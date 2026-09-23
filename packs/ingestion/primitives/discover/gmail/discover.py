@@ -34,6 +34,12 @@ Shape (GmailDiscovery(...).run()):
   (models.py).
 
 Changelog:
+  2026-09-23 (typed rows): the channel parses its two foreign payloads once —
+    `MsgvaultSyncPayload` for the sync result and `GmailExtractPayload` for the
+    extractor payload — so `execute()` reads attributes instead of probing dicts
+    (the raw dicts are still what the manifest's `children` entry and a failed
+    payload carry, via `.raw`). The store parses its prior manifest once into
+    `GmailManifestResume` before asking `gmail_discovery_merge_plan`.
   2026-09-23 (simplification audit): the per-account record's `contacts` field now
     reads `counts.contacts_written` directly. The `payload.get("contacts")`
     alternative it fell back from was never set by either payload shape
@@ -166,18 +172,21 @@ from packs.ingestion.primitives.discover.gmail.models import (  # noqa: E402
     GmailDiscoveryCompleted,
     GmailDiscoveryFailed,
     GmailDiscoverySkipped,
+    GmailExtractPayload,
     GmailPrivacy,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
     GMAIL_DISCOVERY_COLUMNS,
     GMAIL_CALCULATION_FULL_RECOUNT,
+    GmailManifestResume,
     _merge_rows,
     gmail_discovery_merge_plan,
     extract_gmail_base_dir,
     resolve_discovery_inputs,
 )
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: E402
+    MsgvaultSyncPayload,
     sync_msgvault_account,
 )
 
@@ -298,30 +307,30 @@ class GmailAccountChannel(Node):
         """Sync then run the engine in-process, recording the contribution on self.
         Returns the typed per-account payload, or GmailDiscoveryFailed."""
         started = time.monotonic()
-        sync = self._sync()
-        if sync["status"] == "failed":
+        sync = MsgvaultSyncPayload.from_payload(self._sync())
+        if sync.status == "failed":
             self._finish_timing(started, sync)
-            return GmailDiscoveryFailed(account_email=self.account_email, error=sync)
+            return GmailDiscoveryFailed(account_email=self.account_email, error=sync.raw)
         # In-process engine call (no subprocess): GmailExtractor.run_msgvault
         # writes this account's rows to the channel's FIXED gmail_discover_dir paths
-        # and RETURNS the same payload the CLI used to emit — so read the payload as
-        # a dict with no type-sniffing, and take the queue/people CSVs from those
-        # FIXED paths rather than re-parsing them out of the payload's artifacts
-        # block. A ValueError surfaces the way the old subprocess CLI did (exit 2 ->
-        # error payload -> failed channel): mirror it into an error payload so the
-        # `code != 0` branch below stays equivalent.
+        # and RETURNS the same payload the CLI used to emit — parse it once into the
+        # typed payload and take the queue/people CSVs from those FIXED paths rather
+        # than re-parsing them out of the payload's artifacts block. A ValueError
+        # surfaces the way the old subprocess CLI did (exit 2 -> error payload ->
+        # failed channel): mirror it into an error payload so the `code != 0` branch
+        # below stays equivalent.
         try:
-            payload = GmailExtractor().run_msgvault(
+            payload = GmailExtractPayload.from_payload(GmailExtractor().run_msgvault(
                 db=self.msgvault_db,
                 account_email=self.account_email,
                 output_dir=self.output_base,
-            )
+            ))
         except ValueError as exc:
-            payload = {"status": "error", "error": str(exc)}
-        code = 0 if payload.get("status") == "completed" else 1
+            payload = GmailExtractPayload.from_payload({"status": "error", "error": str(exc)})
+        code = 0 if payload.status == "completed" else 1
         # The extractor DECLARES its calculation_mode (extract_gmail.run_msgvault);
         # the default only covers a payload that predates that contract.
-        self.mode = str(payload.get("calculation_mode") or GMAIL_CALCULATION_FULL_RECOUNT)
+        self.mode = payload.calculation_mode or GMAIL_CALCULATION_FULL_RECOUNT
         if self.queue_csv.is_file():
             _fields, self.rows = read_csv_rows(self.queue_csv)
         self.artifacts = {
@@ -330,20 +339,20 @@ class GmailAccountChannel(Node):
         }
         self.record = {
             "account_email": self.account_email,
-            "sync": sync,
+            "sync": sync.raw,
             "code": code,
-            "status": payload.get("status", ""),
-            "contacts": payload.get("counts", {}).get("contacts_written", ""),
+            "status": payload.status,
+            "contacts": payload.contacts_written,
             "calculation_mode": self.mode,
             "rows_read": len(self.rows),
             "artifact_dir": str(self.discover_dir),
             "people_csv": self.artifacts["people_csv"],
             "linkedin_resolution_queue_csv": self.artifacts["linkedin_resolution_queue_csv"],
-            "artifacts": payload.get("artifacts", {}),
+            "artifacts": payload.artifacts,
         }
         if code != 0:
             self._finish_timing(started, sync)
-            return GmailDiscoveryFailed(account_email=self.account_email, error=payload)
+            return GmailDiscoveryFailed(account_email=self.account_email, error=payload.raw)
         self._finish_timing(started, sync)
         return GmailAccountExtracted(
             account_email=self.account_email,
@@ -354,14 +363,14 @@ class GmailAccountChannel(Node):
             linkedin_resolution_queue_csv=self.artifacts["linkedin_resolution_queue_csv"],
         )
 
-    def _finish_timing(self, started: float, sync: dict[str, Any]) -> None:
+    def _finish_timing(self, started: float, sync: MsgvaultSyncPayload) -> None:
         """Record this account's monotonic elapsed time and optional sync count."""
         self.timing = {
             "email": self.account_email,
             "duration_seconds": round(time.monotonic() - started, 3),
         }
-        if sync.get("messages_added") not in (None, ""):
-            self.timing["messages_added"] = sync["messages_added"]
+        if sync.messages_added not in (None, ""):
+            self.timing["messages_added"] = sync.messages_added
 
 
 class GmailDiscovery(Node):
@@ -490,7 +499,7 @@ class GmailDiscovery(Node):
         # output is read only for its ROW COUNT (is there anything there at all?);
         # its rows are never carried forward, because each child's rows already
         # restate its account's whole truth.
-        existing_manifest = read_json(self.manifest_json, {}) or {}
+        existing_manifest = GmailManifestResume.from_document(read_json(self.manifest_json, {}) or {})
         existing_rows = 0
         if self.queue_csv.is_file():
             _existing_fields, existing_output = read_csv_rows(self.queue_csv)
@@ -503,9 +512,13 @@ class GmailDiscovery(Node):
         )
 
         # PHASE 3 — assemble the row set: the children's rows, and only those.
-        incoming: list[dict[str, Any]] = []
-        for channel in self.channels:
-            incoming.extend(channel.rows)
+        # The on-disk queue rows are validated ONCE into the declared row model, so
+        # the merge below works on typed rows and every declared column is present.
+        incoming = [
+            GmailContactRow.model_validate(row)
+            for channel in self.channels
+            for row in channel.rows
+        ]
 
         # PHASE 4 — merge by primary email (counts summed, newest last_interaction,
         # account lists unioned) and write the ONE stage output: the aggregate,

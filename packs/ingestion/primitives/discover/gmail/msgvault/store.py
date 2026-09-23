@@ -25,6 +25,11 @@ Consumers: `gmail/extract_gmail.py` (the in-process extractor CLI),
 re-derivation), and `logbook/logbook_sources.py` (candidate-pid temp table).
 
 Changelog:
+  2026-09-23 (typed rows): `aggregate_contacts` still RETURNS its dict rows (the
+    row shape deep_context and the aggregation tests index by key), but the name
+    tally in `_fold_msgvault_message` no longer uses `dict.get`; the typed form of
+    this row (`msgvault.util.MsgvaultContactRow`, with its `from_row` boundary)
+    lives beside the pure helpers.
   2026-09-23 (simplification audit): `_table_columns` now delegates to
     `sync.sqlite_table_columns` (identical `PRAGMA table_info` -> set[str] body).
   2026-07-23 (audit): split `gmail/msgvault_store.py` into this package —
@@ -250,7 +255,7 @@ def _fold_msgvault_message(
         record = records.setdefault(email, _ContactAccumulator())
         for name in (participant.recipient_display_name, participant.participant_display_name):
             if name:
-                record.names[name] = record.names.get(name, 0) + 1
+                record.names[name] = (record.names[name] if name in record.names else 0) + 1
         counts = record.group if is_group else record.one_to_one
         if direction == "sent":
             counts.sent += 1

@@ -1,6 +1,13 @@
 """msgvault sync for Gmail discovery: last-sync inference and account sync.
 
 Changelog:
+  2026-09-23 (typed rows): added `MsgvaultSyncPayload` — the ONE parse of a
+    msgvault sync summary (the JSON a `msgvault sync-full` run prints, or the dict
+    `sync_msgvault_account` returns) — and `MsgvaultSyncMarker` for
+    `infer_msgvault_sync_after`, which now returns the typed marker instead of a
+    dict (still empty/no-marker on a first run). `sync_msgvault_account` reads the
+    reauthorization branch off a local flag instead of re-reading its own result
+    dict, and keeps returning its dict payload (its CLI/tests index it).
   2026-09-23 (simplification audit): named the epoch-ms cutoff
     (`_EPOCH_MILLISECONDS_THRESHOLD`) and DELETED the four helpers with no
     callers — `normalize_label_names`, `gmail_sync_query`, `gmail_sync_after`,
@@ -18,6 +25,7 @@ Changelog:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -48,6 +56,36 @@ MSGVAULT_REAUTH_ERROR_MARKERS = (
 )
 # Epoch values above this are milliseconds, not seconds (10^10 s is year 2286).
 _EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
+
+
+@dataclass(frozen=True)
+class MsgvaultSyncMarker:
+    """The resume marker for one account's incremental sync. Empty strings mean no
+    usable marker, so the caller runs a FULL sync (correct on a first run)."""
+
+    sync_after: str = ""
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class MsgvaultSyncPayload:
+    """One msgvault sync summary as typed values, parsed once — the dict
+    `sync_msgvault_account` returns AND the JSON a `msgvault sync-full` run prints.
+    `raw` is the original dict for callers that persist it verbatim (the gmail
+    stage manifest's `children` entry, a failed payload)."""
+
+    status: str = ""
+    messages_added: Any = ""
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "MsgvaultSyncPayload":
+        raw = payload if isinstance(payload, dict) else {}
+        return cls(
+            status=str(raw.get("status") or ""),
+            messages_added=raw.get("messages_added", ""),
+            raw=dict(raw),
+        )
 
 
 def parse_msgvault_sync_date(value: Any) -> str:
@@ -88,26 +126,26 @@ def sqlite_table_columns(con: sqlite3.Connection, table: str) -> set[str]:
         return set()
 
 
-def infer_msgvault_sync_after(db: str, email: str) -> dict[str, str]:
-    """Best local marker for an incremental sync: {sync_after, source} or {}.
+def infer_msgvault_sync_after(db: str, email: str) -> MsgvaultSyncMarker:
+    """Best local marker for an incremental sync.
 
     PER ACCOUNT, in preference order: (1) the msgvault sources.last_sync_at
     column when the build records it; (2) otherwise the max stored message
-    date for that account across internal_date/sent_at/received_at. Empty
-    dict means no usable marker — the caller runs a FULL sync (correct on a
+    date for that account across internal_date/sent_at/received_at. An empty
+    marker means no usable marker — the caller runs a FULL sync (correct on a
     first run or an unreadable store). Read-only, 1s timeout, never raises."""
     path = Path(db or DEFAULT_MSGVAULT_DB).expanduser()
     if not email or not path.exists():
-        return {}
+        return MsgvaultSyncMarker()
     uri = f"file:{urllib.parse.quote(str(path), safe='/')}?mode=ro"
     try:
         con = sqlite3.connect(uri, uri=True, timeout=1)
     except sqlite3.Error:
-        return {}
+        return MsgvaultSyncMarker()
     try:
         source_cols = sqlite_table_columns(con, "sources")
         if not {"id", "source_type", "identifier"}.issubset(source_cols):
-            return {}
+            return MsgvaultSyncMarker()
         select_cols = ["id"]
         if "last_sync_at" in source_cols:
             select_cols.append("last_sync_at")
@@ -116,16 +154,16 @@ def infer_msgvault_sync_after(db: str, email: str) -> dict[str, str]:
             (email,),
         ).fetchone()
         if not source:
-            return {}
+            return MsgvaultSyncMarker()
         source_id = source[0]
         if "last_sync_at" in source_cols:
             source_date = parse_msgvault_sync_date(source[1])
             if source_date:
-                return {"sync_after": source_date, "source": "msgvault.sources.last_sync_at"}
+                return MsgvaultSyncMarker(sync_after=source_date, source="msgvault.sources.last_sync_at")
 
         message_cols = sqlite_table_columns(con, "messages")
         if "source_id" not in message_cols:
-            return {}
+            return MsgvaultSyncMarker()
         candidates: list[tuple[str, str]] = []
         for column in ("internal_date", "sent_at", "received_at"):
             if column not in message_cols:
@@ -135,11 +173,11 @@ def infer_msgvault_sync_after(db: str, email: str) -> dict[str, str]:
             if date:
                 candidates.append((date, f"msgvault.messages.{column}"))
         if not candidates:
-            return {}
+            return MsgvaultSyncMarker()
         date, source_name = max(candidates, key=lambda item: item[0])
-        return {"sync_after": date, "source": source_name}
+        return MsgvaultSyncMarker(sync_after=date, source=source_name)
     except sqlite3.Error:
-        return {}
+        return MsgvaultSyncMarker()
     finally:
         con.close()
 
@@ -192,9 +230,9 @@ def sync_msgvault_account(
         sync_after = sync_after_override
         sync_after_source = "explicit_window"
     else:
-        inferred = infer_msgvault_sync_after(db, email)
-        sync_after = inferred.get("sync_after", "")
-        sync_after_source = inferred.get("source", "")
+        marker = infer_msgvault_sync_after(db, email)
+        sync_after = marker.sync_after
+        sync_after_source = marker.source
     no_attachments_applied = bool(no_attachments) and msgvault_sync_supports_no_attachments()
     if not shutil.which("msgvault"):
         return {
@@ -226,12 +264,13 @@ def sync_msgvault_account(
     window_label = f" after {sync_after}" if sync_after else ""
     emit_progress(f"Starting Gmail sync for {email}{window_label}.")
     code, payload, stderr = run_cmd(cmd)
+    sync_output = MsgvaultSyncPayload.from_payload(payload)
     error: Any = (stderr or payload) if code != 0 else ""
     result = {
         "status": "completed" if code == 0 else "failed",
         "account_email": email,
         "code": code,
-        "messages_added": payload.get("messages_added") if isinstance(payload, dict) else "",
+        "messages_added": sync_output.messages_added,
         "error": error,
         "sync_after": sync_after,
         "sync_after_source": sync_after_source,
@@ -242,7 +281,8 @@ def sync_msgvault_account(
         "no_attachments_requested": bool(no_attachments),
         "no_attachments_applied": no_attachments_applied,
     }
-    if code != 0 and msgvault_reauthorization_required(payload, stderr):
+    reauthorization_required = code != 0 and msgvault_reauthorization_required(payload, stderr)
+    if reauthorization_required:
         reauthorize_command = msgvault_reauthorize_command(email)
         result.update({
             "error_code": "gmail_reauthorization_required",
@@ -255,7 +295,7 @@ def sync_msgvault_account(
         })
     if code == 0:
         emit_progress(f"Gmail sync completed for {email}.")
-    elif result.get("error_code") == "gmail_reauthorization_required":
+    elif reauthorization_required:
         emit_progress(str(result["error"]))
     else:
         emit_progress(f"Gmail sync failed for {email} (exit {code}).")
