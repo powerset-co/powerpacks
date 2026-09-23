@@ -34,6 +34,8 @@ Gmail API, configure the OAuth screen, create a Desktop OAuth client named
 msgvault setup. Exit codes: 0 ok, 1 error, 20 needs_user_action.
 
 Changelog:
+  2026-09-23 (typed rows): `exit_code` indexes `EXIT_CODES` with an explicit
+    membership check instead of `.get`, leaving no `.get` in this module.
   2026-07-29 (setup style pass): dropped the `cmd_*(args)` dispatchers and the
     `set_defaults(func=...)` indirection; `main` builds the subcommand's
     request and calls it inline. Flows now return their payload, so emission
@@ -101,7 +103,7 @@ def exit_code(command: str, status: str) -> int:
     """Map a subcommand's payload status to the process exit code."""
     if command in PROBE_COMMANDS:
         return 0
-    return EXIT_CODES.get(status, EXIT_UNRECOGNIZED)
+    return EXIT_CODES[status] if status in EXIT_CODES else EXIT_UNRECOGNIZED
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:

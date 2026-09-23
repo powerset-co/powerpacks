@@ -7,6 +7,10 @@ probed CLI answers (`command_error` / `command_output`), plus text tailing and
 lenient JSON extraction from noisy CLI output.
 
 Changelog:
+  2026-09-23 (typed rows): `run_command`, `run_visible_command`, and
+    `run_streaming_command` return the frozen `CommandResult` instead of a raw
+    dict, so `command_error` / `command_output` and every caller read attributes
+    and no stdout/stderr key probe remains outside this boundary.
   2026-07-29 (setup style pass): added `command_error` / `command_output`, the
     single home for reading a `run_command` result's text. Twelve call sites
     had inlined `tail(result.get("stderr") or result.get("stdout") or "")` and
@@ -28,6 +32,7 @@ import json
 import subprocess
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +40,21 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    """One probed subprocess's outcome, the single value every runner returns.
+
+    Captured and streamed runs fill `stdout`/`stderr`; a visible run fills
+    `message` with its failure text instead. `ok` and `returncode` are always
+    set (missing binary is rc 127, timeout rc 124)."""
+
+    ok: bool
+    returncode: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    message: str = ""
 
 
 def progress(message: str) -> None:
@@ -47,11 +67,11 @@ def expand(path: str | Path) -> Path:
     return Path(path).expanduser()
 
 
-def run_command(cmd: list[str], *, timeout: int = 90, env: dict[str, str] | None = None) -> dict[str, Any]:
+def run_command(cmd: list[str], *, timeout: int = 90, env: dict[str, str] | None = None) -> CommandResult:
     """Run a command with captured output and detached stdin.
 
-    Returns {ok, returncode, stdout, stderr}; missing binaries map to
-    returncode 127 and timeouts to 124 instead of raising.
+    Missing binaries map to returncode 127 and timeouts to 124 instead of
+    raising.
 
     PINNED DIVERGENCE from `common/proc.py:run_cmd` — deliberately NOT unified:
     setup automation probes third-party CLIs (`gcloud`, `msgvault`, `npm`,
@@ -72,37 +92,37 @@ def run_command(cmd: list[str], *, timeout: int = 90, env: dict[str, str] | None
             env=env,
         )
     except FileNotFoundError:
-        return {"ok": False, "returncode": 127, "stdout": "", "stderr": f"{cmd[0]} not found"}
+        return CommandResult(ok=False, returncode=127, stderr=f"{cmd[0]} not found")
     except subprocess.TimeoutExpired as exc:
-        return {
-            "ok": False,
-            "returncode": 124,
-            "stdout": exc.stdout or "",
-            "stderr": exc.stderr or f"{cmd[0]} timed out",
-        }
-    return {
-        "ok": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-    }
+        return CommandResult(
+            ok=False,
+            returncode=124,
+            stdout=exc.stdout or "",
+            stderr=exc.stderr or f"{cmd[0]} timed out",
+        )
+    return CommandResult(
+        ok=completed.returncode == 0,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
 
 
-def run_visible_command(cmd: list[str], *, timeout: int | None = None) -> dict[str, Any]:
+def run_visible_command(cmd: list[str], *, timeout: int | None = None) -> CommandResult:
     """Run a command with inherited stdio for interactive/browser steps.
 
-    Returns {ok, returncode, message}; output goes straight to the user's
-    terminal so login prompts and OAuth URLs stay visible."""
+    Output goes straight to the user's terminal so login prompts and OAuth URLs
+    stay visible; failure text lands in `message`."""
     try:
         completed = subprocess.run(cmd, timeout=timeout)
     except FileNotFoundError:
-        return {"ok": False, "returncode": 127, "message": f"{cmd[0]} not found"}
+        return CommandResult(ok=False, returncode=127, message=f"{cmd[0]} not found")
     except subprocess.TimeoutExpired:
-        return {"ok": False, "returncode": 124, "message": f"{cmd[0]} timed out"}
-    return {"ok": completed.returncode == 0, "returncode": completed.returncode, "message": ""}
+        return CommandResult(ok=False, returncode=124, message=f"{cmd[0]} timed out")
+    return CommandResult(ok=completed.returncode == 0, returncode=completed.returncode)
 
 
-def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] | None = None) -> dict[str, Any]:
+def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] | None = None) -> CommandResult:
     """Run a command capturing stdout while mirroring stderr live.
 
     Browser automation logs land on stderr as they happen; stdout is kept
@@ -110,7 +130,7 @@ def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] |
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     except FileNotFoundError:
-        return {"ok": False, "returncode": 127, "stdout": "", "stderr": f"{cmd[0]} not found"}
+        return CommandResult(ok=False, returncode=127, stderr=f"{cmd[0]} not found")
 
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
@@ -139,12 +159,12 @@ def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] |
         returncode = 124
     for thread in threads:
         thread.join(timeout=1)
-    return {
-        "ok": returncode == 0,
-        "returncode": returncode,
-        "stdout": "".join(stdout_chunks),
-        "stderr": "".join(stderr_chunks),
-    }
+    return CommandResult(
+        ok=returncode == 0,
+        returncode=returncode,
+        stdout="".join(stdout_chunks),
+        stderr="".join(stderr_chunks),
+    )
 
 
 def tail(text: str, limit: int = 1600) -> str:
@@ -153,21 +173,21 @@ def tail(text: str, limit: int = 1600) -> str:
     return text[-limit:] if len(text) > limit else text
 
 
-def command_error(result: dict[str, Any]) -> str:
+def command_error(result: CommandResult) -> str:
     """Return a failed `run_command` result's message: stderr, else stdout, tailed.
 
     The probed CLIs are inconsistent about which stream carries the failure
     (gcloud uses stderr, msgvault sometimes stdout), so every error path reads
     both in this order. It is read here once instead of at each call site."""
-    return tail(result.get("stderr") or result.get("stdout") or "")
+    return tail(result.stderr or result.stdout or "")
 
 
-def command_output(result: dict[str, Any]) -> str:
+def command_output(result: CommandResult) -> str:
     """Return a successful `run_command` result's text: stdout, else stderr, stripped.
 
     The mirror of `command_error` for the probes whose answer is the output
     itself (`msgvault version`), which some builds print on stderr."""
-    return (result.get("stdout") or result.get("stderr") or "").strip()
+    return (result.stdout or result.stderr or "").strip()
 
 
 def parse_json_fragment(text: str) -> Any:

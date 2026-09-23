@@ -6,6 +6,8 @@ msgvault_home) because MCP registration is harness state, not msgvault home
 state.
 
 Changelog:
+  2026-09-23 (typed rows): `mcp_status`'s own record is read by key and the codex
+    probe through `CommandResult`, so no `.get` remains here.
   2026-07-23 (audit):
     - Split out of the former 1,770-line setup/msgvault_setup.py.
 """
@@ -36,8 +38,8 @@ def mcp_status() -> dict[str, Any]:
     result = run_command(["codex", "mcp", "get", "msgvault"], timeout=20)
     return {
         "available": True,
-        "installed": result["ok"],
-        "message": "" if result["ok"] else command_error(result),
+        "installed": result.ok,
+        "message": "" if result.ok else command_error(result),
     }
 
 
@@ -46,11 +48,11 @@ def install_mcp() -> dict[str, Any]:
     if not shutil.which("codex"):
         return {"status": "skipped", "reason": "codex not found"}
     current = mcp_status()
-    if current.get("installed"):
+    if current["installed"]:
         return {"status": "ok", "already_installed": True}
     progress("Installing msgvault MCP in Codex...")
     result = run_command(["codex", "mcp", "add", "msgvault", "--", "msgvault", "mcp"], timeout=60)
-    if result["ok"]:
+    if result.ok:
         progress("msgvault MCP installed.")
         return {"status": "ok", "already_installed": False}
     return {"status": "error", "message": command_error(result)}
