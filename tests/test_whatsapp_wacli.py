@@ -1258,9 +1258,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
         run_attempt.assert_called_once()
         self.assertEqual(summary["status"], "partial")
-        self.assertEqual(row["outcome"], "pending")
-        self.assertEqual(row["no_growth_attempts"], "0")
-        self.assertEqual(row["transient_failures"], "1")
+        self.assertEqual(row.outcome, "pending")
+        self.assertEqual(row.no_growth_attempts, 0)
+        self.assertEqual(row.transient_failures, 1)
 
     def test_history_depth_received_duplicates_are_not_server_zero(self) -> None:
         jid = "15550001111@s.whatsapp.net"
@@ -1291,8 +1291,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             )[target.chat_ref]
 
         self.assertEqual(summary["status"], "partial")
-        self.assertEqual(row["outcome"], "pending")
-        self.assertEqual(row["no_growth_attempts"], "0")
+        self.assertEqual(row.outcome, "pending")
+        self.assertEqual(row.no_growth_attempts, 0)
 
     def test_history_depth_includes_legacy_unknown_direct_chat(self) -> None:
         jid = "15550001111@s.whatsapp.net"
@@ -1372,8 +1372,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         sleep.assert_not_called()
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(summary["counts"]["server_zero"], 1)
-        self.assertEqual(rows[target.chat_ref]["outcome"], "server_zero")
-        self.assertEqual(rows[target.chat_ref]["no_growth_attempts"], "1")
+        self.assertEqual(rows[target.chat_ref].outcome, "server_zero")
+        self.assertEqual(rows[target.chat_ref].no_growth_attempts, 1)
         self.assertNotIn(jid, artifact_text)
         self.assertNotIn("15550001111", artifact_text)
 
@@ -1415,8 +1415,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             )[target.chat_ref]
 
         self.assertEqual(summary["status"], "partial")
-        self.assertEqual(row["outcome"], "pending")
-        self.assertEqual(row["no_growth_attempts"], "0")
+        self.assertEqual(row.outcome, "pending")
+        self.assertEqual(row.no_growth_attempts, 0)
 
     def test_history_depth_pre_request_failure_does_not_consume_no_growth(self) -> None:
         jid = "15550001111@s.whatsapp.net"
@@ -1441,9 +1441,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             row = depth_results.read_history_depth_results(out_dir / "results.csv")[target.chat_ref]
 
         run_attempt.assert_called_once()
-        self.assertEqual(row["no_growth_attempts"], "0")
-        self.assertEqual(row["transient_failures"], "1")
-        self.assertEqual(row["outcome"], "pending")
+        self.assertEqual(row.no_growth_attempts, 0)
+        self.assertEqual(row.transient_failures, 1)
+        self.assertEqual(row.outcome, "pending")
         sleep.assert_not_called()
 
     def test_history_depth_timeout_with_partial_growth_defers_chat(self) -> None:
@@ -1473,8 +1473,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(summary["status"], "partial")
         self.assertEqual(summary["counts"]["target_rows_added"], 3)
         self.assertEqual(summary["counts"]["unrelated_rows_added"], 2)
-        self.assertEqual(row["transient_failures"], "1")
-        self.assertEqual(row["outcome"], "pending")
+        self.assertEqual(row.transient_failures, 1)
+        self.assertEqual(row.outcome, "pending")
 
     def test_history_depth_uses_one_native_batch_without_python_pauses(self) -> None:
         targets = [
@@ -1554,7 +1554,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out_dir = Path(td) / "history-depth"
             depth_results.write_history_depth_results(out_dir / "results.csv", {
-                targets[1].chat_ref: {
+                targets[1].chat_ref: depth_results.HistoryDepthRow.from_record({
                     "chat_ref": targets[1].chat_ref,
                     "kind": "dm",
                     "initial_count": 1,
@@ -1570,7 +1570,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "outcome": "server_zero",
                     "error_category": "none",
                     "updated_at": "2026-01-01T00:00:00Z",
-                },
+                }),
             })
             current_states = {
                 target.chat_jid: (target.current_count, target.current_latest_ts)
@@ -1645,7 +1645,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
         run_attempt.assert_called_once()
         self.assertEqual(summary["status"], "completed")
-        self.assertEqual(row["outcome"], "completed_threshold")
+        self.assertEqual(row.outcome, "completed_threshold")
 
     def test_history_depth_seeds_all_targets_before_budget_check(self) -> None:
         targets = [
@@ -1673,7 +1673,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
         run_attempt.assert_not_called()
         self.assertEqual(set(rows), {target.chat_ref for target in targets})
-        self.assertTrue(all(row["outcome"] == "pending" for row in rows.values()))
+        self.assertTrue(all(row.outcome == "pending" for row in rows.values()))
         self.assertEqual(summary["status"], "partial")
 
     def test_history_depth_recovers_pre_sync_count_drift_from_manifest(self) -> None:
@@ -1771,7 +1771,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out_dir = Path(td) / "history-depth"
             depth_results.write_history_depth_results(out_dir / "results.csv", {
-                chat_ref: {
+                chat_ref: depth_results.HistoryDepthRow.from_record({
                     "chat_ref": chat_ref,
                     "kind": "dm",
                     "initial_count": 1,
@@ -1786,7 +1786,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "outcome": "pending",
                     "error_category": "none",
                     "updated_at": "2026-01-01T00:00:00Z",
-                },
+                }),
             })
             with mock.patch.object(
                     store_db,
@@ -1808,8 +1808,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 )
             row = depth_results.read_history_depth_results(out_dir / "results.csv")[chat_ref]
 
-        self.assertEqual(row["current_count"], "21")
-        self.assertEqual(row["outcome"], "completed_threshold")
+        self.assertEqual(row.current_count, 21)
+        self.assertEqual(row.outcome, "completed_threshold")
 
     def test_history_depth_zero_targets_writes_complete_artifact_contract(self) -> None:
         with tempfile.TemporaryDirectory() as td, \
@@ -1841,7 +1841,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out_dir = Path(td) / "history-depth"
             depth_results.write_history_depth_results(out_dir / "results.csv", {
-                target.chat_ref: {
+                target.chat_ref: depth_results.HistoryDepthRow.from_record({
                     "chat_ref": target.chat_ref,
                     "kind": "dm",
                     "initial_count": 1,
@@ -1856,7 +1856,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "outcome": "server_zero",
                     "error_category": "none",
                     "updated_at": "2026-01-01T00:00:00Z",
-                },
+                }),
             })
             with mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
                     mock.patch.object(backfill, "run_history_backfill_attempt") as run_attempt:
@@ -1884,7 +1884,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out_dir = Path(td) / "history-depth"
             depth_results.write_history_depth_results(out_dir / "results.csv", {
-                target.chat_ref: {
+                target.chat_ref: depth_results.HistoryDepthRow.from_record({
                     "chat_ref": target.chat_ref,
                     "kind": "dm",
                     "initial_count": 1,
@@ -1899,7 +1899,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "outcome": "server_zero",
                     "error_category": "none",
                     "updated_at": "2026-01-01T00:00:00Z",
-                },
+                }),
             })
             with mock.patch.object(
                     store_db,
@@ -1939,7 +1939,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             out_dir = Path(td) / "history-depth"
             out_dir.mkdir(parents=True)
             depth_results.write_history_depth_results(out_dir / "results.csv", {
-                target.chat_ref: {
+                target.chat_ref: depth_results.HistoryDepthRow.from_record({
                     "chat_ref": target.chat_ref,
                     "kind": "dm",
                     "initial_count": 1,
@@ -1955,7 +1955,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "outcome": "server_zero",
                     "error_category": "none",
                     "updated_at": "2026-01-01T00:00:00Z",
-                },
+                }),
             })
             (out_dir / "manifest.json").write_text(
                 json.dumps({
@@ -2008,7 +2008,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out_dir = Path(td) / "history-depth"
             depth_results.write_history_depth_results(out_dir / "results.csv", {
-                target.chat_ref: {
+                target.chat_ref: depth_results.HistoryDepthRow.from_record({
                     "chat_ref": target.chat_ref,
                     "kind": "dm",
                     "initial_count": 1,
@@ -2023,7 +2023,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "outcome": "recovered",
                     "error_category": "none",
                     "updated_at": "2026-01-01T00:00:00Z",
-                },
+                }),
             })
             with mock.patch.object(
                     store_db,

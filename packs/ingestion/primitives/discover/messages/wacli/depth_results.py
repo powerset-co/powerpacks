@@ -17,6 +17,11 @@ owns what that state LOOKS like on disk and how it is read back:
   `payloads.PriorDepthManifest`.
 
 Changelog:
+  2026-09-23 (typed rows): `results.csv` rows are the mutable `HistoryDepthRow`,
+    parsed by `from_record`/`as_record` at the file, so `depth.py` and
+    `history_depth_summary` read and set fields instead of re-parsing cells with
+    `result_int(row, ...)` / `.get(...)`. Header, column order, and cell strings
+    unchanged.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`
     alongside `depth.py`, which kept the run loop. Artifact bytes unchanged.
 """
@@ -27,6 +32,7 @@ import csv
 import json
 import os
 import sys
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -76,14 +82,64 @@ HISTORY_DEPTH_TERMINAL_OUTCOMES = {
 }
 
 
-def read_history_depth_results(path: Path) -> dict[str, dict[str, str]]:
+@dataclass
+class HistoryDepthRow:
+    """One `results.csv` row, parsed once at the file.
+
+    Mutable on purpose: `depth.py` mutates its rows in place as attempts come back
+    (counters, outcome, watermark). `from_record` is the ONLY tolerant reader of a
+    row — it owns the fact that a cell is a `str` from CSV — so nothing downstream
+    re-derives `"0"` out of a missing cell. `as_record` is the dict form the CSV
+    writer takes."""
+
+    chat_ref: str
+    kind: str = ""
+    initial_count: int = 0
+    current_count: int = 0
+    current_latest_ts: int = 0
+    target_rows_added: int = 0
+    unrelated_rows_added: int = 0
+    attempts: int = 0
+    requests_sent: int = 0
+    responses_seen: int = 0
+    transient_failures: int = 0
+    no_growth_attempts: int = 0
+    outcome: str = "pending"
+    error_category: str = "none"
+    updated_at: str = ""
+
+    @classmethod
+    def from_record(cls, record: dict[str, Any]) -> HistoryDepthRow:
+        return cls(
+            chat_ref=str(record.get("chat_ref") or ""),
+            kind=str(record.get("kind") or ""),
+            initial_count=result_int(record, "initial_count"),
+            current_count=result_int(record, "current_count"),
+            current_latest_ts=result_int(record, "current_latest_ts"),
+            target_rows_added=result_int(record, "target_rows_added"),
+            unrelated_rows_added=result_int(record, "unrelated_rows_added"),
+            attempts=result_int(record, "attempts"),
+            requests_sent=result_int(record, "requests_sent"),
+            responses_seen=result_int(record, "responses_seen"),
+            transient_failures=result_int(record, "transient_failures"),
+            no_growth_attempts=result_int(record, "no_growth_attempts"),
+            outcome=str(record.get("outcome") or ""),
+            error_category=str(record.get("error_category") or ""),
+            updated_at=str(record.get("updated_at") or ""),
+        )
+
+    def as_record(self) -> dict[str, Any]:
+        return {field.name: getattr(self, field.name) for field in fields(self)}
+
+
+def read_history_depth_results(path: Path) -> dict[str, HistoryDepthRow]:
     if not path.exists():
         return {}
     with path.open(newline="", encoding="utf-8") as handle:
         return {
-            str(row.get("chat_ref") or ""): dict(row)
-            for row in CsvIO.dict_reader(handle)
-            if row.get("chat_ref")
+            row.chat_ref: row
+            for row in (HistoryDepthRow.from_record(record) for record in CsvIO.dict_reader(handle))
+            if row.chat_ref
         }
 
 
@@ -95,15 +151,14 @@ def read_history_depth_manifest(path: Path) -> PriorDepthManifest:
     return PriorDepthManifest.from_payload(payload)
 
 
-def write_history_depth_results(path: Path, rows: dict[str, dict[str, Any]]) -> None:
+def write_history_depth_results(path: Path, rows: dict[str, HistoryDepthRow]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=HISTORY_DEPTH_HEADERS)
         writer.writeheader()
         for chat_ref in sorted(rows):
-            row = rows[chat_ref]
-            writer.writerow({key: row.get(key, "") for key in HISTORY_DEPTH_HEADERS})
+            writer.writerow(rows[chat_ref].as_record())
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
 
@@ -111,7 +166,7 @@ def write_history_depth_results(path: Path, rows: dict[str, dict[str, Any]]) -> 
 def history_depth_summary(
     *,
     targets: list[HistoryDepthTarget],
-    rows: dict[str, dict[str, Any]],
+    rows: dict[str, HistoryDepthRow],
     results_path: Path,
     progress_path: Path,
     active_since_ts: int,
@@ -133,7 +188,7 @@ def history_depth_summary(
 ) -> dict[str, Any]:
     target_rows = [rows[target.chat_ref] for target in targets if target.chat_ref in rows]
     completed = sum(
-        1 for row in target_rows if row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES
+        1 for row in target_rows if row.outcome in HISTORY_DEPTH_TERMINAL_OUTCOMES
     )
     pending = len(targets) - completed
     return {
@@ -166,17 +221,17 @@ def history_depth_summary(
             "eligible": len(targets),
             "completed": completed,
             "pending": pending,
-            "with_real_request": sum(1 for row in target_rows if result_int(row, "requests_sent") > 0),
+            "with_real_request": sum(1 for row in target_rows if row.requests_sent > 0),
             "recovered_chats": sum(
                 1
                 for row in target_rows
-                if row.get("outcome") in {"completed_threshold", "recovered"}
+                if row.outcome in {"completed_threshold", "recovered"}
             ),
-            "target_rows_added": sum(result_int(row, "target_rows_added") for row in target_rows),
-            "unrelated_rows_added": sum(result_int(row, "unrelated_rows_added") for row in target_rows),
-            "server_zero": sum(1 for row in target_rows if row.get("outcome") == "server_zero"),
-            "transient_failures": sum(result_int(row, "transient_failures") for row in target_rows),
-            "terminal_errors": sum(1 for row in target_rows if row.get("outcome") == "terminal_error"),
+            "target_rows_added": sum(row.target_rows_added for row in target_rows),
+            "unrelated_rows_added": sum(row.unrelated_rows_added for row in target_rows),
+            "server_zero": sum(1 for row in target_rows if row.outcome == "server_zero"),
+            "transient_failures": sum(row.transient_failures for row in target_rows),
+            "terminal_errors": sum(1 for row in target_rows if row.outcome == "terminal_error"),
             "source_total_messages": source_total_messages,
         },
         "source": {
