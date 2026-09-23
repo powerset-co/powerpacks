@@ -106,9 +106,9 @@ size (hard cap 3 h), and targeted depth can add up to two hours. Heartbeats ever
 `$import-messages` command resumes unfinished targeted chats.
 
 iMessage always does a cheap local `chat.db` read. The wacli sync protocol
-(batch sizes, waits, and chat-identity fallback) is documented in
-[`message-import-pipeline.md`](../../docs/message-import-pipeline.md); the skill
-does not need it to run the command.
+(batch sizes, pacing, and chat-identity fallback) lives in
+`discover/messages/wacli/`; the product walkthrough is in
+[`message-import-pipeline.md`](../../docs/message-import-pipeline.md).
 
 ### Step 2 — Link & discover message contacts
 

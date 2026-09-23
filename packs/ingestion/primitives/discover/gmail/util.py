@@ -54,9 +54,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_MSGVAULT_DB  # noqa: E402
-from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    GMAIL_INTERACTION_CALCULATION_VERSION,
-)
+from packs.ingestion.primitives.discover.common import GMAIL_INTERACTION_CALCULATION_VERSION  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
     source_config,
