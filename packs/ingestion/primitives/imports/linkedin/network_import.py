@@ -49,6 +49,12 @@ that path. Until the indexing pack is converted, the merge's linkedin input has
 no declared producer.
 
 Changelog:
+  2026-09-23 (typed rows): `command_status` reports a run that stopped before it
+    wrote outputs. A raised `execute()` (or a missing declared input) leaves the
+    Node template's own `failed` / `not_ready` record — `stage` plus
+    `reason`/`error`, none of which a LinkedIn payload field validates against —
+    so `status` reads those two statuses as the framework record and reports the
+    status with empty sections, as it did before the typed read.
   2026-09-23 (typed rows): the stage's own state is read typed — `convert`'s summary
     and the delegated enrichment counts are keyed, not `.get`-ed, and
     `command_status` reads the on-disk manifest through `ManifestDocument` into
@@ -136,7 +142,14 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
     discover_source_dir,
     resolve_discover_source_dir,
 )
-from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow, StageManifest  # noqa: E402
+from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
+    STATUS_FAILED,
+    STATUS_NOT_READY,
+    Artifact,
+    Node,
+    PeopleRow,
+    StageManifest,
+)
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 # The fixed discover dir this stage writes into, and the two declared paths under
@@ -148,6 +161,10 @@ LINKEDIN_MANIFEST_JSON = LINKEDIN_DISCOVER_DIR / "manifest.json"
 # --approve-spend. Value + status->code mapping live in common/gates.py; kept as a
 # module alias for the name callers/tests reach for.
 NEEDS_APPROVAL_CODE = EXIT_NEEDS_APPROVAL
+# The statuses whose manifest on disk is the Node template's own failure record
+# (`stage`, plus `reason`/`error`) rather than this stage's payload: a run that
+# was not ready or raised leaves nothing for a LinkedIn payload to validate.
+FRAMEWORK_FAILURE_STATUSES = frozenset({STATUS_FAILED, STATUS_NOT_READY})
 
 
 class PipelineFailed(Exception):
@@ -294,6 +311,35 @@ class LinkedInImportManifest(StageManifest):
     updated_at: str = ""
     needs_approval: dict[str, Any] | None = None
     error: str | None = None
+
+
+def manifest_status_payload(document: ManifestDocument, artifact_dir: Path) -> dict[str, Any]:
+    """The `status` command's emit payload for the manifest on disk.
+
+    A `failed` / `not_ready` manifest is the Node template's failure record, so it
+    reports its status with empty sections; every other status carries this
+    stage's payload, which `LinkedInImportManifest` validates."""
+    if document.status in FRAMEWORK_FAILURE_STATUSES:
+        counts: dict[str, Any] = {}
+        artifacts: dict[str, Any] = {}
+        steps: dict[str, Any] = {}
+        needs_approval: dict[str, Any] | None = None
+        status = document.status
+    else:
+        manifest = LinkedInImportManifest.model_validate(document.payload)
+        counts = manifest.counts
+        artifacts = manifest.artifacts
+        steps = manifest.steps
+        needs_approval = manifest.needs_approval
+        status = manifest.status or "unknown"
+    return {
+        "status": status,
+        "artifact_dir": str(artifact_dir),
+        "counts": counts,
+        "artifacts": artifacts,
+        "steps": steps,
+        "needs_approval": needs_approval,
+    }
 
 
 class LinkedInImport(Node):
@@ -463,17 +509,8 @@ class LinkedInImport(Node):
     @staticmethod
     def command_status(args: argparse.Namespace) -> int:
         run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
-        manifest = LinkedInImportManifest.model_validate(
-            ManifestDocument.read(run_dir / "manifest.json").payload
-        )
-        emit({
-            "status": manifest.status or "unknown",
-            "artifact_dir": str(run_dir),
-            "counts": manifest.counts,
-            "artifacts": manifest.artifacts,
-            "steps": manifest.steps,
-            "needs_approval": manifest.needs_approval,
-        })
+        document = ManifestDocument.read(run_dir / "manifest.json")
+        emit(manifest_status_payload(document, run_dir))
         return 0
 
     @staticmethod

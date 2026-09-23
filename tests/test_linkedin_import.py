@@ -240,6 +240,44 @@ class LinkedInNetworkImportTests(unittest.TestCase):
         self.assertEqual(set(payload["keys_present"].keys()), {"POWERSET_API_KEY"})
         self.assertTrue(all(isinstance(v, bool) for v in payload["keys_present"].values()))
 
+    def write_manifest(self, discover_dir: Path, manifest: dict) -> None:
+        discover_dir.mkdir(parents=True, exist_ok=True)
+        (discover_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_status_reports_a_failed_run_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # A run that raised leaves the template's own Failed record: `stage`
+            # and `error`, the previous stage payload's keys are gone.
+            self.write_manifest(
+                Path(tmp) / "out" / "discover" / "linkedin",
+                {"stage": "linkedin_import", "status": "failed", "error": "Connections.csv not found"},
+            )
+            code, payload = self.invoke(["status", "--output-dir", str(Path(tmp) / "out")])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["counts"], {})
+            self.assertEqual(payload["artifacts"], {})
+            self.assertIsNone(payload["needs_approval"])
+
+    def test_status_reports_a_completed_run_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            discover_dir = Path(tmp) / "out" / "discover" / "linkedin"
+            self.write_manifest(
+                discover_dir,
+                {
+                    "primitive": "linkedin/network_import",
+                    "status": "completed",
+                    "counts": {"source_people_total": 1},
+                    "artifacts": {"people_csv": str(discover_dir / "people.csv")},
+                    "steps": {"convert": {"status": "completed"}},
+                },
+            )
+            code, payload = self.invoke(["status", "--output-dir", str(Path(tmp) / "out")])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["counts"]["source_people_total"], 1)
+            self.assertEqual(payload["steps"]["convert"]["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()
