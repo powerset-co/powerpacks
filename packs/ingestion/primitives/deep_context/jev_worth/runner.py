@@ -1,4 +1,8 @@
-"""Estimate and answer one worth-plus-label request using the standard JEV cache."""
+"""Estimate and answer one worth-plus-label request using the standard JEV cache.
+
+Changelog:
+  2026-09-24: score labels (warmth) are the expected level, not the argmax.
+"""
 from __future__ import annotations
 
 import json
@@ -99,17 +103,24 @@ def estimate(request: dict, *, output_dir: Path | None = None) -> dict:
     return {'input_tokens': tokens, 'cost_usd': tokens * INPUT_PRICE_PER_MILLION / 1_000_000, 'cached': cached}
 
 
-def _labels(answers: dict[str, dict]) -> dict[str, str | float | int]:
-    result = {}
+def _labels(answers: dict[str, dict]) -> dict[str, str | float]:
+    """noul -> p; choice -> argmax option + its p; score -> the expected level.
+
+    A score keeps the whole distribution's information (2.7, not 3): JEV's own
+    `score` field is this same expectation, recomputed here from the validated
+    probabilities."""
+    result: dict[str, str | float] = {}
     for name, answer in answers.items():
         if answer['type'] == 'noul':
             result[name] = float(answer['noul'])
             continue
         probabilities = answer['probabilities']
+        if answer['type'] == 'score':
+            result[name] = round(sum(int(level) * p for level, p in probabilities.items()), 2)
+            continue
         best = max(probabilities, key=probabilities.__getitem__)
-        result[name] = int(best) if answer['type'] == 'score' else best
-        if answer['type'] == 'choice':
-            result[name + '_p'] = float(probabilities[best])
+        result[name] = best
+        result[name + '_p'] = float(probabilities[best])
     return result
 
 

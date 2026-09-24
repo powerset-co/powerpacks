@@ -217,6 +217,6 @@ def _label_row(
     if jev is not None:
         row.update({name: jev.choices[name] for name in CHOICE_LABELS})
         row.update({f"{name}_p": f"{jev.choice_p[name]:.3f}" for name in CHOICE_LABELS})
-        row.update({name: jev.scores[name] for name in SCORE_LABELS})
+        row.update({name: f"{jev.scores[name]:.2f}" for name in SCORE_LABELS})
         row.update({name: f"{jev.probabilities[name]:.3f}" for name in NOUL_LABELS})
     return row

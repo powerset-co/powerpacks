@@ -108,7 +108,8 @@ class JevLabels:
 
     choices: dict[str, str]
     choice_p: dict[str, float]
-    scores: dict[str, int]
+    # Expected level (0.00-4.00 for warmth), not the argmax: the tiers spread.
+    scores: dict[str, float]
     probabilities: dict[str, float]
 
 

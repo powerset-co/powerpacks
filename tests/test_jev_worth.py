@@ -57,7 +57,7 @@ class JevWorthTests(unittest.TestCase):
         assert model.predict(answers) in ('yes', 'no', 'maybe')
         labels = runner._labels(answers)
         assert labels['noise'] == 0.6
-        assert type(labels['warmth']) is int
+        assert type(labels['warmth']) is float
         assert type(labels['relationship_kind']) is str
         assert type(labels['relationship_kind_p']) is float
 

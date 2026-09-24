@@ -127,7 +127,7 @@ def deterministic_labels(person: PersonEvidence, *, reference_date: str) -> Dete
 
 
 def labels_from_answers(answers: dict[str, dict]) -> JevLabels:
-    """Reduce one Jev response: choice -> argmax option, score -> argmax level, noul -> p."""
+    """Reduce one Jev response: choice -> argmax option, score -> expected level, noul -> p."""
     choices: dict[str, str] = {}
     choice_p: dict[str, float] = {}
     for name in CHOICE_LABELS:
@@ -135,10 +135,10 @@ def labels_from_answers(answers: dict[str, dict]) -> JevLabels:
         best = max(probabilities, key=lambda option: probabilities[option])
         choices[name] = best
         choice_p[name] = float(probabilities[best])
-    scores: dict[str, int] = {}
+    scores: dict[str, float] = {}
     for name in SCORE_LABELS:
         probabilities = answers[name]["probabilities"]
-        scores[name] = int(max(probabilities, key=lambda level: probabilities[level]))
+        scores[name] = round(sum(int(level) * p for level, p in probabilities.items()), 2)
     return JevLabels(
         choices=choices,
         choice_p=choice_p,
@@ -152,7 +152,7 @@ def labels_from_saved(labels: dict) -> JevLabels:
     return JevLabels(
         choices={name: str(labels[name]) for name in CHOICE_LABELS},
         choice_p={name: float(labels[f"{name}_p"]) for name in CHOICE_LABELS},
-        scores={name: int(labels[name]) for name in SCORE_LABELS},
+        scores={name: float(labels[name]) for name in SCORE_LABELS},
         probabilities={name: float(labels[name]) for name in NOUL_LABELS},
     )
 

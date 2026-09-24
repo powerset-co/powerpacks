@@ -339,7 +339,7 @@ class QuestionContractTests(unittest.TestCase):
         labels = labels_from_answers({name: _answer(question) for name, question in questions.items()})
         self.assertEqual(labels.choices["relationship_kind"], "family")
         self.assertAlmostEqual(labels.choice_p["relationship_kind"], 0.7)
-        self.assertEqual(labels.scores["warmth"], 0)
+        self.assertAlmostEqual(labels.scores["warmth"], 0.75)  # 0.7·0 + 0.075·(1+2+3+4)
         self.assertAlmostEqual(labels.probabilities["is_family"], 0.9)
 
     def test_the_request_is_dated_by_its_evidence_not_by_today(self) -> None:
