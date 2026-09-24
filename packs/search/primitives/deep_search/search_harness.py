@@ -71,6 +71,8 @@ from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_request, parse_candidate_judge,
 )
 from packs.search.primitives.deep_search.person_attribution import HydratePersonAttribution
+from packs.search.primitives.deep_search import shortlist_priority
+from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_evidence
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
@@ -320,6 +322,12 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         for candidate in iteration.get("shortlist_grades") or []
         if _candidate_judgment_eligible(candidate) and candidate.get("candidate_judgment")
     }
+    shortlist_priorities = {
+        _candidate_key(candidate): candidate.get("shortlist_priority")
+        for frame in reversed(frames)
+        for iteration in (frame.get("results") or {}).get("iterations") or []
+        for candidate in iteration.get("shortlist_grades") or []
+    }
     occurrences: dict[str, list[dict[str, Any]]] = {}
     found_by: dict[str, list[dict[str, Any]]] = {}
     chain = []
@@ -362,6 +370,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "cross_encoder_status": primary.get("cross_encoder_status"),
             "cross_encoder_model": primary.get("cross_encoder_model"),
             "candidate_judgment": candidate_judgments.get(key),
+            "shortlist_priority": shortlist_priorities.get(key),
             "why": " ".join(str(primary.get("reason") or "").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
@@ -1281,6 +1290,54 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     return run_dir / "results.json"
 
 
+def prioritize_saved(*, run_dir: Path, env_file: str, approve_spend: bool = False,
+                     max_cost_usd: float, limit: int | None = None) -> dict[str, Any]:
+    """Add opt-in review priorities to saved qualified candidates without rerunning search."""
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be positive")
+    load_env_file(Path(env_file))
+    results = _read_json(run_dir / "results.json")
+    profiles, saved = {}, {}
+    for iteration in results.get("iterations") or []:
+        artifacts = (iteration.get("arm") or {}).get("artifacts") or {}
+        profiles.update(_profiles(artifacts.get("profiles_path")))
+        saved.update({str(row["person"]): row for row in iteration.get("shortlist_grades") or []})
+    summary = build_search_summary(results, 0)
+    eligible = [candidate for candidate in summary["groups"][""]
+                if (candidate.get("candidate_judgment") or {}).get("overall_score") in (4, 5)]
+    if limit is not None:
+        eligible = eligible[:limit]
+    jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
+    cases = []
+    for candidate in eligible:
+        person = str(candidate["person"])
+        if person not in profiles:
+            raise ValueError(f"Original profile unavailable for {person}")
+        state = {"job_description": jd, "profile": profile_evidence(profiles[person]),
+                 "reference_date": str(results["created_at"])[:10]}
+        for key in ("role_brief", "hiring_company_context"):
+            if results.get(key):
+                state[key] = results[key]
+        context = {key.removeprefix("current_company_"): value
+                   for key, value in saved[person].items()
+                   if key.startswith("current_company_") and value is not None}
+        if context:
+            state["current_company_context"] = context
+        cases.append(shortlist_priority.ReviewCase(person_id=person, state=state))
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = "search_harness.shortlist_priority"
+    output = shortlist_priority.ShortlistPriority(
+        cases=cases, output_dir=run_dir / "shortlist-priority",
+        max_cost_usd=max_cost_usd, approve_spend=approve_spend).run()
+    if output["status"] == "completed":
+        for iteration in results.get("iterations") or []:
+            for candidate in iteration.get("shortlist_grades") or []:
+                candidate["shortlist_priority"] = output["scores"].get(str(candidate["person"]))
+        _price_usage_log(run_dir / "usage.jsonl")
+        _save(results, run_dir)
+    return {**output, "results": str(run_dir / "results.json")}
+
+
 def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                      client: Any | None = None) -> Path:
     """Annotate candidate judgments from saved rerank rows; never searches."""
@@ -1638,10 +1695,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide",
-                 "reannotate-saved"):
+                 "reannotate-saved", "prioritize-saved"):
         command = sub.add_parser(name)
         command.add_argument("--run-dir", required=True)
-        if name in {"compile-pond", "run-pond", "reannotate-saved"}:
+        if name in {"compile-pond", "run-pond", "reannotate-saved", "prioritize-saved"}:
             command.add_argument("--env-file", default=str(ROOT / ".env"))
             if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
@@ -1651,6 +1708,10 @@ def main() -> None:
                                      help="Retrieval cap for this pond (default 1000)")
             elif name == "reannotate-saved":
                 command.add_argument("--pond", type=int)
+            elif name == "prioritize-saved":
+                command.add_argument("--approve-spend", action="store_true")
+                command.add_argument("--max-cost-usd", type=float, required=True)
+                command.add_argument("--limit", type=int)
             if name == "run-pond":
                 command.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
         elif name == "set-query":
@@ -1683,6 +1744,12 @@ def main() -> None:
                         backend=args.backend, db=args.db, capability_judge=args.capability_judge)
     elif args.command == "reannotate-saved":
         path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
+    elif args.command == "prioritize-saved":
+        output = prioritize_saved(run_dir=run_dir, env_file=args.env_file,
+                                  approve_spend=args.approve_spend,
+                                  max_cost_usd=args.max_cost_usd, limit=args.limit)
+        print(json.dumps(output, indent=2))
+        raise SystemExit(20 if output["status"] == "needs_approval" else 0)
     else:
         path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
                       note=args.note, autonomous=args.autonomous, model=args.model,

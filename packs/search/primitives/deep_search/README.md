@@ -44,6 +44,7 @@ An explicit request for another round can reopen a completed run.
 | Payload review | `search_harness.review_payload` | Agent-checked payload, optional rerank exclusions | `ready_to_run` or `ready_to_rerank`; edit delta |
 | Run | `search_harness.run_pond` | Reviewed payload, retrieval corpus | Pipeline candidate/profile artifacts; iteration with scores and pool statistics |
 | Candidate judgments | `search_harness._annotate_candidate_judgments` | Capability ratings >=3, full profiles, JD, pond query, company context | Domain score, opportunity cap, overall score; per-candidate checkpoints |
+| Optional review priority | `search_harness.prioritize_saved`, `shortlist_priority.py` | Saved overall 4/5 candidates, original profiles, JD and available company context | Four Jev signals followed by Sol/high priority and reasoning; exact-response cache |
 | Network attribution | `person_attribution.HydratePersonAttribution` | Saved candidate IDs and exact searched set; direct Postgres credentials | Source counts and operator names/channels in `results.json.person_attribution`; no account addresses or identifiers |
 | Decide | `search_harness.decide` | JD, current query, previous ponds, pool statistics, reviewed move cards | One pending query, a rerank-only payload, or `completed` |
 | Export | `search_harness._save` | Saved iterations, related same-JD results | Deduplicated summary; `shortlist.csv`, `relationship.csv` on completion |
@@ -121,6 +122,54 @@ The API's renderer package must be updated before accepting the attribution fiel
 Reinitializing with a different JD, initial query, or corpus requires a new run
 directory. `set-query` edits the current pending query before compilation.
 URL intake verifies the saved source URL and reuses the fetched JD.
+
+## Optional Sol + four-Jev review ordering
+
+This is a separate, opt-in final step over saved results, not another retrieval pass
+or replacement for the domain/opportunity judges. It uses the tested GPT-6 Sol/high
+prompt and four Jev questions: scope, role/company corroboration, central-function
+evidence and mechanism depth. No fitted weights or newer experimental prompts ship here.
+
+Preview eligible count/cost without calls or search mutations:
+
+```sh
+uv run --project . python packs/search/primitives/deep_search/search_harness.py prioritize-saved \
+  --run-dir <run> --env-file .env --max-cost-usd 20
+```
+
+After spend approval, smoke one candidate with the same command plus
+`--approve-spend --limit 1`, then omit `--limit` to resume all saved overall 4/5s.
+The limit bounds this invocation's ordering; only that subset is active until the
+full run completes. Successful calls are reused. `OPENAI_API_KEY` and
+`TYPESAFE_API_KEY` are required only for new calls; completed offline replays need neither.
+The dollar cap is cumulative for this run's `shortlist-priority/responses/` directory,
+including conservatively reserved failed/unfinished calls. Those require inspection,
+not automatic paid retries. There is no profile refresh or additional company lookup.
+
+The viewer places scored candidates first by review priority, preserving the prior
+overall/capability order for ties and unscored candidates. The existing details panel
+shows the priority explanation. All candidates, original scores, manual pins and
+human ratings remain unchanged. New ponds or reannotation invalidate older priorities
+for affected people. Exported snapshots use the same renderer and saved annotation;
+hosted parity requires the updated renderer package and a re-uploaded snapshot.
+This command does not upload or deploy anything.
+
+Input uses full original work history, not generated dense text, together with existing
+company context. A saved role brief is advisory; the exact JD is authoritative.
+No previous ratings, pins or network warmth are sent to either model. No age feature,
+new tenure penalty, automatic pin, or confidence-calibrated approval claim is added.
+
+The retrospective four-signal experiment captured 75 of 108 historical engineering
+pins in the first 150 of 300 reviews. That is pin capture, **not 70% precision**;
+unpinned rows were not necessarily rejected. Finance has not been validated here.
+Packing this version does not claim the later signal experiments improved it.
+
+Prompts/questions are `packs/search/prompts/shortlist-priority*`. Each candidate
+uses one Jev request and one Sol request, with system/JD before profile and signals.
+Sol uses Standard processing and 4,000 maximum completion tokens, unchanged from
+the experiment. The preview is a conservative bound, not an invoice; actual usage
+flows into the existing run usage log. See [Sol settings](https://developers.openai.com/api/docs/models/gpt-6-sol)
+and [pricing](https://developers.openai.com/api/docs/pricing).
 
 ## Precedents and standalone trait tools
 

@@ -218,7 +218,7 @@ def _education_item(education: Education) -> str:
       </div>"""
 
 
-def _person_details(pond_candidate: PondCandidate) -> str:
+def _person_details(pond_candidate: PondCandidate, candidate: Candidate | None = None) -> str:
     sources = "".join(f"<b class='source-chip'>{_e(source.capitalize())}</b>"
                       for source in pond_candidate.vertical_sources)
     sources = (f"<div class='details-section'><p class='details-label'>Sources</p>"
@@ -228,6 +228,9 @@ def _person_details(pond_candidate: PondCandidate) -> str:
                  if pond_candidate.reasoning else "")
     traits = "".join(_trait_indicator(trait, mark_core=False) for trait in pond_candidate.traits)
     reasoning += f"<div class='trait-indicators'>{traits}</div>" if traits else ""
+    if candidate and candidate.shortlist_priority:
+        reasoning += ("<div class='details-reasoning'><p class='details-label'>Review priority</p>"
+                      f"<p>{_e(candidate.shortlist_priority.reason)}</p></div>")
     location_matched = "location" in pond_candidate.vertical_sources
     location = (f"<div class='details-section'><p class='details-label'>Location"
                 f"{_MATCHED_CHIP if location_matched else ''}</p>"
@@ -417,7 +420,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       <td class='candidate-indicators'>
         <span class='person-actions'>{score_button}{_details_button(pond_candidate.name)}</span>
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {_person_details(pond_candidate)}
+        {_person_details(pond_candidate, graded)}
       </td>
     </tr>"""
 
@@ -523,6 +526,13 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
         ranked = sorted(best.values(), key=lambda row: (
             _overall_score(row, search.candidate(row.person_id)) or 0,
             ce_score(row)), reverse=True)
+
+    def priority(row: PondCandidate) -> tuple[bool, int]:
+        candidate = search.candidate(row.person_id)
+        review = candidate.shortlist_priority if candidate else None
+        return (review is not None, review.priority if review else 0)
+
+    ranked.sort(key=priority, reverse=True)
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True, readonly=readonly)
             for index, row in enumerate(ranked)]

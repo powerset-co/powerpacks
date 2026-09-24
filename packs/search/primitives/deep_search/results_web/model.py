@@ -195,6 +195,20 @@ def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
 
 
 @dataclass(frozen=True)
+class ShortlistPriority:
+    priority: int
+    reason: str
+
+
+def _shortlist_priority(raw: dict[str, Any] | None) -> ShortlistPriority | None:
+    if raw is None:
+        return None
+    if type(raw["priority"]) is not int or not 0 <= raw["priority"] <= 100:
+        raise ValueError("Shortlist priority must be an integer between 0 and 100")
+    return ShortlistPriority(raw["priority"], raw["reason"])
+
+
+@dataclass(frozen=True)
 class Candidate:
     person_id: str
     name: str
@@ -214,6 +228,7 @@ class Candidate:
     human_note: str = ""
     candidate_judgment: CandidateJudgment | None = None
     network_attribution: PersonAttribution | None = None
+    shortlist_priority: ShortlistPriority | None = None
 
     def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
         return next((row.candidate for row in self.ponds
@@ -483,6 +498,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
         human_note=_text(raw.get("human_note")),
         candidate_judgment=_candidate_judgment(raw.get("candidate_judgment")),
         network_attribution=_person_attribution(attribution),
+        shortlist_priority=_shortlist_priority(raw.get("shortlist_priority")),
     )
 
 

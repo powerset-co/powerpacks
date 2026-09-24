@@ -1,0 +1,25 @@
+{
+  "scope_match": {
+    "type": "noul",
+    "instructions": "Does the person's demonstrated day-to-day scope plausibly match the actual work this JD asks them to do? Evaluate responsibility and technical involvement, not nominal title, total career length or willingness to change jobs. Management is not automatically a mismatch if hands-on work continues. Apply evidence_policy. Use role_brief as an interpretation, not additional requirements; the JD is authoritative."
+  },
+  "role_company_corroboration": {
+    "type": "noul",
+    "instructions": "Does a specific relevant role or team at a company with well-established strength in this JD's function, TOGETHER WITH another independent career or research fact, support likely capability despite sparse descriptions? Generic employer prestige alone is insufficient. Do not assign company accomplishments to this individual. Apply evidence_policy. Use role_brief as an interpretation, not additional requirements; the JD is authoritative."
+  },
+  "function_evidence": {
+    "type": "choice",
+    "instructions": "Which best describes this person's match to the CENTRAL WORK in job_description? Use original responsibilities, role/team context and credible transfer. Optional tools are not required. Apply evidence_policy. Use role_brief as an interpretation, not additional requirements; the JD is authoritative.",
+    "criteria": {
+      "direct": "Personal work in the central function is directly described.",
+      "transferable": "Described adjacent personal work uses substantially transferable methods.",
+      "corroborated_inference": "Descriptions are sparse, but a specific role/team at a relevant company plus independent prior work or relevant research credibly support the function.",
+      "unknown": "Not enough evidence to establish either capability or a mismatch.",
+      "contradicted": "Actual responsibilities establish a different function without a credible bridge to the central work."
+    }
+  },
+  "mechanism_depth": {
+    "type": "noul",
+    "instructions": "Does this person's described work demonstrate understanding or ownership of mechanisms central to the JD, rather than merely using a related product or sharing an industry keyword? For example implementing a scheduler differs from using a cloud service; building an operating model differs from consuming reports. Interpret equivalent methods broadly. Apply evidence_policy. Use role_brief as an interpretation, not additional requirements; the JD is authoritative."
+  }
+}
