@@ -13,7 +13,6 @@ from unittest import mock
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
 from packs.ingestion.primitives.share import share as share_cli
 from packs.ingestion.primitives.share.label import ShareLabels
-from packs.ingestion.primitives.share.questions import channel_state, facts_state, profile_state
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.share.labels import (
     ACTIVE_P,
@@ -342,23 +341,6 @@ class QuestionContractTests(unittest.TestCase):
         self.assertEqual(labels.scores["warmth"], 0)
         self.assertAlmostEqual(labels.probabilities["is_family"], 0.9)
 
-    def test_the_request_carries_no_message_text(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = _write_install(Path(directory))
-            person = next(p for p in evidence.load() if p.person_id == "person-a")
-            request = build_request(
-                dossier=person.dossier,
-                facts=facts_state(person),
-                profile=profile_state(person),
-                channels=channel_state(person),
-                owner=evidence.owner_state(),
-                reference_date=REFERENCE_DATE,
-            )
-        serialized = json.dumps(request)
-        self.assertNotIn("SECRET-BODY", serialized)
-        self.assertNotIn("SECRET-SUBJECT", serialized)
-        self.assertFalse(_keys(request) & {"body", "text", "subject", "snippet"})
-
     def test_the_request_is_dated_by_its_evidence_not_by_today(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             evidence = _write_install(Path(directory))
@@ -368,12 +350,6 @@ class QuestionContractTests(unittest.TestCase):
             person = next(p for p in evidence.load() if p.person_id == "person-a")
         self.assertEqual(person.evidence_date, "2026-09-10")
 
-    def test_owned_identifiers_never_reach_the_request(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = _write_install(Path(directory))
-            person = next(p for p in evidence.load() if p.person_id == "person-a")
-        self.assertNotIn("owned_identifiers", facts_state(person))
-        self.assertIn("owned_identifiers", person.facts)
 
 
 def _keys(value: object) -> set[str]:
@@ -392,54 +368,39 @@ class LabelRunTests(unittest.TestCase):
         self.evidence = _write_install(self.root)
         self.out = self.root / "share"
 
-    def _run(self, **overrides):
-        args = {
-            "out_dir": self.out,
-            "evidence": self.evidence,
-            "api_key": "synthetic-key",
-            "approve_spend": True,
+    def _save_labels(self):
+        paths = list(self.evidence.facts_dir.glob("*.jsonl"))
+        path = paths[0]
+        rec = json.loads(path.read_text().splitlines()[-1])
+        answers = {name: _answer(question) for name, question in build_questions().items()}
+        labels = labels_from_answers(answers)
+        rec["facts"]["labels"] = {
+            **labels.choices, **{f"{name}_p": value for name, value in labels.choice_p.items()},
+            **labels.scores, **labels.probabilities,
         }
-        args.update(overrides)
-        with mock.patch.dict("os.environ", {"POWERPACKS_USAGE_LOG": str(self.out / "usage.jsonl")}):
-            return ShareLabels(**args).run()
+        path.write_text(json.dumps(rec) + "\n")
 
-    def test_estimate_prices_the_uncached_calls_and_writes_nothing(self) -> None:
-        payload = self._run(estimate_only=True, approve_spend=False, client=_Client())
+    def test_export_requires_worth_labels_before_sharing(self):
+        payload = ShareLabels(out_dir=self.out, evidence=self.evidence).run()
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("synthesize", payload["error"])
+        self.assertFalse((self.out / "labels.csv").exists())
+
+    def test_saved_labels_export_is_free_and_covers_linkedin_only(self):
+        self._save_labels()
+        payload = ShareLabels(out_dir=self.out, evidence=self.evidence).run()
         self.assertEqual(payload["status"], "completed")
-        self.assertEqual(payload["estimate"]["uncached_calls"], 1)
-        self.assertGreater(payload["estimate"]["cost_usd"], 0)
-        self.assertFalse((self.out / "labels.csv").exists())
-
-    def test_spend_is_gated_until_approved(self) -> None:
-        payload = self._run(approve_spend=False, client=_Client())
-        self.assertEqual(payload["status"], "needs_approval")
-        self.assertEqual(payload["needs_approval"]["estimated_calls"], 1)
-        self.assertEqual(share_cli.exit_code_for_status(payload["status"]), EXIT_NEEDS_APPROVAL)
-        self.assertFalse((self.out / "labels.csv").exists())
-
-    def test_approved_run_labels_everyone_and_calls_jev_once(self) -> None:
-        client = _Client()
-        payload = self._run(client=client)
-        self.assertEqual(len(client.calls), 1)
-        self.assertEqual(payload["counts"], {
-            "people": 2,
-            "jev_called": 1,
-            "cached": 0,
-            "deterministic_only": 1,
-            "private_suggested": 1,
-        })
+        self.assertEqual(payload["counts"]["saved_labels"], 1)
         rows = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "labels.csv")}
         self.assertEqual(rows["person-a"]["relationship_kind"], "family")
         self.assertEqual(rows["person-a"]["private_reason"], "family")
         self.assertEqual(rows["person-b"]["linkedin_only"], "yes")
-        self.assertEqual(rows["person-b"]["relationship_kind"], "")
 
-    def test_a_cached_answer_costs_no_network_call(self) -> None:
-        self._run(client=_Client())
-        second = self._run(client=None, api_key=None)
-        self.assertEqual(second["counts"]["cached"], 1)
-        self.assertEqual(second["counts"]["jev_called"], 0)
-        self.assertEqual(second["paid_usage"]["pairs"], 0)
+    def test_estimate_never_calls_jev_or_writes(self):
+        self._save_labels()
+        payload = ShareLabels(out_dir=self.out, evidence=self.evidence, estimate_only=True).run()
+        self.assertEqual(payload["estimate"]["cost_usd"], 0)
+        self.assertFalse((self.out / "labels.csv").exists())
 
 
 class EvidenceJoinTests(unittest.TestCase):

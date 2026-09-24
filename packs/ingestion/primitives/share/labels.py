@@ -133,6 +133,16 @@ def labels_from_answers(answers: dict[str, dict]) -> JevLabels:
     )
 
 
+def labels_from_saved(labels: dict) -> JevLabels:
+    """Parse the labels persisted with a person's synthesized facts."""
+    return JevLabels(
+        choices={name: str(labels[name]) for name in CHOICE_LABELS},
+        choice_p={name: float(labels[f"{name}_p"]) for name in CHOICE_LABELS},
+        scores={name: int(labels[name]) for name in SCORE_LABELS},
+        probabilities={name: float(labels[name]) for name in NOUL_LABELS},
+    )
+
+
 # First rule wins; the rule NAME is the reason written to labels.csv.
 _JEV_PRIVATE_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
     ("family", lambda j: j.choices["relationship_kind"] == "family" or j.probabilities["is_family"] >= PRIVATE_P),

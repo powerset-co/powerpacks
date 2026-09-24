@@ -97,17 +97,16 @@ Cloud (production, read-only checks):
 
 ## Decisions
 
-1. **Labels are a stage, `share`, under `packs/ingestion/primitives/share/`.** Output dir
-   `.powerpacks/share/` with `labels.csv` (machine), `tags.csv` (human), `share.csv`
-   (derived), `manifest.json`, `jev/<sha>.json` (client cache). Manifest + outputs only.
-2. **The judge is Jev** with a frozen 34-question set (`share/questions.py`) plus 10
-   deterministic labels computed from body-free metadata. The request's `reference_date` is
-   the facts file's date (parent dossiers carry none), so the per-request cache only misses when evidence changes. Input per person = dossier markdown
-   (parent dossier if present, else child) + the facts JSON + profile fields + channel/cadence
-   metadata + owner context. **Never raw bodies.** Only people with a facts file or dossier are
-   sent; LinkedIn-only people get deterministic labels (`linkedin_only`).
-   Cost: ~1–3k input tokens/person → ~$0.05 for 766 people. Still spend-gated
-   (`--approve-spend`, `common/gates.py`), estimate printed first.
+1. **Worth produces labels; Share exports them locally.** Worth persists machine
+   `network_worth` and `labels` with the facts; its request cache lives under
+   `.powerpacks/deep-context/jev/`. Share writes `.powerpacks/share/labels.csv`,
+   human `tags.csv`, derived `share.csv`, and `manifest.json`.
+2. **JEV answers 34 share questions and 7 worth questions together.** A frozen
+   mapping trained only on original machine decisions produces worth. Inputs are
+   synthesized facts, a facts-derived dossier/profile, message counts, and owner
+   context. Old worth answers, old labels, LinkedIn enrichment, and raw message
+   bodies are excluded. `synthesize --dry-run` estimates the uncached calls.
+   Share makes no paid calls; LinkedIn-only people receive deterministic labels.
 3. **Human tags win.** `tags.csv` rows: `person_id, tags, note, updated_at`; tags are a
    `|`-joined set from the same label vocabulary plus `private` and `share`. Machine never
    writes `tags.csv`. Set with `bin/deep-context tag <lookup> +private -friend`.
@@ -208,7 +207,7 @@ upload), CLAUDE.md routing line, `packs/indexing/README.md` row.
 ## Verification (real surface)
 
 1. `bin/deep-context label --estimate` on the real install → count + $ estimate.
-2. `bin/deep-context label --approve-spend` (≈$0.05) → `labels.csv` 766 rows; spot-check 10
+2. `bin/deep-context label` (free) → `labels.csv` 766 rows; spot-check 10
    people by hand against their dossiers (family/homie/service correctly separated;
    `private_suggested` fires on the obvious ones).
 3. `bin/deep-context tag --name "<someone>" +private` → `tags.csv` row; `share` → `share.csv`

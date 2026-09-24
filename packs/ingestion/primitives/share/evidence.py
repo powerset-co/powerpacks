@@ -1,9 +1,8 @@
 """people.csv joined to its deep-context leaves — the share stage's one reader.
 
-Facts, raw bundles and parent dossiers are keyed by PARENT id, not by the
-people.csv id; `review_store.parent_ids_by_person` is the one map between them.
-Only body-free fields of `raw/<parent_id>.json` are ever read (direction, at,
-channel, group names); message text never reaches a request.
+Facts and raw bundles use parent or child identity keys. Current parent membership
+and superseded people IDs connect realized rows to those files. Labels come from
+the same highest-worth machine record used to select the facts.
 
 Flow: `ShareEvidence(...).load()` -> `list[PersonEvidence]`; `owner_state()` ->
 the mailbox owner's background for the request.
@@ -44,12 +43,13 @@ from packs.ingestion.primitives.share.csv_cells import cell_text
 from packs.ingestion.schemas.people_schema import parse_interaction_counts, parse_source_channels
 from packs.shared.csv_io import CsvIO
 
+_MACHINE_PRIORITY = {"no": 0, "maybe": 1, "yes": 2}
+
 
 class ShareEvidence:
     """people.csv joined to its deep-context leaves, parsed once at the boundary.
 
-    Facts, raw bundles and parent dossiers are keyed by PARENT id, not by the
-    people.csv id — `review_store.parent_ids_by_person` is the one map between them.
+    Parent membership joins identity-keyed facts to each realized person.
     """
 
     def __init__(
@@ -96,6 +96,9 @@ class ShareEvidence:
             for child in record.get("children") or []
         }
         parent_ids = parent_ids_by_person(self.index_json)
+        children_by_parent: dict[str, list[str]] = {}
+        for child, parent in parent_ids.items():
+            children_by_parent.setdefault(parent, []).append(child)
         overrides = load_override_rows(self.overrides_csv)
 
         people: list[PersonEvidence] = []
@@ -103,12 +106,22 @@ class ShareEvidence:
             person_id = str(row.get("id") or "").strip()
             if not person_id:
                 continue
-            parent_id = parent_ids.get(person_id.lower(), "")
+            superseded = tuple(parse_list(row.get("superseded_person_ids")))
+            identities = {value.lower() for value in (person_id, *superseded)}
+            parents = {parent_ids[identity] for identity in identities if identity in parent_ids}
+            for parent in sorted(parents):
+                identities.add(parent)
+                identities.update(children_by_parent[parent])
+            parent_id = next(iter(sorted(parents)), "")
             public_identifier = cell_text(row.get("public_identifier"))
             public_identifier = public_identifier.lower() if public_identifier else None
             worth_key = parent_worth_key(parent_id) if parent_id else (public_identifier or person_id)
-            dossier = self._dossier(slug_by_person.get(person_id, ""), parent_slug_by_child)
-            facts = self._facts(parent_id)
+            facts_id, facts, evidence_date = self._facts(identities)
+            dossier = next((text for identity in sorted(identities)
+                            if (text := self._dossier(slug_by_person.get(identity, ""), parent_slug_by_child))), None)
+            worth = effective_network_worth(worth_key, overrides, self.facts_dir)
+            if worth["source"] != "user" and facts:
+                worth = facts.get("network_worth") or worth
             people.append(
                 PersonEvidence(
                     person_id=person_id,
@@ -123,34 +136,37 @@ class ShareEvidence:
                     source_channels=parse_source_channels(row.get("source_channels")),
                     interaction_counts=parse_interaction_counts(row.get("interaction_counts")),
                     last_interaction=cell_text(row.get("last_interaction")),
-                    superseded_person_ids=tuple(parse_list(row.get("superseded_person_ids"))),
-                    network_worth=effective_network_worth(worth_key, overrides, self.facts_dir)["decision"],
+                    superseded_person_ids=superseded,
+                    network_worth=worth["decision"],
                     dossier=dossier,
-                    evidence_date=self._evidence_date(parent_id, facts),
+                    evidence_date=evidence_date,
                     facts=facts,
                     shared_overlaps=_overlaps(facts),
-                    messages=self._messages(parent_id),
+                    messages=self._messages(facts_id or parent_id),
                 )
             )
             if limit and len(people) >= limit:
                 break
         return people
 
-    def _evidence_date(self, parent_id: str, facts: dict[str, Any] | None) -> str | None:
-        """The date the facts file was synthesized — the dossiers are rendered from
-        it (parent dossiers carry no date of their own). None without facts."""
-        if facts is None:
-            return None
-        return date.fromtimestamp((self.facts_dir / f"{parent_id}.jsonl").stat().st_mtime).isoformat()
-
-    def _facts(self, parent_id: str) -> dict[str, Any] | None:
-        if not parent_id:
-            return None
-        records = read_jsonl(self.facts_dir / f"{parent_id}.jsonl")
-        if not records:
-            return None
-        facts = records[-1].get("facts")
-        return facts if isinstance(facts, dict) else None
+    def _facts(self, identities: set[str]) -> tuple[str, dict[str, Any] | None, str | None]:
+        candidates = []
+        for identity in sorted(identities):
+            path = self.facts_dir / f"{identity}.jsonl"
+            records = read_jsonl(path)
+            if not records:
+                continue
+            record = records[-1]
+            facts = record.get("facts")
+            if not isinstance(facts, dict):
+                continue
+            decision = (facts.get("network_worth") or {}).get("decision", "maybe")
+            evidence_date = str(record.get("updated_at") or date.fromtimestamp(path.stat().st_mtime))[:10]
+            candidates.append((-_MACHINE_PRIORITY.get(decision, 1), identity, facts, evidence_date))
+        if not candidates:
+            return "", None, None
+        _, identity, facts, evidence_date = min(candidates, key=lambda item: item[:2])
+        return identity, facts, evidence_date
 
     def _dossier(self, slug: str, parent_slug_by_child: dict[str, str]) -> str | None:
         if not slug:

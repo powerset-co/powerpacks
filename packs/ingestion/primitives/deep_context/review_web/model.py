@@ -814,6 +814,15 @@ def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str,
             None,
         )
         p["worth_row"] = row
+        labels = {}
+        # Use the same contributing identity as the parent machine verdict.
+        labels_id = str(((row or {}).get("machine") or {}).get("person_id") or "")
+        ids = [labels_id] if labels_id else p.get("person_ids") or []
+        for pid in ids:
+            records = list(read_jsonl(facts_dir / f"{pid}.jsonl"))
+            if records:
+                labels.update((records[-1].get("facts") or {}).get("labels") or {})
+        p["labels"] = labels
         if row is not None:
             machine = row.get("machine") or {
                 "decision": "maybe", "reason": "", "source": "default",

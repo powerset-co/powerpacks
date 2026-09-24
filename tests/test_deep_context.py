@@ -775,7 +775,7 @@ class TestSynthesize(unittest.TestCase):
         self.assertIn("Zoom/Teams/Webex bridges are no one's personal number", prompt)
         self.assertIn("their own signature or their own words", prompt)
 
-    def test_contract_version_requeues_stale_terminal_facts(self):
+    def test_contract_version_preserves_paid_facts(self):
         with tempfile.TemporaryDirectory() as d:
             raw, facts = Path(d) / "raw", Path(d) / "facts"
             raw.mkdir(); facts.mkdir()
@@ -785,29 +785,12 @@ class TestSynthesize(unittest.TestCase):
                 "synthesis_version": "old-contract",
                 "facts": _facts(network_worth={"decision": "yes", "reason": "real person"}),
             }) + "\n", encoding="utf-8")
-            self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id="", review_rows={}), [bundle])
+            self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id=""), [])
             (facts / "p1.jsonl").write_text(json.dumps({
                 "synthesis_version": synth.SYNTHESIS_VERSION,
                 "facts": _facts(network_worth={"decision": "yes", "reason": "real person"}),
             }) + "\n", encoding="utf-8")
-            self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id="", review_rows={}), [])
-
-    def test_completed_collection_prunes_orphan_facts_but_scoped_run_does_not(self):
-        with tempfile.TemporaryDirectory() as d:
-            raw, facts = Path(d) / "raw", Path(d) / "facts"
-            raw.mkdir()
-            facts.mkdir()
-            (raw / "current.json").write_text('{"messages":[{"text":"hello"}]}', encoding="utf-8")
-            (raw / "manifest.json").write_text('{"status":"completed"}', encoding="utf-8")
-            (facts / "current.jsonl").write_text("{}\n", encoding="utf-8")
-            orphan = facts / "retired.jsonl"
-            orphan.write_text("{}\n", encoding="utf-8")
-            self.assertEqual(
-                synth.prune_orphan_facts(raw, facts, scoped=True, dry_run=False), 0)
-            self.assertTrue(orphan.exists())
-            self.assertEqual(
-                synth.prune_orphan_facts(raw, facts, scoped=False, dry_run=False), 1)
-            self.assertFalse(orphan.exists())
+            self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id=""), [])
 
 
 class TestMergeFacts(unittest.TestCase):
@@ -935,7 +918,12 @@ class TestSynthesizeExecute(unittest.TestCase):
     def _execute(self, root: Path, fake_call_one, **kw):
         client = _StubAsyncClient()
         with mock.patch.object(synth, "_call_one", fake_call_one), \
-                mock.patch.object(synth, "make_async_client", lambda **_: client):
+                mock.patch.object(synth, "make_async_client", lambda **_: client), \
+                mock.patch.object(synth.jev_worth, "classify", mock.AsyncMock(return_value={
+                    "network_worth": {"decision": "yes", "reason": "work evidence"},
+                    "labels": {"professional": True},
+                    "usage": {"input_tokens": 20, "output_tokens": 10, "cached": True, "cost_usd": 0},
+                })):
             return self._node(root, **kw).execute(), client
 
     def test_nothing_pending_reports_a_zero_run_without_building_a_client(self):
@@ -7628,6 +7616,19 @@ class GhostRowSettleTests(unittest.TestCase):
             ghost = next(c for c in parents_list[0]["candidates"]
                          if c["row_key"] == self.GHOST)
             self.assertEqual(web_model.candidate_state(ghost), "detached")
+
+    def test_skip_accepts_the_review_row_key_without_a_linkedin_pub(self):
+        with tempfile.TemporaryDirectory() as d:
+            fixture = self._fixture(d)
+            base, verdicts, review = fixture
+            with self._serve(base, verdicts, review) as port:
+                status, body = self._post(port, "/decide", {
+                    "pub": self.GHOST, "decision": "detach",
+                    "parent_slug": "jordan-bravo-p"})
+            self.assertEqual(status, 200, body)
+            row = load_rows(review)[self.GHOST]
+            self.assertEqual((row["action"], row["approved"]), ("detach", "yes"))
+            self.assertEqual(self._queue(*fixture), [])
 
     def test_decide_keep_settles_ghost_sibling_and_parent_leaves_queue(self):
         with tempfile.TemporaryDirectory() as d:

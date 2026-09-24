@@ -61,20 +61,12 @@ Use the narrow path when the user names one:
   compatibility but is a no-op — restart is always unconditional.
 - `$deep-context heal` -> run only `bin/deep-context heal`: the same
   self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
-- `$deep-context refresh`, "resynthesize and show me the directory" -> run only
-  `bin/deep-context refresh`; it re-synthesizes stale dossiers (free when facts
-  are on the current synthesis contract; a contract bump re-runs everyone and
-  the dry estimate prints first — invoking refresh is the approval), rebuilds
-  parents, and opens the directory.
+- `$deep-context refresh` -> run `bin/deep-context refresh`; estimate first,
+  reuse existing facts, complete JEV worth/labels, rebuild parents, and open the directory.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
-  show the OpenAI estimate, get fresh approval, then run the exact paid command.
-  This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
-  dossier, including mixed-source people and people with an attached LinkedIn.
-  It ignores cached machine and human worth for selection, never uses LinkedIn
-  as evidence, and never overwrites the human-owned `network_worth` column.
-  Both commands first rebuild every raw bundle from the current message stores
-  (free, local, no LLM), so a deeper message sync is picked up automatically —
-  expect a higher estimate than the original run when history got deeper.
+  show the JEV estimate, obtain spend approval, then run the exact command.
+  This reclassifies saved facts using the JEV cache. It never uses LinkedIn as
+  evidence and never changes the human-owned `network_worth` column.
 - "Review complete proceed with enrichment" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
@@ -203,14 +195,15 @@ common case) — just run it, keep this cost gate out of the user-facing task co
 Only when the ceiling is **$25 or more** do you pause: show the contact count and
 cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
-printed by `dry` — do not invent a different scope. Synthesis also produces an
-initial `network_worth` recommendation and reason in each
+printed by `dry` — do not invent a different scope. Synthesis extracts facts.
+JEV then answers the 34 share-label and 7 worth questions together. A frozen mapping trained only on original machine decisions
+produces `network_worth`; the same call stores `labels` in each
 `facts/<person_id>.jsonl`, then mirrors that child machine verdict into
 `review.csv.llm_worth` / `llm_worth_reason`. After canonicalization, `parents`
 aggregates child verdicts in priority order (`Yes > Maybe > No`) into one
 parent-keyed worth row in the same `review.csv`. Human review writes only that
-row's authoritative `network_worth`. Normal repeated synthesis rejudges only
-missing/Maybe machine verdicts; machine Yes/No and human Yes/No are stable.
+row's authoritative `network_worth`. Existing facts are reused without another
+GPT call. JEV resumes from its request cache; human decisions remain unchanged. Use `--force` explicitly to rebuild facts.
 
 Worth uses message context and contact identifiers only — never LinkedIn:
 
@@ -518,14 +511,12 @@ Pass only on `status: ok`.
 ### 9. Share (optional): label, tag, upload to Powerset
 
 Who leaves the laptop is a per-person decision — see
-`packs/ingestion/docs/share-and-upload.md`. Labels are cheap (Jev, ~$0.10 per
-1,000 people) and cached per person until their evidence changes.
+`packs/ingestion/docs/share-and-upload.md`. Worth already produces the JEV
+labels. Share reuses them locally; there is no separate paid labeling stage.
 
 ```bash
-bin/deep-context label --estimate          # count + cost, writes nothing
-bin/deep-context label --approve-spend     # labels.csv (needs TYPESAFE_API_KEY)
 bin/deep-context tag --name "Jane Doe" +private   # or +share; rebuilds share.csv
-bin/deep-context share                     # share.csv from labels + tags (free)
+bin/deep-context share                     # export saved labels and build share.csv (free)
 ```
 
 `share.csv` says yes to everyone except the owner, human `private`, machine

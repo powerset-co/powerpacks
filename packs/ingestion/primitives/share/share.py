@@ -50,9 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Share stage: machine labels, human tags, the share list.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    label = sub.add_parser("label", help="build labels.csv (Jev; spend-gated)")
+    label = sub.add_parser("label", help="export saved labels.csv (free, local)")
     label.add_argument("--estimate", action="store_true", help="print the cost and write nothing")
-    label.add_argument("--approve-spend", action="store_true")
     label.add_argument("--limit", type=int, default=0)
 
     tag = sub.add_parser("tag", help="set human tags on one person: tag --name X +private -friend")
@@ -72,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "label":
         payload = ShareLabels(
-            estimate_only=args.estimate, approve_spend=args.approve_spend, limit=args.limit
+            estimate_only=args.estimate, limit=args.limit
         ).run()
         emit(payload)
         return exit_code_for_status(payload["status"])
@@ -113,6 +112,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "share":
+        payload = ShareLabels().run()
+        if payload["status"] != "completed":
+            emit(payload)
+            return exit_code_for_status(payload["status"])
         payload = ShareList().run()
         emit(payload)
         return exit_code_for_status(payload["status"])

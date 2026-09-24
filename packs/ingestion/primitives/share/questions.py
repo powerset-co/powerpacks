@@ -21,12 +21,9 @@ Changelog:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
-
-if TYPE_CHECKING:
-    from packs.ingestion.primitives.share.models import PersonEvidence
 
 REQUEST_VERSION = "share-labels-request-v1-20260924"
 
@@ -184,37 +181,6 @@ NOUL_QUESTIONS: dict[str, str] = {
 CHOICE_LABELS = tuple(CHOICE_QUESTIONS)
 SCORE_LABELS = tuple(SCORE_QUESTIONS)
 NOUL_LABELS = tuple(NOUL_QUESTIONS)
-
-
-def profile_state(person: PersonEvidence) -> dict[str, Any]:
-    location = ", ".join(part for part in (person.city, person.state, person.country) if part)
-    return {
-        "name": person.full_name,
-        "headline": person.headline,
-        "title": person.current_title,
-        "company": person.current_company,
-        "location": location or None,
-    }
-
-
-def channel_state(person: PersonEvidence) -> dict[str, Any]:
-    return {
-        "source_channels": list(person.source_channels),
-        "interaction_counts": person.interaction_counts,
-        "last_interaction": person.last_interaction,
-        "first_message_at": person.messages.first_at,
-        "last_message_at": person.messages.last_at,
-        "from_me": person.messages.from_me,
-        "from_them": person.messages.from_them,
-        "group_count": person.messages.group_count,
-    }
-
-
-def facts_state(person: PersonEvidence) -> dict[str, Any] | None:
-    """Exclude the owner's own addresses from the request."""
-    if person.facts is None:
-        return None
-    return {key: value for key, value in person.facts.items() if key != "owned_identifiers"}
 
 
 def build_questions() -> dict[str, dict]:
