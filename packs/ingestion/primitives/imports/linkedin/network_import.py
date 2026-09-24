@@ -316,10 +316,10 @@ class LinkedInImportManifest(StageManifest):
 def manifest_status_payload(document: ManifestDocument, artifact_dir: Path) -> dict[str, Any]:
     """The `status` command's emit payload for the manifest on disk.
 
-    A `failed` / `not_ready` manifest is the Node template's failure record, so it
-    reports its status with empty sections; every other status carries this
-    stage's payload, which `LinkedInImportManifest` validates."""
-    if document.status in FRAMEWORK_FAILURE_STATUSES:
+    A `failed` / `not_ready` manifest is the Node template's failure record.
+    Existing LinkedIn discovery manifests also lack this import stage's
+    `primitive`; both report their status with empty import sections."""
+    if document.status in FRAMEWORK_FAILURE_STATUSES or "primitive" not in document.payload:
         counts: dict[str, Any] = {}
         artifacts: dict[str, Any] = {}
         steps: dict[str, Any] = {}

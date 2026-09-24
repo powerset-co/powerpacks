@@ -278,6 +278,25 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["source_people_total"], 1)
             self.assertEqual(payload["steps"]["convert"]["status"], "completed")
 
+    def test_status_reports_existing_discovery_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write_manifest(
+                Path(tmp) / "out" / "discover" / "linkedin",
+                {
+                    "status": "completed",
+                    "source": "linkedin_csv",
+                    "source_csv": "Connections.csv",
+                    "contacts": 291,
+                    "stats": {"parsed": 291},
+                    "fingerprints": {"input_artifacts": {}, "output_artifacts": {}},
+                },
+            )
+            code, payload = self.invoke(["status", "--output-dir", str(Path(tmp) / "out")])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["counts"], {})
+            self.assertEqual(payload["artifacts"], {})
+
 
 if __name__ == "__main__":
     unittest.main()
