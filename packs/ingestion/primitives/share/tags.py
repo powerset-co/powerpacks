@@ -1,25 +1,22 @@
-"""tags.csv — the human's word on a person, and the lookup that finds them.
+"""tags.csv — the human's word on a person.
 
-Only `bin/deep-context tag` writes this file; every machine stage reads it.
+The UI writes this file through `TagStore`; every machine stage reads it.
 One row per tagged person: `person_id, tags, note, updated_at`.
 
-Flow: `lookup_targets(name=…)` resolves a query to person ids through the
-deep-context index; `TagStore.apply(...)` upserts one row; `TagStore.load()`
-hands the share decision a `dict[person_id, HumanTags]`.
+Flow: `TagStore.apply(...)` upserts one row; `TagStore.load()` hands the share
+decision a `dict[person_id, HumanTags]`.
 
 Changelog:
+  2026-09-24: dropped the tag CLI's person lookup; the UI resolves its own rows.
   2026-09-24: bound the tags path to the store output directory.
   2026-09-24: created.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.common import INDEX_JSON
-from packs.ingestion.primitives.deep_context.lookup_person import PersonLookup
 from packs.ingestion.primitives.share.labels import PRIVATE_TAG, SHARE_TAG
 from packs.ingestion.primitives.share.models import SHARE_DIR, TAG_COLUMNS, TAGS_FILENAME, HumanTags
 from packs.ingestion.primitives.share.questions import NOUL_LABELS
@@ -30,28 +27,6 @@ from packs.shared.csv_io import CsvIO
 TAG_VOCABULARY = frozenset(NOUL_LABELS) | {PRIVATE_TAG, SHARE_TAG}
 
 TAG_SEPARATOR = "|"
-
-
-@dataclass(frozen=True)
-class TagTarget:
-    """One person a lookup query resolved to."""
-
-    person_id: str
-    slug: str
-    name: str
-
-
-def lookup_targets(
-    *, name: str = "", phone: str = "", email: str = "", index_json: Path = INDEX_JSON
-) -> tuple[TagTarget, ...]:
-    """Resolve a name/phone/email query to person ids through the deep-context index."""
-    result = PersonLookup(name=name, phone=phone, email=email, index_json=index_json).run()
-    targets = []
-    for match in result.matches:
-        person_id = str(match.record.get("person_id") or "").strip()
-        if person_id:
-            targets.append(TagTarget(person_id=person_id, slug=match.slug, name=match.label))
-    return tuple(targets)
 
 
 class TagStore:

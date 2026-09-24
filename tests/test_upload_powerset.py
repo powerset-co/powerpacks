@@ -26,7 +26,16 @@ from packs.indexing.primitives.upload_powerset.models import (
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
-from packs.ingestion.schemas.share_schema import HUMAN_PRIVATE, HUMAN_SHARE, PRIVATE_SUGGESTED, ShareRow
+from packs.ingestion.schemas.share_schema import (
+    FAMILY,
+    HUMAN_PRIVATE,
+    HUMAN_SHARE,
+    SHARE_CONFIRM,
+    SHARE_NO,
+    SHARE_YES,
+    WORTH_NO,
+    ShareRow,
+)
 
 OPERATOR = "00000000-0000-0000-0000-0000000000aa"
 OTHER_OPERATOR = "00000000-0000-0000-0000-0000000000bb"
@@ -52,7 +61,7 @@ CLOUD_PERSONS_COLUMNS = [
 ]
 
 
-def share_row(person_id: str, slug: str, *, share: bool = True, reason: str = "") -> ShareRow:
+def share_row(person_id: str, slug: str, *, share: str = SHARE_YES, reason: str = "") -> ShareRow:
     return ShareRow(person_id, slug, share, reason, (), "machine", "2026-09-24T00:00:00Z")
 
 
@@ -156,7 +165,7 @@ class PlanBucketTests(unittest.TestCase):
     def test_unshared_person_deletes_sources_and_joins_the_patch_list(self):
         stale = SourceRow(STALE_PERSON, "gmail", "casey@example.com", 3, "")
         plan = plan_for(
-            [share_row(STALE_PERSON, "casey-lane", share=False)],
+            [share_row(STALE_PERSON, "casey-lane", share=SHARE_NO, reason=WORTH_NO)],
             [local_person(STALE_PERSON, "casey-lane")],
             cloud_state(operator_sources=(stale,), operator_ids_by_person={STALE_PERSON: (OPERATOR, OTHER_OPERATOR)}),
         )
@@ -165,10 +174,22 @@ class PlanBucketTests(unittest.TestCase):
         self.assertEqual(summaries.patch_person_ids, (STALE_PERSON,))
         self.assertEqual(plan.allowed_operator_ids[STALE_PERSON], (OTHER_OPERATOR,))
 
+    def test_a_confirm_row_is_neither_uploaded_nor_tagged(self):
+        stale = SourceRow(CLOUD_PERSON, "gmail", "casey@example.com", 3, "")
+        plan = plan_for(
+            [share_row(CLOUD_PERSON, "casey-lane", share=SHARE_CONFIRM, reason=FAMILY)],
+            [local_person(CLOUD_PERSON, "casey-lane")],
+            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}, operator_sources=(stale,)),
+        )
+        self.assertEqual(plan.persons_upsert, ())
+        self.assertEqual(plan.sources_insert, ())
+        self.assertEqual(plan.sources_delete, (stale,))
+        self.assertEqual(plan.tags_put, ())
+
     def test_private_person_in_cloud_gets_a_tag_and_an_un_privated_one_loses_it(self):
         plan = plan_for(
             [
-                share_row(CLOUD_PERSON, "casey-lane", share=False, reason=HUMAN_PRIVATE),
+                share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=HUMAN_PRIVATE),
                 share_row(NEW_PERSON, "jordan-bravo"),
             ],
             [local_person(CLOUD_PERSON, "casey-lane"), local_person(NEW_PERSON, "jordan-bravo")],
@@ -178,7 +199,7 @@ class PlanBucketTests(unittest.TestCase):
             ),
         )
         self.assertEqual([row.group_key for row in plan.tags_put], ["casey-lane"])
-        # jordan-bravo's local decision is a machine default, so the cloud tag (a
+        # jordan-bravo's local decision is a machine one, so the cloud tag (a
         # human's word in the Powerset UI) stays; someone-cloud-only is not ours at all.
         self.assertEqual(plan.tags_delete, ())
 
@@ -190,13 +211,13 @@ class PlanBucketTests(unittest.TestCase):
         )
         self.assertEqual([row.group_key for row in plan.tags_delete], ["jordan-bravo"])
 
-    def test_a_machine_private_suggestion_also_tags_the_cloud(self):
+    def test_a_machine_no_never_tags_the_cloud(self):
         plan = plan_for(
-            [share_row(CLOUD_PERSON, "casey-lane", share=False, reason=PRIVATE_SUGGESTED)],
+            [share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=WORTH_NO)],
             [local_person(CLOUD_PERSON, "casey-lane")],
             cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}),
         )
-        self.assertEqual([row.group_key for row in plan.tags_put], ["casey-lane"])
+        self.assertEqual(plan.tags_put, ())
 
     def test_a_cloud_minted_id_is_used_for_sources_tags_and_patches(self):
         cloud_minted = "99999999-9999-4999-8999-999999999999"
@@ -214,7 +235,7 @@ class PlanBucketTests(unittest.TestCase):
 
     def test_private_person_absent_from_cloud_gets_no_tag(self):
         plan = plan_for(
-            [share_row(NEW_PERSON, "jordan-bravo", share=False, reason=HUMAN_PRIVATE)],
+            [share_row(NEW_PERSON, "jordan-bravo", share=SHARE_NO, reason=HUMAN_PRIVATE)],
             [local_person(NEW_PERSON, "jordan-bravo")],
             cloud_state(),
         )
@@ -369,12 +390,14 @@ class DryRunTests(unittest.TestCase):
         people_csv.write_text(
             "id,public_identifier,source_channels,interaction_counts,last_interaction,primary_email,primary_phone\n"
             f"{NEW_PERSON},jordan-bravo,linkedin_csv,,,,\n"
+            f"{STALE_PERSON},riley-echo,linkedin_csv,,,,\n"
         )
         share_csv = root / "share.csv"
         share_csv.write_text(
             "person_id,public_identifier,share,reason,labels,source,updated_at\n"
-            f"{NEW_PERSON},jordan-bravo,yes,,,machine,2026-09-24T00:00:00Z\n"
+            f"{NEW_PERSON},jordan-bravo,yes,worth_yes,,machine,2026-09-24T00:00:00Z\n"
             f"{CLOUD_PERSON},casey-lane,no,human_private,,human,2026-09-24T00:00:00Z\n"
+            f"{STALE_PERSON},riley-echo,confirm,family,is_family,machine,2026-09-24T00:00:00Z\n"
         )
         return {"db": db, "people_csv": people_csv, "share_csv": share_csv, "out_dir": root / "out"}
 
@@ -401,6 +424,8 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(namespace.writes, [])
         self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SELECT"] * 4)
         self.assertTrue(payload["dry_run"])
+        # The `yes` row only: the human's `private` and the machine's `confirm` stay home.
+        self.assertEqual(payload["plan"]["persons_upsert_ids"], [NEW_PERSON])
         self.assertEqual(payload["plan"]["persons_upsert"], 1)
         self.assertEqual(payload["plan"]["tags_put"], 1)
         self.assertEqual(payload["plan"]["namespaces"]["companies"]["upsert"], 1)
@@ -413,7 +438,7 @@ class ApplyTests(unittest.TestCase):
         plan = plan_for(
             [share_row(NEW_PERSON, "jordan-bravo"),
              share_row(CLOUD_PERSON, "casey-lane"),
-             share_row(private_person, "private-person", share=False, reason=HUMAN_PRIVATE)],
+             share_row(private_person, "private-person", share=SHARE_NO, reason=HUMAN_PRIVATE)],
             [local_person(NEW_PERSON, "jordan-bravo"), local_person(CLOUD_PERSON, "casey-lane")],
             cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON, private_person: private_person}),
         )

@@ -508,7 +508,7 @@ uv run --project . python packs/indexing/primitives/validate_search_index/valida
 
 Pass only on `status: ok`.
 
-### 9. Share (optional): label, tag, upload to Powerset
+### 9. Share (optional): share list, upload to Powerset
 
 Who leaves the laptop is a per-person decision — see
 `packs/ingestion/docs/share-and-upload.md`. Synthesize (step 3) already asked
@@ -516,14 +516,16 @@ JEV the label questions and saved the answers with each person's facts; `share`
 is free and local.
 
 ```bash
-bin/deep-context share                            # labels.csv + share.csv, every merged person
-bin/deep-context tag --name "Jane Doe" +private   # or +share; rebuilds share.csv
+bin/deep-context share   # labels.csv + share.csv, every merged person
 ```
 
-`share.csv` says yes to everyone except the owner, human `private`, machine
-`private_suggested` (family, partner, minor, sensitive context, clinician/
-lawyer/banker), automated senders and strangers. Then the upload — without
-`--apply` it plans only, reads the cloud, writes one manifest:
+Share follows worth: `share.csv` says yes to the worth-yes people, no to the
+owner, to a human `private`, and to everyone worth said no or maybe to. The JEV
+labels decide nothing — they raise at most one flag (family, partner, minor,
+sensitive context, clinician/lawyer/banker, automated sender, stranger) on a
+worth-yes person, which makes that row `confirm`. Confirm rows are for the UI to
+put to the user; they upload nothing until the user answers with a tag. Then the
+upload — without `--apply` it plans only, reads the cloud, writes one manifest:
 
 ```bash
 uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py
@@ -531,8 +533,8 @@ uv run --env-file .env --project . python packs/indexing/primitives/upload_power
 
 Show the plan counts and get explicit approval before `--apply`: it upserts
 `persons`, reconciles this operator's `operator_person_sources` rows, writes or
-patches the five TurboPuffer namespaces, and mirrors `private` into
-`contact_tags`. People without a LinkedIn never reach the cloud
+patches the five TurboPuffer namespaces, and mirrors the user's own `private`
+into `contact_tags`. People without a LinkedIn never reach the cloud
 (`skipped_no_linkedin`). `ALEPH_ENV=staging` targets the `_dev` namespaces.
 
 ## Completion report

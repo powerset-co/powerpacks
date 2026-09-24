@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Pure reconcile: local share list + cloud state -> UploadPlan.
 
-Flow: share rows split into shared/private -> shared people with a LinkedIn slug
-become the persons upsert (the rest are skipped_no_linkedin, a cloud NOT NULL
-constraint, not a bug) -> desired operator_person_sources rows are one per
-(person, cloud channel) -> the operator's stale powerpacks rows become deletes ->
-allowed_operator_ids is recomputed for every person the run touches -> people new
-to the cloud get full TurboPuffer upserts, people already there get an
-allowed_operator_ids patch only -> private-reason people in the cloud get a
-contact_tags row; a cloud tag is dropped only where the human tagged `share`.
+Flow: the `yes` share rows with a LinkedIn slug become the persons upsert (the
+rest are skipped_no_linkedin, a cloud NOT NULL constraint, not a bug; `confirm`
+rows wait for a human and leave the laptop no more than a `no` does) -> desired
+operator_person_sources rows are one per (person, cloud channel) -> the
+operator's stale powerpacks rows become deletes -> allowed_operator_ids is
+recomputed for every person the run touches -> people new to the cloud get full
+TurboPuffer upserts, people already there get an allowed_operator_ids patch only
+-> people the human tagged `private` and the cloud already has get a contact_tags
+row; a cloud tag is dropped only where the human tagged `share`.
 
 No IO. Every bucket is sorted so two runs on the same state emit the same plan.
 
 Changelog:
+  2026-09-24: shared = the three-way share value `yes`; only a human's `private`
+    becomes a cloud tag.
   2026-09-24: created; namespace grain and share reasons use shared contracts.
 """
 
@@ -28,7 +31,7 @@ from packs.indexing.primitives.upload_powerset.models import (
     UploadPlan,
 )
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
-from packs.ingestion.schemas.share_schema import HUMAN_SHARE, PRIVATE_REASONS, ShareRow
+from packs.ingestion.schemas.share_schema import HUMAN_PRIVATE, HUMAN_SHARE, SHARE_YES, ShareRow
 
 
 def _desired_sources(person: LocalPerson, cloud_id: str) -> list[SourceRow]:
@@ -59,7 +62,7 @@ def build_plan(
     company_ids_by_person: dict[str, tuple[str, ...]],
     school_ids_by_person: dict[str, tuple[str, ...]],
 ) -> UploadPlan:
-    shared = [row for row in share_rows if row.share]
+    shared = [row for row in share_rows if row.share == SHARE_YES]
     persons_upsert = sorted(row.person_id for row in shared if row.public_identifier)
     skipped_no_linkedin = sorted(row.person_id for row in shared if not row.public_identifier)
     # Everything the cloud keys by person (source rows, tags, documents) uses the
@@ -101,7 +104,9 @@ def build_plan(
         missing = referenced - cloud.present_entity_ids.get(logical, frozenset())
         namespaces.append(NamespacePlan(logical, namespace_names[logical], tuple(sorted(missing)), ()))
 
-    private_rows = [row for row in share_rows if row.reason in PRIVATE_REASONS and row.public_identifier]
+    # Only a human's `private` reaches the cloud as a tag; a machine flag asks a
+    # question, and an unanswered question is not the human's word.
+    private_rows = [row for row in share_rows if row.reason == HUMAN_PRIVATE and row.public_identifier]
     tags_put = tuple(sorted(
         (TagRow(cloud.cloud_id_by_person[row.person_id], row.public_identifier, PRIVATE_TAG)
          for row in private_rows if row.person_id in cloud.cloud_id_by_person),

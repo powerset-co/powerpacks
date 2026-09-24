@@ -12,6 +12,7 @@ Flow: `evidence.py` parses people.csv + deep-context artifacts into
 `share_list.py` (the node) writes labels.csv and share.csv.
 
 Changelog:
+  2026-09-24: labels.csv carries one `flag` column; LabelRow carries worth.
   2026-09-24: the share node writes both files; no JEV cache here (synthesize's).
   2026-09-24: moved the share.csv contract and request state to their owners.
   2026-09-24: created.
@@ -24,7 +25,6 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
-from packs.ingestion.schemas.share_schema import PRIVATE_SUGGESTED
 
 SHARE_DIR = Path(".powerpacks/share")
 LABELS_FILENAME = "labels.csv"
@@ -123,7 +123,8 @@ class LabelRow:
     person_id: str
     public_identifier: str | None
     is_owner: bool
-    private_suggested: bool
+    worth: str
+    flag: str | None
     probabilities: dict[str, float]
 
 
@@ -139,6 +140,9 @@ class HumanTags:
 
 DETERMINISTIC_COLUMNS = tuple(field.name for field in fields(DeterministicLabels))
 
+# The confirm flag that fired for this person, or empty.
+FLAG_COLUMN = "flag"
+
 LABEL_COLUMNS = (
     "person_id",
     "public_identifier",
@@ -148,8 +152,7 @@ LABEL_COLUMNS = (
     *tuple(f"{name}_p" for name in CHOICE_LABELS),
     *SCORE_LABELS,
     *NOUL_LABELS,
-    PRIVATE_SUGGESTED,
-    "private_reason",
+    FLAG_COLUMN,
     "updated_at",
 )
 

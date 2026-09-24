@@ -15,6 +15,7 @@ share list. An un-share removes the operator from allowed_operator_ids and
 deletes its source rows; documents are never deleted.
 
 Changelog:
+  2026-09-24: shared = the three-way share value `yes`; `confirm` rows stay home.
   2026-09-24: created; delegated local reads and centralized namespace contracts.
 """
 
@@ -50,7 +51,7 @@ from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES  # noqa: E402
-from packs.ingestion.schemas.share_schema import ShareRow  # noqa: E402
+from packs.ingestion.schemas.share_schema import SHARE_YES, ShareRow  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
@@ -123,7 +124,7 @@ class UploadPowerset:
     def _plan(self, con: Any, cur: Any, operator_id: str, share_rows: tuple[ShareRow, ...],
               people: dict[str, LocalPerson]) -> UploadPlan:
         with_slug = [row for row in share_rows if row.public_identifier]
-        shared_ids = sorted(row.person_id for row in with_slug if row.share)
+        shared_ids = sorted(row.person_id for row in with_slug if row.share == SHARE_YES)
         # Every slug, shared or not: a private person the cloud already has is
         # the one who needs the tag.
         cloud_ids = postgres.fetch_cloud_ids_by_slug(cur, sorted(row.public_identifier for row in with_slug))

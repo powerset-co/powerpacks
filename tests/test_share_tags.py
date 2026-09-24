@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.share.share import _split_tag_args
-from packs.ingestion.primitives.share.tags import TAG_VOCABULARY, TagStore, lookup_targets
+from packs.ingestion.primitives.share.tags import TAG_VOCABULARY, TagStore
 from packs.shared.csv_io import CsvIO
 
 
@@ -17,26 +15,6 @@ class VocabularyTests(unittest.TestCase):
         self.assertIn("is_family", TAG_VOCABULARY)
         self.assertNotIn("warmth", TAG_VOCABULARY)
         self.assertNotIn("relationship_kind", TAG_VOCABULARY)
-
-
-class TagArgumentTests(unittest.TestCase):
-    def test_plus_and_minus_words_are_pulled_out_before_argparse(self) -> None:
-        rest, add, remove, unknown = _split_tag_args(["tag", "--name", "Jordan Bravo", "+private", "-is_family"])
-        self.assertEqual(rest, ["tag", "--name", "Jordan Bravo"])
-        self.assertEqual(add, {"private"})
-        self.assertEqual(remove, {"is_family"})
-        self.assertEqual(unknown, set())
-
-    def test_a_plus_word_outside_the_vocabulary_is_reported_not_parsed(self) -> None:
-        rest, add, remove, unknown = _split_tag_args(["tag", "+homie"])
-        self.assertEqual(rest, ["tag"])
-        self.assertEqual(unknown, {"homie"})
-        self.assertEqual(add | remove, set())
-
-    def test_ordinary_flags_survive_the_split(self) -> None:
-        rest, add, _, _ = _split_tag_args(["tag", "--person-id", "person-a", "--note", "close", "+share"])
-        self.assertEqual(rest, ["tag", "--person-id", "person-a", "--note", "close"])
-        self.assertEqual(add, {"share"})
 
 
 class TagStoreTests(unittest.TestCase):
@@ -69,29 +47,6 @@ class TagStoreTests(unittest.TestCase):
 
     def test_an_untagged_store_is_empty_not_missing(self) -> None:
         self.assertEqual(self.store.load(), {})
-
-
-class LookupTests(unittest.TestCase):
-    def test_a_query_resolves_to_a_person_id_through_the_index(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            index = Path(directory) / "index.json"
-            index.write_text(
-                json.dumps(
-                    {
-                        "slugs": {"jordan-bravo-aaaa": {"person_id": "person-a", "name": "Jordan Bravo"}},
-                        "by_name": {"jordan bravo": ["jordan-bravo-aaaa"]},
-                        "by_email": {"casey@example.com": ["jordan-bravo-aaaa"]},
-                        "by_phone": {"15550100": ["jordan-bravo-aaaa"]},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            self.assertEqual(
-                [t.person_id for t in lookup_targets(name="Jordan Bravo", index_json=index)], ["person-a"]
-            )
-            self.assertEqual(lookup_targets(email="casey@example.com", index_json=index)[0].slug, "jordan-bravo-aaaa")
-            self.assertEqual(lookup_targets(phone="+15550100", index_json=index)[0].person_id, "person-a")
-            self.assertEqual(lookup_targets(name="Nobody Here", index_json=index), ())
 
 
 if __name__ == "__main__":

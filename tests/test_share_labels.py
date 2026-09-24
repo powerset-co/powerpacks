@@ -12,13 +12,14 @@ from pathlib import Path
 from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.share.labels import (
+    share_decision,
     ACTIVE_P,
-    PRIVATE_P,
+    CONFIRM_P,
+    confirm_flag,
     deterministic_labels,
     labels_from_answers,
-    private_reason,
 )
-from packs.ingestion.primitives.share.models import JevLabels, MessageStats, PersonEvidence
+from packs.ingestion.primitives.share.models import JevLabels, LabelRow, MessageStats, PersonEvidence
 from packs.ingestion.primitives.share.questions import NOUL_LABELS, build_questions
 from packs.shared.csv_io import CsvIO
 
@@ -187,6 +188,7 @@ def _write_install(root: Path) -> ShareEvidence:
                     "canonical_name": "Jordan Bravo",
                     "owned_identifiers": ["owner@example.com"],
                     "shared_context": [{"overlap": "school"}],
+                    "network_worth": {"decision": "yes"},
                 }
             }
         )
@@ -282,38 +284,45 @@ class DeterministicLabelTests(unittest.TestCase):
         self.assertTrue(deterministic_labels(person, reference_date=REFERENCE_DATE).linkedin_only)
 
 
-class PrivateSuggestionTests(unittest.TestCase):
-    def test_first_matching_rule_names_the_reason(self) -> None:
-        deterministic = deterministic_labels(_person(), reference_date=REFERENCE_DATE)
-        jev = _jev(is_family=PRIVATE_P, is_minor=PRIVATE_P, sensitive_context=PRIVATE_P)
-        self.assertEqual(private_reason(deterministic, jev), "family")
+class ConfirmFlagTests(unittest.TestCase):
+    def test_first_matching_rule_names_the_flag(self) -> None:
+        jev = _jev(is_family=CONFIRM_P, is_minor=CONFIRM_P, sensitive_context=CONFIRM_P,
+                   is_automated_sender=ACTIVE_P, is_stranger=ACTIVE_P)
+        self.assertEqual(confirm_flag(jev), "family")
+
+    def test_a_sensitive_rule_beats_automated_sender_and_stranger(self) -> None:
+        jev = _jev(is_minor=CONFIRM_P, is_automated_sender=ACTIVE_P, is_stranger=ACTIVE_P)
+        self.assertEqual(confirm_flag(jev), "minor")
+        self.assertEqual(confirm_flag(_jev(is_automated_sender=ACTIVE_P, is_stranger=ACTIVE_P)), "automated_sender")
 
     def test_family_fires_from_the_relationship_kind_alone(self) -> None:
-        deterministic = deterministic_labels(_person(), reference_date=REFERENCE_DATE)
-        self.assertEqual(private_reason(deterministic, _jev(kind="family")), "family")
-        self.assertEqual(private_reason(deterministic, _jev(kind="romantic_partner")), "romantic_partner")
+        self.assertEqual(confirm_flag(_jev(kind="family")), "family")
+        self.assertEqual(confirm_flag(_jev(kind="romantic_partner")), "romantic_partner")
 
     def test_each_later_rule_fires_on_its_own(self) -> None:
-        deterministic = deterministic_labels(_person(), reference_date=REFERENCE_DATE)
-        for name, probability_key in (
-            ("minor", "is_minor"),
-            ("sensitive_context", "sensitive_context"),
-            ("sensitive_provider", "is_healthcare_legal_or_financial_provider"),
+        for name, probability_key, probability in (
+            ("minor", "is_minor", CONFIRM_P),
+            ("sensitive_context", "sensitive_context", CONFIRM_P),
+            ("sensitive_provider", "is_healthcare_legal_or_financial_provider", CONFIRM_P),
+            ("automated_sender", "is_automated_sender", ACTIVE_P),
+            ("stranger", "is_stranger", ACTIVE_P),
         ):
-            self.assertEqual(private_reason(deterministic, _jev(**{probability_key: PRIVATE_P})), name)
+            self.assertEqual(confirm_flag(_jev(**{probability_key: probability})), name)
 
-    def test_the_owner_rule_needs_no_jev_answers(self) -> None:
-        person = _person(facts={"is_owner": True})
-        deterministic = deterministic_labels(person, reference_date=REFERENCE_DATE)
-        self.assertEqual(private_reason(deterministic, None), "owner")
+    def test_a_flagged_owner_is_no_by_the_owner_rule_not_a_confirm(self) -> None:
+        row = LabelRow(person_id="person-a", public_identifier="jordan-bravo", is_owner=True,
+                       worth="yes", flag="family", probabilities={})
+        decision = share_decision(row, None, updated_at="2026-09-24T00:00:00Z")
+        self.assertEqual((decision.share, decision.reason), ("no", "owner"))
 
-    def test_nothing_is_suggested_for_an_ordinary_contact(self) -> None:
-        deterministic = deterministic_labels(_person(), reference_date=REFERENCE_DATE)
-        self.assertIsNone(private_reason(deterministic, _jev(is_professional=ACTIVE_P)))
+    def test_a_person_jev_never_saw_raises_no_flag(self) -> None:
+        self.assertIsNone(confirm_flag(None))
 
-    def test_confidential_dealings_is_a_label_not_a_private_rule(self) -> None:
-        deterministic = deterministic_labels(_person(), reference_date=REFERENCE_DATE)
-        self.assertIsNone(private_reason(deterministic, _jev(confidential_dealings=0.95)))
+    def test_nothing_is_flagged_for_an_ordinary_contact(self) -> None:
+        self.assertIsNone(confirm_flag(_jev(is_professional=ACTIVE_P)))
+
+    def test_confidential_dealings_is_a_label_not_a_flag(self) -> None:
+        self.assertIsNone(confirm_flag(_jev(confidential_dealings=0.95)))
 
 
 class QuestionContractTests(unittest.TestCase):
@@ -385,14 +394,16 @@ class ShareNodeTests(unittest.TestCase):
         self.assertEqual((payload["people"], payload["saved_labels"], payload["deterministic_only"]), (2, 1, 1))
         labels = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "labels.csv")}
         self.assertEqual(labels["person-a"]["relationship_kind"], "family")
-        self.assertEqual(labels["person-a"]["private_reason"], "family")
+        self.assertEqual(labels["person-a"]["flag"], "family")
         self.assertEqual(labels["person-b"]["linkedin_only"], "yes")
         share = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "share.csv")}
-        self.assertEqual((share["person-a"]["share"], share["person-a"]["reason"]), ("no", "private_suggested"))
-        self.assertEqual((share["person-b"]["share"], share["person-b"]["reason"]), ("yes", "default"))
+        # Worth yes plus a flag asks the human; the unjudged LinkedIn-only row stays home.
+        self.assertEqual((share["person-a"]["share"], share["person-a"]["reason"]), ("confirm", "family"))
+        self.assertEqual((share["person-b"]["share"], share["person-b"]["reason"]), ("no", "worth_maybe"))
         manifest = json.loads((self.out / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["stage"] if "stage" in manifest else manifest["source"], "share")
-        self.assertEqual(manifest["by_reason"], {"private_suggested": 1, "default": 1})
+        self.assertEqual(manifest["by_reason"], {"family": 1, "worth_maybe": 1})
+        self.assertEqual((manifest["confirm"], manifest["share_no"], manifest["share_yes"]), (1, 1, 0))
 
 
 class EvidenceJoinTests(unittest.TestCase):

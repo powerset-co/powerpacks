@@ -2,13 +2,15 @@
 
 Flow: people.csv + the deep-context leaves (facts with their JEV labels, index,
 raw bundles, review worth) -> PersonEvidence -> deterministic labels + the saved
-JEV labels + the private suggestion -> labels.csv -> the human's tags.csv ->
+JEV labels + the confirm flag -> labels.csv -> the human's tags.csv ->
 share_decision per person -> share.csv -> the stage manifest.
 
 Free and local: JEV already answered during deep_synthesize. One pass writes
 both files, so share.csv always covers the whole network.
 
 Changelog:
+  2026-09-24: share follows worth; the manifest counts the confirm rows a UI
+    puts to the human.
   2026-09-24: created from the share CLI; became the `share` Node (labels.csv
     and share.csv in one pass, the `label` export folded in).
 """
@@ -38,13 +40,14 @@ from packs.ingestion.primitives.pipeline.contract import (
 from packs.ingestion.primitives.share.csv_cells import cell_value
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.share.labels import (
+    confirm_flag,
     deterministic_labels,
     labels_from_saved,
-    private_reason,
     share_decision,
 )
 from packs.ingestion.primitives.share.models import (
     DETERMINISTIC_COLUMNS,
+    FLAG_COLUMN,
     LABEL_COLUMNS,
     LABELS_FILENAME,
     MANIFEST_FILENAME,
@@ -58,7 +61,12 @@ from packs.ingestion.primitives.share.models import (
 )
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
 from packs.ingestion.primitives.share.tags import TagStore
-from packs.ingestion.schemas.share_schema import PRIVATE_SUGGESTED, SHARE_COLUMNS
+from packs.ingestion.schemas.share_schema import (
+    SHARE_COLUMNS,
+    SHARE_CONFIRM,
+    SHARE_NO,
+    SHARE_YES,
+)
 from packs.shared.csv_io import CsvIO
 
 LabelCsvRow = row_model_for("LabelCsvRow", list(LABEL_COLUMNS))
@@ -70,9 +78,10 @@ class ShareManifest(StageManifest):
     people: int = 0
     saved_labels: int = 0
     deterministic_only: int = 0
-    private_suggested: int = 0
     share_yes: int = 0
     share_no: int = 0
+    # Worth-yes people a flag fired on: the rows a UI puts to the human.
+    confirm: int = 0
     by_reason: dict[str, int] = {}
     labels_csv: str = ""
     share_csv: str = ""
@@ -85,7 +94,7 @@ class ShareList(Node):
     """Writes labels.csv and share.csv for every people.csv row. Free, local."""
 
     name = "share"
-    # tags.csv is the human's file (bin/deep-context tag); no node produces it.
+    # tags.csv is the human's file (the UI writes it); no node produces it.
     inputs = (
         Artifact(path=str(DEFAULT_PEOPLE_CSV)),
         Artifact(path=FACTS_TEMPLATE, required=False),
@@ -151,22 +160,22 @@ class ShareList(Node):
             saved = (person.facts or {}).get("labels")
             jev = labels_from_saved(saved) if saved else None
             deterministic = deterministic_labels(person, reference_date=self.reference_date)
-            reason = private_reason(deterministic, jev)
-            label_rows.append(_label_row(person, deterministic, jev, reason, updated_at))
+            flag = confirm_flag(jev)
+            label_rows.append(_label_row(person, deterministic, jev, flag, updated_at))
 
             # A tag set before a merge is keyed by the id that merged away; the
             # surviving row is the only row that can still carry that decision.
             held = tags.get(person.person_id) or next(
                 (tags[old] for old in person.superseded_person_ids if old in tags), None
             )
-            decision = share_decision(_label_for_decision(person, deterministic, jev, reason), held, updated_at=updated_at)
+            decision = share_decision(_label_for_decision(person, deterministic, jev, flag), held, updated_at=updated_at)
             share_rows.append(decision.to_csv_row())
 
             manifest.saved_labels += int(jev is not None)
             manifest.deterministic_only += int(jev is None)
-            manifest.private_suggested += int(reason is not None)
-            manifest.share_yes += int(decision.share)
-            manifest.share_no += int(not decision.share)
+            manifest.share_yes += int(decision.share == SHARE_YES)
+            manifest.share_no += int(decision.share == SHARE_NO)
+            manifest.confirm += int(decision.share == SHARE_CONFIRM)
             by_reason[decision.reason] = by_reason.get(decision.reason, 0) + 1
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -178,13 +187,14 @@ class ShareList(Node):
 
 
 def _label_for_decision(
-    person: PersonEvidence, deterministic: DeterministicLabels, jev: JevLabels | None, reason: str | None
+    person: PersonEvidence, deterministic: DeterministicLabels, jev: JevLabels | None, flag: str | None
 ) -> LabelRow:
     return LabelRow(
         person_id=person.person_id,
         public_identifier=person.public_identifier,
         is_owner=deterministic.is_owner,
-        private_suggested=reason is not None,
+        worth=deterministic.network_worth,
+        flag=flag,
         probabilities=dict(jev.probabilities) if jev else {},
     )
 
@@ -193,7 +203,7 @@ def _label_row(
     person: PersonEvidence,
     deterministic: DeterministicLabels,
     jev: JevLabels | None,
-    reason: str | None,
+    flag: str | None,
     updated_at: str,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
@@ -201,8 +211,7 @@ def _label_row(
         "public_identifier": person.public_identifier or "",
         "full_name": person.full_name,
         **{name: cell_value(getattr(deterministic, name)) for name in DETERMINISTIC_COLUMNS},
-        PRIVATE_SUGGESTED: cell_value(reason is not None),
-        "private_reason": reason or "",
+        FLAG_COLUMN: flag or "",
         "updated_at": updated_at,
     }
     if jev is not None:

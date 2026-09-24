@@ -3,12 +3,18 @@
 Created: 2026-09-24
 
 Change log:
+- 2026-09-24: `share.csv.share` is three-way; only `yes` uploads and only a
+  human's `private` becomes a cloud tag.
 - 2026-09-24: first version.
 
 Makes the Powerset cloud state for ONE operator equal the local share list.
 Reconcile, not append: a person dropped from `share.csv` loses this operator's
 source rows and is patched out of `allowed_operator_ids`. Documents are never
 deleted, and no cloud-enriched value is ever overwritten with a local one.
+
+`share.csv.share` is `yes | no | confirm`. Only `yes` is shared: a `confirm` row
+is a question waiting for a human, so it uploads nothing and tags nothing, and
+un-shares like any other non-`yes` row.
 
 `--dry-run` is the default and only reads. `--apply` writes.
 
@@ -39,10 +45,10 @@ flowchart TD
 
 ## What the plan decides
 
-- `persons_upsert` — shared people that have a LinkedIn `public_identifier`.
+- `persons_upsert` — `share=yes` people that have a LinkedIn `public_identifier`.
   The SQL is the cloud pipeline's own COALESCE upsert
   (`sync_persons_to_supabase.py`), so a laptop value never replaces a cloud one.
-- `skipped_no_linkedin` — shared people without a slug. `persons.public_identifier`
+- `skipped_no_linkedin` — `share=yes` people without a slug. `persons.public_identifier`
   is UNIQUE and the cloud has no non-LinkedIn person key, so they stay local.
 - `sources_insert` — every DESIRED `operator_person_sources` row, one per
   (person, channel). The statement is an upsert, so re-sending an unchanged row
@@ -59,7 +65,9 @@ flowchart TD
   holds for that person, so an un-share also reaches documents this laptop
   never had.
 - `tags_put` / `tags_delete` — `contact_tags(tag='private')` keyed by
-  `group_key = public_identifier`, mirroring `PUT/DELETE /v2/contacts/tags`.
+  `group_key = public_identifier`, mirroring `PUT/DELETE /v2/contacts/tags`. Only
+  a `human_private` reason puts one, and only a `human_share` reason deletes one:
+  the cloud tag is a human decision on both sides.
 
 ## Facts the code depends on (read 2026-09-24)
 

@@ -14,6 +14,10 @@ Change log:
   the share.csv contract; upload DuckDB readers in `local_index.py`; one namespace table;
   Postgres counts affected rows; evidence date = facts file date; `share.py` split into
   `label.py` / `share_list.py`; `status` subcommand deleted.
+- 2026-09-24 (share follows worth): the share decision is worth's, not the
+  labels': `share` became `yes | no | confirm`, the private rules became confirm
+  flags that only ask a human about a worth-yes person, `labels.csv` carries one
+  `flag` column, and the `tag` CLI is gone — a UI writes tags.csv.
 - 2026-09-24 (after the code): corrected the facts the builders found wrong from
   the artifacts (parent-id keying, 548 slugs, live namespaces narrower than the
   contracts, `_dev` twins), dropped `relationship_active` (cadence is
@@ -114,19 +118,26 @@ Cloud (production, read-only checks):
    Share makes no paid calls; LinkedIn-only people receive deterministic labels.
 3. **Human tags win.** `tags.csv` rows: `person_id, tags, note, updated_at`; tags are a
    `|`-joined set from the same label vocabulary plus `private` and `share`. Machine never
-   writes `tags.csv`. Set with `bin/deep-context tag <lookup> +private -friend`.
-4. **`private` is the one blocking label.** Auto-suggested (`private_suggested`) when:
-   family, romantic partner, minor, sensitive context (health/legal/finance/immigration/
-   romance/family conflict), healthcare/legal/financial service provider, or `is_owner`.
-   Suggested private blocks upload until a human tags `share`. `confidential_dealings` is
-   a label only — on this network it fired on 87 people, 50 of them recruiters.
+   writes `tags.csv`. The UI writes it through `share/tags.py:TagStore`; there is no `tag`
+   CLI.
+4. **Share follows worth; the labels only ask.** The share decision is
+   `PersonEvidence.network_worth` — the effective worth the user already reviewed, human
+   over machine. No JEV label shares or blocks anyone. A first-rule-wins
+   `labels.confirm_flag` raises at most one flag on a person — family, romantic partner,
+   minor, sensitive context (health/legal/finance/immigration/romance/family conflict),
+   healthcare/legal/financial service provider, automated sender (p ≥ 0.6), stranger
+   (p ≥ 0.6) — and a flag on a worth-yes person makes their row `confirm`: nothing is
+   uploaded until a human answers, in the UI, with a `private` or `share` tag.
+   `confidential_dealings` is a label only — on this network it fired on 87 people, 50 of
+   them recruiters.
 5. **`share.csv` is the contract between the two halves**, one row per `people.csv` row:
-   `person_id, public_identifier, share (yes|no), reason, labels (|-joined active labels),
-   source (human|machine), updated_at`. Reasons, first rule wins: `owner`, `human_private`,
-   `human_share`, `private_suggested`, `automated_sender` (p ≥ 0.6), `stranger` (p ≥ 0.6),
-   `default` (yes). `share` refuses to write a list that does not cover every people.csv
-   row — the upload reconciles the cloud to it, so a partial list would un-share the rest. Everything else defaults to yes — same default as today's whole-CSV
-   LinkedIn upload. Rows keyed by a `superseded_person_ids` member follow the surviving row.
+   `person_id, public_identifier, share (yes|no|confirm), reason, labels (|-joined active
+   labels), source (human|machine), updated_at`. First rule wins, the rule name is the
+   reason: `owner` → no, `human_private` → no, `human_share` → yes, `worth_no` → no,
+   `worth_maybe` (maybe or unjudged) → no, a confirm flag → confirm under the flag's own
+   name, else `worth_yes` → yes. `share` refuses to write a list that does not cover every
+   people.csv row — the upload reconciles the cloud to it, so a partial list would un-share
+   the rest. Rows keyed by a `superseded_person_ids` member follow the surviving row.
 6. **Upload = reconcile, not append.** `packs/indexing/primitives/upload_powerset/` reads
    `share.csv` + the DuckDB and makes the cloud state for THIS operator equal the share list:
    - `persons`: upsert the shared people **that have a `public_identifier`** with the cloud
@@ -145,10 +156,10 @@ Cloud (production, read-only checks):
      columns, `allowed_operator_ids` = union from `operator_person_sources` after the PG step);
      for people **already in the cloud**, patch `allowed_operator_ids` only (`patch_rows`) —
      never regress cloud-enriched attributes. Un-share = patch the operator out.
-   - `contact_tags`: `private` row for people whose share reason is `human_private` or
-     `private_suggested` and who exist in `persons`. A cloud tag is a human decision (the
-     Powerset UI): it is deleted only where the human's local word is `share`, never by a
-     machine default.
+   - `contact_tags`: `private` row for people whose share reason is `human_private` and who
+     exist in `persons`. A cloud tag is a human decision (the Powerset UI) on both sides: a
+     machine reason never puts one, and it is deleted only where the human's local word is
+     `share`.
    - Operator id = `users.id` for the credentials JWT `sub` (`postgres_client.credentials_subject`).
    - Without `--apply` the run plans only (counts per table, first N ids, the Postgres host
      and namespaces it would write); `--apply` writes. `ALEPH_ENV=staging` redirects
@@ -185,7 +196,7 @@ Jev — noul (probability columns): `is_family`, `is_close_friend`, `is_personal
 `sensitive_context`, `is_minor`, `confidential_dealings`, `owner_would_intro`,
 `they_would_take_owner_call`, `met_in_person`, `notable`. (`reciprocal` was dropped: the
 deterministic `direction` label is the same counts.)
-Derived: `private_suggested` (bool) + `private_reason` (which rule fired).
+Derived: `flag` (which confirm rule fired, or empty).
 
 Threshold for a noul label to be "active" in `share.csv.labels`: p ≥ 0.6. Choice/score:
 argmax. All thresholds live in one table in `share/labels.py`.
@@ -199,24 +210,24 @@ Agent A (share stage):
   request-keyed `answer(request, *, output_dir, api_key, client, concurrency)` used by both
   `score_candidates` and the share stage. Byte-identical JD behavior (existing tests + the
   frozen-contract hashes must pass untouched).
-- `bin/deep-context`: `label`, `tag`, `share` passthroughs.
+- `bin/deep-context`: the `share` passthrough.
 
 Agent B (upload):
 - `packs/indexing/primitives/upload_powerset/{upload_powerset,models,plan,postgres,turbopuffer}.py`
   + `README.md`, tests `tests/test_upload_powerset.py` (fake PG cursor + fake TP namespace;
   no network).
 
-After both land: `packs/ingestion/skills/deep-context/SKILL.md` step 9 (label → tag → share →
-upload), CLAUDE.md routing line, `packs/indexing/README.md` row.
+After both land: `packs/ingestion/skills/deep-context/SKILL.md` step 9 (share → upload),
+CLAUDE.md routing line, `packs/indexing/README.md` row.
 
 ## Verification (real surface)
 
-1. `bin/deep-context label --estimate` on the real install → count + $ estimate.
-2. `bin/deep-context label` (free) → `labels.csv` 766 rows; spot-check 10
-   people by hand against their dossiers (family/homie/service correctly separated;
-   `private_suggested` fires on the obvious ones).
-3. `bin/deep-context tag --name "<someone>" +private` → `tags.csv` row; `share` → `share.csv`
-   flips that row to `no/private`.
+1. `bin/deep-context share` (free) → `labels.csv` + `share.csv`, 766 rows each; spot-check
+   10 people by hand against their dossiers (family/homie/service correctly separated;
+   `flag` fires on the obvious ones).
+2. The manifest's `share_yes` / `share_no` / `confirm` counts match the worth the review UI
+   shows, and every `confirm` row is a worth-yes person with a flag.
+3. A `private` tag written through `TagStore` → `share` → that row reads `no/human_private`.
 4. `upload_powerset.py` (no flag = plan only) → plan counts (persons upserts, OPS
    inserts/deletes, TP upserts/patches per namespace, skipped_no_linkedin).
 5. Real write ONLY after explicit go, first against `ALEPH_ENV=staging` (`_dev` namespaces);
@@ -233,8 +244,6 @@ upload), CLAUDE.md routing line, `packs/indexing/README.md` row.
   belongs to whoever owns company identity: resolve local companies against
   `aleph_companies_v1` by name/LinkedIn URL before upload.
 
-- Default share = yes for unflagged people (matches today's whole-CSV upload). Flip to
-  opt-in if you'd rather.
 - People without a LinkedIn slug never reach `persons`/TurboPuffer (cloud constraint). They
   stay local until the cloud grows a non-LinkedIn person key.
 - Dossier text goes to TypeSafe for labeling (synthesized facts, not bodies). Say if that

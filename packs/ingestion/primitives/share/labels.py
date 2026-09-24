@@ -1,14 +1,18 @@
 """The share stage's whole policy: deterministic labels, Jev label reduction,
-the private-suggestion table and the share decision.
+the confirm-flag table and the share decision.
 
 Flow: `deterministic_labels(person)` -> cadence/direction/worth from metadata;
-`labels_from_answers(answers)` -> one value per Jev question; `private_reason`
--> the first private rule that fires; `share_decision(row, tags)` -> the
-yes/no + reason that `share.csv` carries.
+`labels_from_answers(answers)` -> one value per Jev question; `confirm_flag(jev)`
+-> the first flag rule that fires; `share_decision(row, tags)` -> the
+yes/no/confirm + reason that `share.csv` carries.
+
+Share follows worth. The Jev labels decide nothing: they only flag a worth-yes
+person for a human to confirm.
 
 Every threshold is a module constant here; nothing downstream re-derives one.
 
 Changelog:
+  2026-09-24: share follows worth; the private rules became confirm flags.
   2026-09-24: used the shared share.csv reasons and Boolean row contract.
   2026-09-24: created.
 """
@@ -18,6 +22,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Callable
 
+from packs.ingestion.primitives.deep_context.candidates import NETWORK_WORTH_NO, NETWORK_WORTH_YES
 from packs.ingestion.primitives.share.models import (
     GROUP_CHANNELS,
     DeterministicLabels,
@@ -29,12 +34,21 @@ from packs.ingestion.primitives.share.models import (
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
 from packs.ingestion.schemas.share_schema import (
     AUTOMATED_SENDER,
-    DEFAULT,
+    FAMILY,
     HUMAN_PRIVATE,
     HUMAN_SHARE,
+    MINOR,
     OWNER,
-    PRIVATE_SUGGESTED,
+    ROMANTIC_PARTNER,
+    SENSITIVE_CONTEXT,
+    SENSITIVE_PROVIDER,
+    SHARE_CONFIRM,
+    SHARE_NO,
+    SHARE_YES,
     STRANGER,
+    WORTH_MAYBE,
+    WORTH_NO,
+    WORTH_YES,
     ShareRow,
 )
 
@@ -48,12 +62,12 @@ REGULAR_MESSAGES = 30
 THEY_INITIATE_BELOW = 0.35
 I_INITIATE_ABOVE = 0.65
 
-# A noul label is "active" (listed in share.csv, and blocking where it blocks) at
-# this probability.
+# A noul label is "active" (listed in share.csv) at this probability.
 ACTIVE_P = 0.6
-# A noul label suggests `private` at this probability — a lower bar, because a
-# false private costs one tag and a false share cannot be taken back.
-PRIVATE_P = 0.5
+# A sensitive noul label raises a confirm flag at this probability — a lower bar,
+# because a needless confirmation costs one click and a false share cannot be
+# taken back.
+CONFIRM_P = 0.5
 
 PRIVATE_TAG = "private"
 SHARE_TAG = "share"
@@ -143,60 +157,66 @@ def labels_from_saved(labels: dict) -> JevLabels:
     )
 
 
-# First rule wins; the rule NAME is the reason written to labels.csv.
-_JEV_PRIVATE_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
-    ("family", lambda j: j.choices["relationship_kind"] == "family" or j.probabilities["is_family"] >= PRIVATE_P),
-    ("romantic_partner", lambda j: j.choices["relationship_kind"] == "romantic_partner"),
-    ("minor", lambda j: j.probabilities["is_minor"] >= PRIVATE_P),
-    ("sensitive_context", lambda j: j.probabilities["sensitive_context"] >= PRIVATE_P),
-    ("sensitive_provider",
-     lambda j: j.probabilities["is_healthcare_legal_or_financial_provider"] >= PRIVATE_P),
+# First rule wins; the rule NAME is the flag written to labels.csv.
+_CONFIRM_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
+    (FAMILY, lambda j: j.choices["relationship_kind"] == "family" or j.probabilities["is_family"] >= CONFIRM_P),
+    (ROMANTIC_PARTNER, lambda j: j.choices["relationship_kind"] == "romantic_partner"),
+    (MINOR, lambda j: j.probabilities["is_minor"] >= CONFIRM_P),
+    (SENSITIVE_CONTEXT, lambda j: j.probabilities["sensitive_context"] >= CONFIRM_P),
+    (SENSITIVE_PROVIDER,
+     lambda j: j.probabilities["is_healthcare_legal_or_financial_provider"] >= CONFIRM_P),
+    (AUTOMATED_SENDER, lambda j: j.probabilities["is_automated_sender"] >= ACTIVE_P),
+    (STRANGER, lambda j: j.probabilities["is_stranger"] >= ACTIVE_P),
 )
-# `confidential_dealings` stays a label, not a private rule: on a real network it
-# fired on 87 people, 50 of them recruiters — hiring talk is ordinary here.
+# `confidential_dealings` stays a label, not a flag: on a real network it fired
+# on 87 people, 50 of them recruiters — hiring talk is ordinary here.
 
 
-def private_reason(deterministic: DeterministicLabels, jev: JevLabels | None) -> str | None:
-    """The first private rule that fires, or None. `owner` is last and needs no Jev."""
-    if jev is not None:
-        for name, fired in _JEV_PRIVATE_RULES:
-            if fired(jev):
-                return name
-    return "owner" if deterministic.is_owner else None
+def confirm_flag(jev: JevLabels | None) -> str | None:
+    """The first flag rule that fires, or None. A flag asks a human; it decides nothing.
+
+    A person Jev never saw raises no flag: no answers, no question to ask."""
+    if jev is None:
+        return None
+    for name, fired in _CONFIRM_RULES:
+        if fired(jev):
+            return name
+    return None
 
 
 def active_labels(row: LabelRow) -> tuple[str, ...]:
-    """The labels share.csv carries: every noul at or above ACTIVE_P, then the suggestion."""
+    """The labels share.csv carries: every noul at or above ACTIVE_P, then the flag."""
     active = tuple(name for name in NOUL_LABELS if row.probabilities.get(name, 0.0) >= ACTIVE_P)
-    return active + ((PRIVATE_SUGGESTED,) if row.private_suggested else ())
+    return active + ((row.flag,) if row.flag else ())
 
 
 def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) -> ShareRow:
     """First rule wins; the rule name is the row's `reason`.
 
-    `owner` comes before the human tags because the mailbox owner is not a contact —
-    no tag makes them one. Everything else defaults to yes, matching the whole-CSV
-    LinkedIn upload this replaces.
+    Share follows worth — the same effective worth the human reviewed, human over
+    machine. `owner` comes before the human tags because the mailbox owner is not
+    a contact; no tag makes them one. A flag on a worth-yes person shares nothing
+    until a human confirms it.
     """
     held = tags.tags if tags else frozenset()
     if row.is_owner:
-        decision, reason = False, OWNER
+        share, reason = SHARE_NO, OWNER
     elif PRIVATE_TAG in held:
-        decision, reason = False, HUMAN_PRIVATE
+        share, reason = SHARE_NO, HUMAN_PRIVATE
     elif SHARE_TAG in held:
-        decision, reason = True, HUMAN_SHARE
-    elif row.private_suggested:
-        decision, reason = False, PRIVATE_SUGGESTED
-    elif row.probabilities.get("is_automated_sender", 0.0) >= ACTIVE_P:
-        decision, reason = False, AUTOMATED_SENDER
-    elif row.probabilities.get("is_stranger", 0.0) >= ACTIVE_P:
-        decision, reason = False, STRANGER
+        share, reason = SHARE_YES, HUMAN_SHARE
+    elif row.worth == NETWORK_WORTH_NO:
+        share, reason = SHARE_NO, WORTH_NO
+    elif row.worth != NETWORK_WORTH_YES:
+        share, reason = SHARE_NO, WORTH_MAYBE
+    elif row.flag:
+        share, reason = SHARE_CONFIRM, row.flag
     else:
-        decision, reason = True, DEFAULT
+        share, reason = SHARE_YES, WORTH_YES
     return ShareRow(
         person_id=row.person_id,
         public_identifier=row.public_identifier,
-        share=decision,
+        share=share,
         reason=reason,
         labels=active_labels(row),
         source="human" if reason.startswith("human_") else "machine",
