@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import httpx
+
 ROOT = Path(__file__).resolve().parents[4]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -71,11 +73,13 @@ from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_request, parse_candidate_judge,
 )
 from packs.search.primitives.deep_search.person_attribution import HydratePersonAttribution
+from packs.search.primitives.deep_search import pin_confidence
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
+PIN_FIELDS = ("taste_score", "pin_confidence", "pin_judgment")
 RETRIEVAL_LIMIT = 1000
 CANDIDATE_JUDGE_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -320,6 +324,13 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         for candidate in iteration.get("shortlist_grades") or []
         if _candidate_judgment_eligible(candidate) and candidate.get("candidate_judgment")
     }
+    pin_fields = {
+        _candidate_key(candidate): {key: candidate.get(key) for key in PIN_FIELDS}
+        for frame in reversed(frames)
+        for iteration in (frame.get("results") or {}).get("iterations") or []
+        for candidate in iteration.get("shortlist_grades") or []
+        if "pin_confidence" in candidate
+    }
     occurrences: dict[str, list[dict[str, Any]]] = {}
     found_by: dict[str, list[dict[str, Any]]] = {}
     chain = []
@@ -362,6 +373,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "cross_encoder_status": primary.get("cross_encoder_status"),
             "cross_encoder_model": primary.get("cross_encoder_model"),
             "candidate_judgment": candidate_judgments.get(key),
+            **pin_fields.get(key, dict.fromkeys(PIN_FIELDS)),
             "why": " ".join(str(primary.get("reason") or "").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
@@ -1091,6 +1103,176 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
     return annotated
 
 
+def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
+                             profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
+                             run_dir: Path, pond_n: int, judge_client: Any | None = None,
+                             http: Any | None = None) -> list[dict[str, Any]]:
+    """Taste for every judged candidate; pin verdict and Jev signals for overall 4/5. All concurrent."""
+    rows = [dict(candidate) for candidate in candidates]
+    judged = [index for index, row in enumerate(rows) if row.get("candidate_judgment")]
+    if not judged:
+        return rows
+    for index in judged:
+        rows[index].update(dict.fromkeys(PIN_FIELDS))
+    pinnable = [index for index in judged
+                if rows[index]["candidate_judgment"].get("overall_score") in pin_confidence.PIN_ELIGIBLE_OVERALL]
+    jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
+    hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
+    as_of = str(results["created_at"])[:10]
+    checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "pin-confidence"
+    keys = {name: os.environ.get(name) for name in ("POWERSET_API_KEY", "OPENAI_API_KEY", "TYPESAFE_API_KEY")}
+    urls = {index: pin_confidence.canonical_linkedin(rows[index].get("linkedin_url")) for index in judged}
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.pin_confidence"
+
+    def state(index: int) -> dict[str, Any]:
+        return pin_confidence.candidate_state(
+            jd=jd, profile=profiles.get(str(rows[index]["person"])) or {}, candidate=rows[index],
+            hiring_company=hiring_company, as_of=as_of)
+
+    def checkpoint_for(prefix: str, request: Mapping[str, Any]) -> tuple[str, Path, dict[str, Any], bool]:
+        input_sha = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+        checkpoint = checkpoint_dir / f"{prefix}-{input_sha}.json"
+        record = _read_json(checkpoint) if checkpoint.is_file() else {}
+        return input_sha, checkpoint, record, record.get("input_sha") == input_sha and bool(record.get("raw"))
+
+    async def annotate_all() -> list[dict[str, Any]]:
+        judge_semaphore = asyncio.Semaphore(CANDIDATE_JUDGE_CONCURRENCY)
+        jev_semaphore = asyncio.Semaphore(jev.MAX_CONCURRENCY)
+        judge = judge_client or (make_async_openai_client(keys["OPENAI_API_KEY"]) if keys["OPENAI_API_KEY"] else None)
+        client = http or httpx.AsyncClient(timeout=jev.TIMEOUT_SECONDS)
+
+        async def taste(batch: list[str]) -> tuple[None, str, Any, dict[str, Any]]:
+            scores = await pin_confidence.fetch_taste(client, batch, keys["POWERSET_API_KEY"])
+            return None, "taste", scores, {"kind": "taste", "requested": len(batch),
+                                           "scored": sum(score is not None for score in scores.values())}
+
+        async def judge_one(index: int) -> tuple[int, str, Any, dict[str, Any]]:
+            request = pin_confidence.judge_request(state(index))
+            input_sha, checkpoint, record, cached = checkpoint_for("judge", request)
+            if not cached:
+                async with judge_semaphore:
+                    response = await judge.chat.completions.create(**request)
+                record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "",
+                          "finish_reason": getattr(response.choices[0], "finish_reason", None),
+                          "usage": response_usage(response)}
+                _write_json(checkpoint, record)
+            provenance = {"candidate_index": index, "kind": "judge", "model": pin_confidence.PIN_JUDGE_MODEL,
+                          "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": cached,
+                          "usage": record.get("usage", {})}
+            try:
+                if record.get("finish_reason") == "length":
+                    raise ValueError("Pin judgment exceeded completion token limit")
+                verdict = pin_confidence.parse_judgment(str(record["raw"]))
+            except (ValueError, TypeError) as exc:
+                provenance["error"] = f"{type(exc).__name__}: {exc}"
+                verdict = None
+            return index, "judge", verdict, provenance
+
+        async def jev_one(index: int) -> tuple[int, str, Any, dict[str, Any]]:
+            request = pin_confidence.jev_request(state(index))
+            input_sha, checkpoint, record, cached = checkpoint_for("jev", request)
+            if cached:
+                response = json.loads(record["raw"])
+            else:
+                async with jev_semaphore:
+                    response = await jev.evaluate_once(client=client, request=request,
+                                                       api_key=keys["TYPESAFE_API_KEY"])
+                record = {"input_sha": input_sha, "raw": json.dumps(response),
+                          "usage": response.get("usage", {})}
+                _write_json(checkpoint, record)
+            jev.validate_response(response, request)
+            return index, "jev", pin_confidence.jev_signals(response, request), {
+                "candidate_index": index, "kind": "jev", "model": jev.MODEL, "input_sha": input_sha,
+                "checkpoint": str(checkpoint), "cached": cached, "usage": record.get("usage", {})}
+
+        async def guarded(kind: str, coro: Any, index: int | None = None) -> tuple[int | None, str, Any, dict[str, Any]]:
+            try:
+                return await coro
+            except Exception as exc:
+                return index, kind, None, {"candidate_index": index, "kind": kind,
+                                           "error": f"{type(exc).__name__}: {exc}"}
+
+        records: list[dict[str, Any]] = []
+
+        def handle(value: tuple[int | None, str, Any, dict[str, Any]]) -> None:
+            index, kind, payload, record = value
+            records.append(record)
+            if kind == "taste":
+                for row_index, url in urls.items():
+                    if url in (payload or {}):
+                        rows[row_index]["taste_score"] = payload[url]
+                return
+            judgment = rows[index]["pin_judgment"] or {
+                "model": pin_confidence.PIN_JUDGE_MODEL, "decision": None, "reason": "", "signals": None,
+                "status": "ok" if judge is not None else "skipped"}
+            if kind == "judge":
+                if payload is None:
+                    judgment["status"] = "error"
+                else:
+                    judgment.update(decision=payload["decision"], reason=payload["reason"])
+                    rows[index]["pin_confidence"] = payload["priority"]
+            else:
+                judgment["signals"] = payload
+            rows[index]["pin_judgment"] = judgment
+
+        tasks = []
+        wanted = sorted({url for url in urls.values() if url})
+        if keys["POWERSET_API_KEY"]:
+            tasks += [guarded("taste", taste(wanted[start:start + pin_confidence.TASTE_BATCH_URLS]))
+                      for start in range(0, len(wanted), pin_confidence.TASTE_BATCH_URLS)]
+        else:
+            records.append({"kind": "taste", "error": "POWERSET_API_KEY is not set"})
+        if judge is not None:
+            tasks += [guarded("judge", judge_one(index), index) for index in pinnable]
+        else:
+            records.append({"kind": "judge", "error": "OPENAI_API_KEY is not set"})
+        if keys["TYPESAFE_API_KEY"]:
+            tasks += [guarded("jev", jev_one(index), index) for index in pinnable]
+        else:
+            records.append({"kind": "jev", "error": "TYPESAFE_API_KEY is not set"})
+        try:
+            await drain_pool(tasks, handle)
+        finally:
+            if judge_client is None and judge is not None:
+                await judge.close()
+            if http is None:
+                await client.aclose()
+        return sorted(records, key=lambda record: record.get("candidate_index") if record.get("candidate_index") is not None else -1)
+
+    checkpoints = asyncio.run(annotate_all())
+    for record in checkpoints:
+        if record.get("candidate_index") is None and record.get("error"):
+            print(f"[pin-confidence] {record['kind']}: {record['error']}", file=sys.stderr)
+    raw_record = {"kind": "pin_confidence", "pond_n": pond_n, "checkpoints": checkpoints}
+    raw_responses = results.setdefault("raw_model_responses", [])
+    prior = next((index for index, row in enumerate(raw_responses)
+                  if row.get("kind") == "pin_confidence" and row.get("pond_n") == pond_n), None)
+    if prior is None:
+        raw_responses.append(raw_record)
+    else:
+        raw_responses[prior] = raw_record
+    _price_usage_log(run_dir / "usage.jsonl")
+    _save(results, run_dir)
+    return rows
+
+
+def pin_saved(*, run_dir: Path, env_file: str, pond: int | None = None) -> Path:
+    """Add pin confidence and taste to saved judged candidates; never searches or re-judges."""
+    load_env_file(Path(env_file))
+    results = _read_json(run_dir / "results.json")
+    iterations = list(results.get("iterations") or [])
+    if pond is not None:
+        iterations = [row for row in iterations if int(row.get("pond_n") or 0) == pond][-1:]
+    for iteration in iterations:
+        artifacts = (iteration.get("arm") or {}).get("artifacts") or {}
+        iteration["shortlist_grades"] = _annotate_pin_confidence(
+            candidates=iteration["shortlist_grades"], profiles=_profiles(artifacts.get("profiles_path")),
+            results=results, run_dir=run_dir, pond_n=int(iteration["pond_n"]))
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
 def _top_counts(values: Sequence[str], limit: int = 10) -> dict[str, int]:
     return dict(Counter(value for value in values if value).most_common(limit))
 
@@ -1242,6 +1424,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     candidates = _annotate_candidate_judgments(
         candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
         context=results, pond_query=str(pending["query"]), client=client)
+    candidates = _annotate_pin_confidence(
+        candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n)
     snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
     prior = results["iterations"][-1] if results.get("iterations") else None
     prior_input = (prior or {}).get("input") or {
@@ -1319,6 +1503,9 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
         iteration["shortlist_grades"] = _annotate_candidate_judgments(
             candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
             context=results, pond_query=str(iteration["query"]), client=client)
+        iteration["shortlist_grades"] = _annotate_pin_confidence(
+            candidates=iteration["shortlist_grades"], profiles=profiles, results=results,
+            run_dir=run_dir, pond_n=pond_n)
         iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))
         iteration["reviewed_count"] = len(iteration["shortlist_grades"])
         iteration["below_threshold"] = bool(
@@ -1638,10 +1825,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide",
-                 "reannotate-saved"):
+                 "reannotate-saved", "pin-saved"):
         command = sub.add_parser(name)
         command.add_argument("--run-dir", required=True)
-        if name in {"compile-pond", "run-pond", "reannotate-saved"}:
+        if name in {"compile-pond", "run-pond", "reannotate-saved", "pin-saved"}:
             command.add_argument("--env-file", default=str(ROOT / ".env"))
             if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
@@ -1649,7 +1836,7 @@ def main() -> None:
             if name == "compile-pond":
                 command.add_argument("--limit", type=int, default=RETRIEVAL_LIMIT,
                                      help="Retrieval cap for this pond (default 1000)")
-            elif name == "reannotate-saved":
+            elif name in {"reannotate-saved", "pin-saved"}:
                 command.add_argument("--pond", type=int)
             if name == "run-pond":
                 command.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
@@ -1683,6 +1870,8 @@ def main() -> None:
                         backend=args.backend, db=args.db, capability_judge=args.capability_judge)
     elif args.command == "reannotate-saved":
         path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
+    elif args.command == "pin-saved":
+        path = pin_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
     else:
         path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
                       note=args.note, autonomous=args.autonomous, model=args.model,

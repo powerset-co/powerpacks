@@ -436,3 +436,10 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .position-company a:hover { color: var(--foreground); text-decoration: underline; }
 .position-note, .position-dates { margin: 1px 0 0; color: var(--muted); font-size: 10px; }
 .position-description { margin: 5px 0 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+/* Pin confidence: the judge's introduce decision beside the pin control; taste under the overall score. */
+.suggested-pin-chip { align-self: center; padding: 1px 7px; border-radius: 999px; background: rgba(34, 197, 94, .18); color: #86efac; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.details-label .suggested-pin-chip { margin-left: 2px; }
+.score-stack { display: grid; gap: 4px; align-content: start; flex: 0 0 auto; }
+.taste-badge { min-width: 38px; padding: 2px 6px; white-space: nowrap; background: var(--secondary); color: var(--foreground); font-weight: 600; }
+.taste-badge.taste-missing { color: var(--muted); }

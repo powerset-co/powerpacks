@@ -44,6 +44,7 @@ An explicit request for another round can reopen a completed run.
 | Payload review | `search_harness.review_payload` | Agent-checked payload, optional rerank exclusions | `ready_to_run` or `ready_to_rerank`; edit delta |
 | Run | `search_harness.run_pond` | Reviewed payload, retrieval corpus | Pipeline candidate/profile artifacts; iteration with scores and pool statistics |
 | Candidate judgments | `search_harness._annotate_candidate_judgments` | Capability ratings >=3, full profiles, JD, pond query, company context | Domain score, opportunity cap, overall score; per-candidate checkpoints |
+| Pin confidence | `search_harness._annotate_pin_confidence`, `pin_confidence.py` | Judged candidates, full profiles, JD, company context | `taste_score` for every judged candidate; `pin_confidence` and `pin_judgment` for overall 4/5; per-candidate checkpoints |
 | Network attribution | `person_attribution.HydratePersonAttribution` | Saved candidate IDs and exact searched set; direct Postgres credentials | Source counts and operator names/channels in `results.json.person_attribution`; no account addresses or identifiers |
 | Decide | `search_harness.decide` | JD, current query, previous ponds, pool statistics, reviewed move cards | One pending query, a rerank-only payload, or `completed` |
 | Export | `search_harness._save` | Saved iterations, related same-JD results | Deduplicated summary; `shortlist.csv`, `relationship.csv` on completion |
@@ -121,6 +122,47 @@ The API's renderer package must be updated before accepting the attribution fiel
 Reinitializing with a different JD, initial query, or corpus requires a new run
 directory. `set-query` edits the current pending query before compilation.
 URL intake verifies the saved source URL and reuses the fetched JD.
+
+## Pin confidence and taste
+
+Runs after the candidate judges in every pond and in `reannotate-saved`, with the three
+sources concurrent. Taste is a free read of Reporting's stored talent-index score
+(`GET /api/taste/scores`, 100 URLs per call) for every judged candidate. The pin judge,
+gpt-6-sol at low reasoning on `prompts/pin-confidence.txt`, and the four Jev evidence
+questions run only for overall 4/5 candidates. A source that is unreachable, unconfigured
+or returns an invalid answer leaves its fields null and records the error in
+`raw_model_responses`; the pond never fails on it.
+
+To add the stage to a search that already has judgments, without searching or re-judging:
+
+```sh
+uv run --project . python packs/search/primitives/deep_search/search_harness.py pin-saved \
+  --run-dir <run> --env-file .env
+```
+
+The viewer shows a **Suggested** chip beside the pin control when the judge's decision is
+`introduce`, and a **Taste** badge under the overall score for every judged candidate
+(`Taste N/A` when Reporting has no score). The details panel shows the confidence and reason.
+
+Each judged candidate row, in `shortlist_grades` and in the summary, carries:
+
+```json
+{"taste_score": 7.58,
+ "pin_confidence": 88,
+ "pin_judgment": {"model": "gpt-6-sol", "decision": "introduce",
+                  "reason": "Two short sentences about the work.",
+                  "signals": {"scope_match": 0.81, "role_company_corroboration": 0.40,
+                              "function_evidence": {"direct": 0.7, "transferable": 0.2, "corroborated_inference": 0.05, "unknown": 0.05, "contradicted": 0.0},
+                              "mechanism_depth": 0.66},
+                  "status": "ok"}}
+```
+
+`taste_score` is null when Reporting has no score for the person. `pin_confidence` is the
+judge's priority, null below overall 4 or on failure. Keys: `POWERSET_API_KEY` (taste),
+`OPENAI_API_KEY` (judge), `TYPESAFE_API_KEY` (Jev). The prompt and questions are the ones
+measured in the lab pin audit on 300 Sail matches: the prompt ranks pinned above unpinned
+at AUC 0.71 on gpt-6-sol/low, 0.73 on GLM-5.3, 0.65–0.70 on other OpenAI models and
+efforts; taste alone 0.63. No rating, pin or feedback is ever sent to either model.
 
 ## Precedents and standalone trait tools
 
