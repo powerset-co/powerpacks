@@ -44,7 +44,7 @@ class TagStoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "tags.csv"
-        self.store = TagStore(self.path)
+        self.store = TagStore(Path(self.temp.name))
 
     def test_apply_upserts_one_row_per_person(self) -> None:
         self.store.apply("person-a", add={"private"}, remove=set(), note="family")

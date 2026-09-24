@@ -217,6 +217,11 @@ def parse_jsonish(value: Any, default: Any) -> Any:
         return default
 
 
+def parse_source_channels(value: Any) -> tuple[str, ...]:
+    """The comma-joined `source_channels` cell as labels (`gmail_msgvault`, `imessage`, ...)."""
+    return tuple(part.strip() for part in str(value or "").split(",") if part.strip())
+
+
 def parse_interaction_counts(value: Any) -> dict[str, int]:
     parsed = parse_jsonish(value, {})
     if not isinstance(parsed, dict):

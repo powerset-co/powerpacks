@@ -9,6 +9,7 @@ yes/no + reason that `share.csv` carries.
 Every threshold is a module constant here; nothing downstream re-derives one.
 
 Changelog:
+  2026-09-24: used the shared share.csv reasons and Boolean row contract.
   2026-09-24: created.
 """
 
@@ -24,9 +25,18 @@ from packs.ingestion.primitives.share.models import (
     JevLabels,
     LabelRow,
     PersonEvidence,
-    ShareRow,
 )
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
+from packs.ingestion.schemas.share_schema import (
+    AUTOMATED_SENDER,
+    DEFAULT,
+    HUMAN_PRIVATE,
+    HUMAN_SHARE,
+    OWNER,
+    PRIVATE_SUGGESTED,
+    STRANGER,
+    ShareRow,
+)
 
 # Cadence bands, first rule wins: staleness before volume.
 DORMANT_DAYS = 730
@@ -45,8 +55,6 @@ ACTIVE_P = 0.6
 # false private costs one tag and a false share cannot be taken back.
 PRIVATE_P = 0.5
 
-SHARE_YES = "yes"
-SHARE_NO = "no"
 PRIVATE_TAG = "private"
 SHARE_TAG = "share"
 
@@ -140,19 +148,20 @@ _JEV_PRIVATE_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
 
 def private_reason(deterministic: DeterministicLabels, jev: JevLabels | None) -> str | None:
     """The first private rule that fires, or None. `owner` is last and needs no Jev."""
-    for name, fired in _JEV_PRIVATE_RULES:
-        if jev is not None and fired(jev):
-            return name
+    if jev is not None:
+        for name, fired in _JEV_PRIVATE_RULES:
+            if fired(jev):
+                return name
     return "owner" if deterministic.is_owner else None
 
 
 def active_labels(row: LabelRow) -> tuple[str, ...]:
     """The labels share.csv carries: every noul at or above ACTIVE_P, then the suggestion."""
     active = tuple(name for name in NOUL_LABELS if row.probabilities.get(name, 0.0) >= ACTIVE_P)
-    return active + (("private_suggested",) if row.private_suggested else ())
+    return active + ((PRIVATE_SUGGESTED,) if row.private_suggested else ())
 
 
-def share_decision(row: LabelRow, tags: HumanTags | None) -> ShareRow:
+def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) -> ShareRow:
     """First rule wins; the rule name is the row's `reason`.
 
     `owner` comes before the human tags because the mailbox owner is not a contact —
@@ -161,19 +170,19 @@ def share_decision(row: LabelRow, tags: HumanTags | None) -> ShareRow:
     """
     held = tags.tags if tags else frozenset()
     if row.is_owner:
-        decision, reason = SHARE_NO, "owner"
+        decision, reason = False, OWNER
     elif PRIVATE_TAG in held:
-        decision, reason = SHARE_NO, "human_private"
+        decision, reason = False, HUMAN_PRIVATE
     elif SHARE_TAG in held:
-        decision, reason = SHARE_YES, "human_share"
+        decision, reason = True, HUMAN_SHARE
     elif row.private_suggested:
-        decision, reason = SHARE_NO, "private_suggested"
+        decision, reason = False, PRIVATE_SUGGESTED
     elif row.probabilities.get("is_automated_sender", 0.0) >= ACTIVE_P:
-        decision, reason = SHARE_NO, "automated_sender"
+        decision, reason = False, AUTOMATED_SENDER
     elif row.probabilities.get("is_stranger", 0.0) >= ACTIVE_P:
-        decision, reason = SHARE_NO, "stranger"
+        decision, reason = False, STRANGER
     else:
-        decision, reason = SHARE_YES, "default"
+        decision, reason = True, DEFAULT
     return ShareRow(
         person_id=row.person_id,
         public_identifier=row.public_identifier,
@@ -181,4 +190,5 @@ def share_decision(row: LabelRow, tags: HumanTags | None) -> ShareRow:
         reason=reason,
         labels=active_labels(row),
         source="human" if reason.startswith("human_") else "machine",
+        updated_at=updated_at,
     )

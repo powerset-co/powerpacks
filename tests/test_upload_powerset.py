@@ -21,11 +21,12 @@ from packs.indexing.primitives.upload_powerset import postgres, turbopuffer_writ
 from packs.indexing.primitives.upload_powerset.models import (
     CloudState,
     LocalPerson,
-    ShareRow,
     SourceRow,
     TagRow,
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan
+from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
+from packs.ingestion.schemas.share_schema import HUMAN_PRIVATE, HUMAN_SHARE, PRIVATE_SUGGESTED, ShareRow
 
 OPERATOR = "00000000-0000-0000-0000-0000000000aa"
 OTHER_OPERATOR = "00000000-0000-0000-0000-0000000000bb"
@@ -42,14 +43,12 @@ NAMESPACE_NAMES = {
     "schools": "aleph_education_v1",
 }
 
-# Every column the cloud persons upsert updates
-# (network-search-api/data_pipeline_v2/pipelines/people/processing/sync_persons_to_supabase.py).
+# Cloud persons upsert columns with a locally sourced value.
 CLOUD_PERSONS_COLUMNS = [
     "public_profile_url", "first_name", "last_name", "full_name", "headline", "summary",
-    "profile_picture_url", "city", "state", "country", "location_raw", "enrichment_provider",
-    "provider_entity_urn", "hydrated_context", "x_twitter_handle", "x_twitter_followers",
-    "linkedin_followers", "linkedin_connections", "ig_handle", "ig_followers",
-    "inferred_birth_year", "linkedin_member_id", "twitter_user_id",
+    "profile_picture_url", "city", "state", "country", "location_raw", "hydrated_context",
+    "x_twitter_handle", "x_twitter_followers", "linkedin_followers", "linkedin_connections",
+    "ig_followers", "inferred_birth_year",
 ]
 
 
@@ -94,14 +93,17 @@ def plan_for(share_rows, people, cloud, **kwargs):
 class FakeCursor:
     """Records every statement; replays canned rows in the order they are asked for."""
 
-    def __init__(self, results: list[list[tuple]] | None = None) -> None:
+    def __init__(self, results: list[list[tuple]] | None = None, rowcounts: list[int] | None = None) -> None:
         self.statements: list[tuple[str, tuple]] = []
         self._results = list(results or [])
+        self._rowcounts = list(rowcounts or [])
         self._current: list[tuple] = []
+        self.rowcount = 0
 
     def execute(self, sql: str, params: tuple = ()) -> None:
         self.statements.append((sql, params))
         self._current = self._results.pop(0) if self._results else []
+        self.rowcount = self._rowcounts.pop(0) if self._rowcounts else 1
 
     def fetchone(self):
         return self._current[0] if self._current else None
@@ -120,6 +122,9 @@ class FakeNamespace:
 
     def write(self, **kwargs):
         self.writes.append(kwargs)
+
+    def schema(self):
+        return {"id": {}, "base_id": {}, "person_id": {}, "position_title": {}}
 
     def query(self, **kwargs):
         self.queries.append(kwargs)
@@ -163,7 +168,7 @@ class PlanBucketTests(unittest.TestCase):
     def test_private_person_in_cloud_gets_a_tag_and_an_un_privated_one_loses_it(self):
         plan = plan_for(
             [
-                share_row(CLOUD_PERSON, "casey-lane", share=False, reason="human_private"),
+                share_row(CLOUD_PERSON, "casey-lane", share=False, reason=HUMAN_PRIVATE),
                 share_row(NEW_PERSON, "jordan-bravo"),
             ],
             [local_person(CLOUD_PERSON, "casey-lane"), local_person(NEW_PERSON, "jordan-bravo")],
@@ -179,7 +184,7 @@ class PlanBucketTests(unittest.TestCase):
 
     def test_a_human_share_tag_drops_the_cloud_private_tag(self):
         plan = plan_for(
-            [share_row(NEW_PERSON, "jordan-bravo", reason="human_share")],
+            [share_row(NEW_PERSON, "jordan-bravo", reason=HUMAN_SHARE)],
             [local_person(NEW_PERSON, "jordan-bravo")],
             cloud_state(private_tag_keys=frozenset({"jordan-bravo", "someone-cloud-only"})),
         )
@@ -187,7 +192,7 @@ class PlanBucketTests(unittest.TestCase):
 
     def test_a_machine_private_suggestion_also_tags_the_cloud(self):
         plan = plan_for(
-            [share_row(CLOUD_PERSON, "casey-lane", share=False, reason="private_suggested")],
+            [share_row(CLOUD_PERSON, "casey-lane", share=False, reason=PRIVATE_SUGGESTED)],
             [local_person(CLOUD_PERSON, "casey-lane")],
             cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}),
         )
@@ -209,7 +214,7 @@ class PlanBucketTests(unittest.TestCase):
 
     def test_private_person_absent_from_cloud_gets_no_tag(self):
         plan = plan_for(
-            [share_row(NEW_PERSON, "jordan-bravo", share=False, reason="private")],
+            [share_row(NEW_PERSON, "jordan-bravo", share=False, reason=HUMAN_PRIVATE)],
             [local_person(NEW_PERSON, "jordan-bravo")],
             cloud_state(),
         )
@@ -332,8 +337,8 @@ class TurbopufferWriterTests(unittest.TestCase):
 class NamespaceResolutionTests(unittest.TestCase):
     def test_staging_env_selects_the_dev_namespaces(self):
         with mock.patch.dict(os.environ, {"ALEPH_ENV": "staging"}, clear=False):
-            names = {logical: upload_powerset.tp_backend.namespace_name(logical)
-                     for logical in upload_powerset.LOGICAL_NAMESPACES}
+            names = {namespace.logical: upload_powerset.tp_backend.namespace_name(namespace.logical)
+                     for namespace in NAMESPACES}
         self.assertEqual(names, {
             "people": "aleph_people_v1_dev",
             "summaries": "aleph_summaries_v1_dev",
@@ -400,6 +405,49 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["tags_put"], 1)
         self.assertEqual(payload["plan"]["namespaces"]["companies"]["upsert"], 1)
         self.assertEqual(manifest["plan"]["persons_upsert"], 1)
+
+
+class ApplyTests(unittest.TestCase):
+    def test_apply_counts_written_rows_and_upserts_new_docs_but_patches_existing_docs(self):
+        private_person = "55555555-5555-5555-8555-555555555555"
+        plan = plan_for(
+            [share_row(NEW_PERSON, "jordan-bravo"),
+             share_row(CLOUD_PERSON, "casey-lane"),
+             share_row(private_person, "private-person", share=False, reason=HUMAN_PRIVATE)],
+            [local_person(NEW_PERSON, "jordan-bravo"), local_person(CLOUD_PERSON, "casey-lane")],
+            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON, private_person: private_person}),
+        )
+        cursor = FakeCursor(rowcounts=[1, 0, 1, 0, 0, 1])
+        namespace = FakeNamespace(rows=[mock.Mock(id="existing-doc", base_id=CLOUD_PERSON,
+                                                  person_id=CLOUD_PERSON)])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+            con.execute("CREATE TABLE local_person_profiles (person_id VARCHAR, public_identifier VARCHAR)")
+            con.execute("INSERT INTO local_person_profiles VALUES (?, 'jordan-bravo'), (?, 'casey-lane')",
+                        [NEW_PERSON, CLOUD_PERSON])
+            con.execute("CREATE TABLE local_people_positions (id VARCHAR, base_id VARCHAR, position_title VARCHAR)")
+            con.execute("INSERT INTO local_people_positions VALUES ('new-doc', ?, 'Engineer')", [NEW_PERSON])
+            con.execute("CREATE TABLE local_summaries (id VARCHAR, base_id VARCHAR, summary VARCHAR)")
+            con.execute("CREATE TABLE local_people_education (id VARCHAR, base_id VARCHAR, person_id VARCHAR)")
+            con.execute("CREATE TABLE local_companies (id VARCHAR, company_name VARCHAR)")
+            con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
+            uploader = upload_powerset.UploadPowerset(
+                db=Path(tmp) / "local-search.duckdb", share_csv=Path(tmp) / "share.csv",
+                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
+            with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace):
+                result = uploader._apply(con, cursor, plan)
+            con.close()
+
+        person_writes = [call for call in namespace.writes if "upsert_rows" in call and
+                         any(row["id"] == "new-doc" for row in call["upsert_rows"])]
+        patched = [call for call in namespace.writes if "patch_rows" in call]
+        self.assertEqual(len(person_writes), 1)
+        self.assertTrue(any(row["id"] == "existing-doc" for call in patched for row in call["patch_rows"]))
+        self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO persons" in sql]), 2)
+        self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO operator_person_sources" in sql]), 2)
+        self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO contact_tags" in sql]), 1)
+        self.assertEqual((result.persons_upserted, result.sources_inserted, result.tags_put), (1, 1, 1))
 
 
 if __name__ == "__main__":

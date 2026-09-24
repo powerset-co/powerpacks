@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Frozen value types for the Powerset upload, parsed once at the boundary.
 
-Flow: share.csv row -> ShareRow; people.csv row -> LocalPerson (channel labels
-already mapped to cloud names); local_person_profiles row -> PersonProfile (the
-persons upsert payload); operator_person_sources row -> SourceRow; contact_tags
-row -> TagRow. Everything downstream of these constructors takes typed values.
+Flow: share.csv row -> ShareRow from the ingestion schema; people.csv row ->
+LocalPerson (channel labels already mapped to cloud names); local_person_profiles
+row -> PersonProfile (the persons upsert payload); operator_person_sources row ->
+SourceRow; contact_tags row -> TagRow. Everything downstream of these
+constructors takes typed values.
 
 Changelog:
-  2026-09-24: created.
+  2026-09-24: created; share contract and namespace definitions have one owner.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from packs.ingestion.schemas.people_schema import parse_interaction_counts
+from packs.ingestion.schemas.people_schema import parse_interaction_counts, parse_source_channels
 
 # Local people.csv channel label -> cloud operator_person_sources.source_channel.
 # A local label missing from this table contributes no source row.
@@ -29,45 +30,14 @@ CLOUD_SOURCE_CHANNEL = {
 DISCOVERY_METHOD = "powerpacks"
 PRIVATE_TAG = "private"
 
-# share.csv reasons that mean "hide this person from set search in the cloud"
-# (the share stage's `share_decision` rule names).
-PRIVATE_SHARE_REASONS = frozenset({"human_private", "private_suggested"})
-HUMAN_SHARE_REASON = "human_share"
-
-
-def _split_list(value: Any) -> tuple[str, ...]:
-    """people.csv list columns are comma- or pipe-joined strings."""
-    text = str(value or "").replace("|", ",")
-    return tuple(part.strip() for part in text.split(",") if part.strip())
-
 
 @dataclass(frozen=True)
-class ShareRow:
-    """One row of .powerpacks/share/share.csv."""
-
-    person_id: str
-    public_identifier: str
-    share: bool
-    reason: str
-    labels: tuple[str, ...]
-    source: str
-    updated_at: str
-
-    @classmethod
-    def from_csv_row(cls, row: dict[str, str]) -> "ShareRow":
-        return cls(
-            person_id=str(row["person_id"]).strip(),
-            public_identifier=str(row.get("public_identifier") or "").strip().lower(),
-            share=str(row["share"]).strip().lower() == "yes",
-            reason=str(row.get("reason") or "").strip().lower(),
-            labels=_split_list(row.get("labels")),
-            source=str(row.get("source") or "").strip(),
-            updated_at=str(row.get("updated_at") or "").strip(),
-        )
-
-    @property
-    def is_private(self) -> bool:
-        return self.reason in PRIVATE_SHARE_REASONS
+class Namespace:
+    logical: str
+    table: str
+    doc_key: str | None
+    write_schema: dict[str, dict[str, Any]]
+    person_grain: bool
 
 
 @dataclass(frozen=True)
@@ -84,7 +54,7 @@ class LocalPerson:
 
     @classmethod
     def from_csv_row(cls, row: dict[str, str]) -> "LocalPerson":
-        channels = [CLOUD_SOURCE_CHANNEL[label] for label in _split_list(row.get("source_channels"))
+        channels = [CLOUD_SOURCE_CHANNEL[label] for label in parse_source_channels(row.get("source_channels"))
                     if label in CLOUD_SOURCE_CHANNEL]
         return cls(
             person_id=str(row["id"]).strip(),

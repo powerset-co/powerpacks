@@ -8,6 +8,7 @@ deep-context index; `TagStore.apply(...)` upserts one row; `TagStore.load()`
 hands the share decision a `dict[person_id, HumanTags]`.
 
 Changelog:
+  2026-09-24: bound the tags path to the store output directory.
   2026-09-24: created.
 """
 
@@ -20,7 +21,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import INDEX_JSON
 from packs.ingestion.primitives.deep_context.lookup_person import PersonLookup
 from packs.ingestion.primitives.share.labels import PRIVATE_TAG, SHARE_TAG
-from packs.ingestion.primitives.share.models import TAG_COLUMNS, TAGS_CSV, HumanTags
+from packs.ingestion.primitives.share.models import SHARE_DIR, TAG_COLUMNS, TAGS_FILENAME, HumanTags
 from packs.ingestion.primitives.share.questions import NOUL_LABELS
 from packs.shared.csv_io import CsvIO
 
@@ -56,12 +57,12 @@ def lookup_targets(
 class TagStore:
     """Read/upsert tags.csv. Construct with the path, call load/apply."""
 
-    def __init__(self, path: Path = TAGS_CSV) -> None:
-        self.path = Path(path)
+    def __init__(self, out_dir: Path = SHARE_DIR) -> None:
+        self.tags_csv = Path(out_dir) / TAGS_FILENAME
 
     def load(self) -> dict[str, HumanTags]:
         rows: dict[str, HumanTags] = {}
-        for row in CsvIO.read_dict_rows_normalized(self.path):
+        for row in CsvIO.read_dict_rows_normalized(self.tags_csv):
             person_id = row["person_id"].strip()
             if not person_id:
                 continue
@@ -86,7 +87,7 @@ class TagStore:
         )
         rows[person_id] = updated
         CsvIO.write_dict_rows(
-            self.path,
+            self.tags_csv,
             list(TAG_COLUMNS),
             [
                 {

@@ -6,6 +6,7 @@ answers out, reusing the exact-request cache under `<output_dir>/jev/`.
 question set, then turns the answers into a qualification score.
 
 Changelog:
+  2026-09-24: made the cache path reusable by request callers.
   2026-09-24 (share stage): the cache/semaphore/request/checkpoint body of
     `score_candidates`' inner `score_one` became the module-level
     `answer_requests`, so a second question set (the share stage's labels) can
@@ -61,6 +62,11 @@ def request_digest(value: object) -> str:
     """The cache key for a request: sha256 of its canonical JSON."""
     encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def cache_path(output_dir: Path, request_hash: str) -> Path:
+    """The exact-request cache file."""
+    return output_dir / "jev" / f"{request_hash}.json"
 
 
 def _validate_probability(value: object) -> float:
@@ -319,6 +325,7 @@ async def answer_requests(
     hashes to their answers, in the same order. A cached answer costs nothing and
     needs no API key. `request_version`/`question_version` bind the cache record to
     the CALLER's question set, so two question sets cannot read each other's files.
+    Every request's state must carry `reference_date`, the cache record's assessment_date.
     """
     if not 1 <= concurrency <= MAX_CONCURRENCY:
         raise ValueError(f"Jev concurrency must be between 1 and {MAX_CONCURRENCY}")
@@ -328,7 +335,7 @@ async def answer_requests(
 
     async def answer_one(request_hash: str, request: dict) -> AnsweredRequest:
         nonlocal client, owned_client
-        cache = output_dir / "jev" / f"{request_hash}.json"
+        cache = cache_path(output_dir, request_hash)
         if cache.exists():
             try:
                 saved = json.loads(cache.read_text(encoding="utf-8"))

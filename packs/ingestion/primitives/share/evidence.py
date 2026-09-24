@@ -9,12 +9,13 @@ Flow: `ShareEvidence(...).load()` -> `list[PersonEvidence]`; `owner_state()` ->
 the mailbox owner's background for the request.
 
 Changelog:
+  2026-09-24: keyed parentless worth by slug; evidence date = facts file date.
   2026-09-24: created (split out of share.py).
 """
 
 from __future__ import annotations
 
-import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,8 @@ from packs.ingestion.primitives.deep_context.review_store import (
     parent_worth_key,
 )
 from packs.ingestion.primitives.share.models import NO_MESSAGES, MessageStats, PersonEvidence
-from packs.ingestion.schemas.people_schema import parse_interaction_counts
+from packs.ingestion.primitives.share.csv_cells import cell_text
+from packs.ingestion.schemas.people_schema import parse_interaction_counts, parse_source_channels
 from packs.shared.csv_io import CsvIO
 
 
@@ -102,13 +104,15 @@ class ShareEvidence:
             if not person_id:
                 continue
             parent_id = parent_ids.get(person_id.lower(), "")
-            worth_key = parent_worth_key(parent_id) if parent_id else person_id
+            public_identifier = cell_text(row.get("public_identifier"))
+            public_identifier = public_identifier.lower() if public_identifier else None
+            worth_key = parent_worth_key(parent_id) if parent_id else (public_identifier or person_id)
             dossier = self._dossier(slug_by_person.get(person_id, ""), parent_slug_by_child)
             facts = self._facts(parent_id)
             people.append(
                 PersonEvidence(
                     person_id=person_id,
-                    public_identifier=cell_text(row.get("public_identifier")),
+                    public_identifier=public_identifier,
                     full_name=str(row.get("full_name") or "").strip(),
                     headline=cell_text(row.get("headline")),
                     current_title=cell_text(row.get("current_title")),
@@ -116,15 +120,13 @@ class ShareEvidence:
                     city=cell_text(row.get("city")),
                     state=cell_text(row.get("state")),
                     country=cell_text(row.get("country")),
-                    source_channels=tuple(
-                        channel.strip() for channel in str(row.get("source_channels") or "").split(",") if channel.strip()
-                    ),
+                    source_channels=parse_source_channels(row.get("source_channels")),
                     interaction_counts=parse_interaction_counts(row.get("interaction_counts")),
                     last_interaction=cell_text(row.get("last_interaction")),
                     superseded_person_ids=tuple(parse_list(row.get("superseded_person_ids"))),
                     network_worth=effective_network_worth(worth_key, overrides, self.facts_dir)["decision"],
                     dossier=dossier,
-                    evidence_date=_generated_at(dossier),
+                    evidence_date=self._evidence_date(parent_id, facts),
                     facts=facts,
                     shared_overlaps=_overlaps(facts),
                     messages=self._messages(parent_id),
@@ -133,6 +135,13 @@ class ShareEvidence:
             if limit and len(people) >= limit:
                 break
         return people
+
+    def _evidence_date(self, parent_id: str, facts: dict[str, Any] | None) -> str | None:
+        """The date the facts file was synthesized — the dossiers are rendered from
+        it (parent dossiers carry no date of their own). None without facts."""
+        if facts is None:
+            return None
+        return date.fromtimestamp((self.facts_dir / f"{parent_id}.jsonl").stat().st_mtime).isoformat()
 
     def _facts(self, parent_id: str) -> dict[str, Any] | None:
         if not parent_id:
@@ -195,19 +204,3 @@ def _overlaps(facts: dict[str, Any] | None) -> frozenset[str]:
         for entry in (facts or {}).get("shared_context") or []
         if isinstance(entry, dict)
     )
-
-
-_GENERATED_AT = re.compile(r"^generated_at:\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE)
-
-
-def _generated_at(dossier: str | None) -> str | None:
-    """The dossier front matter's generated_at, date part only."""
-    match = _GENERATED_AT.search(dossier or "")
-    return match[1] if match else None
-
-
-def cell_text(value: Any) -> str | None:
-    """A CSV cell as a value: absent stays absent, never an empty string."""
-    text = str(value or "").strip()
-    return text or None
-

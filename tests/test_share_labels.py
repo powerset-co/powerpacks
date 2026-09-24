@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from datetime import datetime
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
 from packs.ingestion.primitives.share import share as share_cli
+from packs.ingestion.primitives.share.label import ShareLabels
+from packs.ingestion.primitives.share.questions import channel_state, facts_state, profile_state
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.share.labels import (
     ACTIVE_P,
@@ -343,9 +348,9 @@ class QuestionContractTests(unittest.TestCase):
             person = next(p for p in evidence.load() if p.person_id == "person-a")
             request = build_request(
                 dossier=person.dossier,
-                facts=person.facts_state(),
-                profile=person.profile_state(),
-                channels=person.channel_state(),
+                facts=facts_state(person),
+                profile=profile_state(person),
+                channels=channel_state(person),
                 owner=evidence.owner_state(),
                 reference_date=REFERENCE_DATE,
             )
@@ -357,6 +362,9 @@ class QuestionContractTests(unittest.TestCase):
     def test_the_request_is_dated_by_its_evidence_not_by_today(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             evidence = _write_install(Path(directory))
+            facts_file = next(evidence.facts_dir.glob("*.jsonl"))
+            synthesized = datetime(2026, 9, 10, 8, 0).timestamp()
+            os.utime(facts_file, (synthesized, synthesized))
             person = next(p for p in evidence.load() if p.person_id == "person-a")
         self.assertEqual(person.evidence_date, "2026-09-10")
 
@@ -364,7 +372,7 @@ class QuestionContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             evidence = _write_install(Path(directory))
             person = next(p for p in evidence.load() if p.person_id == "person-a")
-        self.assertNotIn("owned_identifiers", person.facts_state())
+        self.assertNotIn("owned_identifiers", facts_state(person))
         self.assertIn("owned_identifiers", person.facts)
 
 
@@ -393,7 +401,7 @@ class LabelRunTests(unittest.TestCase):
         }
         args.update(overrides)
         with mock.patch.dict("os.environ", {"POWERPACKS_USAGE_LOG": str(self.out / "usage.jsonl")}):
-            return share_cli.ShareLabels(**args).run()
+            return ShareLabels(**args).run()
 
     def test_estimate_prices_the_uncached_calls_and_writes_nothing(self) -> None:
         payload = self._run(estimate_only=True, approve_spend=False, client=_Client())
@@ -435,6 +443,25 @@ class LabelRunTests(unittest.TestCase):
 
 
 class EvidenceJoinTests(unittest.TestCase):
+    def test_parentless_review_uses_public_identifier_for_worth(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = _write_install(Path(directory))
+            CsvIO.write_dict_rows(
+                evidence.overrides_csv,
+                ["public_identifier", "network_worth", "llm_worth"],
+                [{"public_identifier": "casey-delta", "network_worth": "no"}],
+            )
+            casey = next(person for person in evidence.load() if person.person_id == "person-b")
+        self.assertEqual(casey.network_worth, "no")
+
+    def test_facts_without_dossier_use_facts_file_date(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = _write_install(Path(directory))
+            (evidence.parents_dir / "jordan-bravo-aaaa.md").unlink()
+            jordan = next(person for person in evidence.load() if person.person_id == "person-a")
+            expected = date.fromtimestamp((evidence.facts_dir / "parent-aaaa.jsonl").stat().st_mtime).isoformat()
+        self.assertEqual(jordan.evidence_date, expected)
+
     def test_facts_dossier_and_messages_join_through_the_parent_id(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             people = _write_install(Path(directory)).load()

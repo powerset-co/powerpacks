@@ -19,7 +19,7 @@ different schema is rejected. Sources:
   companies  company/upload_companies_to_turbopuffer.py
 
 Changelog:
-  2026-09-24: created.
+  2026-09-24: created; the namespace table lives here.
 """
 
 from __future__ import annotations
@@ -28,18 +28,14 @@ from typing import Any, Iterable, Sequence
 
 import turbopuffer
 
+from packs.indexing.primitives.upload_powerset.models import Namespace
+
 BATCH_SIZE = 500
 QUERY_PAGE_SIZE = 1000
 STRONG_CONSISTENCY = {"level": "strong"}
 DISTANCE_METRIC = "cosine_distance"
 
 ALLOWED_OPERATOR_IDS_SCHEMA = {"allowed_operator_ids": {"type": "[]string"}}
-
-# How a person's documents are addressed in each person-grain namespace, read
-# off the live namespaces: aleph_people_v1 keys positions by base_id,
-# aleph_summaries_v1's document id IS the person id, aleph_people_education_v1
-# carries person_id (it has no base_id attribute).
-PERSON_DOC_KEY = {"people": "base_id", "summaries": "id", "education": "person_id"}
 
 WRITE_SCHEMA: dict[str, dict[str, Any]] = {
     "people": {
@@ -100,6 +96,21 @@ WRITE_SCHEMA: dict[str, dict[str, Any]] = {
 }
 
 
+# WRITE_SCHEMA stays here because this writer owns it; importing it into models
+# would make the namespace table depend on this writer in both directions.
+# doc_key is how a person's documents are addressed, read off the live
+# namespaces: aleph_people_v1 keys positions by base_id, aleph_summaries_v1's
+# document id IS the person id, aleph_people_education_v1 carries person_id.
+NAMESPACES = (
+    Namespace("people", "local_people_positions", "base_id", WRITE_SCHEMA["people"], True),
+    Namespace("summaries", "local_summaries", "id", WRITE_SCHEMA["summaries"], True),
+    Namespace("education", "local_people_education", "person_id", WRITE_SCHEMA["education"], True),
+    Namespace("companies", "local_companies", None, WRITE_SCHEMA["companies"], False),
+    Namespace("schools", "local_education", None, WRITE_SCHEMA["schools"], False),
+)
+NAMESPACE_BY_LOGICAL = {namespace.logical: namespace for namespace in NAMESPACES}
+
+
 def _chunks(values: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
     for start in range(0, len(values), size):
         yield values[start:start + size]
@@ -124,7 +135,7 @@ def fetch_person_doc_ids(ns: Any, logical: str, person_ids: Sequence[str]) -> di
     Reading the cloud (not deriving from the local index) is what makes an
     un-share reach documents this laptop never held.
     """
-    key = PERSON_DOC_KEY[logical]
+    key = NAMESPACE_BY_LOGICAL[logical].doc_key
     by_person: dict[str, list[str]] = {}
     for chunk in _chunks(list(person_ids), 200):
         last_id: str | None = None
@@ -163,7 +174,8 @@ def fetch_present_ids(ns: Any, ids: Sequence[str]) -> frozenset[str]:
 
 def upsert_docs(ns: Any, logical: str, rows: Sequence[dict[str, Any]]) -> int:
     for batch in _chunks(list(rows), BATCH_SIZE):
-        ns.write(upsert_rows=list(batch), schema=WRITE_SCHEMA[logical], distance_metric=DISTANCE_METRIC)
+        ns.write(upsert_rows=list(batch), schema=NAMESPACE_BY_LOGICAL[logical].write_schema,
+                 distance_metric=DISTANCE_METRIC)
     return len(rows)
 
 

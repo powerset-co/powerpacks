@@ -35,6 +35,7 @@ Provider keys (powerset-api, powerset-openai) are workspace Modal
 Secrets mounted server-side; they never exist on the laptop.
 
 Changelog:
+  2026-09-24: use the shared upload operator resolver and share CSV schema.
   2026-07-23 (dead accounts.json registry): dropped the `update_channel` write
     and the `mark_linkedin_linked` helper. The linked-source `accounts.json`
     registry had no live reader, so this path no longer writes it; the Modal
@@ -64,9 +65,8 @@ load_dotenv(_REPO_FOR_ENV / ".env", override=False)
 # for the `packs.*` import below.
 sys.path.insert(0, str(_REPO_FOR_ENV))
 
-from packs.indexing.primitives.upload_powerset.postgres import resolve_operator_id  # noqa: E402
-from packs.indexing.primitives.upload_powerset.upload_powerset import postgres_client  # noqa: E402
-from packs.ingestion.primitives.share.models import SHARE_COLUMNS  # noqa: E402
+from packs.indexing.primitives.upload_powerset.upload_powerset import resolve_operator_id_from_credentials  # noqa: E402
+from packs.ingestion.schemas.share_schema import SHARE_COLUMNS  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 import modal  # noqa: E402
 
@@ -618,14 +618,6 @@ UPLOAD_ENTRY = "/repo/packs/indexing/modal/run_upload.py"
 # The indexing image has no cloud clients; the upload needs exactly these two,
 # pinned to the repo uv.lock versions.
 UPLOAD_PACKAGES = ("psycopg2-binary==2.9.12", "turbopuffer==1.21.0")
-
-
-def resolve_operator_id_from_credentials() -> str:
-    """The operator's users.id, from the laptop's Powerset credentials and .env DSN."""
-    postgres_client.load_env_file(None)
-    psycopg2 = postgres_client.ensure_psycopg2()
-    with psycopg2.connect(postgres_client.database_url()) as conn, conn.cursor() as cur:
-        return resolve_operator_id(cur, postgres_client.credentials_subject())
 
 
 def cmd_upload_powerset(args: argparse.Namespace) -> int:

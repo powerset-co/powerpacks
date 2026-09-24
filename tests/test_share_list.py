@@ -7,7 +7,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.share.labels import ACTIVE_P, share_decision
 from packs.ingestion.primitives.share.models import LABEL_COLUMNS, HumanTags, LabelRow
-from packs.ingestion.primitives.share.share import ShareList
+from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.tags import TagStore
 from packs.shared.csv_io import CsvIO
 
@@ -18,10 +18,8 @@ def _label(**overrides) -> LabelRow:
     fields = {
         "person_id": "person-a",
         "public_identifier": "jordan-bravo",
-        "linkedin_only": False,
         "is_owner": False,
         "private_suggested": False,
-        "private_reason": None,
         "probabilities": {},
     }
     fields.update(overrides)
@@ -38,32 +36,32 @@ class ShareDecisionTests(unittest.TestCase):
             (_label(is_owner=True), _tags("share"), "no", "owner"),
             (_label(), _tags("private"), "no", "human_private"),
             (_label(private_suggested=True), _tags("share"), "yes", "human_share"),
-            (_label(private_suggested=True, private_reason="family"), None, "no", "private_suggested"),
+            (_label(private_suggested=True), None, "no", "private_suggested"),
             (_label(probabilities={"is_automated_sender": ACTIVE_P}), None, "no", "automated_sender"),
             (_label(probabilities={"is_stranger": ACTIVE_P}), None, "no", "stranger"),
             (_label(), None, "yes", "default"),
         ]
         for label, tags, expected_share, expected_reason in cases:
-            row = share_decision(label, tags)
-            self.assertEqual((row.share, row.reason), (expected_share, expected_reason), expected_reason)
+            row = share_decision(label, tags, updated_at="2026-09-24T00:00:00Z")
+            self.assertEqual((row.to_csv_row()["share"], row.reason), (expected_share, expected_reason), expected_reason)
 
     def test_a_human_private_tag_beats_a_human_share_tag(self) -> None:
-        self.assertEqual(share_decision(_label(), _tags("private", "share")).reason, "human_private")
+        self.assertEqual(share_decision(_label(), _tags("private", "share"), updated_at="2026-09-24T00:00:00Z").reason, "human_private")
 
     def test_the_source_column_says_who_decided(self) -> None:
-        self.assertEqual(share_decision(_label(), _tags("private")).source, "human")
-        self.assertEqual(share_decision(_label(), None).source, "machine")
+        self.assertEqual(share_decision(_label(), _tags("private"), updated_at="2026-09-24T00:00:00Z").source, "human")
+        self.assertEqual(share_decision(_label(), None, updated_at="2026-09-24T00:00:00Z").source, "machine")
 
     def test_active_labels_carry_the_high_probability_names_and_the_suggestion(self) -> None:
         label = _label(
             private_suggested=True,
             probabilities={"is_family": 0.95, "is_professional": 0.1, "is_personal": ACTIVE_P},
         )
-        self.assertEqual(share_decision(label, None).labels, ("is_family", "is_personal", "private_suggested"))
+        self.assertEqual(share_decision(label, None, updated_at="2026-09-24T00:00:00Z").labels, ("is_family", "is_personal", "private_suggested"))
 
     def test_a_linkedin_only_row_defaults_to_yes_with_no_labels(self) -> None:
-        row = share_decision(_label(linkedin_only=True), None)
-        self.assertEqual((row.share, row.reason, row.labels), ("yes", "default", ()))
+        row = share_decision(_label(), None, updated_at="2026-09-24T00:00:00Z")
+        self.assertEqual((row.share, row.reason, row.labels), (True, "default", ()))
 
 
 class ShareListTests(unittest.TestCase):
@@ -119,7 +117,7 @@ class ShareListTests(unittest.TestCase):
         self.assertFalse((self.out / "share.csv").exists())
 
     def test_a_tag_on_a_superseded_id_decides_the_surviving_row(self) -> None:
-        TagStore(self.out / "tags.csv").apply(
+        TagStore(self.out).apply(
             "candidate:email:casey@example.com", add={"share"}, remove=set(), note=None
         )
         self._run()
@@ -129,7 +127,7 @@ class ShareListTests(unittest.TestCase):
         self.assertEqual(rows["person-b"]["source"], "human")
 
     def test_a_tag_on_the_surviving_id_wins_over_the_superseded_one(self) -> None:
-        store = TagStore(self.out / "tags.csv")
+        store = TagStore(self.out)
         store.apply("candidate:email:casey@example.com", add={"share"}, remove=set(), note=None)
         store.apply("person-b", add={"private"}, remove=set(), note=None)
         self._run()

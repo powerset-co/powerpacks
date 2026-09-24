@@ -8,11 +8,12 @@ The stage writes one fixed directory and overwrites in place:
   .powerpacks/share/manifest.json counts + versions
   .powerpacks/share/jev/<sha>.json  the Jev client's per-request cache
 
-Flow: `share.py` parses people.csv + deep-context artifacts into `PersonEvidence`
-(this file) -> `labels.py` renders `DeterministicLabels` + `JevLabels` ->
-`share.py` writes the CSVs whose column tuples live here.
+Flow: `evidence.py` parses people.csv + deep-context artifacts into
+`PersonEvidence` -> `labels.py` renders `DeterministicLabels` + `JevLabels` ->
+`label.py` writes labels.csv and `share_list.py` writes share.csv.
 
 Changelog:
+  2026-09-24: moved the share.csv contract and request state to their owners.
   2026-09-24: created.
 """
 
@@ -23,12 +24,13 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
+from packs.ingestion.schemas.share_schema import PRIVATE_SUGGESTED
 
 SHARE_DIR = Path(".powerpacks/share")
-LABELS_CSV = SHARE_DIR / "labels.csv"
-TAGS_CSV = SHARE_DIR / "tags.csv"
-SHARE_CSV = SHARE_DIR / "share.csv"
-MANIFEST_JSON = SHARE_DIR / "manifest.json"
+LABELS_FILENAME = "labels.csv"
+TAGS_FILENAME = "tags.csv"
+SHARE_FILENAME = "share.csv"
+MANIFEST_FILENAME = "manifest.json"
 
 # Raw-bundle message channels that carry group traffic rather than DMs.
 GROUP_CHANNELS = frozenset({"imessage_group"})
@@ -68,8 +70,7 @@ class PersonEvidence:
     superseded_person_ids: tuple[str, ...]
     network_worth: str
     dossier: str | None
-    # The dossier's `generated_at` date — the Jev request's reference_date, so a
-    # request only changes when its evidence does.
+    # The dossier date, or facts file date when no dossier exists.
     evidence_date: str | None
     facts: dict[str, Any] | None
     # `facts.shared_context[].overlap` values, parsed once here.
@@ -84,35 +85,6 @@ class PersonEvidence:
     @property
     def is_owner(self) -> bool:
         return bool((self.facts or {}).get("is_owner"))
-
-    def profile_state(self) -> dict[str, Any]:
-        location = ", ".join(part for part in (self.city, self.state, self.country) if part)
-        return {
-            "name": self.full_name,
-            "headline": self.headline,
-            "title": self.current_title,
-            "company": self.current_company,
-            "location": location or None,
-        }
-
-    def channel_state(self) -> dict[str, Any]:
-        return {
-            "source_channels": list(self.source_channels),
-            "interaction_counts": self.interaction_counts,
-            "last_interaction": self.last_interaction,
-            "first_message_at": self.messages.first_at,
-            "last_message_at": self.messages.last_at,
-            "from_me": self.messages.from_me,
-            "from_them": self.messages.from_them,
-            "group_count": self.messages.group_count,
-        }
-
-    def facts_state(self) -> dict[str, Any] | None:
-        """The facts object minus `owned_identifiers` (the owner's own addresses)."""
-        if self.facts is None:
-            return None
-        return {key: value for key, value in self.facts.items() if key != "owned_identifiers"}
-
 
 @dataclass(frozen=True)
 class DeterministicLabels:
@@ -150,10 +122,8 @@ class LabelRow:
 
     person_id: str
     public_identifier: str | None
-    linkedin_only: bool
     is_owner: bool
     private_suggested: bool
-    private_reason: str | None
     probabilities: dict[str, float]
 
 
@@ -167,18 +137,6 @@ class HumanTags:
     updated_at: str
 
 
-@dataclass(frozen=True)
-class ShareRow:
-    """One share.csv row — the contract the upload half reads."""
-
-    person_id: str
-    public_identifier: str | None
-    share: str
-    reason: str
-    labels: tuple[str, ...]
-    source: str
-
-
 DETERMINISTIC_COLUMNS = tuple(field.name for field in fields(DeterministicLabels))
 
 LABEL_COLUMNS = (
@@ -190,11 +148,9 @@ LABEL_COLUMNS = (
     *tuple(f"{name}_p" for name in CHOICE_LABELS),
     *SCORE_LABELS,
     *NOUL_LABELS,
-    "private_suggested",
+    PRIVATE_SUGGESTED,
     "private_reason",
     "updated_at",
 )
 
 TAG_COLUMNS = ("person_id", "tags", "note", "updated_at")
-
-SHARE_COLUMNS = ("person_id", "public_identifier", "share", "reason", "labels", "source", "updated_at")

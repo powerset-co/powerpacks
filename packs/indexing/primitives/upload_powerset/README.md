@@ -30,11 +30,12 @@ flowchart TD
 
 | file | role | reads | writes |
 | --- | --- | --- | --- |
-| `upload_powerset.py` | CLI + `UploadPowerset` orchestrator; owns the DuckDB/CSV reads and the stage manifest | share.csv, people.csv, local-search.duckdb, Postgres, TurboPuffer | `.powerpacks/upload-powerset/manifest.json`, Postgres + TurboPuffer on `--apply` |
-| `models.py` | frozen value types + the channel/identifier tables | — | — |
+| `upload_powerset.py` | CLI + `UploadPowerset` orchestrator; owns CSV reads and the stage manifest | share.csv, people.csv, Postgres, TurboPuffer | `.powerpacks/upload-powerset/manifest.json`, Postgres + TurboPuffer on `--apply` |
+| `local_index.py` | local DuckDB readers for profiles and namespace documents | local-search.duckdb | — |
+| `models.py` | frozen value types + the channel/identifier table | — | — |
 | `plan.py` | pure reconcile: local + cloud -> `UploadPlan` | — | — |
 | `postgres.py` | every SQL statement, each taking a cursor | `persons`, `operator_person_sources`, `contact_tags`, `users` | the same three tables |
-| `turbopuffer_writer.py` | namespace reads, 500-row upserts, `allowed_operator_ids` patches | the 5 namespaces | the 5 namespaces |
+| `turbopuffer_writer.py` | namespace definitions and reads, 500-row upserts, `allowed_operator_ids` patches | the 5 namespaces | the 5 namespaces |
 
 ## What the plan decides
 

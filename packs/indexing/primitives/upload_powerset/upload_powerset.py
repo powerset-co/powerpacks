@@ -15,7 +15,7 @@ share list. An un-share removes the operator from allowed_operator_ids and
 deletes its source rows; documents are never deleted.
 
 Changelog:
-  2026-09-24: created.
+  2026-09-24: created; delegated local reads and centralized namespace contracts.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -32,25 +33,24 @@ import duckdb
 REPO = Path(__file__).resolve().parents[4]
 SEARCH_PRIMITIVES = REPO / "packs/search/primitives"
 for _path in [REPO, SEARCH_PRIMITIVES / "lib", SEARCH_PRIMITIVES / "shared",
-              SEARCH_PRIMITIVES / "local", SEARCH_PRIMITIVES / "turbopuffer"]:
+              SEARCH_PRIMITIVES / "turbopuffer"]:
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
 import postgres_client  # noqa: E402
 import turbopuffer_search_backend as tp_backend  # noqa: E402
 
-from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract, vector_metadata  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
-from packs.indexing.primitives.upload_powerset import postgres, turbopuffer_writer  # noqa: E402
+from packs.indexing.primitives.upload_powerset import local_index, postgres, turbopuffer_writer  # noqa: E402
 from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
     CloudState,
     LocalPerson,
-    PersonProfile,
-    ShareRow,
     UploadPlan,
     UploadResult,
 )
-from packs.indexing.primitives.upload_powerset.plan import ENTITY_NAMESPACES, PERSON_NAMESPACES, build_plan  # noqa: E402
+from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
+from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES  # noqa: E402
+from packs.ingestion.schemas.share_schema import ShareRow  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
@@ -58,15 +58,15 @@ DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
 DEFAULT_SHARE_CSV = REPO / ".powerpacks/share/share.csv"
 DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
 
-LOGICAL_NAMESPACES = PERSON_NAMESPACES + ENTITY_NAMESPACES
-NAMESPACE_TABLE = {
-    "people": "local_people_positions",
-    "summaries": "local_summaries",
-    "education": "local_people_education",
-    "companies": "local_companies",
-    "schools": "local_education",
-}
 PREVIEW_IDS = 10
+
+
+def resolve_operator_id_from_credentials() -> str:
+    """Resolve the operator's users.id from laptop credentials and the Postgres DSN."""
+    postgres_client.load_env_file(None)
+    psycopg2 = postgres_client.ensure_psycopg2()
+    with psycopg2.connect(postgres_client.database_url()) as conn, conn.cursor() as cur:
+        return postgres.resolve_operator_id(cur, postgres_client.credentials_subject())
 
 
 class UploadPowerset:
@@ -120,7 +120,7 @@ class UploadPowerset:
             "postgres_host": urlparse(postgres_client.database_url()).hostname,
             "namespaces": {ns.logical: ns.namespace for ns in plan.namespaces},
             "plan": plan_preview(plan),
-            "result": result_payload(result),
+            "result": asdict(result),
             "started_at": started_at,
             "finished_at": now_iso(),
         }
@@ -138,9 +138,9 @@ class UploadPowerset:
         cloud_id_by_person = {
             row.person_id: cloud_ids[row.public_identifier] for row in with_slug if row.public_identifier in cloud_ids
         }
-        company_ids_by_person = self._entity_ids_by_person(con, "companies", shared_ids)
-        school_ids_by_person = self._entity_ids_by_person(con, "schools", shared_ids)
-        namespace_names = {logical: tp_backend.namespace_name(logical) for logical in LOGICAL_NAMESPACES}
+        company_ids_by_person = local_index.entity_ids_by_person(con, "companies", shared_ids)
+        school_ids_by_person = local_index.entity_ids_by_person(con, "schools", shared_ids)
+        namespace_names = {namespace.logical: tp_backend.namespace_name(namespace.logical) for namespace in NAMESPACES}
         present_entity_ids = {
             logical: turbopuffer_writer.fetch_present_ids(
                 tp_backend.namespace(logical),
@@ -168,7 +168,7 @@ class UploadPowerset:
         )
 
     def _apply(self, con: Any, cur: Any, plan: UploadPlan) -> UploadResult:
-        profiles = self._person_profiles(con, plan.persons_upsert)
+        profiles = local_index.person_profiles(con, plan.persons_upsert)
         persons_upserted = postgres.upsert_persons(cur, profiles)
         sources_inserted = postgres.upsert_sources(cur, plan.operator_id, plan.sources_insert)
         sources_deleted = postgres.delete_sources(cur, plan.operator_id, plan.sources_delete)
@@ -182,9 +182,9 @@ class UploadPowerset:
         docs_patched: dict[str, int] = {}
         for namespace_plan in plan.namespaces:
             ns = tp_backend.namespace(namespace_plan.logical)
-            rows = self._namespace_rows(con, namespace_plan.logical, namespace_plan.upsert_ids,
-                                        allowed, plan.operator_id,
-                                        turbopuffer_writer.live_attributes(ns))
+            rows = local_index.namespace_rows(con, namespace_plan.logical, namespace_plan.upsert_ids,
+                                              allowed, plan.operator_id,
+                                              turbopuffer_writer.live_attributes(ns))
             docs_upserted[namespace_plan.logical] = turbopuffer_writer.upsert_docs(
                 ns, namespace_plan.logical, rows)
             if not namespace_plan.patch_person_ids:
@@ -209,77 +209,6 @@ class UploadPowerset:
             docs_patched=docs_patched,
         )
 
-    def _entity_ids_by_person(self, con: Any, logical: str, person_ids: list[str]) -> dict[str, tuple[str, ...]]:
-        if logical == "companies":
-            sql = """
-                SELECT p.base_id, p.company_id FROM local_people_positions p
-                JOIN local_companies c ON c.id = p.company_id
-                WHERE p.base_id = ANY(?)
-            """
-        else:
-            sql = """
-                SELECT e.base_id, e.canonical_education_id FROM local_people_education e
-                JOIN local_education s ON s.id = e.canonical_education_id
-                WHERE e.base_id = ANY(?)
-            """
-        by_person: dict[str, set[str]] = {}
-        for person_id, entity_id in con.execute(sql, [person_ids]).fetchall():
-            by_person.setdefault(str(person_id), set()).add(str(entity_id))
-        return {person_id: tuple(sorted(ids)) for person_id, ids in by_person.items()}
-
-    def _person_profiles(self, con: Any, person_ids: tuple[str, ...]) -> list[PersonProfile]:
-        rows = con.execute(
-            "SELECT * FROM local_person_profiles WHERE person_id = ANY(?) ORDER BY person_id",
-            [list(person_ids)],
-        )
-        columns = [column[0] for column in rows.description]
-        return [PersonProfile.from_db_row(dict(zip(columns, row))) for row in rows.fetchall()]
-
-    def _namespace_rows(self, con: Any, logical: str, ids: tuple[str, ...],
-                        allowed: dict[str, tuple[str, ...]], operator_id: str,
-                        live: frozenset[str]) -> list[dict[str, Any]]:
-        if not ids:
-            return []
-        table = NAMESPACE_TABLE[logical]
-        columns = self._doc_columns(con, logical, table, live)
-        # The person key is selected last and never written: the live person
-        # namespaces do not all carry it (aleph_summaries_v1 and
-        # aleph_people_education_v1 have no base_id attribute).
-        key = "base_id" if logical in PERSON_NAMESPACES else "id"
-        select = ", ".join(f't."{column}"' for column in columns)
-        rows = con.execute(
-            f'SELECT {select}, t."{key}" FROM {table} t WHERE t."{key}" = ANY(?) ORDER BY t."id"',
-            [list(ids)],
-        )
-        names = [column[0] for column in rows.description][:-1]
-        docs = []
-        for row in rows.fetchall():
-            doc = {name: value for name, value in zip(names, row) if value is not None}
-            if logical in PERSON_NAMESPACES:
-                doc["allowed_operator_ids"] = list(allowed.get(str(row[-1]), ()))
-            elif logical == "companies":
-                doc["allowed_operator_ids"] = [operator_id]
-            docs.append(doc)
-        return docs
-
-    def _doc_columns(self, con: Any, logical: str, table: str, live: frozenset[str]) -> list[str]:
-        """Contract columns the local table has AND the live namespace holds.
-
-        The contracts are a superset of the live namespaces (aleph_people_v1 has
-        no company_* or *_followers attributes, aleph_companies_v1 no aliases),
-        so intersecting with the live schema is what keeps an upload from
-        widening a shared index. An empty `live` means the namespace does not
-        exist yet, and the contract is then the only available shape.
-        """
-        contract = load_search_contract(f"turbopuffer/{logical}.namespace.json")
-        names = ["id"] + [name for name in contract_attribute_names(contract) if name != "id"]
-        if vector_metadata(contract) is not None:
-            names.append("vector")
-        columns = {row[0] for row in con.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = ?", [table]).fetchall()}
-        allowed = columns if not live else columns & (live | {"id"})
-        return [name for name in names if name in allowed]
-
 
 def plan_preview(plan: UploadPlan) -> dict[str, Any]:
     """Counts plus the first ids per bucket. Ids and counts only — a source row's
@@ -297,18 +226,6 @@ def plan_preview(plan: UploadPlan) -> dict[str, Any]:
         for ns in plan.namespaces
     }
     return preview
-
-
-def result_payload(result: UploadResult) -> dict[str, Any]:
-    return {
-        "persons_upserted": result.persons_upserted,
-        "sources_inserted": result.sources_inserted,
-        "sources_deleted": result.sources_deleted,
-        "tags_put": result.tags_put,
-        "tags_deleted": result.tags_deleted,
-        "docs_upserted": result.docs_upserted,
-        "docs_patched": result.docs_patched,
-    }
 
 
 def main() -> int:

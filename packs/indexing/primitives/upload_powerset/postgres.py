@@ -5,17 +5,19 @@ Flow: resolve_operator_id (credentials JWT sub -> users.id) -> the four read
 helpers the plan needs (the cloud id of each of our people it already has, this
 operator's own powerpacks source rows, every operator that can see those people,
 this operator's private contact_tags) -> the four writes (persons upsert,
-operator_person_sources upsert/delete, contact_tags put/delete).
+operator_person_sources upsert/delete, contact_tags put/delete). Each write
+returns the sum of cursor rowcount, rather than attempted rows.
 
 PERSONS_UPSERT_SQL has the column list of the cloud pipeline's upsert
 (network-search-api/data_pipeline_v2/pipelines/people/processing/
 sync_persons_to_supabase.py) with the COALESCE turned around: the cloud owns a
 person it already has, so an existing row keeps every non-NULL cloud value and
 a laptop only fills the gaps — COALESCE(persons.col, EXCLUDED.col). A person the
-cloud lacks is created from the local profile.
+cloud lacks is created from the local profile. The INSERT column list stays
+pinned to that cloud pipeline's list, including five locally NULL columns.
 
 Changelog:
-  2026-09-24: created.
+  2026-09-24: created; count affected rows and omit locally NULL update clauses.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ from packs.indexing.primitives.upload_powerset.models import (
     SourceRow,
     TagRow,
 )
+
+# operator_person_sources.operator_id is VARCHAR; contact_tags.operator_id is uuid.
 
 PERSONS_UPSERT_SQL = """
     INSERT INTO persons (
@@ -60,18 +64,13 @@ PERSONS_UPSERT_SQL = """
         state = COALESCE(persons.state, EXCLUDED.state),
         country = COALESCE(persons.country, EXCLUDED.country),
         location_raw = COALESCE(persons.location_raw, EXCLUDED.location_raw),
-        enrichment_provider = COALESCE(persons.enrichment_provider, EXCLUDED.enrichment_provider),
-        provider_entity_urn = COALESCE(persons.provider_entity_urn, EXCLUDED.provider_entity_urn),
         hydrated_context = COALESCE(persons.hydrated_context, EXCLUDED.hydrated_context),
         x_twitter_handle = COALESCE(persons.x_twitter_handle, EXCLUDED.x_twitter_handle),
         x_twitter_followers = COALESCE(persons.x_twitter_followers, EXCLUDED.x_twitter_followers),
         linkedin_followers = COALESCE(persons.linkedin_followers, EXCLUDED.linkedin_followers),
         linkedin_connections = COALESCE(persons.linkedin_connections, EXCLUDED.linkedin_connections),
-        ig_handle = COALESCE(persons.ig_handle, EXCLUDED.ig_handle),
         ig_followers = COALESCE(persons.ig_followers, EXCLUDED.ig_followers),
         inferred_birth_year = COALESCE(persons.inferred_birth_year, EXCLUDED.inferred_birth_year),
-        linkedin_member_id = COALESCE(persons.linkedin_member_id, EXCLUDED.linkedin_member_id),
-        twitter_user_id = COALESCE(persons.twitter_user_id, EXCLUDED.twitter_user_id),
         updated_at = NOW()
 """
 
@@ -164,6 +163,7 @@ def fetch_private_tag_keys(cur: Any, operator_id: str) -> frozenset[str]:
 
 
 def upsert_persons(cur: Any, profiles: Sequence[PersonProfile]) -> int:
+    count = 0
     for profile in profiles:
         cur.execute(PERSONS_UPSERT_SQL, (
             profile.id,
@@ -192,10 +192,12 @@ def upsert_persons(cur: Any, profiles: Sequence[PersonProfile]) -> int:
             None,  # linkedin_member_id
             None,  # twitter_user_id
         ))
-    return len(profiles)
+        count += cur.rowcount
+    return count
 
 
 def upsert_sources(cur: Any, operator_id: str, rows: Sequence[SourceRow]) -> int:
+    count = 0
     for row in rows:
         cur.execute(SOURCES_UPSERT_SQL, (
             operator_id,
@@ -206,24 +208,31 @@ def upsert_sources(cur: Any, operator_id: str, rows: Sequence[SourceRow]) -> int
             row.total_interactions,
             row.last_interaction_at or None,
         ))
-    return len(rows)
+        count += cur.rowcount
+    return count
 
 
 def delete_sources(cur: Any, operator_id: str, rows: Sequence[SourceRow]) -> int:
+    count = 0
     for row in rows:
         cur.execute(SOURCES_DELETE_SQL, (
             operator_id, DISCOVERY_METHOD, row.person_id, row.source_channel, row.source_identifier,
         ))
-    return len(rows)
+        count += cur.rowcount
+    return count
 
 
 def put_tags(cur: Any, operator_id: str, rows: Sequence[TagRow]) -> int:
+    count = 0
     for row in rows:
         cur.execute(TAG_PUT_SQL, (operator_id, row.group_key, row.tag, row.person_id or None))
-    return len(rows)
+        count += cur.rowcount
+    return count
 
 
 def delete_tags(cur: Any, operator_id: str, rows: Sequence[TagRow]) -> int:
+    count = 0
     for row in rows:
         cur.execute(TAG_DELETE_SQL, (operator_id, row.group_key, row.tag))
-    return len(rows)
+        count += cur.rowcount
+    return count

@@ -5,6 +5,10 @@ Created: 2026-09-24
 Change log:
 - 2026-09-24: first version — labels (Jev), tags (human), share list, upload to
   Powerset (TurboPuffer + Postgres). Written before the code; edit as the code lands.
+- 2026-09-24 (craft pass, Codex gpt-6-sol + Opus craft review): one `share_schema.py` home for
+  the share.csv contract; upload DuckDB readers in `local_index.py`; one namespace table;
+  Postgres counts affected rows; evidence date = facts file date; `share.py` split into
+  `label.py` / `share_list.py`; `status` subcommand deleted.
 - 2026-09-24 (after the code): corrected the facts the builders found wrong from
   the artifacts (parent-id keying, 548 slugs, live namespaces narrower than the
   contracts, `_dev` twins), dropped `relationship_active` (cadence is
@@ -98,7 +102,7 @@ Cloud (production, read-only checks):
    (derived), `manifest.json`, `jev/<sha>.json` (client cache). Manifest + outputs only.
 2. **The judge is Jev** with a frozen 34-question set (`share/questions.py`) plus 10
    deterministic labels computed from body-free metadata. The request's `reference_date` is
-   the dossier's `generated_at`, so the per-request cache only misses when evidence changes. Input per person = dossier markdown
+   the facts file's date (parent dossiers carry none), so the per-request cache only misses when evidence changes. Input per person = dossier markdown
    (parent dossier if present, else child) + the facts JSON + profile fields + channel/cadence
    metadata + owner context. **Never raw bodies.** Only people with a facts file or dossier are
    sent; LinkedIn-only people get deterministic labels (`linkedin_only`).

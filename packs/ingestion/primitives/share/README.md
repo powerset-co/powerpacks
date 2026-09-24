@@ -34,7 +34,6 @@ bin/deep-context label --estimate            # count + $ , writes nothing
 bin/deep-context label --approve-spend       # writes labels.csv (~$0.08 for 766 people)
 bin/deep-context tag --name "Jordan Bravo" +private -is_family --note "family"
 bin/deep-context share                       # rebuild share.csv
-bin/deep-context share status               # manifest counts
 ```
 
 `label` without `--approve-spend` emits the `needs_approval` payload and exits
@@ -45,11 +44,15 @@ after a change re-asks only what changed and costs nothing for the rest.
 
 | file | role | reads | writes |
 | --- | --- | --- | --- |
-| `models.py` | stage paths, the frozen dataclasses, the three CSV column tuples | `questions.py` label names | — |
-| `questions.py` | the frozen question set (6 choice, 1 score, 27 noul) + the request envelope | — | — |
+| `models.py` | stage filenames, evidence and label types | `questions.py` label names | — |
+| `csv_cells.py` | CSV cell read and write coercion | — | — |
+| `questions.py` | the frozen question set and request state | — | — |
+| `evidence.py` | join people and deep-context evidence | `merged/people.csv`, deep-context leaves, `overrides/review.csv` | — |
 | `labels.py` | all policy: cadence/direction bands, answer reduction, the private table, `share_decision` | — | — |
 | `tags.py` | `tags.csv` read/upsert, the tag vocabulary, name/phone/email lookup | `tags.csv`, `deep-context/index.json` | `tags.csv` |
-| `share.py` | evidence join + the three CLI runs | `merged/people.csv`, `deep-context/{index.json,facts,parents,dossiers,raw,owner.json}`, `overrides/review.csv`, `labels.csv`, `tags.csv` | `labels.csv`, `share.csv`, `manifest.json`, `jev/<sha>.json` |
+| `label.py` | label run, Jev estimate, shared manifest writer | evidence, Jev cache | `labels.csv`, `manifest.json`, `jev/<sha>.json` |
+| `share_list.py` | complete share list run | `merged/people.csv`, `labels.csv`, `tags.csv` | `share.csv`, `manifest.json` |
+| `share.py` | label, tag, share CLI | stage results | — |
 
 ## Contracts worth knowing
 
