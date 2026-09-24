@@ -195,6 +195,11 @@ usage: bin/deep-context <command> [args]
   apply-retargets           enrich approved retargets -> retarget-people.csv
   persist-review-identities persist approved real LinkedIn identities -> directory.csv
   realize      fan-in merge of the per-source import people files (free, local)
+  label        machine share-labels for every merged person (Jev; spend-gated —
+               `label --estimate` prints the cost first, `--approve-spend` runs it)
+  tag          set YOUR tags on one person: `tag --name "Jane Doe" +private -friend`
+               (rebuilds share.csv and prints that person's share row)
+  share        rebuild share.csv from labels.csv + tags.csv (free, local)
   lookup       fetch a person's dossier by name/phone/email
   probe        chat.db readability (Full Disk Access) check
   purge-raw    delete the ephemeral raw bundles
@@ -456,6 +461,11 @@ case "$cmd" in
       --people-csv .powerpacks/network-import/merged/people.csv "$@"
     echo "✅ people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
+    ;;
+  label|tag|share)
+    # The share stage: machine labels, your tags, the derived share list.
+    # `label` is the only spend-bearing one and gates itself behind --approve-spend.
+    "${PY[@]}" "packs.ingestion.primitives.share.share" "$cmd" "$@"
     ;;
   lookup)
     "${PY[@]}" "$PKG.lookup_person" "$@"

@@ -64,6 +64,9 @@ load_dotenv(_REPO_FOR_ENV / ".env", override=False)
 # for the `packs.*` import below.
 sys.path.insert(0, str(_REPO_FOR_ENV))
 
+from packs.indexing.primitives.upload_powerset.postgres import resolve_operator_id  # noqa: E402
+from packs.indexing.primitives.upload_powerset.upload_powerset import postgres_client  # noqa: E402
+from packs.ingestion.primitives.share.models import SHARE_COLUMNS  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 import modal  # noqa: E402
 
@@ -610,6 +613,84 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     return 0
 
 
+UPLOAD_LABEL = "upload-powerset"
+UPLOAD_ENTRY = "/repo/packs/indexing/modal/run_upload.py"
+# The indexing image has no cloud clients; the upload needs exactly these two,
+# pinned to the repo uv.lock versions.
+UPLOAD_PACKAGES = ("psycopg2-binary==2.9.12", "turbopuffer==1.21.0")
+
+
+def resolve_operator_id_from_credentials() -> str:
+    """The operator's users.id, from the laptop's Powerset credentials and .env DSN."""
+    postgres_client.load_env_file(None)
+    psycopg2 = postgres_client.ensure_psycopg2()
+    with psycopg2.connect(postgres_client.database_url()) as conn, conn.cursor() as cur:
+        return resolve_operator_id(cur, postgres_client.credentials_subject())
+
+
+def cmd_upload_powerset(args: argparse.Namespace) -> int:
+    """Push the shared slice of an indexed run to Powerset from the sandbox.
+
+    Dry-run by default: it reads Postgres and TurboPuffer and writes only the
+    stage manifest. `--apply` performs the reconcile. The DuckDB comes from the
+    volume's runs/<label>/ and people.csv from this operator's input/ (put there
+    by `upload` / `index-people`); share.csv is uploaded here.
+    """
+    share_path = Path(args.share_csv).expanduser()
+    if not share_path.exists():
+        raise SystemExit(f"missing share.csv: {share_path}")
+    operator_id = args.operator_id or resolve_operator_id_from_credentials()
+
+    # Only LinkedIn-keyed rows go to the volume: the rows without a slug are keyed
+    # by an email address and the upload skips them anyway.
+    rows = [row for row in CsvIO.read_dict_rows(share_path) if row.get("public_identifier")]
+    with tempfile.TemporaryDirectory() as tmp:
+        filtered_share = Path(tmp) / "share.csv"
+        CsvIO.write_dict_rows(filtered_share, list(SHARE_COLUMNS), rows)
+        vol = get_volume()
+        with vol.batch_upload(force=True) as batch:
+            batch.put_file(filtered_share, f"{operator_volume_prefix()}/input/share.csv")
+
+    people_csv, _ = dataset_paths("real")
+    run_vol = run_vol_path(args.label)
+    reset_run_status(vol, UPLOAD_LABEL)
+    entrypoint = [
+        "python", UPLOAD_ENTRY,
+        "--db", f"{run_vol}/local-search.duckdb",
+        "--share-csv", f"{OPERATOR_ROOT}/input/share.csv",
+        "--people-csv", people_csv,
+        "--run-vol", run_vol_path(UPLOAD_LABEL),
+        "--operator-id", operator_id,
+    ]
+    if args.apply:
+        entrypoint.append("--apply")
+    sb = modal.Sandbox.create(
+        *entrypoint,
+        app=modal.App.lookup(APP_NAME, create_if_missing=True),
+        image=build_image().pip_install(*UPLOAD_PACKAGES),
+        volumes={"/data": vol},
+        secrets=[
+            modal.Secret.from_name("powerset-turbopuffer"),
+            modal.Secret.from_name("powerset-postgres"),
+            # The caller's ALEPH_ENV picks the TurboPuffer namespaces inside the sandbox too.
+            modal.Secret.from_dict({"ALEPH_ENV": os.environ.get("ALEPH_ENV", "")}),
+        ],
+        cpu=args.cpu,
+        memory=args.memory_mib,
+        timeout=args.timeout,
+    )
+    print(f"dispatched sandbox {sb.object_id} run={UPLOAD_LABEL} operator={operator_id} apply={args.apply}")
+    for line in sb.stdout:
+        print(line, end="", flush=True)
+    sb.wait()
+    payload = read_run_status(UPLOAD_LABEL)
+    if not payload or payload.get("status") != "completed":
+        print(json.dumps({"status": "failed", "detail": payload}, indent=2))
+        return 1
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_process(args: argparse.Namespace) -> int:
     """Fully automatic: dispatch a server-side run, watch it, download results.
 
@@ -1053,6 +1134,16 @@ def main() -> int:
                       help="allow paid OpenAI calls for cache misses (mounts the powerset-openai secret; dry-run estimate gated by --max-usd)")
     proc.add_argument("--max-usd", type=float, default=25.0)
 
+    ups = sub.add_parser("upload-powerset", help="push the shared slice of an indexed run to Powerset (dry-run by default)")
+    ups.add_argument("--share-csv", required=True, help="path to .powerpacks/share/share.csv")
+    ups.add_argument("--operator-id", default=None,
+                     help="users.id of the operator whose network this is; derived from the Powerset credentials when omitted")
+    ups.add_argument("--label", default=GMAIL_INDEX_LABEL, help="run label holding local-search.duckdb")
+    ups.add_argument("--apply", action="store_true", help="write; without it the sandbox only plans")
+    ups.add_argument("--cpu", type=float, default=4)
+    ups.add_argument("--memory-mib", type=int, default=8192)
+    ups.add_argument("--timeout", type=int, default=3600)
+
     dl = sub.add_parser("download")
     dl.add_argument("--label", required=True, help="run label to pull, e.g. real-1x")
     dl.add_argument("--dest", help="destination dir; defaults to .powerpacks/search-index")
@@ -1060,7 +1151,7 @@ def main() -> int:
 
     args = ap.parse_args()
     require_modal_credentials()
-    return {"pipeline": cmd_pipeline, "import-linkedin": cmd_import_linkedin, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
+    return {"pipeline": cmd_pipeline, "import-linkedin": cmd_import_linkedin, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "upload-powerset": cmd_upload_powerset, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 
 if __name__ == "__main__":

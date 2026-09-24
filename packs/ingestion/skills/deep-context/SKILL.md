@@ -515,6 +515,35 @@ uv run --project . python packs/indexing/primitives/validate_search_index/valida
 
 Pass only on `status: ok`.
 
+### 9. Share (optional): label, tag, upload to Powerset
+
+Who leaves the laptop is a per-person decision — see
+`packs/ingestion/docs/share-and-upload.md`. Labels are cheap (Jev, ~$0.10 per
+1,000 people) and cached per person until their evidence changes.
+
+```bash
+bin/deep-context label --estimate          # count + cost, writes nothing
+bin/deep-context label --approve-spend     # labels.csv (needs TYPESAFE_API_KEY)
+bin/deep-context tag --name "Jane Doe" +private   # or +share; rebuilds share.csv
+bin/deep-context share                     # share.csv from labels + tags (free)
+```
+
+`share.csv` says yes to everyone except the owner, human `private`, machine
+`private_suggested` (family, partner, minor, sensitive context, clinician/
+lawyer/banker), automated senders and strangers; it refuses to write a list
+that does not cover every merged person. Then the upload — without `--apply`
+it plans only, reads the cloud, writes one manifest:
+
+```bash
+uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py
+```
+
+Show the plan counts and get explicit approval before `--apply`: it upserts
+`persons`, reconciles this operator's `operator_person_sources` rows, writes or
+patches the five TurboPuffer namespaces, and mirrors `private` into
+`contact_tags`. People without a LinkedIn never reach the cloud
+(`skipped_no_linkedin`). `ALEPH_ENV=staging` targets the `_dev` namespaces.
+
 ## Completion report
 
 Report terse counts: people/candidates dossiered, duplicate merges, explicit

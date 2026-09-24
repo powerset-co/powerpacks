@@ -607,7 +607,10 @@ Routes:
   per-person dossier from message bodies (Gmail + iMessage/WhatsApp DMs),
   "context/dossier on a person", "who is <phone/name> in my messages", find
   same-person/merge candidates, staged worth/LinkedIn review, candidate lookup,
-  synthetic profiles, fan-in + Modal index + validate. This is the single
+  synthetic profiles, fan-in + Modal index + validate, and the share step —
+  "label my contacts", "tag <person> private", "who gets shared", "upload my
+  network to Powerset" (`bin/deep-context label|tag|share`, then
+  `upload_powerset.py`, dry-run first). This is the single
   post-import processing surface; `$deep-setup` is retired →
   `packs/ingestion/skills/deep-context/SKILL.md`
 - `$clean-slate`, "clean slate", "pipeclean", "start over from scratch" —

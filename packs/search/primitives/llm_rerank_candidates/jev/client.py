@@ -1,4 +1,18 @@
-"""Async TypeSafe client for bounded Jev capability scoring."""
+"""Async TypeSafe client for Jev question answering.
+
+`answer_requests` is the question-agnostic half: sha-keyed requests in, validated
+answers out, reusing the exact-request cache under `<output_dir>/jev/`.
+`score_candidates` is the JD capability judge built on it — it binds the JD
+question set, then turns the answers into a qualification score.
+
+Changelog:
+  2026-09-24 (share stage): the cache/semaphore/request/checkpoint body of
+    `score_candidates`' inner `score_one` became the module-level
+    `answer_requests`, so a second question set (the share stage's labels) can
+    reuse it. `_cache_record`/`_validate_cache` take the caller's
+    request/question versions instead of reading the JD constants, and
+    `score_candidates` passes the JD ones. Same cache file names and contents.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +22,7 @@ import json
 import math
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
@@ -42,7 +57,8 @@ MAX_UNKNOWN_CALL_COST_USD = MAX_INPUT_TOKENS * INPUT_PRICE_PER_MILLION / 1_000_0
 RETRYABLE_STATUS = frozenset((429, 500, 502, 503, 504, 529))
 
 
-def _digest(value: object) -> str:
+def request_digest(value: object) -> str:
+    """The cache key for a request: sha256 of its canonical JSON."""
     encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -114,16 +130,23 @@ def _compact_request(request: dict) -> dict:
     return result
 
 
-def _cache_record(raw_response: str, request_hash: str, effective_request: dict) -> dict:
-    effective_kind = "full" if _digest(effective_request) == request_hash else "compact"
+def _cache_record(
+    raw_response: str,
+    request_hash: str,
+    effective_request: dict,
+    *,
+    request_version: str,
+    question_version: str,
+) -> dict:
+    effective_kind = "full" if request_digest(effective_request) == request_hash else "compact"
     return {
         "raw_response": raw_response,
         "request_sha256": request_hash,
-        "effective_request_sha256": _digest(effective_request),
+        "effective_request_sha256": request_digest(effective_request),
         "effective_request_kind": effective_kind,
         "model": MODEL,
-        "request_version": REQUEST_VERSION,
-        "question_version": QUESTION_VERSION,
+        "request_version": request_version,
+        "question_version": question_version,
         "prompt_version": PROMPT_VERSION,
         "assessment_date": effective_request["state"]["reference_date"],
         "model_asset_sha256": MODEL_ASSET_SHA256,
@@ -131,12 +154,19 @@ def _cache_record(raw_response: str, request_hash: str, effective_request: dict)
     }
 
 
-def _validate_cache(record: object, request: dict, request_hash: str) -> dict:
+def _validate_cache(
+    record: object,
+    request: dict,
+    request_hash: str,
+    *,
+    request_version: str,
+    question_version: str,
+) -> dict:
     expected = {
         "request_sha256": request_hash,
         "model": MODEL,
-        "request_version": REQUEST_VERSION,
-        "question_version": QUESTION_VERSION,
+        "request_version": request_version,
+        "question_version": question_version,
         "prompt_version": PROMPT_VERSION,
         "assessment_date": request["state"]["reference_date"],
     }
@@ -146,7 +176,7 @@ def _validate_cache(record: object, request: dict, request_hash: str) -> dict:
     expected_effective_hash = (
         request_hash
         if effective_kind == "full"
-        else _digest(_compact_request(request))
+        else request_digest(_compact_request(request))
         if effective_kind == "compact"
         else None
     )
@@ -263,6 +293,93 @@ async def _request(
         raise RuntimeError(f"Jev HTTP {response.status_code}; candidate remains unscored")
 
 
+@dataclass(frozen=True)
+class AnsweredRequest:
+    """One request's validated answers plus how they were obtained."""
+
+    response: dict
+    cache: Path
+    cached: bool
+    attempts: int
+
+
+async def answer_requests(
+    requests: dict[str, dict],
+    *,
+    output_dir: Path,
+    api_key: str | None,
+    client: Any | None,
+    concurrency: int,
+    request_version: str,
+    question_version: str,
+) -> dict[str, AnsweredRequest]:
+    """Answer sha-keyed Jev requests, reusing the exact-request cache.
+
+    `requests` maps `request_digest(request)` to the request; the result maps the same
+    hashes to their answers, in the same order. A cached answer costs nothing and
+    needs no API key. `request_version`/`question_version` bind the cache record to
+    the CALLER's question set, so two question sets cannot read each other's files.
+    """
+    if not 1 <= concurrency <= MAX_CONCURRENCY:
+        raise ValueError(f"Jev concurrency must be between 1 and {MAX_CONCURRENCY}")
+    semaphore = asyncio.Semaphore(concurrency)
+    key = api_key if api_key is not None else os.environ.get("TYPESAFE_API_KEY")
+    owned_client = None
+
+    async def answer_one(request_hash: str, request: dict) -> AnsweredRequest:
+        nonlocal client, owned_client
+        cache = output_dir / "jev" / f"{request_hash}.json"
+        if cache.exists():
+            try:
+                saved = json.loads(cache.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raise RuntimeError("Jev cache is unreadable; preserved without another paid request") from None
+            response = _validate_cache(
+                saved,
+                request,
+                request_hash,
+                request_version=request_version,
+                question_version=question_version,
+            )
+            return AnsweredRequest(response=response, cache=cache, cached=True, attempts=0)
+        async with semaphore:
+            if not key:
+                raise RuntimeError("Jev requires TYPESAFE_API_KEY; candidate remains unscored")
+            if client is None:
+                owned_client = client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
+
+            def checkpoint(raw_response: str, effective_request: dict) -> None:
+                saved = _cache_record(
+                    raw_response,
+                    request_hash,
+                    effective_request,
+                    request_version=request_version,
+                    question_version=question_version,
+                )
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with cache.open("x", encoding="utf-8") as handle:
+                        json.dump(saved, handle, ensure_ascii=False, allow_nan=False)
+                except FileExistsError:
+                    raise RuntimeError("Jev cache changed concurrently; preserved without overwrite") from None
+
+            response, _, attempts = await _request(client, request, key, checkpoint)
+            return AnsweredRequest(response=response, cache=cache, cached=False, attempts=attempts)
+
+    try:
+        rows = await asyncio.gather(
+            *(answer_one(request_hash, request) for request_hash, request in requests.items()),
+            return_exceptions=True,
+        )
+    finally:
+        if owned_client is not None:
+            await owned_client.aclose()
+    for row in rows:
+        if isinstance(row, BaseException):
+            raise row
+    return dict(zip(requests, rows))
+
+
 async def score_candidates(
     *,
     jd: str,
@@ -302,70 +419,34 @@ async def score_candidates(
     candidate_requests = {}
     for person_id, profile in profiles.items():
         request = build_request(jd=jd, profile=profile, as_of=as_of)
-        request_hash = _digest(request)
+        request_hash = request_digest(request)
         requests[request_hash] = request
         candidate_requests[person_id] = request_hash
 
-    semaphore = asyncio.Semaphore(concurrency)
-    key = api_key if api_key is not None else os.environ.get("TYPESAFE_API_KEY")
-    owned_client = None
-
-    async def score_one(request_hash: str, request: dict) -> tuple[dict, Path, bool, int]:
-        nonlocal client, owned_client
-        cache = output_dir / "jev" / f"{request_hash}.json"
-        if cache.exists():
-            try:
-                saved = json.loads(cache.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                raise RuntimeError("Jev cache is unreadable; preserved without another paid request") from None
-            response = _validate_cache(saved, request, request_hash)
-            return response, cache, True, 0
-        async with semaphore:
-            if not key:
-                raise RuntimeError("Jev requires TYPESAFE_API_KEY; candidate remains unscored")
-            if client is None:
-                owned_client = client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
-
-            def checkpoint(raw_response: str, effective_request: dict) -> None:
-                saved = _cache_record(raw_response, request_hash, effective_request)
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    with cache.open("x", encoding="utf-8") as handle:
-                        json.dump(saved, handle, ensure_ascii=False, allow_nan=False)
-                except FileExistsError:
-                    raise RuntimeError("Jev cache changed concurrently; preserved without overwrite") from None
-
-            response, _, attempts = await _request(client, request, key, checkpoint)
-            return response, cache, False, attempts
-
-    try:
-        rows = await asyncio.gather(
-            *(score_one(request_hash, request) for request_hash, request in requests.items()),
-            return_exceptions=True,
-        )
-    finally:
-        if owned_client is not None:
-            await owned_client.aclose()
-    for row in rows:
-        if isinstance(row, BaseException):
-            raise row
-
-    records = {request_hash: row for request_hash, row in zip(requests, rows)}
-    for request_hash, (response, cache, cached, attempts) in records.items():
-        result["artifacts"].append(str(cache))
-        result["requests"] += attempts
+    records = await answer_requests(
+        requests,
+        output_dir=output_dir,
+        api_key=api_key,
+        client=client,
+        concurrency=concurrency,
+        request_version=REQUEST_VERSION,
+        question_version=QUESTION_VERSION,
+    )
+    for answer in records.values():
+        result["artifacts"].append(str(answer.cache))
+        result["requests"] += answer.attempts
+        usage = answer.response["usage"]
         result["usage"]["pairs"] += 1
-        result["usage"]["input_tokens"] += response["usage"]["input_tokens"]
-        result["usage"]["output_tokens"] += response["usage"]["output_tokens"]
-        usage_bucket = result["cached_usage"] if cached else result["paid_usage"]
+        result["usage"]["input_tokens"] += usage["input_tokens"]
+        result["usage"]["output_tokens"] += usage["output_tokens"]
+        usage_bucket = result["cached_usage"] if answer.cached else result["paid_usage"]
         usage_bucket["pairs"] += 1
-        usage_bucket["input_tokens"] += response["usage"]["input_tokens"]
-        usage_bucket["output_tokens"] += response["usage"]["output_tokens"]
+        usage_bucket["input_tokens"] += usage["input_tokens"]
+        usage_bucket["output_tokens"] += usage["output_tokens"]
     for person_id, request_hash in candidate_requests.items():
-        response, _, cached, _ = records[request_hash]
-        answers = response["answers"]
+        answers = records[request_hash].response["answers"]
         score = predict(build_features(requests[request_hash]["state"]["roles"], answers))
-        result["cached_candidates"] += int(cached)
+        result["cached_candidates"] += int(records[request_hash].cached)
         result["scores"].append(
             {
                 "id": person_id,
