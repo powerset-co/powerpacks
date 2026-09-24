@@ -5,14 +5,14 @@ The stage writes one fixed directory and overwrites in place:
   .powerpacks/share/labels.csv    machine labels, one row per people.csv row
   .powerpacks/share/tags.csv      human tags, one row per tagged person
   .powerpacks/share/share.csv     the derived share list
-  .powerpacks/share/manifest.json counts + versions
-  .powerpacks/share/jev/<sha>.json  the Jev client's per-request cache
+  .powerpacks/share/manifest.json the `share` node's manifest
 
 Flow: `evidence.py` parses people.csv + deep-context artifacts into
 `PersonEvidence` -> `labels.py` renders `DeterministicLabels` + `JevLabels` ->
-`label.py` writes labels.csv and `share_list.py` writes share.csv.
+`share_list.py` (the node) writes labels.csv and share.csv.
 
 Changelog:
+  2026-09-24: the share node writes both files; no JEV cache here (synthesize's).
   2026-09-24: moved the share.csv contract and request state to their owners.
   2026-09-24: created.
 """

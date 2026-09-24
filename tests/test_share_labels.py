@@ -8,11 +8,8 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
-from unittest import mock
 
-from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
-from packs.ingestion.primitives.share import share as share_cli
-from packs.ingestion.primitives.share.label import ShareLabels
+from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.share.labels import (
     ACTIVE_P,
@@ -22,7 +19,7 @@ from packs.ingestion.primitives.share.labels import (
     private_reason,
 )
 from packs.ingestion.primitives.share.models import JevLabels, MessageStats, PersonEvidence
-from packs.ingestion.primitives.share.questions import NOUL_LABELS, build_questions, build_request
+from packs.ingestion.primitives.share.questions import NOUL_LABELS, build_questions
 from packs.shared.csv_io import CsvIO
 
 REFERENCE_DATE = "2026-09-24"
@@ -228,10 +225,6 @@ def _write_install(root: Path) -> ShareEvidence:
         encoding="utf-8",
     )
     (root / "review.csv").write_text("public_identifier,network_worth,llm_worth\n", encoding="utf-8")
-    (root / "owner.json").write_text(
-        json.dumps({"name": "Owner Person", "work": [{"company": "Powerset", "title": "Engineer"}]}),
-        encoding="utf-8",
-    )
     return ShareEvidence(
         people_csv=people_csv,
         index_json=root / "index.json",
@@ -240,7 +233,6 @@ def _write_install(root: Path) -> ShareEvidence:
         dossier_dir=root / "dossiers",
         parents_dir=root / "parents",
         overrides_csv=root / "review.csv",
-        owner_json=root / "owner.json",
     )
 
 
@@ -360,7 +352,7 @@ def _keys(value: object) -> set[str]:
     return set()
 
 
-class LabelRunTests(unittest.TestCase):
+class ShareNodeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -369,8 +361,7 @@ class LabelRunTests(unittest.TestCase):
         self.out = self.root / "share"
 
     def _save_labels(self):
-        paths = list(self.evidence.facts_dir.glob("*.jsonl"))
-        path = paths[0]
+        path = next(self.evidence.facts_dir.glob("*.jsonl"))
         rec = json.loads(path.read_text().splitlines()[-1])
         answers = {name: _answer(question) for name, question in build_questions().items()}
         labels = labels_from_answers(answers)
@@ -380,27 +371,28 @@ class LabelRunTests(unittest.TestCase):
         }
         path.write_text(json.dumps(rec) + "\n")
 
-    def test_export_requires_worth_labels_before_sharing(self):
-        payload = ShareLabels(out_dir=self.out, evidence=self.evidence).run()
+    def test_share_requires_the_labels_synthesize_saved(self):
+        payload = ShareList(out_dir=self.out, evidence=self.evidence).run().to_payload()
         self.assertEqual(payload["status"], "failed")
         self.assertIn("synthesize", payload["error"])
         self.assertFalse((self.out / "labels.csv").exists())
+        self.assertFalse((self.out / "share.csv").exists())
 
-    def test_saved_labels_export_is_free_and_covers_linkedin_only(self):
+    def test_one_pass_writes_labels_and_share_for_everyone(self):
         self._save_labels()
-        payload = ShareLabels(out_dir=self.out, evidence=self.evidence).run()
+        payload = ShareList(out_dir=self.out, evidence=self.evidence).run().to_payload()
         self.assertEqual(payload["status"], "completed")
-        self.assertEqual(payload["counts"]["saved_labels"], 1)
-        rows = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "labels.csv")}
-        self.assertEqual(rows["person-a"]["relationship_kind"], "family")
-        self.assertEqual(rows["person-a"]["private_reason"], "family")
-        self.assertEqual(rows["person-b"]["linkedin_only"], "yes")
-
-    def test_estimate_never_calls_jev_or_writes(self):
-        self._save_labels()
-        payload = ShareLabels(out_dir=self.out, evidence=self.evidence, estimate_only=True).run()
-        self.assertEqual(payload["estimate"]["cost_usd"], 0)
-        self.assertFalse((self.out / "labels.csv").exists())
+        self.assertEqual((payload["people"], payload["saved_labels"], payload["deterministic_only"]), (2, 1, 1))
+        labels = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "labels.csv")}
+        self.assertEqual(labels["person-a"]["relationship_kind"], "family")
+        self.assertEqual(labels["person-a"]["private_reason"], "family")
+        self.assertEqual(labels["person-b"]["linkedin_only"], "yes")
+        share = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "share.csv")}
+        self.assertEqual((share["person-a"]["share"], share["person-a"]["reason"]), ("no", "private_suggested"))
+        self.assertEqual((share["person-b"]["share"], share["person-b"]["reason"]), ("yes", "default"))
+        manifest = json.loads((self.out / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["stage"] if "stage" in manifest else manifest["source"], "share")
+        self.assertEqual(manifest["by_reason"], {"private_suggested": 1, "default": 1})
 
 
 class EvidenceJoinTests(unittest.TestCase):

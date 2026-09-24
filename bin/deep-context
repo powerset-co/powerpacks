@@ -193,10 +193,10 @@ usage: bin/deep-context <command> [args]
   apply-retargets           enrich approved retargets -> retarget-people.csv
   persist-review-identities persist approved real LinkedIn identities -> directory.csv
   realize      fan-in merge of the per-source import people files (free, local)
-  label        export saved dossier labels for sharing (free, local)
+  share        write labels.csv + share.csv for every merged person from the
+               JEV labels synthesize saved (free, local)
   tag          set YOUR tags on one person: `tag --name "Jane Doe" +private -friend`
                (rebuilds share.csv and prints that person's share row)
-  share        rebuild share.csv from labels.csv + tags.csv (free, local)
   lookup       fetch a person's dossier by name/phone/email
   probe        chat.db readability (Full Disk Access) check
   purge-raw    delete the ephemeral raw bundles
@@ -450,9 +450,9 @@ case "$cmd" in
     echo "✅ people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;
-  label|tag|share)
-    # The share stage: machine labels, your tags, the derived share list.
-    # Worth already produced labels; these commands only read local artifacts.
+  tag|share)
+    # The share stage (free, local): JEV labels were saved by synthesize;
+    # `share` writes labels.csv + share.csv, `tag` records your word first.
     "${PY[@]}" "packs.ingestion.primitives.share.share" "$cmd" "$@"
     ;;
   lookup)

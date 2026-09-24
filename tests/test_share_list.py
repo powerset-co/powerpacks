@@ -6,12 +6,14 @@ import unittest
 from pathlib import Path
 
 from packs.ingestion.primitives.share.labels import ACTIVE_P, share_decision
-from packs.ingestion.primitives.share.models import LABEL_COLUMNS, HumanTags, LabelRow
+from packs.ingestion.primitives.share.evidence import ShareEvidence
+from packs.ingestion.primitives.share.models import HumanTags, LabelRow
+from packs.ingestion.primitives.share.questions import build_questions
 from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.tags import TagStore
 from packs.shared.csv_io import CsvIO
 
-PEOPLE_HEADER = ["id", "public_identifier", "full_name", "superseded_person_ids"]
+PEOPLE_HEADER = ["id", "public_identifier", "full_name", "source_channels", "interaction_counts", "superseded_person_ids"]
 
 
 def _label(**overrides) -> LabelRow:
@@ -65,14 +67,17 @@ class ShareDecisionTests(unittest.TestCase):
 
 
 class ShareListTests(unittest.TestCase):
+    """The node end to end on a synthetic install: two people with saved labels,
+    person-b an automated sender, person-a's old candidate id superseded."""
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.out = self.root / "share"
-        self.people_csv = self.root / "people.csv"
+        people_csv = self.root / "people.csv"
         CsvIO.write_dict_rows(
-            self.people_csv,
+            people_csv,
             PEOPLE_HEADER,
             [
                 {"id": "person-a", "public_identifier": "jordan-bravo", "full_name": "Jordan Bravo"},
@@ -84,37 +89,42 @@ class ShareListTests(unittest.TestCase):
                 },
             ],
         )
-        CsvIO.write_dict_rows(
-            self.out / "labels.csv",
-            list(LABEL_COLUMNS),
-            [
-                {"person_id": "person-a", "public_identifier": "jordan-bravo", "is_automated_sender": "0.100"},
-                {"person_id": "person-b", "public_identifier": "casey-delta", "is_automated_sender": "0.900"},
-            ],
+        (self.root / "index.json").write_text(json.dumps({
+            "slugs": {"jordan-bravo-aaaa": {"person_id": "person-a"}, "casey-delta-bbbb": {"person_id": "person-b"}},
+            "parents": {
+                "jordan-bravo-aaaa": {"parent_id": "parent-aaaa", "children": ["jordan-bravo-aaaa"]},
+                "casey-delta-bbbb": {"parent_id": "parent-bbbb", "children": ["casey-delta-bbbb"]},
+            },
+        }), encoding="utf-8")
+        (self.root / "facts").mkdir()
+        for parent_id, automated in (("parent-aaaa", 0.1), ("parent-bbbb", 0.9)):
+            (self.root / "facts" / f"{parent_id}.jsonl").write_text(
+                json.dumps({"facts": {"labels": _saved_labels(is_automated_sender=automated)}}) + "\n",
+                encoding="utf-8",
+            )
+        for name in ("raw", "dossiers", "parents"):
+            (self.root / name).mkdir()
+        (self.root / "review.csv").write_text("public_identifier,network_worth,llm_worth\n", encoding="utf-8")
+        self.evidence = ShareEvidence(
+            people_csv=people_csv,
+            index_json=self.root / "index.json",
+            facts_dir=self.root / "facts",
+            raw_dir=self.root / "raw",
+            dossier_dir=self.root / "dossiers",
+            parents_dir=self.root / "parents",
+            overrides_csv=self.root / "review.csv",
         )
 
     def _run(self) -> dict:
-        return ShareList(out_dir=self.out, people_csv=self.people_csv).run()
+        return ShareList(out_dir=self.out, evidence=self.evidence).run().to_payload()
 
     def test_share_csv_follows_people_csv_order_and_counts_by_reason(self) -> None:
         payload = self._run()
         rows = CsvIO.read_dict_rows_normalized(self.out / "share.csv")
         self.assertEqual([row["person_id"] for row in rows], ["person-a", "person-b"])
         self.assertEqual([row["reason"] for row in rows], ["default", "automated_sender"])
-        self.assertEqual(payload["counts"]["share_yes"], 1)
-        self.assertEqual(payload["counts"]["share_no"], 1)
-        self.assertEqual(payload["counts"]["by_reason"], {"default": 1, "automated_sender": 1})
-
-    def test_a_partial_label_set_is_refused_not_shared(self) -> None:
-        CsvIO.write_dict_rows(
-            self.out / "labels.csv",
-            list(LABEL_COLUMNS),
-            [{"person_id": "person-a", "public_identifier": "jordan-bravo", "is_automated_sender": "0.100"}],
-        )
-        payload = self._run()
-        self.assertEqual(payload["status"], "failed")
-        self.assertIn("1 of 2 people have no label row", payload["error"])
-        self.assertFalse((self.out / "share.csv").exists())
+        self.assertEqual((payload["share_yes"], payload["share_no"]), (1, 1))
+        self.assertEqual(payload["by_reason"], {"default": 1, "automated_sender": 1})
 
     def test_a_tag_on_a_superseded_id_decides_the_surviving_row(self) -> None:
         TagStore(self.out).apply(
@@ -134,12 +144,26 @@ class ShareListTests(unittest.TestCase):
         rows = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "share.csv")}
         self.assertEqual(rows["person-b"]["reason"], "human_private")
 
-    def test_the_manifest_keeps_the_share_counts_beside_the_label_counts(self) -> None:
-        (self.out / "manifest.json").write_text(json.dumps({"labels": {"counts": {"people": 2}}}), encoding="utf-8")
+    def test_the_manifest_is_the_node_manifest(self) -> None:
         self._run()
         manifest = json.loads((self.out / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["labels"]["counts"]["people"], 2)
-        self.assertEqual(manifest["share"]["counts"]["share_yes"], 1)
+        self.assertEqual(manifest["status"], "completed")
+        self.assertEqual(manifest["people"], 2)
+        self.assertIn("fingerprints", manifest)
+
+
+def _saved_labels(**probabilities: float) -> dict:
+    """Labels as synthesize saves them: every question answered, the given nouls overridden."""
+    saved: dict = {}
+    for name, question in build_questions().items():
+        if question["type"] == "noul":
+            saved[name] = probabilities.get(name, 0.0)
+        elif question["type"] == "score":
+            saved[name] = 0
+        else:
+            saved[name] = "unknown"
+            saved[f"{name}_p"] = 1.0
+    return saved
 
 
 if __name__ == "__main__":

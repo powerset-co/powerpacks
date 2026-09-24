@@ -42,8 +42,9 @@ _STAGE_OF_PACKAGE = {
     "imports": "import",
     "enrich": "enrich",
     "deep_context": "deep-context",
+    "share": "share",
 }
-_STAGE_ORDER = ("discover", "import", "enrich", "deep-context", "other")
+_STAGE_ORDER = ("discover", "import", "enrich", "deep-context", "share", "other")
 
 
 def stage_of(node: type[Node]) -> str:

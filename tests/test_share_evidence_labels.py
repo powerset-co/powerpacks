@@ -25,7 +25,7 @@ def _evidence(tmp_path, *, person_id='person-a', superseded='', parent_facts=Fal
         }) + '\n')
     return ShareEvidence(people_csv=tmp_path / 'people.csv', index_json=tmp_path / 'index.json',
                          facts_dir=tmp_path / 'facts', raw_dir=tmp_path / 'raw', dossier_dir=tmp_path / 'dossiers',
-                         parents_dir=tmp_path / 'parents', overrides_csv=tmp_path / 'review.csv', owner_json=tmp_path / 'owner.json')
+                         parents_dir=tmp_path / 'parents', overrides_csv=tmp_path / 'review.csv')
 
 
 class ShareEvidenceLabelsTests(unittest.TestCase):

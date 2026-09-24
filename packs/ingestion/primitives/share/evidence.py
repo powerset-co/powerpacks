@@ -4,8 +4,7 @@ Facts and raw bundles use parent or child identity keys. Current parent membersh
 and superseded people IDs connect realized rows to those files. Labels come from
 the same highest-worth machine record used to select the facts.
 
-Flow: `ShareEvidence(...).load()` -> `list[PersonEvidence]`; `owner_state()` ->
-the mailbox owner's background for the request.
+Flow: `ShareEvidence(...).load()` -> `list[PersonEvidence]`.
 
 Changelog:
   2026-09-24: keyed parentless worth by slug; evidence date = facts file date.
@@ -26,11 +25,9 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    OWNER_JSON,
     PARENTS_DIR,
     RAW_DIR,
     load_index,
-    load_owner,
     parse_list,
 )
 from packs.ingestion.primitives.deep_context.review_store import (
@@ -62,7 +59,6 @@ class ShareEvidence:
         dossier_dir: Path = DOSSIER_DIR,
         parents_dir: Path = PARENTS_DIR,
         overrides_csv: Path = LINKEDIN_OVERRIDES_CSV,
-        owner_json: Path = OWNER_JSON,
     ) -> None:
         self.people_csv = Path(people_csv)
         self.index_json = Path(index_json)
@@ -71,18 +67,6 @@ class ShareEvidence:
         self.dossier_dir = Path(dossier_dir)
         self.parents_dir = Path(parents_dir)
         self.overrides_csv = Path(overrides_csv)
-        self.owner_json = Path(owner_json)
-
-    def owner_state(self) -> dict[str, Any]:
-        owner = load_owner(self.owner_json) or {}
-        work = (owner.get("work") or [{}])[0]
-        return {
-            "name": owner.get("name"),
-            "company": work.get("company"),
-            "title": work.get("title"),
-            "locations": owner.get("locations") or [],
-            "education": [entry.get("school") for entry in owner.get("education") or []],
-        }
 
     def load(self, *, limit: int = 0) -> list[PersonEvidence]:
         index = load_index(self.index_json)

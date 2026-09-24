@@ -5,6 +5,11 @@ Created: 2026-09-24
 Change log:
 - 2026-09-24: first version — labels (Jev), tags (human), share list, upload to
   Powerset (TurboPuffer + Postgres). Written before the code; edit as the code lands.
+- 2026-09-24 (node convention): JEV answers the label questions inside
+  `deep_synthesize` (step 3) and saves them with the facts; `share` became one
+  declared `Node` (`share_list.ShareList`, registered in `pipeline/graph.py`) that
+  writes labels.csv + share.csv in one pass; the `label` command and the share
+  stage's own JEV cache are gone; `deep_synthesize` declares its JEV cache output.
 - 2026-09-24 (craft pass, Codex gpt-6-sol + Opus craft review): one `share_schema.py` home for
   the share.csv contract; upload DuckDB readers in `local_index.py`; one namespace table;
   Postgres counts affected rows; evidence date = facts file date; `share.py` split into

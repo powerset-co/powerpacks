@@ -128,6 +128,7 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     FACTS_MANIFEST,
     FACTS_TEMPLATE,
+    JEV_CACHE_TEMPLATE,
     LINKEDIN_OVERRIDES_CSV,
     load_env,
     load_owner,
@@ -654,6 +655,7 @@ class SynthesizePersonContext(Node):
     # action/link columns; the human alone owns network_worth.
     outputs = (
         Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=JEV_CACHE_TEMPLATE, required=False),
         Artifact(
             path=str(LINKEDIN_OVERRIDES_CSV),
             row_model=ReviewRow,
@@ -714,6 +716,7 @@ class SynthesizePersonContext(Node):
         return {
             RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
             FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            JEV_CACHE_TEMPLATE: str(self.facts_dir.parent / "jev" / "{request_sha256}.json"),
             str(LINKEDIN_OVERRIDES_CSV): str(self.review_csv),
             self.manifest: str(self.facts_dir / "manifest.json"),
         }

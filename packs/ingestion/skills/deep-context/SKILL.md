@@ -511,19 +511,19 @@ Pass only on `status: ok`.
 ### 9. Share (optional): label, tag, upload to Powerset
 
 Who leaves the laptop is a per-person decision — see
-`packs/ingestion/docs/share-and-upload.md`. Worth already produces the JEV
-labels. Share reuses them locally; there is no separate paid labeling stage.
+`packs/ingestion/docs/share-and-upload.md`. Synthesize (step 3) already asked
+JEV the label questions and saved the answers with each person's facts; `share`
+is free and local.
 
 ```bash
+bin/deep-context share                            # labels.csv + share.csv, every merged person
 bin/deep-context tag --name "Jane Doe" +private   # or +share; rebuilds share.csv
-bin/deep-context share                     # export saved labels and build share.csv (free)
 ```
 
 `share.csv` says yes to everyone except the owner, human `private`, machine
 `private_suggested` (family, partner, minor, sensitive context, clinician/
-lawyer/banker), automated senders and strangers; it refuses to write a list
-that does not cover every merged person. Then the upload — without `--apply`
-it plans only, reads the cloud, writes one manifest:
+lawyer/banker), automated senders and strangers. Then the upload — without
+`--apply` it plans only, reads the cloud, writes one manifest:
 
 ```bash
 uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py

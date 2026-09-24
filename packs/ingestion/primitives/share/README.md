@@ -16,9 +16,11 @@ bin/deep-context share
 bin/deep-context tag --name "Jordan Bravo" +private
 ```
 
-`label` remains a free export command. A context-bearing person without saved JEV
-labels must complete deep-context synthesis before sharing. LinkedIn-only people
-receive deterministic labels. Human tags are never changed by machine labeling.
+`share` is the stage's one node (`share_list.ShareList`, declared in
+`pipeline/graph.py`): one pass writes labels.csv and share.csv for every merged
+person, so the list can never be partial. A context-bearing person without saved
+JEV labels must complete deep-context synthesis first. LinkedIn-only people get
+deterministic labels. Human tags are never changed by machine labeling.
 
 | File | Role | Reads | Writes |
 |---|---|---|---|
@@ -26,9 +28,8 @@ receive deterministic labels. Human tags are never changed by machine labeling.
 | `models.py` | Typed evidence and CSV layout | — | — |
 | `evidence.py` | Join people to facts and context | people, facts, index, raw metadata | — |
 | `labels.py` | Label reduction and sharing policy | saved labels | — |
-| `label.py` | Free label export | evidence | labels.csv, manifest.json |
 | `tags.py` | Human overrides | tags.csv | tags.csv |
-| `share_list.py` | Complete share list | people, labels, tags | share.csv, manifest.json |
+| `share_list.py` | The `share` node: labels + share list in one pass | evidence, tags.csv | labels.csv, share.csv, manifest.json |
 | `share.py` | CLI | command arguments | command results |
 | `csv_cells.py` | CSV boundary coercion | cells | — |
 

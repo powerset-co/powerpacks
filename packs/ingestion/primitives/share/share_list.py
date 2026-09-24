@@ -1,96 +1,213 @@
-"""Derive the complete share.csv list from labels, tags, and people.csv.
+"""The share node: every merged person's labels, then who leaves the laptop.
 
-Flow: read labels and tags -> decide each person -> write share.csv and manifest.
+Flow: people.csv + the deep-context leaves (facts with their JEV labels, index,
+raw bundles, review worth) -> PersonEvidence -> deterministic labels + the saved
+JEV labels + the private suggestion -> labels.csv -> the human's tags.csv ->
+share_decision per person -> share.csv -> the stage manifest.
+
+Free and local: JEV already answered during deep_synthesize. One pass writes
+both files, so share.csv always covers the whole network.
 
 Changelog:
-  2026-09-24: created from the share CLI.
+  2026-09-24: created from the share CLI; became the `share` Node (labels.csv
+    and share.csv in one pass, the `label` export folded in).
 """
 
 from __future__ import annotations
 
+import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.common import DEFAULT_PEOPLE_CSV, parse_list
-from packs.ingestion.primitives.share.csv_cells import cell_text
-from packs.ingestion.primitives.share.label import update_manifest
-from packs.ingestion.primitives.share.labels import share_decision
-from packs.ingestion.primitives.share.models import (
-    LABELS_FILENAME, MANIFEST_FILENAME, SHARE_DIR, SHARE_FILENAME, LabelRow,
+from packs.ingestion.primitives.deep_context.common import (
+    DEFAULT_PEOPLE_CSV,
+    FACTS_TEMPLATE,
+    INDEX_JSON,
+    LINKEDIN_OVERRIDES_CSV,
+    RAW_BUNDLE_TEMPLATE,
 )
-from packs.ingestion.primitives.share.questions import NOUL_LABELS
+from packs.ingestion.primitives.pipeline.contract import (
+    STATUS_COMPLETED,
+    Artifact,
+    Node,
+    StageManifest,
+    row_model_for,
+)
+from packs.ingestion.primitives.share.csv_cells import cell_value
+from packs.ingestion.primitives.share.evidence import ShareEvidence
+from packs.ingestion.primitives.share.labels import (
+    deterministic_labels,
+    labels_from_saved,
+    private_reason,
+    share_decision,
+)
+from packs.ingestion.primitives.share.models import (
+    DETERMINISTIC_COLUMNS,
+    LABEL_COLUMNS,
+    LABELS_FILENAME,
+    MANIFEST_FILENAME,
+    SHARE_DIR,
+    SHARE_FILENAME,
+    TAGS_FILENAME,
+    DeterministicLabels,
+    JevLabels,
+    LabelRow,
+    PersonEvidence,
+)
+from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
 from packs.ingestion.primitives.share.tags import TagStore
 from packs.ingestion.schemas.share_schema import PRIVATE_SUGGESTED, SHARE_COLUMNS
 from packs.shared.csv_io import CsvIO
 
+LabelCsvRow = row_model_for("LabelCsvRow", list(LABEL_COLUMNS))
+ShareCsvRow = row_model_for("ShareCsvRow", list(SHARE_COLUMNS))
 
-class ShareList:
-    """Rebuild share.csv from labels.csv + tags.csv + people.csv. Free, local."""
 
-    def __init__(self, *, out_dir: Path = SHARE_DIR, people_csv: Path = DEFAULT_PEOPLE_CSV) -> None:
+class ShareManifest(StageManifest):
+    source: str = "share"
+    people: int = 0
+    saved_labels: int = 0
+    deterministic_only: int = 0
+    private_suggested: int = 0
+    share_yes: int = 0
+    share_no: int = 0
+    by_reason: dict[str, int] = {}
+    labels_csv: str = ""
+    share_csv: str = ""
+    elapsed_ms: int = 0
+    updated_at: str = ""
+    error: str = ""
+
+
+class ShareList(Node):
+    """Writes labels.csv and share.csv for every people.csv row. Free, local."""
+
+    name = "share"
+    # tags.csv is the human's file (bin/deep-context tag); no node produces it.
+    inputs = (
+        Artifact(path=str(DEFAULT_PEOPLE_CSV)),
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=str(INDEX_JSON), required=False),
+        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
+        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
+        Artifact(path=str(SHARE_DIR / TAGS_FILENAME), external=True, required=False),
+    )
+    outputs = (
+        Artifact(path=str(SHARE_DIR / LABELS_FILENAME), row_model=LabelCsvRow, writes="full_rewrite"),
+        Artifact(path=str(SHARE_DIR / SHARE_FILENAME), row_model=ShareCsvRow, writes="full_rewrite"),
+    )
+    payload = ShareManifest
+    manifest = str(SHARE_DIR / MANIFEST_FILENAME)
+
+    def __init__(self, *, out_dir: Path = SHARE_DIR, evidence: ShareEvidence | None = None) -> None:
         self.out_dir = Path(out_dir)
-        self.share_csv = self.out_dir / SHARE_FILENAME
         self.labels_csv = self.out_dir / LABELS_FILENAME
-        self.people_csv = Path(people_csv)
+        self.share_csv = self.out_dir / SHARE_FILENAME
+        self.tags_csv = self.out_dir / TAGS_FILENAME
+        self.evidence = evidence or ShareEvidence()
+        self.reference_date = date.today().isoformat()
 
-    def run(self) -> dict[str, Any]:
-        labels = _load_label_rows(self.labels_csv)
-        people = _people_order(self.people_csv)
-        # share.csv is the whole network or nothing: the upload reconciles the
-        # cloud to it, so a list missing people (after `label --limit N`) would
-        # un-share everyone it omits.
-        unlabeled = [person_id for person_id, _ in people if person_id not in labels]
-        if unlabeled:
-            return {
-                "primitive": "share_list",
-                "status": "failed",
-                "error": f"{len(unlabeled)} of {len(people)} people have no label row; run `label` for everyone first",
-            }
-        tags = TagStore(self.out_dir).load()
-        updated_at = now_iso()
-        rows: list[dict[str, Any]] = []
-        reasons: dict[str, int] = {}
-        counts = {"share_yes": 0, "share_no": 0}
-        for person_id, superseded in people:
-            # A tag set before a merge is keyed by the id that merged away; the
-            # surviving row is the only row that can still carry that decision.
-            held = tags.get(person_id) or next((tags[old] for old in superseded if old in tags), None)
-            decision = share_decision(labels[person_id], held, updated_at=updated_at)
-            counts["share_yes" if decision.share else "share_no"] += 1
-            reasons[decision.reason] = reasons.get(decision.reason, 0) + 1
-            rows.append(decision.to_csv_row())
-        CsvIO.write_dict_rows(self.share_csv, list(SHARE_COLUMNS), rows)
-        payload = {"counts": {**counts, "by_reason": reasons}, "updated_at": updated_at}
-        update_manifest(self.out_dir, "share", payload)
+    def bindings(self) -> dict[str, str]:
+        evidence = self.evidence
         return {
-            "primitive": "share_list",
-            "status": "completed",
-            "share_csv": str(self.share_csv),
-            "manifest": str(self.out_dir / MANIFEST_FILENAME),
-            **payload,
+            str(DEFAULT_PEOPLE_CSV): str(evidence.people_csv),
+            FACTS_TEMPLATE: str(evidence.facts_dir / "{person_id}.jsonl"),
+            str(INDEX_JSON): str(evidence.index_json),
+            RAW_BUNDLE_TEMPLATE: str(evidence.raw_dir / "{person_id}.json"),
+            str(LINKEDIN_OVERRIDES_CSV): str(evidence.overrides_csv),
+            str(SHARE_DIR / TAGS_FILENAME): str(self.tags_csv),
+            str(SHARE_DIR / LABELS_FILENAME): str(self.labels_csv),
+            str(SHARE_DIR / SHARE_FILENAME): str(self.share_csv),
+            self.manifest: str(self.out_dir / MANIFEST_FILENAME),
         }
 
+    def execute(self) -> ShareManifest:
+        started = time.monotonic()
+        people = self.evidence.load()
+        missing = [p.person_id for p in people if not p.linkedin_only and not (p.facts or {}).get("labels")]
+        if missing:
+            return ShareManifest(
+                status="failed",
+                people=len(people),
+                error=f"{len(missing)} people have facts without JEV labels; run deep-context synthesize first",
+                updated_at=now_iso(),
+            )
 
-def _people_order(people_csv: Path) -> list[tuple[str, tuple[str, ...]]]:
-    return [
-        (str(row.get("id") or "").strip(), tuple(parse_list(row.get("superseded_person_ids"))))
-        for row in CsvIO.read_dict_rows(people_csv)
-        if str(row.get("id") or "").strip()
-    ]
-
-
-def _load_label_rows(path: Path) -> dict[str, LabelRow]:
-    rows: dict[str, LabelRow] = {}
-    for row in CsvIO.read_dict_rows_normalized(path):
-        person_id = row["person_id"].strip()
-        if not person_id:
-            continue
-        rows[person_id] = LabelRow(
-            person_id=person_id,
-            public_identifier=cell_text(row.get("public_identifier")),
-            is_owner=row.get("is_owner") == "yes",
-            private_suggested=row.get(PRIVATE_SUGGESTED) == "yes",
-            probabilities={name: float(row[name]) for name in NOUL_LABELS if row.get(name)},
+        updated_at = now_iso()
+        tags = TagStore(self.out_dir).load()
+        label_rows: list[dict[str, Any]] = []
+        share_rows: list[dict[str, str]] = []
+        manifest = ShareManifest(
+            status=STATUS_COMPLETED,
+            people=len(people),
+            labels_csv=str(self.labels_csv),
+            share_csv=str(self.share_csv),
+            updated_at=updated_at,
         )
-    return rows
+        by_reason: dict[str, int] = {}
+        for person in people:
+            saved = (person.facts or {}).get("labels")
+            jev = labels_from_saved(saved) if saved else None
+            deterministic = deterministic_labels(person, reference_date=self.reference_date)
+            reason = private_reason(deterministic, jev)
+            label_rows.append(_label_row(person, deterministic, jev, reason, updated_at))
+
+            # A tag set before a merge is keyed by the id that merged away; the
+            # surviving row is the only row that can still carry that decision.
+            held = tags.get(person.person_id) or next(
+                (tags[old] for old in person.superseded_person_ids if old in tags), None
+            )
+            decision = share_decision(_label_for_decision(person, deterministic, jev, reason), held, updated_at=updated_at)
+            share_rows.append(decision.to_csv_row())
+
+            manifest.saved_labels += int(jev is not None)
+            manifest.deterministic_only += int(jev is None)
+            manifest.private_suggested += int(reason is not None)
+            manifest.share_yes += int(decision.share)
+            manifest.share_no += int(not decision.share)
+            by_reason[decision.reason] = by_reason.get(decision.reason, 0) + 1
+
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        CsvIO.write_dict_rows(self.labels_csv, list(LABEL_COLUMNS), label_rows)
+        CsvIO.write_dict_rows(self.share_csv, list(SHARE_COLUMNS), share_rows)
+        manifest.by_reason = by_reason
+        manifest.elapsed_ms = int((time.monotonic() - started) * 1000)
+        return manifest
+
+
+def _label_for_decision(
+    person: PersonEvidence, deterministic: DeterministicLabels, jev: JevLabels | None, reason: str | None
+) -> LabelRow:
+    return LabelRow(
+        person_id=person.person_id,
+        public_identifier=person.public_identifier,
+        is_owner=deterministic.is_owner,
+        private_suggested=reason is not None,
+        probabilities=dict(jev.probabilities) if jev else {},
+    )
+
+
+def _label_row(
+    person: PersonEvidence,
+    deterministic: DeterministicLabels,
+    jev: JevLabels | None,
+    reason: str | None,
+    updated_at: str,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "person_id": person.person_id,
+        "public_identifier": person.public_identifier or "",
+        "full_name": person.full_name,
+        **{name: cell_value(getattr(deterministic, name)) for name in DETERMINISTIC_COLUMNS},
+        PRIVATE_SUGGESTED: cell_value(reason is not None),
+        "private_reason": reason or "",
+        "updated_at": updated_at,
+    }
+    if jev is not None:
+        row.update({name: jev.choices[name] for name in CHOICE_LABELS})
+        row.update({f"{name}_p": f"{jev.choice_p[name]:.3f}" for name in CHOICE_LABELS})
+        row.update({name: jev.scores[name] for name in SCORE_LABELS})
+        row.update({name: f"{jev.probabilities[name]:.3f}" for name in NOUL_LABELS})
+    return row

@@ -469,9 +469,15 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertEqual(
             sorted((item["node"], item["path"]) for item in report["dead_outputs"]),
             [
+                # synthesize's own JEV request cache: written and re-read by the same node.
+                ("deep_synthesize", ".powerpacks/deep-context/jev/{request_sha256}.json"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("gmail_stage_merge", ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
+                # labels.csv is the human's scan surface; share.csv is read by the
+                # indexing pack's upload_powerset, which is not a declared node.
+                ("share", ".powerpacks/share/labels.csv"),
+                ("share", ".powerpacks/share/share.csv"),
             ],
         )
 
@@ -483,16 +489,16 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("messages_stage_merge", report["edges"]["messages_import"])
 
     def test_the_deep_context_stage_is_registered(self) -> None:
-        # The twelve deep-context nodes; a rename or a lost registration import
-        # must not pass silently.
+        # The twelve deep-context nodes plus the share node; a rename or a lost
+        # registration import must not pass silently.
         names = set(check_graph(self._declared_nodes())["nodes"])
         self.assertLessEqual({
             "deep_owner", "deep_collect", "deep_synthesize", "deep_compose",
             "deep_cluster", "deep_parents", "deep_reconcile", "deep_research",
             "deep_assemble_synthetic", "deep_prefetch", "deep_apply_retargets",
-            "deep_persist_review",
+            "deep_persist_review", "share",
         }, names)
-        self.assertEqual(len(names), 25)
+        self.assertEqual(len(names), 26)
 
     def test_review_csv_has_two_disjoint_machine_writers(self) -> None:
         # review.csv is the graph's most-shared mutable file: synthesize owns the

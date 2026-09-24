@@ -78,6 +78,8 @@ PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to ch
 RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{person_id}.json")
 RAW_MANIFEST = RAW_DIR / "manifest.json"
 FACTS_TEMPLATE = str(FACTS_DIR / "{person_id}.jsonl")
+# JEV's exact-request cache (jev/client.py `cache_path`), written by synthesize.
+JEV_CACHE_TEMPLATE = str(ROOT / "jev" / "{request_sha256}.json")
 FACTS_MANIFEST = FACTS_DIR / "manifest.json"
 DOSSIER_TEMPLATE = str(DOSSIER_DIR / "{slug}.md")
 DOSSIERS_MANIFEST = DOSSIER_DIR / "manifest.json"
