@@ -88,6 +88,6 @@ uv run --env-file .env --project . python \
 `ALEPH_ENV=staging` moves every namespace to its `_dev` twin; Postgres stays the
 same database, scoped to this operator's rows.
 
-In the Modal sandbox the same module runs from
-`packs/indexing/modal/run_upload.py`, dispatched by
-`linkedin_modal_pipeline.py upload-powerset`.
+The upload runs from the laptop only: the build may run on Modal, but
+`download` already brings `local-search.duckdb` home, and the upload is a few MB
+of I/O with no compute in it.

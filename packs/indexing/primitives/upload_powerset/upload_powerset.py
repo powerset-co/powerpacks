@@ -61,14 +61,6 @@ DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
 PREVIEW_IDS = 10
 
 
-def resolve_operator_id_from_credentials() -> str:
-    """Resolve the operator's users.id from laptop credentials and the Postgres DSN."""
-    postgres_client.load_env_file(None)
-    psycopg2 = postgres_client.ensure_psycopg2()
-    with psycopg2.connect(postgres_client.database_url()) as conn, conn.cursor() as cur:
-        return postgres.resolve_operator_id(cur, postgres_client.credentials_subject())
-
-
 class UploadPowerset:
     """Make the cloud state for one operator equal the local share list."""
 

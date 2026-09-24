@@ -149,11 +149,10 @@ Cloud (production, read-only checks):
    - Without `--apply` the run plans only (counts per table, first N ids, the Postgres host
      and namespaces it would write); `--apply` writes. `ALEPH_ENV=staging` redirects
      TurboPuffer to the `_dev` twins — there is one Postgres, and the plan names its host.
-   - Runs on the laptop (`.env` creds) or in the Modal sandbox (`linkedin_modal_pipeline.py
-     upload-powerset` → `run_upload.py` shelling to the same module against the volume's
-     `runs/<label>/local-search.duckdb`, secrets from the workspace; only the slug-bearing
-     rows of share.csv are copied to the volume; `ALEPH_ENV` is forwarded; the operator id
-     is derived from the laptop's credentials unless given).
+   - Runs on the laptop only. The build may run on Modal, but `download` already brings
+     `local-search.duckdb` home and the upload is a few MB of I/O with no compute in it; a
+     Modal door existed briefly (2026-09-24) and was deleted before merge — every laptop
+     already holds the Postgres DSN for hydration, so it protected nothing.
 7. **No new nouns in user-facing text**: label, tag, private, share, upload, hub = Powerset.
    No UI in this round.
 
@@ -202,8 +201,6 @@ Agent B (upload):
 - `packs/indexing/primitives/upload_powerset/{upload_powerset,models,plan,postgres,turbopuffer}.py`
   + `README.md`, tests `tests/test_upload_powerset.py` (fake PG cursor + fake TP namespace;
   no network).
-- `packs/indexing/modal/linkedin_modal_pipeline.py`: `upload-powerset` subcommand;
-  `packs/indexing/modal/run_upload.py` sandbox entry.
 
 After both land: `packs/ingestion/skills/deep-context/SKILL.md` step 9 (label → tag → share →
 upload), CLAUDE.md routing line, `packs/indexing/README.md` row.

@@ -9,7 +9,7 @@ database used by `$search local`.
 | --- | --- | --- | --- |
 | `$setup` plus Modal | Standard product setup. Import and enrich LinkedIn, merge sources, build the index, and download it. | Profile enrichment and indexing run in Modal; source fan-in and final validation run locally. | LinkedIn `Connections.csv`. |
 | `$build-local-search-index` | Develop, inspect, or rebuild from an existing canonical merged CSV without using Modal. | The processing pipeline and DuckDB build run on the local machine. | `.powerpacks/network-import/merged/people.csv`. |
-| `upload_powerset` (`$deep-context` step 9) | Push the shared slice of a built index to Powerset — TurboPuffer + Postgres — after `bin/deep-context share`. Dry-run by default. | Laptop with `.env` creds, or a Modal sandbox (`linkedin_modal_pipeline.py upload-powerset`). | `.powerpacks/share/share.csv` + `local-search.duckdb`. |
+| `upload_powerset` (`$deep-context` step 9) | Push the shared slice of a built index to Powerset — TurboPuffer + Postgres — after `bin/deep-context share`. Dry-run by default. | The laptop, with `.env` creds — after a Modal build, `download` has already brought the DuckDB home. | `.powerpacks/share/share.csv` + `local-search.duckdb`. |
 
 Read the canonical [LinkedIn and Modal indexing pipeline](docs/linkedin-modal-pipeline.md)
 for the product flow, diagrams, data boundaries, shared-cache behavior, and
