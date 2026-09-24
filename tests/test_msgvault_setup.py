@@ -69,7 +69,7 @@ class MsgvaultSetupTests(unittest.TestCase):
         with mock.patch.object(shell.subprocess, "run", return_value=completed) as run:
             result = shell.run_command(["fake-child"])
 
-        self.assertTrue(result["ok"])
+        self.assertTrue(result.ok)
         self.assertEqual(run.call_args.kwargs["stdin"], shell.subprocess.DEVNULL)
 
     def test_validate_client_secret_accepts_installed_app(self):
@@ -77,16 +77,16 @@ class MsgvaultSetupTests(unittest.TestCase):
             secret = Path(tmp) / "client_secret.json"
             self.write_secret(secret)
             result = msgvault_home.validate_client_secret(secret)
-            self.assertTrue(result["ok"])
-            self.assertEqual(result["client_id"], "abc.apps.googleusercontent.com")
+            self.assertTrue(result.ok)
+            self.assertEqual(result.client_id, "abc.apps.googleusercontent.com")
 
     def test_validate_client_secret_rejects_web_client(self):
         with tempfile.TemporaryDirectory() as tmp:
             secret = Path(tmp) / "client_secret.json"
             secret.write_text(json.dumps({"web": {"client_id": "abc"}}), encoding="utf-8")
             result = msgvault_home.validate_client_secret(secret)
-            self.assertFalse(result["ok"])
-            self.assertIn("installed", result["message"])
+            self.assertFalse(result.ok)
+            self.assertIn("installed", result.message)
 
     def test_write_msgvault_config_default_and_named_app(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -162,13 +162,12 @@ class MsgvaultSetupTests(unittest.TestCase):
         def fake_run_msgvault(args, home, timeout=120):
             calls.append(args)
             if args[1] == "healthy@example.com":
-                return {"ok": True, "returncode": 0, "stdout": "verified", "stderr": ""}
-            return {
-                "ok": False,
-                "returncode": 1,
-                "stdout": "",
-                "stderr": "oauth2: invalid_grant: token is expired or revoked",
-            }
+                return shell.CommandResult(ok=True, returncode=0, stdout="verified")
+            return shell.CommandResult(
+                ok=False,
+                returncode=1,
+                stderr="oauth2: invalid_grant: token is expired or revoked",
+            )
 
         current = {
             "msgvault": {"installed": True},
@@ -337,12 +336,11 @@ class MsgvaultSetupTests(unittest.TestCase):
             "accounts_error": "",
             "accounts": [{"email": "me@example.com"}],
         }
-        transient = {
-            "ok": False,
-            "returncode": 124,
-            "stdout": "",
-            "stderr": "request timed out connecting to Gmail",
-        }
+        transient = shell.CommandResult(
+            ok=False,
+            returncode=124,
+            stderr="request timed out connecting to Gmail",
+        )
         with mock.patch.object(accounts, "status_payload", return_value=current), \
             mock.patch.object(accounts, "run_msgvault", return_value=transient):
             code, payload = self.invoke(["auth-check", "--email", "me@example.com"])
@@ -367,13 +365,13 @@ class MsgvaultSetupTests(unittest.TestCase):
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             if cmd[:3] == ["gcloud", "auth", "print-access-token"] and len(calls) == 1:
-                return {"ok": False, "stdout": "", "stderr": "Reauthentication failed. cannot prompt during non-interactive execution"}
-            return {"ok": True, "stdout": "token", "stderr": ""}
+                return shell.CommandResult(ok=False, stderr="Reauthentication failed. cannot prompt during non-interactive execution")
+            return shell.CommandResult(ok=True, stdout="token")
 
         with mock.patch.object(gcloud_project.shutil, "which", return_value="/bin/gcloud"), \
             mock.patch.object(gcloud_project, "gcloud_value", return_value="me@example.com"), \
             mock.patch.object(gcloud_project, "run_command", side_effect=fake_run), \
-            mock.patch.object(gcloud_project, "run_visible_command", return_value={"ok": True, "returncode": 0, "message": ""}):
+            mock.patch.object(gcloud_project, "run_visible_command", return_value=shell.CommandResult(ok=True, returncode=0)):
             result = gcloud_project.ensure_gcloud_auth(open_browser=True)
         self.assertEqual(result["status"], "ok")
         self.assertTrue(result["login_ran"])
@@ -389,11 +387,11 @@ class MsgvaultSetupTests(unittest.TestCase):
 
         def fake_visible(cmd, **kwargs):
             calls.append(cmd)
-            return {"ok": True, "returncode": 0, "message": ""}
+            return shell.CommandResult(ok=True, returncode=0)
 
         with mock.patch.object(gcloud_project.shutil, "which", return_value="/bin/gcloud"), \
             mock.patch.object(gcloud_project, "gcloud_value", side_effect=fake_gcloud_value), \
-            mock.patch.object(gcloud_project, "run_command", return_value={"ok": True, "stdout": "token", "stderr": ""}), \
+            mock.patch.object(gcloud_project, "run_command", return_value=shell.CommandResult(ok=True, stdout="token")), \
             mock.patch.object(gcloud_project, "run_visible_command", side_effect=fake_visible):
             result = gcloud_project.ensure_gcloud_auth(
                 open_browser=False,
@@ -406,8 +404,8 @@ class MsgvaultSetupTests(unittest.TestCase):
     def test_ensure_gcloud_auth_rejects_wrong_account_after_login(self):
         with mock.patch.object(gcloud_project.shutil, "which", return_value="/bin/gcloud"), \
             mock.patch.object(gcloud_project, "gcloud_value", return_value="other@example.com"), \
-            mock.patch.object(gcloud_project, "run_command", return_value={"ok": True, "stdout": "token", "stderr": ""}), \
-            mock.patch.object(gcloud_project, "run_visible_command", return_value={"ok": True, "returncode": 0, "message": ""}):
+            mock.patch.object(gcloud_project, "run_command", return_value=shell.CommandResult(ok=True, stdout="token")), \
+            mock.patch.object(gcloud_project, "run_visible_command", return_value=shell.CommandResult(ok=True, returncode=0)):
             result = gcloud_project.ensure_gcloud_auth(
                 open_browser=True,
                 expected_account="me@example.com",

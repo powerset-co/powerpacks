@@ -8,6 +8,9 @@ a store. Every other wacli module goes through `binary.wacli_json` /
 `binary.wacli_bin` instead of assembling its own binary path.
 
 Changelog:
+  2026-09-23 (typed rows): `run_command` returns the typed `runtime.CommandResult`,
+    so the version/json calls read `.returncode`/`.stdout`/`.failure_detail`
+    instead of indexing a dict. Behavior unchanged.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`
     with the version/asset/download/verify/install constants that only these
     functions read. Behavior unchanged.
@@ -108,9 +111,9 @@ def wacli_version(timeout: int = 30) -> dict[str, Any]:
     if not exe:
         raise PrimitiveFailed("wacli is not installed")
     result = runtime.run_command([exe, "--version"], timeout=timeout)
-    version = (result.get("stdout") or "").strip()
-    if result["returncode"] != 0 or not version:
-        raise PrimitiveFailed(((result.get("stderr") or result.get("stdout") or "").strip())[-1000:])
+    version = result.stdout.strip()
+    if result.returncode != 0 or not version:
+        raise PrimitiveFailed(result.failure_detail)
     return {"path": exe, "version": version, "pinned": exe == str(WACLI_PINNED_BIN)}
 
 
@@ -235,10 +238,9 @@ def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
 def wacli_json(store: Path, args: list[str], *, timeout: int = 300) -> dict[str, Any]:
     cmd = [wacli_bin() or "wacli", "--store", str(store), "--json", *args]
     result = runtime.run_command(cmd, timeout=timeout)
-    payload = result.get("json")
-    if result["returncode"] != 0:
-        raise PrimitiveFailed(((result.get("stderr") or result.get("stdout") or "").strip())[-1000:])
-    return payload if isinstance(payload, dict) else {}
+    if result.returncode != 0:
+        raise PrimitiveFailed(result.failure_detail)
+    return result.json
 
 
 def ensure_wacli_report() -> dict[str, Any]:

@@ -19,6 +19,9 @@ name/inputs/outputs and would then show up in the declared graph as a phantom
 node. The concrete channels inherit ``(MessageChannel, Node)``.
 
 Changelog:
+  2026-09-23 (simplification audit): dropped the unused ``stderr`` parameter from
+    ``failed_child``. Every caller passed ``""``, so it could only ever extend the
+    fallback text with an empty string.
   2026-07-30 (steps return results): ``extract()`` and the per-channel
     ``self.artifacts`` dict are GONE; ``execute()`` is the single step method and
     a success is a VALUE (``MessageChannelExtracted``), not ``None``. A channel
@@ -115,10 +118,10 @@ def blocked_child(
     )
 
 
-def failed_child(step_id: str, payload: dict[str, Any], stderr: str) -> MessageChannelFailed:
+def failed_child(step_id: str, payload: dict[str, Any]) -> MessageChannelFailed:
     """Build the ``failed`` payload a channel (or the store's merge) returns when
     a child step reports a non-success status; picks the most specific error text."""
-    detail = payload.get("error") or payload.get("message") or payload or stderr or "child command failed"
+    detail = payload.get("error") or payload.get("message") or payload or "child command failed"
     return MessageChannelFailed(step_id=step_id, error=detail)
 
 

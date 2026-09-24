@@ -11,6 +11,9 @@ home a cross-stage payload should reach for without importing a sibling stage's
   stage cannot invent fields on the fly.
 - ``write_stage_manifest`` — writes one stage's manifest (fingerprinted, no-op when
   unchanged), accepting the typed StagePayload or its dict form.
+- ``ArtifactStat`` / ``ArtifactFingerprints`` / ``ManifestDocument`` — a manifest read
+  back as typed values. Readers never walk the `fingerprints` block by key: they ask
+  the document for a declared artifact's stat (``document.output(path).rows``).
 - ``manifest_fingerprints`` / ``artifact_fingerprint`` / ``collect_artifact_paths`` /
   ``stable_manifest_signature`` — the size/mtime/sha256 fingerprint helpers
   write_stage_manifest builds on. The output-artifact key list is a superset of the
@@ -24,6 +27,13 @@ matches by on-disk existence rather than absolute-path prefix) and a source-deri
 manifest path — and are NOT this contract; do not fold them together.
 
 Changelog:
+  2026-09-23 (typed manifest reads): added `ArtifactStat` + `ManifestDocument`,
+    and their `_stat_group` parse. Every computed `fingerprints` entry was already
+    a fixed shape, so a manifest READER no longer walks it with `.get`: status.py
+    and friends read `document.status`, `document.updated_at`, and
+    `document.output(declared).rows`. The parse stays here (the manifest writer's
+    own module); `manifest_fingerprints` below still guesses for the unconverted
+    stages.
   2026-07-26 (per-node IO stats): the `output_paths` parameter added below is gone
     again. A converted node now computes its whole `fingerprints` block from its
     declarations (`pipeline/contract.py:Node.artifact_stats`, which also counts
@@ -43,7 +53,7 @@ Changelog:
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -118,6 +128,111 @@ def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | No
         "input_artifacts": {path: artifact_fingerprint(path, existing_inputs.get(path) if isinstance(existing_inputs, dict) else None) for path in input_paths},
         "output_artifacts": {path: artifact_fingerprint(path, existing_outputs.get(path) if isinstance(existing_outputs, dict) else None) for path in output_paths},
     }
+
+
+@dataclass(frozen=True)
+class ArtifactStat:
+    """One entry of a manifest's `fingerprints` block: a declared artifact's
+    on-disk state. `from_record` is the parse of the JSON we wrote — the one
+    place a raw record dict is read; every consumer gets attributes."""
+
+    path: str
+    exists: bool
+    size: int = 0
+    mtime_ns: int = 0
+    sha256: str = ""
+    rows: int | None = None
+
+    @classmethod
+    def from_record(cls, path: str, record: Any) -> "ArtifactStat":
+        record = record if isinstance(record, dict) else {}
+        rows = record.get("rows")
+        return cls(
+            path=str(record.get("path") or path),
+            exists=record.get("exists") is True,
+            size=int(record.get("size") or 0),
+            mtime_ns=int(record.get("mtime_ns") or 0),
+            sha256=str(record.get("sha256") or ""),
+            rows=rows if isinstance(rows, int) else None,
+        )
+
+    def to_record(self) -> dict[str, Any]:
+        record: dict[str, Any] = {"path": self.path, "exists": self.exists}
+        if self.exists:
+            record.update({"size": self.size, "mtime_ns": self.mtime_ns, "sha256": self.sha256})
+        if self.rows is not None:
+            record["rows"] = self.rows
+        return record
+
+
+# The manifest keys that are the CONTRACT (typed above), not a stage's payload.
+_MANIFEST_CONTRACT_KEYS = frozenset({"fingerprints", "updated_at", "created_at"})
+
+
+@dataclass(frozen=True)
+class ArtifactFingerprints:
+    """A manifest's whole `fingerprints` block, typed by declared path."""
+
+    input_artifacts: dict[str, ArtifactStat] = field(default_factory=dict)
+    output_artifacts: dict[str, ArtifactStat] = field(default_factory=dict)
+
+    @classmethod
+    def from_record(cls, value: Any) -> "ArtifactFingerprints":
+        record = value if isinstance(value, dict) else {}
+        return cls(
+            input_artifacts=_stat_group(record.get("input_artifacts")),
+            output_artifacts=_stat_group(record.get("output_artifacts")),
+        )
+
+    def stats(self) -> list[ArtifactStat]:
+        return [*self.input_artifacts.values(), *self.output_artifacts.values()]
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "input_artifacts": {path: stat.to_record() for path, stat in self.input_artifacts.items()},
+            "output_artifacts": {path: stat.to_record() for path, stat in self.output_artifacts.items()},
+        }
+
+
+@dataclass(frozen=True)
+class ManifestDocument:
+    """A stage `manifest.json` read back as typed values: status, timestamp, and
+    the declared artifacts' stats. `payload` carries the stage-specific fields for
+    the stage's own typed payload to validate; nothing here keys off a raw dict."""
+
+    path: Path
+    status: str
+    updated_at: str
+    fingerprints: ArtifactFingerprints
+    payload: dict[str, Any]
+
+    @classmethod
+    def read(cls, path: Path) -> "ManifestDocument":
+        raw = read_json(path, {}) or {}
+        raw = raw if isinstance(raw, dict) else {}
+        return cls(
+            path=Path(path),
+            status=str(raw.get("status") or ""),
+            updated_at=str(raw.get("updated_at") or ""),
+            fingerprints=ArtifactFingerprints.from_record(raw.get("fingerprints")),
+            payload={key: value for key, value in raw.items() if key not in _MANIFEST_CONTRACT_KEYS},
+        )
+
+    def output(self, declared_path: str) -> ArtifactStat | None:
+        return self.fingerprints.output_artifacts.get(declared_path)
+
+    def input(self, declared_path: str) -> ArtifactStat | None:
+        return self.fingerprints.input_artifacts.get(declared_path)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.status)
+
+
+def _stat_group(value: Any) -> dict[str, ArtifactStat]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): ArtifactStat.from_record(str(key), record) for key, record in value.items()}
 
 
 @dataclass

@@ -10,6 +10,10 @@ it and maps its status to an exit code. Cross-module calls are
 module-qualified so tests patch the defining submodule.
 
 Changelog:
+  2026-09-23 (typed rows): the flow reads the `ensure_gcloud_auth` /
+    `create_gcloud_project` / `choose_project_id` payload keys directly and the
+    browser script's fields through `oauth_browser.browser_status` /
+    `browser_client_secret_path`, so no `.get` remains in this module.
   2026-07-29 (setup style pass):
     - The two keyword-only `*_flow` functions became frozen request classes
       (`browser_setup_flow` took twenty keyword arguments unpacked from a
@@ -187,15 +191,15 @@ class BrowserSetup:
         )
         if auth["status"] != "ok":
             return {"status": "error", "message": "Google login failed.", "gcloud_auth": auth}
-        account_email = self.email or auth.get("account", "")
+        account_email = self.email or auth["account"]
         project_id, project_choice = gcloud_project.choose_project_id(
             self.home,
             self.requested_project,
             self.email,
-            str(auth.get("account") or ""),
+            str(auth["account"] or ""),
             self.app_name,
         )
-        progress(f"Using Google Cloud project {project_id} ({project_choice.get('source')}).")
+        progress(f"Using Google Cloud project {project_id} ({project_choice['source']}).")
 
         project_result: dict[str, Any] = {"status": "skipped", "project": project_id}
         if self.create_project:
@@ -209,7 +213,7 @@ class BrowserSetup:
             # create_gcloud_project may have fallen back to a fresh id when the
             # deterministic one was globally reserved. Adopt the id that was really
             # created and pin it to state so every later step and re-run reuses it.
-            created_project_id = gcloud_project.validate_project_id(str(project_result.get("project") or "")) or project_id
+            created_project_id = gcloud_project.validate_project_id(str(project_result["project"] or "")) or project_id
             if created_project_id != project_id:
                 project_id = created_project_id
                 msgvault_home.save_oauth_app_state(
@@ -232,7 +236,7 @@ class BrowserSetup:
             timeout_seconds=self.timeout_seconds,
             audience=self.audience,
         )
-        secret_path = browser.get("client_secret_path") or ""
+        secret_path = oauth_browser.browser_client_secret_path(browser)
 
         configured: dict[str, Any] | None = None
         account = None
@@ -365,11 +369,11 @@ class TestUsers:
         if auth["status"] != "ok":
             return {"status": "error", "message": "Google login failed.", "gcloud_auth": auth}
 
-        login_email = self.login_email or str(auth.get("account") or "")
+        login_email = self.login_email or str(auth["account"] or "")
         project_id, project_choice = gcloud_project.choose_project_id(
             self.home, self.requested_project, login_email, login_email, self.app_name
         )
-        progress(f"Using Google Cloud project {project_id} ({project_choice.get('source')}).")
+        progress(f"Using Google Cloud project {project_id} ({project_choice['source']}).")
 
         browser = oauth_browser.run_browser_add_test_users(
             project=project_id,
@@ -380,7 +384,7 @@ class TestUsers:
             timeout_seconds=self.timeout_seconds,
             oauth_client_name=self.oauth_client_name,
         )
-        status = browser.get("status", "error")
+        status = oauth_browser.browser_status(browser)
         if status == "ok":
             self.save_users(project_id, login_email)
         return {

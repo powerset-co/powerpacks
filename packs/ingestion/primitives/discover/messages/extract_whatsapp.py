@@ -9,6 +9,13 @@ whatsapp_wacli.py.
 
 CLI output defaults to wacli.contacts.*; the discovery channel explicitly uses
 whatsapp.contacts.*. Name fallbacks require an explicit --name-fallback-csv.
+
+Changelog:
+  2026-09-23 (typed rows): the `contacts` and `messages` SQLite rows are parsed
+    into the frozen `ContactRow`/`MessageStats` at the read, so `phone_for_jid`,
+    `name_for_jid`, `names_by_phone`, and the export loop use accessors instead of
+    `.get(...)` chains over raw row dicts. `best_contact_name` became
+    `ContactRow.best_name`. Exported rows and manifest values unchanged.
 """
 
 from __future__ import annotations
@@ -87,12 +94,38 @@ class Contact:
     last_message: str | None = None
 
 
-def best_contact_name(row: dict[str, Any]) -> str:
-    for key in ("full_name", "system_name", "push_name", "business_name", "first_name"):
-        name = clean_name(row.get(key))
-        if name:
-            return name
-    return ""
+@dataclass(frozen=True)
+class ContactRow:
+    """One `contacts` table row, parsed once at the read.
+
+    These rows are inside wacli's own SQLite store, so the columns are what wacli
+    happens to have written; the parsing (and its tolerances) lives here rather
+    than in the three callers that only ever want a phone or the best name."""
+
+    phone: str = ""
+    push_name: str = ""
+    full_name: str = ""
+    first_name: str = ""
+    business_name: str = ""
+    system_name: str = ""
+
+    def best_name(self) -> str:
+        """wacli's saved name for this contact, best column first."""
+        for candidate in (self.full_name, self.system_name, self.push_name, self.business_name, self.first_name):
+            name = clean_name(candidate)
+            if name:
+                return name
+        return ""
+
+
+@dataclass(frozen=True)
+class MessageStats:
+    """One chat's aggregate over the `messages` table — count and last timestamp.
+    Body/column-carrying rows never reach here; `load_message_stats` selects
+    aggregates only."""
+
+    message_count: int
+    last_message: str | None
 
 
 def epoch_to_iso(value: Any) -> str | None:
@@ -157,28 +190,30 @@ def load_lid_map(store: Path) -> dict[str, str]:
         conn.close()
 
 
-def phone_for_jid(jid: str, contacts_by_jid: dict[str, dict[str, Any]], lid_map: dict[str, str]) -> str:
-    contact = contacts_by_jid.get(jid) or {}
+def phone_for_jid(jid: str, contacts_by_jid: dict[str, ContactRow], lid_map: dict[str, str]) -> str:
+    contact = contacts_by_jid.get(jid)
     mapped_jid = lid_map.get(jid) or ""
-    mapped_contact = contacts_by_jid.get(mapped_jid) or {}
+    mapped_contact = contacts_by_jid.get(mapped_jid)
     return (
-        canonicalize_phone(contact.get("phone"))
-        or canonicalize_phone(mapped_contact.get("phone"))
+        canonicalize_phone(contact.phone if contact else "")
+        or canonicalize_phone(mapped_contact.phone if mapped_contact else "")
         or jid_to_phone(mapped_jid)
         or jid_to_phone(jid)
         or ""
     )
 
 
-def name_for_jid(jid: str, contacts_by_jid: dict[str, dict[str, Any]], lid_map: dict[str, str]) -> str:
-    return best_contact_name(contacts_by_jid.get(jid) or {}) or best_contact_name(contacts_by_jid.get(lid_map.get(jid) or "") or {})
+def name_for_jid(jid: str, contacts_by_jid: dict[str, ContactRow], lid_map: dict[str, str]) -> str:
+    contact = contacts_by_jid.get(jid)
+    mapped_contact = contacts_by_jid.get(lid_map.get(jid) or "")
+    return (contact.best_name() if contact else "") or (mapped_contact.best_name() if mapped_contact else "")
 
 
-def names_by_phone(contacts_by_jid: dict[str, dict[str, Any]], lid_map: dict[str, str]) -> dict[str, str]:
+def names_by_phone(contacts_by_jid: dict[str, ContactRow], lid_map: dict[str, str]) -> dict[str, str]:
     out: dict[str, str] = {}
-    for jid, row in contacts_by_jid.items():
+    for jid, contact in contacts_by_jid.items():
         phone = phone_for_jid(jid, contacts_by_jid, lid_map)
-        name = best_contact_name(row)
+        name = contact.best_name()
         if phone and name and phone not in out:
             out[phone] = name
     return out
@@ -299,20 +334,27 @@ def read_group_participants_cache(store: Path) -> GroupParticipantCache:
     return GroupParticipantCache(jids=tuple(str(jid) for jid in raw_groups), groups=tuple(groups))
 
 
-def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    contacts: dict[str, dict[str, Any]] = {}
+def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, ContactRow]:
+    """The `contacts` table keyed by jid, each row parsed into a `ContactRow`."""
+    contacts: dict[str, ContactRow] = {}
     if not store_db.table_exists(conn, "contacts"):
         return contacts
     for row in store_db.select_rows(
         conn,
         "SELECT jid, phone, push_name, full_name, first_name, business_name, system_name FROM contacts",
     ):
-        item = dict(row)
-        contacts[str(item.get("jid") or "")] = item
+        contacts[str(row["jid"] or "")] = ContactRow(
+            phone=str(row["phone"] or ""),
+            push_name=str(row["push_name"] or ""),
+            full_name=str(row["full_name"] or ""),
+            first_name=str(row["first_name"] or ""),
+            business_name=str(row["business_name"] or ""),
+            system_name=str(row["system_name"] or ""),
+        )
     return contacts
 
 
-def load_message_stats(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+def load_message_stats(conn: sqlite3.Connection) -> dict[str, MessageStats]:
     if not store_db.table_exists(conn, "messages"):
         return {}
     columns = store_db.table_columns(conn, "messages")
@@ -327,10 +369,10 @@ def load_message_stats(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
         f"SELECT chat_jid, COUNT(*) AS message_count, MAX(ts) AS last_ts FROM messages{where_sql} GROUP BY chat_jid",
     )
     return {
-        str(row["chat_jid"]): {
-            "message_count": int(row["message_count"] or 0),
-            "last_message": epoch_to_iso(row["last_ts"]),
-        }
+        str(row["chat_jid"]): MessageStats(
+            message_count=int(row["message_count"] or 0),
+            last_message=epoch_to_iso(row["last_ts"]),
+        )
         for row in rows
     }
 
@@ -430,13 +472,13 @@ def export_contacts_from_store(
                 if not phone:
                     continue
                 diagnostics["direct_chats"] += 1
-                contact_row = contacts_by_jid.get(jid) or {}
-                stats = message_stats.get(jid) or {}
-                last_message = stats.get("last_message") or epoch_to_iso(row["last_message_ts"])
+                contact_row = contacts_by_jid.get(jid)
+                stats = message_stats.get(jid)
+                last_message = (stats.last_message if stats else None) or epoch_to_iso(row["last_message_ts"])
                 add_contact(contacts, Contact(
                     phone=phone,
-                    name=name or best_contact_name(contact_row) or contact_names_by_phone.get(phone, ""),
-                    message_count=stats.get("message_count"),
+                    name=name or (contact_row.best_name() if contact_row else "") or contact_names_by_phone.get(phone, ""),
+                    message_count=stats.message_count if stats else None,
                     last_message=last_message,
                 ))
 
@@ -580,8 +622,8 @@ def completed_payload(
             "csv_rows": csv_rows,
             "jsonl_rows": jsonl_rows,
             "contacts": csv_rows,
-            "with_message_count": diagnostics.get("contacts_with_message_count", 0),
-            "in_group_chats": diagnostics.get("contacts_in_groups", 0),
+            "with_message_count": diagnostics["contacts_with_message_count"],
+            "in_group_chats": diagnostics["contacts_in_groups"],
         },
         "diagnostics": diagnostics,
         "privacy": {
@@ -686,7 +728,7 @@ class WhatsAppExtractor:
                     timeout=auth_timeout,
                     idle_exit=idle_exit,
                     open_qr_page=not no_open_qr_page,
-                ))
+                ).to_payload())
                 status = auth.auth_status(store)
                 linked_jid = status.linked_jid or doctor.linked_jid
                 if not status.authenticated:
@@ -699,9 +741,9 @@ class WhatsAppExtractor:
             if not authenticated_before and status.authenticated:
                 pairing.write_pairing_marker(store)  # we just paired with full sync
             pairing_state = pairing.pairing_full_sync_status(store, authenticated=status.authenticated)
-            if pairing_state.get("state") == "pre_full_sync":
-                runtime.emit_status(pairing_state["hint"])
-            runtime.write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing_state})
+            if pairing_state.pre_full_sync:
+                runtime.emit_status(pairing_state.hint or "")
+            runtime.write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing_state.to_payload()})
 
             cold_start = existing_messages_at_start == 0
             before_states = store_db.history_depth_chat_states(store)
@@ -736,8 +778,8 @@ class WhatsAppExtractor:
                 progress_jsonl,
                 {
                     "event": "history_depth_completed",
-                    "status": history_depth.get("status"),
-                    "counts": history_depth.get("counts"),
+                    "status": history_depth["status"],
+                    "counts": history_depth["counts"],
                 },
             )
             group_info = sync.refresh_group_info(
@@ -773,7 +815,7 @@ class WhatsAppExtractor:
                 csv_rows=csv_rows,
                 jsonl_rows=jsonl_rows,
                 elapsed_ms=elapsed_ms,
-                pairing=pairing_state,
+                pairing=pairing_state.to_payload(),
             )
             payload["command"] = "run"
             payload["auth"] = auth_summary
@@ -815,7 +857,7 @@ class WhatsAppExtractor:
 def run_exit_code(payload: dict[str, Any]) -> int:
     """Map a ``run`` payload status to the CLI exit code (0 completed, 20 blocked,
     1 failed)."""
-    status = payload.get("status")
+    status = payload["status"]
     if status == "completed":
         return 0
     if status == "blocked_user_action":

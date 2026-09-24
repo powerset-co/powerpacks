@@ -17,6 +17,9 @@ Two judgements live here and nowhere else:
   wacli left out of its result entirely (`missing_result`).
 
 Changelog:
+  2026-09-23 (typed rows): the batch attempt reads the typed
+    `runtime.CommandResult` (`.json`, `.returncode`, `.stderr`) instead of
+    indexing the subprocess result dict. Behavior unchanged.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`;
     the command's JSON is now parsed once into `payloads.BackfillBatchResult`
     instead of re-guarded field by field. Classification and pacing unchanged.
@@ -168,9 +171,9 @@ class WacliHistoryDepthAdapter:
             timeout=self.timeout,
             heartbeat_message="Deepening WhatsApp history.",
         )
-        batch = BackfillBatchResult.from_command_json(result.get("json"))
-        global_returncode = int(result.get("returncode") or 0)
-        stderr = str(result.get("stderr") or "")
+        batch = BackfillBatchResult.from_command_json(result.json)
+        global_returncode = result.returncode
+        stderr = result.stderr
         attempts: dict[str, HistoryDepthAttempt] = {}
         total_target_added = 0
         for target in targets:

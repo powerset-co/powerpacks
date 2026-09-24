@@ -11,6 +11,15 @@ init-db), OAuth-app name validation, and the deterministic
 re-guards the file's shape.
 
 Changelog:
+  2026-09-23 (typed rows): the `oauth_apps` walk is now the named boundary
+    `oauth_apps` / `oauth_app_record`, so `load_setup_state` and
+    `save_oauth_app_state` read typed values; `local_msg_vault_projects` returns
+    project ids (str) instead of gcloud JSON objects; `validate_client_secret`
+    returns the frozen `ClientSecret` so no caller re-reads the dict; subprocess
+    text reads through the `CommandResult` fields.
+  2026-09-23 (simplification audit): `save_oauth_app_state` reads `oauth_apps` and
+    its app entry once instead of repeating each `.get` behind two isinstance
+    guards.
   2026-07-29 (setup style pass): `load_setup_state(home, app_name)` parses the
     state document into the frozen `SetupState` instead of handing back the raw
     dict. The three callers (status payload, project choice, test-user save)
@@ -41,6 +50,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    CommandResult,
     command_error,
     command_output,
     progress,
@@ -57,7 +67,7 @@ INSTALL_COMMAND = "curl -fsSL https://msgvault.io/install.sh | bash"
 OAUTH_APP_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def run_msgvault(args: list[str], home: Path, *, timeout: int = 120) -> dict[str, Any]:
+def run_msgvault(args: list[str], home: Path, *, timeout: int = 120) -> CommandResult:
     """Run `msgvault --home <home> ...` with captured output."""
     return run_command(["msgvault", "--home", str(home), *args], timeout=timeout)
 
@@ -83,14 +93,14 @@ def ensure_msgvault(install: bool) -> dict[str, Any]:
         }
     result = run_command(["bash", "-lc", INSTALL_COMMAND], timeout=600)
     path = shutil.which("msgvault")
-    version = run_command(["msgvault", "version"], timeout=15) if path else {"stdout": "", "stderr": ""}
+    version = run_command(["msgvault", "version"], timeout=15) if path else CommandResult(ok=False, returncode=0)
     return {
         "installed": bool(path),
         "path": path or "",
         "version": command_output(version),
         "install_attempted": True,
-        "install_ok": result["ok"],
-        "install_error": tail(result.get("stderr", "")) if not result["ok"] else "",
+        "install_ok": result.ok,
+        "install_error": tail(result.stderr) if not result.ok else "",
         "install_command": INSTALL_COMMAND,
     }
 
@@ -152,6 +162,22 @@ def read_state_document(home: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def oauth_apps(document: dict[str, Any]) -> dict[str, Any]:
+    """The state document's `oauth_apps` mapping, `{}` when absent or not an object."""
+    apps = document.get("oauth_apps")
+    return apps if isinstance(apps, dict) else {}
+
+
+def oauth_app_record(document: dict[str, Any], app_name: str) -> dict[str, Any]:
+    """The record for one named app, `{}` when absent or not an object.
+
+    The read-modify-write writers merge into the raw record so diagnostic keys
+    they do not model survive; this and `oauth_apps` are the only places the
+    `oauth_apps.<name>` walk happens."""
+    record = oauth_apps(document).get(app_name)
+    return record if isinstance(record, dict) else {}
+
+
 def load_setup_state(home: Path, app_name: str = "") -> SetupState:
     """Return the frozen state for one OAuth app ("" = the unnamed default app).
 
@@ -159,8 +185,7 @@ def load_setup_state(home: Path, app_name: str = "") -> SetupState:
     document = read_state_document(home)
     if not app_name:
         return SetupState.from_record(document)
-    apps = document.get("oauth_apps")
-    return SetupState.from_record(apps.get(app_name) if isinstance(apps, dict) else None)
+    return SetupState.from_record(oauth_app_record(document, app_name))
 
 
 def save_setup_state(home: Path, state: dict[str, Any]) -> None:
@@ -180,32 +205,33 @@ def save_oauth_app_state(home: Path, app_name: str, state: dict[str, Any]) -> No
     path = setup_state_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     current = read_state_document(home)
-    apps = current.get("oauth_apps") if isinstance(current.get("oauth_apps"), dict) else {}
-    existing = apps.get(app_name) if isinstance(apps.get(app_name), dict) else {}
+    apps = oauth_apps(current)
+    existing = oauth_app_record(current, app_name)
     existing.update({key: value for key, value in state.items() if value})
     apps[app_name] = existing
     current["oauth_apps"] = apps
     path.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def local_msg_vault_projects() -> list[dict[str, Any]]:
-    """List ACTIVE `local-msg-vault-*` gcloud projects, newest first."""
+def local_msg_vault_projects() -> list[str]:
+    """List ACTIVE `local-msg-vault-*` gcloud project ids, newest first."""
     if not shutil.which("gcloud"):
         return []
     result = run_command(
         ["gcloud", "projects", "list", "--filter=projectId:local-msg-vault-*", "--format=json"],
         timeout=60,
     )
-    if not result["ok"]:
+    if not result.ok:
         return []
     try:
-        projects = json.loads(result["stdout"] or "[]")
+        projects = json.loads(result.stdout or "[]")
     except json.JSONDecodeError:
         return []
     if not isinstance(projects, list):
         return []
     active = [project for project in projects if project.get("lifecycleState") == "ACTIVE"]
-    return sorted(active, key=lambda project: project.get("createTime", ""), reverse=True)
+    ordered = sorted(active, key=lambda project: project.get("createTime", ""), reverse=True)
+    return [str(project.get("projectId") or "") for project in ordered]
 
 
 def validate_oauth_app(app_name: str | None) -> str:
@@ -264,28 +290,43 @@ def parse_client_secret_paths(path: Path) -> dict[str, str]:
     return values
 
 
-def validate_client_secret(path: Path) -> dict[str, Any]:
+@dataclass(frozen=True)
+class ClientSecret:
+    """A validated installed-app OAuth client secret, or the reason it is not one.
+
+    The client_secret JSON is Google's shape; it is parsed once here so callers
+    read fields instead of re-guarding the file."""
+
+    ok: bool
+    message: str = ""
+    client_id: str = ""
+    has_client_secret: bool = False
+    redirect_uris: tuple[str, ...] = ()
+
+
+def validate_client_secret(path: Path) -> ClientSecret:
     """Validate an installed-app OAuth client secret JSON file."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {"ok": False, "message": f"{path} does not exist"}
+        return ClientSecret(ok=False, message=f"{path} does not exist")
     except json.JSONDecodeError as exc:
-        return {"ok": False, "message": f"{path} is not valid JSON: {exc}"}
+        return ClientSecret(ok=False, message=f"{path} is not valid JSON: {exc}")
     if not isinstance(data, dict):
-        return {"ok": False, "message": "client secret JSON must be an object"}
+        return ClientSecret(ok=False, message="client secret JSON must be an object")
     installed = data.get("installed")
     if not isinstance(installed, dict):
-        return {"ok": False, "message": "expected an installed-app OAuth JSON with an 'installed' object"}
+        return ClientSecret(ok=False, message="expected an installed-app OAuth JSON with an 'installed' object")
     missing = [key for key in ("client_id", "client_secret") if not installed.get(key)]
     if missing:
-        return {"ok": False, "message": f"client secret JSON is missing: {', '.join(missing)}"}
-    return {
-        "ok": True,
-        "client_id": installed.get("client_id", ""),
-        "has_client_secret": bool(installed.get("client_secret")),
-        "redirect_uris": installed.get("redirect_uris") or [],
-    }
+        return ClientSecret(ok=False, message=f"client secret JSON is missing: {', '.join(missing)}")
+    redirects = installed.get("redirect_uris")
+    return ClientSecret(
+        ok=True,
+        client_id=str(installed.get("client_id") or ""),
+        has_client_secret=bool(installed.get("client_secret")),
+        redirect_uris=tuple(redirects) if isinstance(redirects, list) else (),
+    )
 
 
 def destination_secret_path(home: Path, app_name: str) -> Path:
@@ -297,8 +338,8 @@ def destination_secret_path(home: Path, app_name: str) -> Path:
 def copy_client_secret(source: Path, home: Path, app_name: str, *, copy_secret: bool) -> dict[str, Any]:
     """Validate a client secret and copy it into the home (chmod 600) unless referenced in place."""
     validation = validate_client_secret(source)
-    if not validation["ok"]:
-        return {"ok": False, "message": validation["message"]}
+    if not validation.ok:
+        return {"ok": False, "message": validation.message}
     if copy_secret:
         dest = destination_secret_path(home, app_name)
         home.mkdir(parents=True, exist_ok=True)
@@ -311,8 +352,8 @@ def copy_client_secret(source: Path, home: Path, app_name: str, *, copy_secret: 
         "ok": True,
         "source": str(source),
         "path": str(dest),
-        "client_id": validation["client_id"],
-        "redirect_uris": validation.get("redirect_uris") or [],
+        "client_id": validation.client_id,
+        "redirect_uris": list(validation.redirect_uris),
     }
 
 
@@ -320,23 +361,25 @@ def configured_client_secret(home: Path, app_name: str) -> dict[str, Any] | None
     """Return the configured client secret record for an app, or None when unconfigured."""
     key = app_name or "default"
     secret_paths = parse_client_secret_paths(config_path(home))
-    raw_path = secret_paths.get(key)
+    if key not in secret_paths:
+        return None
+    raw_path = secret_paths[key]
     if not raw_path:
         return None
     path = Path(raw_path).expanduser()
     validation = validate_client_secret(path)
-    if not validation["ok"]:
+    if not validation.ok:
         return {
             "status": "invalid",
             "path": str(path),
-            "message": validation["message"],
+            "message": validation.message,
         }
     return {
         "status": "configured",
         "config": str(config_path(home)),
         "client_secret_path": str(path),
-        "client_id": validation["client_id"],
-        "redirect_uris": validation.get("redirect_uris") or [],
+        "client_id": validation.client_id,
+        "redirect_uris": list(validation.redirect_uris),
     }
 
 
@@ -389,7 +432,7 @@ def init_db(home: Path) -> dict[str, Any]:
     """Run `msgvault init-db` for the home and report the database path."""
     progress("Initializing msgvault database...")
     result = run_msgvault(["init-db"], home, timeout=120)
-    if result["ok"]:
+    if result.ok:
         progress("msgvault database ready.")
         return {"status": "ok", "path": str(db_path(home))}
     return {"status": "error", "path": str(db_path(home)), "message": command_error(result)}

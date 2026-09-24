@@ -3,6 +3,12 @@
 
 Flow: current-output check -> parse contacts -> write people.csv -> manifest.
 Identity, worth, and person merging belong to Deep Context.
+
+Changelog:
+  2026-09-23 (typed manifest reads): the current-manifest branch reads the typed
+    `ImportManifest` (`current.status`) and re-emits its on-disk payload.
+  2026-09-23 (simplification audit): `WORKING_CONTACTS_CSV` is now derived from
+    `common.paths.MESSAGES_OUT_DIR` instead of repeating the literal path.
 """
 
 from __future__ import annotations
@@ -20,7 +26,10 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.schemas.message_contacts import MessageContact  # noqa: E402
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
-from packs.ingestion.primitives.common.paths import DEFAULT_IMPORT_DIR  # noqa: E402
+from packs.ingestion.primitives.common.paths import (  # noqa: E402
+    DEFAULT_IMPORT_DIR,
+    MESSAGES_OUT_DIR,
+)
 from packs.ingestion.primitives.discover.common import read_csv_rows, write_csv_rows  # noqa: E402
 from packs.ingestion.primitives.discover.messages.models import MessageContactRow  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
@@ -36,7 +45,7 @@ from packs.ingestion.primitives.imports.common import (  # noqa: E402
 from packs.ingestion.primitives.imports.messages.util import contact_to_person  # noqa: E402
 
 MESSAGES_IMPORT_CONTRACT = "messages-source-only-v7"
-WORKING_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
+WORKING_CONTACTS_CSV = MESSAGES_OUT_DIR / "contacts.csv"
 
 
 class MessagesImportManifest(StageManifest):
@@ -97,8 +106,8 @@ class MessagesImport(Node):
             self.source, self.manifest_input, import_dir=self.import_dir.parent,
         )
         if current:
-            self.written = current
-            return MessagesImportManifest(status=current["status"])
+            self.written = current.to_payload()
+            return MessagesImportManifest(status=current.status)
         if not self.contacts_csv.exists():
             return self._manifest(MessagesImportManifest(
                 status="failed",

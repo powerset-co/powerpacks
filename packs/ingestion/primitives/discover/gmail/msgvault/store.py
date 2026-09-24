@@ -25,6 +25,13 @@ Consumers: `gmail/extract_gmail.py` (the in-process extractor CLI),
 re-derivation), and `logbook/logbook_sources.py` (candidate-pid temp table).
 
 Changelog:
+  2026-09-23 (typed rows): `aggregate_contacts` still RETURNS its dict rows (the
+    row shape deep_context and the aggregation tests index by key), but the name
+    tally in `_fold_msgvault_message` no longer uses `dict.get`; the typed form of
+    this row (`msgvault.util.MsgvaultContactRow`, with its `from_row` boundary)
+    lives beside the pure helpers.
+  2026-09-23 (simplification audit): `_table_columns` now delegates to
+    `sync.sqlite_table_columns` (identical `PRAGMA table_info` -> set[str] body).
   2026-07-23 (audit): split `gmail/msgvault_store.py` into this package —
     `store.py` is the `MsgvaultStore` class, its SQL constants, and the private
     `_fold_msgvault_message` aggregation helper; the pure module-level helpers
@@ -61,6 +68,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.discover.gmail.msgvault.sync import sqlite_table_columns  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
     best_display_name,
@@ -247,7 +255,7 @@ def _fold_msgvault_message(
         record = records.setdefault(email, _ContactAccumulator())
         for name in (participant.recipient_display_name, participant.participant_display_name):
             if name:
-                record.names[name] = record.names.get(name, 0) + 1
+                record.names[name] = (record.names[name] if name in record.names else 0) + 1
         counts = record.group if is_group else record.one_to_one
         if direction == "sent":
             counts.sent += 1
@@ -322,11 +330,7 @@ class MsgvaultStore:
 
     def _table_columns(self, table: str) -> set[str]:
         """Return the column names of a table, or an empty set on SQLite errors."""
-        try:
-            rows = self.con.execute(f"PRAGMA table_info({table})").fetchall()
-        except sqlite3.Error:
-            return set()
-        return {str(row[1]) for row in rows}
+        return sqlite_table_columns(self.con, table)
 
     def require_schema(self) -> None:
         """SystemExit unless the required msgvault metadata tables exist."""

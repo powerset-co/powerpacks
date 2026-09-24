@@ -12,6 +12,12 @@ account — and `CHECK_BUCKETS` says which payload lists each verdict lands in.
 nested dict.
 
 Changelog:
+  2026-09-23 (typed rows): subprocess and visible-run results read their
+    `CommandResult` fields, and the bucket lookup is a direct table index, so no
+    `.get` remains outside `VaultHealth.from_status` (the status-payload boundary).
+  2026-09-23 (simplification audit): dropped redundant `(text or "")` in
+    `msgvault_reauthorization_required`; the parameter is typed `str` and callers
+    pass captured msgvault output.
   2026-07-29 (setup style pass): extracted the auth-check decision. The loop
     used to inline the four verdicts and then re-derive five parallel lists and
     the overall status with five more comprehensions over the same payload
@@ -53,6 +59,7 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     run_msgvault,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    CommandResult,
     command_error,
     command_output,
     parse_json_fragment,
@@ -109,7 +116,7 @@ def normalize_email_list(values: list[str]) -> list[str]:
 
 def msgvault_reauthorization_required(text: str) -> bool:
     """Return True when msgvault output means the account token needs re-auth."""
-    haystack = (text or "").lower()
+    haystack = text.lower()
     return any(marker in haystack for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
 
 
@@ -201,7 +208,7 @@ def check_account(home: Path, email: str, *, stored: bool) -> AccountCheck:
             authorize_command=msgvault_account_authorize_command(home, email, force=False),
         )
     result = run_msgvault(["verify", email, "--skip-db-check", "--sample", "0", "--local"], home, timeout=60)
-    if result["ok"]:
+    if result.ok:
         return AccountCheck(email=email, status="healthy", network_called=True)
     error = command_error(result)
     if msgvault_reauthorization_required(error):
@@ -217,7 +224,7 @@ def check_account(home: Path, email: str, *, stored: bool) -> AccountCheck:
         email=email,
         status="transient_error",
         error_code="gmail_auth_check_failed",
-        error=error or f"msgvault verify exited with {result.get('returncode')}",
+        error=error or f"msgvault verify exited with {result.returncode}",
         network_called=True,
     )
 
@@ -253,32 +260,32 @@ def add_account(home: Path, email: str, app_name: str, *, headless: bool, force:
     if app_name:
         cmd.extend(["--oauth-app", app_name])
     result = run_visible_command(cmd, timeout=900)
-    if result["ok"]:
+    if result.ok:
         progress("msgvault account authorized.")
         return {"status": "ok", "email": email, "oauth_app": app_name or "default"}
     return {
         "status": "error",
         "email": email,
         "oauth_app": app_name or "default",
-        "message": result.get("message") or f"msgvault add-account exited with {result.get('returncode')}",
+        "message": result.message or f"msgvault add-account exited with {result.returncode}",
     }
 
 
 def status_payload(home: Path) -> dict[str, Any]:
     """Build the full `status` payload: binary, config, accounts, MCP, gcloud."""
     msgvault_path = shutil.which("msgvault") or ""
-    version = run_command(["msgvault", "version"], timeout=15) if msgvault_path else {"stdout": "", "stderr": ""}
+    version = run_command(["msgvault", "version"], timeout=15) if msgvault_path else CommandResult(ok=False, returncode=0)
     cfg_path = config_path(home)
     secrets = parse_client_secret_paths(cfg_path)
     accounts: Any = []
     accounts_error = ""
     if msgvault_path and db_path(home).exists():
         result = run_msgvault(["list-accounts", "--json", "--local"], home, timeout=30)
-        if result["ok"]:
+        if result.ok:
             try:
-                accounts = parse_json_fragment(result["stdout"] or "[]")
+                accounts = parse_json_fragment(result.stdout or "[]")
             except json.JSONDecodeError:
-                if "No accounts found" in result["stdout"]:
+                if "No accounts found" in result.stdout:
                     accounts = []
                 else:
                     accounts_error = "list-accounts did not return JSON"
@@ -350,7 +357,7 @@ def check_accounts_payload(home: Path, requested_emails: list[str]) -> dict[str,
 
     buckets: dict[str, list[str]] = {name: [] for name in CHECK_LISTS}
     for check in checks:
-        for bucket in CHECK_BUCKETS.get(check.status, ()):
+        for bucket in CHECK_BUCKETS[check.status]:
             buckets[bucket].append(check.email)
     if buckets["error_accounts"]:
         status = "error"
