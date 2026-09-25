@@ -23,7 +23,6 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveFailed  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E402
     canonicalize_phone,
-    jid_to_phone,
 )
 
 BODY_COLUMN_NAMES = {
@@ -153,23 +152,6 @@ def load_lid_map(store: Path) -> dict[str, str]:
         return mapping
     finally:
         conn.close()
-
-
-def phone_for_jid(
-    jid: str,
-    contacts_by_jid: dict[str, dict[str, Any]],
-    lid_map: dict[str, str],
-) -> str:
-    contact = contacts_by_jid.get(jid) or {}
-    mapped_jid = lid_map.get(jid) or ""
-    mapped_contact = contacts_by_jid.get(mapped_jid) or {}
-    return (
-        canonicalize_phone(contact.get("phone"))
-        or canonicalize_phone(mapped_contact.get("phone"))
-        or jid_to_phone(mapped_jid)
-        or jid_to_phone(jid)
-        or ""
-    )
 
 
 def contact_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:

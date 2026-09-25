@@ -305,45 +305,32 @@ def read_group_participants_cache(store: Path) -> GroupParticipantCache:
 
 
 def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, ContactRow]:
-    """The `contacts` table keyed by jid, each row parsed into a `ContactRow`."""
-    contacts: dict[str, ContactRow] = {}
-    if not store_db.table_exists(conn, "contacts"):
-        return contacts
-    for row in store_db.select_rows(
-        conn,
-        "SELECT jid, phone, push_name, full_name, first_name, business_name, system_name FROM contacts",
-    ):
-        contacts[str(row["jid"] or "")] = ContactRow(
-            phone=str(row["phone"] or ""),
-            push_name=str(row["push_name"] or ""),
-            full_name=str(row["full_name"] or ""),
-            first_name=str(row["first_name"] or ""),
-            business_name=str(row["business_name"] or ""),
-            system_name=str(row["system_name"] or ""),
+    """The `contacts` table keyed by jid, each row parsed into a `ContactRow`.
+
+    `store_db` owns the read: wacli's schema is whatever wacli wrote, so the
+    tolerance for absent columns lives there and this only types the rows.
+    """
+    return {
+        jid: ContactRow(
+            phone=str(row.get("phone") or ""),
+            push_name=str(row.get("push_name") or ""),
+            full_name=str(row.get("full_name") or ""),
+            first_name=str(row.get("first_name") or ""),
+            business_name=str(row.get("business_name") or ""),
+            system_name=str(row.get("system_name") or ""),
         )
-    return contacts
+        for jid, row in store_db.contacts_by_jid(conn).items()
+    }
 
 
 def load_message_stats(conn: sqlite3.Connection) -> dict[str, MessageStats]:
-    if not store_db.table_exists(conn, "messages"):
-        return {}
-    columns = store_db.table_columns(conn, "messages")
-    where = []
-    if "revoked" in columns:
-        where.append("revoked = 0")
-    if "deleted_for_me" in columns:
-        where.append("deleted_for_me = 0")
-    where_sql = f" WHERE {' AND '.join(where)}" if where else ""
-    rows = store_db.select_rows(
-        conn,
-        f"SELECT chat_jid, COUNT(*) AS message_count, MAX(ts) AS last_ts FROM messages{where_sql} GROUP BY chat_jid",
-    )
+    """One chat's aggregate over the `messages` table, typed at the read."""
     return {
-        str(row["chat_jid"]): MessageStats(
-            message_count=int(row["message_count"] or 0),
-            last_message=epoch_to_iso(row["last_ts"]),
+        jid: MessageStats(
+            message_count=int(row.get("message_count") or 0),
+            last_message=row.get("last_message") or None,
         )
-        for row in rows
+        for jid, row in store_db.message_stats(conn).items()
     }
 
 
@@ -433,19 +420,19 @@ def export_contacts_from_store(
                     active_group_jids.add(jid)
                 continue
 
-                phone = phone_for_jid(jid, contacts_by_jid, lid_map)
-                if not phone:
-                    continue
-                diagnostics["direct_chats"] += 1
-                contact_row = contacts_by_jid.get(jid)
-                stats = message_stats.get(jid)
-                last_message = (stats.last_message if stats else None) or epoch_to_iso(row["last_message_ts"])
-                add_contact(contacts, Contact(
-                    phone=phone,
-                    name=name or (contact_row.best_name() if contact_row else "") or contact_names_by_phone.get(phone, ""),
-                    message_count=stats.message_count if stats else None,
-                    last_message=last_message,
-                ))
+            phone = phone_for_jid(jid, contacts_by_jid, lid_map)
+            if not phone:
+                continue
+            diagnostics["direct_chats"] += 1
+            contact_row = contacts_by_jid.get(jid)
+            stats = message_stats.get(jid)
+            last_message = (stats.last_message if stats else None) or epoch_to_iso(row["last_message_ts"])
+            add_contact(contacts, Contact(
+                phone=phone,
+                name=name or (contact_row.best_name() if contact_row else "") or contact_names_by_phone.get(phone, ""),
+                message_count=stats.message_count if stats else None,
+                last_message=last_message,
+            ))
 
         for row in store_db.group_participant_rows(conn):
             group_jid = str(row["group_jid"] or "")

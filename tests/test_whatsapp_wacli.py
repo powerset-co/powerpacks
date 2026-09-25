@@ -474,8 +474,26 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
             conn = store_db.open_wacli_db(store)
             try:
-                self.assertEqual(extract.load_contacts_by_jid(conn), store_db.contacts_by_jid(conn))
-                self.assertEqual(extract.load_message_stats(conn), store_db.message_stats(conn))
+                # store_db owns the read of wacli's own schema; the extractor
+                # only types those rows, so every store_db column must reach
+                # the typed row unchanged.
+                for jid, raw in store_db.contacts_by_jid(conn).items():
+                    contact = extract.load_contacts_by_jid(conn)[jid]
+                    self.assertEqual(
+                        (contact.phone, contact.push_name, contact.full_name,
+                         contact.first_name, contact.business_name, contact.system_name),
+                        tuple(
+                            str(raw.get(field) or "")
+                            for field in ("phone", "push_name", "full_name", "first_name",
+                                          "business_name", "system_name")
+                        ),
+                    )
+                for jid, raw in store_db.message_stats(conn).items():
+                    stat = extract.load_message_stats(conn)[jid]
+                    self.assertEqual(
+                        (stat.message_count, stat.last_message),
+                        (int(raw["message_count"] or 0), raw["last_message"] or None),
+                    )
                 self.assertEqual(
                     extract.group_participant_counts(conn),
                     store_db.group_participant_counts(conn),
