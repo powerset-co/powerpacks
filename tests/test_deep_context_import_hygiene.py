@@ -26,6 +26,7 @@ EXPECTED_DB_OPERATIONS = {
     "people_views.person_lookup",
     "projectors.project_parent_fact",
     "projectors.project_parent_source_bundle",
+    "schema.id_set",
     "queries.artifacts",
     "context_queries.collection_bundle_group_message_count",
     "context_queries.collection_bundle_parent_ids",
@@ -68,6 +69,7 @@ EXPECTED_DB_OPERATIONS = {
     "workflow_views.workflow_state",
     "worth_views.worth_counts",
     "worth_views.worth_queue",
+    "worth_views.worth_row",
     "worth_views.worth_rows",
 }
 

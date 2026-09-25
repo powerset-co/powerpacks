@@ -1,9 +1,15 @@
-"""Atomic identity-family normalization shared by every SQLite writer."""
+"""Atomic identity-family normalization shared by every SQLite writer.
+
+Changelog:
+- 2026-09-25: `settle_human_families` binds its parent ids as one JSON array.
+"""
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
+
+from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
@@ -203,15 +209,14 @@ class IdentityPolicy:
         parents = tuple(sorted(set(parent_ids)))
         if not parents:
             return
-        parent_slots = ",".join("?" for _ in parents)
         winners: dict[str, sqlite3.Row] = {}
         rows = conn.execute(
             "SELECT row_key, parent_id, decided_at FROM links "
-            f"WHERE parent_id IN ({parent_slots}) "
+            f"WHERE parent_id IN {ID_SET} "
             f"AND {AFFIRMATIVE_HUMAN_DECISION_SQL} "
             f"AND decision_source IN ({_DIRECT_HUMAN_SLOTS}) "
             "ORDER BY decided_at DESC, row_key",
-            (*parents, *_DIRECT_HUMAN_SOURCES),
+            (id_set(parents), *_DIRECT_HUMAN_SOURCES),
         )
         for row in rows:
             winners.setdefault(row["parent_id"], row)

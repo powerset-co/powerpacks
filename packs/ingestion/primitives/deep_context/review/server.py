@@ -1,4 +1,8 @@
-"""Frozen Deep Context HTTP transport over canonical SQLite state."""
+"""Frozen Deep Context HTTP transport over canonical SQLite state.
+
+Changelog:
+- 2026-09-25: a worth decision re-reads its one row instead of every worth row.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue, worth_rows
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue, worth_row
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
     ParentViewRow,
@@ -636,7 +640,7 @@ def make_handler(
                     api.set_worth(key, value, _value(form, "note").strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row: WorthRow | None = next((item for item in worth_rows(db) if item.key == key), None)
+                row: WorthRow | None = worth_row(db, key)
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
                 # The decision write is what the UI waits on — this response

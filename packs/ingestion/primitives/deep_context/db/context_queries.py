@@ -1,6 +1,8 @@
 """Narrow typed reads for message collection and dossier evidence.
 
 Changelog:
+- 2026-09-25: the identifier read walks the family's people first; the kind index
+  had the planner scanning every identifier per call.
 - 2026-09-25: id sets bind as one JSON array read through json_each, so the
   variable count no longer grows with the install (27k parents bound twice
   exceeded SQLite's 32,766-variable limit and blocked the cluster survey).
@@ -8,7 +10,6 @@ Changelog:
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -21,19 +22,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.queries import typed_rows
+from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CollectionSourceRow,
     DossierEvidenceRows,
 )
-
-
-# One bound JSON array stands in for an id list of any size.
-ID_SET = "(SELECT value FROM json_each(?))"
-
-
-def _id_set(values: Sequence[str]) -> str:
-    return json.dumps(list(values))
 
 
 def dossier_evidence_rows(
@@ -44,7 +38,7 @@ def dossier_evidence_rows(
     wanted = tuple(sorted({value.strip().lower() for value in subject_ids if value.strip()}))
     if not wanted:
         return DossierEvidenceRows((), (), (), (), ())
-    wanted_json = _id_set(wanted)
+    wanted_json = id_set(wanted)
     matched_people = typed_rows(
         db,
         f"""
@@ -65,7 +59,7 @@ ORDER BY person_id
     parent_ids = tuple(sorted({row.parent_id for row in matched_people} | {row.parent_id for row in direct_parents}))
     if not parent_ids:
         return DossierEvidenceRows((), matched_people, (), (), ())
-    parents_json = _id_set(parent_ids)
+    parents_json = id_set(parent_ids)
     family_people = typed_rows(
         db,
         f"SELECT * FROM people WHERE parent_id IN {ID_SET} ORDER BY person_id",
@@ -96,13 +90,16 @@ ORDER BY artifact_key
         ArtifactRow,
         (parents_json,),
     )
+    # `+pi.kind` keeps the planner off the kind index, which made it scan every
+    # identifier per batch (3.3 s on 12k people) instead of walking the family's
+    # people first (1.5 ms).
     identifiers = typed_rows(
         db,
         f"""
 SELECT pi.* FROM person_identifiers pi
 JOIN people pe USING(person_id)
 WHERE pe.parent_id IN {ID_SET}
-  AND pi.kind IN ('email', 'phone')
+  AND +pi.kind IN ('email', 'phone')
 ORDER BY pi.person_id, pi.kind, pi.normalized_value
 """,
         PersonIdentifierRow,

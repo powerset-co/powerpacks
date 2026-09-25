@@ -8,6 +8,7 @@ yields no verdict, so the pair is judged again on the next run; the failure is
 counted and reported on stderr. Transient errors are retried inside the client.
 
 Changelog:
+- 2026-09-25: requests are built and judged MERGE_JUDGE_CHUNK pairs at a time.
 - 2026-09-25: JEV replaces the OpenAI pair judge; a pair merges at
   p(yes) >= 0.5. The SHARED IDENTIFIERS note also names an email handle that
   is identical across domains.
@@ -46,6 +47,9 @@ from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
 
 JUDGE_SYSTEM = load_prompt("identity_merge_system")
 JUDGE_LLM = "llm"
+# Pairs whose requests exist at once: a 21k-pair survey builds one chunk of
+# rendered evidence at a time, not every request up front.
+MERGE_JUDGE_CHUNK = 500
 MERGE_REQUEST_VERSION = "deep-context-merge-judge-v1-20260925"
 MERGE_QUESTION_VERSION = "deep-context-merge-questions-v1-20260925"
 SAME_PERSON_CUTOFF = 0.5
@@ -200,16 +204,18 @@ def judge_pairs(
     async def driver() -> None:
         nonlocal usage
         semaphore = asyncio.Semaphore(concurrency)
+        results: list[MergeJudgeResult] = []
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-            results = await asyncio.gather(*(
-                judge_pair(
-                    client,
-                    judge_request(pair.first, pair.second, owner_name=owner_name, reference_date=reference_date),
-                    output_dir=output_dir,
-                    semaphore=semaphore,
-                )
-                for pair in pairs
-            ))
+            for start in range(0, len(pairs), MERGE_JUDGE_CHUNK):
+                results.extend(await asyncio.gather(*(
+                    judge_pair(
+                        client,
+                        judge_request(pair.first, pair.second, owner_name=owner_name, reference_date=reference_date),
+                        output_dir=output_dir,
+                        semaphore=semaphore,
+                    )
+                    for pair in pairs[start:start + MERGE_JUDGE_CHUNK]
+                )))
         for pair, result in zip(pairs, results, strict=True):
             usage = usage + result.usage
             if result.decision is None:

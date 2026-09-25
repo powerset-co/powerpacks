@@ -1,10 +1,24 @@
-"""Versioned relational DDL, row-to-table registry, and generated upserts."""
+"""Versioned relational DDL, row-to-table registry, and generated upserts.
+
+Changelog:
+- 2026-09-25: `ID_SET`/`id_set` bind an id list as one JSON array for every reader and writer.
+"""
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import fields
 
 from packs.ingestion.primitives.deep_context.db import models
 from packs.ingestion.schemas.share_schema import SHARE_VALUES
+
+# One bound JSON array stands in for an id list of any size. SQLite caps bound
+# variables at 32,766; a 27k-parent install bound every parent id twice.
+ID_SET = "(SELECT value FROM json_each(?))"
+
+
+def id_set(values: Sequence[str]) -> str:
+    return json.dumps(list(values))
 
 # Pre-release installs re-migrate instead of carrying an upgrade ladder.
 SCHEMA_VERSION = 1

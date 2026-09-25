@@ -1,4 +1,8 @@
-"""SQL relations shared by the Deep Context review projections."""
+"""SQL relations shared by the Deep Context review projections.
+
+Changelog:
+- 2026-09-25: `CANDIDATE_SELECT` takes its parent ids as one JSON-bound set, not placeholders.
+"""
 
 from __future__ import annotations
 
@@ -251,7 +255,7 @@ LEFT JOIN research r ON r.candidate_key=c.row_key AND r.handle=(
   SELECT r2.handle FROM research r2 WHERE r2.candidate_key=c.row_key
   ORDER BY r2.updated_at DESC, r2.handle LIMIT 1
 )
-WHERE c.parent_id IN ({parent_placeholders})
+WHERE c.parent_id IN (SELECT value FROM json_each(?))
 {pending}
 ORDER BY c.parent_id, c.is_pending DESC, c.row_key
 """

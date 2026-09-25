@@ -1,4 +1,8 @@
-"""Narrow projector and domain-transaction API for Deep Context SQLite."""
+"""Narrow projector and domain-transaction API for Deep Context SQLite.
+
+Changelog:
+- 2026-09-25: synthetic prune and scrub reset bind their key lists as one JSON array.
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -45,6 +49,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.schema import (
+    ID_SET,
+    id_set,
     DDL,
     SCHEMA_VERSION,
     TABLE_BY_TYPE,
@@ -458,8 +464,8 @@ class Db:
         excluded = ""
         params: tuple[str, ...] = (RowKind.SYNTHETIC.value,)
         if keys:
-            excluded = f" AND row_key NOT IN ({','.join('?' for _ in keys)})"
-            params += keys
+            excluded = f" AND row_key NOT IN {ID_SET}"
+            params += (id_set(keys),)
         with self.transaction() as conn:
             return conn.execute(
                 "DELETE FROM links WHERE kind=?"
@@ -656,21 +662,15 @@ class DbMaintenance:
             keys = [row["artifact_key"] for row in artifacts]
             facts = research = 0
             if keys:
-                placeholders = ",".join("?" for _ in keys)
+                scrubbed = (id_set(keys),)
                 facts = conn.execute(
-                    f"SELECT COUNT(*) FROM facts WHERE artifact_key IN ({placeholders})",
-                    keys,
+                    f"SELECT COUNT(*) FROM facts WHERE artifact_key IN {ID_SET}", scrubbed,
                 ).fetchone()[0]
                 research = conn.execute(
-                    f"SELECT COUNT(*) FROM research WHERE artifact_key IN ({placeholders})",
-                    keys,
+                    f"SELECT COUNT(*) FROM research WHERE artifact_key IN {ID_SET}", scrubbed,
                 ).fetchone()[0]
-                conn.execute(
-                    f"DELETE FROM research WHERE artifact_key IN ({placeholders})", keys,
-                )
-                conn.execute(
-                    f"DELETE FROM artifacts WHERE artifact_key IN ({placeholders})", keys,
-                )
+                conn.execute(f"DELETE FROM research WHERE artifact_key IN {ID_SET}", scrubbed)
+                conn.execute(f"DELETE FROM artifacts WHERE artifact_key IN {ID_SET}", scrubbed)
             guidance = conn.execute("DELETE FROM guidance").rowcount
             share_rows = conn.execute("DELETE FROM person_labels").rowcount
             share_rows += conn.execute("DELETE FROM share").rowcount
