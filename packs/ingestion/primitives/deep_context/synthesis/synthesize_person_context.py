@@ -9,6 +9,8 @@ The stage keeps the fixed artifacts and payload contract:
 ``<out-dir>/<parent_id>.jsonl`` plus ``<out-dir>/manifest.json``.
 
 Changelog:
+- 2026-09-25: the default model is gpt-6-luna (DEFAULT_SYNTHESIS_MODEL); the
+  shared DEFAULT_MODEL stays gpt-5.2 for the pair judge and enrichment.
 - 2026-08-08: a --model/--reasoning-effort switch since the last completed
   run now forces a full re-plan instead of silently reusing facts a
   different model produced. See _model_or_effort_changed.
@@ -21,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso, read_json
 from packs.ingestion.primitives.common.legacy import scrub_retired_message_linkedin_facts
 from packs.ingestion.primitives.deep_context.shared.common import (
@@ -80,7 +82,7 @@ class SynthesizePersonContext(Node):
         db: Db,
         raw_dir: Path | None = None,
         out_dir: Path | None = None,
-        model: str = DEFAULT_MODEL,
+        model: str = DEFAULT_SYNTHESIS_MODEL,
         reasoning_effort: str = "medium",
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
         max_batches: int = DEFAULT_MAX_BATCHES,
@@ -221,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-dir", default=str(RAW_DIR))
     parser.add_argument("--out-dir", default=str(FACTS_DIR))
     parser.add_argument("--db", default=str(CANONICAL_DB))
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=DEFAULT_SYNTHESIS_MODEL)
     parser.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
     parser.add_argument("--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS)
     parser.add_argument("--max-batches", type=int, default=DEFAULT_MAX_BATCHES)
