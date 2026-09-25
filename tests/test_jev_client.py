@@ -260,8 +260,12 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["id"] for row in result["scores"]], ["person-a", "person-b"])
         self.assertEqual(len(api.calls), 1)
 
-    async def test_concurrency_is_bounded_at_four(self) -> None:
-        profiles = {f"person-{index}": {**self.profile, "summary": f"Synthetic {index}"} for index in range(8)}
+    async def test_concurrency_is_bounded_at_the_cap(self) -> None:
+        # More profiles than the cap, so the bound is what limits the in-flight count.
+        profiles = {
+            f"person-{index}": {**self.profile, "summary": f"Synthetic {index}"}
+            for index in range(jev.MAX_CONCURRENCY + 8)
+        }
         responses = [
             _Response(
                 200,
@@ -273,9 +277,10 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         ]
         api = _Client(*responses, pause=True)
         await self._score(api, profiles=profiles)
-        self.assertEqual(api.max_in_flight, 4)
-        with self.assertRaisesRegex(ValueError, "between 1 and 4"):
-            await self._score(api, concurrency=5)
+        self.assertEqual(api.max_in_flight, jev.MAX_CONCURRENCY)
+        self.assertEqual(jev.MAX_CONCURRENCY, 32)
+        with self.assertRaisesRegex(ValueError, f"between 1 and {jev.MAX_CONCURRENCY}"):
+            await self._score(api, concurrency=jev.MAX_CONCURRENCY + 1)
 
     async def test_transient_errors_retry_but_invalid_results_never_reject(self) -> None:
         request = self._request()
