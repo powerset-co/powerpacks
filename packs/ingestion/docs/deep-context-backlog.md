@@ -193,7 +193,7 @@ Was three problems with how that is expressed:
 
 ### Do NOT drop the people projection relying on migration
 
-Tempting shortcut, and it silently breaks ingestion: `import_legacy` runs once per
+Tempting shortcut, and it silently breaks ingestion: the legacy import ran once per
 install, while `merged/people.csv` is rewritten by the fan-in (`imports/
 merge_people.py`) after EVERY `$import-gmail`, `$import-messages`, or LinkedIn
 re-import. Remove the projection from collect and lean on migration, and any
@@ -411,7 +411,7 @@ the root keeps `__init__.py` and nothing else.
 | `enrich/` | judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
 | `review/` | web server/rendering/assets, guided_retarget.py, reconcile_review_web.py, restart_review.py |
 | `realize/` | apply_retargets.py, persist_review_identities.py |
-| `migration/` | migrate_sqlite.py, legacy.py, canonical_graph.py, parent_graph.py (the dying mass, together, so it deletes as one folder) |
+| `migration/` | seed.py (the whole-graph importer, its graph machinery and the proof tool were deleted 2026-09-25) |
 | `shared/` | common.py, check_readiness.py, readiness_models.py, build_owner.py, lookup_person.py, dossier_evidence.py |
 | unchanged | db/, manifests/ (new, per the manifests item), prompts/, tools/ |
 

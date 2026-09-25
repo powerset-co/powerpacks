@@ -2,6 +2,9 @@
 
 The schema owns only DDL construction. Runtime callers import these definitions
 from their concrete home so the domain model can be read without the SQL text.
+
+Changelog:
+- 2026-09-25: the migration-only whole-graph models went with legacy.py.
 """
 
 from __future__ import annotations
@@ -308,35 +311,6 @@ class PersonSourcesProjection:
 class CandidatePeopleProjection:
     row_key: str
     rows: tuple[CandidatePersonRow, ...]
-
-
-@dataclass(frozen=True)
-class CanonicalGraphProjection:
-    """Migration-only whole-graph input.
-
-    Removal countdown (2026-08-06): delete once no supported install predates
-    powerpacks v1.19.0.
-    """
-
-    parents: tuple[ParentRow, ...]
-    people: tuple[PersonRow, ...]
-    identifiers: tuple[PersonIdentifierRow, ...]
-    sources: tuple[PersonSourceRow, ...]
-
-
-@dataclass(frozen=True)
-class CanonicalGraphCounts:
-    """Migration-only whole-graph result counts.
-
-    Removal countdown (2026-08-06): delete once no supported install predates
-    powerpacks v1.19.0.
-    """
-
-    parents: int
-    people: int
-    identifiers: int
-    sources: int
-    parents_removed: int
 
 
 @dataclass(frozen=True)

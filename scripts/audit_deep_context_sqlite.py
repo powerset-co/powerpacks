@@ -2,7 +2,7 @@
 """Fail when Deep Context bypasses its SQLite projection boundary.
 
 Durable stage artifacts remain useful for inspection and paid-work reuse. The
-only general artifact readers are ``migration/legacy.py`` and ``migration/seed.py``
+only general artifact reader is ``migration/seed.py``
 (legacy trees); ``imported_people.py`` is the one current input boundary for the
 import fan-in's people.csv. Current writers
 parse just-written outputs into frozen projection rows at a named boundary and
@@ -29,14 +29,11 @@ from packs.ingestion.primitives.deep_context.db.identity_invariants import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 PACKAGE = REPO / "packs/ingestion/primitives/deep_context"
-LEGACY_READER = PACKAGE / "migration/legacy.py"
 SEED_READER = PACKAGE / "migration/seed.py"
 IMPORTED_PEOPLE_READER = PACKAGE / "ensure_parents/imported_people.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
-PARENT_IDENTITY_PROOF = PACKAGE / "tools/parent_identity_proof.py"
 DB_PACKAGE = PACKAGE / "db"
 MIGRATION_PACKAGE = PACKAGE / "migration"
-WHOLE_GRAPH_CALLERS = {LEGACY_READER, PARENT_IDENTITY_PROOF}
 
 FORBIDDEN_STATE_TEXT = (
     "stage_state",
@@ -402,7 +399,7 @@ def _allowed_file_read(
     parents: dict[ast.AST, ast.AST],
     tree: ast.AST,
 ) -> bool:
-    if path in {LEGACY_READER, SEED_READER, PROJECTOR_READER}:
+    if path in {SEED_READER, PROJECTOR_READER}:
         return True
     if _static_asset_read(relative, call, parents, tree):
         return True
@@ -537,22 +534,11 @@ def audit_source(path: Path, source: str) -> list[Violation]:
         if isinstance(node, ast.Call):
             raw_called = _name(node.func)
             called = _resolved_name(node.func, aliases)
-            whole_graph_call = (
-                called.rsplit(".", 1)[-1] in {
-                    "replace_canonical_graph", "_replace_canonical_graph",
-                }
-                or called.endswith(".LegacyGraphMigration.apply")
-                or called.endswith(".LegacyGraphMigration._apply")
-            )
-            if whole_graph_call and path not in WHOLE_GRAPH_CALLERS:
-                add(node, "migration-only-graph", called)
-            if _is_csv_reader(node, aliases) and path not in {
-                LEGACY_READER, SEED_READER, IMPORTED_PEOPLE_READER,
-            }:
+            if _is_csv_reader(node, aliases) and path not in {SEED_READER, IMPORTED_PEOPLE_READER}:
                 add(
                     node,
                     "csv-input-boundary",
-                    "only migration/legacy.py, migration/seed.py and imported_people.py may parse CSV",
+                    "only migration/seed.py and imported_people.py may parse CSV",
                 )
             if called.rsplit(".", 1)[-1] in FORBIDDEN_HELPERS:
                 add(node, "no-file-state-helper", called)
@@ -570,7 +556,6 @@ def audit_source(path: Path, source: str) -> list[Violation]:
                 )
             if (
                 method in KNOWN_READER_HELPERS
-                and path != LEGACY_READER
                 and (relative, _scope(node, parents))
                 not in READER_HELPER_BOUNDARIES.get(method, set())
             ):
@@ -585,7 +570,7 @@ def audit_source(path: Path, source: str) -> list[Violation]:
                 continue
             if (
                 projector is not None
-                and path not in {LEGACY_READER, PROJECTOR_READER}
+                and path != PROJECTOR_READER
                 and (relative, _scope(node, parents))
                 not in PROJECTOR_CALL_BOUNDARIES[projector]
             ):
@@ -612,12 +597,11 @@ def audit_source(path: Path, source: str) -> list[Violation]:
             ):
                 add(node, "sql-home", "SQL text is allowed only in deep_context/db")
 
-    if path != LEGACY_READER:
-        lowered = source.lower()
-        for token in FORBIDDEN_STATE_TEXT:
-            for match in re.finditer(rf"\b{re.escape(token)}\b", lowered):
-                line = lowered.count("\n", 0, match.start()) + 1
-                violations.append(Violation(relative, line, "deleted-control-state", token))
+    lowered = source.lower()
+    for token in FORBIDDEN_STATE_TEXT:
+        for match in re.finditer(rf"\b{re.escape(token)}\b", lowered):
+            line = lowered.count("\n", 0, match.start()) + 1
+            violations.append(Violation(relative, line, "deleted-control-state", token))
     return sorted(violations, key=lambda item: (item.line, item.rule, item.detail))
 
 
@@ -641,11 +625,7 @@ def audit() -> list[Violation]:
             for node in ast.walk(tree)
         ):
             csv_readers.append(path)
-    expected_csv_readers = sorted((
-        LEGACY_READER,
-        SEED_READER,
-        IMPORTED_PEOPLE_READER,
-    ))
+    expected_csv_readers = sorted((SEED_READER, IMPORTED_PEOPLE_READER))
     if csv_readers != expected_csv_readers:
         violations.append(Violation(
             _relative(PACKAGE),

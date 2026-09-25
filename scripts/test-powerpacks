@@ -67,7 +67,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_whatsapp_wacli \
   tests.test_clean_slate \
   tests.test_cluster_merge_candidates \
-  tests.test_deep_context_canonical_graph \
   tests.test_deep_context_collection_sqlite \
   tests.test_deep_context_db_parent_merge \
   tests.test_deep_context_db_projectors \
@@ -81,15 +80,12 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_identity_queue \
   tests.test_deep_context_import_hygiene \
   tests.test_deep_context_imported_people \
-  tests.test_deep_context_incremental_parents \
   tests.test_deep_context_judgment_policy \
   tests.test_deep_context_legacy_scrubs \
   tests.test_deep_context_lookup_sqlite \
-  tests.test_deep_context_migrate_sqlite \
   tests.test_deep_context_seed \
   tests.test_deep_context_owner_projection \
   tests.test_deep_context_parent_assignment \
-  tests.test_deep_context_parent_identity_proof \
   tests.test_deep_context_parent_projection \
   tests.test_deep_context_prefetch_rate \
   tests.test_deep_context_prompt_assets \
@@ -105,7 +101,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_email_context \
   tests.test_identity_evidence_identifiers \
   tests.test_ingestion_jsonio \
-  tests.test_legacy_synthetic_migration \
   tests.test_llm_config \
   tests.test_logbook \
   tests.test_messages_chatdb \

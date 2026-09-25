@@ -104,8 +104,8 @@ def merge_disjoint_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFact
       ``collapse_fact_records``.
 
     Callers: parent construction (merge_candidates/build_parents.py), dossier
-    evidence (shared/dossier_evidence.py), and two migration-only paths
-    (synthesis/normalization.py, migration/parent_graph.py). It is NOT the reducer
+    evidence (shared/dossier_evidence.py), and the legacy-layout collapse in
+    synthesis/normalization.py. It is NOT the reducer
     for one person's own batches — that is ``collapse_fact_records``.
     """
     records = list(chunks)
