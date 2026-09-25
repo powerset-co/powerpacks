@@ -9,6 +9,7 @@ Free and local: JEV already answered during deep_synthesize. One pass writes bot
 tables, so `share` always covers the whole network.
 
 Changelog:
+  2026-09-25: only people with facts need JEV labels; a dossier is not facts.
   2026-09-24: labels and the share list became SQLite tables; no CSV state.
   2026-09-24: share follows worth; the manifest counts the confirm rows a UI
     puts to the human.
@@ -155,7 +156,7 @@ class ShareList(Node):
         missing = [
             person.person_id
             for person in people
-            if not person.linkedin_only and not (person.facts or {}).get("labels")
+            if person.facts is not None and not person.facts.get("labels")
         ]
         if missing:
             return ShareManifest(

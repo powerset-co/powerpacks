@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Apply accepted parent merges and refresh only changed parent dossiers."""
+"""Apply accepted parent merges and refresh only changed parent dossiers.
+
+A parent without facts (synthesis has not run for it) has no dossier: it gets no
+file under parents/ and no dossier artifact.
+
+Changelog:
+  2026-09-25: parents without facts are absent from parents/, not stubbed.
+"""
 
 from __future__ import annotations
 
@@ -110,9 +117,10 @@ def _parent_plans(db: Db) -> tuple[tuple[ParentPlan, ...], int]:
         )
         visible = [row for row in members if not row.is_owner]
         owner_excluded += len(members) - len(visible)
-        if not visible:
+        facts = facts_by_parent.get(parent.parent_id)
+        if not visible or not facts:
             continue
-        merged = merge_disjoint_fact_records(facts_by_parent.get(parent.parent_id, [])) or SynthesizedFacts()
+        merged = merge_disjoint_fact_records(facts) or SynthesizedFacts()
         name = str(merged.canonical_name or parent.display_name or visible[0].display_name or "person")
         slug = parent.display_slug or slugify(name, parent.parent_id)
         emails: list[str] = []
@@ -289,6 +297,16 @@ class BuildParents(Node):
                     parent_id=plan.parent_id,
                 )
             )
+
+        # A parent dropped from the plans (no facts, owner-only) keeps no parent
+        # dossier row; remove_orphans below deletes its file.
+        planned = {plan.parent_id for plan in plans}
+        for parent_id, prior in prior_artifacts.items():
+            stub_key = f"{PARENT_DOSSIER_ARTIFACT_PREFIX}{parent_id}"
+            if parent_id in planned or all(row.artifact_key != stub_key for row in prior):
+                continue
+            kept = tuple(row for row in prior if row.artifact_key != stub_key)
+            replacements.append(ArtifactReplacement(ArtifactKind.DOSSIER.value, kept, parent_id=parent_id))
 
         if replacements:
             self.db.project_rows(tuple(replacements))

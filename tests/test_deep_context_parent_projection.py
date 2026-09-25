@@ -27,6 +27,20 @@ from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mi
 from deep_context_sqlite_test_helpers import query
 
 
+
+def _facts(root: Path, parent_id: str, name: str) -> tuple[ArtifactRow, FactRow]:
+    """Parent-owned facts: a parent gets a dossier only once synthesis ran for it."""
+    facts_json = json.dumps({"canonical_name": name})
+    key = f"facts:{parent_id}"
+    return (
+        ArtifactRow(
+            key, "facts", parent_id, str(root / "facts" / f"{parent_id}.jsonl"),
+            hashlib.sha256(facts_json.encode()).hexdigest(), "projected",
+        ),
+        FactRow(parent_id, parent_id, key, facts_json=facts_json),
+    )
+
+
 class ParentProjectionTest(unittest.TestCase):
     def test_minted_parent_id_keeps_the_founding_child_set_formula(self) -> None:
         self.assertEqual(mint_parent_id(["person-b", "person-a"]), "parent-65856992ac99")
@@ -50,6 +64,7 @@ class ParentProjectionTest(unittest.TestCase):
             db.project_rows((
                 ParentRow("old-person-a", "parent-worth:old-person-a", "Jordan Bravo", "jordan-a"),
                 PersonRow("person-a", "old-person-a", "jordan-a", "jordan-a", "Jordan Bravo"),
+                *_facts(root, "old-person-a", "Jordan Bravo"),
                 PersonIdentifiersProjection("person-a", (
                     PersonIdentifierRow("person-a", "email", "jordan@example.com", "jordan@example.com"),
                     PersonIdentifierRow("person-a", "phone", "+15550100", "+15550100"),
@@ -94,6 +109,48 @@ class ParentProjectionTest(unittest.TestCase):
                 parent_dossier.path,
                 str((parents / parent_filename).resolve()),
             )
+
+    def test_parent_without_facts_gets_no_dossier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parents_dir = root / "parents"
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-a", "parent-worth:parent-a", "Jordan Bravo", "jordan"),
+                PersonRow("person-a", "parent-a", "jordan", "jordan", "Jordan Bravo"),
+                ParentRow("parent-b", "parent-worth:parent-b", "Casey Doe", "casey"),
+                PersonRow("person-b", "parent-b", "casey", "casey", "Casey Doe"),
+            ))
+
+            result = BuildParents(db=db, parents_dir=parents_dir).execute()
+
+            self.assertEqual((result.parents_changed, result.singletons_written), (0, 0))
+            self.assertEqual(list(parents_dir.glob("*.md")), [])
+            self.assertEqual(query(db, "SELECT count(*) FROM artifacts WHERE kind='dossier'")[0][0], 0)
+
+    def test_stub_dossier_of_a_parent_without_facts_is_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parents_dir = root / "parents"
+            parents_dir.mkdir()
+            stub = parents_dir / "jordan-bravo-parent-a.md"
+            stub.write_text("# Jordan Bravo\n")
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-a", "parent-worth:parent-a", "Jordan Bravo", "jordan"),
+                PersonRow("person-a", "parent-a", "jordan", "jordan", "Jordan Bravo"),
+                ArtifactRow(
+                    "dossier-parent:parent-a", "dossier", "parent-a", str(stub.resolve()),
+                    hashlib.sha256(stub.read_bytes()).hexdigest(), "projected",
+                    payload_json=json.dumps({"body": "# Jordan Bravo\n"}),
+                ),
+            ))
+
+            result = BuildParents(db=db, parents_dir=parents_dir).execute()
+
+            self.assertEqual(result.orphans_removed, 1)
+            self.assertFalse(stub.exists())
+            self.assertEqual(query(db, "SELECT count(*) FROM artifacts WHERE kind='dossier'")[0][0], 0)
 
     def test_merge_rekeys_facts_and_preserves_human_worth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -304,6 +361,7 @@ class ParentProjectionTest(unittest.TestCase):
             db.project_rows((
                 ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
                 PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
+                *_facts(root, "parent-a", "Jordan Bravo"),
                 PersonIdentifiersProjection("person-a", (
                     PersonIdentifierRow(
                         "person-a", "email", "jordan@example.com", "jordan@example.com",
@@ -360,6 +418,8 @@ class ParentProjectionTest(unittest.TestCase):
                 ParentRow("parent-b", "parent-worth:b", "Casey Delta", "casey"),
                 PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
                 PersonRow("person-b", "parent-b", "casey-b", "casey", "Casey Delta"),
+                *_facts(root, "parent-a", "Jordan Bravo"),
+                *_facts(root, "parent-b", "Casey Delta"),
             ))
             parents_dir = root / "parents"
             BuildParents(db=db, parents_dir=parents_dir).execute()
@@ -425,6 +485,8 @@ class ParentProjectionTest(unittest.TestCase):
                 ParentRow("parent-b", "parent-worth:b", "Casey Delta", "casey"),
                 PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
                 PersonRow("person-b", "parent-b", "casey-b", "casey", "Casey Delta"),
+                *_facts(root, "parent-a", "Jordan Bravo"),
+                *_facts(root, "parent-b", "Casey Delta"),
             ))
             parents_dir = root / "parents"
             BuildParents(db=db, parents_dir=parents_dir).execute()
@@ -458,6 +520,8 @@ class ParentProjectionTest(unittest.TestCase):
                 ParentRow("parent-b", "parent-worth:b", "Jordan Bravo", "jordan"),
                 PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
                 PersonRow("person-b", "parent-b", "jordan-b", "jordan", "Jordan Bravo"),
+                *_facts(root, "parent-a", "Jordan Bravo"),
+                *_facts(root, "parent-b", "Jordan Bravo"),
                 ArtifactRow(
                     "dossier:parent-a", "dossier", "parent-a", str(collided.resolve()),
                     stale_fingerprint, "projected",
@@ -497,6 +561,7 @@ class ParentProjectionTest(unittest.TestCase):
             db.project_rows((
                 ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
                 PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
+                *_facts(root, "parent-a", "Jordan Bravo"),
             ))
             BuildParents(db=db, parents_dir=parents_dir).execute()
             path = parents_dir / "jordan-bravo-a.md"

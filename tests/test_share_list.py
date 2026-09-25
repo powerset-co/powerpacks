@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from deep_context_sqlite_test_helpers import connect, seed_identity
+from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactRow, ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.share_views import person_labels, share_decisions
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
@@ -177,6 +178,64 @@ class ShareListTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "completed")
         self.assertEqual(manifest["people"], 3)
         self.assertIn("fingerprints", manifest)
+
+
+class ShareWithoutFactsTests(unittest.TestCase):
+    """Synthesis has not run: people and parents exist, facts do not. A stale
+    parent dossier from an earlier `parents` run is not facts."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.out = root / "share"
+        self.db = Db(root / "deep-context.sqlite")
+        people_csv = root / "people.csv"
+        CsvIO.write_dict_rows(
+            people_csv,
+            PEOPLE_HEADER,
+            [
+                {"id": "person-a", "full_name": "Jordan Bravo"},
+                {"id": "person-b", "full_name": "Casey Delta"},
+            ],
+        )
+        self.db.project_rows((
+            ParentRow("parent-a", "parent-worth:parent-a", "Jordan Bravo", "jordan"),
+            PersonRow("person-a", "parent-a", "jordan", "jordan", "Jordan Bravo"),
+            ParentRow("parent-b", "parent-worth:parent-b", "Casey Delta", "casey"),
+            PersonRow("person-b", "parent-b", "casey", "casey", "Casey Delta"),
+            ArtifactRow(
+                "dossier-parent:parent-a", "dossier", "parent-a", "/parents/jordan.md",
+                "stub", "projected", payload_json=json.dumps({"body": "# Jordan Bravo\n"}),
+            ),
+        ))
+        self.evidence = ShareEvidence(self.db, people_csv=people_csv)
+
+    def _run(self) -> dict:
+        return ShareList(db=self.db, out_dir=self.out, evidence=self.evidence).run().to_payload()
+
+    def test_every_person_is_decided_from_worth(self) -> None:
+        payload = self._run()
+        self.assertEqual(payload["status"], "completed")
+        rows = share_decisions(self.db)
+        self.assertEqual(
+            [(row.person_id, row.share, row.reason) for row in rows],
+            [("person-a", "no", "worth_maybe"), ("person-b", "no", "worth_maybe")],
+        )
+        self.assertEqual(payload["deterministic_only"], 2)
+
+    def test_only_people_with_facts_lacking_labels_fail_the_node(self) -> None:
+        facts = {"canonical_name": "Casey Delta"}
+        self.db.project_rows((
+            ArtifactRow(
+                "facts:parent-b", "facts", "parent-b", "/facts/parent-b.jsonl",
+                "fixture", "projected", payload_json=json.dumps({"facts": facts}),
+            ),
+            FactRow("parent-b", "parent-b", "facts:parent-b", facts_json=json.dumps(facts)),
+        ))
+        payload = self._run()
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("1 people have facts without JEV labels", payload["error"])
 
 
 class ShareSchemaTests(unittest.TestCase):
