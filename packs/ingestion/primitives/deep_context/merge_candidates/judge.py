@@ -1,12 +1,13 @@
 """Prompt rendering and OpenAI judging for ambiguous identity pairs.
 
-A judge call that still fails after one immediate retry yields no verdict, so
-the pair is judged again on the next run; the failure is counted and reported
-on stderr.
+A failed judge call yields no verdict, so the pair is judged again on the next
+run; the failure is counted and reported on stderr. Transient errors are
+retried inside OpenAIResponsesCaller.
 
 Changelog:
 - 2026-09-25: a failed call no longer becomes a cached "not same person, 0"
   verdict; retry once, then leave the pair unjudged.
+- 2026-09-25: the judge call runs once; the caller's max_retries owns retries.
 """
 from __future__ import annotations
 
@@ -31,7 +32,6 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 
 JUDGE_SYSTEM = load_prompt("identity_merge_system")
 JUDGE_LLM = "llm"
-_JUDGE_RETRIES = 1
 JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -81,24 +81,22 @@ async def judge_pair(
     first: MergePerson,
     second: MergePerson,
 ) -> MergeJudgeResult:
-    error = ""
-    for _attempt in range(1 + _JUDGE_RETRIES):
-        try:
-            response = await caller.call(
-                system_prompt=JUDGE_SYSTEM,
-                user_prompt=judge_prompt(first, second),
-                schema=JUDGE_SCHEMA,
-                schema_name="same_person",
-                context="judge",
-            )
-        except Exception as exc:  # noqa: BLE001 - an unjudged pair is retried next run
-            error = f"{type(exc).__name__}: {exc}"[:200]
-            continue
-        return MergeJudgeResult(
-            MergeDecision.from_payload(response.payload, judge=JUDGE_LLM),
-            MergeUsage.from_payload(response.usage.as_dict()),
+    try:
+        response = await caller.call(
+            system_prompt=JUDGE_SYSTEM,
+            user_prompt=judge_prompt(first, second),
+            schema=JUDGE_SCHEMA,
+            schema_name="same_person",
+            context="judge",
         )
-    return MergeJudgeResult(MergeDecision.from_payload({}, judge=JUDGE_LLM), MergeUsage(), error)
+    except Exception as exc:  # noqa: BLE001 - an unjudged pair is retried next run
+        error = f"{type(exc).__name__}: {exc}"[:200]
+        return MergeJudgeResult(MergeDecision.from_payload({}, judge=JUDGE_LLM), MergeUsage(), error)
+
+    return MergeJudgeResult(
+        MergeDecision.from_payload(response.payload, judge=JUDGE_LLM),
+        MergeUsage.from_payload(response.usage.as_dict()),
+    )
 
 
 def judge_pairs(pairs: list[MergePairCandidate], *, model: str,

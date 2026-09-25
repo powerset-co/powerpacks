@@ -421,8 +421,8 @@ _SAME_PERSON = {
 }
 
 
-def scripted_caller(outcomes: list):
-    """Fake the OpenAI caller where judge.py looks it up; pop one outcome per call."""
+def scripted_caller(*, fail_on: str | None = None):
+    """Fake the OpenAI caller where judge.py looks it up; time out on prompts naming fail_on."""
 
     class _ScriptedCaller:
         calls = 0
@@ -436,12 +436,11 @@ def scripted_caller(outcomes: list):
         async def __aexit__(self, *_exc) -> None:
             return None
 
-        async def call(self, **_kwargs):
+        async def call(self, *, user_prompt, **_kwargs):
             type(self).calls += 1
-            outcome = outcomes.pop(0) if outcomes else TimeoutError("timed out")
-            if isinstance(outcome, Exception):
-                raise outcome
-            return SimpleNamespace(payload=dict(outcome), usage=OpenAIUsage())
+            if fail_on and fail_on in user_prompt:
+                raise TimeoutError("timed out")
+            return SimpleNamespace(payload=dict(_SAME_PERSON), usage=OpenAIUsage())
 
     return _ScriptedCaller
 
@@ -449,14 +448,16 @@ def scripted_caller(outcomes: list):
 class TestFailedJudgeCall(unittest.TestCase):
     def _node(self, root: Path) -> ClusterMergeCandidates:
         db = Db(root / "deep-context.sqlite")
-        seed_person(
-            db, person_id="a", slug="jordan-alpha", name="Jordan Alpha",
-            facts_path=root / "a.jsonl", facts={}, phone="4155550100",
-        )
-        seed_person(
-            db, person_id="b", slug="casey-bravo", name="Casey Bravo",
-            facts_path=root / "b.jsonl", facts={}, phone="4155550100",
-        )
+        for person_id, slug, name, phone in (
+            ("a", "jordan-alpha", "Jordan Alpha", "4155550100"),
+            ("b", "casey-bravo", "Casey Bravo", "4155550100"),
+            ("c", "riley-charlie", "Riley Charlie", "4155550111"),
+            ("d", "morgan-delta", "Morgan Delta", "4155550111"),
+        ):
+            seed_person(
+                db, person_id=person_id, slug=slug, name=name,
+                facts_path=root / f"{person_id}.jsonl", facts={}, phone=phone,
+            )
         return ClusterMergeCandidates(
             db=db,
             dossier_dir=root,
@@ -464,46 +465,36 @@ class TestFailedJudgeCall(unittest.TestCase):
             out_md=root / "merge-candidates.md",
         )
 
-    def test_timeout_then_success_writes_one_verdict(self):
+    def test_failed_pair_writes_no_verdict_and_is_judged_next_run(self):
         with tempfile.TemporaryDirectory() as directory:
             node = self._node(Path(directory))
-            caller = scripted_caller([TimeoutError("timed out"), _SAME_PERSON])
-
-            with mock.patch.object(judge, "OpenAIResponsesCaller", caller):
-                payload = node.run()
-
-            self.assertEqual(caller.calls, 2)
-            cached = canonical_snapshot(node.db).merge_verdicts
-            self.assertEqual(len(cached), 1)
-            self.assertEqual(cached[0].same_person, 1)
-            self.assertEqual(payload.pairs_judged, 1)
-            self.assertEqual(payload.errors, 0)
-
-    def test_persistent_failure_writes_no_verdict_and_is_judged_next_run(self):
-        with tempfile.TemporaryDirectory() as directory:
-            node = self._node(Path(directory))
-            failing = scripted_caller([])
+            failing = scripted_caller(fail_on="Casey Bravo")
 
             with mock.patch.object(judge, "OpenAIResponsesCaller", failing), \
                     mock.patch("sys.stderr") as stderr:
                 payload = node.run()
 
             self.assertEqual(failing.calls, 2)
-            self.assertEqual(canonical_snapshot(node.db).merge_verdicts, ())
+            cached = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual([(row.person_a, row.person_b) for row in cached], [("c", "d")])
             self.assertEqual(payload.errors, 1)
-            self.assertEqual(payload.pairs_judged, 0)
+            self.assertEqual(payload.pairs_judged, 1)
             self.assertIn("[cluster]", "".join(
                 str(call.args[0]) for call in stderr.write.call_args_list
             ))
 
-            second = scripted_caller([_SAME_PERSON])
+            second = scripted_caller()
             with mock.patch.object(judge, "OpenAIResponsesCaller", second):
                 payload = node.run()
 
             self.assertEqual(second.calls, 1)
-            self.assertEqual(payload.pairs_reused, 0)
+            self.assertEqual(payload.pairs_reused, 1)
             self.assertEqual(payload.pairs_judged, 1)
-            self.assertEqual(len(canonical_snapshot(node.db).merge_verdicts), 1)
+            self.assertEqual(payload.errors, 0)
+            cached = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual(
+                [(row.person_a, row.person_b) for row in cached], [("a", "b"), ("c", "d")],
+            )
 
 
 if __name__ == "__main__":
