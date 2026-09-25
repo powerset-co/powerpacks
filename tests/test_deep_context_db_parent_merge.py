@@ -26,6 +26,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from deep_context_sqlite_test_helpers import query
 
+_DECISION_COLUMNS = (
+    "decision_action, decision_approved, decision_source, decision_note, decided_at, "
+    "replacement_url, replacement_public_identifier"
+)
+
 
 class IncrementalParentMergeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -148,11 +153,45 @@ class IncrementalParentMergeTests(unittest.TestCase):
             {"survivor-slug"},
         )
         decisions = {
-            row["row_key"]: (row["decision_action"], row["decision_source"])
-            for row in query(self.db, "SELECT * FROM links")
+            row["row_key"]: tuple(row)[1:]
+            for row in query(self.db, f"SELECT row_key, {_DECISION_COLUMNS} FROM links")
         }
-        self.assertEqual(decisions["link-absorbed"][0], "verify")
-        self.assertEqual(decisions["link-survivor"], ("detach", "sibling-settle"))
+        self.assertEqual(
+            decisions["link-absorbed"],
+            ("verify", "yes", "deep-context-review", None, "2026-08-05T04:00:00Z", None, None),
+        )
+        self.assertEqual(
+            decisions["link-survivor"],
+            ("detach", "yes", "sibling-settle", None, "2026-08-05T04:00:00Z", None, None),
+        )
+
+    def test_merge_keeps_what_the_human_typed_on_the_superseded_link(self) -> None:
+        self.db.decide_identity(
+            "link-survivor", ReviewAction.RETARGET.value,
+            replacement_url="https://www.linkedin.com/in/jordan-bravo-real",
+            replacement_public_identifier="jordan-bravo-real",
+            note="it's the Acme one", decided_at="2026-08-05T03:00:00Z",
+        )
+        self.db.decide_identity(
+            "link-absorbed", ReviewAction.VERIFY.value,
+            decided_at="2026-08-05T04:00:00Z",
+        )
+
+        self.db.merge_parents("survivor", "absorbed")
+
+        decisions = {
+            row["row_key"]: tuple(row)[1:]
+            for row in query(self.db, f"SELECT row_key, {_DECISION_COLUMNS} FROM links")
+        }
+        self.assertEqual(
+            decisions["link-absorbed"],
+            ("verify", "yes", "deep-context-review", None, "2026-08-05T04:00:00Z", None, None),
+        )
+        # The schema allows replacement_* only on a retarget row.
+        self.assertEqual(
+            decisions["link-survivor"],
+            ("detach", "yes", "sibling-settle", "it's the Acme one", "2026-08-05T04:00:00Z", None, None),
+        )
 
     def test_merge_is_atomic_and_rejects_invalid_parents(self) -> None:
         with patch.object(

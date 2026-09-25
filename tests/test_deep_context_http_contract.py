@@ -832,7 +832,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 "detach",
                 "yes",
                 ReviewSource.SIBLING_SETTLE.value,
-                None,
+                "Keep this candidate until a better URL arrives",
             ),
         )
         approved_count = self.db.query(

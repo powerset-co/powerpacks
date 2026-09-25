@@ -181,7 +181,7 @@ class IdentityPolicy:
         ]
         conn.execute(
             "UPDATE links SET decision_action='detach', decision_approved='yes', "
-            "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
+            "decision_source=?, decided_at=?, replacement_url=NULL, "
             "replacement_public_identifier=NULL WHERE parent_id=? AND row_key!=? "
             f"AND {settleable}",
             (
