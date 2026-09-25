@@ -24,11 +24,6 @@ from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.ingestion.primitives.enrich import rapidapi_client
 
 
-def provider_key_available() -> bool:
-    """Whether paid profile hydration can run in this process."""
-    return bool(rapidapi_client.RapidApiClient.resolve_key())
-
-
 def profile_payloads(
     db: Db,
     candidate_keys: Iterable[str] | None = None,

@@ -64,17 +64,13 @@ def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
 
 
 # A row the human answered yes/no on is settled: settle_machine_identities
-# discards any fresh machine verdict for it (see its `preserved` branch), so
-# judging one is spend whose result is thrown away by design. Spelled once and
-# used both ways — negated in the queue below, positively by
-# `human_settled_identities` so the count stays visible instead of the rows
-# silently vanishing from the stage's report.
+# discards any fresh machine verdict for it (see its `preserved` branch).
+# Judging one is spend whose result is thrown away by design, so the queue
+# below excludes it.
 HUMAN_SETTLED = "COALESCE(l.decision_approved, '') IN ('yes', 'no')"
 
 # What makes an attached link judgeable, minus the human-settled polarity:
-# assumes the `eligible_links l` alias and the worth CTE join. Spelled once so
-# the queue (which negates HUMAN_SETTLED) and human_settled_identities (which
-# asserts it) can never drift on eligibility.
+# assumes the `eligible_links l` alias and the worth CTE join.
 ATTACHED_IDENTITY_ELIGIBLE = f"""{WORTH_GATE_NOT_REJECTED}
     AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
     AND l.kind NOT IN ('synthetic', 'research')
@@ -99,26 +95,6 @@ _ATTACHED_IDENTITY_CTE = (
 )
 """
 )
-
-
-def human_settled_identities(db: Db) -> int:
-    """Attached links this stage skips because the human already answered them.
-
-    The queue excludes them (see HUMAN_SETTLED); this counts them, so a run
-    still reports that they exist rather than quietly shrinking its totals.
-    """
-    return int(
-        db.query(
-            WORTH_CTE
-            + f"""
-SELECT COUNT(*) AS n
-FROM eligible_links l JOIN parents p USING(parent_id)
-JOIN worth w USING(parent_id)
-WHERE {ATTACHED_IDENTITY_ELIGIBLE}
-  AND {HUMAN_SETTLED}
-"""
-        )[0]["n"]
-    )
 
 
 def attached_identity_queue(db: Db) -> list[AttachedIdentityQueueRow]:

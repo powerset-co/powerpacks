@@ -37,10 +37,7 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import Doss
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
-from packs.ingestion.primitives.deep_context.db.identity_views import (
-    attached_identity_queue,
-    human_settled_identities,
-)
+from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
@@ -78,13 +75,11 @@ def task(
     pub="jordan-bravo",
     url="https://www.linkedin.com/in/jordan-bravo",
     has_profile=False,
-    from_connections=False,
 ):
     return IdentityTask(
         parent_slug="jordan-bravo-ab12cd34",
         parent_id="parent-1",
         candidate_key=pub,
-        from_connections=from_connections,
         evidence=DossierEvidence(name="Jordan Bravo"),
         linkedin=JudgeProfile.from_payload(
             {
@@ -182,27 +177,7 @@ JUDGE_ANSWER = {
 }
 
 
-class FetchCandidateTests(unittest.TestCase):
-    def test_selects_only_urled_profileless_judge_targets(self):
-        rows = [
-            task(),  # wanted
-            task(has_profile=True),  # already judgeable
-            task(url=""),  # nothing attached
-            task(from_connections=True),  # ground truth, never judged
-            replace(
-                task(),
-                linkedin=JudgeProfile.from_payload(
-                    {
-                        "linkedin_url": "",
-                        "has_profile": False,
-                    }
-                ),
-            ),
-        ]
-        wanted = queue.profile_fetch_candidates(rows)
-        self.assertEqual(len(wanted), 1)
-        self.assertIs(wanted[0], rows[0])
-
+class LinkedinViewTests(unittest.TestCase):
     def test_fallback_view_has_no_experience_or_education_before_a_fetch(self):
         """No production caller ever populates raw work/education on
         IdentityProfileSource (see queue.linkedin_view's fallback branch) — a
@@ -222,8 +197,6 @@ class FetchCandidateTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             queue.linkedin_view({"school": "State University"})  # type: ignore[arg-type]
 
-
-class FetchMissingProfilesTests(unittest.TestCase):
     def test_old_cache_shape_preserves_judgment_fingerprint_on_read(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -345,93 +318,6 @@ class FetchMissingProfilesTests(unittest.TestCase):
         self.assertEqual(profile.public_identifier, "jordan-bravo")
         self.assertFalse(profile.has_profile)
 
-    def test_keyless_install_skips_cleanly(self):
-        with (
-            TemporaryDirectory() as directory,
-            mock.patch.object(
-                profile_projection.rapidapi_client.RapidApiClient,
-                "resolve_key",
-                return_value="",
-            ),
-        ):
-            root = Path(directory)
-            fetched = queue.fetch_missing_profiles(profile_db(root), [task()], root / "cache")
-        self.assertEqual(fetched.fetch_skipped_no_key, 1)
-        self.assertEqual(fetched.fetch_ok, 0)
-
-    def test_fetch_hydrates_cache_and_rebuilds_view(self):
-        with TemporaryDirectory() as d:
-            cache_dir = Path(d)
-            t = task()
-            db = profile_db(cache_dir)
-
-            def fake_fetch(self, pub, url, *, cache_dir=None, **kw):
-                profile = {
-                    "success": True,
-                    "full_name": "Jordan Bravo",
-                    "headline": "Founder at Bravo Robotics",
-                    "experiences": [{"title": "Founder", "company_name": "Bravo Robotics"}],
-                    "education": [],
-                    "city": "SF",
-                    "state": "",
-                    "country": "",
-                }
-                return {"state": rapid.PROFILE_CONTENT, "status_code": 200, "normalized_profile": profile}
-
-            with (
-                mock.patch.object(
-                    profile_projection.rapidapi_client.RapidApiClient,
-                    "resolve_key",
-                    return_value="k",
-                ),
-                mock.patch.object(
-                    profile_projection.rapidapi_client.RapidApiClient,
-                    "__init__",
-                    return_value=None,
-                ),
-                mock.patch.object(
-                    profile_projection.rapidapi_client.RapidApiClient,
-                    "get_profile",
-                    fake_fetch,
-                ),
-            ):
-                fetched = queue.fetch_missing_profiles(db, [t], cache_dir)
-
-        refreshed = fetched.tasks[0]
-        self.assertEqual(fetched.fetch_ok, 1)
-        self.assertEqual(fetched.fetch_failed, 0)
-        self.assertTrue(refreshed.linkedin.has_profile)
-        self.assertEqual(refreshed.linkedin.source, "cache")
-        self.assertIn("Bravo Robotics", " ".join(refreshed.linkedin.experiences))
-
-    def test_failed_fetch_counts_and_leaves_task_unjudgeable(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            t = task()
-            with (
-                mock.patch.object(
-                    profile_projection.rapidapi_client.RapidApiClient,
-                    "resolve_key",
-                    return_value="k",
-                ),
-                mock.patch.object(
-                    profile_projection.rapidapi_client.RapidApiClient,
-                    "__init__",
-                    return_value=None,
-                ),
-                mock.patch.object(
-                    profile_projection.rapidapi_client.RapidApiClient,
-                    "get_profile",
-                    return_value={
-                        "state": rapid.PROFILE_EMPTY,
-                        "status_code": 404,
-                        "normalized_profile": {},
-                    },
-                ),
-            ):
-                fetched = queue.fetch_missing_profiles(profile_db(root), [t], root / "cache")
-        self.assertEqual(fetched.fetch_failed, 1)
-        self.assertFalse(fetched.tasks[0].linkedin.has_profile)
 
 
 if __name__ == "__main__":
@@ -1369,7 +1255,7 @@ class HumanSettledRowsAreNotJudgedTests(unittest.TestCase):
     design. On the owner's store that was 24 rows re-billed on every run.
     """
 
-    def test_a_human_decided_row_leaves_the_queue_but_is_still_counted(self):
+    def test_a_human_decided_row_leaves_the_queue(self):
         with TemporaryDirectory() as directory:
             db = Db(Path(directory) / "deep-context.sqlite")
             seed_identity(
@@ -1381,10 +1267,8 @@ class HumanSettledRowsAreNotJudgedTests(unittest.TestCase):
                 machine_worth="yes",
                 linkedin_url="https://www.linkedin.com/in/jordan-bravo",
             )
-            before = len(attached_identity_queue(db))
-            self.assertEqual((before, human_settled_identities(db)), (1, 0))
+            self.assertEqual(len(attached_identity_queue(db)), 1)
 
             db.decide_identity("jordan-bravo", "detach", approved="yes")
 
             self.assertEqual(len(attached_identity_queue(db)), 0)
-            self.assertEqual(human_settled_identities(db), 1)

@@ -5,55 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
-    IdentityTask,
-)
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
-
-
-@dataclass(frozen=True)
-class IdentityEstimate:
-    """Provider work predicted before any attached-identity spend."""
-
-    profile_fetch_misses: int
-    parents: int
-    tasks: int
-    judgeable: int
-    reused: int
-    human_settled: int
-    billed: int
-    ground_truth_connections: int
-    conflicts: int
-    estimated_cost_usd_low: float
-    estimated_cost_usd_high: float
-    model: str
-    reasoning_effort: str
-    elapsed_ms: int
-    updated_at: IsoTimestamp
-
-    def to_payload(self) -> dict[str, Any]:
-        """Serialize at the CLI/manifest boundary."""
-        return {
-            "source": "reconcile_linkedin",
-            "status": "dry_run",
-            "profile_fetch_misses": self.profile_fetch_misses,
-            "estimated_rapidapi_credits": self.profile_fetch_misses,
-            "parents": self.parents,
-            "tasks": self.tasks,
-            "judgeable": self.judgeable,
-            "reused": self.reused,
-            "human_settled": self.human_settled,
-            "billed": self.billed,
-            "ground_truth_connections": self.ground_truth_connections,
-            "conflicts": self.conflicts,
-            "estimated_cost_usd_low": self.estimated_cost_usd_low,
-            "estimated_cost_usd_high": self.estimated_cost_usd_high,
-            "model": self.model,
-            "reasoning_effort": self.reasoning_effort,
-            "elapsed_ms": self.elapsed_ms,
-            "updated_at": self.updated_at,
-        }
 
 
 @dataclass(frozen=True)
@@ -108,38 +61,6 @@ class IdentityProfileSource:
     full_name: str = ""
     headline: str = ""
     profile_picture_url: str = ""
-
-
-@dataclass(frozen=True)
-class ProfileFetchResult:
-    """Fetch tally for the ordinary (non-heal) reconcile queue.
-
-    Parallels HealFetchState/HealFetchResult/HealProfileCounts below, which
-    are heal's own fetch tally over HealCandidate rows — the two pipelines
-    each keep their own shape rather than sharing one.
-    """
-
-    tasks: tuple[IdentityTask, ...]
-    fetch_wanted: int = 0
-    fetch_ok: int = 0
-    fetch_failed: int = 0
-    fetch_skipped_no_key: int = 0
-
-    def as_counts(self) -> ProfileFetchCounts:
-        return ProfileFetchCounts(
-            self.fetch_wanted,
-            self.fetch_ok,
-            self.fetch_failed,
-            self.fetch_skipped_no_key,
-        )
-
-
-@dataclass(frozen=True)
-class ProfileFetchCounts:
-    fetch_wanted: int
-    fetch_ok: int
-    fetch_failed: int
-    fetch_skipped_no_key: int
 
 
 @dataclass(frozen=True)

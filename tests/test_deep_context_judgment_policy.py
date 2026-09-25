@@ -8,10 +8,9 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import Doss
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
     IdentityAction,
     decide_actions,
-    deep_research_eligible,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
-    CONNECTION_RULE,
+    STANDING_SYNTHETIC_RULE,
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,
@@ -56,12 +55,12 @@ class IdentityJudgmentPolicyTest(unittest.TestCase):
         )
         self.assertEqual(tuple(tasks), original)
 
-    def test_connection_rule_remains_a_decisive_conflict_winner(self) -> None:
+    def test_verify_rule_remains_a_decisive_conflict_winner(self) -> None:
         tasks = [
             IdentityTask(
                 parent_id="family",
-                candidate_key="connection",
-                rule=CONNECTION_RULE,
+                candidate_key="synthetic",
+                rule=STANDING_SYNTHETIC_RULE,
                 evidence=DossierEvidence(name="Jordan Bravo"),
                 linkedin=JudgeProfile(),
             ),
@@ -83,9 +82,7 @@ class IdentityJudgmentPolicyTest(unittest.TestCase):
 
     def test_zero_detach_threshold_resolves_to_zero_everywhere(self) -> None:
         """An explicit 0.0 must not collapse back to the origin default via a
-        truthy `or`, and the exact same resolved bar must gate both the
-        detach decision and deep-research eligibility — see
-        judgment_policy.decide_actions/Decision/ResolvedThresholds."""
+        truthy `or` — see judgment_policy.decide_actions/ResolvedThresholds."""
         task = IdentityTask(
             parent_id="solo",
             candidate_key="candidate",
@@ -102,7 +99,6 @@ class IdentityJudgmentPolicyTest(unittest.TestCase):
 
         self.assertEqual(decided.thresholds.detach, 0.0)
         self.assertEqual(decided.actions[0].action, "detach")
-        self.assertTrue(deep_research_eligible(task, decided.thresholds))
 
 if __name__ == "__main__":
     unittest.main()

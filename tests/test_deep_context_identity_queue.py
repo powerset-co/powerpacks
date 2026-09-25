@@ -111,7 +111,6 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
             patch.object(projection, "hydrate_profiles") as hydrate,
             patch.object(judge, "judge_batch") as judge_batch,
         ):
-            queue.fetch_missing_profiles(self.db, tasks, self.root / "profiles")
             healing.fetch_states(
                 self.db,
                 candidates,

@@ -188,12 +188,11 @@ def rejudge(
     # judgment_fingerprint's docstring for why that serialization stays pinned.
     tasks = [task.with_judgment(result) for task, result in zip(tasks, verdicts)]
     # Local write from here on — no further billing. settle applies the
-    # origin-default bars (identical to the reconcile pass), and
-    # settle_machine_identities still re-checks for a human decision even
-    # though selection already filtered those rows out: a user can
-    # approve/reject the same row through the review UI while this batch is
-    # mid-flight, and that decision must still win (preserved_user_rows).
-    projected = settle(db, tasks, source=WriterSource.HEAL).overrides
+    # origin-default bars, and settle_machine_identities still re-checks for
+    # a human decision even though selection already filtered those rows out:
+    # a user can approve/reject the same row through the review UI while this
+    # batch is mid-flight, and that decision must still win (preserved_user_rows).
+    projected = settle(db, tasks, source=WriterSource.HEAL)
     return replace(
         base,
         verified=projected.verified,

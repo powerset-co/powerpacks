@@ -230,11 +230,6 @@ class IdentityJudge:
             )
 
 
-def task_fingerprint(task: IdentityTask, owner_block: str, *, model: str, effort: str) -> str:
-    """Fingerprint one parsed orchestration task from its actual judge input."""
-    return judgment_fingerprint(*task.packet(), owner_block, model=model, effort=effort)
-
-
 def judge_batch(
     tasks: list[IdentityTask],
     *,

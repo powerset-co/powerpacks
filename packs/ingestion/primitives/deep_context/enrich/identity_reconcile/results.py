@@ -13,16 +13,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import build_tasks
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import stored_judgments
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProjectionResult,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
-    JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import (
     MachineIdentitySettlement,
@@ -114,47 +111,27 @@ def write_overrides(
     )
 
 
-@dataclass(frozen=True)
-class Settled:
-    """One settlement pass: the stamped tasks, the bars applied, the write tally."""
-
-    tasks: tuple[IdentityTask, ...]
-    thresholds: judgment_policy.ResolvedThresholds
-    overrides: IdentityProjectionResult
-
-
 def settle(
     db: Db,
     tasks: list[IdentityTask],
     *,
-    confirm: float | None = None,
-    detach: float | None = None,
-    artifact_path: Path | None = None,
     source: WriterSource = WriterSource.RECONCILE,
-) -> Settled:
+) -> IdentityProjectionResult:
     """THE judge-path settlement door: decide → stamp → write → tally.
 
     Every path whose verdicts came from the judge goes through here, so the
-    decide step and the action-stamping exist once. ``confirm``/``detach``
-    of None take the origin defaults (see resolve_thresholds); the exact bars
-    applied ride back on ``.thresholds`` for callers that gate follow-up work
-    (deep_research_eligible).
+    decide step and the action-stamping exist once, at the origin-default bars
+    (see resolve_thresholds).
 
     healing.terminate deliberately calls write_overrides directly because its
     dead-link and synthetic rules must not enter sibling arbitration.
     """
-    decided = judgment_policy.decide_actions(tasks, confirm, detach)
+    decided = judgment_policy.decide_actions(tasks)
     stamped = [
         replace(task, action=action.action, via=action.via)
         for task, action in zip(tasks, decided.actions, strict=True)
     ]
-    overrides = write_overrides(
-        db,
-        stamped,
-        artifact_path=artifact_path,
-        source=source,
-    )
-    return Settled(tuple(stamped), decided.thresholds, overrides)
+    return write_overrides(db, stamped, source=source)
 
 
 def upsert_retargets(
@@ -191,24 +168,3 @@ def upsert_retargets(
         proposed += 1
     projected, _, _ = settle_machine_identities(db, settlements)
     return min(proposed, len(projected))
-
-
-def load_tasks_from_store(db: Db) -> list[IdentityTask]:
-    """Rebuild tasks from persisted verdicts for ``reapply``."""
-    verdicts = stored_judgments(db)
-    return [
-        replace(
-            task,
-            linkedin=JudgeProfile.from_payload(
-                {
-                    "public_identifier": task.linkedin.public_identifier,
-                    "linkedin_url": task.linkedin.linkedin_url,
-                }
-            ),
-            verdict=verdicts[task.candidate_key].verdict,
-            judgment_fingerprint=verdicts[task.candidate_key].fingerprint,
-            error="",
-        )
-        for task in build_tasks(db)
-        if task.candidate_key in verdicts
-    ]

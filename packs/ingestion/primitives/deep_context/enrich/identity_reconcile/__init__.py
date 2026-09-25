@@ -1,1 +1,1 @@
-"""Concrete queue, result, and runner modules for attached identity reconciliation."""
+"""Queue, judge, and settlement modules for attached identity reconciliation."""

@@ -43,8 +43,8 @@ def stored_judgments(db: Db) -> dict[str, StoredJudgment]:
 
     Malformed JSON, a non-object payload, or an empty verdict value is skipped
     silently rather than raised — that row simply doesn't appear here, so a
-    caller treats it as unjudged (``reapply`` leaves it alone; the judge pays
-    for it) instead of acting on a verdict nobody can read.
+    caller treats it as unjudged (the judge pays for it) instead of acting on a
+    verdict nobody can read.
     """
     judgments: dict[str, StoredJudgment] = {}
     for link in links(db):
@@ -120,9 +120,8 @@ class Decision:
     Callers read ``.actions`` explicitly (``zip(tasks, decision.actions)``)
     rather than iterating ``decision`` itself — this is a decision record, not
     a sequence standing in for one. ``.thresholds`` is the ``ResolvedThresholds``
-    actually applied, so a caller like ``deep_research_eligible`` never has to
-    re-resolve a number that could silently drift from what decided these
-    actions.
+    actually applied, so a caller never has to re-resolve a number that could
+    silently drift from what decided these actions.
     """
 
     actions: tuple[IdentityAction, ...]
@@ -154,22 +153,6 @@ def resolve_thresholds(
     return ResolvedThresholds(
         confirm=confirm if confirm is not None else threshold_for(origin),
         detach=detach if detach is not None else IDENTITY_THRESHOLDS["detach"],
-    )
-
-
-def deep_research_eligible(task: IdentityTask, thresholds: ResolvedThresholds) -> bool:
-    """A confident detach the judge itself flagged as worth chasing, unless it
-    already concluded no LinkedIn plausibly exists for them.
-
-    ``thresholds`` must be the exact ``ResolvedThresholds`` the run's
-    ``decide_actions`` call produced — see that dataclass's docstring for why.
-    """
-    return bool(
-        task.verdict
-        and task.verdict.value == "wrong_person"
-        and task.verdict.confidence >= thresholds.detach
-        and task.verdict.recommend_deep_research
-        and not task.verdict.linkedin_plausibly_absent
     )
 
 

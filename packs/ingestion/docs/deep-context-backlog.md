@@ -7,6 +7,8 @@ Change log:
 - 2026-08-07: `union_bundles`/`build_bundle` folded into `CollectionBundle.union`/
   `CollectionBundle.of` in `collection/models.py`; the two items below that
   referenced them by their old free-function/module names are updated in place.
+- 2026-09-25: dropped the deleted `identity_reconcile/runner.py` from the
+  OpenAI-concurrency fallback list.
 
 These items are deliberately outside the mechanical D2 cleanup round. They are
 not implicit acceptance criteria for that round.
@@ -262,13 +264,12 @@ one flat pool over all bundles, so the semaphore alone bounds concurrency.
 
 ### Concurrency is configured inline in four files, with disagreeing defaults
 
-Four sites resolve the same concept (how many OpenAI calls in flight) from the
+Three sites resolve the same concept (how many OpenAI calls in flight) from the
 same env var `POWERPACKS_OPENAI_CONCURRENCY` and profile key `openai_concurrency`,
 each spelled out mid-function with its own magic fallback:
 
 - `synthesis/runner.py` fallback 16
 - `merge_candidates/judge.py` fallback 64
-- `enrich/identity_reconcile/runner.py` fallback 64
 - `enrich/research_reconcile/judging.py` fallback `identity_evidence.DEFAULT_IDENTITY_CONCURRENCY` (the only named one)
 
 So unless the env var is set, synthesis runs at a QUARTER of the judges'

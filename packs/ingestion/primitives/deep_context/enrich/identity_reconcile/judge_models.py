@@ -37,7 +37,6 @@ RESEARCH_PRESENT_FIELDS = frozenset(_PROFILE_FIELDS) - {"source"}
 
 
 class IdentityRule(StrEnum):
-    LINKEDIN_CONNECTION = "linkedin-connection"
     NO_PROFILE = "no-profile"
     DEAD_PROFILE = "dead-profile"
     STANDING_SYNTHETIC = "standing-synthetic"
@@ -55,11 +54,6 @@ class IdentityRuleOutcome:
     def fingerprint(self) -> str:
         return f"rule:{self.provenance.value}:v1"
 
-CONNECTION_RULE = IdentityRuleOutcome(
-    IdentityRule.LINKEDIN_CONNECTION,
-    ReviewAction.VERIFY,
-    "Ground truth: this profile came from your LinkedIn Connections import.",
-)
 NO_PROFILE_RULE = IdentityRuleOutcome(
     IdentityRule.NO_PROFILE,
     ReviewAction.REVIEW,
