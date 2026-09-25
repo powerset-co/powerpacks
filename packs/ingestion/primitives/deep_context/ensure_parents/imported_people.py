@@ -3,7 +3,9 @@
 ``people.csv`` is the one live input owned by the import fan-in. This module is
 its only Deep Context reader. It converts rows to frozen values at the boundary,
 then get-or-creates stable parent ownership before message collection starts.
-Everything downstream reads the SQLite projection.
+Everything downstream reads the SQLite projection, except the roster headline,
+which the worth stage reads back through this same boundary for its
+notable-title rule (the store keeps no LinkedIn title).
 
 Changelog:
   2026-09-25: `headline` (the imported LinkedIn headline) rides the row; the

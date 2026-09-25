@@ -67,17 +67,17 @@ class SynthesisJevTests(unittest.TestCase):
             ):
                 # Untagged facts are always a tagging target, even when the
                 # request is already cached.
-                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [("p1", path.resolve())])
                 tagged = json.loads(path.read_text(encoding="utf-8"))
                 tagged["facts"]["labels"] = {"is_professional": 0.9}
                 path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
                 # Saved labels + a cached request: nothing to redo.
-                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [])
             with patch.object(
                 runner.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}
             ):
                 # Saved labels but a changed request (cache miss) relabels anyway.
-                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [("p1", path.resolve())])
 
     def test_tagging_reads_the_projected_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -94,7 +94,7 @@ class SynthesisJevTests(unittest.TestCase):
             ):
                 # The path comes from the projected artifact, not from the parent id.
                 self.assertEqual(
-                    runner._tagging_paths(database, node.config, bundles, {"name": "Mailbox Owner"}),
+                    runner._tagging_paths(database, node.config, bundles, {"name": "Mailbox Owner"}, headlines={}),
                     [("p1", path.resolve())],
                 )
 

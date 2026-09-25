@@ -423,9 +423,8 @@ def _tagging_paths(
     bundles: dict[str, CollectionBundle],
     owner: dict[str, Any],
     *,
-    headlines: dict[str, str] | None = None,
+    headlines: dict[str, str],
 ) -> list[tuple[str, Path]]:
-    headlines = headlines or {}
     paths: list[tuple[str, Path]] = []
     projected = {
         row.artifact_key: row
