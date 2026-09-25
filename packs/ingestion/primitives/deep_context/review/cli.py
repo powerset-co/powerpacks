@@ -13,7 +13,6 @@ from http.server import ThreadingHTTPServer
 
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
-    REVIEW_MANIFEST,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_parents
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
@@ -64,7 +63,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     stage = args.stage or "directory"
     url = _url(args.host, args.port, stage)
     if live.get("primitive") == "reconcile_review_web":
-        _announce("reused", url, manifest=str(REVIEW_MANIFEST), stage=stage)
+        _announce("reused", url, stage=stage)
         if args.open:
             webbrowser.open(url)
         return
@@ -80,7 +79,6 @@ def cmd_serve(args: argparse.Namespace) -> None:
     _announce(
         "serving",
         url,
-        manifest=str(REVIEW_MANIFEST),
         parents=len(linkedin_parents(db)),
         progress=asdict(state.progress),
     )

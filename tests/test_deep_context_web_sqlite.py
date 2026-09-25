@@ -353,7 +353,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             {
                 "primitive",
                 "ok",
-                "manifest",
                 "stage",
                 "next_action",
                 "state_token",

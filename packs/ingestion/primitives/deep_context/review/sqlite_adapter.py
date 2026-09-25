@@ -6,7 +6,6 @@ import base64
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.shared.common import REVIEW_MANIFEST
 from packs.ingestion.primitives.deep_context.db.identity_views import resolve_identity_key
 from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceSnapshotRow,
@@ -278,7 +277,6 @@ class SqliteReviewAdapter:
         return {
             "primitive": "reconcile_review_web",
             "ok": True,
-            "manifest": str(REVIEW_MANIFEST),
             "stage": STAGE_BY_ACTION[workflow.next_action],
             "next_action": workflow.next_action,
             "state_token": workflow.state_token,

@@ -72,9 +72,6 @@ ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
 # it; migration imports it once for installs that predate the SQLite verdict rows.
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"
 REVIEW_DIR = ROOT / "review"  # staged human review UI state + cached avatars
-REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"  # display-only review receipt
-# review.cli/sqlite_adapter write and echo this manifest for the FE; the actual
-# review decisions live in CANONICAL_DB, not here — losing this file loses no state.
 
 DEFAULT_PEOPLE_CSV = DEFAULT_BASE_DIR / "merged" / "people.csv"
 # Written by imports.merge_people (the network-import fan-in stage, outside deep_context).
