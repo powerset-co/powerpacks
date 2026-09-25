@@ -36,4 +36,4 @@ Both inherit the template `not_ready` / `failed`.
 Synthesis is fingerprint-keyed (prompt + system prompt), so a rename or
 re-cluster never re-bills unchanged evidence; a person whose every batch errors
 is not persisted, so it retries next run. `deep_compose` raises without an owner
-profile ("run build-owner first"); only parent-owned facts are dossier sources.
+profile ("run bin/deep-context owner first"); only parent-owned facts are dossier sources.

@@ -5,6 +5,15 @@ this narrow probe (msgvault/Gmail, chat.db/iMessage, wacli/WhatsApp, people.csv,
 OPENAI_API_KEY, owner.json, the canonical SQLite db) on every invocation instead
 of the full `bin/doctor`, which is broader and reserved for concrete setup
 failures, not routine readiness checks.
+
+`next_command` is the first unmet step, first rule wins: migrate-sqlite
+(no store, or legacy artifacts to import) → ensure-parents (store holds no
+people) → owner (no owner profile; synthesis requires one) → none.
+
+Changelog:
+- 2026-09-25: next_command routes an empty store to ensure-parents and a
+  missing owner profile to the owner command; owner.json is reported
+  `absent`, not `absent_optional`.
 """
 
 from __future__ import annotations
@@ -50,6 +59,8 @@ from packs.ingestion.primitives.deep_context.shared.readiness_models import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 
 MIGRATE_COMMAND = "bin/deep-context migrate-sqlite"
+ENSURE_PARENTS_COMMAND = "bin/deep-context ensure-parents"
+OWNER_COMMAND = "bin/deep-context owner --linkedin-url <url> --email <email>"
 
 # Paired positionally with the `check_statuses` tuple built in run() — same
 # order (imessage, msgvault, openai key, owner.json), not matched by name.
@@ -61,8 +72,18 @@ ADVICE_RULES: tuple[tuple[str, str], ...] = (
     ),
     ("missing", "No msgvault.db — run $import-email/$msgvault to sync Gmail, or proceed with messages only."),
     ("missing", "OPENAI_API_KEY missing from environment/.env — synthesis cannot run."),
-    ("absent", "No owner.json — add one to enable shared-context (school/employer overlap) inference."),
+    ("absent", f"No owner profile — synthesis requires one: run {OWNER_COMMAND}."),
 )
+
+
+def _next_command(*, migrate: bool, has_people: bool, has_owner: bool) -> str | None:
+    if migrate:
+        return MIGRATE_COMMAND
+    if not has_people:
+        return ENSURE_PARENTS_COMMAND
+    if not has_owner:
+        return OWNER_COMMAND
+    return None
 
 
 def _import_counts(
@@ -208,7 +229,7 @@ class CheckReadiness:
                 imported_counts.message_people,
             ),
             owner_json=PathCheck(
-                "present" if projected.has_owner else "absent_optional",
+                "present" if projected.has_owner else "absent",
                 projected.owner_path,
             ),
             openai_api_key=StatusCheck("present" if has_key else "missing"),
@@ -264,7 +285,7 @@ class CheckReadiness:
             checks=checks,
             advice=tuple(advice),
             updated_at=now_iso(),
-            next_command=MIGRATE_COMMAND if migrate else None,
+            next_command=_next_command(migrate=migrate, has_people=has_people, has_owner=projected.has_owner),
         )
 
 

@@ -138,7 +138,7 @@ class OwnerProjectionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 StoreError,
-                "deep context requires an owner profile; run build-owner first",
+                "deep context requires an owner profile; run bin/deep-context owner first",
             ):
                 build_system_prompt(db)
 

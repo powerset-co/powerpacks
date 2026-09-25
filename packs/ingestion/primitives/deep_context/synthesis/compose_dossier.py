@@ -110,7 +110,7 @@ class ComposeDossier(Node):
         owner = owner_profile(self.db)
         if owner is None:
             raise StoreError(
-                "dossier composition requires an owner profile; run build-owner first"
+                "dossier composition requires an owner profile; run bin/deep-context owner first"
             )
         projection_rows: list[ArtifactReplacement] = []
         dossier_artifacts: list[ArtifactRow] = []

@@ -187,6 +187,10 @@ Disclose that a profile-cache miss calls RapidAPI and get approval before:
 bin/deep-context owner --linkedin-url <url> --email <email>
 ```
 
+owner.json is required: `dry` and `compose` fail without it. When `check`
+reports `checks.owner_json.status` `absent`, its `next_command` is that owner
+command.
+
 ### 2. Message scope
 
 Group bodies are always included — do not ask, and do not mention group
@@ -279,8 +283,8 @@ constructor-level testing seam.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
 with message context before any paid identity lookup. A candidate merged into an
-existing person does not reappear in the People queue or paid lookup; reconcile
-folds its email/phone/channel metadata onto the kept LinkedIn instead.
+existing person does not reappear in the People queue or paid lookup; the
+merge folds its email/phone/channel metadata onto the kept LinkedIn.
 
 ### 5. People decision gate
 

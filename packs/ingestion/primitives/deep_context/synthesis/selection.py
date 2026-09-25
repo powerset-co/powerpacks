@@ -161,7 +161,7 @@ def build_system_prompt(db: Db) -> str:
     """Render the required owner context without scanning source bundles."""
     owner: OwnerProfile | None = owner_profile(db)
     if owner is None:
-        raise StoreError("deep context requires an owner profile; run build-owner first")
+        raise StoreError("deep context requires an owner profile; run bin/deep-context owner first")
     return prompting.SYSTEM_PROMPT + (
         prompting.owner_identity_block(owner) + prompting.OWNER_PROMPT_SUFFIX + owner_background_block(owner)
     )
