@@ -167,23 +167,34 @@ def seed_identity(
     artifact_root: Path | None = None,
     dossier_body: str = "",
     avatar_bytes: bytes = b"",
+    labels: dict | None = None,
 ) -> None:
-    """Seed one facts-backed parent family through the public typed store door."""
+    """Seed one facts-backed parent family through the public typed store door.
+
+    `labels` is the JEV labels block synthesize saves with the facts. Passing it
+    seeds the facts row the way the share stage reads them — PARENT-owned
+    (`subject_key`/`artifact_key` on the parent id, `person_id` NULL), carrying
+    the labels. Without it the facts are the child's own row, as before.
+    """
     if candidate_people and not include_link:
         raise ValueError("candidate_people requires an identity link")
     slug = row_key if display_slug is None else display_slug
-    artifact_key = f"facts:{person_id}"
-    fact_payload = {
+    facts_owner = parent_id if labels is not None else person_id
+    facts_person_id = None if labels is not None else person_id
+    artifact_key = f"facts:{facts_owner}"
+    fact_payload: dict = {
         "canonical_name": name,
         "network_worth": {"decision": machine_worth, "reason": "fixture"},
     }
+    if labels is not None:
+        fact_payload["labels"] = dict(labels)
     if artifact_root:
-        fact_path = artifact_root / f"{person_id}.jsonl"
+        fact_path = artifact_root / f"{facts_owner}.jsonl"
         fact_path.write_text(json.dumps({"facts": fact_payload}) + "\n", encoding="utf-8")
         fact_fingerprint = hashlib.sha256(fact_path.read_bytes()).hexdigest()
     else:
-        fact_path = Path(f"/facts/{person_id}.jsonl")
-        fact_fingerprint = f"worth-{person_id}"
+        fact_path = Path(f"/facts/{facts_owner}.jsonl")
+        fact_fingerprint = f"worth-{facts_owner}"
     link_values: dict[str, object] = {
         "linkedin_url": linkedin_url,
         "display_name": name,
@@ -205,14 +216,14 @@ def seed_identity(
             str(fact_path),
             fact_fingerprint,
             ProjectionStatus.PROJECTED.value,
-            person_id=person_id,
+            person_id=facts_person_id,
             payload_json=json.dumps({"facts": fact_payload}),
         ),
         FactRow(
-            person_id,
+            facts_owner,
             parent_id,
             artifact_key,
-            person_id=person_id,
+            person_id=facts_person_id,
             machine_worth=machine_worth,
             machine_worth_reason="fixture",
             confidence=0.6,

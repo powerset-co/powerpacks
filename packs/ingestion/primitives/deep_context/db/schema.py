@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import fields
 
 from packs.ingestion.primitives.deep_context.db import models
+from packs.ingestion.schemas.share_schema import SHARE_VALUES
 
 # Pre-release installs re-migrate instead of carrying an upgrade ladder.
 SCHEMA_VERSION = 1
@@ -190,6 +191,30 @@ CREATE TABLE merge_verdicts (
   CHECK (person_a < person_b)
 );
 
+CREATE TABLE person_tags (
+  person_id TEXT PRIMARY KEY,
+  tags TEXT NOT NULL DEFAULT '', note TEXT, updated_at TEXT
+);
+
+CREATE TABLE person_labels (
+  person_id TEXT PRIMARY KEY,
+  public_identifier TEXT, full_name TEXT,
+  worth TEXT CHECK (worth IS NULL OR worth IN {_WORTH}),
+  flag TEXT,
+  labels_json TEXT CHECK (labels_json IS NULL OR json_valid(labels_json)),
+  updated_at TEXT,
+  FOREIGN KEY (person_id) REFERENCES people(person_id) ON DELETE CASCADE
+);
+
+CREATE TABLE share (
+  person_id TEXT PRIMARY KEY,
+  public_identifier TEXT,
+  share TEXT NOT NULL CHECK (share IN {_values(*sorted(SHARE_VALUES))}),
+  reason TEXT NOT NULL DEFAULT '', labels TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '', updated_at TEXT,
+  FOREIGN KEY (person_id) REFERENCES people(person_id) ON DELETE CASCADE
+);
+
 """
 
 
@@ -207,6 +232,9 @@ TABLES = {
     "research": (models.ResearchRow, ("handle",)),
     "guidance": (models.GuidanceRow, ("handle",)),
     "merge_verdicts": (models.MergeVerdictRow, ("person_a", "person_b")),
+    "person_tags": (models.PersonTagRow, ("person_id",)),
+    "person_labels": (models.PersonLabelRow, ("person_id",)),
+    "share": (models.ShareDecisionRow, ("person_id",)),
 }
 TABLE_BY_TYPE = {row_type: table for table, (row_type, _) in TABLES.items()}
 

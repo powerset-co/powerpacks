@@ -32,13 +32,16 @@ from packs.ingestion.primitives.deep_context.db.models import (
     OwnerContextRow,
     ParentRow,
     PersonIdentifiersProjection,
+    PersonLabelRow,
     PersonRow,
     PersonSourcesProjection,
+    PersonTagRow,
     ResearchRow,
     ResetReviewCounts,
     ReviewAction,
     ReviewSource,
     RowKind,
+    ShareDecisionRow,
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.schema import (
@@ -569,6 +572,27 @@ class Db:
                 )
         return [candidate_key, *siblings]
 
+    def replace_share_rows(
+        self,
+        labels: tuple[PersonLabelRow, ...],
+        decisions: tuple[ShareDecisionRow, ...],
+    ) -> None:
+        """Rewrite the label export and the share list for the whole network.
+
+        One pass, both tables: the share node always covers every live person,
+        so a surviving row from an earlier run is stale, not informative.
+        """
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM person_labels")
+            conn.execute("DELETE FROM share")
+            conn.executemany(UPSERTS["person_labels"], [asdict(row) for row in labels])
+            conn.executemany(UPSERTS["share"], [asdict(row) for row in decisions])
+
+    def upsert_person_tag(self, row: PersonTagRow) -> None:
+        """Write one human tag row. Machines never call this."""
+        with self.transaction() as conn:
+            conn.execute(UPSERTS["person_tags"], asdict(row))
+
     def reset_review(self, *, apply: bool = True) -> ResetReviewCounts:
         """Clear human review state atomically while preserving every machine artifact."""
         with self.transaction() as conn:
@@ -650,4 +674,6 @@ class DbMaintenance:
                     f"DELETE FROM artifacts WHERE artifact_key IN ({placeholders})", keys,
                 )
             guidance = conn.execute("DELETE FROM guidance").rowcount
-        return DerivedResetCounts(len(keys), facts, research, guidance)
+            share_rows = conn.execute("DELETE FROM person_labels").rowcount
+            share_rows += conn.execute("DELETE FROM share").rowcount
+        return DerivedResetCounts(len(keys), facts, research, guidance, share_rows)

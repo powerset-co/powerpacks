@@ -444,6 +444,8 @@ class DerivedResetCounts:
     facts: int
     research: int
     guidance: int
+    # The share export is derived from the facts: scrubbing the facts clears it.
+    share_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -569,6 +571,46 @@ class CanonicalSnapshot:
     facts: tuple[FactRow, ...]
     dossiers: tuple[DossierSnapshotRow, ...]
     merge_verdicts: tuple[MergeVerdictRow, ...]
+
+
+@dataclass(frozen=True)
+class PersonTagRow:
+    """The human's word on a person.
+
+    Carries no foreign key: a tag may name an id that has since merged away or
+    that never became a live roster row, and the tag outlives both.
+    """
+
+    person_id: str
+    tags: str = ""
+    note: str | None = None
+    updated_at: IsoTimestamp | None = None
+
+
+@dataclass(frozen=True)
+class PersonLabelRow:
+    """One person's label export: deterministic labels plus the JEV answers."""
+
+    person_id: str
+    public_identifier: str | None = None
+    full_name: str | None = None
+    worth: str | None = None
+    flag: str | None = None
+    labels_json: str | None = None
+    updated_at: IsoTimestamp | None = None
+
+
+@dataclass(frozen=True)
+class ShareDecisionRow:
+    """One share decision: who leaves the laptop for Powerset."""
+
+    person_id: str
+    public_identifier: str | None = None
+    share: str = ""
+    reason: str = ""
+    labels: str = ""
+    source: str = ""
+    updated_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)

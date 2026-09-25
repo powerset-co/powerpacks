@@ -1,25 +1,21 @@
-"""Share-stage layout and the typed values every other module in the stage takes.
+"""The typed values every module in the share stage takes.
 
-The stage writes one fixed directory and overwrites in place:
+The stage writes no file state: labels, the share list, and human tags are
+tables in the canonical store (`.powerpacks/deep-context/deep-context.sqlite`).
+Only the run manifest stays a file, in `.powerpacks/share/manifest.json`.
 
-  .powerpacks/share/labels.csv    machine labels, one row per people.csv row
-  .powerpacks/share/tags.csv      human tags, one row per tagged person
-  .powerpacks/share/share.csv     the derived share list
-  .powerpacks/share/manifest.json the `share` node's manifest
-
-Flow: `evidence.py` parses people.csv + deep-context artifacts into
+Flow: `evidence.py` parses people.csv + the canonical store into
 `PersonEvidence` -> `labels.py` renders `DeterministicLabels` + `JevLabels` ->
-`share_list.py` (the node) writes labels.csv and share.csv.
+`share_list.py` (the node) writes `person_labels` and `share`.
 
 Changelog:
-  2026-09-24: labels.csv carries one `flag` column; LabelRow carries worth.
-  2026-09-24: the share node writes both files; no JEV cache here (synthesize's).
-  2026-09-24: moved the share.csv contract and request state to their owners.
-  2026-09-24: created.
+  2026-09-24: labels/share/tags left CSV for SQLite tables.
+  2026-09-24: labels carried one `flag` column; LabelRow carries worth.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -27,10 +23,8 @@ from typing import Any
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
 
 SHARE_DIR = Path(".powerpacks/share")
-LABELS_FILENAME = "labels.csv"
-TAGS_FILENAME = "tags.csv"
-SHARE_FILENAME = "share.csv"
 MANIFEST_FILENAME = "manifest.json"
+MANIFEST_PATH = SHARE_DIR / MANIFEST_FILENAME
 
 # Raw-bundle message channels that carry group traffic rather than DMs.
 GROUP_CHANNELS = frozenset({"imessage_group"})
@@ -38,7 +32,7 @@ GROUP_CHANNELS = frozenset({"imessage_group"})
 
 @dataclass(frozen=True)
 class MessageStats:
-    """Body-free counts from `deep-context/raw/<parent_id>.json`."""
+    """Body-free counts from the parent's projected source bundle."""
 
     first_at: str | None
     last_at: str | None
@@ -53,25 +47,17 @@ NO_MESSAGES = MessageStats(first_at=None, last_at=None, from_me=0, from_them=0, 
 
 @dataclass(frozen=True)
 class PersonEvidence:
-    """One people.csv row joined to its deep-context leaves. Absent = None."""
+    """One roster row joined to its canonical store leaves. Absent = None."""
 
     person_id: str
     public_identifier: str | None
     full_name: str
-    headline: str | None
-    current_title: str | None
-    current_company: str | None
-    city: str | None
-    state: str | None
-    country: str | None
     source_channels: tuple[str, ...]
     interaction_counts: dict[str, int]
     last_interaction: str | None
     superseded_person_ids: tuple[str, ...]
     network_worth: str
     dossier: str | None
-    # The dossier date, or facts file date when no dossier exists.
-    evidence_date: str | None
     facts: dict[str, Any] | None
     # `facts.shared_context[].overlap` values, parsed once here.
     shared_overlaps: frozenset[str]
@@ -85,6 +71,7 @@ class PersonEvidence:
     @property
     def is_owner(self) -> bool:
         return bool((self.facts or {}).get("is_owner"))
+
 
 @dataclass(frozen=True)
 class DeterministicLabels:
@@ -115,7 +102,7 @@ class JevLabels:
 
 @dataclass(frozen=True)
 class LabelRow:
-    """One labels.csv row parsed back at the boundary, for the share decision.
+    """One person's label cells, for the share decision.
 
     `probabilities` is empty for a linkedin_only row — that person was never sent
     to Jev, so the noul cells are absent rather than zero.
@@ -131,7 +118,7 @@ class LabelRow:
 
 @dataclass(frozen=True)
 class HumanTags:
-    """One tags.csv row. The human's word on a person; machines never write it."""
+    """One `person_tags` row. The human's word on a person; machines never write it."""
 
     person_id: str
     tags: frozenset[str]
@@ -141,20 +128,13 @@ class HumanTags:
 
 DETERMINISTIC_COLUMNS = tuple(field.name for field in fields(DeterministicLabels))
 
-# The confirm flag that fired for this person, or empty.
-FLAG_COLUMN = "flag"
 
-LABEL_COLUMNS = (
-    "person_id",
-    "public_identifier",
-    "full_name",
-    *DETERMINISTIC_COLUMNS,
-    *CHOICE_LABELS,
-    *tuple(f"{name}_p" for name in CHOICE_LABELS),
-    *SCORE_LABELS,
-    *NOUL_LABELS,
-    FLAG_COLUMN,
-    "updated_at",
-)
-
-TAG_COLUMNS = ("person_id", "tags", "note", "updated_at")
+def label_payload(deterministic: DeterministicLabels, jev: JevLabels | None) -> str:
+    """Serialize one person's label cells flat, the shape the export table holds."""
+    cells: dict[str, Any] = {name: getattr(deterministic, name) for name in DETERMINISTIC_COLUMNS}
+    if jev is not None:
+        cells.update(jev.choices)
+        cells.update({f"{name}_p": round(jev.choice_p[name], 3) for name in CHOICE_LABELS})
+        cells.update({name: round(jev.scores[name], 2) for name in SCORE_LABELS})
+        cells.update({name: round(jev.probabilities[name], 3) for name in NOUL_LABELS})
+    return json.dumps(cells, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

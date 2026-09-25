@@ -8,7 +8,7 @@ Everything downstream reads the SQLite projection.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import (
@@ -37,13 +37,22 @@ from packs.ingestion.primitives.deep_context.db.queries import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import load_assignment
-from packs.ingestion.schemas.people_schema import parse_jsonish
+from packs.ingestion.schemas.people_schema import (
+    parse_interaction_counts,
+    parse_jsonish,
+    row_public_identifier,
+)
 from packs.shared.csv_io import CsvIO
 
 
 @dataclass(frozen=True)
 class ImportedPerson:
-    """The small part of one fan-in row Deep Context is allowed to consume."""
+    """The small part of one fan-in row Deep Context is allowed to consume.
+
+    The roster metadata that needs no message bodies rides here too: the share
+    stage reads cadence and recency from this one boundary rather than opening
+    people.csv a second time.
+    """
 
     person_id: str
     display_name: str
@@ -51,6 +60,9 @@ class ImportedPerson:
     phones: tuple[str, ...]
     source_channels: tuple[str, ...]
     superseded_person_ids: tuple[str, ...]
+    public_identifier: str = ""
+    interaction_counts: dict[str, int] = field(default_factory=dict)
+    last_interaction: str = ""
 
 
 def _text(value: object) -> str:
@@ -63,6 +75,11 @@ def _superseded(value: object) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(item for raw in values if (item := _text(raw).lower()) and "/" not in item and "\\" not in item)
     )
+
+
+def _public_identifier(raw: dict[str, str]) -> str:
+    """The row's LinkedIn slug, normalized by the same rules every reader uses."""
+    return row_public_identifier(raw).lower()
 
 
 def _channels(value: object) -> tuple[str, ...]:
@@ -84,24 +101,32 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             filter(None, (_text(raw.get("first_name")), _text(raw.get("last_name"))))
         )
         incoming = ImportedPerson(
-            person_id,
-            display_name,
-            tuple(emails_from_row(raw)),
-            tuple(phones_from_row(raw)),
-            _channels(raw.get("source_channels")),
-            _superseded(raw.get("superseded_person_ids")),
+            person_id=person_id,
+            display_name=display_name,
+            emails=tuple(emails_from_row(raw)),
+            phones=tuple(phones_from_row(raw)),
+            source_channels=_channels(raw.get("source_channels")),
+            superseded_person_ids=_superseded(raw.get("superseded_person_ids")),
+            public_identifier=_public_identifier(raw),
+            interaction_counts=parse_interaction_counts(raw.get("interaction_counts")),
+            last_interaction=_text(raw.get("last_interaction")),
         )
         prior: ImportedPerson | None = combined.get(person_id)
         if prior is None:
             combined[person_id] = incoming
             continue
         combined[person_id] = ImportedPerson(
-            person_id,
-            incoming.display_name or prior.display_name,
-            tuple(dict.fromkeys((*prior.emails, *incoming.emails))),
-            tuple(dict.fromkeys((*prior.phones, *incoming.phones))),
-            tuple(dict.fromkeys((*prior.source_channels, *incoming.source_channels))),
-            tuple(dict.fromkeys((*prior.superseded_person_ids, *incoming.superseded_person_ids))),
+            person_id=person_id,
+            display_name=incoming.display_name or prior.display_name,
+            emails=tuple(dict.fromkeys((*prior.emails, *incoming.emails))),
+            phones=tuple(dict.fromkeys((*prior.phones, *incoming.phones))),
+            source_channels=tuple(dict.fromkeys((*prior.source_channels, *incoming.source_channels))),
+            superseded_person_ids=tuple(
+                dict.fromkeys((*prior.superseded_person_ids, *incoming.superseded_person_ids))
+            ),
+            public_identifier=incoming.public_identifier or prior.public_identifier,
+            interaction_counts={**prior.interaction_counts, **incoming.interaction_counts},
+            last_interaction=max(prior.last_interaction, incoming.last_interaction),
         )
     return tuple(combined[key] for key in sorted(combined))
 

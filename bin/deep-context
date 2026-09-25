@@ -177,10 +177,10 @@ usage: bin/deep-context <command> [args]
   apply-retargets           project approved retargets -> retarget-people.csv
   persist-review-identities persist approved real LinkedIn identities -> directory.csv
   realize      fan-in merge of the per-source import people files (free, local)
-  share        write labels.csv + share.csv for every merged person from their
-               worth and the JEV labels synthesize saved (free, local).
+  share        write the person_labels + share tables for every merged person
+               from their worth and the JEV labels synthesize saved (free, local).
                `tag` is gone: the UI records your tags and the confirmations
-               share.csv asks for
+               the share table asks for
   lookup       fetch a person's dossier by name/phone/email
   probe        chat.db readability (Full Disk Access) check
   purge-raw    delete the ephemeral raw bundles
@@ -430,9 +430,9 @@ case "$cmd" in
     # The share stage (free, local): share follows worth; JEV labels were saved
     # by synthesize and only flag worth-yes people for a human to confirm.
     if (( wants_help )); then
-      echo "bin/deep-context share - write labels.csv + share.csv for every merged" >&2
-      echo "person. No flags: the decision is their worth, your tags, and the confirm" >&2
-      echo "flags a UI puts to you." >&2
+      echo "bin/deep-context share - write the person_labels + share tables for every" >&2
+      echo "merged person. No flags: the decision is their worth, your tags, and the" >&2
+      echo "confirm flags a UI puts to you." >&2
       exit 0
     fi
     "${PY[@]}" "packs.ingestion.primitives.share.share"

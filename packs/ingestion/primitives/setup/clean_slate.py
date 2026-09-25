@@ -217,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                 "facts": reset.facts,
                 "research": reset.research,
                 "guidance": reset.guidance,
+                "share_rows": reset.share_rows,
             }
         if moved or sqlite_snapshot:
             manifest = {

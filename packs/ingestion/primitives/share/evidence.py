@@ -1,200 +1,34 @@
-"""people.csv joined to its deep-context leaves — the share stage's one reader.
+"""The share stage's one reader: the roster joined to the canonical store.
 
-Facts and raw bundles use parent or child identity keys. Current parent membership
-and superseded people IDs connect realized rows to those files. Labels come from
-the same highest-worth machine record used to select the facts.
+The roster arrives through `ensure_parents.imported_people` — people.csv's only
+Deep Context reader — and everything the stage knows about a person's context
+comes from SQLite: parents (worth), facts (labels, overlaps), artifacts (dossier
+bodies and body-free message bundles). No CSV state is read or written here.
 
-Flow: `ShareEvidence(...).load()` -> `list[PersonEvidence]`.
+Flow: `ShareEvidence(db).load()` -> `list[PersonEvidence]`.
 
 Changelog:
-  2026-09-24: keyed parentless worth by slug; evidence date = facts file date.
+  2026-09-24: read facts, worth, dossiers, and bundles from SQLite, not files.
   2026-09-24: created (split out of share.py).
 """
 
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from packs.ingestion.primitives.common.jsonio import read_json, read_jsonl
-from packs.ingestion.primitives.deep_context.candidates import effective_network_worth
-from packs.ingestion.primitives.deep_context.common import (
-    DEFAULT_PEOPLE_CSV,
-    DOSSIER_DIR,
-    FACTS_DIR,
-    INDEX_JSON,
-    LINKEDIN_OVERRIDES_CSV,
-    PARENTS_DIR,
-    RAW_DIR,
-    load_index,
-    parse_list,
+from packs.ingestion.primitives.common.jsonio import parse_json_object
+from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    FactRow,
+    MachineWorth,
+    ParentSnapshotRow,
 )
-from packs.ingestion.primitives.deep_context.review_store import (
-    load_override_rows,
-    parent_ids_by_person,
-    parent_worth_key,
-)
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
+from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE_CSV
 from packs.ingestion.primitives.share.models import NO_MESSAGES, MessageStats, PersonEvidence
-from packs.ingestion.primitives.share.csv_cells import cell_text
-from packs.ingestion.schemas.people_schema import parse_interaction_counts, parse_source_channels
-from packs.shared.csv_io import CsvIO
-
-_MACHINE_PRIORITY = {"no": 0, "maybe": 1, "yes": 2}
-
-
-class ShareEvidence:
-    """people.csv joined to its deep-context leaves, parsed once at the boundary.
-
-    Parent membership joins identity-keyed facts to each realized person.
-    """
-
-    def __init__(
-        self,
-        *,
-        people_csv: Path = DEFAULT_PEOPLE_CSV,
-        index_json: Path = INDEX_JSON,
-        facts_dir: Path = FACTS_DIR,
-        raw_dir: Path = RAW_DIR,
-        dossier_dir: Path = DOSSIER_DIR,
-        parents_dir: Path = PARENTS_DIR,
-        overrides_csv: Path = LINKEDIN_OVERRIDES_CSV,
-    ) -> None:
-        self.people_csv = Path(people_csv)
-        self.index_json = Path(index_json)
-        self.facts_dir = Path(facts_dir)
-        self.raw_dir = Path(raw_dir)
-        self.dossier_dir = Path(dossier_dir)
-        self.parents_dir = Path(parents_dir)
-        self.overrides_csv = Path(overrides_csv)
-
-    def load(self, *, limit: int = 0) -> list[PersonEvidence]:
-        index = load_index(self.index_json)
-        slugs = index.get("slugs") or {}
-        slug_by_person = {
-            str(record.get("person_id") or ""): slug for slug, record in slugs.items() if record.get("person_id")
-        }
-        parent_slug_by_child = {
-            child: parent_slug
-            for parent_slug, record in (index.get("parents") or {}).items()
-            for child in record.get("children") or []
-        }
-        parent_ids = parent_ids_by_person(self.index_json)
-        children_by_parent: dict[str, list[str]] = {}
-        for child, parent in parent_ids.items():
-            children_by_parent.setdefault(parent, []).append(child)
-        overrides = load_override_rows(self.overrides_csv)
-
-        people: list[PersonEvidence] = []
-        for row in CsvIO.read_dict_rows(self.people_csv):
-            person_id = str(row.get("id") or "").strip()
-            if not person_id:
-                continue
-            superseded = tuple(parse_list(row.get("superseded_person_ids")))
-            identities = {value.lower() for value in (person_id, *superseded)}
-            parents = {parent_ids[identity] for identity in identities if identity in parent_ids}
-            for parent in sorted(parents):
-                identities.add(parent)
-                identities.update(children_by_parent[parent])
-            parent_id = next(iter(sorted(parents)), "")
-            public_identifier = cell_text(row.get("public_identifier"))
-            public_identifier = public_identifier.lower() if public_identifier else None
-            worth_key = parent_worth_key(parent_id) if parent_id else (public_identifier or person_id)
-            facts_id, facts, evidence_date = self._facts(identities)
-            dossier = next((text for identity in sorted(identities)
-                            if (text := self._dossier(slug_by_person.get(identity, ""), parent_slug_by_child))), None)
-            worth = effective_network_worth(worth_key, overrides, self.facts_dir)
-            if worth["source"] != "user" and facts:
-                worth = facts.get("network_worth") or worth
-            people.append(
-                PersonEvidence(
-                    person_id=person_id,
-                    public_identifier=public_identifier,
-                    full_name=str(row.get("full_name") or "").strip(),
-                    headline=cell_text(row.get("headline")),
-                    current_title=cell_text(row.get("current_title")),
-                    current_company=cell_text(row.get("current_company")),
-                    city=cell_text(row.get("city")),
-                    state=cell_text(row.get("state")),
-                    country=cell_text(row.get("country")),
-                    source_channels=parse_source_channels(row.get("source_channels")),
-                    interaction_counts=parse_interaction_counts(row.get("interaction_counts")),
-                    last_interaction=cell_text(row.get("last_interaction")),
-                    superseded_person_ids=superseded,
-                    network_worth=worth["decision"],
-                    dossier=dossier,
-                    evidence_date=evidence_date,
-                    facts=facts,
-                    shared_overlaps=_overlaps(facts),
-                    messages=self._messages(facts_id or parent_id),
-                )
-            )
-            if limit and len(people) >= limit:
-                break
-        return people
-
-    def _facts(self, identities: set[str]) -> tuple[str, dict[str, Any] | None, str | None]:
-        candidates = []
-        for identity in sorted(identities):
-            path = self.facts_dir / f"{identity}.jsonl"
-            records = read_jsonl(path)
-            if not records:
-                continue
-            record = records[-1]
-            facts = record.get("facts")
-            if not isinstance(facts, dict):
-                continue
-            decision = (facts.get("network_worth") or {}).get("decision", "maybe")
-            evidence_date = str(record.get("updated_at") or date.fromtimestamp(path.stat().st_mtime))[:10]
-            candidates.append((-_MACHINE_PRIORITY.get(decision, 1), identity, facts, evidence_date))
-        if not candidates:
-            return "", None, None
-        _, identity, facts, evidence_date = min(candidates, key=lambda item: item[:2])
-        return identity, facts, evidence_date
-
-    def _dossier(self, slug: str, parent_slug_by_child: dict[str, str]) -> str | None:
-        if not slug:
-            return None
-        parent_slug = parent_slug_by_child.get(slug, "")
-        candidates = ([self.parents_dir / f"{parent_slug}.md"] if parent_slug else []) + [
-            self.dossier_dir / f"{slug}.md"
-        ]
-        for path in candidates:
-            if path.exists():
-                return path.read_text(encoding="utf-8")
-        return None
-
-    def _messages(self, parent_id: str) -> MessageStats:
-        """Body-free message stats. Reads ONLY direction/at/channel and the group
-        names — `subject` and `text` are never touched, here or anywhere after."""
-        if not parent_id:
-            return NO_MESSAGES
-        bundle = read_json(self.raw_dir / f"{parent_id}.json", None)
-        if bundle is None:
-            return NO_MESSAGES
-        timestamps: list[str] = []
-        channels: list[str] = []
-        from_me = from_them = 0
-        for message in bundle.get("messages") or []:
-            at = str(message.get("at") or "")
-            if at:
-                timestamps.append(at)
-            channel = str(message.get("channel") or "")
-            if channel and channel not in channels:
-                channels.append(channel)
-            direction = str(message.get("direction") or "")
-            if direction == "from_me":
-                from_me += 1
-            elif direction == "from_them":
-                from_them += 1
-        return MessageStats(
-            first_at=min(timestamps) if timestamps else None,
-            last_at=max(timestamps) if timestamps else None,
-            from_me=from_me,
-            from_them=from_them,
-            group_count=len(bundle.get("groups") or []),
-            channels=tuple(channels),
-        )
 
 
 def _overlaps(facts: dict[str, Any] | None) -> frozenset[str]:
@@ -204,3 +38,102 @@ def _overlaps(facts: dict[str, Any] | None) -> frozenset[str]:
         for entry in (facts or {}).get("shared_context") or []
         if isinstance(entry, dict)
     )
+
+
+def _messages(bundle: dict[str, Any] | None) -> MessageStats:
+    """Body-free message stats. Reads ONLY direction/at/channel and the group
+    count — `subject` and `text` are never touched, here or anywhere after."""
+    if not bundle:
+        return NO_MESSAGES
+    timestamps: list[str] = []
+    channels: list[str] = []
+    from_me = from_them = 0
+    for message in bundle.get("messages") or []:
+        at = str(message.get("at") or "")
+        if at:
+            timestamps.append(at)
+        channel = str(message.get("channel") or "")
+        if channel and channel not in channels:
+            channels.append(channel)
+        direction = str(message.get("direction") or "")
+        if direction == "from_me":
+            from_me += 1
+        elif direction == "from_them":
+            from_them += 1
+    return MessageStats(
+        first_at=min(timestamps) if timestamps else None,
+        last_at=max(timestamps) if timestamps else None,
+        from_me=from_me,
+        from_them=from_them,
+        group_count=len(bundle.get("groups") or []),
+        channels=tuple(channels),
+    )
+
+
+class ShareEvidence:
+    """The roster joined to the canonical store, parsed once at the boundary."""
+
+    def __init__(self, db: Db, *, people_csv: Path = DEFAULT_PEOPLE_CSV) -> None:
+        self.db = db
+        self.people_csv = Path(people_csv)
+
+    def load(self, *, limit: int = 0) -> list[PersonEvidence]:
+        parent_of_person = {row.person_id: row.parent_id for row in queries.people(self.db)}
+        parents = {row.parent_id: row for row in queries.parents(self.db)}
+        parent_facts = {row.parent_id: row for row in queries.facts(self.db, parent_owned=True)}
+        dossiers = self._artifacts(ArtifactKind.DOSSIER.value, lambda payload: str(payload.get("body") or ""))
+        bundles = self._artifacts(ArtifactKind.SOURCE_BUNDLE.value, lambda payload: payload)
+        children: dict[str, list[str]] = {}
+        for person_id, parent_id in parent_of_person.items():
+            children.setdefault(parent_id, []).append(person_id)
+
+        people: list[PersonEvidence] = []
+        for imported in read_imported_people(self.people_csv):
+            identities = {imported.person_id, *imported.superseded_person_ids}
+            parent_ids = {parent_of_person[key] for key in identities if key in parent_of_person}
+            for parent_id in parent_ids:
+                identities.update(children.get(parent_id, ()))
+            parent_id = next(iter(sorted(parent_ids)), "")
+            facts = _facts_payload(parent_facts.get(parent_id))
+            people.append(
+                PersonEvidence(
+                    person_id=imported.person_id,
+                    public_identifier=imported.public_identifier or None,
+                    full_name=imported.display_name,
+                    source_channels=imported.source_channels,
+                    interaction_counts=imported.interaction_counts,
+                    last_interaction=imported.last_interaction or None,
+                    superseded_person_ids=imported.superseded_person_ids,
+                    network_worth=self._worth(parents.get(parent_id), facts),
+                    dossier=dossiers.get(parent_id) or None,
+                    facts=facts,
+                    shared_overlaps=_overlaps(facts),
+                    messages=_messages(bundles.get(parent_id)),
+                )
+            )
+            if limit and len(people) >= limit:
+                break
+        return people
+
+    def _artifacts(self, kind: str, extract: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
+        """Map parent_id -> extracted payload, preferring the parent's own artifact."""
+        index: dict[str, Any] = {}
+        rows = sorted(queries.artifacts(self.db, kind=kind), key=lambda row: row.person_id is not None)
+        for row in rows:
+            value = extract(parse_json_object(row.payload_json))
+            if value in (None, "", [], {}):
+                continue
+            index[row.parent_id] = value
+        return index
+
+    def _worth(self, parent: ParentSnapshotRow | None, facts: dict[str, Any] | None) -> str:
+        """Effective worth: the human's word, then the model's, then the fact's."""
+        if parent is not None and parent.human_worth:
+            return parent.human_worth
+        if parent is not None and parent.machine_worth:
+            return parent.machine_worth
+        return str((facts or {}).get("network_worth", {}).get("decision") or MachineWorth.MAYBE.value)
+
+
+def _facts_payload(row: FactRow | None) -> dict[str, Any] | None:
+    return parse_json_object(row.facts_json) if row is not None else None

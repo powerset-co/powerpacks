@@ -3,16 +3,18 @@
 Created: 2026-09-24
 
 Change log:
-- 2026-09-24: `share.csv.share` is three-way; only `yes` uploads and only a
+- 2026-09-24: read the share list from the store's `share` table, not share.csv.
+- 2026-09-24: `share.share` is three-way; only `yes` uploads and only a
   human's `private` becomes a cloud tag.
 - 2026-09-24: first version.
 
 Makes the Powerset cloud state for ONE operator equal the local share list.
-Reconcile, not append: a person dropped from `share.csv` loses this operator's
+Reconcile, not append: a person dropped from the share list loses this operator's
 source rows and is patched out of `allowed_operator_ids`. Documents are never
 deleted, and no cloud-enriched value is ever overwritten with a local one.
 
-`share.csv.share` is `yes | no | confirm`. Only `yes` is shared: a `confirm` row
+`share.share` is `yes | no | confirm` in
+`.powerpacks/deep-context/deep-context.sqlite`. Only `yes` is shared: a `confirm` row
 is a question waiting for a human, so it uploads nothing and tags nothing, and
 un-shares like any other non-`yes` row.
 
@@ -20,7 +22,7 @@ un-shares like any other non-`yes` row.
 
 ```mermaid
 flowchart TD
-  share[".powerpacks/share/share.csv"] --> plan
+  share[("store: share table")] --> plan
   people["merged/people.csv"] --> plan
   duck["search-index/local-search.duckdb"] --> plan
   pg[("Postgres: persons, operator_person_sources, contact_tags")] --> plan
@@ -36,7 +38,7 @@ flowchart TD
 
 | file | role | reads | writes |
 | --- | --- | --- | --- |
-| `upload_powerset.py` | CLI + `UploadPowerset` orchestrator; owns CSV reads and the stage manifest | share.csv, people.csv, Postgres, TurboPuffer | `.powerpacks/upload-powerset/manifest.json`, Postgres + TurboPuffer on `--apply` |
+| `upload_powerset.py` | CLI + `UploadPowerset` orchestrator; owns the people.csv read, the share-table read, and the stage manifest | share table, people.csv, Postgres, TurboPuffer | `.powerpacks/upload-powerset/manifest.json`, Postgres + TurboPuffer on `--apply` |
 | `local_index.py` | local DuckDB readers for profiles and namespace documents | local-search.duckdb | — |
 | `models.py` | frozen value types + the channel/identifier table | — | — |
 | `plan.py` | pure reconcile: local + cloud -> `UploadPlan` | — | — |
@@ -90,7 +92,7 @@ uv run --env-file .env --project . python \
   packs/indexing/primitives/upload_powerset/upload_powerset.py --dry-run \
   --db .powerpacks/search-index/local-search.duckdb \
   --people-csv .powerpacks/network-import/merged/people.csv \
-  --share-csv .powerpacks/share/share.csv
+  --share-db .powerpacks/deep-context/deep-context.sqlite
 ```
 
 `ALEPH_ENV=staging` moves every namespace to its `_dev` twin; Postgres stays the

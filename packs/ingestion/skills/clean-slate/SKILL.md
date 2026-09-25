@@ -81,8 +81,9 @@ Scrubbed (all derived; regenerates free on the re-walk): `merged/`,
 `directory.csv`, `overrides/` (file mirrors; canonical human decisions remain
 in SQLite),
 `import/gmail` + `import/messages*`, `discover/`, `search-index/`, the
-deep-context index/parents/dossiers/merge-candidates/raw/review state, and
-reconcile summaries.
+deep-context index/parents/dossiers/merge-candidates/raw/review state, the
+derived share export (`person_labels` + `share`; the human's `person_tags` stay),
+and reconcile summaries.
 
 Never run `--apply` without showing the dry run and getting an explicit yes
 in this conversation. Never delete anything to "clean up further" — moving to

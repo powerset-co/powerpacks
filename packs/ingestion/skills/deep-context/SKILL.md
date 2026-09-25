@@ -500,11 +500,11 @@ JEV the label questions and saved the answers with each person's facts; `share`
 is free and local.
 
 ```bash
-bin/deep-context share   # labels.csv + share.csv, every merged person
+bin/deep-context share   # person_labels + share tables, every merged person
 ```
 
-Share follows worth: `share.csv` says yes to the worth-yes people, no to the
-owner, to a human `private`, and to everyone worth said no or maybe to. The JEV
+Share follows worth: the `share` table says yes to the worth-yes people, no to
+the owner, to a human `private`, and to everyone worth said no or maybe to. The JEV
 labels decide nothing — they raise at most one flag (family, partner, minor,
 sensitive context, clinician/lawyer/banker, automated sender, stranger) on a
 worth-yes person, which makes that row `confirm`. Confirm rows are for the UI to

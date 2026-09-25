@@ -490,10 +490,8 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("gmail_stage_merge", ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
-                # labels.csv is the human's scan surface; share.csv is read by the
-                # indexing pack's upload_powerset, which is not a declared node.
-                ("share", ".powerpacks/share/labels.csv"),
-                ("share", ".powerpacks/share/share.csv"),
+                # share declares no file outputs: its products are the
+                # person_labels and share tables, read by upload_powerset.
             ],
         )
 

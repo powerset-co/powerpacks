@@ -4,7 +4,7 @@ the confirm-flag table and the share decision.
 Flow: `deterministic_labels(person)` -> cadence/direction/worth from metadata;
 `labels_from_answers(answers)` -> one value per Jev question; `confirm_flag(jev)`
 -> the first flag rule that fires; `share_decision(row, tags)` -> the
-yes/no/confirm + reason that `share.csv` carries.
+yes/no/confirm and reason the `share` table carries.
 
 Share follows worth. The Jev labels decide nothing: they only flag a worth-yes
 person for a human to confirm.
@@ -13,7 +13,7 @@ Every threshold is a module constant here; nothing downstream re-derives one.
 
 Changelog:
   2026-09-24: share follows worth; the private rules became confirm flags.
-  2026-09-24: used the shared share.csv reasons and Boolean row contract.
+  2026-09-24: used the shared share reasons and the decision row.
   2026-09-24: created.
 """
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Callable
 
-from packs.ingestion.primitives.deep_context.candidates import NETWORK_WORTH_NO, NETWORK_WORTH_YES
+from packs.ingestion.primitives.deep_context.db.models import MachineWorth, ShareDecisionRow
 from packs.ingestion.primitives.share.models import (
     GROUP_CHANNELS,
     DeterministicLabels,
@@ -49,7 +49,6 @@ from packs.ingestion.schemas.share_schema import (
     WORTH_MAYBE,
     WORTH_NO,
     WORTH_YES,
-    ShareRow,
 )
 
 # Cadence bands, first rule wins: staleness before volume.
@@ -62,7 +61,7 @@ REGULAR_MESSAGES = 30
 THEY_INITIATE_BELOW = 0.35
 I_INITIATE_ABOVE = 0.65
 
-# A noul label is "active" (listed in share.csv) at this probability.
+# A noul label is "active" (listed on the share row) at this probability.
 ACTIVE_P = 0.6
 # A sensitive noul label raises a confirm flag at this probability — a lower bar,
 # because a needless confirmation costs one click and a false share cannot be
@@ -157,7 +156,7 @@ def labels_from_saved(labels: dict) -> JevLabels:
     )
 
 
-# First rule wins; the rule NAME is the flag written to labels.csv.
+# First rule wins; the rule NAME is the label row's flag.
 _CONFIRM_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
     (FAMILY, lambda j: j.choices["relationship_kind"] == "family" or j.probabilities["is_family"] >= CONFIRM_P),
     (ROMANTIC_PARTNER, lambda j: j.choices["relationship_kind"] == "romantic_partner"),
@@ -185,12 +184,12 @@ def confirm_flag(jev: JevLabels | None) -> str | None:
 
 
 def active_labels(row: LabelRow) -> tuple[str, ...]:
-    """The labels share.csv carries: every noul at or above ACTIVE_P, then the flag."""
+    """The labels the share row carries: every noul at or above ACTIVE_P, then the flag."""
     active = tuple(name for name in NOUL_LABELS if row.probabilities.get(name, 0.0) >= ACTIVE_P)
     return active + ((row.flag,) if row.flag else ())
 
 
-def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) -> ShareRow:
+def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) -> ShareDecisionRow:
     """First rule wins; the rule name is the row's `reason`.
 
     Share follows worth — the same effective worth the human reviewed, human over
@@ -205,20 +204,20 @@ def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) ->
         share, reason = SHARE_NO, HUMAN_PRIVATE
     elif SHARE_TAG in held:
         share, reason = SHARE_YES, HUMAN_SHARE
-    elif row.worth == NETWORK_WORTH_NO:
+    elif row.worth == MachineWorth.NO.value:
         share, reason = SHARE_NO, WORTH_NO
-    elif row.worth != NETWORK_WORTH_YES:
+    elif row.worth != MachineWorth.YES.value:
         share, reason = SHARE_NO, WORTH_MAYBE
     elif row.flag:
         share, reason = SHARE_CONFIRM, row.flag
     else:
         share, reason = SHARE_YES, WORTH_YES
-    return ShareRow(
+    return ShareDecisionRow(
         person_id=row.person_id,
         public_identifier=row.public_identifier,
         share=share,
         reason=reason,
-        labels=active_labels(row),
+        labels="|".join(active_labels(row)),
         source="human" if reason.startswith("human_") else "machine",
         updated_at=updated_at,
     )
