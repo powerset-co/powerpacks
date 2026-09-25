@@ -1099,8 +1099,11 @@ def run_pipeline_local(args) -> dict[str, Any]:
     }
 
 def _validate_capability_input(args) -> None:
-    if getattr(args, "capability_judge", "terra") == "jev" and not getattr(args, "jd_file", None):
+    """A JD run judges with Jev unless told otherwise; a run without a JD has no capability judge."""
+    if getattr(args, "capability_judge", None) == "jev" and not getattr(args, "jd_file", None):
         raise Failed("--capability-judge jev requires --jd-file")
+    if getattr(args, "jd_file", None) and getattr(args, "capability_judge", None) is None:
+        args.capability_judge = capability_contract.DEFAULT_JUDGE
 
 
 def cmd_run(args):
@@ -1250,7 +1253,7 @@ def add_backend(p):
 def add_run(p):
     add_backend(p)
     p.add_argument("--jd-file", help="JD: replace trait reranking with capability scoring")
-    p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+    p.add_argument("--capability-judge", choices=("terra", "jev"))
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
@@ -1296,7 +1299,7 @@ def build_parser() -> argparse.ArgumentParser:
     p=sub.add_parser("prepare")
     add_backend(p)
     p.add_argument("--jd-file", help="JD for capability scoring")
-    p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+    p.add_argument("--capability-judge", choices=("terra", "jev"))
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")

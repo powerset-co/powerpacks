@@ -35,74 +35,43 @@ def _noul(value: float) -> dict:
 
 
 def _answers() -> dict:
-    answers = {
-        "function_match": _score({"0": 0.1, "1": 0.2, "2": 0.3, "3": 0.4}),
-        "direct_execution": _noul(0.6),
-        "coverage": _score({"0": 0.1, "1": 0.2, "2": 0.3, "3": 0.3, "4": 0.1}),
-        "specialty": _choice({"direct": 0.4, "transferable": 0.3, "missing": 0.1, "unknown": 0.1, "not_required": 0.1}),
+    return {
         "transfer": _score({"0": 0.1, "1": 0.2, "2": 0.3, "3": 0.4}),
-        "evidence_basis": _choice(
-            {"description": 0.4, "summary": 0.2, "repeated_roles": 0.2, "isolated_title": 0.1, "none": 0.1}
-        ),
         "continuity": _choice(
             {"current": 0.3, "recent": 0.2, "senior_adjacent": 0.1, "stale_switch": 0.1, "unknown": 0.2, "none": 0.1}
         ),
-        "historical_match": _score({"0": 0.1, "1": 0.2, "2": 0.3, "3": 0.4}),
-        "repeated_practice": _noul(0.7),
-        "relevant_leadership": _noul(0.3),
-        "scope": _score({"0": 0.1, "1": 0.2, "2": 0.3, "3": 0.4}),
-        "company_domain": _score({"0": 0.1, "1": 0.2, "2": 0.3, "3": 0.4}),
-        "company_quality": _choice({"strong": 0.6, "ordinary": 0.2, "weak": 0.1, "unknown": 0.1}),
-        "environment_fit": _choice({"comparable": 0.4, "transferable": 0.3, "mismatch": 0.1, "unknown": 0.2}),
-        "funding_context": _choice({"supported": 0.5, "adverse": 0.1, "unknown": 0.4}),
         "independent_execution_quality": _noul(0.8),
-        "education_relevance": _choice({"relevant": 0.3, "unrelated": 0.2, "unknown": 0.5}),
-        "school_signal": _choice({"strong": 0.9, "ordinary": 0.05, "unknown": 0.05}),
-        "wrong_function": _noul(0.2),
-        "overall_rating": _choice({"1": 0.0, "2": 0.1, "3": 0.2, "4": 0.3, "5": 0.4}),
-        "role_0_function": _noul(0.8),
-        "role_0_execution": _noul(0.5),
-        "role_0_quality": _choice({"strong": 0.7, "ordinary": 0.2, "weak": 0.05, "unknown": 0.05}),
-        "role_1_function": _noul(0.4),
-        "role_1_execution": _noul(0.25),
-        "role_1_quality": _choice({"strong": 0.1, "ordinary": 0.2, "weak": 0.6, "unknown": 0.1}),
+        "evidence_basis": _choice(
+            {"description": 0.4, "summary": 0.2, "repeated_roles": 0.2, "isolated_title": 0.1, "none": 0.1}
+        ),
+        "company_quality": _choice({"strong": 0.6, "ordinary": 0.2, "weak": 0.1, "unknown": 0.1}),
+        "specialty": _choice({"direct": 0.4, "transferable": 0.3, "missing": 0.1, "unknown": 0.1, "not_required": 0.1}),
+        "historical_match": _score({"0": 0.1, "1": 0.2, "2": 0.3, "3": 0.4}),
     }
-    return answers
 
 
 class JevFeatureTests(unittest.TestCase):
-    def test_builds_the_frozen_company_schema_and_interactions(self) -> None:
-        roles = [
-            {"dates": {"recency": "current", "years_in_role": 2}},
-            {"dates": {"recency": "ended_within_5years", "years_in_role": 3}},
-        ]
-        features = build_features(roles, _answers())
+    def test_builds_the_frozen_profile_schema_and_interactions(self) -> None:
+        features = build_features(_answers())
 
-        self.assertEqual(set(features), set(FEATURE_NAMES))
-        self.assertEqual(len(features), 87)
-        self.assertAlmostEqual(features["role_match_max"], 0.8)
-        self.assertAlmostEqual(features["role_substantive_max"], 0.4)
-        self.assertAlmostEqual(features["role_repeated_support"], 0.6)
-        self.assertAlmostEqual(features["company_relevant_strong"], 0.5)
-        self.assertAlmostEqual(features["company_role_year_share_strong"], 0.34)
-        self.assertAlmostEqual(features["company_current_relevant_strong"], 0.56)
-        self.assertAlmostEqual(features["company_current_strong_prior_weak"], 0.2128)
-        self.assertAlmostEqual(features["direct_x_continuity"], 0.36)
-        self.assertAlmostEqual(features["function_x_company_quality"], 0.4)
+        self.assertEqual(tuple(features), FEATURE_NAMES)
+        self.assertEqual(len(features), 31)
+        self.assertAlmostEqual(features["transfer::3"], 0.4)
+        self.assertAlmostEqual(features["continuity::stale_switch"], 0.1)
+        self.assertAlmostEqual(features["independent_execution_quality"], 0.8)
+        self.assertAlmostEqual(features["company_quality::strong"], 0.6)
         self.assertAlmostEqual(features["stale_x_historical_direct"], 0.04)
         self.assertAlmostEqual(features["stale_x_historical_adjacent"], 0.03)
 
-    def test_legacy_full_answers_and_slim_answers_predict_identically(self) -> None:
-        roles = [{"dates": {"recency": "unknown", "years_in_role": None}}]
-        full_answers = _answers()
-        slim_answers = copy.deepcopy(full_answers)
-        del slim_answers["overall_rating"]
-        del slim_answers["school_signal"]
-
-        full_features = build_features(roles, full_answers)
-        slim_features = build_features(roles, slim_answers)
-        self.assertEqual(slim_features, full_features)
-        self.assertEqual(predict(slim_features), predict(full_features))
+    def test_extra_answers_are_ignored_and_missing_ones_fail(self) -> None:
+        answers = _answers()
+        with_extra = copy.deepcopy(answers)
+        with_extra["role_0_function"] = _noul(0.8)
+        self.assertEqual(build_features(with_extra), build_features(answers))
+        self.assertEqual(predict(build_features(with_extra)), predict(build_features(answers)))
+        del answers["transfer"]
+        with self.assertRaises(KeyError):
+            build_features(answers)
 
 
 class JevModelTests(unittest.TestCase):

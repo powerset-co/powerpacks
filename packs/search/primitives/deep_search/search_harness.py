@@ -1353,7 +1353,7 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
-             capability_judge: str = "terra",
+             capability_judge: str = "jev",
              client: Any | None = None) -> Path:
     if capability_judge not in {"terra", "jev"}:
         raise ValueError("capability_judge must be terra or jev")
@@ -1839,7 +1839,7 @@ def main() -> None:
             elif name in {"reannotate-saved", "pin-saved"}:
                 command.add_argument("--pond", type=int)
             if name == "run-pond":
-                command.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+                command.add_argument("--capability-judge", choices=("terra", "jev"), default="jev")
         elif name == "set-query":
             command.add_argument("--query", required=True)
         elif name == "review-payload":

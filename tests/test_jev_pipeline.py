@@ -22,6 +22,23 @@ class JevPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(pipeline.Failed, "requires --jd-file"):
                 pipeline._validate_capability_input(args)
 
+    def test_jd_runs_default_to_jev_and_trait_runs_have_no_judge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jd = Path(directory) / "jd.txt"
+            jd.write_text("Synthetic JD")
+            for command in ("prepare", "run"):
+                with_jd = pipeline.build_parser().parse_args([command, "--query", "engineers", "--jd-file", str(jd)])
+                pipeline._validate_capability_input(with_jd)
+                self.assertEqual(with_jd.capability_judge, "jev")
+                self.assertEqual(pipeline.cross_encoder_child_args(with_jd)[-2:], ["--capability-judge", "jev"])
+                explicit = pipeline.build_parser().parse_args(
+                    [command, "--query", "engineers", "--jd-file", str(jd), "--capability-judge", "terra"])
+                pipeline._validate_capability_input(explicit)
+                self.assertEqual(explicit.capability_judge, "terra")
+                without_jd = pipeline.build_parser().parse_args([command, "--query", "engineers"])
+                pipeline._validate_capability_input(without_jd)
+                self.assertIsNone(without_jd.capability_judge)
+
     def test_switching_judge_invalidates_completed_rerank(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"

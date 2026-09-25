@@ -1,4 +1,9 @@
-"""Deterministic input and prompt contract for capability scoring."""
+"""Deterministic input and prompt contract for capability scoring.
+
+Changelog:
+  2026-09-25: the Jev spec is the seven profile-level questions and the evidence policy;
+    the rating rubric and per-position question template are gone with the request.
+"""
 
 from __future__ import annotations
 
@@ -10,13 +15,15 @@ from packs.search.primitives.llm_rerank_candidates import terra
 from packs.search.primitives.llm_rerank_candidates.jev import model as jev_model
 from packs.search.primitives.llm_rerank_candidates.jev.questions import (
     EVIDENCE_POLICY,
-    RATING_RUBRIC,
     REQUEST_VERSION,
-    questions_for_roles,
+    base_questions,
 )
 
+# The judge a JD run uses unless the caller names one; trait reranking without a JD has none.
+DEFAULT_JUDGE = "jev"
 
-def _prompt_spec(judge: str, rubric: str) -> dict:
+
+def _prompt_spec(judge: str, rubric: str | None) -> dict:
     if judge == "terra":
         return {
             "judge": judge,
@@ -26,7 +33,6 @@ def _prompt_spec(judge: str, rubric: str) -> dict:
         }
     if judge != "jev":
         raise ValueError("capability judge must be 'terra' or 'jev'")
-    questions = questions_for_roles([{}])
     return {
         "judge": judge,
         "model": jev_model.MODEL_ID,
@@ -34,18 +40,15 @@ def _prompt_spec(judge: str, rubric: str) -> dict:
         "prompt_version": jev_model.PROMPT_VERSION,
         "question_version": jev_model.QUESTION_VERSION,
         "model_asset_sha256": hashlib.sha256(jev_model.MODEL_ASSET.read_bytes()).hexdigest(),
-        "rating_rubric": rubric,
         "evidence_policy": EVIDENCE_POLICY,
-        "shared_questions": {key: value for key, value in questions.items() if not key.startswith("role_0_")},
-        "role_question_template": {key: value for key, value in questions.items() if key.startswith("role_0_")},
+        "questions": base_questions(),
     }
 
 
 def prompt_spec(*, judge: str, as_of: str) -> dict:
     """Describe the exact scorer prompt and schema for a run artifact."""
     normalized_judge = judge.strip().casefold()
-    rubric = (RATING_RUBRIC.read_text(encoding="utf-8").rstrip("\n").replace("{as_of}", as_of)
-              if normalized_judge == "jev" else terra.system_prompt(as_of))
+    rubric = terra.system_prompt(as_of) if normalized_judge == "terra" else None
     return _prompt_spec(normalized_judge, rubric)
 
 
@@ -60,12 +63,13 @@ def request_sha256(*, jd: str, title: str, company_name: str, evaluation_query: 
         title=" ".join(title.split()) or "Not stated",
         company_name=" ".join(company_name.split()) or "Not stated",
     )
-    rubric_path = RATING_RUBRIC if judge.strip().casefold() == "jev" else terra.PROMPT
-    rubric_template = rubric_path.read_text(encoding="utf-8").rstrip("\n")
+    normalized_judge = judge.strip().casefold()
+    rubric_template = (terra.PROMPT.read_text(encoding="utf-8").rstrip("\n")
+                       if normalized_judge == "terra" else None)
     payload = {
         "cleaner_request": cleaner_request,
         "evaluation_query": evaluation_query.strip(),
-        "scorer": _prompt_spec(judge.strip().casefold(), rubric_template),
+        "scorer": _prompt_spec(normalized_judge, rubric_template),
     }
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

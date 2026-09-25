@@ -13,25 +13,15 @@ from packs.search.primitives.llm_rerank_candidates.jev.questions import REQUEST_
 
 
 BASE_QUESTION_NAMES = (
-    "function_match",
-    "direct_execution",
-    "coverage",
-    "specialty",
     "transfer",
-    "evidence_basis",
     "continuity",
-    "historical_match",
-    "repeated_practice",
-    "relevant_leadership",
-    "scope",
-    "company_domain",
-    "company_quality",
-    "environment_fit",
-    "funding_context",
     "independent_execution_quality",
-    "education_relevance",
-    "wrong_function",
+    "evidence_basis",
+    "company_quality",
+    "specialty",
+    "historical_match",
 )
+QUESTIONS_SHA256 = "ac42f91ba17b04dbcd77027c1896b1d0746d36435d1628fba85e94d94734756f"
 
 
 class _Response:
@@ -147,19 +137,18 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.dict("os.environ", {"POWERPACKS_USAGE_LOG": str(self.output / "usage.jsonl")}):
             return await jev.score_candidates(**args)
 
-    def test_request_matches_frozen_questions_rubric_and_role_dates(self) -> None:
+    def test_request_matches_frozen_questions_and_role_dates(self) -> None:
         request = self._request()
         self.assertEqual(request["model"], "jev-1.13.0")
         self.assertEqual(tuple(base_questions()), BASE_QUESTION_NAMES)
-        self.assertEqual(len(request["questions"]), 24)
+        self.assertEqual(tuple(request["questions"]), BASE_QUESTION_NAMES)
         digest = hashlib.sha256(
             json.dumps(base_questions(), sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
         ).hexdigest()
-        self.assertEqual(digest, "809bc6be0667af9b758af2b4fbcda56ecf8b0483741937b3550bee71288fa1b0")
-        rubric = request["state"]["rating_rubric"]
+        self.assertEqual(digest, QUESTIONS_SHA256)
         self.assertEqual(
-            hashlib.sha256(rubric.replace("2026-09-19", "2026-09-16", 1).encode()).hexdigest(),
-            "2c43b8fa6ef45083125591884aa2a0a9ff8d6833e033debac9a151635d8dee98",
+            set(request["state"]),
+            {"job_cleaned_text", "profile", "reference_date", "evidence_policy", "roles"},
         )
         company = request["state"]["profile"]["companies"][0]
         self.assertEqual(
@@ -170,9 +159,10 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Private Investor", json.dumps(request))
         self.assertNotIn("company-secret", json.dumps(request))
         current, historical = request["state"]["roles"]
+        self.assertEqual(set(current), {"dates", "title", "company"})
         self.assertEqual(current["dates"]["years_in_role"], 4)
         self.assertEqual(current["dates"]["recency"], "current")
-        self.assertEqual(current["company_context"], [company])
+        self.assertEqual(current["company"], "Example Systems")
         self.assertEqual(historical["dates"]["years_in_role"], 2)
         self.assertEqual(historical["dates"]["recency"], "ended_5plus_years_ago")
 
@@ -222,6 +212,20 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["threshold"], jev.THRESHOLD)
         self.assertNotIn("synthetic-key", json.dumps(saved))
         self.assertEqual(len((self.output / "usage.jsonl").read_text().splitlines()), 1)
+
+    async def test_cache_survives_a_prompt_version_bump_but_not_a_question_version_change(self) -> None:
+        request = self._request()
+        first = await self._score(_Client(_Response(200, _payload(request))))
+        saved = Path(first["artifacts"][0])
+        record = json.loads(saved.read_text())
+        record["prompt_version"] = "older-capability-prompt"
+        saved.write_text(json.dumps(record))
+        cached = await self._score(None, api_key=None)
+        self.assertEqual(cached["requests"], 0)
+        record["question_version"] = "older-question-set"
+        saved.write_text(json.dumps(record))
+        with self.assertRaisesRegex(RuntimeError, "cache binding changed"):
+            await self._score(None, api_key=None)
 
     async def test_request_binding_changes_for_date_job_and_profile(self) -> None:
         requests = [self._request() for _ in range(4)]
@@ -280,7 +284,7 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["requests"], 2)
 
         invalid = _payload(request)
-        invalid["answers"].pop("function_match")
+        invalid["answers"].pop("transfer")
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RuntimeError, "remains unscored"):
                 await self._score(_Client(_Response(200, invalid)), output_dir=Path(directory))
@@ -300,23 +304,12 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "cached response is invalid"):
             await self._score(None, api_key=None)
 
-    async def test_oversized_request_compacts_without_losing_feature_roles(self) -> None:
-        request = self._request()
-        api = _Client(
-            _Response(503),
-            _Response(503),
-            _Response(400, text="max_tokens_exceeded"),
-            _Response(200, _payload(request)),
-        )
-        result = await self._score(api)
-        self.assertEqual(result["requests"], 4)
-        compact = api.calls[3][1]["json"]
-        self.assertEqual(compact["state"]["profile"], request["state"]["profile"])
-        self.assertEqual(compact["state"]["roles"][0]["original_position_index"], 0)
-        self.assertNotIn("original_role", compact["state"]["roles"][0])
-        cached = await self._score(None, api_key=None)
-        self.assertEqual(cached["requests"], 0)
-        self.assertEqual(cached["scores"], result["scores"])
+    async def test_bad_request_is_not_retried_and_never_rejects(self) -> None:
+        api = _Client(_Response(503), _Response(400, text="max_tokens_exceeded"))
+        with self.assertRaisesRegex(RuntimeError, "Jev HTTP 400; candidate remains unscored"):
+            await self._score(api)
+        self.assertEqual(len(api.calls), 2)
+        self.assertEqual(list((self.output / "jev").glob("*.json")) if (self.output / "jev").exists() else [], [])
 
     def test_invalid_company_blocks_fail_before_any_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "companies must contain objects"):

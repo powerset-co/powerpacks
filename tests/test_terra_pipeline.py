@@ -91,7 +91,7 @@ class TerraPipelineTests(unittest.TestCase):
             structured = "Title: Storage Engineer\nHiring company: Example Systems\n\nResponsibilities\n- Own storage.\n"
             with mock.patch.object(sys, "argv", ["rerank", "--state", str(state_path), "--write-state",
                     "--jd-file", str(jd_path), "--job-title", "Storage Engineer", "--job-company", "Example Systems",
-                    "--api-key", "synthetic-key", "--cross-encoder-beta",
+                    "--capability-judge", "terra", "--api-key", "synthetic-key", "--cross-encoder-beta",
                     "--evaluation-query", "Engineers; exclude frontend-only experience"]), \
                     mock.patch.object(reranker.jd_cleaner, "clean_job_description",
                                       return_value=structured) as cleaner, \
