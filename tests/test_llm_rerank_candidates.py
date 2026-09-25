@@ -237,7 +237,10 @@ class FanOutConcurrencyTests(unittest.TestCase):
             {"id": f"p{i}", "name": f"Person {i}", "headline": "AI engineer at OpenAI"}
             for i in range(200)
         ]
-        with _MockServer(latency_sec=0.1) as mock:
+        # 0.5s keeps all 50 slots busy long enough to observe the steady-state
+        # peak. At 0.1s a two-core runner samples the ramp-up instead and
+        # reports a lower peak.
+        with _MockServer(latency_sec=0.5) as mock:
             rc, results, stderr = run_rerank(
                 items=items,
                 query="ai or software engineer at open ai",
