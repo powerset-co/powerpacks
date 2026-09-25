@@ -14,6 +14,8 @@ Every column is optional on read: rows written before a column existed simply
 lack it, and `normalize_people_row` fills the gap with `""`.
 
 Changelog:
+  2026-09-25: `legacy_message_linkedin_id` deleted with the whole-graph
+    migration, its only consumer.
   2026-07-24: added `enrichment_status` / `enrichment_error` (appended, so old
     CSVs keep their column order) so a failed enrichment is an annotated row
     instead of a deleted one. Written only by
@@ -180,21 +182,6 @@ def generate_person_id(public_identifier: str) -> str:
 
     public_id = str(public_identifier or "").strip().lower()
     return stable_person_id_from_key(f"linkedin:{public_id}")
-
-
-def legacy_message_linkedin_id(public_identifier: str, linkedin_url: str = "") -> str:
-    """The RETIRED id the messages import minted for a LinkedIn-matched contact
-    before its durable directory id existed. Same person, second key: a later
-    import run silently re-keyed the contact to `generate_person_id(pub)`,
-    stranding any artifacts written under this one (facts, review rows). The
-    recipe is a pure function of the pub, so consumers can fold the two keys
-    deterministically — this is the recipe's single home; never re-mint it.
-    NOBODY mints it anymore: the messages importer's last (unreachable) minting
-    branch was deleted 2026-07-26, so this exists solely for `deep_context/
-    the one-time SQLite importer to fold ids already stranded on disk back onto the person."""
-    basis = str(public_identifier or linkedin_url or "")
-    return f"message-linkedin:{hashlib.sha256(basis.encode('utf-8')).hexdigest()[:16]}"
-
 
 def normalize_people_row(row: dict[str, Any]) -> dict[str, str]:
     normalized: dict[str, str] = {col: "" for col in PEOPLE_SCHEMA_COLUMNS}

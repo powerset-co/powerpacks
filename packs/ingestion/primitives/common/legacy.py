@@ -43,9 +43,6 @@ import csv
 import hashlib
 import json
 from typing import Any
-from packs.ingestion.schemas.people_schema import (
-    legacy_message_linkedin_id,
-)
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
 
 
@@ -231,9 +228,8 @@ def migrate_parent_slug_artifacts(
 # `scrub_retired_message_linkedin_facts` below is what drives that condition to
 # zero without anyone doing it by hand: every synthesis run deletes the stranded
 # files, and nothing can create a new one. Once every supported install has run
-# synthesis once, this whole section plus `people_schema.
-# legacy_message_linkedin_id` and the seed's `MESSAGE_LINKEDIN_PREFIX` branch
-# all go together.
+# synthesis once, this whole section and the seed's `MESSAGE_LINKEDIN_PREFIX`
+# branch go together.
 # -----------------------------------------------------------------------------
 
 MESSAGE_LINKEDIN_PREFIX = "message-linkedin:"
