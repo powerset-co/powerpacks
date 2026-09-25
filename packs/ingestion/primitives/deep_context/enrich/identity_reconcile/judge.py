@@ -1,4 +1,4 @@
-"""One typed evidence judge for attached and researched LinkedIn identities.
+"""One typed evidence judge for research-proposed LinkedIn identities.
 
 Changelog:
 - 2026-08-08: judgment_fingerprint now hashes model + reasoning effort. It

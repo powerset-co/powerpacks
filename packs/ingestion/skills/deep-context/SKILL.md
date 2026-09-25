@@ -97,7 +97,6 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
-[Match] Review attached LinkedIn matches
 [People] Wait for review to complete
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person

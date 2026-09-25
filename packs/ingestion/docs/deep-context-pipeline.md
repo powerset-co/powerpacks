@@ -30,10 +30,9 @@ enrichment, review, realization, and indexing behavior now lives in
   lookup indexes for name, email, and phone.
 - **People decision:** the model assigns Yes/Maybe/No. Only genuine uncertainty
   appears in the main review queue; Yes and No remain visible and editable.
-- **Enrichment:** attached-link judging covers effective-Yes/Maybe
-  parents; effective-No is excluded in SQL before paid work. Parallel research
-  remains restricted to effective-Yes. Completed research is reused and only
-  net-new submissions are priced.
+- **Enrichment:** Parallel research runs only for effective-Yes parents,
+  gated in SQL before paid work; attached links are not machine-judged.
+  Completed research is reused and only net-new submissions are priced.
 - **LinkedIn decision:** a found LinkedIn can be verified, replaced with a known
   URL, or skipped. A no-LinkedIn research result can only be given a real
   LinkedIn URL or skipped; synthetic records are not directly indexed.

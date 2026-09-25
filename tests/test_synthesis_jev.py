@@ -85,6 +85,25 @@ class SynthesisJevTests(unittest.TestCase):
                 # Saved labels but a changed request (cache miss) relabels anyway.
                 self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
 
+    def test_tagging_reads_the_projected_artifact_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, database = self._node(root)
+            path = root / "facts" / "renamed.jsonl"
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(json.dumps({"facts": {"canonical_name": "Jordan Bravo"}}) + "\n", encoding="utf-8")
+            project_parent_fact(database, path, "p1")
+            bundles = selection.effective_parent_bundles(database)
+
+            with patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+            ):
+                # The path comes from the projected artifact, not from the parent id.
+                self.assertEqual(
+                    runner._tagging_paths(database, node.config, bundles, {"name": "Mailbox Owner"}),
+                    [("p1", path.resolve())],
+                )
+
     def test_tagging_ignores_stale_and_missing_fact_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

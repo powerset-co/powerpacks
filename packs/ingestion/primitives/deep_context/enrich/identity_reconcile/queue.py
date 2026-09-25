@@ -89,4 +89,3 @@ def linkedin_view(
             "has_profile": bool(profile is not None and profile.present),
         }
     )
-
