@@ -515,11 +515,12 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 "deep_compose",
                 "deep_cluster",
                 "deep_parents",
+                "deep_seed",
                 "share",
             },
             names,
         )
-        self.assertEqual(len(names), 21)
+        self.assertEqual(len(names), 22)
 
     def test_review_csv_has_no_runtime_writer(self) -> None:
         # Runtime worth and identity decisions live in SQLite. review.csv is

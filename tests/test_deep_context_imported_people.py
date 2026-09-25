@@ -235,7 +235,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             ).run()
 
         self.assertFalse(result.ready)
-        self.assertEqual(result.next_command, "bin/deep-context migrate-sqlite")
+        self.assertEqual(result.next_command, "bin/deep-context ensure-parents")
         self.assertEqual(result.message_people, 1)
         self.assertEqual(result.candidates.total, 1)
         self.assertFalse(missing_db.exists())

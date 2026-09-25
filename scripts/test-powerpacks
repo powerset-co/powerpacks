@@ -86,6 +86,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_legacy_scrubs \
   tests.test_deep_context_lookup_sqlite \
   tests.test_deep_context_migrate_sqlite \
+  tests.test_deep_context_seed \
   tests.test_deep_context_owner_projection \
   tests.test_deep_context_parent_assignment \
   tests.test_deep_context_parent_identity_proof \

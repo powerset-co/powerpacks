@@ -7,11 +7,14 @@ invocation instead
 of the full `bin/doctor`, which is broader and reserved for concrete setup
 failures, not routine readiness checks.
 
-`next_command` is the first unmet step, first rule wins: migrate-sqlite
-(no store, or legacy artifacts to import) → ensure-parents (store holds no
-people) → owner (no owner profile; synthesis requires one) → none.
+`next_command` is the first unmet step, first rule wins: ensure-parents (no
+store, or a store with no people) → seed (legacy artifacts beside a store that
+has not carried them over) → owner (no owner profile; synthesis requires one)
+→ none.
 
 Changelog:
+- 2026-09-25: a legacy install routes to ensure-parents then seed; migrate-sqlite
+  is no longer a next command. ensure-parents creates a missing store.
 - 2026-09-25: next_command routes an empty store to ensure-parents and a
   missing owner profile to the owner command; owner.json is reported
   `absent`, not `absent_optional`.
@@ -40,8 +43,9 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
     ImportedPerson,
     read_imported_people,
 )
-from packs.ingestion.primitives.deep_context.migration.migrate_sqlite import (
-    legacy_artifacts_present,
+from packs.ingestion.primitives.deep_context.migration.seed import (
+    carried_over_at,
+    legacy_decisions_present,
 )
 from packs.ingestion.primitives.deep_context.shared.readiness_models import (
     CandidateCounts,
@@ -59,8 +63,8 @@ from packs.ingestion.primitives.deep_context.shared.readiness_models import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 
-MIGRATE_COMMAND = "bin/deep-context migrate-sqlite"
 ENSURE_PARENTS_COMMAND = "bin/deep-context ensure-parents"
+SEED_COMMAND = "bin/deep-context seed"
 OWNER_COMMAND = "bin/deep-context owner --linkedin-url <url> --email <email>"
 
 # Paired positionally with the `check_statuses` tuple built in run() — same
@@ -79,11 +83,11 @@ ADVICE_RULES: tuple[tuple[str, str], ...] = (
 )
 
 
-def _next_command(*, migrate: bool, has_people: bool, has_owner: bool) -> str | None:
-    if migrate:
-        return MIGRATE_COMMAND
+def _next_command(*, has_people: bool, seed_required: bool, has_owner: bool) -> str | None:
     if not has_people:
         return ENSURE_PARENTS_COMMAND
+    if seed_required:
+        return SEED_COMMAND
     if not has_owner:
         return OWNER_COMMAND
     return None
@@ -185,11 +189,8 @@ class CheckReadiness:
         database_exists = self.db is not None or self.db_path.is_file()
         db: Db | None = self.db or Db(self.db_path) if database_exists else None
         has_people = bool(db is not None and any(not row.is_owner for row in queries.people(db)))
-        legacy_present = legacy_artifacts_present(
-            self.db_path.parent,
-            self.db_path.parent.parent / "network-import/overrides/review.csv",
-        )
-        migration_required = legacy_present and not has_people
+        legacy_present = legacy_decisions_present(self.db_path.parent.parent)
+        seed_required = legacy_present and has_people and carried_over_at(db) is None
         # Two different questions, two different sources: imported_counts answers
         # "what did we import" from people.csv (below, message_people/candidates on
         # the report); projected answers "what did we actually collect" from SQLite
@@ -240,8 +241,8 @@ class CheckReadiness:
             typesafe_api_key=StatusCheck("present" if has_typesafe_key else "missing"),
             canonical_sqlite=PathCheck(
                 (
-                    "migration_required"
-                    if migration_required
+                    "seed_required"
+                    if seed_required
                     else "ok"
                     if has_people
                     else "empty"
@@ -259,15 +260,13 @@ class CheckReadiness:
                 checks.whatsapp_wacli.status,
             )
         )
-        # migrate-sqlite is the one creator of the store: it imports legacy artifacts or,
-        # on a fresh install, creates the empty store.
-        migrate = migration_required or not database_exists
         ready = (
             checks.people_csv.status == "ok"
             and any_source
             and has_key
             and has_typesafe_key
-            and not migrate
+            and has_people
+            and not seed_required
             and projected.has_owner
         )
         # Order must track ADVICE_RULES above exactly — see the comment there.
@@ -283,10 +282,10 @@ class CheckReadiness:
             for status, (prefix, text) in zip(check_statuses, ADVICE_RULES, strict=True)
             if status.startswith(prefix)
         ]
-        if migration_required:
-            advice.append("Legacy Deep Context artifacts need one SQLite import before processing.")
+        if seed_required:
+            advice.append(f"Legacy Deep Context artifacts are not carried over yet: run {SEED_COMMAND}.")
         elif not database_exists:
-            advice.append("No Deep Context database yet: migrate-sqlite creates the empty store.")
+            advice.append(f"No Deep Context database yet: {ENSURE_PARENTS_COMMAND} creates it.")
 
         return ReadinessReport(
             source="check_readiness",
@@ -298,7 +297,9 @@ class CheckReadiness:
             checks=checks,
             advice=tuple(advice),
             updated_at=now_iso(),
-            next_command=_next_command(migrate=migrate, has_people=has_people, has_owner=projected.has_owner),
+            next_command=_next_command(
+                has_people=has_people, seed_required=seed_required, has_owner=projected.has_owner,
+            ),
         )
 
 

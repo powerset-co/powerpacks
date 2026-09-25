@@ -123,6 +123,9 @@ usage: bin/deep-context <command> [args]
   owner        build owner.json from YOUR LinkedIn (run first)
   check        readiness check (sources, Full Disk Access, keys)
   ensure-parents  project the current imported people into stable SQLite parents
+               (creates the store on a fresh install)
+  seed         carry legacy decisions, facts and Parallel results onto the cold
+               parents by identifier, once (free, local; --legacy-root PATH)
   dry          estimate synthesis cost from existing raw bundles (free)
   run          safety guard: paid stages require separate previews and approvals
   collect      gather message bodies into raw bundles (free, local)
@@ -132,7 +135,7 @@ usage: bin/deep-context <command> [args]
                ambiguous remainder (spends TypeSafe; run `cluster --dry-run` first)
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
-  migrate-sqlite  import existing Deep Context artifacts into canonical SQLite once
+  migrate-sqlite  whole-graph legacy import; unrouted, `seed` replaces it
   review       restart the review server and print the staged UI URL once
                /healthz answers. Active enrichment or guided
                re-research only prints a warning (both are durable: identical
@@ -242,9 +245,13 @@ case "$cmd" in
   cluster)
     "${PY[@]}" "$PKG.merge_candidates.cluster_merge_candidates" "$@"
     ;;
+  seed)
+    # After ensure-parents: legacy merges, facts, human decisions and Parallel
+    # results land on the cold parents by identifier. Refuses a seeded store.
+    "${PY[@]}" "$PKG.migration.seed" "$@"
+    ;;
   migrate-sqlite)
-    # The sole cutover path from legacy artifacts to canonical runtime state.
-    # It refuses a populated database; normal commands never import implicitly.
+    # The retired whole-graph import; `check` no longer routes here.
     "${PY[@]}" "$PKG.migration.migrate_sqlite" "$@"
     ;;
   assemble-synthetic)

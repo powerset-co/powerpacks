@@ -119,17 +119,9 @@ bin/deep-context check
 uv run --project . python packs/ingestion/primitives/imports/status.py status
 ```
 
-`check` is read-only. If `checks.canonical_sqlite.status` is
-`migration_required` or `missing`, run `bin/deep-context migrate-sqlite`, then
-re-run the check:
-
-```bash
-bin/deep-context migrate-sqlite
-bin/deep-context check
-```
-
-Once SQLite is ready, combine current source imports before projecting their
-people into SQLite. Imports do not merge people or write identity decisions:
+`check` is read-only. Combine current source imports, then project their
+people into SQLite; `ensure-parents` creates the store on a fresh install.
+Imports do not merge people or write identity decisions:
 
 ```bash
 uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
@@ -138,13 +130,29 @@ bin/deep-context ensure-parents
 bin/deep-context check
 ```
 
-Run this same free sequence on an already-migrated install. `ensure-parents`
-is the only steady-state owner of imported `people.csv` projection; collection
-never imports people.
+Run this same free sequence on every install. `ensure-parents` is the only
+steady-state owner of imported `people.csv` projection; collection never
+imports people.
 
-Do not run migration for a narrow `$deep-context check`; report its
-`next_command` and stop. A populated canonical database never imports legacy
-artifacts again.
+If `checks.canonical_sqlite.status` is `seed_required`, the install has
+pre-SQLite Deep Context artifacts. Carry them over once, then re-run the check:
+
+```bash
+bin/deep-context seed
+bin/deep-context check
+```
+
+`seed` is free and local. It merges the cold parents a legacy same-person
+family spans, re-owns each legacy raw bundle and facts record to its cold
+parent, replays the human worth and LinkedIn decisions from
+`overrides/review.csv`, and projects Parallel research results so enrichment
+reuses them. Machine review rows, dossiers and the profile cache are not
+carried. A seeded store refuses a second run. The next `collect` and
+`synthesize` refresh the carried bundles and facts from the live message
+stores; unchanged people re-synthesize once on the new model.
+
+Do not run `seed` for a narrow `$deep-context check`; report its
+`next_command` and stop.
 
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
 source. Stop on unreadable iMessage Full Disk Access.

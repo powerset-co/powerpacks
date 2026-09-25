@@ -153,7 +153,7 @@ def make_handler(
     )
     api = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
     if api.snapshot().progress.total == 0:
-        raise StoreError("Deep Context database is empty; run bin/deep-context migrate-sqlite")
+        raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
     retargets_enabled = bool(run_jobs or guided_retargets)
 
     if guided_retargets is None and run_jobs:
