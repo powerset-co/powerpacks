@@ -22,7 +22,9 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     estimate_cost_usd,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.db.models import ArtifactKind
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
+from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as stored_facts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.deep_context.synthesis.facts import collapse_fact_records
@@ -220,10 +222,10 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
             for batch in person_batches
         )
         total_batches += len(person_batches)
-    for path in _tagging_paths(config, bundles, owner):
-        if path.stem in synthesized_ids:
+    for parent_id, path in _tagging_paths(db, config, bundles, owner):
+        if parent_id in synthesized_ids:
             continue
-        record, bundle_payload, timestamp = _tagging_inputs(config, bundles, path)
+        record, bundle_payload, timestamp = _tagging_inputs(bundles, parent_id, path)
         request = build_request(
             facts=record["facts"],
             bundle=bundle_payload,
@@ -251,7 +253,6 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
         "reasoning_effort": config.responses.effort,
         "owner_context": True,
         "orphan_facts_removed": 0,
-        "rejudge": config.rejudge,
         "max_batches": config.max_batches,
         "estimated_cost_floor_usd": estimated_cost_usd + jev_cost,
         "estimated_cost_ceiling_usd": estimated_cost_usd + jev_cost,
@@ -356,14 +357,13 @@ def _bundle_payload(bundles: dict[str, CollectionBundle], parent_id: str) -> dic
 
 
 def _tagging_inputs(
-    config: SynthesisConfig,
     bundles: dict[str, CollectionBundle],
+    parent_id: str,
     path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     record = _load_facts_record(path)
-    bundle = _bundle_payload(bundles, path.stem)
-    # A tagged record carries its own updated_at; only an untagged one falls back
-    # to the file's mtime, so --rejudge reproduces the same request (and cache key).
+    bundle = _bundle_payload(bundles, parent_id)
+    # A tagged record carries its own updated_at; an untagged one uses the file's mtime.
     timestamp = str(
         record.get("updated_at")
         or datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
@@ -372,25 +372,36 @@ def _tagging_inputs(
 
 
 def _needs_tagging(config: SynthesisConfig, facts: dict[str, Any], request: dict[str, Any]) -> bool:
-    if config.rejudge or not facts.get("labels"):
+    if not facts.get("labels"):
         return True
     return not jev_worth.estimate(request, output_dir=config.facts_dir.parent)["cached"]
 
 
 def _tagging_paths(
+    db: Db,
     config: SynthesisConfig,
     bundles: dict[str, CollectionBundle],
     owner: dict[str, Any],
-) -> list[Path]:
-    paths: list[Path] = []
-    for path in sorted(config.facts_dir.glob("*.jsonl")):
-        record, bundle, timestamp = _tagging_inputs(config, bundles, path)
+) -> list[tuple[str, Path]]:
+    paths: list[tuple[str, Path]] = []
+    projected = {
+        row.artifact_key: row
+        for row in artifacts(db, kind=ArtifactKind.FACTS.value, status="projected", parent_owned=True)
+    }
+    for fact in stored_facts(db, parent_owned=True):
+        artifact = projected.get(fact.artifact_key)
+        if artifact is None:
+            continue
+        path = Path(artifact.path)
+        if not path.is_file():
+            continue
+        record, bundle, timestamp = _tagging_inputs(bundles, fact.parent_id, path)
         facts = record.get("facts") or {}
         if not facts:
             continue
         request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=timestamp[:10])
         if _needs_tagging(config, facts, request):
-            paths.append(path)
+            paths.append((fact.parent_id, path))
     return paths
 
 
@@ -413,7 +424,7 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
     """
     owner = asdict(plan.owner) if plan.owner else {}
     bundles = selection.effective_parent_bundles(db)
-    paths = _tagging_paths(config, bundles, owner)
+    paths = _tagging_paths(db, config, bundles, owner)
     if not paths:
         return JevUsage()
     load_env()
@@ -422,9 +433,9 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
     async def tag_all() -> None:
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
-        async def tag(path: Path) -> None:
+        async def tag(parent_id: str, path: Path) -> None:
             async with semaphore:
-                record, bundle, timestamp = _tagging_inputs(config, bundles, path)
+                record, bundle, timestamp = _tagging_inputs(bundles, parent_id, path)
                 result = await jev_worth.classify(
                     facts=record.get("facts") or {},
                     bundle=bundle,
@@ -441,11 +452,11 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
                 lines[-1] = json.dumps(record, ensure_ascii=False)
                 _backup_facts(path)
                 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                project_parent_fact(db, path, path.stem)
+                project_parent_fact(db, path, parent_id)
                 _tally_jev(usage, result["usage"])
 
         for chunk in _chunked(paths, TAG_CHUNK_PEOPLE):
-            await asyncio.gather(*(tag(path) for path in chunk))
+            await asyncio.gather(*(tag(parent_id, path) for parent_id, path in chunk))
 
     asyncio.run(tag_all())
     return JevUsage(**usage)

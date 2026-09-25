@@ -73,17 +73,46 @@ class SynthesisJevTests(unittest.TestCase):
             ):
                 # Untagged facts are always a tagging target, even when the
                 # request is already cached.
-                self.assertEqual(runner._tagging_paths(node.config, bundles, owner), [path])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
                 tagged = json.loads(path.read_text(encoding="utf-8"))
                 tagged["facts"]["labels"] = {"is_professional": 0.9}
                 path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
                 # Saved labels + a cached request: nothing to redo.
-                self.assertEqual(runner._tagging_paths(node.config, bundles, owner), [])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [])
             with patch.object(
                 runner.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}
             ):
                 # Saved labels but a changed request (cache miss) relabels anyway.
-                self.assertEqual(runner._tagging_paths(node.config, bundles, owner), [path])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
+
+    def test_tagging_ignores_stale_and_missing_fact_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, database = self._node(root)
+            current = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
+            self._mark_facts_cached(root, node)
+            stale = root / "facts" / "merged-away.jsonl"
+            stale.write_text(json.dumps({"facts": {"canonical_name": "Merged Away"}}) + "\n")
+            database.project_rows((ParentRow("p2", "p2"), PersonRow("person-2", "p2")))
+            missing = root / "facts" / "p2.jsonl"
+            missing.write_text(json.dumps({"facts": {"canonical_name": "Missing File"}}) + "\n")
+            project_parent_fact(database, missing, "p2")
+            missing.unlink()
+
+            with patch.object(
+                runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
+            ) as classify, patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+            ):
+                self.assertEqual(node.estimate()["jev_people"], 1)
+                result = node.execute()
+
+            classify.assert_awaited_once()
+            self.assertEqual(result.jev.people, 1)
+            self.assertEqual(classify.await_args.kwargs["facts"]["canonical_name"], "Jordan Bravo")
+            self.assertTrue(stale.exists())
+            self.assertFalse(missing.exists())
+            self.assertEqual(json.loads(current.read_text())["facts"]["labels"], {"is_professional": 0.9})
 
     def test_existing_facts_are_tagged_without_gpt_and_only_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -121,7 +150,7 @@ class SynthesisJevTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             node, _ = self._node(root, bundle=None)
-            path = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"}, artifact=False)
+            path = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
             self.assertFalse(path.with_suffix(".jsonl.bkup").exists())
 
             with patch.object(
@@ -136,26 +165,6 @@ class SynthesisJevTests(unittest.TestCase):
                 "Jordan Bravo",
             )
             self.assertFalse(path.with_suffix(".jsonl.bkup").exists())
-
-    def test_rejudge_only_replays_jev_and_keeps_the_reference_date(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            node, _ = self._node(root)
-            path = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
-            self._mark_facts_cached(root, node)
-
-            with patch.object(
-                runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
-            ) as classify:
-                node.execute()
-                timestamp = json.loads(path.read_text(encoding="utf-8"))["updated_at"]
-                rejudge = self._node(root, rejudge=True)[0].execute()
-
-            self.assertEqual(classify.await_count, 2)
-            # --rejudge reproduces the same reference_date, so the cached request
-            # key is stable instead of silently re-billing every person.
-            self.assertEqual(classify.await_args.kwargs["reference_date"], timestamp[:10])
-            self.assertEqual(rejudge.jev.people, 1)
 
     def test_estimate_includes_facts_only_tagging_without_gpt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -195,15 +204,6 @@ class SynthesisJevTests(unittest.TestCase):
                 {"is_professional": 0.9},
             )
 
-    def test_rejudge_does_not_synthesize_unprocessed_bundle(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            node, _ = self._node(root)
-            self.assertEqual(self._node(root, rejudge=True)[0]._plan().bundles, ())
-            # Plain rejudge leaves the paid synthesis population empty even when
-            # the parent has no cached facts yet.
-            self.assertEqual(node._plan().bundles, (CollectionBundle.from_payload(BUNDLE),))
-
     # --- fixtures ---------------------------------------------------------
 
     def _answer(self) -> dict:
@@ -213,7 +213,7 @@ class SynthesisJevTests(unittest.TestCase):
             "usage": {"input_tokens": 200, "output_tokens": 50, "cached": False},
         }
 
-    def _node(self, root: Path, *, bundle: dict | None = BUNDLE, rejudge: bool = False):
+    def _node(self, root: Path, *, bundle: dict | None = BUNDLE):
         database = Db(root / "deep-context.sqlite")
         rows = [
             OwnerContextRow(
@@ -244,7 +244,6 @@ class SynthesisJevTests(unittest.TestCase):
             raw_dir=root / "raw",
             out_dir=root / "facts",
             concurrency=1,
-            rejudge=rejudge,
         )
         return node, database
 
