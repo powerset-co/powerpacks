@@ -107,7 +107,7 @@ bin/deep-context review-status --wait --timeout 900
 
 It is read-only and blocks on SQLite-derived workflow status until
 `next_action` is an agent action, then prints the contract and exits.
-Agent actions are only `synthesize`, `retry_enrichment` and `realize` — the review app
+Agent actions are only `synthesize` and `realize` — the review app
 runs the mid-flow work itself (preview, approved enrichment, from-cache
 continuation, synthetic assembly, profile prefetch) as in-process jobs
 the moment the user's clicks authorize them. Every other action is the
