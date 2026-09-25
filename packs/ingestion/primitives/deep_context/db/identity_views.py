@@ -12,7 +12,6 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
-    WORTH_GATE_NOT_REJECTED,
 )
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
     AFFIRMATIVE_MACHINE_ACTIONS,
@@ -29,9 +28,7 @@ from packs.ingestion.primitives.deep_context.db.identity_queries import links, r
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
-    AttachedIdentityQueueRow,
     EnrichmentQueueRow,
-    HealIdentityQueueRow,
     LinkedInProgress,
     ParentViewRow,
     SyntheticFallbackRow,
@@ -61,148 +58,6 @@ def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
 # defined in _view_sql.py (see the comment there) so identity_scope in
 # LINKEDIN_CTE and the workflow_views.py rollups can share them too, without
 # an import cycle back into this module.
-
-
-# A row the human answered yes/no on is settled: settle_machine_identities
-# discards any fresh machine verdict for it (see its `preserved` branch).
-# Judging one is spend whose result is thrown away by design, so the queue
-# below excludes it.
-HUMAN_SETTLED = "COALESCE(l.decision_approved, '') IN ('yes', 'no')"
-
-# What makes an attached link judgeable, minus the human-settled polarity:
-# assumes the `eligible_links l` alias and the worth CTE join.
-ATTACHED_IDENTITY_ELIGIBLE = f"""{WORTH_GATE_NOT_REJECTED}
-    AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
-    AND l.kind NOT IN ('synthetic', 'research')
-    AND EXISTS (
-      SELECT 1 FROM people member
-      WHERE member.parent_id=l.parent_id AND member.is_owner=0 AND member.is_ghost=0
-    )"""
-
-
-_ATTACHED_IDENTITY_CTE = (
-    WORTH_CTE
-    + f""", attached_identity_queue AS (
-  SELECT l.*,
-         COALESCE(w.display_slug, p.display_slug) AS parent_display_slug,
-         COALESCE(NULLIF(w.display_name, ''), NULLIF(p.display_name, ''),
-                  NULLIF(l.display_name, ''), p.public_identifier) AS parent_name,
-         count(*) OVER (PARTITION BY l.parent_id) AS sibling_count
-  FROM eligible_links l JOIN parents p USING(parent_id)
-  JOIN worth w USING(parent_id)
-  WHERE {ATTACHED_IDENTITY_ELIGIBLE}
-    AND NOT ({HUMAN_SETTLED})
-)
-"""
-)
-
-
-def attached_identity_queue(db: Db) -> list[AttachedIdentityQueueRow]:
-    """Return the attached-link judge queue after the single upstream worth gate."""
-    rows = db.query(
-        _ATTACHED_IDENTITY_CTE
-        + """, selected_people AS (
-  SELECT q.row_key, cp.person_id
-  FROM attached_identity_queue q
-  JOIN candidate_people cp ON cp.row_key=q.row_key
-  JOIN people pe ON pe.person_id=cp.person_id
-  WHERE pe.is_owner=0 AND pe.is_ghost=0
-  UNION ALL
-  SELECT q.row_key, pe.person_id
-  FROM attached_identity_queue q
-  JOIN people pe ON pe.parent_id=q.parent_id
-  WHERE pe.is_owner=0 AND pe.is_ghost=0
-    AND NOT EXISTS (
-      SELECT 1 FROM candidate_people cp
-      JOIN people member ON member.person_id=cp.person_id
-      WHERE cp.row_key=q.row_key AND member.is_owner=0 AND member.is_ghost=0
-    )
-)
-SELECT q.parent_id, q.parent_display_slug, q.parent_name, q.row_key,
-       q.public_identifier, q.linkedin_url, q.sibling_count,
-       (SELECT json_group_array(person_id) FROM (
-          SELECT person_id FROM selected_people sp
-          WHERE sp.row_key=q.row_key ORDER BY person_id
-        )) AS person_ids_json,
-       EXISTS (
-         SELECT 1 FROM selected_people sp JOIN person_sources ps USING(person_id)
-         WHERE sp.row_key=q.row_key AND ps.source='linkedin_csv'
-       ) AS from_connections
-FROM attached_identity_queue q
-ORDER BY q.row_key
-"""
-    )
-    return [
-        AttachedIdentityQueueRow(
-            parent_id=row["parent_id"],
-            parent_slug=ResearchHandle.for_parent(
-                row["parent_id"],
-                row["parent_display_slug"],
-            ),
-            name=row["parent_name"],
-            candidate_key=row["row_key"],
-            public_identifier=str(row["public_identifier"] or "").lower(),
-            linkedin_url=row["linkedin_url"],
-            person_ids=tuple(_json(row["person_ids_json"], [])),
-            conflict=int(row["sibling_count"]) > 1,
-            from_connections=bool(row["from_connections"]),
-        )
-        for row in rows
-    ]
-
-
-# Vocabulary of heal_identity_queue's `selection` column (the SQL CASE below);
-# healing.select_candidates branches on these values across the module boundary.
-HEAL_SELECTION_PENDING_RETARGET = "pending_retarget"
-HEAL_SELECTION_CANDIDATE = "candidate"
-
-
-def heal_identity_queue(db: Db, no_profile_rule: str) -> list[HealIdentityQueueRow]:
-    """Return attached links carrying the explicit no-profile rule outcome."""
-    rows = db.query(
-        _ATTACHED_IDENTITY_CTE
-        + f""", heal_queue AS (
-  SELECT q.*,
-         CASE
-           WHEN COALESCE(q.decision_action, q.machine_action, '')='retarget'
-             AND NULLIF(COALESCE(q.replacement_public_identifier,
-                                 q.machine_proposed_public_identifier, ''), '') IS NOT NULL
-             AND lower(COALESCE(q.replacement_public_identifier,
-                                q.machine_proposed_public_identifier, ''))
-                 != lower(q.public_identifier)
-           THEN '{HEAL_SELECTION_PENDING_RETARGET}'
-           ELSE '{HEAL_SELECTION_CANDIDATE}'
-         END AS selection
-  FROM attached_identity_queue q
-  WHERE q.judgment_fingerprint=?
-    AND q.machine_action IN ('review', 'retarget')
-    AND q.machine_judgment IS NULL
-    AND q.machine_confidence IS NULL
-    AND COALESCE(q.decision_approved, q.machine_approved, '')
-        NOT IN ('yes', 'no', 'auto')
-)
-SELECT parent_id, parent_display_slug, parent_name, row_key,
-       public_identifier, linkedin_url, selection
-FROM heal_queue
-ORDER BY COALESCE(NULLIF(parent_display_slug, ''), parent_id), row_key
-""",
-        (no_profile_rule,),
-    )
-    return [
-        HealIdentityQueueRow(
-            parent_id=row["parent_id"],
-            parent_slug=ResearchHandle.for_parent(
-                row["parent_id"],
-                row["parent_display_slug"],
-            ),
-            name=row["parent_name"],
-            candidate_key=row["row_key"],
-            public_identifier=str(row["public_identifier"] or "").lower(),
-            linkedin_url=row["linkedin_url"],
-            selection=row["selection"],
-        )
-        for row in rows
-    ]
 
 
 def approved_identities(db: Db) -> list[ApprovedIdentityRow]:

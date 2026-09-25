@@ -1,6 +1,6 @@
 """Offline tests for LinkedIn identity evidence: the cached profile view,
-profile hydration counts, research-proposed retargets, verdict reuse by
-fingerprint, and the human-settled exclusion from the attached queue.
+profile hydration counts, research-proposed retargets, and verdict reuse by
+fingerprint.
 
 The RapidAPI client is mocked where profiles.projection binds it and the judge
 where judging binds it; everything else runs for real against synthetic
@@ -43,7 +43,6 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import Doss
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
-from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
@@ -83,9 +82,6 @@ def task(
     has_profile=False,
 ):
     return IdentityTask(
-        parent_slug="jordan-bravo-ab12cd34",
-        parent_id="parent-1",
-        candidate_key=pub,
         evidence=DossierEvidence(name="Jordan Bravo"),
         linkedin=JudgeProfile.from_payload(
             {
@@ -867,9 +863,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
 
     def test_fingerprint_changes_with_model_and_effort(self):
         """Proves the fix: a model or reasoning-effort swap must miss cache,
-        not silently reuse a verdict answered under a different model/effort
-        — see identity_reconcile/healing.py's rejudge(), which deliberately
-        asks for effort="high" specifically to avoid this."""
+        not silently reuse a verdict answered under a different model/effort."""
         evidence = DossierEvidence(
             name="Jordan Bravo",
             relationship="former colleague",
@@ -1251,30 +1245,3 @@ class IdentityVerdictReuseTests(unittest.TestCase):
         self.assertFalse(
             judgment_policy.reuses_stored_verdict(self._stored(), "fp-1", force=True)
         )
-
-
-class HumanSettledRowsAreNotJudgedTests(unittest.TestCase):
-    """A row you already answered never reaches the judge.
-
-    settle_machine_identities discards a fresh machine verdict for a
-    human-decided row, so judging one is spend whose result is thrown away by
-    design. On the owner's store that was 24 rows re-billed on every run.
-    """
-
-    def test_a_human_decided_row_leaves_the_queue(self):
-        with TemporaryDirectory() as directory:
-            db = Db(Path(directory) / "deep-context.sqlite")
-            seed_identity(
-                db,
-                parent_id="parent-1",
-                person_id="person-1",
-                row_key="jordan-bravo",
-                name="Jordan Bravo",
-                machine_worth="yes",
-                linkedin_url="https://www.linkedin.com/in/jordan-bravo",
-            )
-            self.assertEqual(len(attached_identity_queue(db)), 1)
-
-            db.decide_identity("jordan-bravo", "detach", approved="yes")
-
-            self.assertEqual(len(attached_identity_queue(db)), 0)

@@ -12,13 +12,11 @@ from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
-    LinkRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
     PersonSourceRow,
     PersonSourcesProjection,
     ReviewSource,
-    RowKind,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -27,12 +25,9 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityP
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement as identity_settlement
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     upsert_retargets,
-    write_overrides,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
-    IdentityTask,
     IdentityVerdict,
-    JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     ProfileResult,
@@ -41,40 +36,20 @@ from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     RetargetProposal,
 )
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
-    decide_actions,
-)
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.shared.csv_io import CsvIO
 from deep_context_sqlite_test_helpers import query, seed_identity
 
 
-def reconcile_task(
+def retarget_proposal(
     *,
-    verdict: str = "confirmed",
-    confidence: float = 0.99,
-    reason: str = "matches",
-    action: str = "verify",
-    fingerprint: str = "fixture-judge-input",
-) -> IdentityTask:
-    return IdentityTask(
-        candidate_key="alice",
-        evidence=DossierEvidence(name="Alice Example"),
-        linkedin=JudgeProfile.from_payload(
-            {
-                "linkedin_url": "https://www.linkedin.com/in/alice",
-            }
-        ),
-        verdict=IdentityVerdict.from_payload(
-            {
-                "verdict": verdict,
-                "confidence": confidence,
-                "reason": reason,
-            }
-        ),
-        action=action,
-        judgment_fingerprint=fingerprint,
+    candidate_key: str = "alice",
+    fingerprint: str = "fixture-research-judge-input",
+) -> RetargetProposal:
+    return RetargetProposal(
+        candidate_key=candidate_key,
+        new_linkedin_url=f"https://www.linkedin.com/in/{candidate_key}-correct",
+        judge_fingerprint=fingerprint,
     )
 
 
@@ -98,32 +73,17 @@ class SqliteProducerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_reconcile_projects_machine_identity_without_touching_human(self) -> None:
-        task = reconcile_task()
-        write_overrides(self.db, [task])
-        row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
-        self.assertEqual(row["machine_action"], "verify")
-        self.assertEqual(row["machine_approved"], "auto")
-
+    def test_machine_settlement_never_overwrites_a_human_decision(self) -> None:
         self.db.decide_identity("alice", "verify", source=ReviewSource.REVIEW.value)
-        task = replace(
-            task,
-            verdict=IdentityVerdict.from_payload(
-                {
-                    "verdict": "wrong_person",
-                    "confidence": 1.0,
-                    "reason": "different",
-                }
-            ),
-            action="detach",
-        )
-        self.assertEqual(write_overrides(self.db, [task]).preserved_user_rows, 1)
+
+        self.assertEqual(upsert_retargets(self.db, [retarget_proposal()]), 0)
+
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
         self.assertEqual(row["decision_action"], "verify")
-        self.assertEqual(row["machine_action"], "verify")
+        self.assertIsNone(row["machine_proposed_url"])
 
-    def test_reconcile_reads_identity_tables_once_per_projection_batch(self) -> None:
-        task = reconcile_task()
+    def test_machine_settlement_reads_identity_tables_once_per_batch(self) -> None:
+        proposal = retarget_proposal()
         with (
             mock.patch.object(
                 identity_settlement,
@@ -136,143 +96,9 @@ class SqliteProducerTests(unittest.TestCase):
                 wraps=identity_settlement.links,
             ) as links,
         ):
-            write_overrides(self.db, [task, replace(task)])
+            upsert_retargets(self.db, [proposal, replace(proposal)])
         reviews.assert_called_once_with(self.db)
         links.assert_called_once()
-
-    def test_non_retarget_rejudge_clears_prior_proposal_for_entire_batch(self) -> None:
-        self.db.project_rows(
-            (
-                IdentityMachineProjection(
-                    "alice",
-                    machine_action="retarget",
-                    machine_proposed_url="https://www.linkedin.com/in/alice-proposed",
-                    machine_proposed_public_identifier="alice-proposed",
-                    source=WriterSource.RECONCILE.value,
-                ),
-            )
-        )
-        seed_identity(
-            self.db,
-            parent_id="parent-2",
-            person_id="person-2",
-            row_key="bob",
-            name="Bob Example",
-            machine_worth="maybe",
-            linkedin_url="https://www.linkedin.com/in/bob",
-        )
-        alice = replace(reconcile_task(), parent_id="parent-1")
-        bob = replace(
-            reconcile_task(fingerprint="fixture-bob-judge-input"),
-            candidate_key="bob",
-            parent_id="parent-2",
-            linkedin=JudgeProfile.from_payload(
-                {
-                    "linkedin_url": "https://www.linkedin.com/in/bob",
-                }
-            ),
-        )
-
-        write_overrides(self.db, [alice, bob])
-
-        rows = {
-            row["row_key"]: row
-            for row in query(
-                self.db,
-                "SELECT row_key, machine_action, machine_approved, "
-                "machine_proposed_url, machine_proposed_public_identifier "
-                "FROM links WHERE row_key IN ('alice', 'bob')",
-            )
-        }
-        self.assertEqual(
-            (
-                rows["alice"]["machine_action"],
-                rows["alice"]["machine_approved"],
-                rows["alice"]["machine_proposed_url"],
-                rows["alice"]["machine_proposed_public_identifier"],
-            ),
-            ("verify", "auto", None, None),
-        )
-        self.assertEqual(
-            (rows["bob"]["machine_action"], rows["bob"]["machine_approved"]),
-            ("verify", "auto"),
-        )
-
-    def test_confident_wrong_person_detaches_without_a_family_winner(self) -> None:
-        self.db.project_rows(
-            (
-                LinkRow(
-                    "alice-second",
-                    "parent-1",
-                    "alice-second",
-                    RowKind.PUB.value,
-                    linkedin_url="https://www.linkedin.com/in/alice-second",
-                    display_name="Alice Second",
-                    source=WriterSource.RECONCILE.value,
-                ),
-            )
-        )
-        wrong = replace(
-            reconcile_task(
-                verdict="wrong_person",
-                confidence=0.9,
-                reason="different person",
-                action="",
-                fingerprint="fixture-wrong-judge-input",
-            ),
-            parent_id="parent-1",
-        )
-        uncertain = replace(
-            reconcile_task(
-                verdict="needs_review",
-                confidence=0.6,
-                reason="uncertain",
-                action="",
-                fingerprint="fixture-review-judge-input",
-            ),
-            candidate_key="alice-second",
-            parent_id="parent-1",
-            linkedin=JudgeProfile.from_payload(
-                {
-                    "linkedin_url": "https://www.linkedin.com/in/alice-second",
-                }
-            ),
-        )
-
-        tasks = [wrong, uncertain]
-        decided = decide_actions(tasks)
-        write_overrides(
-            self.db,
-            [
-                replace(task, action=action.action, via=action.via)
-                for task, action in zip(tasks, decided.actions, strict=True)
-            ],
-        )
-
-        rows = {
-            row["row_key"]: row
-            for row in query(
-                self.db,
-                "SELECT row_key, machine_action, machine_approved, "
-                "authoritative_detach FROM links WHERE parent_id='parent-1'",
-            )
-        }
-        self.assertEqual(
-            (
-                rows["alice"]["machine_action"],
-                rows["alice"]["machine_approved"],
-                rows["alice"]["authoritative_detach"],
-            ),
-            ("detach", "auto", 1),
-        )
-        self.assertEqual(
-            (
-                rows["alice-second"]["machine_action"],
-                rows["alice-second"]["machine_approved"],
-                rows["alice-second"]["authoritative_detach"],
-            ),
-            ("review", None, 0),
-        )
 
     def test_retarget_and_downstream_baton_are_sqlite_derived(self) -> None:
         upsert_retargets(
@@ -445,7 +271,7 @@ class SqliteProducerTests(unittest.TestCase):
 
     def test_machine_settlement_rejects_a_missing_judge_fingerprint(self) -> None:
         with self.assertRaisesRegex(StoreError, "lacks decision fingerprint"):
-            write_overrides(self.db, [reconcile_task(fingerprint="")])
+            upsert_retargets(self.db, [retarget_proposal(fingerprint="")])
 
         baton = self.root / "review.csv"
         result = ApplyRetargets(

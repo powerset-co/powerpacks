@@ -91,7 +91,7 @@ PENDING_CANDIDATE = """
 """
 
 
-# The paid-judge worth gates, named once so attached/heal, the identity-scope
+# The paid-judge worth gates, named once so the identity-scope
 # CTE below, research/synthetic, and the review-progress rollups never drift
 # apart. Defined here (not in identity_views.py, which imports WORTH_CTE from
 # this module) because identity_scope needs WORTH_GATE_NOT_REJECTED at

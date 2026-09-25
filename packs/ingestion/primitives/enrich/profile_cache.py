@@ -150,8 +150,8 @@ def profile_has_content(record: dict[str, Any] | None) -> bool:
     """True when a profile record carries DECIDABLE content: at least one
     experience or education entry on its `normalized_profile`.
 
-    The ONE definition of the judge bar, shared by the client's CONTENT/EMPTY
-    split and the heal pass. Same bar as the review card's render-time
+    The ONE definition of the judge bar, used by the client's CONTENT/EMPTY
+    split. Same bar as the review card's render-time
     hydration and the retarget judge: a headline-only profile is a SHELL —
     renderable, never enough to decide identity on. Accepts any dict carrying
     a `normalized_profile` key (a cache record or a client result)."""

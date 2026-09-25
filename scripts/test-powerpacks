@@ -76,7 +76,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_db_views \
   tests.test_deep_context_dossier \
   tests.test_deep_context_enrichment_projection \
-  tests.test_deep_context_heal_review \
   tests.test_deep_context_http_contract \
   tests.test_deep_context_identity_invariants \
   tests.test_deep_context_identity_queue \

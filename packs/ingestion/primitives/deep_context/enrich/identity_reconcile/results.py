@@ -1,31 +1,19 @@
-"""Project and read canonical identity decisions."""
+"""Project research retarget proposals into canonical identity decisions."""
 
 from __future__ import annotations
 
 import json
-from collections import Counter
-from dataclasses import dataclass, replace
-from pathlib import Path
+from dataclasses import dataclass
 
-from packs.ingestion.primitives.deep_context.db.models import (
-    ApprovedState,
-    ReviewAction,
-    WriterSource,
-)
+from packs.ingestion.primitives.deep_context.db.models import WriterSource
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
-    IdentityProjectionResult,
-)
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
-    IdentityTask,
     IdentityVerdict,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import (
     MachineIdentitySettlement,
     settle_machine_identities,
 )
-from packs.ingestion.primitives.deep_context.shared.coerce import text
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
@@ -52,86 +40,6 @@ def _judgment_payload_json(payload: IdentityVerdict | None) -> str | None:
         sort_keys=True,
         separators=(",", ":"),
     )
-
-
-def write_overrides(
-    db: Db,
-    tasks: list[IdentityTask],
-    *,
-    artifact_path: Path | None = None,
-    source: WriterSource = WriterSource.RECONCILE,
-) -> IdentityProjectionResult:
-    settlements = []
-    for task in tasks:
-        key = task.candidate_key.lower()
-        if not key:
-            continue
-        verdict = task.verdict
-        rule = task.rule
-        machine_action = (
-            rule.action.value if rule else task.action or ReviewAction.REVIEW.value
-        )
-        approved = (
-            ApprovedState.AUTO.value
-            if machine_action in {ReviewAction.VERIFY.value, ReviewAction.DETACH.value}
-            else None
-        )
-        settlements.append(
-            MachineIdentitySettlement(
-                key=key,
-                judgment_fingerprint=task.judgment_fingerprint,
-                judgment_payload_json=_judgment_payload_json(verdict),
-                machine_action=machine_action,
-                machine_approved=approved,
-                machine_confidence=verdict.confidence if verdict else None,
-                machine_reason=verdict.reason if verdict else rule.reason if rule else "",
-                machine_judgment=(verdict.value if verdict and verdict.value else None),
-                # True only for a threshold-cleared auto-detach — not a
-                # review-pending "detach" hint — so downstream callers can tell
-                # trusted machine removal apart from a mere suggestion.
-                authoritative_detach=(
-                    machine_action == ReviewAction.DETACH.value
-                    and approved == ApprovedState.AUTO.value
-                ),
-                judgment_artifact_path=text(artifact_path),
-                source=source.value,
-            )
-        )
-    projected, preserved, total_rows = settle_machine_identities(db, settlements)
-    outcomes = Counter(
-        settlement.outcome for settlement in settlements if settlement.key in projected
-    )
-    return IdentityProjectionResult(
-        path=str(db.db_path),
-        detached=outcomes["detach_auto"],
-        verified=outcomes["verify_auto"],
-        pending=outcomes["pending"],
-        preserved_user_rows=len(preserved),
-        total_rows=total_rows,
-    )
-
-
-def settle(
-    db: Db,
-    tasks: list[IdentityTask],
-    *,
-    source: WriterSource = WriterSource.RECONCILE,
-) -> IdentityProjectionResult:
-    """THE judge-path settlement door: decide → stamp → write → tally.
-
-    Every path whose verdicts came from the judge goes through here, so the
-    decide step and the action-stamping exist once, at the origin-default bars
-    (see resolve_thresholds).
-
-    healing.terminate deliberately calls write_overrides directly because its
-    dead-link and synthetic rules must not enter sibling arbitration.
-    """
-    decided = judgment_policy.decide_actions(tasks)
-    stamped = [
-        replace(task, action=action.action, via=action.via)
-        for task, action in zip(tasks, decided.actions, strict=True)
-    ]
-    return write_overrides(db, stamped, source=source)
 
 
 def upsert_retargets(
@@ -166,5 +74,5 @@ def upsert_retargets(
             )
         )
         proposed += 1
-    projected, _, _ = settle_machine_identities(db, settlements)
+    projected = settle_machine_identities(db, settlements)
     return min(proposed, len(projected))

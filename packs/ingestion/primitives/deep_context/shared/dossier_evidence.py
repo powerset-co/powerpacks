@@ -42,7 +42,7 @@ def _sample(
 
 @dataclass(frozen=True)
 class DossierEvidence:
-    """Frozen evidence packet shared by research, identity judging, and healing."""
+    """Frozen evidence packet shared by research and identity judging."""
 
     name: str = ""
     relationship: str = ""
@@ -250,7 +250,7 @@ class DossierEvidence:
 def owner_background(db: Db) -> str:
     """Render the canonical owner payload with the existing prompt policy.
 
-    The identity-judge anchor: every enrich reconciliation/healing prompt
+    The identity-judge anchor: every enrich reconciliation prompt
     (identity_reconcile, research_reconcile) calls this,
     not owner_background_block directly, so a missing owner silently renders "".
     """

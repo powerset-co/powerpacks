@@ -373,16 +373,16 @@ def hydrate_profiles(
     cache_dir: Path | str | None,
     *,
     max_workers: int = 8,
-    fresh: bool = False,
     max_per_minute: int = 0,
     on_result: Callable[[str, str, dict[str, Any]], None] | None = None,
 ) -> dict[str, int]:
     """Prefer cache, always retrieve: ensure a usable profile exists for each
     (public_identifier, linkedin_url) pair, fetching the misses.
 
-    The ONE home for that policy — both judges that need a profile before
-    judging call this (the attached-link heal in identity_reconcile and the
-    retarget-proposal judge in reconcile_deep_research). Cache hits cost
+    The ONE home for that policy — every deep-context consumer that needs a
+    profile (the retarget-proposal judge in research_reconcile, the review
+    prefetch, and the owner build) calls this through
+    profiles.projection.hydrate_profiles. Cache hits cost
     nothing; a miss is one RapidAPI credit and permanent failures are cached,
     so re-runs never re-bill a dead URL. A keyless install is not an error: it
     returns `skipped_no_key` and leaves the caller on whatever it already had.
@@ -396,7 +396,7 @@ def hydrate_profiles(
 
     def one(item: "tuple[str, str]") -> tuple[str, str, dict[str, Any]]:
         pub, url = item
-        return pub, url, client.get_profile(pub, url, cache_dir=cache_dir, fresh=fresh)
+        return pub, url, client.get_profile(pub, url, cache_dir=cache_dir)
 
     starts: deque[float] = deque()
     effective_rpm = max_per_minute if has_key else 0

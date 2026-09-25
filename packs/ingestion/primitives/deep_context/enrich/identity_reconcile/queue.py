@@ -1,19 +1,14 @@
-"""SQLite identity-task selection over cached LinkedIn profiles.
+"""Judge-facing LinkedIn profile view over cached profiles.
 
-Building a task here never spends: profiles come from the projected cache only.
+Building a view here never spends: profiles come from the projected cache only.
 """
 
 from __future__ import annotations
 
-from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue
-from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProfileSource,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
-    IdentityTask,
     JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
@@ -95,30 +90,3 @@ def linkedin_view(
         }
     )
 
-
-def build_tasks(db: Db) -> list[IdentityTask]:
-    """Assemble tasks from the current queue view; no judging happens here."""
-    tasks: list[IdentityTask] = []
-    rows = attached_identity_queue(db)
-    profiles = projection.profile_payloads(db, (row.candidate_key for row in rows))
-    for row in rows:
-        evidence = DossierEvidence.from_parent_db(db, row.parent_id)
-        tasks.append(
-            IdentityTask(
-                parent_slug=row.parent_slug,
-                parent_id=row.parent_id,
-                candidate_key=row.candidate_key,
-                conflict=row.conflict,
-                evidence=evidence,
-                linkedin=linkedin_view(
-                    IdentityProfileSource(
-                        public_identifier=row.public_identifier,
-                        linkedin_url=row.linkedin_url,
-                        display_name=row.name,
-                    ),
-                    profiles.get(row.candidate_key),
-                ),
-                from_connections=row.from_connections,
-            )
-        )
-    return tasks

@@ -12,10 +12,8 @@ DB_PACKAGE = DEEP_CONTEXT / "db"
 MIGRATION_PACKAGE = DEEP_CONTEXT / "migration"
 EXPECTED_DB_OPERATIONS = {
     "identity_views.approved_identities",
-    "identity_views.attached_identity_queue",
     "identity_views.decision_parents",
     "identity_views.enrichment_queue",
-    "identity_views.heal_identity_queue",
     "identity_views.linkedin_parents",
     "identity_views.linkedin_progress",
     "identity_views.linkedin_queue",

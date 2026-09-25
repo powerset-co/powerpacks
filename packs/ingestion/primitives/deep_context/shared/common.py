@@ -73,7 +73,7 @@ ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"
 REVIEW_DIR = ROOT / "review"  # staged human review UI state + cached avatars
 REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"  # display-only review receipt
-# review.cli/heal_review/sqlite_adapter write and echo this manifest for the FE; the actual
+# review.cli/sqlite_adapter write and echo this manifest for the FE; the actual
 # review decisions live in CANONICAL_DB, not here — losing this file loses no state.
 
 DEFAULT_PEOPLE_CSV = DEFAULT_BASE_DIR / "merged" / "people.csv"
@@ -83,7 +83,7 @@ PROFILE_CACHE_DIR = DEFAULT_PROFILE_CACHE_DIR
 PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
 # The shared paid LinkedIn-profile cache, keyed by public_identifier and written by imports'
 # profile-fetch primitives outside deep_context. Read here by build_owner,
-# profiles/prefetch, and review healing — a hit here means no RapidAPI spend.
+# profiles/prefetch, and research judging — a hit here means no RapidAPI spend.
 OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
 # Legacy pre-SQLite review-decisions file. Nothing in this repo writes it anymore:

@@ -104,7 +104,6 @@ def hydrate_profiles(
     db: Db | None = None,
     max_workers: int = 8,
     max_per_minute: int | None = None,
-    fresh: bool = False,
     on_result: Callable[[ProfileTarget, ProfileResult], None] | None = None,
 ) -> ProfileHydration:
     """Apply the one cache/empty/project policy for every profile consumer."""
@@ -139,7 +138,6 @@ def hydrate_profiles(
         items,
         cache_dir,
         max_workers=max_workers,
-        fresh=fresh,
         max_per_minute=max_per_minute or 0,
         on_result=receive,
     )

@@ -1,1 +1,1 @@
-"""Queue, judge, and settlement modules for attached identity reconciliation."""
+"""Judge, profile view, settlement, and guided-research modules for identity reconciliation."""

@@ -1,14 +1,13 @@
-"""Frozen identity-judge rows shared by attached and research identity stages."""
+"""Frozen identity-judge rows: profile, verdict, usage, result, and task."""
 
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, replace
-from enum import StrEnum
+from dataclasses import dataclass
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin, ReviewAction
+from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 
 
@@ -34,41 +33,6 @@ _PROFILE_FIELDS = (
 # adding it would put `"source": ""` into as_judge_dict and change every
 # research judgment fingerprint.
 RESEARCH_PRESENT_FIELDS = frozenset(_PROFILE_FIELDS) - {"source"}
-
-
-class IdentityRule(StrEnum):
-    NO_PROFILE = "no-profile"
-    DEAD_PROFILE = "dead-profile"
-    STANDING_SYNTHETIC = "standing-synthetic"
-
-
-@dataclass(frozen=True)
-class IdentityRuleOutcome:
-    """A deterministic identity conclusion, distinct from a judge verdict."""
-
-    provenance: IdentityRule
-    action: ReviewAction
-    reason: str
-
-    @property
-    def fingerprint(self) -> str:
-        return f"rule:{self.provenance.value}:v1"
-
-NO_PROFILE_RULE = IdentityRuleOutcome(
-    IdentityRule.NO_PROFILE,
-    ReviewAction.REVIEW,
-    "no usable LinkedIn profile",
-)
-DEAD_PROFILE_RULE = IdentityRuleOutcome(
-    IdentityRule.DEAD_PROFILE,
-    ReviewAction.DETACH,
-    "fresh LinkedIn fetch returned no profile content",
-)
-STANDING_SYNTHETIC_RULE = IdentityRuleOutcome(
-    IdentityRule.STANDING_SYNTHETIC,
-    ReviewAction.VERIFY,
-    "standing synthetic identity for dead attached link",
-)
 
 
 @dataclass(frozen=True)
@@ -205,39 +169,12 @@ class IdentityJudgeResult:
 
 @dataclass(frozen=True)
 class IdentityTask:
-    """The sole immutable row passed through identity judging and settlement."""
+    """The sole immutable row passed through identity judging."""
 
     evidence: DossierEvidence
     linkedin: JudgeProfile
-    parent_slug: str = ""
-    parent_id: str = ""
-    candidate_key: str = ""
-    conflict: bool = False
-    from_connections: bool = False
     origin: IdentityOrigin = IdentityOrigin.ATTACHED
-    verdict: IdentityVerdict | None = None
-    rule: IdentityRuleOutcome | None = None
-    error: str = ""
-    judgment_fingerprint: str = ""
-    action: str = ""
-    via: str = ""
 
     def packet(self) -> tuple[DossierEvidence, JudgeProfile, IdentityOrigin]:
         """Project the byte-pinned judge input at the provider-call edge."""
         return self.evidence, self.linkedin, self.origin
-
-    def with_judgment(self, result: IdentityJudgeResult) -> IdentityTask:
-        """Attach what the judge answered, including its paid-cache key.
-
-        ``result.fingerprint`` is always set: judge_identity computes it before
-        it branches, and every return path (answered, refused, errored) carries
-        it. This used to take a `fallback_fingerprint` the caller re-derived
-        per task — a third computation of a hash the judge had already handed
-        back — for a case no return path can produce.
-        """
-        return replace(
-            self,
-            verdict=result.verdict,
-            error=result.error,
-            judgment_fingerprint=result.fingerprint,
-        )

@@ -170,10 +170,8 @@ PARENT_WORTH_PREFIX = "parent-worth:"
 # These provenance-specific risk limits are policy, not caller tuning knobs:
 # changing one changes which paid judgments auto-apply before human review.
 IDENTITY_THRESHOLDS = {
-    "attached_confirm": 0.70,  # Imported links are already anchored to observed identity evidence.
     "research_confirm": 0.80,  # Speculative research needs stronger corroboration before retargeting.
-    "detach": 0.85,  # Destructive removal remains more conservative than attached confirmation.
-    "decisive": 0.95,  # A conflict can auto-settle only with near-certain positive evidence.
+    "detach": 0.85,  # Destructive removal needs more confidence than confirmation.
 }
 
 
@@ -185,10 +183,7 @@ class ResearchHandle:
         return (display_slug or "").strip() or parent_id
 
 
-JUDGE_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["attached_confirm"]
 RESEARCH_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["research_confirm"]
-JUDGE_DETACH_THRESHOLD = IDENTITY_THRESHOLDS["detach"]
-DECISIVE_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["decisive"]
 
 
 @dataclass(frozen=True)

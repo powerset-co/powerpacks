@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -18,8 +17,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
 # WorthRow <-> _view_sql.WORTH_SELECT
 # CandidateViewRow <-> _view_sql.CANDIDATE_SELECT
 # ParentViewRow <-> _view_sql.PARENT_SELECT
-# AttachedIdentityQueueRow <-> identity_views.attached_identity_queue SELECT
-# HealIdentityQueueRow <-> identity_views.heal_identity_queue SELECT
 # EnrichmentQueueRow <-> identity_views.enrichment_queue SELECT
 # SyntheticFallbackRow <-> identity_views.synthetic_fallback SELECT
 
@@ -194,34 +191,6 @@ class ParentLookupRow:
 class AvatarPayload:
     base64: str
     content_type: str
-
-
-@dataclass(frozen=True)
-class AttachedIdentityQueueRow:
-    """Pinned to ``identity_views.attached_identity_queue`` SELECT aliases."""
-
-    parent_id: str
-    parent_slug: str
-    name: str
-    candidate_key: str
-    public_identifier: str
-    linkedin_url: str
-    person_ids: tuple[str, ...]
-    conflict: bool
-    from_connections: bool
-
-
-@dataclass(frozen=True)
-class HealIdentityQueueRow:
-    """Pinned to ``identity_views.heal_identity_queue`` SELECT aliases."""
-
-    parent_id: str
-    parent_slug: str
-    name: str
-    candidate_key: str
-    public_identifier: str
-    linkedin_url: str
-    selection: Literal["candidate", "pending_retarget"]
 
 
 @dataclass(frozen=True)

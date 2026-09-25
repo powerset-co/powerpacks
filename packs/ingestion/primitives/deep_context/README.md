@@ -15,6 +15,8 @@ Change log:
 - 2026-09-25: the standalone attached-link judge (`bin/deep-context reconcile`)
   is cut for now; attached links are judged by the review app's heal pass and
   research judge.
+- 2026-09-25: the review app's heal pass is cut; attached links are no longer
+  machine-judged, only research-proposed links are.
 
 This is the engineering spec for the `deep_context` package: the data flow, the
 contracts every stage obeys, and a per-file map. The product/UX guide is
@@ -165,7 +167,7 @@ flowchart LR
 | `synthesis/` | synthesis selection/runner plus dossier composition and validation | SQLite artifacts, `raw/` | `facts/*.jsonl`, dossiers, receipts |
 | `merge_candidates/` | same-person blocking/judging, accepted merge application, parent rendering | facts, SQLite | merge proposals, cached verdicts, `parents/*.md` |
 | `enrich/` | Parallel research, profile hydration, identity judging, synthetic fallback | SQLite queue, provider caches | research artifacts, SQLite verdicts |
-| `review/` | worth and identity web review, guided retarget, heal and restart | named SQLite views | human decisions via `db/store` |
+| `review/` | worth and identity web review, guided retarget, and restart | named SQLite views | human decisions via `db/store` |
 | `realize/` | paid-free projection of approved identity decisions | SQLite, cached profiles | network exports |
 | `migration/` | dated pre-SQLite import and whole-graph proof path | legacy artifacts | canonical SQLite bootstrap |
 | `shared/` | common paths, readiness, owner, lookup, and dossier evidence | varies | owner cache where applicable |
@@ -177,10 +179,9 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  eligible["effective-Yes/Maybe\nwith attached LinkedIn"] --> hydrate["one profile hydration policy"]
   yes["effective-Yes\nwithout usable LinkedIn"] --> research["Parallel research\nproposal + reasoning"]
   guided["user guidance"] --> research
-  research -- proposal --> hydrate
+  research -- proposal --> hydrate["one profile hydration policy"]
   research -- no usable link --> synth["synthetic fallback"]
   hydrate --> judge["one identity judge\nDossierEvidence + profile"]
   judge -- confident --> verified["verified parent identity\n→ SQLite"]
@@ -188,12 +189,10 @@ flowchart TD
   judge -- nothing left --> synth
 ```
 
-Attached and heal queues exclude effective-No parents in SQL before paid work;
-research keeps its stricter effective-Yes gate. There is no standalone
-attached-link pass: the review app judges attached links through the heal pass
-at every `review` boot and through research. Batch-research, heal, and guided
-entry points share the same evidence packet, prompt, thresholds,
-async judge pool, and strict SQLite settlement. Cleared machine decisions are
+Batch research runs only on effective-Yes parents, gated in SQL before paid work.
+Attached links are not machine-judged. Batch-research and guided entry points
+share the same evidence packet, prompt, thresholds, async judge pool, and
+strict SQLite settlement. Cleared machine decisions are
 recorded and hydrated at judge time; a settlement without the exact judge-input
 fingerprint is rejected.
 

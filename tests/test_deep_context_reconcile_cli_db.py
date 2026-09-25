@@ -24,10 +24,7 @@ from packs.ingestion.primitives.deep_context.realize import (
     apply_retargets,
     persist_review_identities,
 )
-from packs.ingestion.primitives.deep_context.review import (
-    heal_review,
-    restart_review,
-)
+from packs.ingestion.primitives.deep_context.review import restart_review
 from packs.ingestion.primitives.deep_context.synthesis import (
     compose_dossier,
     synthesize_person_context,
@@ -56,7 +53,6 @@ class ReconcileCliDbTest(unittest.TestCase):
             build_parents,
             cluster_merge_candidates,
             compose_dossier,
-            heal_review,
             persist_review_identities,
             prefetch,
             reconcile,

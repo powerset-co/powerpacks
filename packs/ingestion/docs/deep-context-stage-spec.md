@@ -2,6 +2,9 @@
 
 Created: 2026-08-06
 Change log:
+- 2026-09-25: the review app's self-heal is cut too, so no attached-link
+  judging runs for now; stage 6's attached-link and multi-candidate-family
+  lines state intent with no current code behind them.
 - 2026-09-25: the standalone attached-link judge (`bin/deep-context reconcile`)
   is cut for now; stage 6 attached-link judging runs only through the review
   app's self-heal (no-profile links) and research judge.
@@ -74,9 +77,8 @@ Writes: research results + judge verdicts into SQLite; receipts.
 Decision: (a) research iff no usable LinkedIn (Parallel → proposed URL +
   reasoning, else synthetic); (b) ONE judge scores any candidate URL against
   the parent's whole evidence → confidence; one threshold table. Attached-link
-  judging and self-heal skip effective_worth = 'no' through one SQL queue
-  predicate upstream of every paid call; research keeps the stricter
-  effective_worth = 'yes' gate. Machine verdicts that clear the pinned
+  judging is cut for now; research runs only on effective_worth = 'yes',
+  upstream of every paid call. Machine verdicts that clear the pinned
   threshold table auto-apply into machine decision columns at judge time; a
   human decision always wins; the review queue is the below-threshold slice.
   In an unresolved multi-candidate family, each wrong_person verdict at or
