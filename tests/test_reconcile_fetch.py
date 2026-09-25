@@ -1,8 +1,14 @@
-"""Offline tests for the identity queue's prefer-cache-always-retrieve profile fetch.
+"""Offline tests for LinkedIn identity evidence: the cached profile view,
+profile hydration counts, research-proposed retargets, verdict reuse by
+fingerprint, and the human-settled exclusion from the attached queue.
 
-The RapidAPI client is mocked where profiles.projection binds it; everything else
-(candidate selection, view rebuild from the cache, keyless skip, counts) runs
-for real against synthetic fixtures.
+The RapidAPI client is mocked where profiles.projection binds it and the judge
+where judging binds it; everything else runs for real against synthetic
+fixtures.
+
+Changelog:
+- 2026-09-25: the standalone reconcile node's fetch/keyless/CLI tests left with
+  the node; the remaining suites cover code the review UI still uses.
 """
 
 import json
