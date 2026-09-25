@@ -58,7 +58,8 @@ class LabelBadgeTests(unittest.TestCase):
         markup = rendering._label_badges(parent)
         visible = markup.split("class='person-label-more'")[0]
         self.assertEqual(visible.count("class='person-label'"), 1)
-        self.assertIn("Limited context 88%", visible)
+        self.assertIn("Limited context", visible)
+        self.assertNotIn("%", visible)
         for hidden in ("Direct contact", "Personal", "Founder", "Unknown"):
             self.assertNotIn(hidden, markup)
         self.assertNotIn("class='person-label-more'", markup)

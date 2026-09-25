@@ -3,9 +3,11 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-09-25: a notable imported LinkedIn headline is worth Yes (code rule after
+  the JEV answers); label badges show titles without percentages.
 - 2026-09-25: `ensure-parents` creates the store; `seed` carries a legacy install's
-  merges, facts, human decisions and Parallel results onto the cold parents by
-  identifier; migrate-sqlite is no longer routed.
+  merges, raw bundles, facts, human decisions and Parallel results onto the cold
+  parents by identifier; migrate-sqlite is no longer routed.
 - 2026-09-25: the merge pair judge is JEV, not OpenAI; the merge cutoff is p(yes) ≥ 0.5.
 - 2026-09-25: the page listens to the event stream, it does not poll; the
   unwritten review/manifest.json is no longer advertised.
@@ -162,7 +164,7 @@ browser button and cannot be blocked by the Done page.
 | --- | --- | --- |
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. `ensure-parents` projects the fan-in export into stable parents (creating the store on a fresh install); on an install with pre-SQLite artifacts, `seed` then carries its merges, raw bundles, facts, human decisions and Parallel results onto those parents by identifier, once. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON, SQLite parents, `owner.json` |
 | Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are always included. | `raw/<parent_id>.json`, SQLite projection, receipt |
-| Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
+| Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, except that a notable imported LinkedIn headline (CEO or any chief officer, founder, president, chair, partner, managing director) is Yes. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs with JEV (one request per pair, merge at p(yes) ≥ 0.5), caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
 | Attached-LinkedIn judging | There is no standalone step. The review app judges research results when enrichment completes and applies guided retargets. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts |
@@ -239,6 +241,10 @@ Worth is intentionally decisive:
   ambiguous exchanges may be Maybe; automated noise is No.
 - **Mixed sources:** a genuine relationship in one channel wins over noise in
   another. A recognizable name or plausible area code is weak context only.
+- **Notable title:** a person whose imported LinkedIn headline names a notable
+  role (CEO or any chief officer, founder, president, chair, partner, managing
+  director) is Yes regardless of message evidence. The rule runs in code after
+  the JEV answers, so it re-bills nothing; the reason reads `Notable title: …`.
 
 The durable worth authority is the parent row in
 `.powerpacks/deep-context/deep-context.sqlite`; `review.csv` is compatibility

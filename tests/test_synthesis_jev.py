@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
@@ -66,17 +67,17 @@ class SynthesisJevTests(unittest.TestCase):
             ):
                 # Untagged facts are always a tagging target, even when the
                 # request is already cached.
-                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [("p1", path.resolve())])
                 tagged = json.loads(path.read_text(encoding="utf-8"))
                 tagged["facts"]["labels"] = {"is_professional": 0.9}
                 path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
                 # Saved labels + a cached request: nothing to redo.
-                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [])
             with patch.object(
                 runner.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}
             ):
                 # Saved labels but a changed request (cache miss) relabels anyway.
-                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [("p1", path.resolve())])
 
     def test_tagging_reads_the_projected_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -93,7 +94,7 @@ class SynthesisJevTests(unittest.TestCase):
             ):
                 # The path comes from the projected artifact, not from the parent id.
                 self.assertEqual(
-                    runner._tagging_paths(database, node.config, bundles, {"name": "Mailbox Owner"}),
+                    runner._tagging_paths(database, node.config, bundles, {"name": "Mailbox Owner"}, headlines={}),
                     [("p1", path.resolve())],
                 )
 
@@ -225,7 +226,72 @@ class SynthesisJevTests(unittest.TestCase):
             "usage": {"input_tokens": 200, "output_tokens": 50, "cached": False},
         }
 
-    def _node(self, root: Path, *, bundle: dict | None = BUNDLE):
+    def test_notable_roster_headline_retags_a_non_yes_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            people_csv = root / "people.csv"
+            people_csv.write_text(
+                "id,full_name,headline,public_identifier\nperson-1,Jordan Bravo,CEO @ Example Labs,jordan-bravo\n",
+                encoding="utf-8",
+            )
+            node, database = self._node(root, people_csv=people_csv)
+            path = self._write_facts(root, facts={
+                "canonical_name": "Jordan Bravo",
+                "labels": {"is_professional": 0.9},
+                "network_worth": {"decision": "maybe", "reason": "thin"},
+            })
+            self._mark_facts_cached(root, node)
+            owner = {"name": "Mailbox Owner"}
+            bundles = selection.effective_parent_bundles(database)
+            headlines = runner.parent_headlines(database, people_csv)
+            self.assertEqual(headlines, {"p1": "CEO @ Example Labs"})
+
+            with patch.object(runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}):
+                # Tagged, cached, but a notable title and a non-yes verdict: re-tag at $0.
+                self.assertEqual(
+                    runner._tagging_paths(database, node.config, bundles, owner, headlines=headlines),
+                    [("p1", path.resolve())],
+                )
+                tagged = json.loads(path.read_text(encoding="utf-8"))
+                tagged["facts"]["network_worth"] = {"decision": "yes", "reason": "fine"}
+                path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
+                self.assertEqual(
+                    runner._tagging_paths(database, node.config, bundles, owner, headlines=headlines),
+                    [],
+                )
+                tagged["facts"]["network_worth"] = {"decision": "maybe", "reason": "thin"}
+                path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
+                self._project(root, path)
+
+            # The real tagging pass, answers from cache, model still says maybe: the
+            # saved record and the store end up yes with the notable reason.
+            async def cached_answers(requests, **kwargs):
+                return {
+                    key: SimpleNamespace(
+                        response={"answers": {"is_professional": {"type": "noul", "noul": 0.9}},
+                                  "usage": {"input_tokens": 0, "output_tokens": 0}},
+                        cached=True,
+                    )
+                    for key in requests
+                }
+
+            with patch.object(
+                openai_responses, "AsyncOpenAI", side_effect=AssertionError("must reuse GPT facts")
+            ), patch.object(runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}), \
+                    patch.object(runner.jev_worth, "answer_requests", cached_answers), \
+                    patch.object(runner.jev_worth, "predict", return_value="maybe"):
+                result = node.execute()
+            record = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                record["facts"]["network_worth"],
+                {"decision": "yes", "reason": runner.jev_worth.NOTABLE_REASON_PREFIX + "CEO @ Example Labs"},
+            )
+            self.assertEqual(result.jev.people, 1)
+            self.assertEqual(result.jev.cost_usd, 0)
+            stored = database.query("SELECT machine_worth FROM facts WHERE subject_key='p1'")[0]
+            self.assertEqual(stored["machine_worth"], "yes")
+
+    def _node(self, root: Path, *, bundle: dict | None = BUNDLE, people_csv: Path | None = None):
         database = Db(root / "deep-context.sqlite")
         rows = [
             OwnerContextRow(
@@ -255,6 +321,7 @@ class SynthesisJevTests(unittest.TestCase):
             db=database,
             raw_dir=root / "raw",
             out_dir=root / "facts",
+            people_csv=people_csv,
             concurrency=1,
         )
         return node, database

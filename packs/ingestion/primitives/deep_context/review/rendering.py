@@ -1,4 +1,8 @@
-"""Presentation-only HTML for SQLite-hydrated Deep Context rows."""
+"""Presentation-only HTML for SQLite-hydrated Deep Context rows.
+
+Changelog:
+  2026-09-25: label badges show the title only; the percentage is gone.
+"""
 
 from __future__ import annotations
 
@@ -71,8 +75,8 @@ _VISIBLE_LABELS = 3
 _LABEL_THRESHOLD = 0.85
 
 
-def _label_badges(parent: ParentViewRow, *, show_scores: bool = True) -> Markup:
-    """The visible share-label badges for one parent, scores hidden on hover."""
+def _label_badges(parent: ParentViewRow) -> Markup:
+    """The visible share-label badges for one parent, highest probability first."""
 
     def sort_key(item: tuple[str, float]) -> float:
         return -item[1]
@@ -87,7 +91,7 @@ def _label_badges(parent: ParentViewRow, *, show_scores: bool = True) -> Markup:
         title = relationship.replace("_", " ").capitalize()
         scores[title] = max(scores.get(title, 0.0), float(labels["relationship_kind_p"]))
     names = [
-        f"{title} {score:.0%}" if show_scores else title
+        title
         for title, score in sorted(scores.items(), key=sort_key)
         if score >= _LABEL_THRESHOLD
     ]

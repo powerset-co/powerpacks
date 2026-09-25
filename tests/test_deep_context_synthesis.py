@@ -206,6 +206,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             config = SynthesisConfig(
                 raw_dir=Path("/raw"),
                 facts_dir=Path("/facts"),
+                people_csv=Path("/people.csv"),
                 responses=responses_config,
                 chunk_chars=1,
                 max_batches=20,
@@ -263,6 +264,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             config = SynthesisConfig(
                 raw_dir=Path("/raw"),
                 facts_dir=Path("/facts"),
+                people_csv=Path("/people.csv"),
                 responses=responses_config,
                 chunk_chars=9000,
                 max_batches=20,
@@ -296,6 +298,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             config = SynthesisConfig(
                 raw_dir=Path("/raw"),
                 facts_dir=Path("/facts"),
+                people_csv=Path("/people.csv"),
                 responses=responses_config,
                 chunk_chars=9000,
                 max_batches=20,

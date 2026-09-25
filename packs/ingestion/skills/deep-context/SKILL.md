@@ -211,7 +211,12 @@ SQLite row. Existing facts are reused without another GPT call; JEV resumes from
 its request cache; human decisions remain unchanged. Use `--force` explicitly to
 rebuild facts.
 
-Worth uses message context and contact identifiers only — never LinkedIn:
+Worth uses message context and contact identifiers only, never the LinkedIn
+profile, with one rule decided in code rather than by the model: a person whose
+imported LinkedIn headline names a notable role (CEO or any chief officer,
+founder, president, chair, partner, managing director) is Yes regardless of
+message evidence, with the reason `Notable title: <headline>`. For everyone
+else:
 
 - For Gmail or Gmail+phone, bias toward Yes for clearly human, person-directed
   correspondence, including sparse, old, academic, personal, or plausibly
