@@ -219,10 +219,11 @@ def _education_item(education: Education) -> str:
 
 
 def _suggested_pin_chip(candidate: Candidate | None) -> str:
-    """The pin judge's introduce decision, beside the pin control and in the details label."""
+    """The pin judge's introduce decision, stacked under the overall score."""
     if not candidate or not candidate.suggested_pin:
         return ""
-    return f"<b class='suggested-pin-chip' title='Pin confidence {candidate.pin_confidence}/100'>Suggested</b>"
+    return (f"<b class='trait-score-badge suggested-pin-chip' "
+            f"title='Pin confidence {candidate.pin_confidence}/100'>Suggested Pin</b>")
 
 
 def _taste_badge(candidate: Candidate | None) -> str:
@@ -232,6 +233,11 @@ def _taste_badge(candidate: Candidate | None) -> str:
     if candidate.taste_score is None:
         return "<b class='trait-score-badge taste-badge taste-missing' title='No taste score on file'>Taste N/A</b>"
     return f"<b class='trait-score-badge taste-badge' title='Reporting taste score'>Taste {candidate.taste_score:.1f}</b>"
+
+
+def _judge_badges(candidate: Candidate | None) -> str:
+    """Everything that stacks under the overall score: taste, then the suggested pin."""
+    return _taste_badge(candidate) + _suggested_pin_chip(candidate)
 
 
 def _person_details(pond_candidate: PondCandidate, candidate: Candidate | None = None) -> str:
@@ -247,8 +253,7 @@ def _person_details(pond_candidate: PondCandidate, candidate: Candidate | None =
     if candidate and candidate.pin_judgment:
         confidence = (f"{candidate.pin_confidence}/100" if candidate.pin_confidence is not None
                       else "unscored")
-        reasoning += (f"<div class='details-reasoning'><p class='details-label'>Pin confidence"
-                      f"{_suggested_pin_chip(candidate)}</p>"
+        reasoning += (f"<div class='details-reasoning'><p class='details-label'>Pin confidence</p>"
                       f"<p>{_e(confidence)} · {_e(candidate.pin_judgment.decision or 'no decision')}. "
                       f"{_e(candidate.pin_judgment.reason)}</p></div>")
     location_matched = "location" in pond_candidate.vertical_sources
@@ -374,7 +379,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                           if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
                 indicators += (
                     f"<div class='trait-indicator'><span class='score-stack'><b class='trait-score-badge "
-                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>{_taste_badge(graded)}</span>"
+                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>{_judge_badges(graded)}</span>"
                     f"<p>{_e(reason)}</p></div>")
             else:
                 reason = qualification_reason
@@ -389,7 +394,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             if overall is not None:
                 indicators = (
                     f"<div class='trait-indicator'><span class='score-stack'><b class='trait-score-badge "
-                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>{_taste_badge(graded)}</span>"
+                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>{_judge_badges(graded)}</span>"
                     f"<p>{_e(reason)}</p></div>")
             else:
                 indicators = '<p class="no-traits">Not judged</p>'
@@ -426,7 +431,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                 aria-label='Add tag to {_e(pond_candidate.name)}' title='Add tag'>
           <span class='person-tags' data-person-tags></span>{PLUS_SVG}
         </button><button type='button' class='pin-trigger' data-pin-person='{_e(pond_candidate.person_id)}'
-          aria-label='Pin {_e(pond_candidate.name)}' aria-pressed='false' title='Pin to shortlist'>{PIN_SVG}</button>{_suggested_pin_chip(graded)}</div>
+          aria-label='Pin {_e(pond_candidate.name)}' aria-pressed='false' title='Pin to shortlist'>{PIN_SVG}</button></div>
         <div class='candidate-person'>
           <span class='avatar'>{avatar}<span>{_e(_initials(pond_candidate.name))}</span></span>
           <span class='candidate-identity'>

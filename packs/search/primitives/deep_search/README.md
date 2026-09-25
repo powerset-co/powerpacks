@@ -140,9 +140,9 @@ uv run --project . python packs/search/primitives/deep_search/search_harness.py 
   --run-dir <run> --env-file .env
 ```
 
-The viewer shows a **Suggested** chip beside the pin control when the judge's decision is
-`introduce`, and a **Taste** badge under the overall score for every judged candidate
-(`Taste N/A` when Reporting has no score). The details panel shows the confidence and reason.
+The viewer stacks two badges under the overall score: **Taste X.X** for every judged
+candidate (`Taste N/A` when Reporting has no score) and **Suggested Pin** when the judge's
+decision is `introduce`. The details panel shows the confidence and reason.
 
 Each judged candidate row, in `shortlist_grades` and in the summary, carries:
 

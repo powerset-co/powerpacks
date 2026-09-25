@@ -137,9 +137,11 @@ class PinConfidenceHelperTests(unittest.TestCase):
         review = PinJudgment("review", "Data work.", pc.PIN_JUDGE_MODEL, "ok")
         suggested = _candidate(candidate_judgment=JUDGED, pin_confidence=88, pin_judgment=introduce, taste_score=7.58)
         self.assertTrue(suggested.suggested_pin)
-        self.assertIn("Suggested", rendering._suggested_pin_chip(suggested))
+        self.assertIn("Suggested Pin", rendering._suggested_pin_chip(suggested))
         self.assertIn("Pin confidence 88/100", rendering._suggested_pin_chip(suggested))
         self.assertIn("Taste 7.6", rendering._taste_badge(suggested))
+        self.assertEqual(rendering._judge_badges(suggested),
+                         rendering._taste_badge(suggested) + rendering._suggested_pin_chip(suggested))
         reviewed = _candidate(candidate_judgment=JUDGED, pin_confidence=60, pin_judgment=review, taste_score=None)
         self.assertFalse(reviewed.suggested_pin)
         self.assertEqual(rendering._suggested_pin_chip(reviewed), "")
