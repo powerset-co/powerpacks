@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.12.0...powerpacks-v2.13.0) (2026-09-25)
+
+
+### Features
+
+* **search:** add pin confidence and taste to judged candidates ([8546f77](https://github.com/powerset-co/powerpacks/commit/8546f7793ee49c79919e0eb25500ed6618588db9))
+* **search:** add pin confidence and taste to judged candidates ([5e5ba31](https://github.com/powerset-co/powerpacks/commit/5e5ba31b83a1bf50533642efc720553d98213417))
+
+
+### Bug Fixes
+
+* **ingestion:** read existing LinkedIn discovery status ([29be0d3](https://github.com/powerset-co/powerpacks/commit/29be0d35be6f8db8b406e074c6ba5a304529ac83))
+* **ingestion:** report a failed linkedin import manifest in status ([2b0267e](https://github.com/powerset-co/powerpacks/commit/2b0267e53c10ce7c47c4350f2877cc4c8caa85c2))
+* **search:** place Taste and Suggested Pin under the overall reasoning ([122b588](https://github.com/powerset-co/powerpacks/commit/122b5882f104b8bf04f69d104547ba771a0fe698))
+* **search:** round every row badge and control like the filters ([3bd5395](https://github.com/powerset-co/powerpacks/commit/3bd5395db4d9b01a2e8a715cc0c6b50e0e89de2c))
+* **search:** stack Suggested Pin under the overall score ([a9779da](https://github.com/powerset-co/powerpacks/commit/a9779da44c45fccc767c8dda328e929919dc6cd2))
+
+
+### Documentation
+
+* **ingestion:** trim import-gmail and import-messages skill instructions ([9f95571](https://github.com/powerset-co/powerpacks/commit/9f95571d3b97d0f59125f4eaa1b06f2612376983))
+* **search:** describe the Suggested Pin badge placement ([d5b2849](https://github.com/powerset-co/powerpacks/commit/d5b284921d0a6b6d8d5ee1cb73c3c28306a87b0e))
+
 ## [2.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.11.1...powerpacks-v2.12.0) (2026-09-21)
 
 
