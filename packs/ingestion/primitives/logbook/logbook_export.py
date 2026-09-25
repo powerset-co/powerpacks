@@ -42,6 +42,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     emit,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store
 from packs.ingestion.primitives.logbook import logbook_sources as src
 from packs.ingestion.primitives.logbook.logbook_common import (
     DEFAULT_CHAT_DB,
@@ -265,8 +266,8 @@ def _store_depth(channel: str, db: Path) -> dict[str, Any]:
             else:  # whatsapp
                 row = con.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM messages").fetchone()
                 info["messages"] = int(row[0] or 0)
-                info["earliest"] = src._whatsapp_iso(row[1])
-                info["latest"] = src._whatsapp_iso(row[2])
+                info["earliest"] = wacli_store.whatsapp_epoch_to_iso(row[1])
+                info["latest"] = wacli_store.whatsapp_epoch_to_iso(row[2])
             info["status"] = "ok"
         finally:
             con.close()
