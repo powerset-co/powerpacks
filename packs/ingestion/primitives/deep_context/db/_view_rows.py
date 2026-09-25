@@ -1,4 +1,9 @@
-"""Private row shapers shared by the named review queries."""
+"""Private row shapers shared by the named review queries.
+
+Changelog:
+- 2026-09-25: the worth Yes/No tables list every row with that effective worth;
+  the links predicate that hid unresearched people is gone.
+"""
 
 from __future__ import annotations
 

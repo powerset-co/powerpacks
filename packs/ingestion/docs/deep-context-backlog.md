@@ -8,7 +8,8 @@ Change log:
   `CollectionBundle.of` in `collection/models.py`; the two items below that
   referenced them by their old free-function/module names are updated in place.
 - 2026-09-25: dropped the deleted `identity_reconcile/runner.py` from the
-  OpenAI-concurrency fallback list.
+  OpenAI-concurrency fallback list, and `reconcile_linkedin` (node cut) from
+  the manifest-owner and `enrich/` file lists.
 
 These items are deliberately outside the mechanical D2 cleanup round. They are
 not implicit acceptance criteria for that round.
@@ -311,7 +312,7 @@ must be checked, not assumed.
 
 Twelve manifest/receipt types live under three different conventions: seven
 defined inline in their stage driver (ensure_parents, compose_dossier,
-reconcile_linkedin, build_owner, synthesize_person_context,
+build_owner, synthesize_person_context,
 cluster_merge_candidates, build_parents), four in a package models.py
 (collection, review_web, research_reconcile x2), one in its own file
 (enrichment_receipt).
@@ -405,7 +406,7 @@ the root keeps `__init__.py` and nothing else.
 | `collection/` | collect_person_context.py, context_sources.py, email_context.py, models, planning |
 | `synthesis/` | synthesize_person_context.py, compose_dossier.py, validate_dossiers.py, facts.py, models.py, rendering.py |
 | `merge_candidates/` | cluster_merge_candidates.py, build_parents.py, rendering.py |
-| `enrich/` | identity_evidence.py, judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_linkedin.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
+| `enrich/` | identity_evidence.py, judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
 | `review/` | web server/rendering/assets, guided_retarget.py, heal_review.py, reconcile_review_web.py, restart_review.py |
 | `realize/` | apply_retargets.py, persist_review_identities.py |
 | `migration/` | migrate_sqlite.py, legacy.py, canonical_graph.py, parent_graph.py (the dying mass, together, so it deletes as one folder) |
