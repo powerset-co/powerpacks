@@ -1,4 +1,4 @@
-"""Synthetic source-only Messages import contracts."""
+"""Synthetic Messages import contracts: the floor, then source-only mapping."""
 
 import json
 import subprocess
@@ -43,10 +43,41 @@ class MessageContactBoundaryTests(unittest.TestCase):
         self.assertEqual(util.contact_last_interaction(contact), "")
 
 
-class SourceOnlyMessagesCliTests(unittest.TestCase):
-    def test_fresh_import_keeps_every_keyable_source_contact_without_review(self):
+class ContactFloorTests(unittest.TestCase):
+    def test_fresh_import_keeps_only_contacts_clearing_the_floor(self):
         rows = [
-            {"phone": "+15550100123", "name": "Jordan 🚲", "source": "imessage",
+            {"phone": "+15550100123", "name": "Jordan Bravo", "source": "imessage",
+             "message_count": "4", "imessage_message_count": "4",
+             "imessage_last_message": "2026-09-01T12:00:00+00:00"},
+            {"phone": "+15550100124", "name": "", "source": "imessage",
+             "message_count": "6", "imessage_message_count": "6"},
+            {"phone": "+15550100125", "name": "5550100125", "source": "imessage",
+             "message_count": "6", "imessage_message_count": "6"},
+            {"phone": "+15550100126", "name": "Casey Bravo", "source": "whatsapp",
+             "message_count": "0", "whatsapp_message_count": "0"},
+            {"phone": "+15550100127", "name": "Riley Bravo", "source": "imessage",
+             "message_count": "3", "imessage_message_count": "3", "is_in_group_chats": "true"},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            contacts = root / "messages/contacts.csv"
+            write_csv_rows(contacts, CSV_HEADERS, rows)
+            node = importer.MessagesImport(contacts_csv=contacts, import_dir=root / "import")
+            node.run()
+            manifest = node.written
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(manifest["stats"], {"people": 1, "candidates": 1})
+            self.assertEqual(manifest["skipped"], {
+                "no_name": 1, "name_is_phone": 1, "below_min_messages": 1, "group_only_low_signal": 1,
+            })
+            _headers, people = read_csv_rows(root / "import/messages/people.csv")
+            self.assertEqual([row["id"] for row in people], ["candidate:phone:+15550100123"])
+
+
+class SourceOnlyMessagesCliTests(unittest.TestCase):
+    def test_fresh_import_maps_source_metadata_and_counts_floor_skips(self):
+        rows = [
+            {"phone": "+15550100123", "name": "Jordan Bravo 🚲", "source": "imessage",
              "match_status": "matched", "matched_person_id": "wrong-person",
              "matched_name": "Wrong Person", "matched_linkedin_url": "https://linkedin.com/in/wrong-person",
              "match_method": "name_exact", "match_confidence": "1", "match_reason": "old guess",
@@ -54,14 +85,14 @@ class SourceOnlyMessagesCliTests(unittest.TestCase):
              "imessage_last_message": "2026-09-01T12:00:00+00:00"},
             {"phone": "+15550100124", "name": "", "source": "whatsapp", "message_count": "0",
              "whatsapp_message_count": "0", "is_in_group_chats": "true"},
-            {"phone": "Casey@Example.com", "name": "", "source": "imessage/whatsapp",
+            {"phone": "Casey@Example.com", "name": "Casey Bravo", "source": "imessage/whatsapp",
              "message_count": "3", "imessage_message_count": "1", "whatsapp_message_count": "2",
              "imessage_last_message": "2026-09-01T12:00:00+00:00",
              "whatsapp_last_message": "2026-09-02T12:00:00+00:00",
              "match_status": "suggested", "matched_person_id": "wrong-email-person"},
             {"phone": "+15550100125", "name": "K", "source": "imessage", "message_count": "1",
              "imessage_message_count": "1", "is_in_group_chats": "true"},
-            {"phone": "911", "name": "Service", "source": "imessage", "message_count": "0"},
+            {"phone": "911", "name": "Service Desk", "source": "imessage", "message_count": "0"},
             {"phone": "", "name": "No Identifier"},
             {"phone": "not-an-identifier", "name": "Invalid Identifier"},
         ]
@@ -77,26 +108,23 @@ class SourceOnlyMessagesCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             manifest = json.loads(result.stdout)
             self.assertEqual(manifest["status"], "completed")
-            self.assertEqual(manifest["stats"], {"people": 5, "candidates": 5})
+            self.assertEqual(manifest["stats"], {"people": 2, "candidates": 2})
+            self.assertEqual(manifest["skipped"], {
+                "no_name": 1, "bad_name": 1, "short_code_or_invalid_phone": 3,
+            })
             out_dir = root / ".powerpacks/network-import/import/messages"
             headers, people = read_csv_rows(out_dir / "people.csv")
             self.assertEqual(headers, PEOPLE_SCHEMA_COLUMNS)
             by_id = {row["id"]: row for row in people}
             self.assertEqual(set(by_id), {
-                "candidate:phone:+15550100123", "candidate:phone:+15550100124",
-                "candidate:email:casey@example.com", "candidate:phone:+15550100125",
-                "candidate:phone:911",
+                "candidate:phone:+15550100123", "candidate:email:casey@example.com",
             })
             named = by_id["candidate:phone:+15550100123"]
-            self.assertEqual(named["full_name"], "Jordan 🚲")
+            self.assertEqual(named["full_name"], "Jordan Bravo 🚲")
             self.assertEqual(named["primary_phone"], "+15550100123")
             self.assertEqual(json.loads(named["all_phones"]), ["+15550100123"])
             self.assertEqual(json.loads(named["interaction_counts"]), {"imessage": 4})
             self.assertEqual(named["last_interaction"], "2026-09-01T12:00:00+00:00")
-            nameless = by_id["candidate:phone:+15550100124"]
-            self.assertEqual(nameless["full_name"], "")
-            self.assertEqual(nameless["source_channels"], "whatsapp")
-            self.assertEqual(nameless["interaction_counts"], "")
             email = by_id["candidate:email:casey@example.com"]
             self.assertEqual(email["primary_email"], "Casey@Example.com")
             self.assertEqual(json.loads(email["all_emails"]), ["Casey@Example.com"])

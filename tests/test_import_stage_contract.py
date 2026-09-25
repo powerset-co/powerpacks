@@ -67,10 +67,11 @@ class DeepContextHandoffTests(unittest.TestCase):
             }]}))
             contacts = root / "contacts.csv"
             CsvIO.write_dict_rows(contacts, CSV_HEADERS, [
-                {"phone": "casey@example.com", "name": "Casey", "source": "imessage",
-                 "imessage_message_count": "3", "imessage_last_message": "2026-09-03T00:00:00+00:00"},
-                {"phone": "+15550100123", "name": "", "source": "whatsapp",
-                 "whatsapp_message_count": "0", "is_in_group_chats": "true"},
+                {"phone": "casey@example.com", "name": "Casey Bravo", "source": "imessage",
+                 "message_count": "3", "imessage_message_count": "3",
+                 "imessage_last_message": "2026-09-03T00:00:00+00:00"},
+                {"phone": "+15550100123", "name": "Jordan Bravo", "source": "whatsapp",
+                 "message_count": "2", "whatsapp_message_count": "2", "is_in_group_chats": "true"},
             ])
             gmail = GmailImport(manifest_json=manifest, import_dir=root / "import")
             messages = MessagesImport(contacts_csv=contacts, import_dir=root / "import")

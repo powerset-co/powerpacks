@@ -511,7 +511,7 @@ class MessagesImportRuntimeTests(unittest.TestCase):
     def test_import_parses_each_contact_once(self):
         with self.sandbox() as env:
             write_csv_rows(env["contacts"], CSV_HEADERS, [
-                self.contact_row(), self.contact_row(phone="casey@example.com", name=""),
+                self.contact_row(), self.contact_row(phone="casey@example.com", name="Casey Bravo"),
             ])
             with mock.patch.object(
                 MessageContact, "from_csv_row", wraps=MessageContact.from_csv_row,

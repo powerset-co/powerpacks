@@ -27,7 +27,8 @@ Free.
 
 ## Invariant
 
-It retains every keyable source contact without resolving identity — no identity
-or worth decision, and no `directory.csv` read or write. The manifest belongs to
+It retains every source contact that clears the floor (`util.contact_floor_reason`:
+usable identifier, researchable name, at least one message) without resolving
+identity — no identity or worth decision, and no `directory.csv` read or write. The manifest belongs to
 the imports writer (`imports/common.write_manifest`), so the declared
 `manifest = ""` keeps the Node template from overwriting it.

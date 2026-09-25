@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Import source Messages contacts into canonical candidate people rows.
 
-Flow: current-output check -> parse contacts -> write people.csv -> manifest.
-Identity, worth, and person merging belong to Deep Context.
+Flow: current-output check -> parse contacts -> floor -> write people.csv -> manifest.
+Identity, worth, and person merging belong to Deep Context; the floor
+(`util.contact_floor_reason`) only drops contacts nobody could research.
 
 Changelog:
+  2026-09-25: restored the import floor deleted by #486; skips are counted by
+    reason on the manifest's `skipped` block. Contract bumped to v8 so
+    existing installs re-import.
   2026-09-23 (typed manifest reads): the current-manifest branch reads the typed
     `ImportManifest` (`current.status`) and re-emits its on-disk payload.
   2026-09-23 (simplification audit): `WORKING_CONTACTS_CSV` is now derived from
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -42,9 +47,13 @@ from packs.ingestion.primitives.imports.common import (  # noqa: E402
     import_manifest_current,
     write_manifest,
 )
-from packs.ingestion.primitives.imports.messages.util import contact_to_person  # noqa: E402
+from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
+    SHORT_CODE_OR_INVALID_PHONE,
+    contact_floor_reason,
+    contact_to_person,
+)
 
-MESSAGES_IMPORT_CONTRACT = "messages-source-only-v7"
+MESSAGES_IMPORT_CONTRACT = "messages-source-only-v8"
 WORKING_CONTACTS_CSV = MESSAGES_OUT_DIR / "contacts.csv"
 
 
@@ -57,10 +66,11 @@ class MessagesImportManifest(StageManifest):
     input: dict[str, Any] = {}
     outputs: dict[str, Any] = {}
     stats: dict[str, int] = {}
+    skipped: dict[str, int] = {}
 
 
 class MessagesImport(Node):
-    """Retain every keyable source contact without resolving its identity."""
+    """Retain every source contact that clears the floor, without resolving its identity."""
 
     source = "messages"
     name = "messages_import"
@@ -126,10 +136,17 @@ class MessagesImport(Node):
             for row in read_csv_rows(self.contacts_csv)[1]
         ]
         people = []
+        skipped: Counter[str] = Counter()
         for contact in contacts:
+            reason = contact_floor_reason(contact)
+            if reason:
+                skipped[reason] += 1
+                continue
             person = contact_to_person(contact, self.contacts_csv)
-            if person is not None:
-                people.append(person)
+            if person is None:
+                skipped[SHORT_CODE_OR_INVALID_PHONE] += 1
+                continue
+            people.append(person)
 
         self.import_dir.mkdir(parents=True, exist_ok=True)
         write_csv_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, people)
@@ -138,6 +155,7 @@ class MessagesImport(Node):
             input=self.manifest_input,
             outputs={"people_csv": str(self.people_csv)},
             stats={"people": len(people), "candidates": len(people)},
+            skipped=dict(skipped),
         ))
 
 

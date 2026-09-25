@@ -5,6 +5,8 @@ description: Import iMessage/WhatsApp contact metadata locally. Sets up source a
 
 <!--
 Changelog:
+- 2026-09-25: the import floor is back (usable name, at least one message,
+  group-only contacts need ten); unnamed contacts are no longer imported.
 - 2026-09-23: Trimmed Step 2's wacli protocol detail (batch sizes, waits, chat
   identity fallback) down to the automatic strategy and resumability, pointing at
   `message-import-pipeline.md` for protocol detail; dropped the duplicated
@@ -14,9 +16,10 @@ Changelog:
 # import-messages
 
 `$import-messages` imports iMessage and WhatsApp contact metadata as candidate
-people. Every contact with a usable phone or email is retained, including unnamed
-contacts and contacts without messages. Deep Context makes identity and worth
-decisions and combines people across sources.
+people. A contact is imported when it has a usable phone or email, a
+researchable name, and at least one message; a contact seen only in group chats
+needs ten. Unnamed contacts are skipped and counted on the manifest. Deep
+Context makes identity and worth decisions and combines people across sources.
 
 For the pipeline walkthrough and privacy map, see
 [`message-import-pipeline.md`](../../docs/message-import-pipeline.md).
@@ -183,7 +186,7 @@ Write source names, identifiers, channels, message counts, and dates to
 `.powerpacks/network-import/import/messages/people.csv`. Group metadata stays
 in the source `contacts.csv`. Rows use
 canonical `candidate:phone:` or `candidate:email:` IDs. No catalog, review file,
-minimum-message floor, or import confirmation is required.
+or import confirmation is required; the floor is fixed (`util.contact_floor_reason`).
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/messages/importer.py run
