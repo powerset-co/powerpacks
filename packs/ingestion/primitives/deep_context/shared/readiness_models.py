@@ -79,6 +79,7 @@ class ReadinessChecks:
     people_csv: PeopleCsvCheck
     owner_json: PathCheck
     openai_api_key: StatusCheck
+    typesafe_api_key: StatusCheck
     canonical_sqlite: PathCheck
 
 

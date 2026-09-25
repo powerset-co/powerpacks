@@ -3,6 +3,7 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-09-25: the merge pair judge is JEV, not OpenAI; the merge cutoff is p(yes) ≥ 0.5.
 - 2026-09-25: the page listens to the event stream, it does not poll; the
   unwritten review/manifest.json is no longer advertised.
 - 2026-09-25: the post-review block is stop → apply-retargets → realize,
@@ -160,7 +161,7 @@ browser button and cannot be blocked by the Done page.
 | Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are always included. | `raw/<parent_id>.json`, SQLite projection, receipt |
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
-| Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
+| Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs with JEV (one request per pair, merge at p(yes) ≥ 0.5), caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
 | Attached-LinkedIn judging | There is no standalone step. The review app judges research results when enrichment completes and applies guided retargets. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts |
 | People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
 | Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
@@ -183,7 +184,7 @@ bin/deep-context synthesize
 bin/deep-context compose
 bin/deep-context validate
 bin/deep-context cluster --dry-run # free slam-dunk count + ambiguous-pair estimate
-bin/deep-context cluster           # settle slam dunks, then judge the remainder
+bin/deep-context cluster           # settle slam dunks, then JEV-judge the remainder
 bin/deep-context parents
 bin/deep-context review worth
 ```

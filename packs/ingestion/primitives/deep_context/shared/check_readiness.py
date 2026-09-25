@@ -2,7 +2,8 @@
 
 Scoped deliberately: per AGENTS.md's health-check policy, `$deep-context` runs
 this narrow probe (msgvault/Gmail, chat.db/iMessage, wacli/WhatsApp, people.csv,
-OPENAI_API_KEY, owner.json, the canonical SQLite db) on every invocation instead
+OPENAI_API_KEY, TYPESAFE_API_KEY, owner.json, the canonical SQLite db) on every
+invocation instead
 of the full `bin/doctor`, which is broader and reserved for concrete setup
 failures, not routine readiness checks.
 
@@ -63,7 +64,8 @@ ENSURE_PARENTS_COMMAND = "bin/deep-context ensure-parents"
 OWNER_COMMAND = "bin/deep-context owner --linkedin-url <url> --email <email>"
 
 # Paired positionally with the `check_statuses` tuple built in run() — same
-# order (imessage, msgvault, openai key, owner.json), not matched by name.
+# order (imessage, msgvault, openai key, typesafe key, owner.json), not matched
+# by name.
 # Reordering one without the other silently attaches the wrong advice line.
 ADVICE_RULES: tuple[tuple[str, str], ...] = (
     (
@@ -72,6 +74,7 @@ ADVICE_RULES: tuple[tuple[str, str], ...] = (
     ),
     ("missing", "No msgvault.db — run $import-email/$msgvault to sync Gmail, or proceed with messages only."),
     ("missing", "OPENAI_API_KEY missing from environment/.env — synthesis cannot run."),
+    ("missing", "TYPESAFE_API_KEY missing from environment/.env — worth labels and the merge judge cannot run."),
     ("absent", f"No owner profile — synthesis requires one: run {OWNER_COMMAND}."),
 )
 
@@ -209,6 +212,7 @@ class CheckReadiness:
             )
         )
         has_key = bool(os.getenv("OPENAI_API_KEY"))
+        has_typesafe_key = bool(os.getenv("TYPESAFE_API_KEY"))
         checks = ReadinessChecks(
             msgvault_gmail=PathCheck(
                 "ok" if self.msgvault_db.exists() else "missing",
@@ -233,6 +237,7 @@ class CheckReadiness:
                 projected.owner_path,
             ),
             openai_api_key=StatusCheck("present" if has_key else "missing"),
+            typesafe_api_key=StatusCheck("present" if has_typesafe_key else "missing"),
             canonical_sqlite=PathCheck(
                 (
                     "migration_required"
@@ -261,6 +266,7 @@ class CheckReadiness:
             checks.people_csv.status == "ok"
             and any_source
             and has_key
+            and has_typesafe_key
             and not migrate
             and projected.has_owner
         )
@@ -269,6 +275,7 @@ class CheckReadiness:
             checks.imessage_chat_db.status,
             checks.msgvault_gmail.status,
             checks.openai_api_key.status,
+            checks.typesafe_api_key.status,
             checks.owner_json.status,
         )
         advice = [

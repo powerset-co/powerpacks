@@ -1,26 +1,37 @@
 #!/usr/bin/env python3
-"""Detect and judge same-person pairs from canonical SQLite evidence."""
+"""Detect and judge same-person pairs from canonical SQLite evidence.
+
+Changelog:
+- 2026-09-25: the ambiguous remainder goes to JEV (one request per pair, cached
+  under deep-context/jev/); the OpenAI model, effort, timeout and retry knobs
+  are gone and the dry run prices the actual requests.
+"""
 
 from __future__ import annotations
 
 import argparse
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DOSSIER_DIR,
+    ROOT,
     emit,
     MERGE_CSV,
     MERGE_MANIFEST,
     MERGE_MD,
 )
+from packs.ingestion.primitives.deep_context.db.queries import owner_profile
+from packs.ingestion.primitives.deep_context.jev_worth.runner import estimate as estimate_request
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_LLM,
+    SAME_PERSON_CUTOFF,
     judge_pairs,
+    judge_request,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.models import MergeUsage, PairSurvey
 from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
@@ -28,16 +39,20 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     survey_pairs,
     verdict_rows,
 )
-from packs.ingestion.primitives.deep_context.shared.openai_responses import (
-    estimate_cost_usd,
-)
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.manifests.cluster_merge_manifest import (
     ClusterMergeManifest,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
+from packs.search.primitives.llm_rerank_candidates.jev.client import (
+    INPUT_PRICE_PER_MILLION,
+    MAX_CONCURRENCY,
+)
+from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
 
-DEFAULT_CONFIDENCE = 0.7
+
+def _cost_usd(input_tokens: int) -> float:
+    return input_tokens * INPUT_PRICE_PER_MILLION / 1_000_000
 
 
 class ClusterMergeCandidates(Node):
@@ -57,26 +72,21 @@ class ClusterMergeCandidates(Node):
         *,
         db: Db,
         dossier_dir: Path | None = None,
+        output_dir: Path | None = None,
         out_csv: Path | None = None,
         out_md: Path | None = None,
-        confidence: float = DEFAULT_CONFIDENCE,
-        model: str = DEFAULT_MODEL,
-        reasoning_effort: str = "high",
-        concurrency: int | None = None,
-        timeout: int = 120,
-        max_retries: int = 6,
+        confidence: float = SAME_PERSON_CUTOFF,
+        concurrency: int = MAX_CONCURRENCY,
         refresh: bool = False,
     ) -> None:
         self.db = db
         self.manifest_dir = Path(dossier_dir or DOSSIER_DIR)
+        # The JEV exact-request cache lands at output_dir/jev/, shared with the worth pass.
+        self.output_dir = Path(output_dir or ROOT)
         self.out_csv = Path(out_csv or MERGE_CSV)
         self.out_md = Path(out_md or MERGE_MD)
         self.confidence = confidence
-        self.model = model
-        self.reasoning_effort = reasoning_effort
         self.concurrency = concurrency
-        self.timeout = timeout
-        self.max_retries = max_retries
         self.refresh = refresh
 
     def bindings(self) -> dict[str, str]:
@@ -89,9 +99,22 @@ class ClusterMergeCandidates(Node):
     def survey(self) -> PairSurvey:
         return survey_pairs(self.db, refresh=self.refresh)
 
+    def owner_name(self) -> str:
+        owner = owner_profile(self.db)
+        return owner.name if owner else ""
+
     def estimate(self) -> dict[str, Any]:
         started = time.monotonic()
         survey = self.survey()
+        owner_name = self.owner_name()
+        reference_date = date.today().isoformat()
+        input_tokens = sum(
+            estimate_request(
+                judge_request(pair.first, pair.second, owner_name=owner_name, reference_date=reference_date),
+                output_dir=self.output_dir,
+            )["input_tokens"]
+            for pair in survey.to_judge
+        )
         return {
             "source": "cluster_merge_candidates",
             "status": "dry_run",
@@ -100,10 +123,9 @@ class ClusterMergeCandidates(Node):
             "pairs_slam_dunk": len(survey.slam),
             "cached_reused": len(survey.reused),
             "candidate_pairs_to_judge": len(survey.to_judge),
-            "estimated_cost_usd_low": round(len(survey.to_judge) * 0.004, 2),
-            "estimated_cost_usd_high": round(len(survey.to_judge) * 0.02, 2),
-            "model": self.model,
-            "reasoning_effort": self.reasoning_effort,
+            "estimated_input_tokens": input_tokens,
+            "estimated_cost_usd": _cost_usd(input_tokens),
+            "model": MODEL_ID,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
             "updated_at": now_iso(),
         }
@@ -118,11 +140,9 @@ class ClusterMergeCandidates(Node):
         if to_judge:
             judged, usage, errors = judge_pairs(
                 to_judge,
-                model=self.model,
-                requested_effort=self.reasoning_effort,
-                requested_concurrency=self.concurrency,
-                timeout=self.timeout,
-                max_retries=self.max_retries,
+                owner_name=self.owner_name(),
+                output_dir=self.output_dir,
+                concurrency=self.concurrency,
             )
             verdicts.extend(judged)
         confirmed, clusters = render_results(
@@ -135,10 +155,10 @@ class ClusterMergeCandidates(Node):
         # Preserve paid cache entries outside the current blocking survey. The
         # accepted representative edges remain one-way inputs to BuildParents.
         self.db.replace_merge_verdicts(verdict_rows(verdicts, self.confidence))
-        billed_output = usage.output_tokens + usage.reasoning_tokens
         return ClusterMergeManifest(
             status="completed",
             judge=JUDGE_LLM,
+            model=MODEL_ID,
             people=len(people),
             pairs_total=len(survey.pairs),
             pairs_slam_dunk=len(survey.slam),
@@ -149,11 +169,7 @@ class ClusterMergeCandidates(Node):
             clusters=len(clusters),
             confidence_threshold=self.confidence,
             tokens=usage.as_dict(),
-            estimated_cost_usd=estimate_cost_usd(
-                usage.input_tokens,
-                billed_output,
-                self.model,
-            ),
+            estimated_cost_usd=_cost_usd(usage.input_tokens),
             out_csv=str(self.out_csv),
             out_md=str(self.out_md),
             elapsed_ms=int((time.monotonic() - started) * 1000),
@@ -161,17 +177,15 @@ class ClusterMergeCandidates(Node):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Detect same-person / merge candidates via an LLM tone-aware judge.")
+    parser = argparse.ArgumentParser(description="Detect same-person / merge candidates via the JEV pair judge.")
     parser.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--out-csv", default=str(MERGE_CSV))
     parser.add_argument("--out-md", default=str(MERGE_MD))
-    parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE, help="Min judge confidence to merge")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"])
-    parser.add_argument("--concurrency", type=int, default=None)
-    parser.add_argument("--timeout", type=int, default=120)
-    parser.add_argument("--max-retries", type=int, default=6)
+    parser.add_argument(
+        "--confidence", type=float, default=SAME_PERSON_CUTOFF, help="Min p(yes) to merge (default %(default)s)"
+    )
+    parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENCY)
     parser.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
     parser.add_argument(
         "--refresh", action="store_true", help="Ignore cached SQLite merge verdicts and re-judge every pair"
@@ -188,11 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         out_csv=Path(args.out_csv),
         out_md=Path(args.out_md),
         confidence=args.confidence,
-        model=args.model,
-        reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency,
-        timeout=args.timeout,
-        max_retries=args.max_retries,
         refresh=args.refresh,
     )
     emit(node.estimate() if args.dry_run else node.run().to_payload())

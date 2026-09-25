@@ -6,6 +6,7 @@ from packs.ingestion.primitives.pipeline.contract import StageManifest
 class ClusterMergeManifest(StageManifest):
     source: str = "cluster_merge_candidates"
     judge: str = ""
+    model: str = ""
     people: int = 0
     pairs_total: int = 0
     pairs_slam_dunk: int = 0

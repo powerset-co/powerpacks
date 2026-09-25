@@ -53,7 +53,7 @@ class DeepContextMigrationTests(unittest.TestCase):
                 "packs.ingestion.primitives.deep_context.shared.check_readiness.context_sources.probe_chat_db",
                 return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
-            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key", "TYPESAFE_API_KEY": "synthetic-key"}),
         ):
             return CheckReadiness(
                 db=db,

@@ -227,7 +227,7 @@ bin/deep-context validate
 Identity resolves cheapest evidence first so one human is one review and one
 dossier. The cluster stage applies identical-name plus shared-phone/email slam
 dunks locally, reuses cached decisions, and sends only the ambiguous remainder
-to the LLM judge. Preview the complete stage first:
+to the JEV pair judge (about $0.0001 per pair). Preview the complete stage first:
 
 ```bash
 bin/deep-context cluster --dry-run

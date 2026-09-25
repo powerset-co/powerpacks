@@ -3,6 +3,8 @@
 Created: 2026-08-06
 
 Changelog:
+- 2026-09-25: the merge pair judge runs on JEV (p(yes) ≥ 0.5 merges); the
+  OpenAI pair judge and its model/effort/retry knobs are gone.
 - 2026-08-06: initial spec (post-SQLite-rewrite architecture; parents
   get-or-create contract landing on `parents-get-or-create`).
 - 2026-08-06: contract 3 landed — `ensure_parents/assignment.py` owns stable
@@ -44,7 +46,7 @@ flowchart TD
   factsf --> pfacts["db/projectors.project_parent_fact"]
   pfacts --> sqlite
 
-  sqlite --> cluster["merge_candidates\nparent blocking + one pair judge\nSQLite verdict cache"]
+  sqlite --> cluster["merge_candidates\nparent blocking + one JEV pair judge\nSQLite verdict cache"]
   cluster --> parents["parents — apply accepted merges\none transaction per absorbed family"]
   parents --> sqlite
   sqlite --> dossier["compose_dossier → dossiers/&lt;slug&gt;.md"]
@@ -201,7 +203,7 @@ fingerprint is rejected.
 | Surface | Provider | Cache key | Gate |
 |---|---|---|---|
 | Fact synthesis | OpenAI (`gpt-5.2`) | `input_evidence_fingerprint` + `SYNTHESIS_VERSION` | estimate → run |
-| Merge pair judge | OpenAI | judged pair + evidence | dry-run estimate before cluster |
+| Merge pair judge | JEV (`jev-1.13.0`, TypeSafe) | judged pair + evidence; exact request under `jev/` | dry-run estimate before cluster |
 | Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | `needs_approval` + explicit approve |
 | Profile hydration | RapidAPI | public identifier | cache-first everywhere |
 | LinkedIn evidence judge | OpenAI | `judgment_fingerprint` | sticky verdicts, re-judge only on new evidence |

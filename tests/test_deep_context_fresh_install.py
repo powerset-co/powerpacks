@@ -65,15 +65,16 @@ class FreshInstallTests(unittest.TestCase):
         self.wacli = self.root / "wacli.db"
         self.wacli.touch()
 
-    def readiness(self) -> ReadinessReport:
+    def readiness(self, env: dict[str, str] | None = None) -> ReadinessReport:
         check = "packs.ingestion.primitives.deep_context.shared.check_readiness"
+        keys = {"OPENAI_API_KEY": "synthetic-key", "TYPESAFE_API_KEY": "synthetic-key"}
         with (
             mock.patch(f"{check}.load_env"),
             mock.patch(
                 f"{check}.context_sources.probe_chat_db",
                 return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
-            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
+            mock.patch.dict(os.environ, keys if env is None else env, clear=False),
         ):
             return CheckReadiness(
                 db_path=self.db_path,
@@ -132,6 +133,18 @@ class FreshInstallTests(unittest.TestCase):
         with_owner = self.readiness()
         self.assertIsNone(with_owner.next_command)
         self.assertTrue(with_owner.ready)
+
+    def test_check_requires_the_typesafe_key_for_worth_labels_and_the_merge_judge(self) -> None:
+        self.migrate()
+        EnsureParents(db=open_existing_db(self.db_path), people_csv=self.people_csv).run()
+        self.project_owner()
+
+        with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""}):
+            result = self.readiness({"OPENAI_API_KEY": "synthetic-key"})
+
+        self.assertEqual(result.checks.typesafe_api_key.status, "missing")
+        self.assertFalse(result.ready)
+        self.assertTrue(any("TYPESAFE_API_KEY" in line for line in result.advice))
 
     def test_check_routes_an_empty_store_to_ensure_parents(self) -> None:
         self.migrate()

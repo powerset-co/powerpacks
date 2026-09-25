@@ -39,6 +39,9 @@ from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs im
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_SYSTEM,
+    SAME_PERSON_CUTOFF,
+    TONE_CUTOFF,
+    decision_from_answers,
     judge_prompt,
     shared_identifier_note,
 )
@@ -51,7 +54,11 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     person_sig,
     survey_pairs,
 )
-from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIUsage
+from packs.search.primitives.llm_rerank_candidates.jev.client import (
+    INPUT_PRICE_PER_MILLION,
+    AnsweredRequest,
+)
+from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
 
 
 def person(name, emails=(), extra_emails=(), phones=(), extra_phones=()):
@@ -150,6 +157,24 @@ class TestSharedIdentifierNote(unittest.TestCase):
         a = person("Jordan Bravo", phones=["9145550466"])
         b = person("Casey Delta", phones=["3105550100"])
         self.assertEqual(shared_identifier_note(a, b), "")
+
+    def test_shared_email_handle_across_domains_is_named(self):
+        a = person("Kai Bravo", emails=["kbravo@example.com"])
+        b = person("K Bravo", extra_emails=["kbravo@example.org"])
+        note = shared_identifier_note(a, b)
+        self.assertIn("SHARED IDENTIFIERS", note)
+        self.assertIn(
+            "- email handle kbravo is identical on BOTH records; only the domains differ "
+            "(A: example.com; B: example.org)",
+            note,
+        )
+
+    def test_shared_full_email_is_not_repeated_as_a_handle(self):
+        a = person("Kai Bravo", emails=["kbravo@example.com"])
+        b = person("K Bravo", emails=["kbravo@example.com"])
+        note = shared_identifier_note(a, b)
+        self.assertIn("- email kbravo@example.com is in BOTH records", note)
+        self.assertNotIn("email handle", note)
 
     def test_judge_prompt_carries_the_section_only_on_overlap(self):
         a = person("Jordan Bravo", extra_phones=["9145550466"])
@@ -288,7 +313,7 @@ class TestJudgeSystemRule(unittest.TestCase):
             "Jordan Bravo", extra_emails=["jordan@example.com"],
             extra_phones=["9145550466"],
         )
-        self.assertEqual(pair_sig(first, second), "ab7993a775baa257")
+        self.assertEqual(pair_sig(first, second), "996774661b3e1d0b")
 
 
 class TestCacheAndArtifacts(unittest.TestCase):
@@ -410,42 +435,63 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertFalse(output.with_name("merge-verdicts.csv").exists())
             cached = canonical_snapshot(db).merge_verdicts
             self.assertEqual(len(cached), 1)
-            self.assertEqual(cached[0].signature, "eeadbe96795d2bec")
+            self.assertEqual(cached[0].signature, "5891307a843e8091")
             self.assertEqual(cached[0].accepted, 1)
             self.assertEqual(payload.pairs_slam_dunk, 1)
 
 
-_SAME_PERSON = {
-    "same_person": True, "confidence": 0.9, "tone_toward_a": "casual",
-    "tone_toward_b": "casual", "tone_consistent": True, "reason": "same phone",
-}
+def scripted_answers(*, p_yes: float = 0.9, fail_on: str | None = None):
+    """Fake answer_requests where judge.py binds it; fail on dossiers naming fail_on."""
+    calls: list[dict] = []
+
+    async def answer_requests(requests, *, output_dir, api_key, client, concurrency,
+                              request_version, question_version):
+        ((digest, request),) = requests.items()
+        calls.append(request)
+        if fail_on and fail_on in request["state"]["dossier"]:
+            raise RuntimeError("Jev HTTP 503; candidate remains unscored")
+        response = {
+            "model": MODEL_ID,
+            "answers": {
+                "same_person": {
+                    "type": "choice",
+                    "probabilities": {"yes": p_yes, "no": round(1 - p_yes, 6)},
+                },
+                "tone_consistent": {"type": "noul", "noul": 0.8},
+            },
+            "usage": {"input_tokens": 1000, "output_tokens": 10},
+        }
+        return {digest: AnsweredRequest(
+            response=response, cache=output_dir / "jev" / f"{digest}.json", cached=False, attempts=1,
+        )}
+
+    answer_requests.calls = calls
+    return answer_requests
 
 
-def scripted_caller(*, fail_on: str | None = None):
-    """Fake the OpenAI caller where judge.py looks it up; time out on prompts naming fail_on."""
+class TestJevDecision(unittest.TestCase):
+    def _answers(self, p_yes: float, tone: float = 0.8) -> dict:
+        return {
+            "same_person": {"type": "choice", "probabilities": {"yes": p_yes, "no": 1 - p_yes}},
+            "tone_consistent": {"type": "noul", "noul": tone},
+        }
 
-    class _ScriptedCaller:
-        calls = 0
+    def test_p_yes_at_the_cutoff_is_a_merge_and_below_is_not(self):
+        below = decision_from_answers(self._answers(SAME_PERSON_CUTOFF - 0.01))
+        self.assertFalse(below.same_person)
+        self.assertAlmostEqual(below.confidence, SAME_PERSON_CUTOFF - 0.01)
+        at = decision_from_answers(self._answers(SAME_PERSON_CUTOFF))
+        self.assertTrue(at.same_person)
+        self.assertEqual(at.confidence, SAME_PERSON_CUTOFF)
+        self.assertEqual(at.judge, "llm")
+        self.assertEqual(at.reason, "")
 
-        def __init__(self, config) -> None:
-            self.usage = OpenAIUsage()
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_exc) -> None:
-            return None
-
-        async def call(self, *, user_prompt, **_kwargs):
-            type(self).calls += 1
-            if fail_on and fail_on in user_prompt:
-                raise TimeoutError("timed out")
-            return SimpleNamespace(payload=dict(_SAME_PERSON), usage=OpenAIUsage())
-
-    return _ScriptedCaller
+    def test_tone_noul_maps_through_its_own_cutoff(self):
+        self.assertTrue(decision_from_answers(self._answers(0.9, TONE_CUTOFF)).tone_consistent)
+        self.assertFalse(decision_from_answers(self._answers(0.9, TONE_CUTOFF - 0.01)).tone_consistent)
 
 
-class TestFailedJudgeCall(unittest.TestCase):
+class TestJevJudge(unittest.TestCase):
     def _node(self, root: Path) -> ClusterMergeCandidates:
         db = Db(root / "deep-context.sqlite")
         for person_id, slug, name, phone in (
@@ -461,6 +507,7 @@ class TestFailedJudgeCall(unittest.TestCase):
         return ClusterMergeCandidates(
             db=db,
             dossier_dir=root,
+            output_dir=root,
             out_csv=root / "merge-candidates.csv",
             out_md=root / "merge-candidates.md",
         )
@@ -468,13 +515,13 @@ class TestFailedJudgeCall(unittest.TestCase):
     def test_failed_pair_writes_no_verdict_and_is_judged_next_run(self):
         with tempfile.TemporaryDirectory() as directory:
             node = self._node(Path(directory))
-            failing = scripted_caller(fail_on="Casey Bravo")
+            failing = scripted_answers(fail_on="Casey Bravo")
 
-            with mock.patch.object(judge, "OpenAIResponsesCaller", failing), \
+            with mock.patch.object(judge, "answer_requests", failing), \
                     mock.patch("sys.stderr") as stderr:
                 payload = node.run()
 
-            self.assertEqual(failing.calls, 2)
+            self.assertEqual(len(failing.calls), 2)
             cached = canonical_snapshot(node.db).merge_verdicts
             self.assertEqual([(row.person_a, row.person_b) for row in cached], [("c", "d")])
             self.assertEqual(payload.errors, 1)
@@ -483,11 +530,11 @@ class TestFailedJudgeCall(unittest.TestCase):
                 str(call.args[0]) for call in stderr.write.call_args_list
             ))
 
-            second = scripted_caller()
-            with mock.patch.object(judge, "OpenAIResponsesCaller", second):
+            second = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", second):
                 payload = node.run()
 
-            self.assertEqual(second.calls, 1)
+            self.assertEqual(len(second.calls), 1)
             self.assertEqual(payload.pairs_reused, 1)
             self.assertEqual(payload.pairs_judged, 1)
             self.assertEqual(payload.errors, 0)
@@ -495,6 +542,59 @@ class TestFailedJudgeCall(unittest.TestCase):
             self.assertEqual(
                 [(row.person_a, row.person_b) for row in cached], [("a", "b"), ("c", "d")],
             )
+
+    def test_request_carries_the_pair_text_and_the_two_questions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            fake = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", fake):
+                node.run()
+
+            request = fake.calls[0]
+            self.assertEqual(request["model"], MODEL_ID)
+            self.assertEqual(set(request["questions"]), {"same_person", "tone_consistent"})
+            self.assertEqual(request["questions"]["same_person"]["instructions"], JUDGE_SYSTEM)
+            self.assertEqual(set(request["questions"]["same_person"]["criteria"]), {"yes", "no"})
+            self.assertTrue(request["state"]["dossier"].endswith("Are A and B the same person?"))
+            self.assertIn("CONTACT A", request["state"]["dossier"])
+            self.assertIn("SHARED IDENTIFIERS", request["state"]["dossier"])
+
+    def test_p_yes_is_the_stored_confidence_and_the_cutoff_decides_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.9)):
+                payload = node.run()
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual({(row.judge, row.same_person, row.confidence, row.reason, row.accepted)
+                              for row in rows}, {("llm", 1, 0.9, "", 1)})
+            self.assertEqual(payload.model, MODEL_ID)
+            self.assertEqual(payload.tokens, {"input_tokens": 2000, "output_tokens": 20})
+            self.assertAlmostEqual(payload.estimated_cost_usd, 2000 * INPUT_PRICE_PER_MILLION / 1_000_000)
+
+            Path(directory, "below").mkdir()
+            node = self._node(Path(directory) / "below")
+            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.49)):
+                node.run()
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual({(row.same_person, row.confidence, row.accepted) for row in rows},
+                             {(0, 0.49, 0)})
+
+    def test_dry_run_estimates_from_the_jev_price_without_spending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers()) as fake:
+                estimate = node.estimate()
+
+            self.assertEqual(len(fake.calls), 0)
+            self.assertEqual(estimate["status"], "dry_run")
+            self.assertEqual(estimate["candidate_pairs_to_judge"], 2)
+            self.assertEqual(estimate["model"], MODEL_ID)
+            self.assertGreater(estimate["estimated_input_tokens"], 0)
+            self.assertAlmostEqual(
+                estimate["estimated_cost_usd"],
+                estimate["estimated_input_tokens"] * INPUT_PRICE_PER_MILLION / 1_000_000,
+            )
+            self.assertNotIn("estimated_cost_usd_low", estimate)
 
 
 if __name__ == "__main__":

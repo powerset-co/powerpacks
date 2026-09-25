@@ -1,4 +1,4 @@
-You decide whether two contact records (A and B) are the SAME PERSON, so they can be merged. Reason HOLISTICALLY over ALL the evidence — no single signal dominates. You are given each contact's name, my relationship to them, key identity facts, what we talk about, and sample messages (how I talk to them and how they talk to me).
+state.dossier holds two contact records, A and B: each contact's name, my relationship to them, key identity facts, what we talk about, and sample messages (how I talk to them and how they talk to me). Decide whether A and B are the SAME PERSON. Reason HOLISTICALLY over ALL the evidence; no single signal dominates.
 
 Weigh these together with careful reasoning:
 - IDENTITY: name including nicknames/short forms (e.g. Annmay vs Ann), middle initials, employer, school, location, emails/handles, and any hard CONTRADICTIONS.

@@ -1,4 +1,9 @@
-"""Typed merge-candidate stage values."""
+"""Typed merge-candidate stage values.
+
+Changelog:
+- 2026-09-25: the LLM decision and usage come from JEV answers (no raw payload
+  parser, no reasoning tokens); a failed judge result carries no decision.
+"""
 
 from __future__ import annotations
 
@@ -42,22 +47,6 @@ class MergeDecision:
     reason: str
     judge: str
 
-    @classmethod
-    def from_payload(
-        cls,
-        payload: dict[str, Any],
-        *,
-        judge: str,
-    ) -> MergeDecision:
-        """Parse the raw judge response once at the provider/cache boundary."""
-        return cls(
-            same_person=bool(payload.get("same_person")),
-            confidence=float(payload.get("confidence") or 0),
-            tone_consistent=bool(payload.get("tone_consistent")),
-            reason=str(payload.get("reason") or ""),
-            judge=judge,
-        )
-
 
 @dataclass(frozen=True)
 class MergePairVerdict:
@@ -92,36 +81,29 @@ class CachedMergeVerdict:
 
 @dataclass(frozen=True)
 class MergeUsage:
+    """Paid JEV tokens; cached answers add nothing."""
+
     input_tokens: int = 0
     output_tokens: int = 0
-    reasoning_tokens: int = 0
 
     def __add__(self, other: MergeUsage) -> MergeUsage:
         return type(self)(
             self.input_tokens + other.input_tokens,
             self.output_tokens + other.output_tokens,
-            self.reasoning_tokens + other.reasoning_tokens,
-        )
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> MergeUsage:
-        return cls(
-            int(payload.get("input_tokens") or 0),
-            int(payload.get("output_tokens") or 0),
-            int(payload.get("reasoning_tokens") or 0),
         )
 
     def as_dict(self) -> dict[str, int]:
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
-            "reasoning_tokens": self.reasoning_tokens,
         }
 
 
 @dataclass(frozen=True)
 class MergeJudgeResult:
-    decision: MergeDecision
+    """A failed request carries no decision and the error text."""
+
+    decision: MergeDecision | None
     usage: MergeUsage
     error: str = ""
 

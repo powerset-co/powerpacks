@@ -548,7 +548,7 @@ class SqliteCollectionTest(unittest.TestCase):
                 "probe_chat_db",
                 return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
-            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key", "TYPESAFE_API_KEY": "synthetic-key"}),
         ):
             result = CheckReadiness(
                 db=self.db,
