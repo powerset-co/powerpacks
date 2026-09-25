@@ -125,6 +125,10 @@ PROJECTOR_CALL_BOUNDARIES = {
             "normalize_cached_bundles",
         ),
         (
+            "packs/ingestion/primitives/deep_context/migration/seed.py",
+            "Seed._carry_bundles",
+        ),
+        (
             "packs/ingestion/primitives/deep_context/collection/collect_person_context.py",
             "CollectPersonContext.execute",
         ),
