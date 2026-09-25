@@ -118,7 +118,7 @@ def validate_response(response: object, request: dict) -> dict:
             raise ValueError
         return response
     except (KeyError, TypeError, ValueError, OverflowError):
-        raise RuntimeError("Jev returned an invalid response; candidate remains unscored") from None
+        raise RuntimeError("Jev returned an invalid response; ranking stops without a decision") from None
 
 
 def _cache_record(
@@ -164,7 +164,7 @@ def _validate_cache(
     try:
         response = json.loads(record["raw_response"])
     except (KeyError, TypeError, json.JSONDecodeError):
-        raise RuntimeError("Jev cached response is invalid; candidate remains unscored") from None
+        raise RuntimeError("Jev cached response is invalid; ranking stops without a decision") from None
     return validate_response(response, request)
 
 
@@ -244,7 +244,7 @@ async def _request(
             )
         except httpx.HTTPError:
             if retries == MAX_RETRIES:
-                raise RuntimeError("Jev request failed; candidate remains unscored") from None
+                raise RuntimeError("Jev request failed; ranking stops without a decision") from None
             await asyncio.sleep(2**retries)
             retries += 1
             continue
@@ -254,7 +254,7 @@ async def _request(
             except (TypeError, ValueError):
                 _record_paid_usage(None, int((time.monotonic() - started) * 1000))
                 checkpoint(response.text)
-                raise RuntimeError("Jev returned malformed JSON; candidate remains unscored") from None
+                raise RuntimeError("Jev returned malformed JSON; ranking stops without a decision") from None
             _record_paid_usage(payload, int((time.monotonic() - started) * 1000))
             raw_response = response.text or json.dumps(payload, ensure_ascii=False)
             checkpoint(raw_response)
@@ -263,7 +263,7 @@ async def _request(
             await _retry_delay(response, retries)
             retries += 1
             continue
-        raise RuntimeError(f"Jev HTTP {response.status_code}; candidate remains unscored")
+        raise RuntimeError(f"Jev HTTP {response.status_code}; ranking stops without a decision")
 
 
 @dataclass(frozen=True)
@@ -318,7 +318,7 @@ async def answer_requests(
             return AnsweredRequest(response=response, cache=cache, cached=True, attempts=0)
         async with semaphore:
             if not key:
-                raise RuntimeError("Jev requires TYPESAFE_API_KEY; candidate remains unscored")
+                raise RuntimeError("Jev requires TYPESAFE_API_KEY; ranking stops without a decision")
             if client is None:
                 owned_client = client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
 
@@ -364,7 +364,7 @@ async def evaluate_once(*, client: Any, request: dict, api_key: str) -> dict:
         payload = response.json()
     except ValueError:
         _record_paid_usage(None, int((time.monotonic() - started) * 1000))
-        raise RuntimeError("Jev returned malformed JSON; candidate remains unscored") from None
+        raise RuntimeError("Jev returned malformed JSON; ranking stops without a decision") from None
     _record_paid_usage(payload, int((time.monotonic() - started) * 1000))
     return validate_response(payload, request)
 

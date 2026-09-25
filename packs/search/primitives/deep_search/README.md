@@ -77,7 +77,9 @@ cap into execution. The summary retains every retrieved row. The viewer sorts by
 overall score, then capability rating, and shows one explanation. Ratings 1–2
 show "Did not pass screen".
 
-`llm_rerank_candidates.py --jd-file` uses the exact
+`llm_rerank_candidates.py --jd-file` judges with Jev by default (seven profile
+questions and a trained tree; see the [Jev README](../llm_rerank_candidates/jev/README.md)).
+`--capability-judge terra` uses the exact
 [Terra v5 rubric](../../prompts/terra-capability-v5.txt): high reasoning, Flex,
 one full original profile per request, integer 1–5 output. The shared rubric and
 JD precede candidate evidence with an explicit prompt-cache breakpoint. Both

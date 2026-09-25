@@ -1112,6 +1112,8 @@ def _validate_capability_input(args) -> None:
         raise Failed("--capability-judge jev requires --jd-file")
     if getattr(args, "jd_file", None) and getattr(args, "capability_judge", None) is None:
         args.capability_judge = capability_contract.DEFAULT_JUDGE
+    if _judged_by_jev(args) and getattr(args, "filter_only", False):
+        raise Failed("--filter-only: there is no Luna filter on the Jev path; use --capability-judge terra or --search-only")
 
 
 def cmd_run(args):

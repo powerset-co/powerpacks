@@ -22,6 +22,17 @@ class JevPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(pipeline.Failed, "requires --jd-file"):
                 pipeline._validate_capability_input(args)
 
+    def test_filter_only_is_refused_on_the_jev_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jd = Path(directory) / "jd.txt"
+            jd.write_text("Synthetic JD")
+            args = pipeline.build_parser().parse_args(["run", "--query", "engineers", "--jd-file", str(jd), "--filter-only"])
+            with self.assertRaisesRegex(pipeline.Failed, "no Luna filter"):
+                pipeline._validate_capability_input(args)
+            terra = pipeline.build_parser().parse_args(
+                ["run", "--query", "engineers", "--jd-file", str(jd), "--filter-only", "--capability-judge", "terra"])
+            pipeline._validate_capability_input(terra)
+
     def test_jd_runs_default_to_jev_and_trait_runs_have_no_judge(self):
         with tempfile.TemporaryDirectory() as directory:
             jd = Path(directory) / "jd.txt"

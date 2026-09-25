@@ -163,17 +163,25 @@ def _recent_positions(positions: list[dict], as_of: str) -> list[dict]:
     return [role for index, role in enumerate(positions) if index in kept]
 
 
+def _employer(block: dict) -> str:
+    return str(block.get("company") or "").strip().casefold()
+
+
 def normalized_profile(profile: dict, as_of: str) -> dict:
-    """Use Terra's training evidence shape, the most recent positions only, and their company blocks."""
-    positions = _recent_positions(list(profile.get("positions") or []), as_of)
-    evidence = terra._profile_evidence({**profile, "positions": positions})
+    """Use Terra's training evidence shape, the most recent positions only, and their company blocks.
+
+    Positions are trimmed after normalization, where every input shape carries `start`/`end`
+    (hydrated profiles arrive as `start_date`/`end_date`).
+    """
+    evidence = terra._profile_evidence(profile)
+    evidence["positions"] = _recent_positions(evidence["positions"], as_of)
+    employers = {_employer(role) for role in evidence["positions"]}
     if profile.get("companies"):
-        employers = {str(role.get("company") or "").strip().casefold() for role in positions}
         companies = []
         for raw in profile["companies"]:
             if not isinstance(raw, dict):
                 raise ValueError("Jev profile companies must contain objects")
-            if str(raw.get("company") or "").strip().casefold() not in employers:
+            if _employer(raw) not in employers:
                 continue
             company = {
                 field: copy.deepcopy(raw[field])
@@ -185,6 +193,8 @@ def normalized_profile(profile: dict, as_of: str) -> dict:
             if company:
                 companies.append(company)
         evidence["companies"] = companies
+    else:
+        evidence["companies"] = [block for block in evidence["companies"] if _employer(block) in employers]
     return evidence
 
 

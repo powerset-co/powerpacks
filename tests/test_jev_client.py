@@ -286,11 +286,11 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         invalid = _payload(request)
         invalid["answers"].pop("transfer")
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(RuntimeError, "remains unscored"):
+            with self.assertRaisesRegex(RuntimeError, "without a decision"):
                 await self._score(_Client(_Response(200, invalid)), output_dir=Path(directory))
             checkpoints = list(Path(directory).rglob("*.json"))
             self.assertEqual(len(checkpoints), 1)
-            with self.assertRaisesRegex(RuntimeError, "remains unscored"):
+            with self.assertRaisesRegex(RuntimeError, "without a decision"):
                 await self._score(None, output_dir=Path(directory), api_key=None)
 
     async def test_malformed_paid_response_records_bounded_unknown_cost(self) -> None:
@@ -306,7 +306,7 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bad_request_is_not_retried_and_never_rejects(self) -> None:
         api = _Client(_Response(503), _Response(400, text="max_tokens_exceeded"))
-        with self.assertRaisesRegex(RuntimeError, "Jev HTTP 400; candidate remains unscored"):
+        with self.assertRaisesRegex(RuntimeError, "Jev HTTP 400; ranking stops without a decision"):
             await self._score(api)
         self.assertEqual(len(api.calls), 2)
         self.assertEqual(list((self.output / "jev").glob("*.json")) if (self.output / "jev").exists() else [], [])
@@ -332,6 +332,23 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(request["state"]["roles"]), 40)
         short = self._request()
         self.assertEqual(len(short["state"]["profile"]["positions"]), 2)
+
+    def test_position_cap_reads_hydrated_date_fields(self) -> None:
+        # hydrate_people emits position_title/company_name/start_date/end_date; the cap must
+        # pick the most recent positions by those dates, not the first forty in list order.
+        positions = [{"position_title": "Advisor", "company_name": f"Board {index}",
+                      "start_date": f"{2000 + index // 2}-01", "end_date": f"{2001 + index // 2}-01",
+                      "company_headcount": 10, "description": "Advised."} for index in range(45)]
+        positions.append({"position_title": "Engineer", "company_name": "Newest Systems",
+                          "start_date": "2024-06", "end_date": "2025-08", "company_headcount": 50,
+                          "description": "Built things."})
+        request = self._request(profile={"positions": positions})
+        kept = [role["company"] for role in request["state"]["profile"]["positions"]]
+        self.assertEqual(len(kept), 40)
+        self.assertIn("Newest Systems", kept)
+        self.assertNotIn("Board 0", kept)
+        self.assertEqual({company["company"] for company in request["state"]["profile"]["companies"]}, set(kept))
+        self.assertEqual(len(request["state"]["roles"]), 40)
 
     def test_invalid_company_blocks_fail_before_any_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "companies must contain objects"):
