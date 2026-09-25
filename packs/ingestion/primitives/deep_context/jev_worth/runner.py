@@ -24,8 +24,9 @@ from packs.search.primitives.llm_rerank_candidates.jev.client import (
 # matter how thin the message evidence is. Applied after the JEV answers, so the
 # request and its cache key never change. "Vice President" is not "president".
 NOTABLE_TITLE_RE = re.compile(
-    r"\b(?:c[etofimpr]o|chief\s+(?:[a-z]+\s+){0,3}officer|co-?founder|founder|(?<!vice )president|"
-    r"chair(?:man|woman)?|general\s+partner|managing\s+partner|managing\s+director|partner)\b",
+    r"\b(?:ceo|cto|coo|cfo|cio|cmo|cpo|cro|chro|cso|cdo|chief\s+(?:[a-z]+\s+){0,3}officer|"
+    r"co-?founder|founder|(?<!vice )(?<!vice-)president|chair(?:man|woman)?|"
+    r"general\s+partner|managing\s+partner|managing\s+director|partner)\b",
     re.IGNORECASE,
 )
 NOTABLE_REASON_PREFIX = 'Notable title: '
@@ -190,9 +191,10 @@ async def classify(
     answer = answered[digest]
     answers = answer.response['answers']
     decision = predict(answers)
-    worth = {'decision': decision, 'reason': _reason(answers, decision=decision)}
     if decision != 'yes' and notable_title(headline):
         worth = {'decision': 'yes', 'reason': NOTABLE_REASON_PREFIX + headline.strip()}
+    else:
+        worth = {'decision': decision, 'reason': _reason(answers, decision=decision)}
     return {
         'network_worth': worth,
         'labels': _labels(answers),

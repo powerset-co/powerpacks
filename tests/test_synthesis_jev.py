@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
@@ -239,6 +240,7 @@ class SynthesisJevTests(unittest.TestCase):
                 "labels": {"is_professional": 0.9},
                 "network_worth": {"decision": "maybe", "reason": "thin"},
             })
+            self._mark_facts_cached(root, node)
             owner = {"name": "Mailbox Owner"}
             bundles = selection.effective_parent_bundles(database)
             headlines = runner.parent_headlines(database, people_csv)
@@ -257,6 +259,37 @@ class SynthesisJevTests(unittest.TestCase):
                     runner._tagging_paths(database, node.config, bundles, owner, headlines=headlines),
                     [],
                 )
+                tagged["facts"]["network_worth"] = {"decision": "maybe", "reason": "thin"}
+                path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
+                self._project(root, path)
+
+            # The real tagging pass, answers from cache, model still says maybe: the
+            # saved record and the store end up yes with the notable reason.
+            async def cached_answers(requests, **kwargs):
+                return {
+                    key: SimpleNamespace(
+                        response={"answers": {"is_professional": {"type": "noul", "noul": 0.9}},
+                                  "usage": {"input_tokens": 0, "output_tokens": 0}},
+                        cached=True,
+                    )
+                    for key in requests
+                }
+
+            with patch.object(
+                openai_responses, "AsyncOpenAI", side_effect=AssertionError("must reuse GPT facts")
+            ), patch.object(runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}), \
+                    patch.object(runner.jev_worth, "answer_requests", cached_answers), \
+                    patch.object(runner.jev_worth, "predict", return_value="maybe"):
+                result = node.execute()
+            record = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                record["facts"]["network_worth"],
+                {"decision": "yes", "reason": runner.jev_worth.NOTABLE_REASON_PREFIX + "CEO @ Example Labs"},
+            )
+            self.assertEqual(result.jev.people, 1)
+            self.assertEqual(result.jev.cost_usd, 0)
+            stored = database.query("SELECT machine_worth FROM facts WHERE subject_key='p1'")[0]
+            self.assertEqual(stored["machine_worth"], "yes")
 
     def _node(self, root: Path, *, bundle: dict | None = BUNDLE, people_csv: Path | None = None):
         database = Db(root / "deep-context.sqlite")

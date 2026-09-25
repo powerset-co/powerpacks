@@ -77,9 +77,11 @@ class JevWorthTests(unittest.TestCase):
 
     def test_notable_title_rule(self):
         for headline in ("CEO @ AngelList", "Co-Founder & CTO", "Managing Director, Growth",
-                         "Chief Revenue Officer at Harmonic", "General Partner, Example Ventures"):
+                         "Chief Revenue Officer at Harmonic", "General Partner, Example Ventures",
+                         "CHRO at Example", "CSO, Example"):
             assert runner.notable_title(headline), headline
-        for headline in ("Partnerships Manager", "VP Engineering", "Software Engineer", "Chief of Staff", ""):
+        for headline in ("Partnerships Manager", "VP Engineering", "Software Engineer", "Chief of Staff",
+                         "Vice President of Sales", "Vice-President of Engineering", ""):
             assert not runner.notable_title(headline), headline
 
 
