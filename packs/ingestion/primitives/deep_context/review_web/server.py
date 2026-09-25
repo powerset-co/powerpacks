@@ -420,7 +420,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         hits: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for parent in cached_parents:
             for candidate in parent.get("candidates") or []:
-                if str(candidate.get("pub") or "").strip().lower() == pub_lower:
+                if str(candidate.get("row_key") or candidate.get("pub") or "").strip().lower() == pub_lower:
                     hits.append((parent, candidate))
         if prefer_slug:
             for parent, candidate in hits:

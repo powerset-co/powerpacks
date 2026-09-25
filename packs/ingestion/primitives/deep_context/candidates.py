@@ -281,8 +281,11 @@ def candidates_resolved_by_existing(index_json: Path = INDEX_JSON) -> set[str]:
 # overrides/review.csv. Runtime consumers read that single review surface. The
 # user may overrule it via the sticky, user-owned `network_worth` column.
 
-NETWORK_WORTH_VALUES = ("yes", "maybe", "no")
-DEFAULT_NETWORK_WORTH = "maybe"
+NETWORK_WORTH_YES = "yes"
+NETWORK_WORTH_MAYBE = "maybe"
+NETWORK_WORTH_NO = "no"
+NETWORK_WORTH_VALUES = (NETWORK_WORTH_YES, NETWORK_WORTH_MAYBE, NETWORK_WORTH_NO)
+DEFAULT_NETWORK_WORTH = NETWORK_WORTH_MAYBE
 
 
 # (facts_dir, person_id) -> (mtime_ns, worth). effective_network_worth reads

@@ -40,6 +40,7 @@ import packs.ingestion.primitives.imports.gmail.importer  # noqa: E402,F401
 import packs.ingestion.primitives.imports.linkedin.network_import  # noqa: E402,F401
 import packs.ingestion.primitives.imports.merge_people  # noqa: E402,F401
 import packs.ingestion.primitives.imports.messages.importer  # noqa: E402,F401
+import packs.ingestion.primitives.share.share_list  # noqa: E402,F401
 
 
 def node_subclasses(root: type[Node] = Node) -> list[type[Node]]:

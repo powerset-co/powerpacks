@@ -1,0 +1,250 @@
+# Share + upload: who leaves the laptop, and how it reaches Powerset
+
+Created: 2026-09-24
+
+Change log:
+- 2026-09-24: first version — labels (Jev), tags (human), share list, upload to
+  Powerset (TurboPuffer + Postgres). Written before the code; edit as the code lands.
+- 2026-09-24 (node convention): JEV answers the label questions inside
+  `deep_synthesize` (step 3) and saves them with the facts; `share` became one
+  declared `Node` (`share_list.ShareList`, registered in `pipeline/graph.py`) that
+  writes labels.csv + share.csv in one pass; the `label` command and the share
+  stage's own JEV cache are gone; `deep_synthesize` declares its JEV cache output.
+- 2026-09-24 (craft pass, Codex gpt-6-sol + Opus craft review): one `share_schema.py` home for
+  the share.csv contract; upload DuckDB readers in `local_index.py`; one namespace table;
+  Postgres counts affected rows; evidence date = facts file date; `share.py` split into
+  `label.py` / `share_list.py`; `status` subcommand deleted.
+- 2026-09-24 (share follows worth): the share decision is worth's, not the
+  labels': `share` became `yes | no | confirm`, the private rules became confirm
+  flags that only ask a human about a worth-yes person, `labels.csv` carries one
+  `flag` column, and the `tag` CLI is gone — a UI writes tags.csv.
+- 2026-09-24 (after the code): corrected the facts the builders found wrong from
+  the artifacts (parent-id keying, 548 slugs, live namespaces narrower than the
+  contracts, `_dev` twins), dropped `relationship_active` (cadence is
+  deterministic) and dated Jev requests by their evidence, scoped cloud tag
+  deletes to the share list, resolved cloud ids by slug, recorded the
+  company/school id gap.
+
+## Why
+
+Today every Powerpacks user's LinkedIn network lives in the cloud; some users
+also have Gmail/iMessage/WhatsApp people there. Processing is moving onto the
+laptop (`$deep-context`), so the cloud becomes a **hub** the laptop uploads a
+*chosen subset* of its network to. Two missing pieces:
+
+1. **Share** — a per-person decision "does this person leave my laptop", made
+   from ~50 cheap machine labels (family / homie / professional / private …)
+   the user can override with tags.
+2. **Upload** — push the shared people's already-built local index into the
+   cloud shape `$search powerset` reads.
+
+## Verified facts the design rests on (2026-09-24, read from the artifacts)
+
+Local:
+- `merged/people.csv` (766 rows here): 37 columns, `packs/ingestion/schemas/people_schema.py:44-99`.
+  `id = uuid5(6ba7b810-…, "linkedin:<slug>")` when a slug exists — **the same recipe as cloud
+  `persons.id`** (`network-search-api/shared/ids.py:21,36`); 28 of 50,761 cloud rows were
+  minted under another id, 0 of them in this network. 548/766 rows have a slug; the 218
+  without one are keyed `candidate:email:<address>` (unresolved Gmail candidates).
+- `.powerpacks/search-index/local-search.duckdb` is built from the TurboPuffer namespace
+  contracts (`scripts/build-local-duckdb-shim.py:74-88`): `local_people_positions` ↔
+  `aleph_people_v1`, `local_summaries` ↔ `aleph_summaries_v1`, `local_companies` ↔
+  `aleph_companies_v1`, `local_people_education` ↔ `aleph_people_education_v1`,
+  `local_education` ↔ `aleph_education_v1`. Column names are identical; vectors are
+  1536-d `text-embedding-3-small`, cosine — same as cloud. `local_person_profiles`
+  (39 cols, incl. `hydrated_context` JSON) mirrors Postgres `persons`. The **live**
+  namespaces are strictly narrower than the checked-in contracts (no `person_id`,
+  `title_hash`, `company_*`, `*_followers` on `aleph_people_v1`; no `base_id` on
+  summaries/education), so an upload writes `contract ∩ local table ∩ live schema`.
+  Local `allowed_operator_ids` holds a placeholder operator uuid; the upload always
+  overwrites it. Local company/school ids are `uuid5(indexing-ns, "company:…")`; the cloud
+  keys `aleph_companies_v1` by `urn:harmonic:company:<n>` — **the two never collide** (see
+  Open).
+- Deep-context leaves per person are keyed by **parent id** (`parent-<12hex>`), not the
+  people.csv id; `review_store.parent_ids_by_person(index.json)` is the one map:
+  `deep-context/facts/<parent_id>.jsonl` (strict schema, `synthesize_person_context.py:253-337`;
+  `relationship_category` present in only 14/552 files, `is_owner` true in 0),
+  `deep-context/dossiers/<slug>.md` and `parents/<slug>.md` (YAML front matter incl.
+  `generated_at` + sections, `compose_dossier.py:201-294`), `deep-context/raw/<parent_id>.json`
+  (`direction: from_me|from_them|from_other`, a capped sample — body-free fields only may be
+  used), `people.csv.interaction_counts/last_interaction`. The human/mirror worth row is
+  keyed `parent-worth:<parent_id>`.
+- Human decisions live in `network-import/overrides/review.csv` (`review_store.py:40-77`);
+  human > machine (`worth_view.py`). Nothing named private/tag/label/warmth exists locally.
+- Jev/TypeSafe client `packs/search/primitives/llm_rerank_candidates/jev/client.py`:
+  `POST https://api.typesafe.ai/v1/systemone`, model `jev-1.13.0`, question types
+  `noul` (probability), `choice` (probabilities over named options), `score` (over ordinal
+  levels); $0.042 per 1M input tokens; per-request sha cache under `<out>/jev/`; usage rows
+  via `append_usage_row`. `_request()` (:219-263) is question-agnostic; `score_candidates`
+  is hard-wired to the JD question set — the seam is `score_one` (:313-339).
+
+Cloud (production, read-only checks):
+- `persons`: PK `id`, **UNIQUE `public_identifier` (NOT NULL)**, UNIQUE `public_profile_url`;
+  50,761 rows, 50,551 with `hydrated_context`. Upsert SQL the cloud pipeline uses:
+  `network-search-api/data_pipeline_v2/.../sync_persons_to_supabase.py:70-115`
+  (`ON CONFLICT (public_identifier) DO UPDATE SET col = COALESCE(EXCLUDED.col, persons.col)`).
+- `operator_person_sources(id, operator_id varchar, person_id uuid FK persons ON DELETE CASCADE,
+  source_channel varchar, source_identifier varchar, discovery_method varchar,
+  relationship_strength float, total_interactions int, messages_sent int, messages_received int,
+  first_interaction_at, last_interaction_at, gmail_token_id, discovered_at, created_at, updated_at)`,
+  UNIQUE `(operator_id, person_id, source_channel, source_identifier)`. Existing `source_channel`
+  values: `whatsapp, gmail, phone, csv_import, messages_research, linkedin, contacts, calendar`.
+- TurboPuffer `aleph_people_v1` live attrs: `id, vector, word_tokens, char_tokens, d2q_tokens,
+  phrase_tokens, position_title, seniority_band, company_id, city, state, country, macro_region,
+  is_current, total_years_experience, start_date_epoch, end_date_epoch, tenure_years,
+  inferred_birth_year, base_id, role_track, metro_areas, allowed_operator_ids, role_ids`
+  (+ `taste_*`). Doc id = `"<person uuid>-<position idx>"`. Set scoping =
+  `allowed_operator_ids ContainsAny <users.id of set members>`; the cloud writer derives
+  `allowed_operator_ids` from ALL of `operator_person_sources` (`upload_people_turbopuffer.py:198-217`).
+  Every namespace has a `_dev` twin (`ALEPH_ENV=staging`).
+- `contact_tags(operator_id uuid, person_id uuid NULL, group_key text, tag ∈ private|skip)`,
+  `PUT/DELETE /v2/contacts/tags` (`api_v2/routes/contacts.py:639,690`). Search drops a person
+  when every set member who has them tagged `private` (`contact_tag_filter.py`).
+- My operator: `users.id = 274ac942-3377-4401-886f-88c994985e1b`; 15 `operator_person_sources`
+  rows (contacts/calendar/gmail 5 each) — my 766-person local network is not in the cloud.
+- The laptop `.env` DSN is the `postgres` role with INSERT/UPDATE/DELETE on all of the above.
+
+## Decisions
+
+1. **Worth produces labels; Share exports them locally.** Worth persists machine
+   `network_worth` and `labels` with the facts; its request cache lives under
+   `.powerpacks/deep-context/jev/`. Share writes `.powerpacks/share/labels.csv`,
+   human `tags.csv`, derived `share.csv`, and `manifest.json`.
+2. **JEV answers 34 share questions and 7 worth questions together.** A frozen
+   mapping trained only on original machine decisions produces worth. Inputs are
+   synthesized facts, a facts-derived dossier/profile, message counts, and owner
+   context. Old worth answers, old labels, LinkedIn enrichment, and raw message
+   bodies are excluded. `synthesize --dry-run` estimates the uncached calls.
+   Share makes no paid calls; LinkedIn-only people receive deterministic labels.
+3. **Human tags win.** `tags.csv` rows: `person_id, tags, note, updated_at`; tags are a
+   `|`-joined set from the same label vocabulary plus `private` and `share`. Machine never
+   writes `tags.csv`. The UI writes it through `share/tags.py:TagStore`; there is no `tag`
+   CLI.
+4. **Share follows worth; the labels only ask.** The share decision is
+   `PersonEvidence.network_worth` — the effective worth the user already reviewed, human
+   over machine. No JEV label shares or blocks anyone. A first-rule-wins
+   `labels.confirm_flag` raises at most one flag on a person — family, romantic partner,
+   minor, sensitive context (health/legal/finance/immigration/romance/family conflict),
+   healthcare/legal/financial service provider, automated sender (p ≥ 0.6), stranger
+   (p ≥ 0.6) — and a flag on a worth-yes person makes their row `confirm`: nothing is
+   uploaded until a human answers, in the UI, with a `private` or `share` tag.
+   `confidential_dealings` is a label only — on this network it fired on 87 people, 50 of
+   them recruiters.
+5. **`share.csv` is the contract between the two halves**, one row per `people.csv` row:
+   `person_id, public_identifier, share (yes|no|confirm), reason, labels (|-joined active
+   labels), source (human|machine), updated_at`. First rule wins, the rule name is the
+   reason: `owner` → no, `human_private` → no, `human_share` → yes, `worth_no` → no,
+   `worth_maybe` (maybe or unjudged) → no, a confirm flag → confirm under the flag's own
+   name, else `worth_yes` → yes. `share` refuses to write a list that does not cover every
+   people.csv row — the upload reconciles the cloud to it, so a partial list would un-share
+   the rest. Rows keyed by a `superseded_person_ids` member follow the surviving row.
+6. **Upload = reconcile, not append.** `packs/indexing/primitives/upload_powerset/` reads
+   `share.csv` + the DuckDB and makes the cloud state for THIS operator equal the share list:
+   - `persons`: upsert the shared people **that have a `public_identifier`** with the cloud
+     pipeline's column list and the COALESCE turned around — `COALESCE(persons.col,
+     EXCLUDED.col)`: the cloud owns a person it already has, a laptop only fills NULLs;
+     `hydrated_context` from `local_person_profiles`. People without a slug cannot enter `persons` (NOT NULL/UNIQUE)
+     and are reported as `skipped_no_linkedin` (count only — their keys are email addresses).
+     The cloud id is looked up by slug; where it differs from the local uuid5, every
+     cloud-keyed write (sources, tags, patches) uses the cloud id.
+   - `operator_person_sources`: desired rows = one per (person, local source channel) with
+     `discovery_method = 'powerpacks'`, `source_channel ∈ gmail|imessage|whatsapp|linkedin`,
+     `total_interactions`/`last_interaction_at` from `people.csv`; upsert (counts refresh only
+     on rows this method wrote), delete this operator's `powerpacks` rows that are no longer
+     desired (un-share). Another method's row with the same key is left alone.
+   - TurboPuffer, 5 namespaces: for people **new to the cloud**, upsert the local docs (same
+     columns, `allowed_operator_ids` = union from `operator_person_sources` after the PG step);
+     for people **already in the cloud**, patch `allowed_operator_ids` only (`patch_rows`) —
+     never regress cloud-enriched attributes. Un-share = patch the operator out.
+   - `contact_tags`: `private` row for people whose share reason is `human_private` and who
+     exist in `persons`. A cloud tag is a human decision (the Powerset UI) on both sides: a
+     machine reason never puts one, and it is deleted only where the human's local word is
+     `share`.
+   - Operator id = `users.id` for the credentials JWT `sub` (`postgres_client.credentials_subject`).
+   - Without `--apply` the run plans only (counts per table, first N ids, the Postgres host
+     and namespaces it would write); `--apply` writes. `ALEPH_ENV=staging` redirects
+     TurboPuffer to the `_dev` twins — there is one Postgres, and the plan names its host.
+   - Runs on the laptop only. The build may run on Modal, but `download` already brings
+     `local-search.duckdb` home and the upload is a few MB of I/O with no compute in it; a
+     Modal door existed briefly (2026-09-24) and was deleted before merge — every laptop
+     already holds the Postgres DSN for hydration, so it protected nothing.
+7. **No new nouns in user-facing text**: label, tag, private, share, upload, hub = Powerset.
+   No UI in this round.
+
+## Question set (labels.csv columns)
+
+Deterministic (no LLM): `cadence` (dormant >2y | stale >1y | occasional | regular | frequent,
+from counts + last_interaction), `recency_days`, `channels` (|-joined), `direction`
+(they_initiate | i_initiate | mutual, from raw bundle `direction` counts), `group_chat_only`,
+`linkedin_only`, `network_worth` (pass-through effective worth), `is_owner`,
+`shared_employer`, `shared_school` (from facts `shared_context[].overlap`).
+
+Jev — choice: `relationship_kind` (family | romantic_partner | close_friend | friend |
+acquaintance | colleague | business_contact | service_provider | community | stranger |
+unknown), `mode` (professional_only | personal_only | mixed | unknown), `hierarchy`
+(manager | peer | report | none | unknown), `intro_source` (work | school | mutual_friend |
+family | online | event | cold_outreach | unknown), `seniority` (executive | senior | mid |
+junior | student | retired | unknown), `function` (engineering | product | design | sales |
+marketing | operations | finance | legal | people | founder_exec | investor | academic |
+healthcare | creative | government | other | unknown).
+Jev — score: `warmth` 0–4 (none/automated → distant acquaintance → friendly → close → inner circle).
+Jev — noul (probability columns): `is_family`, `is_close_friend`, `is_personal`,
+`is_professional`, `is_service_provider`, `is_transactional`, `is_automated_sender`,
+`is_stranger`, `is_recruiter`, `is_investor`, `is_founder`, `is_coworker_current`,
+`is_coworker_past`, `is_classmate`, `is_client`, `is_vendor_or_partner`, `is_mentor_or_advisor`,
+`is_mentee_or_report`, `is_neighbor_or_local`, `is_healthcare_legal_or_financial_provider`,
+`sensitive_context`, `is_minor`, `confidential_dealings`, `owner_would_intro`,
+`they_would_take_owner_call`, `met_in_person`, `notable`. (`reciprocal` was dropped: the
+deterministic `direction` label is the same counts.)
+Derived: `flag` (which confirm rule fired, or empty).
+
+Threshold for a noul label to be "active" in `share.csv.labels`: p ≥ 0.6. Choice/score:
+argmax. All thresholds live in one table in `share/labels.py`.
+
+## Files
+
+Agent A (share stage):
+- `packs/ingestion/primitives/share/{__init__,models,questions,evidence,labels,tags,share}.py`,
+  `share/README.md` (mermaid + file table), tests `tests/test_share_*.py`.
+- `packs/search/primitives/llm_rerank_candidates/jev/client.py`: lift `score_one` into a
+  request-keyed `answer(request, *, output_dir, api_key, client, concurrency)` used by both
+  `score_candidates` and the share stage. Byte-identical JD behavior (existing tests + the
+  frozen-contract hashes must pass untouched).
+- `bin/deep-context`: the `share` passthrough.
+
+Agent B (upload):
+- `packs/indexing/primitives/upload_powerset/{upload_powerset,models,plan,postgres,turbopuffer}.py`
+  + `README.md`, tests `tests/test_upload_powerset.py` (fake PG cursor + fake TP namespace;
+  no network).
+
+After both land: `packs/ingestion/skills/deep-context/SKILL.md` step 9 (share → upload),
+CLAUDE.md routing line, `packs/indexing/README.md` row.
+
+## Verification (real surface)
+
+1. `bin/deep-context share` (free) → `labels.csv` + `share.csv`, 766 rows each; spot-check
+   10 people by hand against their dossiers (family/homie/service correctly separated;
+   `flag` fires on the obvious ones).
+2. The manifest's `share_yes` / `share_no` / `confirm` counts match the worth the review UI
+   shows, and every `confirm` row is a worth-yes person with a flag.
+3. A `private` tag written through `TagStore` → `share` → that row reads `no/human_private`.
+4. `upload_powerset.py` (no flag = plan only) → plan counts (persons upserts, OPS
+   inserts/deletes, TP upserts/patches per namespace, skipped_no_linkedin).
+5. Real write ONLY after explicit go, first against `ALEPH_ENV=staging` (`_dev` namespaces);
+   Postgres rows are scoped to operator `274ac942…`. Then `$search powerset` on a query that
+   should hit a newly shared person.
+
+## Open for Arthur
+
+- **Company/school ids don't cross the boundary.** Position docs for a person new to the
+  cloud carry a local `company_id` no cloud company doc has, and the upload gap-fills a
+  company doc under that local id — a second doc for a company the cloud already knows
+  under its harmonic URN. Invisible today (all 192 cloud-new people here have zero
+  positions) but the first LinkedIn-resolved newcomer with work history hits it. The fix
+  belongs to whoever owns company identity: resolve local companies against
+  `aleph_companies_v1` by name/LinkedIn URL before upload.
+
+- People without a LinkedIn slug never reach `persons`/TurboPuffer (cloud constraint). They
+  stay local until the cloud grows a non-LinkedIn person key.
+- Dossier text goes to TypeSafe for labeling (synthesized facts, not bodies). Say if that
+  provider boundary is not acceptable; the fallback is the same questions through OpenAI.

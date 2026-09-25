@@ -304,6 +304,54 @@ def markdown_to_html(markdown: str) -> str:
     return "".join(out)
 
 
+_LABEL_TITLES = (
+    ("is_family", "Family"), ("is_close_friend", "Close friend"),
+    ("is_founder", "Founder"), ("is_investor", "Investor"),
+    ("is_coworker_current", "Coworker"), ("is_coworker_past", "Former coworker"),
+    ("is_classmate", "Classmate"), ("is_mentor_or_advisor", "Mentor / advisor"),
+    ("is_client", "Client"), ("is_recruiter", "Recruiter"),
+    ("is_service_provider", "Service provider"), ("is_automated_sender", "Automated sender"),
+    ("is_stranger", "Stranger"), ("is_transactional", "Transactional"),
+    ("is_professional", "Work-related"), ("is_personal", "Personal"),
+    ("is_vendor_or_partner", "Vendor / partner"), ("is_mentee_or_report", "Mentee / report"),
+    ("is_neighbor_or_local", "Neighbor / local"), ("met_in_person", "Met in person"),
+    ("owner_would_intro", "Would introduce"), ("they_would_take_owner_call", "Would take your call"),
+    ("notable", "Public figure"), ("sensitive_context", "Sensitive topics"),
+    ("is_healthcare_legal_or_financial_provider", "Medical / legal / financial services"),
+    ("confidential_dealings", "Confidential"), ("is_minor", "Under 18"),
+    ("real_relationship", "Direct contact"), ("work_signal", "Work-related"),
+    ("professional_standing", "Established professional"), ("noise", "Spam / broadcasts"),
+    ("transactional_only", "Transactional"), ("evidence_incomplete", "Limited context"),
+)
+_VISIBLE_LABELS = 3
+_LABEL_THRESHOLD = 0.85
+
+
+def _label_badges(parent: dict[str, Any], *, show_scores: bool = True) -> str:
+    labels = parent.get("labels") or {}
+    scores = {}
+    for key, title in _LABEL_TITLES:
+        if key in labels:
+            scores[title] = max(scores.get(title, 0), float(labels[key]))
+    relationship = str(labels.get("relationship_kind") or "")
+    if relationship and relationship != "unknown" and "relationship_kind_p" in labels:
+        title = relationship.replace("_", " ").capitalize()
+        scores[title] = max(scores.get(title, 0), float(labels["relationship_kind_p"]))
+    names = [f"{title} {score:.0%}" if show_scores else title for title, score in
+             sorted(scores.items(), key=lambda item: -item[1]) if score >= _LABEL_THRESHOLD]
+    if not names:
+        return ""
+    shown = "".join(f"<span class='person-label'>{esc(name)}</span>"
+                    for name in names[:_VISIBLE_LABELS])
+    remaining = names[_VISIBLE_LABELS:]
+    if remaining:
+        tooltip = " · ".join(remaining)
+        shown += (f"<span class='person-label-more' tabindex='0' role='button' "
+                  f"aria-label='{esc('More labels: ' + tooltip)}'>+{len(remaining)}"
+                  f"<span class='person-label-tooltip' role='tooltip'>{esc(tooltip)}</span></span>")
+    return f"<span class='person-labels'>{shown}</span>"
+
+
 def _initials(name: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+", name or "")
     if not words:
@@ -557,6 +605,7 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
           {_avatar(parent, candidate)}
           <div class='person-copy'>
             <h2>{esc(name)}</h2>
+            {_label_badges(parent)}
           </div>
         </div>
         {_details(
@@ -635,7 +684,7 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
     if pub.startswith("candidate:"):
         pub = ""  # a candidate id is not a LinkedIn public identifier
     if not pub and not url:
-        return False
+        return True
     view = linkedin_view({"public_identifier": pub or extract_public_identifier(url).lower(),
                           "linkedin_url": url}, profile_cache_dir)
     copied = False
@@ -783,6 +832,7 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
                                  parents_dir: Path, dossier_dir: Path,
                                  profile_cache_dir: Path = PROFILE_CACHE_DIR,
                                  failure_note: str = "") -> str:
+    row_key = candidate.get("row_key") or candidate.get("pub") or (parent.get("person_ids") or [""])[0]
     name = str(parent.get("name") or candidate.get("full_name") or "this person")
     synthetic = bool(candidate.get("synthetic"))
     cache_miss = _hydrate_card_profile(candidate, profile_cache_dir)
@@ -845,6 +895,7 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
           {_avatar(parent, candidate)}
           <div class='profile-copy'>
             <h2>{esc(profile_name)}</h2>
+            {_label_badges(parent)}
             {link}
             {f"<p>{esc(header_headline)}</p>" if header_headline else ""}
             {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
@@ -865,22 +916,22 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         <div class='binary-actions'>
           <button class='button button-outline' data-decide='detach'
                   data-toast='Not this profile'
-                  data-pub='{esc(candidate.get('pub'))}'
+                  data-pub='{esc(row_key)}'
                   data-parent='{esc(parent.get('slug'))}'>No</button>
           <button class='button button-primary' data-decide='keep'
-                  data-pub='{esc(candidate.get('pub'))}'
+                  data-pub='{esc(row_key)}'
                   data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
         </div>"""
     return f"""
     <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
-      {_person_menu(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
+      {_person_menu(row_key,
                     parent.get('slug'), extra_class='card-menu')}
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
         {_failure_note_html(failure_note)}
         <div class='question'>{question}</div>
         {actions}
-        {_retarget_guidance(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
+        {_retarget_guidance(row_key,
                             parent.get('slug'),
                             label=("No profile data — give re-research guidance"
                                    if invalid
@@ -965,7 +1016,8 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
     scroll_content = f"""
         <div class='profile-card'>
           {_avatar(parent, primary)}
-          <div class='profile-copy'><h2>{esc(name)}</h2></div>
+          <div class='profile-copy'><h2>{esc(name)}</h2>
+            {_label_badges(parent)}</div>
         </div>
         {_details(parent, primary, identity=True, identifiers=identifiers)}
         <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
@@ -1058,7 +1110,10 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     fact_rows = []
     if contacts:
         fact_rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
-    fact_rows.append(f"<div><dt>{why_label}</dt><dd>{esc(reason)}</dd></div>")
+    detail_reason = reason
+    if decision == "no" and (parent.get("worth") or {}).get("source") != "user" and reason != "Excluded":
+        detail_reason = str((parent.get("machine_worth") or {}).get("reason") or reason)
+    fact_rows.append(f"<div><dt>{why_label}</dt><dd>{esc(detail_reason)}</dd></div>")
     dossier_preview = (
         "<p class='context-empty'>Not enough information.</p>"
         if sparse_context
@@ -1072,12 +1127,13 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
           <summary class='decision-row-summary'>
             <span class='decision-row-caret' aria-hidden='true'></span>
             {_avatar(parent, candidate, small=True)}
-            <div class='decision-row-main'><strong>{esc(parent.get('name'))}</strong><span>{esc(reason)}</span></div>
+            <div class='decision-row-main'><div class='person-name-line'><strong>{esc(parent.get('name'))}</strong>{_label_badges(parent, show_scores=False)}</div></div>
             <div class='decision-row-actions'>
               <button class='button button-ghost' data-worth='{flip}' data-pub='{esc(_worth_key(parent))}' data-parent='{esc(dossier_slug)}' aria-label='Mark {esc(parent.get('name'))} {flip_label}'>{flip_label}</button>
             </div>
           </summary>
           <div class='decision-row-detail'>
+            <div class='decision-expanded-profile'><h2>{esc(parent.get('name'))}</h2>{_label_badges(parent, show_scores=False)}</div>
             <dl class='row-facts'>{''.join(fact_rows)}</dl>
             {dossier_preview}
           </div>
@@ -1788,6 +1844,7 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
         {_avatar(parent, candidate)}
         <div class='profile-copy'>
           <h2>{esc(name)}</h2>
+          {_label_badges(parent)}
           {link}
           {f"<p>{esc(headline)}</p>" if headline else ""}
           {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
