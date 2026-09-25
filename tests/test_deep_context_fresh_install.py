@@ -1,4 +1,8 @@
-"""A fresh install (no legacy artifacts, no SQLite) reaches a working store."""
+"""A fresh install (no legacy artifacts, no SQLite) reaches a working store.
+
+Changelog:
+- 2026-09-25: created with the fix that routes a missing store to migrate-sqlite.
+"""
 
 from __future__ import annotations
 
