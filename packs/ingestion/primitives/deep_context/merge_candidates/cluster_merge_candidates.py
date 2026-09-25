@@ -2,6 +2,8 @@
 """Detect and judge same-person pairs from canonical SQLite evidence.
 
 Changelog:
+- 2026-09-25: the merge cutoff is the one constant SAME_PERSON_CUTOFF; the
+  --confidence override is gone (below the cutoff it could accept nothing).
 - 2026-09-25: the ambiguous remainder goes to JEV (one request per pair, cached
   under deep-context/jev/); the OpenAI model, effort, timeout and retry knobs
   are gone and the dry run prices the actual requests.
@@ -75,7 +77,6 @@ class ClusterMergeCandidates(Node):
         output_dir: Path | None = None,
         out_csv: Path | None = None,
         out_md: Path | None = None,
-        confidence: float = SAME_PERSON_CUTOFF,
         concurrency: int = MAX_CONCURRENCY,
         refresh: bool = False,
     ) -> None:
@@ -85,7 +86,6 @@ class ClusterMergeCandidates(Node):
         self.output_dir = Path(output_dir or ROOT)
         self.out_csv = Path(out_csv or MERGE_CSV)
         self.out_md = Path(out_md or MERGE_MD)
-        self.confidence = confidence
         self.concurrency = concurrency
         self.refresh = refresh
 
@@ -150,11 +150,10 @@ class ClusterMergeCandidates(Node):
             out_md=self.out_md,
             people=people,
             verdicts=verdicts,
-            confidence=self.confidence,
         )
         # Preserve paid cache entries outside the current blocking survey. The
         # accepted representative edges remain one-way inputs to BuildParents.
-        self.db.replace_merge_verdicts(verdict_rows(verdicts, self.confidence))
+        self.db.replace_merge_verdicts(verdict_rows(verdicts))
         return ClusterMergeManifest(
             status="completed",
             judge=JUDGE_LLM,
@@ -167,7 +166,7 @@ class ClusterMergeCandidates(Node):
             pairs_reused=len(survey.reused),
             candidate_pairs=len(confirmed),
             clusters=len(clusters),
-            confidence_threshold=self.confidence,
+            confidence_threshold=SAME_PERSON_CUTOFF,
             tokens=usage.as_dict(),
             estimated_cost_usd=_cost_usd(usage.input_tokens),
             out_csv=str(self.out_csv),
@@ -182,9 +181,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--out-csv", default=str(MERGE_CSV))
     parser.add_argument("--out-md", default=str(MERGE_MD))
-    parser.add_argument(
-        "--confidence", type=float, default=SAME_PERSON_CUTOFF, help="Min p(yes) to merge (default %(default)s)"
-    )
     parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENCY)
     parser.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
     parser.add_argument(
@@ -201,7 +197,6 @@ def main(argv: list[str] | None = None) -> int:
         dossier_dir=Path(args.dossier_dir),
         out_csv=Path(args.out_csv),
         out_md=Path(args.out_md),
-        confidence=args.confidence,
         concurrency=args.concurrency,
         refresh=args.refresh,
     )

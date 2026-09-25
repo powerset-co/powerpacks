@@ -1,4 +1,8 @@
-"""SQLite-backed merge survey cache plus human-readable result exports."""
+"""SQLite-backed merge survey cache plus human-readable result exports.
+
+Changelog:
+- 2026-09-25: a verdict's same_person is the acceptance; no second threshold.
+"""
 
 from __future__ import annotations
 
@@ -147,10 +151,7 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
     return PairSurvey(people, pairs, slam, reused, to_judge)
 
 
-def verdict_rows(
-    verdicts: list[MergePairVerdict],
-    confidence: float,
-) -> tuple[MergeVerdictRow, ...]:
+def verdict_rows(verdicts: list[MergePairVerdict]) -> tuple[MergeVerdictRow, ...]:
     rows = []
     for verdict in verdicts:
         first, second = verdict.first, verdict.second
@@ -170,7 +171,7 @@ def verdict_rows(
                 score,
                 verdict.decision.tone_consistent,
                 verdict.decision.reason,
-                same and score >= confidence,
+                same,
                 now_iso(),
             )
         )
@@ -180,13 +181,12 @@ def verdict_rows(
 def _confirmed(
     people: list[MergePerson],
     verdicts: list[MergePairVerdict],
-    confidence: float,
 ) -> tuple[list[ConfirmedMergeRow], list[list[str]]]:
     edges: list[tuple[str, str]] = []
     rows: list[ConfirmedMergeRow] = []
     for verdict in verdicts:
         decision = verdict.decision
-        if not decision.same_person or decision.confidence < confidence:
+        if not decision.same_person:
             continue
         first, second = verdict.first, verdict.second
         edges.append((first.person_id, second.person_id))
@@ -211,10 +211,9 @@ def render_results(
     out_md: Path,
     people: list[MergePerson],
     verdicts: list[MergePairVerdict],
-    confidence: float,
 ) -> tuple[list[ConfirmedMergeRow], list[list[str]]]:
     """Write display exports only; SQLite remains the graph/cache authority."""
-    confirmed, clusters = _confirmed(people, verdicts, confidence)
+    confirmed, clusters = _confirmed(people, verdicts)
     CsvIO.write_dict_rows(
         out_csv,
         [

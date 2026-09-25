@@ -18,7 +18,10 @@ from unittest import mock
 import packs.ingestion.primitives.deep_context.merge_candidates.judge as judge
 import packs.ingestion.primitives.deep_context.merge_candidates.receipts as receipts
 from packs.ingestion.primitives.common.contact_fields import identifier_phones
-from packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates import ClusterMergeCandidates
+from packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates import (
+    ClusterMergeCandidates,
+    build_parser,
+)
 from packs.ingestion.primitives.deep_context.shared.common import normalize_name
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -578,6 +581,10 @@ class TestJevJudge(unittest.TestCase):
             rows = canonical_snapshot(node.db).merge_verdicts
             self.assertEqual({(row.same_person, row.confidence, row.accepted) for row in rows},
                              {(0, 0.49, 0)})
+
+    def test_cluster_has_no_confidence_override(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["--confidence", "0.4"])
 
     def test_dry_run_estimates_from_the_jev_price_without_spending(self):
         with tempfile.TemporaryDirectory() as directory:

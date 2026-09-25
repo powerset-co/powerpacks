@@ -244,8 +244,7 @@ bin/deep-context parents
 
 `parents` is free and idempotent — run it after clustering so the canonical
 layer always matches the accepted merges. Report `pairs_slam_dunk` (settled
-locally), `pairs_reused`, and `pairs_judged`; the offline stub remains only a
-constructor-level testing seam.
+locally), `pairs_reused`, and `pairs_judged`.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
 with message context before any paid identity lookup. A candidate merged into an

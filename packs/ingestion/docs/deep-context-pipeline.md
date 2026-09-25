@@ -320,7 +320,7 @@ This gives repeatability without a ledger:
 | Boundary | Data sent | Not sent |
 | --- | --- | --- |
 | OpenAI synthesis | Sampled message text, necessary message metadata, owner context, and small iMessage group bodies under standing owner authorization. | Unselected messages and raw source databases. |
-| OpenAI duplicate judge | Structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
+| JEV duplicate judge (TypeSafe) | The rendered pair evidence: structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
 | OpenAI identity judge (research) | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
 | Parallel.ai | Display name, email, phone, source channel, dossier-derived relationship/work/school/location/topics, and rejected LinkedIn evidence for the approved lookup scope. | Raw message bodies. |
 | RapidAPI | A LinkedIn URL requiring profile hydration. | Gmail or chat content. |
