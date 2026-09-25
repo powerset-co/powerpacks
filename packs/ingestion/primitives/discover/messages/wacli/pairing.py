@@ -14,6 +14,10 @@ Two things WhatsApp only records once, at pairing:
   what the `$import-messages` re-link prompt offers.
 
 Changelog:
+  2026-09-23 (typed rows): `pairing_full_sync_status` returns the frozen
+    `PairingStatus` instead of a dict, so `auth_report`, the extractor, and the
+    status report read `.state`/`.hint`/`.to_payload()` instead of `.get(...)`.
+    Emitted values and key order unchanged.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`;
     the marker read is now a typed `PairingMarker` parse (`payloads.py`) instead
     of a raw dict, and `read_pairing_marker` returns that record (still `None`
@@ -25,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -91,25 +96,54 @@ def read_pairing_marker(store: Path) -> PairingMarker | None:
     return PairingMarker.from_payload(data)
 
 
-def pairing_full_sync_status(store: Path, *, authenticated: bool) -> dict[str, Any]:
+@dataclass(frozen=True)
+class PairingStatus:
+    """`pairing_full_sync_status`'s settled answer, parsed once so its callers
+    (`auth_report`, the extractor, the status report) branch on typed fields
+    instead of re-reading a dict. `to_payload()` reproduces the emitted document
+    key for key — `hint` only on a pre-full-sync session, the paired marker's
+    version/timestamp always on a full-sync one."""
+
+    state: str
+    can_deepen: bool
+    hint: str | None = None
+    paired_wacli_version: Any = None
+    paired_at: Any = None
+
+    @property
+    def pre_full_sync(self) -> bool:
+        """The one state that earns the non-blocking re-link nudge."""
+        return self.state == "pre_full_sync"
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"state": self.state, "can_deepen": self.can_deepen}
+        if self.hint is not None:
+            payload["hint"] = self.hint
+        if self.state == "full_sync":
+            payload["paired_wacli_version"] = self.paired_wacli_version
+            payload["paired_at"] = self.paired_at
+        return payload
+
+
+def pairing_full_sync_status(store: Path, *, authenticated: bool) -> PairingStatus:
     """Whether the current WhatsApp link was set up with full history sync. A
     linked session with no full-sync marker predates our full-sync flow (upstream
     wacli or an old build), so re-linking would pull years more history."""
     if not authenticated:
-        return {"state": "not_authenticated", "can_deepen": False}
+        return PairingStatus(state="not_authenticated", can_deepen=False)
     marker = read_pairing_marker(store)
     if marker and marker.full_sync:
-        return {
-            "state": "full_sync",
-            "can_deepen": False,
-            "paired_wacli_version": marker.wacli_version,
-            "paired_at": marker.paired_at,
-        }
-    return {
-        "state": "pre_full_sync",
-        "can_deepen": True,
-        "hint": (
+        return PairingStatus(
+            state="full_sync",
+            can_deepen=False,
+            paired_wacli_version=marker.wacli_version,
+            paired_at=marker.paired_at,
+        )
+    return PairingStatus(
+        state="pre_full_sync",
+        can_deepen=True,
+        hint=(
             "This WhatsApp link was set up before full history sync. Re-link "
             "(log out and re-scan the QR) to pull years more history."
         ),
-    }
+    )

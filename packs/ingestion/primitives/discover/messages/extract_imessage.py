@@ -7,6 +7,11 @@ No message body columns are selected. Contacts without message history are
 included unless --message-handles-only is set.
 
 CLI: check, open-privacy-settings, extract.
+
+Changelog:
+  2026-09-23 (typed rows): ``check_addressbook`` reads the ``status`` of the
+    diagnostics rows it just built directly instead of ``.get(...)``; every row
+    appended by ``read_addressbook_contacts`` carries it.
 """
 
 from __future__ import annotations
@@ -106,8 +111,8 @@ def iso_desc_sort_value(value: str | None) -> float:
 def check_addressbook(addressbook_glob: str) -> dict[str, Any]:
     matches = sorted(glob.glob(addressbook_glob))
     contacts, diagnostics = read_addressbook_contacts(addressbook_glob)
-    error_diagnostics = [item for item in diagnostics if item.get("status") == "error"]
-    read_diagnostics = [item for item in diagnostics if item.get("status") == "read"]
+    error_diagnostics = [item for item in diagnostics if item["status"] == "error"]
+    read_diagnostics = [item for item in diagnostics if item["status"] == "read"]
     return {
         "glob": addressbook_glob,
         "matches": len(matches),

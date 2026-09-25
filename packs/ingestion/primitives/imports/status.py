@@ -26,6 +26,10 @@ The import counts come from the source people.csv. Candidates share that file
 and are identified by their canonical candidate: IDs.
 
 Changelog:
+  2026-09-23 (typed manifest reads): the discover half reads `ManifestDocument` and
+    the import half reads `ImportManifest`, so neither walks the manifest document
+    with `.get` — `document.output(declared).rows` and `manifest.output_path()`.
+    Output JSON is unchanged.
   2026-07-26 (linkedin discover honesty): the linkedin discover block reports the
     `Connections.csv` export instead of pretending a discover node ran — it used
     to read the fossil discover-dir manifest (last written by a June pipeline;
@@ -52,11 +56,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso  # noqa: E402
+from packs.ingestion.primitives.common.manifests import ManifestDocument  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_IMPORT_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery  # noqa: E402
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery  # noqa: E402
 from packs.ingestion.primitives.imports.common import (  # noqa: E402
+    ImportManifest,
     csv_count,
     import_manifest_current,
 )
@@ -110,28 +116,25 @@ def discover_status(source: str, base_dir: Path) -> dict[str, Any]:
     if source == "linkedin":
         return linkedin_discover_status(base_dir)
     manifest_path = base_dir / "discover" / source / "manifest.json"
-    manifest = read_json(manifest_path, {}) or {}
+    document = ManifestDocument.read(manifest_path)
     declared = DISCOVERY_NODES[source].outputs[0].path
-    outputs = (manifest.get("fingerprints") or {}).get("output_artifacts") or {}
-    stat = outputs.get(declared) if isinstance(outputs, dict) else {}
-    stat = stat if isinstance(stat, dict) else {}
+    stat = document.output(declared)
     return {
         "manifest": str(manifest_path),
-        "present": manifest.get("status") == "completed",
-        "status": str(manifest.get("status") or ""),
-        "contacts_csv": declared if stat.get("exists") else "",
-        "contacts": int(stat.get("rows") or 0),
-        "updated_at": str(manifest.get("updated_at") or ""),
+        "present": document.status == "completed",
+        "status": document.status,
+        "contacts_csv": declared if stat and stat.exists else "",
+        "contacts": (stat.rows or 0) if stat else 0,
+        "updated_at": document.updated_at,
     }
 
 
 def import_status(source: str, import_dir: Path) -> dict[str, Any]:
     manifest_path = import_dir / source / "manifest.json"
-    manifest = read_json(manifest_path, {}) or {}
-    outputs = manifest.get("outputs") if isinstance(manifest.get("outputs"), dict) else {}
-    people_csv = str(outputs.get("people_csv") or "")
+    manifest = ImportManifest.read(source, import_dir)
+    people_csv = manifest.output_path()
     imported = (
-        manifest.get("status") == "completed"
+        manifest.status == "completed"
         and bool(people_csv)
         and Path(people_csv).exists()
     )
@@ -139,14 +142,14 @@ def import_status(source: str, import_dir: Path) -> dict[str, Any]:
     people = CsvIO.read_dict_rows(Path(people_csv)) if imported else []
     return {
         "manifest": str(manifest_path),
-        "present": bool(manifest),
-        "status": str(manifest.get("status") or ""),
+        "present": manifest.present,
+        "status": manifest.status,
         "imported": imported,
         "current": current,
         "people_csv": people_csv if imported else "",
         "people": len(people),
         "candidates": sum(row["id"].startswith("candidate:") for row in people),
-        "updated_at": str(manifest.get("updated_at") or ""),
+        "updated_at": manifest.updated_at,
     }
 
 

@@ -3,22 +3,10 @@ name: search
 description: "The single people-search door for Powerpacks. You decide surface/backend/depth/mode and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the reviewed result-driven deep mode; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
-<!--
-Changelog:
-- 2026-09-09: Deep mode generates its initial query directly from the JD; query
-  review initializes the run without a separate recruiter-plan stage.
-- 2026-08-31: User edits and result feedback are logged through search_feedback.py.
-- 2026-07-01: The agent records surface/backend/depth in decision.json before dispatch.
--->
-
 # Search
 
 The single entry point for people search. `$search` routes every query to the right surface, then
 runs fast local/TurboPuffer retrieval itself for ordinary people searches.
-
-For the product and system walkthrough, read
-[`packs/search/docs/search-architecture.md`](../../docs/search-architecture.md).
-This file remains the executable agent contract.
 
 Use this for any people search request:
 
@@ -34,35 +22,24 @@ Use this for any people search request:
 
 ## How to run this skill
 
-### Opt-in cross-encoder beta
+Deep JD searches keep the existing cheap filter, followed by original-evidence
+Luna capability screening, not Gemma CE. Candidates rated 3+ receive parallel Terra qualification and Luna
+opportunity judgments. Terra independently rechecks Luna opportunity cap 2;
+overall is the lower of qualifications and the authoritative opportunity cap.
+The viewer shows overall score and one explanation, sorted
+by overall then capability. Ratings 1–2 show "Did not pass screen". Saved human
+ratings remain separate. Ordinary non-JD searches keep their existing reranker.
+Deep-mode results also get a private hosted snapshot when signed in to Powerset;
+`deep-mode.md` owns upload and refresh. Explicit offline/local-only requests stay local.
 
-Only when the user requests CE beta, set `POWERPACKS_CROSS_ENCODER_BETA=1`
-for this search's commands (including each deep `run-pond`). Standard `prepare`
-and `run` also accept `--cross-encoder-beta`. Never enable it globally without
-the user's request. Show `CE beta enabled; additional hosted scoring` in the
-usual pre-execution preview; the existing search approval covers that run.
+The pipeline generates pond queries, filters, and traits; review them for
+correctness, not extra specificity. Keep queries broad and positive and traits
+terse. Correct extraction or location errors against the user's request/JD,
+preserving intended breadth and OR alternatives. Do not add constraints, turn
+preferences into requirements, or pad queries with exclusions. Correct wording
+when needed; leave already-correct output alone. See `deep-mode.md` for review.
 
-After filtering, the same full profiles go to the normal reranker and the CE
-in parallel. Deep search also supplies the full JD; both include the pond query
-and qualifications. CE uses `POWERSET_API_KEY` through vendor-gateway, including
-on the local backend. `--search-only` and `--filter-only` do not call CE.
-
-Normal ordering stays authoritative. The exported `cross_encoder_score` is a
-raw model score, not a probability or 1–5 human rating. The saved rerank output
-contains CE status, revision, token usage, and cache paths. Failed CE scoring is
-reported without removing candidates or replacing their normal scores. This
-beta currently uses base Qwen, not a trained taste adapter.
-
-**FIRST, before running anything: create a literal, visible checklist with the five steps
-below and step through it, marking each item complete as you go.** This is mandatory. Use
-your harness's plan/todo/task tool:
-
-- **Claude Code:** `TaskCreate` one task per step (1–5), then `TaskUpdate` each to
-  `in_progress` then `completed` as you go.
-- **Codex:** `update_plan` with the five steps, updating status as you go.
-- **Any other harness:** its equivalent todo/plan mechanism.
-
-Seed the checklist with these exact item titles:
+Before running, track these five steps in the harness's checklist:
 
     1. Decide + record the search decision (decision.json)
     2. Prepare the search (payload preview or deep query)
@@ -70,12 +47,7 @@ Seed the checklist with these exact item titles:
     4. Execute the search
     5. Present results
 
-Work the checklist in order 1 → 5. Exactly one item `in_progress` at a time; mark it
-`completed` before starting the next. No batching, no reordering, no skipping, no invented
-extra steps. If Step 1 decides surface `company`/`sql`/`contacts`, mark items 2–5 as handed
-off and load that surface's SKILL — it owns its own flow. If Step 1 decides depth `deep`,
-items 2–5 are owned by deep mode's own checklist (`deep-mode.md`) — load it right after
-recording the decision.
+Work in order. A routed surface or deep mode owns steps 2–5 through its own skill.
 
 ## Step 1 — Decide the route (you are the router)
 
@@ -117,8 +89,8 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
    - Deep uses the result-driven loop: one broad query, ordinary
-     retrieval/filter/rerank, all results scoring at least 0.70 in the viewer (or at least
-     0.30 when none clear 0.70), then one plain continue-or-done question; the model
+     retrieval/filter/rerank, all retrieved results in the viewer,
+     then one plain continue-or-done question; the model
      diagnoses and crafts each next query
      itself. Auto mode caps at four ponds; an explicit interactive request for another round
      is binding and can reopen a model-stopped run. Scores are display-only.
@@ -205,33 +177,22 @@ The order is **explicit user preferences > JD-supported inference > defaults**.
 Apply these when reviewing the query and ordinary compiled payload. Defaults rank;
 they do not silently become JD hard requirements. The user can override them at review.
 
-- **Derive the seniority target from level language, else from the title's
-  conventional range.** Map stated levels ("senior", "staff+", "director and
-  above") to seniority bands. When a hiring JD/title states no explicit
-  level, propose the title's conventional band range (e.g. "Member of
-  Technical Staff" or a bare "Software Engineer" → mid/senior — MTS is not
-  the `staff` band despite the word) and show it in the preview's
-  `Targeting:` line for correction. Never derive bands from years of
+- **Derive the seniority target from level language, else use the general IC
+  range.** Map stated levels ("senior", "staff+", "lead", "head of") to
+  seniority bands. A candidate role with no explicit level uses
+  junior/mid/senior/staff. Never derive bands from years of
   experience, team size, scope, or impact language — YOE is unreliable
   ("8+ years" does not mean senior). Preserve extractor-inferred bands
   unless they contradict the query.
-- **Exclude current founders / co-founders / CEOs / C-suite by default**
-  for role searches. They are rarely hireable for an IC or leadership
-  hire. State the default in the preview (one line such as
-  `Excluding current founders/C-suite — say "include founders" to keep
-  them`) so the user can flip it. Include them only when the user
-  explicitly asks for founder-type profiles or "builders regardless of
-  current title".
-- **Never silently exclude VP / director / manager / head.** Some are
-  hands-on and appropriate depending on company stage. Keep them unless
-  the user excludes them; the rerank judges hands-on fit.
+- **Explicit leadership language overrides the IC default.** Lead, head,
+  manager, director, VP, and C-suite searches use the corresponding bands;
+  never append negative title clauses to approximate seniority.
 - **"People like <person>"** anchors seniority to that person's current
   role and band (same rule as the deep-search engine). If the anchor is still
   ambiguous, ask exactly one question before executing: "Hands-on IC
   engineers only, or are technical leaders (VP/director/CTO) acceptable
   if still hands-on?"
-- **Preserve the user's stated constraints exactly; never add hidden
-  exclusions beyond the founder default above without asking.** When the
+- **Preserve the user's stated constraints exactly; never add exclusions.** When the
   user corrects a seniority interpretation, that correction binds every
   subsequent search in the session — repeating a corrected mistake is the
   worst outcome.
@@ -271,8 +232,7 @@ matches compactly; if several people match, list them all. If zero match,
 say so and offer a normal search. Skip extraction, task state, retrieval,
 hydration, and all LLM stages — this is a deterministic lookup, not a
 search. If the query combines a person with anything else ("engineers who
-worked with John Doe"), it is not this fast path — use the normal flow and
-the agentic SQL fan-out gate.
+worked with John Doe"), it is not this fast path; follow the Step 1 route.
 
 1. Determine the DuckDB path:
    - `$POWERPACKS_LOCAL_SEARCH_DB` if set
@@ -293,18 +253,14 @@ the agentic SQL fan-out gate.
 
    Use the same `<slug>` run dir where `decision.json` was recorded.
 
-4. Show the preview compactly (it will include `scope: local_duckdb` and a
-   `pool_estimate` with `matched_people` / `total_people`). Include one line
-   like `Pool: 150 of 500 people`. When the extracted filters include
-   `seniority_bands` (or the query names a band), include one compact line
-   such as `Targeting: senior/staff ICs` so the user can correct the band
-   before executing — a role noun like "product managers" must not silently
-   become a `manager` seniority band. If `runtime_notes` flags a broad search
+4. Show the query without an agent-written targeting or filter summary.
+   Review the compiled filters for correctness: a role noun like "product
+   managers" must not silently become a `manager` seniority band.
+   If `runtime_notes` flags a broad search
    (hard filters match more than ~60% of the index), surface that note and
    recommend narrowing before executing — running LLM stages over most of
    the index is usually a query problem, not a retrieval problem. If it
-   flags 0 matches or a suspiciously narrow pool, recommend `modify` (or
-   expect the zero-result fallback below). Then ask exactly:
+   flags 0 matches or a suspiciously narrow pool, recommend `modify`. Then ask exactly:
 
    `Execute this local search or modify it?`
 
@@ -312,90 +268,12 @@ the agentic SQL fan-out gate.
 
 6. Keep execution quiet until the command finishes.
 
-### Agentic SQL fan-out (local mode only)
+### SQL assistance (local only)
 
-In parallel with steps 3–6, fan out to the `search-sql` skill
-(`packs/search/skills/search-sql/SKILL.md`) via a sub-agent — but only when
-the gate below passes. Default is OFF; most searches must not fan out.
-
-Decision test: **could the need be expressed as filters over one position
-row at a time?** If yes, do not fan out — the main retrieval stages own it.
-Fan out only when the query needs one of:
-
-- **counting/aggregation across a person's rows** — "2+ stints at
-  startups", "average tenure under 2 years", "worked at 3+ FAANG companies"
-- **ordering/sequence between a person's roles** — "engineers who became
-  product managers", "promoted internally", "IC before manager"
-- **a join against another person** — "worked with X", "overlapped with X
-  at Y", "schoolmates of X", "people similar to X's career path"
-- **set algebra over two sub-populations** — "ex-Stripe folks now at infra
-  startups"
-- **cross-trait evidence living on different rows or tables** — "designers
-  who can code" (the design role is one position row; the coding evidence
-  is a different engineering row or `local_summaries.tech_skills`),
-  "recruiters with a technical background", "founders who were previously
-  sales". One position row cannot satisfy both traits, so per-row filters
-  cannot express the conjunction — still run hybrid in parallel, since
-  profile prose sometimes carries both signals.
-- **interaction history** — "people I've actually messaged" (requires
-  `local_person_source_summary`; skip if the table is absent)
-- **explicit user request** — "also run the sql vertical", "sql:"
-
-Never fan out for role/title/seniority/location/company/education/date
-filters, however many are combined — "senior Stanford engineers at series A
-fintechs in NYC since 2020" is still one-row-at-a-time and stays in the
-main path. When unsure, do not fan out; the user can ask for `sql:` on a
-follow-up.
-
-Give the sub-agent the user query verbatim plus any already-resolved person
-or company ids, and have it follow `search-sql`'s output contract. Do not
-fan out for plain row-level searches — the main retrieval stages own those.
-
-Fan-in goes through the pipeline, not around it:
-
-1. Run `prepare` and fan out the sub-agent while the user reviews the
-   preview.
-2. Write the sub-agent's output JSON to `agentic-sql-candidates.json` inside
-   the run's output directory.
-3. Append `--extra-candidates-json <that path>` to the returned
-   `execute_command` before running it. The pipeline unions the SQL people
-   into retrieval (tagged `agentic_sql` in `vertical_sources`), so they flow
-   through the **same** `hydrate_people`, `llm_filter_candidates`, and
-   `llm_rerank_candidates` steps as every other candidate — no separate
-   ranking path.
-4. If the sub-agent has not finished by the time the user approves
-   execution, wait briefly for it; if it fails or returns an empty `people`
-   list, run the `execute_command` without the flag and note the vertical
-   was skipped. The SQL vertical is additive evidence — never block or fail
-   the search on it.
-
-### Zero-result SQL fallback (local mode only)
-
-If the pipeline completes with 0 found (or the preview's `pool_estimate`
-already shows 0 matched), fan out one `search-sql` sub-agent with the user
-query **and** the payload's `role_search_filters`, asking it to:
-
-1. probe the actual value spaces of each hard-filtered column,
-2. identify which constraint zeroed the pool (e.g. a filter value that does
-   not exist in the index taxonomy),
-3. return candidates matching the user's intent with corrected values, in
-   the standard output contract.
-
-Present the diagnosis in one line ("`seniority_bands: [manager]` matched 0
-because this index uses ..."), plus the recovered candidates if any. Offer
-to re-run the proper pipeline with corrected filters; do not silently
-substitute SQL results for a full search.
-
-### Local Summary
-
-- Say `<N> found (local)`.
-- Say `Run artifacts: <artifact-dir>`.
-- Show top 10 candidates from the CSV: rank, name, current title/company,
-  location, LinkedIn URL when present.
-- If the SQL fan-out ran, say `<M> sql-vertical candidates merged` (read
-  `agentic_sql_tagged` from the execute_role_search step summary). SQL-only
-  people appear in the main ranked CSV like everyone else; their rows carry
-  `agentic_sql` in `vertical_sources`.
+For cross-row evidence, explicit SQL assistance, or zero matches in the preview
+or results, load [search-sql](../search-sql/SKILL.md#integration-with-a-parent-search)
+and follow its parent-search integration instructions. Ordinary row-level filters
+do not need SQL assistance.
 
 ### Local Constraints
 
@@ -425,11 +303,8 @@ files on the happy path. Start a fresh run for every search request.
 
 2. If `prepare` returns `status: company_directory_fast_path`, follow the
    returned tool request and skip semantic retrieval.
-3. If `prepare` returns a preview, show it compactly. When the extracted
-   filters include `seniority_bands` (or the query names a band), include one
-   compact line such as `Targeting: senior/staff ICs` so the user can correct
-   the band before executing. If there is no seniority target, omit the line
-   — do not invent one. Then ask exactly:
+3. If `prepare` returns a preview, show the query without an agent-written
+   targeting or filter summary. Then ask exactly:
 
    `Execute this search or modify it?`
 
@@ -451,6 +326,7 @@ files on the happy path. Start a fresh run for every search request.
 ## Final Summary
 
 - Say `<N> found`.
+- For local results, say `found (local)`.
 - Say `Run artifacts: <artifact-dir>`.
 - Read only the `csv` path from the final `artifacts` object and show the top
   10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
@@ -461,14 +337,7 @@ files on the happy path. Start a fresh run for every search request.
 
 ## User edit & feedback capture
 
-This applies to every `$search` run, fast and deep (the run dir is
-`.powerpacks/search/<slug>` or `.powerpacks/deep-search/<jd-slug>`).
-
-**Log every user change the moment it happens.** Whenever the user modifies
-anything about the search — changes the query wording, drops/adds/corrects a
-filter or seniority band at the `modify` gate, flips a default (e.g. "include
-founders"), edits a pond query or payload — or gives any feedback about the
-results ("wrong person", "this ranking is off", "top result is stale"), run:
+Log each user query/filter/pond edit or result note immediately:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py log \
@@ -476,31 +345,16 @@ uv run --env-file .env --project . python packs/search/primitives/search_feedbac
   --note "<one line in the user's words>" [--before "<old value>"] [--after "<new value>"]
 ```
 
-It appends to `<run>/user-edits.jsonl`. Identifiers only (names, LinkedIn
-URLs, queries, filter values) — never message content. This automated row is
-a deliberate, owner-approved exception (2026-08-31) to `$feedback`'s
-preview-and-consent flow: search edits and result notes ship with their
-person identifiers so results can be re-labeled later. A concrete data error
-on a person (wrong LinkedIn attached, stale profile data) still deserves its
-own `$feedback` report — the aggregated row is taste telemetry, not a
-data-fix request.
-
-**Send once per run, at the end.** After the final summary (or at the end of
-the search turn, whichever comes last), if anything was logged, run:
+Use identifiers only, never message content. At the end of a run with edits,
+send once:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py send \
   --run-dir <run>
 ```
 
-Edits go to the Powerset feedback endpoint as one row per edit kind (a
-`filter_edit`-typed row per edit kind, a `bad_search`-typed row for result
-feedback), all linked by the run slug in `metadata.run`; nothing is ever
-re-shipped. `status: needs_auth` (not logged in) is a normal outcome: the
-local log is the record, say nothing beyond one line, and do not ask the
-user to log in or retry. Submitted edits rotate into `feedback-sent.jsonl`,
-so repeating `send` is a safe `no_edits` and a later search reusing the same
-slug starts a fresh log.
+`needs_auth` is normal; keep the local log and do not request login. Concrete
+person-data errors still use `$feedback`.
 
 ## Execution Rules
 
@@ -508,30 +362,14 @@ slug starts a fresh log.
   the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
-- Do not use sub-agents for ordinary single-query searches. (Exception: the
-  local-mode agentic SQL fan-out above, only when its trigger conditions are
-  met.)
+- Do not use sub-agents for ordinary single-query searches except the local
+  SQL assistance described above.
 - Do not write new retrieval scripts during a search run.
 - Do not filter or reuse prior artifacts for refinements; create a new search
   with the updated query or constraints.
 - Do not mention skip-rerank, alternate execution modes, internal ledgers, or
   internal artifact paths in the user-facing preview.
 
-## Primitive-Owned Behavior
-
-The packaged primitives own extraction, company-only detection, company and set
-resolution, structured traits, hard-filter/filter-only handling, LLM filtering,
-reranking, and persistence. Treat primitive output as the source of truth.
-
-The neighboring `network-search-api` is the reference implementation for newer
-search behavior, including structured traits (`value`, `temporal`, `meaning`),
-grouped scoring for hard-filter-backed traits, filter-only fallback for
-hard-filter-only queries, and rerank skip behavior when no traits/candidates are
-available. Do not reimplement those behaviors in the skill; port or update the
-packaged primitives when behavior needs to change.
-
-## Debugging
-
-Use internals only after a blocker, failed run, inconsistent final summary, or
-explicit user request. Useful internal surfaces include the task state, ledger,
-hydration outputs, rerank handoff files, manifest, and primitive source.
+The packaged primitives own extraction, resolution, filtering, reranking, and
+persistence. Treat their output as authoritative and inspect internals only
+after a failed or inconsistent run, or when the user asks to debug.

@@ -6,6 +6,10 @@ downloads the client secret JSON, and the add-test-users flow. Also builds the
 manual fallback instructions payload.
 
 Changelog:
+  2026-09-23 (typed rows): `browser_status` / `browser_client_secret_path` are the
+    named boundary for the browser script's JSON fields, so `browser_flows` reads
+    typed values instead of `.get`-ing the payload; the subprocess result reads
+    through `CommandResult`.
   2026-07-29 (setup style pass): DELETED `latest_client_secret` — the browser
     script reports the file it downloaded as `client_secret_path` and
     `browser_flows` reads that, so nothing has scanned the download directory
@@ -70,7 +74,7 @@ def ensure_playwright_core(node_deps: Path = DEFAULT_NODE_DEPS.expanduser()) -> 
     node_deps.mkdir(parents=True, exist_ok=True)
     progress("Installing browser automation runtime...")
     result = run_command(["npm", "install", "--prefix", str(node_deps), "playwright-core"], timeout=300)
-    if not result["ok"]:
+    if not result.ok:
         return {"status": "error", "message": command_error(result)}
     progress("Browser automation runtime ready.")
     return {
@@ -78,6 +82,16 @@ def ensure_playwright_core(node_deps: Path = DEFAULT_NODE_DEPS.expanduser()) -> 
         "installed": True,
         "node_path": str(node_deps / "node_modules"),
     }
+
+
+def browser_status(payload: dict[str, Any]) -> str:
+    """The status reported by google_oauth_browser.js, "error" when it reported none."""
+    return str(payload.get("status") or "error")
+
+
+def browser_client_secret_path(payload: dict[str, Any]) -> str:
+    """The client-secret JSON path google_oauth_browser.js downloaded, "" when none."""
+    return str(payload.get("client_secret_path") or "")
 
 
 def run_browser_automation(
@@ -119,19 +133,19 @@ def run_browser_automation(
     result = run_streaming_command(cmd, timeout=timeout_seconds + 180, env=env)
     payload: dict[str, Any]
     try:
-        payload = parse_json_fragment(result.get("stdout", ""))
+        payload = parse_json_fragment(result.stdout)
     except json.JSONDecodeError:
         payload = {
             "status": "error",
             "message": command_error(result),
         }
-    if not result["ok"] and payload.get("status") == "ok":
+    if not result.ok and browser_status(payload) == "ok":
         payload["status"] = "error"
-    payload.setdefault("returncode", result["returncode"])
-    if result.get("stderr"):
-        payload.setdefault("log", tail(result["stderr"]))
+    payload.setdefault("returncode", result.returncode)
+    if result.stderr:
+        payload.setdefault("log", tail(result.stderr))
     payload.setdefault("browser_deps", deps)
-    if payload.get("status") == "ok":
+    if browser_status(payload) == "ok":
         progress("Google OAuth client secret downloaded.")
     else:
         progress("Chrome is waiting for Google OAuth setup to finish.")
@@ -178,19 +192,19 @@ def run_browser_add_test_users(
     env = {**os.environ, "NODE_PATH": deps["node_path"]}
     result = run_streaming_command(cmd, timeout=timeout_seconds + 180, env=env)
     try:
-        payload: dict[str, Any] = parse_json_fragment(result.get("stdout", ""))
+        payload: dict[str, Any] = parse_json_fragment(result.stdout)
     except json.JSONDecodeError:
         payload = {
             "status": "error",
             "message": command_error(result),
         }
-    if not result["ok"] and payload.get("status") == "ok":
+    if not result.ok and browser_status(payload) == "ok":
         payload["status"] = "error"
-    payload.setdefault("returncode", result["returncode"])
-    if result.get("stderr"):
-        payload.setdefault("log", tail(result["stderr"]))
+    payload.setdefault("returncode", result.returncode)
+    if result.stderr:
+        payload.setdefault("log", tail(result.stderr))
     payload.setdefault("browser_deps", deps)
-    if payload.get("status") == "ok":
+    if browser_status(payload) == "ok":
         progress("Google OAuth test users updated.")
     else:
         progress("Chrome is waiting for Google OAuth test user setup to finish.")

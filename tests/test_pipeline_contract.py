@@ -485,9 +485,15 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 ("deep_compose", ".powerpacks/deep-context/dossiers/{slug}.md"),
                 ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
                 ("deep_synthesize", ".powerpacks/deep-context/facts/{parent_id}.jsonl"),
+                # synthesize's own JEV request cache: written and re-read by the same node.
+                ("deep_synthesize", ".powerpacks/deep-context/jev/{request_sha256}.json"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("gmail_stage_merge", ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
+                # labels.csv is the human's scan surface; share.csv is read by the
+                # indexing pack's upload_powerset, which is not a declared node.
+                ("share", ".powerpacks/share/labels.csv"),
+                ("share", ".powerpacks/share/share.csv"),
             ],
         )
 
@@ -499,8 +505,8 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("messages_stage_merge", report["edges"]["messages_import"])
 
     def test_the_deep_context_stage_is_registered(self) -> None:
-        # Only file-to-file stages remain registered. Review, enrichment, and
-        # realization workers now read/write SQLite explicitly.
+        # Only file-to-file stages remain registered, plus the share node. Review,
+        # enrichment, and realization workers read/write SQLite explicitly.
         names = set(check_graph(self._declared_nodes())["nodes"])
         self.assertLessEqual(
             {
@@ -512,10 +518,11 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 "deep_cluster",
                 "deep_parents",
                 "deep_reconcile",
+                "share",
             },
             names,
         )
-        self.assertEqual(len(names), 21)
+        self.assertEqual(len(names), 22)
 
     def test_review_csv_has_no_runtime_writer(self) -> None:
         # Runtime worth and identity decisions live in SQLite. review.csv is

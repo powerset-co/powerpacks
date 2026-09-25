@@ -12,7 +12,7 @@ model's job, never the user's. When the recorded mode is `auto`, run
 `decide --autonomous` after each pond instead of pausing; the loop stops after
 at most four ponds. Interactive mode also completes at that point, but an
 explicit user request can reopen it for one more pond at a time.
-There is no pool-reading judge and scores never decide candidate quality.
+Candidate ratings assist review; they never replace saved human labels.
 
 ## Checklist
 
@@ -20,7 +20,7 @@ Track these as native harness tasks:
 
 ```
 ☐ 1. Prepare the initial query
-      ──▶ Review: show the query first, then Filters — nothing else
+      ──▶ Review: show only the query
 ☐ 2. Run the pond and open its results in the viewer
 ☐ 3. Ask: review in the viewer, leave feedback — another round, or done?
 ☐ 4. On "another round": model crafts the next query; state it and run
@@ -57,17 +57,22 @@ The first invocation returns `awaiting_query_review` and writes
 with the general pond prompt. `queries.raw.json` preserves the response and
 injected precedent cards. A second arm exists only if the user edits the file.
 
+Apply the main skill's correctness-only review rule: repair inaccurate queries
+without adding specificity or narrowing the intended candidate population.
+Keep negative criteria out of pond queries; preserve explicit user constraints
+in the compiled payload. Already-correct wording needs no rewrite.
+
 Before presenting, compare every allowed location in `jd.txt` and `source.json`
 (when present) with the query. Preserve allowed locations as OR alternatives;
 repair omitted or narrowed locations. Explicit user location changes override
 the posting and belong in the query. Do not add an in-person, hybrid, or remote
 restriction by default.
 
-Present the review as exactly two lines — the query on top, filters below:
+Present only the generated query, with any correctness correction identified.
+Do not append a targeting or filter summary:
 
 ```
 - Query: "<the query>"
-- Filters: <level, location, explicit workplace restrictions, exclusions>
 ```
 
 After the user edits or approves the query, initialize the fixed
@@ -122,15 +127,18 @@ from the query, and do not add a workplace restriction by default.
 Apply only the concrete controls the harness exposes:
 
 - keep/drop individual role-keyword chips;
-- add/remove seniority bands in response to the observed pond size;
+- correct seniority bands to match stated levels or the documented defaults,
+  not merely to shrink the observed pond;
 - correct location fields to match the query, including explicit user scope changes;
-- edit traits, including `temporal: current|past|all`;
-- add named rerank exclusions such as chip or mechanical design.
+- correct traits and `temporal: current|past|all` against the user's request/JD;
+  keep wording terse and preserve qualification breadth and alternatives;
+- use named rerank exclusions only when explicitly requested, not as invented
+  restrictions.
 
-One Terra-medium pass proposes the three initial recruiter patterns, using the
+One Terra-medium pass proposes two initial recruiter patterns, using the
 JD and current query plus similar prior `pattern_default_edits` and human payload edits:
-prune keyword fan-out, retune seniority for the role and prior pond size, and
-drop structured hard filters that duplicate traits. Every proposal includes a
+prune keyword fan-out and drop structured hard filters that duplicate traits.
+Seniority belongs to the parallel extractor, not precedent retuning. Every proposal includes a
 one-line reason in `pattern_default_edits` and remains editable. The prior
 deterministic table runs only if that call or response fails.
 
@@ -153,8 +161,8 @@ uv run --env-file .env --project . python \
 ```
 
 The iteration record contains the query/payload snapshot, `edit_delta`,
-`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all rows
-scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
+`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all retrieved
+rows, result count, cost,
 and deterministic whole-pool statistics: five score bands, level mix,
 geography mix, and top companies. RapidAPI company context is cache-first;
 missing company matches stay unknown. The summary keeps the pond chain,
@@ -168,7 +176,15 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-The viewer shows results in rerank order. Each result has a **Score** button
+For the Jev capability screen, add `--capability-judge jev` to `run-pond` and
+provide `TYPESAFE_API_KEY` in the environment. The selected Jev tree uses the
+evaluated high-recall cutoff; it returns a native qualification score and pass
+decision, not a 1–5 rating. The default `--capability-judge terra` selects the
+Luna capability path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
+See [the Jev README](../../primitives/llm_rerank_candidates/jev/README.md) for metrics.
+
+The viewer shows native qualification scores for Jev; the default path sorts by
+overall score, then capability rating. Each result has a **Score** button
 for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
 and submitted through the existing Powerset feedback endpoint.
 Custom tags are saved in `<run>/tags.json`, shared across browsers, and included
@@ -180,6 +196,27 @@ pond's query, the result count, and the viewer URL
 (tell the user to refresh after later ponds). When the loop stops, mark task 5
 complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.
+
+### Hosted results
+
+After each completed pond, upload the viewer snapshot unless the user requested
+offline/local-only results:
+
+```bash
+uv run --project . python \
+  packs/search/primitives/upload_search_results/upload_search_results.py \
+  --run-dir <run> --env-file .env
+```
+
+`uploaded` returns the private viewer URL; include it with the local viewer link.
+`needs_auth` is quiet and normal: keep the local viewer, without requesting login.
+On upload failure, keep the local results and report that hosting failed.
+Repeat this command when the user finishes labeling to refresh the same snapshot;
+it never changes local scores or labels. Hosted search results stay frozen;
+signed-in reviewers can leave their own scores, comments, tags and pins, saved separately
+without syncing back to local files. Anonymous viewers remain read-only.
+Sharing stays off unless the owner enables it in the hosted viewer. Disabling
+sharing revokes the link; do not enable sharing automatically.
 
 ## Continue or done
 

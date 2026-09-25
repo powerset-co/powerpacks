@@ -192,6 +192,7 @@ Select the best combination of:
 ## PRECISION RULES
 - Return ONLY roles that someone searching for the query would actually want to see in results.
 - Treat the query as an already-reviewed pond. Preserve its occupational boundary; do not widen it just because another role may have transferable skills.
+- Excluded roles are not candidate roles. Never add roles after "exclude", "excluding", "not", or "without" to role_ids, title keywords, or seniority.
 - Parse the candidate population separately from any person or organization they support, report to,
   sell to, recruit for, advise, or build for. A role or level in that relationship's object is context,
   not another candidate role: never add it to role_ids, bm25_queries, departments, or seniority.
@@ -469,8 +470,7 @@ def _merge(
     # Seniority
     if "seniority_bands" in seniority:
         # The dedicated seniority extractor is authoritative, including an explicit
-        # empty result. This prevents a role mentioned only as relationship context
-        # from leaking a level out of the broader role extractor.
+        # empty result for non-IC roles and requests for all levels.
         bands = _normalize_seniority_bands(seniority.get("seniority_bands") or [])
         if bands:
             filters["seniority_bands"] = bands
@@ -591,10 +591,6 @@ def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
     ]
 
 
-def _has_explicit_founder_term(query: str) -> bool:
-    return bool(re.search(r"\b(co[-\s]?founders?|founders?|founding)\b", query, re.IGNORECASE))
-
-
 def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
     seniority_prefixes = re.compile(
         r"^(senior|staff|lead|principal|junior|founding|head of|director of|"
@@ -652,11 +648,12 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
             phrase for phrase in filters.get("bm25_queries") or []
             if str(phrase).lower() not in target_aliases
         ]
-    csuite_expansions = _detect_csuite_expansions(query)
     role_ids = _dedupe_strings(filters.get("role_ids") or [])
     role_ids_lower = {role_id.lower() for role_id in role_ids}
+    csuite_expansions = [spec for spec in _detect_csuite_expansions(query)
+                         if spec["role_id"] in role_ids_lower]
 
-    is_founder = _has_explicit_founder_term(query) or bool(role_ids_lower & {"founder", "cofounder", "co-founder"})
+    is_founder = bool(role_ids_lower & {"founder", "cofounder", "co-founder"})
     if is_founder:
         csuite_bm25 = [bm25 for spec in csuite_expansions for bm25 in spec["bm25"]]
         filters["role_ids"] = ["founder"]
@@ -667,6 +664,7 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
         filters.pop("seniority_bands", None)
     elif csuite_expansions:
         display_values = [spec["display"] for spec in csuite_expansions]
+        filters["csuite_shortcut_role_id"] = csuite_expansions[0]["role_id"]
         filters["role_ids"] = _dedupe_strings([*role_ids, *[spec["role_id"] for spec in csuite_expansions]])
         filters["bm25_queries"] = _dedupe_strings([
             *(filters.get("bm25_queries") or []),

@@ -759,16 +759,6 @@ input::placeholder { color: var(--muted); }
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
-.decision-row-main span {
-  display: block;
-  margin-top: 3px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .decision-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .decision-row-actions .button { width: 64px; min-height: 44px; padding: 0 12px; }
 /* Left-edge chevron: the expand/collapse affordance. Points right when
@@ -1735,3 +1725,26 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Relationship labels share the same layout on all profile previews. */
+.person-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.person-label, .person-label-more {
+  display: inline-block; padding: 3px 8px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--secondary); color: var(--muted);
+  font-size: 11px; font-weight: 500; line-height: 1.35; white-space: nowrap;
+}
+.person-label-more { position: relative; cursor: help; }
+.person-label-tooltip {
+  display: none; position: absolute; z-index: 20; top: calc(100% + 6px); right: 0;
+  width: max-content; max-width: min(300px, 70vw); padding: 10px 12px;
+  white-space: normal; background: var(--background); color: var(--foreground);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px #0002;
+}
+.person-label-more:hover .person-label-tooltip,
+.person-label-more:focus .person-label-tooltip { display: block; }
+.person-label-more:focus-visible { outline: 2px solid var(--foreground); outline-offset: 2px; }
+.person-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.person-name-line .person-labels { margin: 0; }
+.decision-expanded-profile { margin: 12px 0 18px; }
+.decision-expanded-profile h2 { margin: 0; font-size: 24px; }
+.decision-row[open] .person-name-line .person-labels { display: none; }

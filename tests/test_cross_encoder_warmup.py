@@ -54,6 +54,7 @@ class WarmupClientTests(unittest.TestCase):
         self.assertEqual(str(request.url), "https://proxy.powerset.dev/vendor/cross-encoder/warmup")
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.headers["x-powerset-key"], "synthetic-key")
+        self.assertEqual(request.headers["x-ce-score-type"], "expected_rating_1_to_5")
         self.assertNotIn("authorization", request.headers)
         self.assertEqual(request.content, b"")
         constructor.assert_called_once_with(timeout=240)
@@ -218,7 +219,7 @@ class WarmupPipelineTests(unittest.TestCase):
                 self.assertEqual(pipeline.cmd_prepare(args), 0)
         self.warm.assert_not_called()
 
-    def test_reviewed_deep_pond_reaches_warmup_before_retrieval_only_when_enabled(self):
+    def test_reviewed_deep_pond_never_warms_gemma_even_when_enabled(self):
         for backend in ("powerset", "local"):
             for enabled in (False, True):
                 with self.subTest(backend=backend, enabled=enabled), \
@@ -243,20 +244,14 @@ class WarmupPipelineTests(unittest.TestCase):
                         args = pipeline.build_parser().parse_args(command[2:])
                         self.assertTrue(args.execute_approved)
                         self.assertEqual(args.cross_encoder_beta, enabled)
-                        if enabled:
-                            self.assertEqual(args.cross_encoder_jd_file, str(run_dir / "jd.txt"))
+                        self.assertEqual(args.jd_file, str(run_dir / "jd.txt"))
                         self.assertEqual(self.execute(args)["status"], "completed")
                         raise RuntimeError("offline pipeline completed")
 
-                    with mock.patch.object(search_harness, "_jd_traits", return_value=[]), \
-                            mock.patch.object(search_harness, "_run_command", side_effect=execute_command), \
+                    with mock.patch.object(search_harness, "_run_command", side_effect=execute_command), \
                             self.assertRaisesRegex(RuntimeError, "offline pipeline completed"):
                         search_harness.run_pond(run_dir=run_dir, env_file=str(self.env), backend=backend, db=str(self.db))
-                    if enabled:
-                        self.warm.assert_called_once_with(api_key="synthetic-file-key")
-                        self.assertLess(self.events.index("warmup"), self.events.index("execute_role_search"))
-                    else:
-                        self.warm.assert_not_called()
+                    self.warm.assert_not_called()
 
     def test_unreviewed_deep_pond_never_warms(self):
         _start(self.root)

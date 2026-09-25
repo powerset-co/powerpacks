@@ -1,4 +1,5 @@
 """Recruiter presentation ratings shared by the viewer and labeling harness."""
+import math
 from typing import Any, Mapping
 
 SCORE_SCALE = 5
@@ -11,6 +12,19 @@ RUBRIC = {
 }
 SCORES = tuple(RUBRIC)
 LEGACY_SCORES = {1: 1, 2: 2, 3: 2, 4: 2, 7: 3, 8: 4, 9: 5, 10: 5}
+QUALIFICATION_SCORE_TYPE = "qualification_score"
+
+
+def score_1_to_5(score: float, *, score_type: str = "raw_yes_minus_no_logit") -> float | None:
+    """Preserve native ratings, normalize Qwen margins, and leave Jev scores native."""
+    if score_type == QUALIFICATION_SCORE_TYPE:
+        return None
+    if score_type in ("expected_rating_1_to_5", "ordinal_rating_1_to_5"):
+        return score
+    if score >= 0:
+        return 1 + 4 / (1 + math.exp(-score))
+    exp_score = math.exp(score)
+    return 1 + 4 * exp_score / (1 + exp_score)
 
 
 def convert_rating(value: Mapping[str, Any]) -> dict[str, Any]:

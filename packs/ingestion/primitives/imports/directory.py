@@ -3,6 +3,15 @@
 
 Deep Context persists reviewed identities here; the shared fan-in reads them.
 Source imports reuse metadata unions without matching or updating the directory.
+
+Changelog:
+  2026-09-23 (typed rows): `normalized_directory_row` is the ONE boundary parse of
+    a source/review row into the declared `DirectoryRow` and returns that instance;
+    `merge_directory_rows` compares typed rows (rank from
+    `directory_source_priority`) instead of dicts. The in-memory `_priority` /
+    `_url_column` hint columns are gone: the sole producer's `_priority="100"` is
+    what `directory_source_priority("deep_context_review", ...)` already returns,
+    and no writer ever set `_url_column`. directory.csv bytes are unchanged.
 """
 
 from __future__ import annotations
@@ -55,8 +64,8 @@ DIRECTORY_COLUMNS = [
 ]
 # The declared row shape of `directory.csv`, generated FROM DIRECTORY_COLUMNS so
 # field order stays the on-disk header order and the column list keeps one home.
-# `_priority` is deliberately absent: normalized_directory_row carries it as an
-# in-memory ranking hint and merge_directory_rows drops it before writing.
+# `_priority` is deliberately absent: a row's rank is derived from its `source`
+# by `directory_source_priority`, so it never becomes a column.
 DirectoryRow = row_model_for("DirectoryRow", DIRECTORY_COLUMNS)
 
 # The row SLICE each source's writer owns, as declared by `Artifact.owns_rows_where`
@@ -123,7 +132,11 @@ def gmail_account_from_source_key(source_key: str) -> str:
     return parts[1].strip().lower()
 
 
-def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> dict[str, str]:
+def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> DirectoryRow:
+    """Parse a source/review row into the declared `DirectoryRow` — the ONE place
+    the tolerant source-column names (`primary_email`, `display_name`, ...) are
+    read. A row with no derivable `source_key` comes back with `source_key == ""`,
+    which the callers treat as unkeyable."""
     linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
     public_identifier = extract_public_identifier(linkedin_url)
     email = (str(row.get("email") or row.get("primary_email") or "").strip().lower())
@@ -133,7 +146,7 @@ def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", 
     if not source_key:
         source_key = directory_identity_key(email, phone, name, public_identifier)
     if not source_key:
-        return {}
+        return DirectoryRow()
     confidence = parse_confidence(row.get("confidence"), 0.0)
     status = str(row.get("status") or ("found" if public_identifier else "observed")).strip().lower()
     source_name = str(row.get("source") or source or "directory")
@@ -142,61 +155,54 @@ def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", 
         source_account = gmail_account_from_source_key(source_key)
     if not source_account and source_name == "messages":
         source_account = str(row.get("source_channels") or "messages")
-    output = {
-        "source": source_name,
-        "source_key": source_key,
-        "source_account": source_account,
-        "source_id": str(row.get("source_id") or ""),
-        "source_channels": str(row.get("source_channels") or ""),
-        "status": status,
-        "email": email,
-        "phone": phone,
-        "name": name,
-        "linkedin_url": linkedin_url,
-        "public_identifier": public_identifier,
-        "confidence": f"{confidence:.2f}",
-        "matched_name": str(row.get("matched_name") or name),
-        "matched_headline": str(row.get("matched_headline") or ""),
-        "evidence": str(row.get("evidence") or ""),
-        "reasoning": str(row.get("reasoning") or ""),
-        "source_artifact": str(row.get("source_artifact") or source_artifact),
-        "updated_at": str(row.get("updated_at") or updated_at),
-    }
-    priority = row.get("_priority")
-    output["_priority"] = str(priority if priority is not None else directory_source_priority(output["source"], str(row.get("_url_column") or "")))
-    return output
+    return DirectoryRow(
+        source=source_name,
+        source_key=source_key,
+        source_account=source_account,
+        source_id=str(row.get("source_id") or ""),
+        source_channels=str(row.get("source_channels") or ""),
+        status=status,
+        email=email,
+        phone=phone,
+        name=name,
+        linkedin_url=linkedin_url,
+        public_identifier=public_identifier,
+        confidence=f"{confidence:.2f}",
+        matched_name=str(row.get("matched_name") or name),
+        matched_headline=str(row.get("matched_headline") or ""),
+        evidence=str(row.get("evidence") or ""),
+        reasoning=str(row.get("reasoning") or ""),
+        source_artifact=str(row.get("source_artifact") or source_artifact),
+        updated_at=str(row.get("updated_at") or updated_at),
+    )
 
 
-def merge_directory_rows(rows: list[dict[str, str]], existing_by_key: dict[str, dict[str, str]] | None = None) -> list[dict[str, str]]:
-    best: dict[str, dict[str, str]] = dict(existing_by_key or {})
+def merge_directory_rows(rows: list[DirectoryRow], existing_by_key: dict[str, DirectoryRow] | None = None) -> list[dict[str, str]]:
+    best: dict[str, DirectoryRow] = dict(existing_by_key or {})
     for row in rows:
-        normalized = normalized_directory_row(row)
-        if not normalized:
+        if not row.source_key:
             continue
-        key = normalized["source_key"]
-        current = best.get(key)
-        confidence = parse_confidence(normalized.get("confidence"), 0.0)
-        priority = int(normalized.get("_priority") or 0)
-        if current:
-            current_confidence = parse_confidence(current.get("confidence"), 0.0)
-            current_priority = int(current.get("_priority") or 0)
+        key = row.source_key
+        confidence = parse_confidence(row.confidence, 0.0)
+        priority = directory_source_priority(row.source, "")
+        if key in best:
+            current = best[key]
+            current_confidence = parse_confidence(current.confidence, 0.0)
+            current_priority = directory_source_priority(current.source, "")
             if (confidence, priority) <= (current_confidence, current_priority):
                 continue
-        best[key] = normalized
-    output = []
-    for row in sorted(best.values(), key=lambda item: item.get("source_key", "")):
-        output.append({col: row.get(col, "") for col in DIRECTORY_COLUMNS})
-    return output
+        best[key] = row
+    return [best[key].to_row() for key in sorted(best)]
 
 
 def commit_directory_rows(directory_csv: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
-    existing: dict[str, dict[str, str]] = {}
+    existing: dict[str, DirectoryRow] = {}
     if directory_csv.exists():
         for row in read_csv_rows(directory_csv)[1]:
             normalized = normalized_directory_row(row, source="directory")
-            if normalized:
-                existing[normalized["source_key"]] = normalized
-    merged = merge_directory_rows(rows, existing)
+            if normalized.source_key:
+                existing[normalized.source_key] = normalized
+    merged = merge_directory_rows([normalized_directory_row(row) for row in rows], existing)
     write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
     return {"directory_csv": str(directory_csv), "existing_rows": len(existing), "imported_rows": len(rows), "rows": len(merged)}
 

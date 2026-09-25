@@ -7,6 +7,12 @@ human-readable progress lines, and `run_command` is the single place the wacli
 GO BINARY is invoked as a subprocess.
 
 Changelog:
+  2026-09-23 (typed rows): `run_command` now returns the frozen `CommandResult`
+    instead of a `{returncode, stdout, stderr, json}` dict, so the wacli process
+    boundary is typed once here and every client module (binary, sync, backfill)
+    reads attributes instead of `.get(...)`. Values unchanged.
+  2026-09-23 (simplification audit): the heartbeat loop no longer re-tests
+    `heartbeat_message`; the no-heartbeat fast path above already returned.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`.
     Behavior unchanged; every other wacli module calls `runtime.run_command`
     rather than defining its own runner.
@@ -26,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +58,33 @@ class PrimitiveFailed(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class CommandResult:
+    """One `wacli` invocation's settled outcome: the exit code, the raw stdout and
+    stderr (wacli's stdout TEXT is load-bearing — the version string and the
+    linked-device block message are scanned out of it), and the last JSON object
+    decoded off stdout (`{}` when none decoded).
+
+    The ONE place an external process's raw output becomes a typed value; the
+    client modules that call `run_command` read these fields instead of
+    re-unwrapping a dict."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+    json: dict[str, Any]
+
+    @property
+    def combined_text(self) -> str:
+        """stdout + stderr, for the linked-device block scan over both streams."""
+        return f"{self.stdout}\n{self.stderr}"
+
+    @property
+    def failure_detail(self) -> str:
+        """The tail of whichever stream carried the error text, for a raise."""
+        return ((self.stderr or self.stdout or "").strip())[-1000:]
+
+
 def emit_status(message: str) -> None:
     print(f"{STATUS_PREFIX} {message}", file=sys.stderr, flush=True)
 
@@ -71,8 +105,7 @@ def run_command(
     heartbeat_message: str | None = None,
     heartbeat_interval: float = 120.0,
 ) -> dict[str, Any]:
-    """Run one `wacli` binary invocation, returning
-    `{returncode, stdout, stderr, json}`.
+    """Run one `wacli` binary invocation, returning a `CommandResult`.
 
     PINNED DIVERGENCE from `common/proc.py:run_cmd` — deliberately NOT unified:
 
@@ -106,18 +139,18 @@ def run_command(
             stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
             stderr = (stderr + f"\ncommand timed out after {timeout}s").strip() + "\n"
-            return {
-                "returncode": 124,
-                "stdout": stdout,
-                "stderr": stderr,
-                "json": parse_last_json(stdout),
-            }
-        return {
-            "returncode": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "json": parse_last_json(proc.stdout),
-        }
+            return CommandResult(
+                returncode=124,
+                stdout=stdout,
+                stderr=stderr,
+                json=parse_last_json(stdout),
+            )
+        return CommandResult(
+            returncode=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+            json=parse_last_json(proc.stdout),
+        )
 
     proc = subprocess.Popen(
         cmd,
@@ -147,7 +180,7 @@ def run_command(
             timed_out = True
             proc.kill()
             break
-        if heartbeat_message and time.time() >= next_heartbeat:
+        if time.time() >= next_heartbeat:
             emit_status(heartbeat_message)
             next_heartbeat = time.time() + heartbeat_interval
         time.sleep(0.2)
@@ -160,12 +193,12 @@ def run_command(
     if timed_out:
         stderr = (stderr + f"\ncommand timed out after {timeout}s").strip() + "\n"
         returncode = 124
-    return {
-        "returncode": returncode,
-        "stdout": stdout,
-        "stderr": stderr,
-        "json": parse_last_json(stdout),
-    }
+    return CommandResult(
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+        json=parse_last_json(stdout),
+    )
 
 
 def command_text(cmd: list[str]) -> str:

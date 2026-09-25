@@ -28,6 +28,10 @@ distinction the merge makes, and it is a column — not a second file, not an
 admission decision.
 
 Changelog:
+  2026-09-23 (typed rows): source rows enter the stage as `PeopleRow` and directory
+    rows as `DirectoryRow` — `group_key`, `merge_group`, and `directory_slug_for`
+    take typed rows instead of dicts, and the directory lookups build
+    `DirectoryRow` from each CSV row. merged/people.csv is byte-identical.
   2026-07-26 (existing candidate ids are kept): `group_key` uses a no-slug row's
     own `candidate:` id verbatim instead of recomputing `candidate_key_for`
     (whose email-wins precedence silently re-keyed a phone-keyed person to
@@ -87,6 +91,7 @@ from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
     StageManifest,
 )
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
+    DirectoryRow,
     merge_jsonish_lists,
     parse_confidence,
     union_alias_list,
@@ -99,7 +104,6 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     generate_person_id,
     latest_interaction,
     merge_interaction_counts,
-    normalize_people_row,
     parse_jsonish,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -133,18 +137,17 @@ def directory_slug_lookups(directory_csv: Path) -> tuple[dict[str, str], dict[st
     phones: dict[str, str] = {}
     if not directory_csv.exists():
         return emails, phones
-    for row in CsvIO.read_dict_rows(directory_csv):
-        slug = extract_public_identifier(str(row.get("linkedin_url") or "")) or str(
-            row.get("public_identifier") or ""
-        ).strip().lower()
-        if not slug or str(row.get("status") or "").strip().lower() != "found":
+    for raw in CsvIO.read_dict_rows(directory_csv):
+        row = DirectoryRow.model_validate(raw)
+        slug = extract_public_identifier(row.linkedin_url) or row.public_identifier.strip().lower()
+        if not slug or row.status.strip().lower() != "found":
             continue
-        if parse_confidence(row.get("confidence"), 0.0) < MIN_DIRECTORY_CONFIDENCE:
+        if parse_confidence(row.confidence, 0.0) < MIN_DIRECTORY_CONFIDENCE:
             continue
-        email = str(row.get("email") or "").strip().lower()
+        email = row.email.strip().lower()
         if email:
             emails.setdefault(email, slug)
-        phone = normalize_phone(row.get("phone") or "")
+        phone = normalize_phone(row.phone)
         if phone:
             phones.setdefault(phone, slug)
     return emails, phones
@@ -162,37 +165,36 @@ def deep_context_slug_lookups(directory_csv: Path) -> tuple[dict[str, str], dict
     phones: dict[str, str] = {}
     if not directory_csv.exists():
         return emails, phones
-    for row in CsvIO.read_dict_rows(directory_csv):
-        if str(row.get("source") or "").strip().lower() != "deep_context_review":
+    for raw in CsvIO.read_dict_rows(directory_csv):
+        row = DirectoryRow.model_validate(raw)
+        if row.source.strip().lower() != "deep_context_review":
             continue
-        slug = extract_public_identifier(str(row.get("linkedin_url") or "")) or str(
-            row.get("public_identifier") or ""
-        ).strip().lower()
-        if not slug or str(row.get("status") or "").strip().lower() != "found":
+        slug = extract_public_identifier(row.linkedin_url) or row.public_identifier.strip().lower()
+        if not slug or row.status.strip().lower() != "found":
             continue
-        if parse_confidence(row.get("confidence"), 0.0) < MIN_DIRECTORY_CONFIDENCE:
+        if parse_confidence(row.confidence, 0.0) < MIN_DIRECTORY_CONFIDENCE:
             continue
-        email = str(row.get("email") or "").strip().lower()
+        email = row.email.strip().lower()
         if email:
             emails[email] = slug
-        phone = normalize_phone(row.get("phone") or "")
+        phone = normalize_phone(row.phone)
         if phone:
             phones[phone] = slug
     return emails, phones
 
 
-def directory_slug_for(row: dict[str, str], emails: dict[str, str], phones: dict[str, str]) -> str:
+def directory_slug_for(row: PeopleRow, emails: dict[str, str], phones: dict[str, str]) -> str:
     """The directory's slug for a row's identifiers — every email first, then phones."""
-    for email in emails_from_row(row):
+    for email in emails_from_row(row.to_row()):
         if email in emails:
             return emails[email]
-    for phone in phones_from_row(row):
+    for phone in phones_from_row(row.to_row()):
         if phone in phones:
             return phones[phone]
     return ""
 
 
-def group_key(row: dict[str, str]) -> str:
+def group_key(row: PeopleRow) -> str:
     """The identity this row belongs to: its LinkedIn slug, else its contact key.
 
     A no-slug row that already carries a `candidate:` id keeps that key VERBATIM.
@@ -203,13 +205,13 @@ def group_key(row: dict[str, str]) -> str:
 
     Empty only when the row has neither a slug nor an email/phone, which makes it
     unkeyable — there is no identity to merge it onto or to mint an id from."""
-    slug = str(row.get("public_identifier") or "").strip().lower()
+    slug = row.public_identifier.strip().lower()
     if slug:
         return f"{LINKEDIN_KEY_PREFIX}{slug}"
-    existing_id = str(row.get("id") or "").strip()
+    existing_id = row.id.strip()
     if existing_id.startswith(CANDIDATE_KEY_PREFIX):
         return existing_id
-    contact_key = candidate_key_for(row.get("primary_email", ""), row.get("primary_phone", ""))
+    contact_key = candidate_key_for(row.primary_email, row.primary_phone)
     return f"{CANDIDATE_KEY_PREFIX}{contact_key}" if contact_key else ""
 
 
@@ -224,31 +226,32 @@ def person_id_for(key: str) -> str:
     return key
 
 
-def merge_group(key: str, members: list[dict[str, str]]) -> dict[str, str]:
+def merge_group(key: str, members: list[PeopleRow]) -> dict[str, str]:
     """Union the rows that named one human into a single people row."""
     merged = {column: "" for column in PEOPLE_SCHEMA_COLUMNS}
     for row in members:
         for column in PEOPLE_SCHEMA_COLUMNS:
+            value = getattr(row, column)
             if column in LIST_VALUE_COLUMNS:
-                primary = PRIMARY_FOR_LIST_COLUMN.get(column, "")
+                primary = PRIMARY_FOR_LIST_COLUMN[column] if column in PRIMARY_FOR_LIST_COLUMN else ""
                 merged[column] = union_alias_list(
-                    merged[column], row[column],
-                    merged.get(primary, "") if primary else "",
-                    row.get(primary, "") if primary else "",
+                    merged[column], value,
+                    merged[primary] if primary else "",
+                    getattr(row, primary) if primary else "",
                 )
             elif column == "source_channels":
                 merged[column] = ",".join(unique_strings(
-                    merged[column].split(",") + row[column].split(",")
+                    merged[column].split(",") + value.split(",")
                 ))
             elif column == "source_artifacts":
-                merged[column] = merge_jsonish_lists(merged[column], row[column])
+                merged[column] = merge_jsonish_lists(merged[column], value)
             elif column == "interaction_counts":
-                counts = merge_interaction_counts(merged[column], row[column])
+                counts = merge_interaction_counts(merged[column], value)
                 merged[column] = json.dumps(counts, ensure_ascii=False) if counts else ""
             elif column == "last_interaction":
-                merged[column] = latest_interaction(merged[column], row[column])
+                merged[column] = latest_interaction(merged[column], value)
             elif not merged[column]:
-                merged[column] = row[column]
+                merged[column] = value
     # Promote an aliased value when no source row carried the primary.
     for column, primary in PRIMARY_FOR_LIST_COLUMN.items():
         if not merged[primary]:
@@ -368,26 +371,26 @@ class PeopleMerge(Node):
         started_at = now_iso()
         email_slugs, phone_slugs = directory_slug_lookups(self.directory_csv)
         review_emails, review_phones = deep_context_slug_lookups(self.directory_csv)
-        groups: dict[str, list[dict[str, str]]] = {}
+        groups: dict[str, list[PeopleRow]] = {}
         input_rows: dict[str, int] = {}
         stamped = 0
         unkeyable = 0
         for path in self.source_csvs:
             if not path.exists():
                 continue
-            rows = [normalize_people_row(raw) for raw in CsvIO.read_dict_rows(path)]
+            rows = [PeopleRow.model_validate(raw) for raw in CsvIO.read_dict_rows(path)]
             input_rows[str(path)] = len(rows)
             for row in rows:
                 reviewed_slug = directory_slug_for(row, review_emails, review_phones)
-                if reviewed_slug and row["public_identifier"] != reviewed_slug:
-                    row["public_identifier"] = reviewed_slug
-                    row["linkedin_url"] = f"https://www.linkedin.com/in/{reviewed_slug}"
+                if reviewed_slug and row.public_identifier != reviewed_slug:
+                    row.public_identifier = reviewed_slug
+                    row.linkedin_url = f"https://www.linkedin.com/in/{reviewed_slug}"
                     stamped += 1
-                elif not row["public_identifier"]:
+                elif not row.public_identifier:
                     slug = directory_slug_for(row, email_slugs, phone_slugs)
                     if slug:
-                        row["public_identifier"] = slug
-                        row["linkedin_url"] = f"https://www.linkedin.com/in/{slug}"
+                        row.public_identifier = slug
+                        row.linkedin_url = f"https://www.linkedin.com/in/{slug}"
                         stamped += 1
                 key = group_key(row)
                 if not key:
@@ -418,13 +421,13 @@ class PeopleMerge(Node):
         rows: int,
         stamped: int,
         unkeyable: int,
-        groups: dict[str, list[dict[str, str]]],
+        groups: dict[str, list[PeopleRow]],
     ) -> MergePeopleManifest:
         """This stage's typed manifest payload (the Node template writes it)."""
         sizes: dict[str, int] = {}
         for members in groups.values():
             bucket = str(len(members))
-            sizes[bucket] = sizes.get(bucket, 0) + 1
+            sizes[bucket] = sizes[bucket] + 1 if bucket in sizes else 1
         return MergePeopleManifest(
             status=status,
             input=MergePeopleInput(

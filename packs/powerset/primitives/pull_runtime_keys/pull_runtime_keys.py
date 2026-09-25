@@ -2,13 +2,15 @@
 """Pull local runtime keys from the Powerset API using the Auth0 login.
 
 The local machine is a thin dispatcher: heavy work runs on Modal, while local
-steps need OpenAI, Parallel, and the Powerset vendor gateway. All runtime credentials are pulled from the
-authenticated Powerset API with the user's Auth0 bearer:
+steps need OpenAI, Parallel, TypeSafe, and the Powerset vendor gateway. All
+runtime credentials are pulled from the authenticated Powerset API with the
+user's Auth0 bearer:
 
     GET {API}/v2/integrations/modal/token  -> {"modal_token_id", "modal_token_secret"}
     GET {API}/v2/integrations/openai/key   -> {"openai_api_key"}
     GET {API}/v2/integrations/parallel/key -> {"parallel_api_key"}
     GET {API}/v2/integrations/powerset-api/key -> {"powerset_api_key"}
+    GET {API}/v2/integrations/typesafe/key -> {"typesafe_api_key"}
 
 Endpoints are read-only and never mint: a 404/403 means "not provisioned for
 this user" (an admin provisions out of band). Pulled values are written to
@@ -48,6 +50,7 @@ KEY_SOURCES: dict[str, tuple[str, str]] = {
     "OPENAI_API_KEY": ("/v2/integrations/openai/key", "openai_api_key"),
     "PARALLEL_API_KEY": ("/v2/integrations/parallel/key", "parallel_api_key"),
     "POWERSET_API_KEY": ("/v2/integrations/powerset-api/key", "powerset_api_key"),
+    "TYPESAFE_API_KEY": ("/v2/integrations/typesafe/key", "typesafe_api_key"),
 }
 ALLOWED_KEYS = set(KEY_SOURCES)
 
@@ -77,11 +80,12 @@ def api_base(env_file: Path | None = None) -> str:
     return value.rstrip("/") if value else DEFAULT_API_BASE
 
 
-def bearer_token() -> str:
+def bearer_token(env_file: Path | None = None) -> str:
     """Fresh Auth0 access token via auth.py (auto-refreshes); raises if signed out."""
     proc = subprocess.run(
         [sys.executable, str(AUTH_SCRIPT), "token", "--bearer-only"],
         capture_output=True, text=True,
+        env=_read_env_file(env_file) | os.environ,
     )
     token = (proc.stdout or "").strip()
     if proc.returncode != 0 or not token:
@@ -104,6 +108,8 @@ def fetch_endpoint(base: str, path: str, token: str, timeout: int = 30) -> tuple
         return "error", {"http_status": exc.code}
     except urllib.error.URLError as exc:
         return "error", {"reason": str(exc.reason)}
+    except (OSError, json.JSONDecodeError) as exc:
+        return "error", {"reason": type(exc).__name__}
 
 
 def _quote(value: str) -> str:
@@ -117,7 +123,8 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
     for i, line in enumerate(lines):
         s = line.strip()
         if s and not s.startswith("#") and "=" in s:
-            index[s.split("=", 1)[0]] = i
+            key = s.split("=", 1)[0].strip().removeprefix("export ").strip()
+            index[key] = i
     written: list[str] = []
     for key, value in updates.items():
         if not value:
@@ -141,7 +148,7 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
 def cmd_pull(args: argparse.Namespace) -> int:
     env_path = Path(args.env_file)
     base = api_base(env_path)
-    token = bearer_token()
+    token = bearer_token(env_path)
     # Group keys by endpoint so each is fetched once.
     by_path: dict[str, list[str]] = {}
     for key, (path, _) in KEY_SOURCES.items():
@@ -181,16 +188,62 @@ def cmd_pull(args: argparse.Namespace) -> int:
     return 0 if written else 2
 
 
+def refresh_cross_encoder(env_path: Path, token: str | None = None) -> dict[str, str]:
+    """Refresh the gateway key on update; default CE on, retaining explicit opt-outs."""
+    preference = _read_env_file(env_path).get("POWERPACKS_CROSS_ENCODER_BETA")
+    result = {"powerset_api_key_refresh": "not_signed_in",
+              "cross_encoder": "enabled" if preference == "1" else "disabled"}
+    try:
+        token = token or bearer_token(env_path)
+    except SystemExit:
+        return result
+    path, field = KEY_SOURCES["POWERSET_API_KEY"]
+    state, payload = fetch_endpoint(api_base(env_path), path, token)
+    key = payload.get(field) if state == "ok" and payload else None
+    if not key:
+        result["powerset_api_key_refresh"] = "error" if state == "ok" else state
+        return result
+    preference = preference or "1"
+    write_env(env_path, {"POWERSET_API_KEY": str(key),
+                        "POWERPACKS_CROSS_ENCODER_BETA": preference})
+    return {"powerset_api_key_refresh": "refreshed",
+            "cross_encoder": "enabled" if preference == "1" else "disabled"}
+
+
+def refresh_update_keys(env_path: Path) -> dict[str, str]:
+    """Refresh CE and fill a missing TypeSafe key during update with one login."""
+    current = _read_env_file(env_path)
+    existing_typesafe = bool(current.get("TYPESAFE_API_KEY", "").strip())
+    preference = current.get("POWERPACKS_CROSS_ENCODER_BETA")
+    result = {
+        "powerset_api_key_refresh": "not_signed_in",
+        "cross_encoder": "enabled" if preference == "1" else "disabled",
+        "typesafe_api_key": "preserved" if existing_typesafe else "not_signed_in",
+    }
+    try:
+        token = bearer_token(env_path)
+    except SystemExit:
+        return result
+
+    result.update(refresh_cross_encoder(env_path, token=token))
+    if existing_typesafe:
+        return result
+    path, field = KEY_SOURCES["TYPESAFE_API_KEY"]
+    state, payload = fetch_endpoint(api_base(env_path), path, token)
+    key = payload.get(field) if state == "ok" and isinstance(payload, dict) else None
+    if not isinstance(key, str) or not key.strip():
+        result["typesafe_api_key"] = "error" if state == "ok" else state
+        return result
+    write_env(env_path, {"TYPESAFE_API_KEY": key})
+    result["typesafe_api_key"] = "installed"
+    return result
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     env_path = Path(args.env_file)
-    present = {}
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            s = line.strip()
-            if s and not s.startswith("#") and "=" in s:
-                present[s.split("=", 1)[0]] = True
-    have = [k for k in KEY_SOURCES if present.get(k)]
-    missing = [k for k in KEY_SOURCES if not present.get(k)]
+    values = _read_env_file(env_path)
+    have = [key for key in KEY_SOURCES if values.get(key, "").strip()]
+    missing = [key for key in KEY_SOURCES if not values.get(key, "").strip()]
     emit({
         "primitive": "pull_runtime_keys",
         "command": "check",
@@ -206,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     default_env = str(REPO / ".env")
-    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, and Powerset API keys into .env")
+    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, TypeSafe, and Powerset API keys into .env")
     pull.add_argument("--env-file", default=default_env)
     pull.set_defaults(func=cmd_pull)
     check = sub.add_parser("check", help="report which runtime keys are present in .env")

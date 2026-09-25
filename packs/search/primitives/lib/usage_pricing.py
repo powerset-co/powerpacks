@@ -1,7 +1,7 @@
 """Single home for the committed model price table and usage-row cost math.
 
 A usage row is one LLM call as captured by the shared client's POWERPACKS_USAGE_LOG
-hook: {model, stage, prompt_tokens, cached_tokens, completion_tokens,
+hook: {model, stage, prompt_tokens, cached_tokens, cache_write_tokens, completion_tokens,
 reasoning_tokens, latency_ms}.
 Prices live in packs/search/data/model-prices.json as USD per 1M tokens; a null table
 for a model means "unpriced" and cost math reports tokens-only for it.
@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 PRICES_PATH = Path(__file__).resolve().parents[2] / "data" / "model-prices.json"
+CACHE_WRITE_PREMIUM = 0.25  # Cache writes cost 1.25x input; base input cost is already included.
 
 
 def load_prices(path: Path | None = None) -> dict[str, Any]:
@@ -47,6 +48,7 @@ def row_cost_usd(row: dict[str, Any], prices: dict[str, Any]) -> float | None:
     output_price = float(table.get("output_per_1m") or 0.0)
     cost = ((prompt_tokens - cached_tokens) / 1e6) * input_price
     cost += (cached_tokens / 1e6) * cached_input_price
+    cost += (int(row.get("cache_write_tokens") or 0) / 1e6) * input_price * CACHE_WRITE_PREMIUM
     cost += (int(row.get("completion_tokens") or 0) / 1e6) * output_price
     cost += (int(row.get("reasoning_tokens") or 0) / 1e6) * float(table.get("reasoning_per_1m") or output_price)
     if row.get("service_tier") == "flex":

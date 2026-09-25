@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..fit_contract import FIT_EXPERTS, FitDimension, FitLabel, TraitStatus, parse_fit_label
-from packs.search.primitives.shared.human_ratings import convert_rating
+from packs.search.primitives.shared.human_ratings import (
+    QUALIFICATION_SCORE_TYPE,
+    convert_rating,
+    score_1_to_5,
+)
 
 FIT_LABELS_FILE = "fit-labels.jsonl"
 
@@ -74,6 +78,10 @@ class PondCandidate:
     source_channel: str = ""
     source_operator: str = ""
     cross_encoder_score: float | None = None
+    cross_encoder_score_1_to_5: float | None = None
+    cross_encoder_score_type: str = ""
+    cross_encoder_threshold: float | None = None
+    cross_encoder_passed: bool | None = None
     cross_encoder_status: str = ""
 
 
@@ -86,23 +94,65 @@ class CandidatePond:
 
 
 @dataclass(frozen=True)
-class FitExpertResult:
-    dimension: FitDimension
-    label: FitLabel
+class MoveLikelihood:
+    label: str
     why: str
 
 
 @dataclass(frozen=True)
-class JdTrait:
-    trait: str
-    status: TraitStatus
-    evidence: str
+class CandidateJudgment:
+    domain_score: int | None
+    opportunity_cap: int | None
+    overall_score: int | None
+    domain_reason: str
+    opportunity_reason: str
+    company_context: str
+    model: str
+    status: str
+
+
+def _candidate_judgment(raw: dict[str, Any] | None) -> CandidateJudgment | None:
+    if raw is None:
+        return None
+    domain, opportunity = raw.get("domain") or {}, raw.get("opportunity") or {}
+    scores = (domain.get("score"), opportunity.get("cap"), raw.get("overall_score"))
+    for score, allowed in zip(scores, ((1, 2, 3, 4, 5), (2, 3, 5), (1, 2, 3, 4, 5))):
+        if score is not None and (type(score) is not int or score not in allowed):
+            raise ValueError("Candidate judgment scores must be integers on their documented scale")
+    return CandidateJudgment(*scores, domain.get("why", ""), opportunity.get("why", ""),
+                             opportunity.get("company_context", ""), raw["model"], raw["status"])
 
 
 @dataclass(frozen=True)
-class JdFit:
-    coverage: float
-    traits: tuple[JdTrait, ...]
+class PinJudgment:
+    decision: str | None
+    reason: str
+    model: str
+    status: str
+
+
+def _pin_judgment(raw: dict[str, Any] | None) -> PinJudgment | None:
+    if raw is None:
+        return None
+    if raw.get("decision") not in (None, "introduce", "review", "not_supported"):
+        raise ValueError("Pin judgment decision must be introduce, review or not_supported")
+    return PinJudgment(raw.get("decision"), _text(raw.get("reason")), raw["model"], raw["status"])
+
+
+def _taste_score(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+        raise ValueError("Taste score must be a finite number")
+    return float(raw)
+
+
+def _pin_confidence(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    if type(raw) is not int or not 0 <= raw <= 100:
+        raise ValueError("Pin confidence must be an integer between 0 and 100")
+    return raw
 
 
 @dataclass(frozen=True)
@@ -130,6 +180,54 @@ class Pond:
 
 
 @dataclass(frozen=True)
+class NetworkSource:
+    channel: str
+    total_interactions: int
+    operator_count: int
+
+
+@dataclass(frozen=True)
+class GmailAccountDetail:
+    email: str
+    interactions: int
+
+
+@dataclass(frozen=True)
+class NetworkOperator:
+    operator_id: str
+    operator_name: str
+    channels: tuple[str, ...]
+    gmail_interactions: int | None
+    message_interactions: int | None = None
+    gmail_account_details: tuple[GmailAccountDetail, ...] = ()
+
+
+@dataclass(frozen=True)
+class PersonAttribution:
+    person_id: str
+    sources: tuple[NetworkSource, ...]
+    operators: tuple[NetworkOperator, ...]
+    total_interactions: int
+
+
+def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
+    if raw is None:
+        return None
+    return PersonAttribution(
+        person_id=raw['person_id'],
+        sources=tuple(NetworkSource(row['channel'], row['total_interactions'], row['operator_count'])
+                      for row in raw['sources']),
+        operators=tuple(NetworkOperator(row['operator_id'], row['operator_name'],
+                                        tuple(row['channels']), row.get('gmail_interactions'),
+                                        row.get('message_interactions'),
+                                        tuple(GmailAccountDetail(account['email'], account['interactions'])
+                                              for account in row.get('gmail_account_details', [])))
+                        for row in raw['operators']),
+        total_interactions=raw['total_interactions'],
+    )
+
+
+@dataclass(frozen=True)
 class Candidate:
     person_id: str
     name: str
@@ -138,8 +236,7 @@ class Candidate:
     company: str
     location: str
     avatar_url: str
-    fit_experts: tuple[FitExpertResult, ...]
-    jd_fit: JdFit | None
+    move_likelihood: MoveLikelihood | None
     why: str
     found_run: str
     found_pond: int
@@ -148,6 +245,16 @@ class Candidate:
     ponds: tuple[CandidatePond, ...]
     human_score: int | None = None
     human_note: str = ""
+    candidate_judgment: CandidateJudgment | None = None
+    network_attribution: PersonAttribution | None = None
+    taste_score: float | None = None
+    pin_confidence: int | None = None
+    pin_judgment: PinJudgment | None = None
+
+    @property
+    def suggested_pin(self) -> bool:
+        """The pin judge recommended an introduction; shown as a Suggested Pin badge under the overall reasoning."""
+        return self.pin_judgment is not None and self.pin_judgment.decision == "introduce"
 
     def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
         return next((row.candidate for row in self.ponds
@@ -205,6 +312,37 @@ def _number(value: Any) -> float:
         return 0.0
 
 
+def _optional_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if type(value) is bool:
+        return value
+    if value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    raise ValueError(f"Invalid optional boolean: {value!r}")
+
+
+def _cross_encoder_rating(row: dict[str, Any]) -> float | None:
+    score_type = _text(row.get("cross_encoder_score_type"))
+    if score_type == QUALIFICATION_SCORE_TYPE:
+        return None
+    saved = _optional_number(row.get("cross_encoder_score_1_to_5"))
+    if saved is not None:
+        return saved
+    score = _optional_number(row.get("cross_encoder_score"))
+    if score is None:
+        return None
+    return score_1_to_5(score, score_type=score_type or "raw_yes_minus_no_logit")
+
+
 def _artifact_path(root: Path, value: Any) -> Path | None:
     raw = _text(value)
     if not raw:
@@ -244,19 +382,6 @@ def _list(value: Any) -> list[Any]:
     return list(value or [])
 
 
-def _jd_fit(value: Any) -> JdFit | None:
-    """The role-fit expert's per-trait statuses; None when the row was never annotated."""
-    raw = value or {}
-    traits = tuple(JdTrait(
-        trait=_text(row.get("trait")),
-        status=TraitStatus(_text(row.get("status"))),
-        evidence=_text(row.get("evidence")),
-    ) for row in raw.get("traits") or [])
-    if not traits:
-        return None
-    return JdFit(coverage=_number(raw.get("coverage")), traits=traits)
-
-
 def _positions(value: Any) -> tuple[Position, ...]:
     positions = []
     for raw in _list(value):
@@ -268,7 +393,7 @@ def _positions(value: Any) -> tuple[Position, ...]:
             start_date=_text(raw.get("start_date")),
             end_date=_text(raw.get("end_date")),
             is_current=bool(raw.get("is_current")),
-            description=_text(raw.get("dense_text") or raw.get("description")),
+            description=_text(raw.get("description")),
             headcount=int(_number(raw.get("company_headcount"))),
             stage=_text(raw.get("company_stage")),
             funding=_number(raw.get("company_funding_total")),
@@ -325,8 +450,11 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
             education=_education(profile.get("education")),
             source_channel=_text(row.get("source_channel")),
             source_operator=_text(row.get("source_operator")),
-            cross_encoder_score=(float(row["cross_encoder_score"])
-                                 if row.get("cross_encoder_score") is not None else None),
+            cross_encoder_score=_optional_number(row.get("cross_encoder_score")),
+            cross_encoder_score_1_to_5=_cross_encoder_rating(row),
+            cross_encoder_score_type=_text(row.get("cross_encoder_score_type")),
+            cross_encoder_threshold=_optional_number(row.get("cross_encoder_threshold")),
+            cross_encoder_passed=_optional_bool(row.get("cross_encoder_passed")),
             cross_encoder_status=_text(row.get("cross_encoder_status")),
         ))
     return tuple(candidates)
@@ -352,7 +480,8 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
     return tuple(iterations)
 
 
-def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
+def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
+               attribution: dict[str, Any] | None = None) -> Candidate:
     person_id = _text(raw.get("person"))
     found_by = raw.get("found_by") or []
     sources: list[CandidatePond] = []
@@ -374,12 +503,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
                 sources.append(CandidatePond(run_id, pond_n, query or iteration.query, hit))
     best = max(sources, key=lambda item: item.candidate.final_score, default=None)
     pond_row = best.candidate if best else None
-    raw_experts = raw.get("fit_experts") or {}
-    fit_experts = tuple(FitExpertResult(
-        dimension=dimension,
-        label=parse_fit_label(dimension, (raw_experts.get(dimension.value) or {}).get("label")),
-        why=_text((raw_experts.get(dimension.value) or {}).get("why")),
-    ) for dimension in FIT_EXPERTS if raw_experts.get(dimension.value))
+    move = raw.get("move_likelihood")
     return Candidate(
         person_id=person_id,
         name=_text(raw.get("name")),
@@ -388,8 +512,8 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         company=(pond_row.company if pond_row and pond_row.company else _text(raw.get("company"))),
         location=pond_row.location if pond_row else "",
         avatar_url=pond_row.avatar_url if pond_row else "",
-        fit_experts=fit_experts,
-        jd_fit=_jd_fit(raw.get("jd_fit")),
+        move_likelihood=(MoveLikelihood(label=_text(move["label"]), why=_text(move["why"]))
+                         if move else None),
         why=_text(raw.get("why")),
         found_run=best.run_id if best else (_text(found_by[0].get("run")) if found_by else ""),
         found_pond=best.pond_n if best else (int(found_by[0].get("pond") or 0) if found_by else 0),
@@ -398,6 +522,11 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         ponds=tuple(sources),
         human_score=raw.get("human_score"),
         human_note=_text(raw.get("human_note")),
+        candidate_judgment=_candidate_judgment(raw.get("candidate_judgment")),
+        network_attribution=_person_attribution(attribution),
+        taste_score=_taste_score(raw.get("taste_score")),
+        pin_confidence=_pin_confidence(raw.get("pin_confidence")),
+        pin_judgment=_pin_judgment(raw.get("pin_judgment")),
     )
 
 
@@ -433,11 +562,19 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     raw_candidates = {_text(row.get("person")): dict(row)
                       for rows in raw_groups.values() for row in rows}
     for pond in ponds:
+        if not pond.candidates:
+            continue
+        source = raw_runs[pond.run_id]
+        grades = {_text(row.get("person")): row
+                  for iteration in source.payload.get("iterations", [])
+                  if iteration.get("pond_n") == pond.pond_n
+                  for row in iteration.get("shortlist_grades", [])}
         for row in pond.candidates:
-            raw = raw_candidates.setdefault(row.person_id, {
+            raw = raw_candidates.setdefault(row.person_id, dict(grades.get(row.person_id) or {
                 "person": row.person_id, "name": row.name,
-                "linkedin_url": row.linkedin_url, "found_by": [],
-            })
+                "linkedin_url": row.linkedin_url,
+            }))
+            raw.setdefault("found_by", [])
             found = {"run": pond.run_id, "pond": pond.pond_n, "query": pond.query}
             if found not in raw["found_by"]:
                 raw["found_by"].append(found)
@@ -446,7 +583,9 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         raw = raw_candidates.get(label["person_id"])
         if raw is not None and score is not None:
             raw.update(human_score=score, human_note=label["human"]["note"])
-    candidates = {key: _candidate(row, raw_runs) for key, row in raw_candidates.items()}
+    attribution = payload.get('person_attribution') or {}
+    candidates = {key: _candidate(row, raw_runs, attribution.get(key))
+                  for key, row in raw_candidates.items()}
     groups = tuple(CandidateGroup(
         key=key,
         label=label,

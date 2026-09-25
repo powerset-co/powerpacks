@@ -3,6 +3,11 @@
 
 Selected account people.csv files -> merge metadata by email -> people.csv +
 manifest.json. Identity matching and worth decisions belong to Deep Context.
+
+Changelog:
+  2026-09-23 (typed rows): account contacts are read as `PeopleRow` and handed to
+    `merge_group` typed; the only raw `.get` left is the discovery children
+    manifest parse that owns that external input.
 """
 from __future__ import annotations
 
@@ -28,7 +33,7 @@ from packs.ingestion.primitives.imports.directory import merge_jsonish_lists  # 
 from packs.ingestion.primitives.imports.merge_people import merge_group  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow, StageManifest  # noqa: E402
 from packs.ingestion.schemas.candidates_schema import candidate_key_for  # noqa: E402
-from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normalize_people_row  # noqa: E402
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 GMAIL_IMPORT_CONTRACT = "gmail-source-only-v1"
@@ -49,18 +54,18 @@ def _read_accounts(manifest_json: Path) -> tuple[_Account, ...]:
 
 
 def _people_from_accounts(accounts: tuple[_Account, ...]) -> list[dict[str, str]]:
-    grouped: dict[str, list[dict[str, str]]] = {}
+    grouped: dict[str, list[PeopleRow]] = {}
     for account in accounts:
         fields, rows = read_csv_rows(account.people_csv)
         if not {"primary_email", "interaction_counts"}.issubset(fields):
             raise ValueError(f"Gmail people schema missing primary_email or interaction_counts: {account.people_csv}")
         for raw in rows:
-            row = normalize_people_row(raw)
-            key = candidate_key_for(row["primary_email"])
+            row = PeopleRow.model_validate(raw)
+            key = candidate_key_for(row.primary_email)
             if not key:
                 raise ValueError(f"Gmail source contact has no valid email: {account.people_csv}")
-            row["primary_email"] = row["primary_email"].strip().lower()
-            row["source_artifacts"] = merge_jsonish_lists(row["source_artifacts"], str(account.people_csv))
+            row.primary_email = row.primary_email.strip().lower()
+            row.source_artifacts = merge_jsonish_lists(row.source_artifacts, str(account.people_csv))
             grouped.setdefault(f"candidate:{key}", []).append(row)
     return [merge_group(key, members) for key, members in sorted(grouped.items())]
 
@@ -111,9 +116,12 @@ class GmailImport(Node):
         }
         current = import_manifest_current("gmail", expected_input, import_dir=self.import_root)
         if current and not self.force:
-            self.written = current
+            self.written = current.to_payload()
             return GmailImportManifest.model_validate({
-                key: current[key] for key in ("status", "input", "outputs", "stats")
+                "status": current.status,
+                "input": current.input,
+                "outputs": current.outputs,
+                "stats": current.stats,
             })
         accounts = _read_accounts(self.manifest_json)
         people = _people_from_accounts(accounts)

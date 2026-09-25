@@ -39,6 +39,10 @@ if str(LIB_DIR) not in sys.path:
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
+from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -268,12 +272,26 @@ def execution_contract_suffix(args) -> str:
     return "".join(f" {shlex.quote(str(part))}" for part in parts)
 
 def cross_encoder_child_args(args) -> list[str]:
+    jd_file = reviewed_file(getattr(args, "jd_file", None), "reranking JD")
+    if jd_file:
+        parts = ["--jd-file", jd_file, "--job-title", args.job_title,
+                 "--job-company", args.job_company]
+        if getattr(args, "capability_judge", "terra") == "jev":
+            parts += ["--capability-judge", "jev"]
+        cleaner_output_dir = getattr(args, "jd_cleaner_output_dir", None)
+        if cleaner_output_dir:
+            parts += ["--jd-cleaner-output-dir", cleaner_output_dir]
+        return parts
     if not getattr(args, "cross_encoder_beta", False):
         return []
     parts = ["--cross-encoder-beta"]
     jd_file = reviewed_file(getattr(args, "cross_encoder_jd_file", None), "cross-encoder JD")
     if jd_file:
         parts += ["--cross-encoder-jd-file", jd_file]
+    for field in ("title", "company"):
+        value = getattr(args, f"cross_encoder_job_{field}", "")
+        if value:
+            parts += [f"--cross-encoder-job-{field}", value]
     return parts
 
 def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
@@ -781,7 +799,7 @@ def local_run_kwargs(args, db_path: Path) -> dict[str, Any]:
 def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     pinned_bands=pinned_bands_from_args(args)
     pin_current=bool(getattr(args,"current_role",False))
-    if args.state or (l.get("state") and not (args.query and args.payload_json)):
+    if args.state or l.get("state"):
         if pinned_bands:
             raise Failed("--seniority-bands only applies when the run starts from --query plus --payload-json; an existing --state already recorded its expand_search_request filters")
         if pin_current:
@@ -810,7 +828,7 @@ def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
 def init_state_local(args, lp: Path, l: dict[str, Any], payload: dict[str, Any], run_kwargs: dict[str, Any]) -> Path:
     if args.state:
         state=Path(args.state); l["state"]=str(state); save(lp,l); return state
-    if l.get("state") and not (args.query and args.payload_json):
+    if l.get("state"):
         return Path(str(l["state"]))
     if not args.query:
         raise Failed("Need --state or --query")
@@ -830,6 +848,19 @@ def latest_step(state: Path, step_id: str) -> dict[str, Any]:
             return step.get("output") or {}
     return {}
 
+
+def _capability_judge_changed(args, state: Path) -> bool:
+    if not getattr(args, "jd_file", None) or args.search_only or args.filter_only:
+        return False
+    saved = latest_step(state, "llm_rerank_candidates")
+    if not saved:
+        return False
+    requested = capability_contract.request_sha256(
+        jd=Path(args.jd_file).read_text(encoding="utf-8"), title=args.job_title,
+        company_name=args.job_company, evaluation_query=args.evaluation_query or "",
+        judge=args.capability_judge)
+    return saved.get("capability_request_sha256") != requested
+
 def maybe_payload_filters(state: Path) -> dict[str, Any]:
     s=read_json(state,{}) or {}
     for step in reversed(s.get("steps",[])):
@@ -838,28 +869,39 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
     return {}
 
 def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
+    use_jev = bool(getattr(args, "jd_file", None) and getattr(args, "capability_judge", "terra") == "jev")
     payload = {
         "state": str(state),
-        "model": args.model,
+        "model": (jev.MODEL if use_jev else terra.MODEL) if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "mode": "filter_only" if args.filter_only else "filter_rerank",
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
-        "reasoning_effort": args.reasoning_effort,
+        "reasoning_effort": ("none" if use_jev else terra.REASONING_EFFORT) if getattr(args, "jd_file", None) else args.reasoning_effort,
         "filter_reasoning_effort": args.filter_reasoning_effort,
         "evaluation_query": getattr(args, "evaluation_query", None),
         "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),
         "filter_system_file": getattr(args, "filter_system_file", None),
         "rerank_system_file": getattr(args, "rerank_system_file", None),
     }
-    if getattr(args, "cross_encoder_beta", False):
+    if getattr(args, "jd_file", None):
+        payload["capability_judge"] = getattr(args, "capability_judge", "terra")
+        payload["jd_file"] = args.jd_file
+        payload["job_title"] = args.job_title
+        payload["job_company"] = args.job_company
+        payload["jd_cleaner_model"] = jd_cleaner.MODEL
+        payload["jd_cleaner_reasoning_effort"] = jd_cleaner.REASONING_EFFORT
+        payload["jd_cleaner_output_dir"] = getattr(args, "jd_cleaner_output_dir", None)
+    elif getattr(args, "cross_encoder_beta", False):
         payload["cross_encoder_beta"] = True
         payload["cross_encoder_jd_file"] = getattr(args, "cross_encoder_jd_file", None)
+        payload["cross_encoder_job_title"] = getattr(args, "cross_encoder_job_title", "")
+        payload["cross_encoder_job_company"] = getattr(args, "cross_encoder_job_company", "")
     return payload
 
 def _warm_cross_encoder(args, ledger: dict[str, Any], state: Path) -> None:
-    if (not getattr(args, "cross_encoder_beta", False) or args.search_only or args.filter_only
+    if (getattr(args, "jd_file", None) or not getattr(args, "cross_encoder_beta", False) or args.search_only or args.filter_only
             or done(ledger, "llm_rerank_candidates")):
         return
     aid = approval_id("llm", _llm_approval_payload(args, state))
@@ -875,6 +917,7 @@ def run_pipeline(args) -> dict[str, Any]:
     args.rerank_system_file=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
     bind_execution_payload(args,lp,l)
     state=init_state(args,lp,l)
+    judge_changed = _capability_judge_changed(args, state)
     _warm_cross_encoder(args, l, state)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["powerset"]
     steps=[("resolve_set_operators",[sys.executable,str(ROOT/"packs/search/primitives/resolve_set_operators/resolve_set_operators.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"])]
@@ -921,12 +964,14 @@ def run_pipeline(args) -> dict[str, Any]:
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
-            if done(l,step) and not (args.force or getattr(args,"force_llm",False)): continue
+            replace_judge = judge_changed and step == "llm_rerank_candidates"
+            if done(l,step) and not (args.force or getattr(args,"force_llm",False) or replace_judge):
+                continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
             out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
             l.setdefault("artifacts",{}).update(collect_artifacts(out))
             mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
-    if not done(l,"persist_search_results") or args.force or getattr(args,"force_llm",False):
+    if not done(l,"persist_search_results") or args.force or getattr(args,"force_llm",False) or judge_changed:
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state)]
         mark(lp,l,"persist_search_results","running",command=" ".join(cmd)); out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"persist_search_results"); l.setdefault("artifacts",{}).update(collect_artifacts(out)); mark(lp,l,"persist_search_results","completed",summary=compact_summary(out),command=" ".join(cmd))
     l["current_block"]=None; save(lp,l)
@@ -978,6 +1023,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         save(lp,l)
 
     state=init_state_local(args,lp,l,payload,run_kwargs)
+    judge_changed = _capability_judge_changed(args, state)
     _warm_cross_encoder(args, l, state)
     filters=payload_filters(payload)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["local"]
@@ -1019,7 +1065,8 @@ def run_pipeline_local(args) -> dict[str, Any]:
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
-            if not (done(l,step) and not (args.force or getattr(args,"force_llm",False))):
+            replace_judge = judge_changed and step == "llm_rerank_candidates"
+            if not (done(l,step) and not (args.force or getattr(args,"force_llm",False) or replace_judge)):
                 mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
                 # LLM children DO need .env (OPENAI_API_KEY) but must stay in
                 # local backend mode, so keep the env var and load env files.
@@ -1031,7 +1078,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
                 if passed==0:
                     break
 
-    if not done(l,"persist_search_results") or args.force or getattr(args,"force_llm",False):
+    if not done(l,"persist_search_results") or args.force or getattr(args,"force_llm",False) or judge_changed:
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state)]
         mark(lp,l,"persist_search_results","running",command=" ".join(cmd))
         out=require_ok(run(cmd, timeout=args.timeout, **run_kwargs),"persist_search_results")
@@ -1051,8 +1098,14 @@ def run_pipeline_local(args) -> dict[str, Any]:
         "artifacts":l.get("artifacts",{}),
     }
 
+def _validate_capability_input(args) -> None:
+    if getattr(args, "capability_judge", "terra") == "jev" and not getattr(args, "jd_file", None):
+        raise Failed("--capability-judge jev requires --jd-file")
+
+
 def cmd_run(args):
     try:
+        _validate_capability_input(args)
         emit(run_pipeline_local(args) if getattr(args,"backend","powerset")=="local" else run_pipeline(args)); return 0
     except Blocked as e: emit(e.payload); return e.code
     except Exception as e: emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
@@ -1060,6 +1113,7 @@ def cmd_run(args):
 def cmd_prepare(args):
     """Run extraction and emit a compact preview without requiring repo inspection."""
     try:
+        _validate_capability_input(args)
         if getattr(args,"backend","powerset")=="local":
             return cmd_prepare_local(args)
         out_dir=prepare_output_dir(args.query,args.output_dir)
@@ -1195,6 +1249,11 @@ def add_backend(p):
 
 def add_run(p):
     add_backend(p)
+    p.add_argument("--jd-file", help="JD: replace trait reranking with capability scoring")
+    p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+    p.add_argument("--job-title", default="")
+    p.add_argument("--job-company", default="")
+    p.add_argument("--jd-cleaner-output-dir")
     p.add_argument("--ledger")
     p.add_argument("--state")
     p.add_argument("--query", help="Retrieval strategy query recorded in task state")
@@ -1207,6 +1266,8 @@ def add_run(p):
                    default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
                    help="Run CE beta alongside reranking without changing result order")
     p.add_argument("--cross-encoder-jd-file", help="Full JD sent only to CE beta")
+    p.add_argument("--cross-encoder-job-title", default="", help="Source job title for CE beta")
+    p.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     p.add_argument("--env-file",default=".env")
     p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands")
     p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)")
@@ -1234,6 +1295,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
     p=sub.add_parser("prepare")
     add_backend(p)
+    p.add_argument("--jd-file", help="JD for capability scoring")
+    p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+    p.add_argument("--job-title", default="")
+    p.add_argument("--job-company", default="")
+    p.add_argument("--jd-cleaner-output-dir")
     p.add_argument("--query",required=True)
     p.add_argument("--env-file",default=".env")
     p.add_argument("--output-dir")
@@ -1248,6 +1314,8 @@ def build_parser() -> argparse.ArgumentParser:
                    default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
                    help="Include CE beta in the approved run")
     p.add_argument("--cross-encoder-jd-file", help="Full JD sent only to CE beta")
+    p.add_argument("--cross-encoder-job-title", default="", help="Source job title for CE beta")
+    p.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     p.add_argument("--timeout",type=int,default=60)
     p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command")
     p.add_argument("--filter-only",action="store_true",help="Emit an execute_command that runs the cheap LLM filter but skips per-run LLM rerank (for multi-profile fan-out)")

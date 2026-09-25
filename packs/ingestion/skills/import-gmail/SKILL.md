@@ -6,6 +6,9 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-09-23: Trimmed instructions. Dropped the last-message resume note from the
+  "fixed checklist" paragraph (Step 2 always supplies an explicit window) and the
+  duplicated full-mailbox-sync mention in the Step 5 content boundary.
 - 2026-07-23: Gmail discovery selects accounts only via repeated `--account-email`.
   The primitive dropped its `--accounts`/accounts-file alternative and the
   `discover()` wrapper (callers now construct `GmailDiscovery(...).run()`);
@@ -41,8 +44,7 @@ It runs a **fixed checklist and always reruns it end to end**. Reruns are
 idempotent against fixed paths. The one exception is the msgvault store
 (`~/.msgvault/msgvault.db`): it is the durable, incrementally-synced archive —
 **never delete it**. With the explicit history window below, reruns rescan that
-window deterministically and msgvault skips messages already stored. Last-message
-resume inference applies only when no explicit window is supplied.
+window deterministically and msgvault skips messages already stored.
 
 ## How to run this skill
 
@@ -233,17 +235,16 @@ uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py 
 
 Omit extra repeated flags when only one account was selected. Writes
 `.powerpacks/network-import/discover/gmail/<account>/`. **Only sync through this
-`discover` command** — never `msgvault sync-full` (no `--after` bound → entire
-mailbox). If `discover` errors or the sync is too slow/large, recover by syncing
-**less, never more** (a more recent `--sync-after`). If a narrower window still
-fails, surface the error and stop. A large first sync can take a while; msgvault
-skips already-downloaded messages on reruns.
+`discover` command.** If `discover` errors or the sync is too slow or large,
+recover by syncing **less, never more** (a more recent `--sync-after`), and
+surface the error and stop if a narrower window still fails. A large first sync
+can take a while; msgvault skips already-downloaded messages on reruns.
 
-Content boundary: the bounded `msgvault sync-full` child downloads messages into
-msgvault's local full-message archive. The current command does not request
-attachment suppression, so supported msgvault builds may also store attachments.
-Powerpacks' subsequent SQLite reader selects contact/interaction metadata only and
-does not send bodies, subjects, snippets, MIME, or attachments to identity providers.
+Content boundary: the sync downloads messages into msgvault's local
+full-message archive, where supported msgvault builds may also store
+attachments. Powerpacks' SQLite reader then selects contact/interaction metadata
+only and sends no bodies, subjects, snippets, MIME, or attachments to identity
+providers.
 
 ### Step 6 — Import Gmail contacts (free, local)
 

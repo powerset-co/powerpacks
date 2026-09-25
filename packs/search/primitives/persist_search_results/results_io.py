@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packs.shared.csv_io import CsvIO  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5  # noqa: E402
+from packs.search.primitives.shared.human_ratings import score_1_to_5  # noqa: E402
 
 
 CSV_FIELDS = [
@@ -224,7 +224,7 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     profiles = hydrated_profiles(state)
     rerank_by_id = rerank_rows(state)
     ce = step_output(state, "llm_rerank_candidates").get("cross_encoder") or {}
-    ce_by_id = {row["id"]: row["score"] for row in ce.get("scores", [])}
+    ce_by_id = {row["id"]: row for row in ce.get("scores", [])}
     ids = frontier_ids(state)
     if not ids and not has_evaluated_frontier(state):
         ids = list(profiles)
@@ -260,10 +260,19 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
             "source_query": state.get("query", ""),
         })
         if ce:
-            rows[-1].update(cross_encoder_score=ce_by_id.get(person_id),
-                            cross_encoder_score_1_to_5=(score_1_to_5(ce_by_id[person_id])
-                                                       if person_id in ce_by_id else None),
-                            cross_encoder_model=ce.get("model"), cross_encoder_status=ce["status"])
+            ce_row = ce_by_id.get(person_id) or {}
+            score = ce_row.get("score")
+            score_type = ce.get("score_type", "raw_yes_minus_no_logit")
+            rows[-1].update(
+                cross_encoder_score=score,
+                cross_encoder_score_1_to_5=(score_1_to_5(score, score_type=score_type)
+                                            if score is not None else None),
+                cross_encoder_score_type=score_type,
+                cross_encoder_threshold=ce.get("threshold"),
+                cross_encoder_passed=ce_row.get("passed"),
+                cross_encoder_model=ce.get("model"),
+                cross_encoder_status=ce["status"],
+            )
     return rows
 
 
@@ -282,7 +291,9 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         fields = CSV_FIELDS + (["cross_encoder_score", "cross_encoder_score_1_to_5",
-                                "cross_encoder_model", "cross_encoder_status"]
+                                "cross_encoder_score_type", "cross_encoder_threshold",
+                                "cross_encoder_passed", "cross_encoder_model",
+                                "cross_encoder_status"]
                                if any("cross_encoder_status" in row for row in rows) else [])
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()

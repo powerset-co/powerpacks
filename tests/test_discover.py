@@ -280,6 +280,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         """Every branch is a full rewrite — a child's rows restate its account's
         whole truth — so only the ordered diagnostic reason varies."""
         plan = discover_gmail_util.gmail_discovery_merge_plan
+        resume = discover_gmail_util.GmailManifestResume.from_document
         version = discover_gmail_util.GMAIL_INTERACTION_CALCULATION_VERSION
         current = {"calculation_version": version, "account_emails": ["me@example.com"]}
         accounts = ["me@example.com"]
@@ -287,25 +288,25 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         # An empty/missing output wins over every other branch.
         for rows in (0, -1):
             self.assertEqual(
-                plan(current, accounts, output_rows=rows),
+                plan(resume(current), accounts, output_rows=rows),
                 {"mode": "full_rewrite", "reason": "empty_output"},
             )
         self.assertEqual(
-            plan(current, accounts, output_rows=5, full_rerun_requested=True),
+            plan(resume(current), accounts, output_rows=5, full_rerun_requested=True),
             {"mode": "full_rewrite", "reason": "full_rerun_requested"},
         )
         self.assertEqual(
-            plan({"calculation_version": "older-version"}, accounts, output_rows=5),
+            plan(resume({"calculation_version": "older-version"}), accounts, output_rows=5),
             {"mode": "full_rewrite", "reason": "calculation_version_changed"},
         )
         self.assertEqual(
-            plan({"calculation_version": version, "account_emails": ["other@example.com"]},
+            plan(resume({"calculation_version": version, "account_emails": ["other@example.com"]}),
                  accounts, output_rows=5),
             {"mode": "full_rewrite", "reason": "account_emails_changed"},
         )
         # The ordinary case: a populated, still-valid output is rebuilt anyway.
         self.assertEqual(
-            plan(current, accounts, output_rows=5),
+            plan(resume(current), accounts, output_rows=5),
             {"mode": "full_rewrite", "reason": "children_returned_full_recounts"},
         )
 

@@ -23,9 +23,9 @@ for your harness, and keeps going in the same session:
 > Use Powerpacks to set up my local network search using my Powerset account.
 
 That initializes the public hosted config, signs in to Powerset, pulls the
-provisioned Modal/OpenAI runtime keys for that user, and then builds the local
-LinkedIn network index. The shorter `Use Powerpacks to set up my local network
-search` prompt remains supported.
+provisioned runtime keys for that user, and then builds the local LinkedIn
+network index. The shorter `Use Powerpacks to set up my local network search`
+prompt remains supported.
 
 ### Other install paths
 
@@ -81,7 +81,7 @@ Product and architecture walkthroughs live in the
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>` | The single people-search door. The agent records a Step-1 decision (`decision.json`: surface / backend / depth) and dispatches. Ordinary queries: one expansion → hybrid retrieval (TurboPuffer+Postgres or local DuckDB) → LLM filter/rerank, behind one confirm gate. A JD / job-posting URL / role brief runs **deep mode**: resolve the recruiter contract → automated critic → one human Review → wide source → conservative triage → one selected judge → core-gated shortlist → expand-from-anchor until converged. Deep sourcing supports both Powerset and local DuckDB; the in-loop SQL lane and automated judge panel are planned. See the [search architecture](packs/search/docs/search-architecture.md). |
+| [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>` | Ordinary queries: expansion → hybrid retrieval (Powerset or local DuckDB) → LLM filter/rerank. JD searches: reviewed broad query → retrieval → cheap filter → Terra v5 capability ranking → parallel domain/opportunity judgments for ratings ≥3. Overall is the lower of domain and opportunity cap. Review results in the viewer, then continue or stop. See the [deep-search harness](packs/search/primitives/deep_search/README.md). |
 | [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
 | [`search-sql`](packs/search/skills/search-sql/SKILL.md) | `$search-sql <question>` | Agentic read-only SQL over the local search DuckDB, for relational/aggregate people queries the filter DSL can't express (overlap joins, per-person aggregates, career-shape predicates). |
 | [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds the fixed local search index at `.powerpacks/search-index/local-search.duckdb` from the canonical merged people CSV without Modal, Postgres, or TurboPuffer. Planning is local-only; full builds may use configured providers for cache misses. |
@@ -243,6 +243,7 @@ Powerset users runs on Modal.
 | `OPENAI_API_KEY` | Query extraction, LLM filtering/reranking |
 | `OPENROUTER_API_KEY` | Messages contact review |
 | `PARALLEL_API_KEY` | Messages deep research |
+| `TYPESAFE_API_KEY` | Jev capability scoring |
 | `POWERPACKS_DEFAULT_SET_ID` | Local default Powerset set selection |
 | `APOLLO_API_KEY` | Apollo.io outbound build; use a Master API key for sequence/campaign, email-account, schedule, enrichment, and contact endpoints |
 
@@ -414,7 +415,9 @@ uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runti
 ```
 
 The primitive redacts secret values in output and only writes the local runtime
-keys returned by the authenticated Powerset API. Modal holds hosted processing
+keys returned by the authenticated Powerset API, including a provisioned
+`TYPESAFE_API_KEY`. `$update-powerpacks` fills that key only when it is missing
+or empty and preserves a nonempty local value. Modal holds hosted processing
 secrets for provisioned Powerset users. The Google Cloud CLI is still used by
 the separate msgvault/Gmail OAuth app setup flow, not by Powerset runtime-key
 pull.

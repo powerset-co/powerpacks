@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 from packs.search.primitives.deep_search.results_web import RESULTS_JS
 from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request, record_fit_label
-from packs.search.primitives.deep_search.results_web.model import load_searches
+from packs.search.primitives.deep_search.results_web.model import CandidateJudgment, load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
 from packs.search.primitives.deep_search.results_web.server import (
     ThreadingHTTPServer,
@@ -28,6 +28,15 @@ from packs.search.primitives.deep_search.results_web.server import (
 
 
 class ResultsWebTest(unittest.TestCase):
+    def test_work_history_only_uses_original_description(self):
+        from packs.search.primitives.deep_search.results_web.model import _positions
+        rows = _positions([
+            {"description": "Original description", "dense_text": "Generated description"},
+            {"description": "", "dense_text": "Generated description"},
+            {"dense_text": "Generated description"},
+        ])
+        self.assertEqual([row.description for row in rows], ["Original description", "", ""])
+
     PERSON = "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"
     UNGRADED = "1c7a9a4f-9a4f-4b7c-8d3e-2f3a4b5c6d7e"
     SECOND = "2d8b0b5a-0b5a-4c8d-9e4f-3a4b5c6d7e8f"
@@ -109,7 +118,8 @@ class ResultsWebTest(unittest.TestCase):
                      "company_headcount": 120, "company_stage": "SERIES_B",
                      "company_funding_total": 45000000, "is_current": True,
                      "start_date": "2023-01-01T00:00:00Z", "end_date": None,
-                     "dense_text": f"Leads the {name} reliability platform."},
+                     "description": f"Leads the {name} reliability platform.",
+                     "dense_text": "Generated semantic description must not be displayed."},
                     {"position_title": "Software Engineer",
                      "company_name": "Example Labs", "is_current": False,
                      "start_date": "2020-02-01T00:00:00Z",
@@ -176,6 +186,7 @@ class ResultsWebTest(unittest.TestCase):
         }), encoding="utf-8")
         candidate = {
             "person": self.PERSON,
+            "move_likelihood": {"label": "plausible", "why": "Still builds systems at a small startup; a staff IC move fits that scope."},
             "name": "Jordan Bravo",
             "linkedin_url": "https://linkedin.com/in/jordan-bravo",
             "rerank_score": 0.88,
@@ -294,7 +305,7 @@ class ResultsWebTest(unittest.TestCase):
         for expected in (
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
-            "Jordan shipped the prior system.", "Main search",
+            "Jordan shipped the prior system.", "Overall score and reasoning",
             "results-table", "trait-indicator", "1</strong> annotated", "50 retrieved",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
@@ -302,18 +313,17 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("score-histogram", detail)
         self.assertNotIn("candidate-card", detail)
         self.assertNotIn("trait-strip", detail)
-        self.assertEqual(detail.count("class='results-table'"), 3)   # two ponds + beta
-        self.assertIn("data-pond-tab='jordan-role:1'", detail)
-        self.assertIn("data-pond-tab='jordan-role-prior:1'", detail)
-        self.assertIn("role='tab' aria-selected='true'", detail)
-        self.assertIn("data-pond-panel='jordan-role-prior:1' hidden", detail)
+        self.assertEqual(detail.count("class='results-table'"), 1)
+        self.assertNotIn("data-pond-tab", detail)
+        self.assertNotIn("role='tab'", detail)
+        self.assertNotIn("data-view-tab", detail)
         self.assertNotIn("JD Ranking", detail)
         self.assertNotIn("group-band", detail)
         self.assertNotIn("group-toggle", detail)
         self.assertNotIn("result-group", detail)
         self.assertNotIn(">Passed<", detail)
         self.assertNotIn("confidence", detail)
-        self.assertNotIn("overall", detail)
+        self.assertIn("Overall score filter", detail)
         person_cell = detail.split("<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0]
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertNotIn("data-feedback-person", person_cell)
@@ -325,58 +335,165 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Acme needs a senior backend engineer.", page)
         self.assertNotIn("<b>1</b><small>results</small>", page)
 
-    def test_candidate_row_has_one_reasoned_badge_per_fit_expert(self):
+    def test_main_results_show_traits_without_judge_badges(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             detail = render_search_body(search)
 
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertEqual(indicator_cell.count("class='badge'"), 4)
-        self.assertIn(">Role fit · Strong fit<", indicator_cell)
-        self.assertIn("Senior IC scope and systems work match the role.", indicator_cell)
-        self.assertIn(">Company taste · Strong company signal<", indicator_cell)
-        self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
-        self.assertIn(">Craft/potential · Strong craft<", indicator_cell)
-        self.assertIn("Jordan repeatedly shipped high-quality reliability systems.", indicator_cell)
-        self.assertIn(">Move feasibility · Plausible now<", indicator_cell)
-        self.assertIn("The role and compensation make a move plausible now.", indicator_cell)
-        badges = indicator_cell.split("<div class='candidate-badges'>", 1)[1].split("</div>", 1)[0]
-        self.assertNotIn(">Matched<", badges)
-        self.assertNotIn("candidate-badges", detail.split(
-            "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
-        self.assertLess(indicator_cell.index("trait-indicators"),
-                        indicator_cell.index("candidate-badges"))
+        self.assertNotIn("class='badge'", indicator_cell)
+        self.assertIn("trait-indicators", indicator_cell)
+        self.assertNotIn("Role fit", indicator_cell)
+        self.assertNotIn("Company taste", indicator_cell)
+        self.assertNotIn("Craft/potential", indicator_cell)
+        self.assertNotIn("candidate-badges", detail)
 
-    def test_beta_rows_replace_jd_traits_with_five_point_ce_scores(self):
+    def test_beta_shows_overall_integer_and_only_the_limiting_judge_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            judgment = {"status": "ok", "model": "gpt-5.6-terra", "overall_score": 3,
+                        "domain": {"score": 5, "why": "Direct systems ownership <strong>evidence</strong>"},
+                        "opportunity": {"cap": 3, "why": "Scope reduction worth checking",
+                                        "company_context": "Small team versus larger organization"}}
+            for rows in payload["summary"]["groups"].values():
+                for row in rows:
+                    row["candidate_judgment"] = judgment
+            path.write_text(json.dumps(payload))
+            search = load_searches(root)[0]
+            detail = render_search_body(search)
+            metadata = build_feedback_request(search, "review", search.candidate(self.PERSON), {}).metadata
+        beta = detail
+        self.assertNotIn("candidate-badges", detail)
+        self.assertNotIn("CE score <b>", detail)
+        self.assertNotIn("Qualifications ·", detail)
+        self.assertNotIn("Opportunity cap ·", detail)
+        self.assertIn("'>3/5</b>", beta)
+        self.assertNotIn("'>3.0/5</b>", beta)
+        self.assertNotIn("Direct systems ownership", beta)
+        self.assertIn("Scope reduction worth checking", beta)
+        self.assertIn("%", beta)  # Original traits remain in profile details.
+        self.assertEqual(metadata["candidate_judgment"]["overall_score"], 3)
+        groups = tuple(replace(group, candidates=tuple(
+            replace(candidate, candidate_judgment=replace(
+                candidate.candidate_judgment, domain_score=3, opportunity_cap=5))
+            for candidate in group.candidates)) for group in search.groups)
+        beta = render_search_body(replace(search, groups=groups, candidates=tuple(
+            candidate for group in groups for candidate in group.candidates)))
+        self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", beta)
+        self.assertNotIn("Scope reduction worth checking", beta)
+
+    def test_beta_sorts_overall_then_ce_with_unjudged_last(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            for rows in payload["summary"]["groups"].values():
+                for row in rows:
+                    row["candidate_judgment"] = {
+                        "status": "ok", "model": "gpt-5.6-terra", "overall_score": 4,
+                        "domain": {"score": 4, "why": "Qualified"},
+                        "opportunity": {"cap": 5, "why": "Fits"}}
+            path.write_text(json.dumps(payload))
+            search = load_searches(root)[0]
+            beta = render_search_body(search)
+
+            self.assertIn("data-results-toolbar", beta)
+            self.assertIn("data-export-csv", beta)
+            self.assertIn("data-pond-panel", beta)
+            for score in range(1, 6):
+                self.assertIn(f"data-score-filter='{score}'", beta)
+            self.assertIn("data-person-overall='4'", beta)
+            self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+            self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
+            groups = tuple(replace(group, candidates=tuple(
+                replace(candidate, candidate_judgment=replace(candidate.candidate_judgment, overall_score=5))
+                if candidate.person_id == self.SECOND else candidate
+                for candidate in group.candidates)) for group in search.groups)
+            beta = render_search_body(replace(search, groups=groups, candidates=tuple(
+                candidate for group in groups for candidate in group.candidates)))
+            self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
+
+    def test_summary_dedup_does_not_drop_saved_person_judgment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            payload["summary"]["groups"] = {}
+            payload["iterations"][0]["shortlist_grades"] = [{
+                "person": self.PERSON, "name": "Jordan Bravo",
+                "candidate_judgment": {
+                    "status": "ok", "model": "test", "overall_score": 4,
+                    "domain": {"score": 4, "why": "Qualified"},
+                    "opportunity": {"cap": 5, "why": "Fits"}}}]
+            path.write_text(json.dumps(payload))
+            self.assertEqual(load_searches(root)[0].candidate(self.PERSON)
+                             .candidate_judgment.overall_score, 4)
+
+    def test_beta_does_not_substitute_ce_or_trait_scores_for_missing_judgment(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             detail = render_search_body(search)
 
-        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
-        self.assertNotIn("class='cross-encoder-score'", main)
+        beta = detail
+        self.assertNotIn("class='cross-encoder-score'", detail)
         self.assertNotIn("jd-fit-list", detail)
         self.assertNotIn("No database internals work on record.", detail)
         indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertIn("CE score <b>4.11/5</b>", indicator_cell)
+        self.assertIn("Not judged", indicator_cell)
+        self.assertNotIn("CE score <b>", indicator_cell)
         self.assertIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
-        self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
-        self.assertIn("1–5 normalized relevance, not your ratings", beta)
+        self.assertEqual(indicator_cell.count("class='badge'"), 0)
+        self.assertIn("Overall score and reasoning", beta)
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
         self.assertIn('humanJudgment = personId ? { score:', script)
+
+    def test_legacy_expert_badges_are_not_used_as_move_judgments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            for rows in payload["summary"]["groups"].values():
+                for row in rows:
+                    row.pop("move_likelihood", None)
+            path.write_text(json.dumps(payload))
+            before = path.read_bytes()
+            search = load_searches(root)[0]
+            self.assertIsNone(search.candidate(self.PERSON).move_likelihood)
+            self.assertNotIn("class='badge'", render_search_body(search))
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_feedback_preserves_zero_ce_margin_and_move_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            search = load_searches(root)[0]
+            candidate = search.candidate(self.PERSON)
+            candidate = replace(candidate, ponds=tuple(
+                replace(source, candidate=replace(source.candidate, cross_encoder_score=0))
+                for source in candidate.ponds))
+            request = build_feedback_request(search, "Reviewed", candidate, environ={},
+                                             human_judgment={"score": 3, "scale": 5})
+            self.assertEqual(request.metadata["cross_encoder_score"], 0)
+            path = record_fit_label(root / "jordan-role", request)
+            saved = json.loads(path.read_text().splitlines()[-1])
+            self.assertEqual(saved["human"]["score"], 3)
+            self.assertEqual(saved["model"]["cross_encoder_score"], 0)
+            self.assertEqual(saved["model"]["move_likelihood"]["label"], "plausible")
 
     def test_older_runs_without_jd_fit_render_without_the_beta_list(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, jd_fit=False))[0]
             detail = render_search_body(search)
 
-        self.assertIsNone(search.groups[0].candidates[0].jd_fit)
+        self.assertFalse(hasattr(search.groups[0].candidates[0], "jd_fit"))
         self.assertNotIn("jd-fit-list", detail)
         self.assertNotIn("jd-fit-chip", detail)
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertEqual(indicator_cell.count("class='badge'"), 4)
+        self.assertEqual(indicator_cell.count("class='badge'"), 0)
         self.assertNotIn("data-view-tab='jd-fit'", detail)
         self.assertNotIn("data-view-panel='jd-fit'", detail)
 
@@ -510,31 +627,116 @@ class ResultsWebTest(unittest.TestCase):
 
         self.assertEqual(search.ponds[0].candidates[0].cross_encoder_score, 0)
         self.assertIsNone(search.ponds[1].candidates[1].cross_encoder_score)
-        self.assertIn("role='tab' aria-selected='true' data-view-tab='main'>"
-                      "Main search</button>", detail)
-        self.assertIn("role='tab' aria-selected='false' data-view-tab='jd-fit'>"
-                      "JD Traits (Beta)</button>", detail)
-        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
-        self.assertIn("<div data-view-panel='main'", main)
-        self.assertTrue(beta.startswith(" role='tabpanel' hidden>"))
-        # CE includes the ungraded candidate and ignores the legacy JD-fit order.
-        self.assertLess(main.index("Jordan Bravo"), main.index("Morgan Echo"))
+        self.assertNotIn("data-view-tab", detail)
+        beta = detail
         self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
-        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
         self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
-        self.assertIn("CE score <b>4.99/5</b>", beta)
-        self.assertIn("CE score <b>1.30/5</b>", beta)
-        self.assertIn("1–5 normalized relevance", beta)
-        self.assertIn("data-person-score='1.25'", beta)
+        self.assertNotIn("CE score <b>", beta)
+        self.assertIn("Not judged", beta)
+        self.assertIn("data-person-score='4.109", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
-        self.assertNotIn("data-results-toolbar", beta)
-        self.assertIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
+        self.assertIn("data-results-toolbar", beta)
+        self.assertNotIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
+
+    def test_beta_preserves_native_ratings_and_compares_normalized_saved_qwen_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = Path(directory) / "artifacts" / "current" / "results.jsonl"
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            for row, score in zip(rows, [3.1, 3.5, 2.25]):
+                row.update(cross_encoder_score=score, cross_encoder_score_1_to_5=score,
+                           cross_encoder_model="gemma")
+            path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+            search = load_searches(root)[0]
+            beta = render_search_body(search)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: [search]))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/search?run_id=jordan-role", timeout=5,
+                ) as response:
+                    self.assertIn("Not judged", response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        self.assertEqual(search.ponds[0].candidates[0].cross_encoder_score_1_to_5, 3.1)
+        self.assertNotIn("CE score <b>", beta)
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Casey Delta"))
+        self.assertIn("Senior Software Engineer", beta)
+
+    def test_qualification_scores_render_pass_status_and_sort_by_native_score(self):
+        threshold = 0.29855554570561965
+        scores = {
+            "current": [(0.31, True), (0.15, False), (0.55, True)],
+            "prior": [(0.85, True), (0.25, False), (0.45, True)],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            for artifact, values in scores.items():
+                path = Path(directory) / "artifacts" / artifact / "results.jsonl"
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                for row, (score, passed) in zip(rows, values):
+                    row.update(
+                        cross_encoder_score=score,
+                        cross_encoder_score_1_to_5=4.9,
+                        cross_encoder_score_type="qualification_score",
+                        cross_encoder_threshold=threshold,
+                        cross_encoder_passed=passed,
+                    )
+                path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+
+            search = load_searches(root)[0]
+            beta = render_search_body(search)
+            judgment = CandidateJudgment(
+                4, 5, 4, "Strong matching work", "Opportunity fits", "", "test", "ok")
+            rated = replace(search, candidates=tuple(
+                replace(candidate, candidate_judgment=judgment)
+                if candidate.person_id == self.PERSON else candidate
+                for candidate in search.candidates))
+            rated_beta = render_search_body(rated)
+
+        row = search.ponds[0].candidates[0]
+        self.assertEqual(row.cross_encoder_score, 0.31)
+        self.assertIsNone(row.cross_encoder_score_1_to_5)
+        self.assertEqual(row.cross_encoder_score_type, "qualification_score")
+        self.assertEqual(row.cross_encoder_threshold, threshold)
+        self.assertIs(row.cross_encoder_passed, True)
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
+        self.assertIn("Senior Software Engineer", beta)
+        self.assertIn("Qualification score", beta)
+        self.assertIn("Pass", beta)
+        self.assertIn("Fail", beta)
+        self.assertIn("data-person-score='0.85'", beta)
+        self.assertNotIn("Qualification probability", beta)
+        self.assertIn("Qualification score", rated_beta)
+        self.assertIn("4/5", rated_beta)
+        self.assertIn("data-person-overall='4'", rated_beta)
+        self.assertIn("data-score-filter='4'", rated_beta)
+        self.assertLess(rated_beta.index("Jordan Bravo"), rated_beta.index("Morgan Echo"))
 
     def test_legacy_jd_fit_scores_do_not_become_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
-            self.assertIsNotNone(search.candidate(self.PERSON).jd_fit)
+            self.assertFalse(hasattr(search.candidate(self.PERSON), "jd_fit"))
             self.assertNotIn("data-view-tab='jd-fit'", render_search_body(search))
+
+    def test_mixed_jev_and_rating_rows_are_not_compared_or_deduped_across_scales(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
+        current, prior = search.ponds
+        current = replace(current, candidates=tuple(replace(
+            row, cross_encoder_score=.85, cross_encoder_score_1_to_5=None,
+            cross_encoder_score_type="qualification_score", cross_encoder_passed=True,
+            cross_encoder_threshold=.29855554570561965) for row in current.candidates))
+        html = render_search_body(replace(search, ponds=(current, prior)))
+        self.assertIn("Jev qualification scores", html)
+        self.assertIn("Rating-based scores", html)
+        self.assertEqual(html.count("data-person-name='Jordan Bravo'"), 2)
+        self.assertIn("data-person-score='0.85'", html)
 
     def test_zero_score_is_included_missing_score_is_not_and_ce_selects_its_pond(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -548,12 +750,20 @@ class ResultsWebTest(unittest.TestCase):
             replace(row, cross_encoder_score=None) if row.person_id == self.UNGRADED else row
             for row in current.candidates))
         detail = render_search_body(replace(search, ponds=(current, prior)))
-        beta = detail.split("<div data-view-panel='jd-fit'", 1)[1]
-        self.assertIn("CE score <b>3.00/5</b>", beta)
-        self.assertIn("Jordan shipped the current system.", beta)
+        beta = detail
+        self.assertIn("Not judged", beta)
+        self.assertIn("Leads the current reliability platform.", beta)
         self.assertNotIn("Jordan shipped the prior system.", beta)
         self.assertNotIn("Casey Delta", beta)
-        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
+
+    def test_ce_below_three_displays_integer_screen_score(self):
+        from packs.search.primitives.deep_search.results_web.rendering import _overall_score
+        with tempfile.TemporaryDirectory() as directory:
+            row = load_searches(self._fixture(directory, cross_encoder=True))[0].ponds[0].candidates[0]
+        for ce, expected in [(1.0, 1), (1.99, 1), (2.0, 2), (2.99, 2), (3.0, None)]:
+            with self.subTest(ce=ce):
+                self.assertEqual(_overall_score(replace(row, cross_encoder_score_1_to_5=ce), None), expected)
 
     def test_unavailable_ce_does_not_fall_back_to_jd_trait_order(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -564,10 +774,10 @@ class ResultsWebTest(unittest.TestCase):
                     row.update(cross_encoder_status="failed", cross_encoder_score=None)
                 path.write_text("\n".join(map(json.dumps, rows)) + "\n")
             detail = render_search_body(load_searches(root)[0])
-        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        beta = detail
         self.assertIn("CE scores are unavailable", beta)
         self.assertNotIn("candidate-row", beta)
-        self.assertIn("Jordan Bravo", main)
+        self.assertNotIn("Jordan Bravo", detail)
 
     def test_browser_ce_tab_order_and_five_point_review(self):
         try:
@@ -587,14 +797,14 @@ class ResultsWebTest(unittest.TestCase):
                     errors = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
-                    tab = page.get_by_role("tab", name="JD Traits (Beta)", exact=True)
-                    tab.click()
-                    expect(tab).to_have_attribute("aria-selected", "true")
-                    beta = page.locator("[data-view-panel='jd-fit']")
+                    expect(page.locator("[data-view-tab]")).to_have_count(0)
+                    beta = page.locator(".groups-section")
                     expect(beta).to_be_visible()
                     expect(beta.locator(".candidate-name")).to_have_text(
-                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
-                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["4.99/5", "4.11/5", "1.30/5"])
+                        ["Morgan Echo", "Casey Delta", "Jordan Bravo"])
+                    expect(beta.locator(".cross-encoder-score")).to_have_count(0)
+                    expect(beta.locator(".no-traits")).to_have_text(["Not judged"] * 2)
+                    expect(beta.locator(".candidate-indicators > .trait-indicators .trait-score-badge")).to_have_text(["1/5"])
                     beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
                     expect(page.locator(".score-grid input")).to_have_count(5)
                     page.locator(".score-grid label").nth(3).click()
@@ -602,15 +812,49 @@ class ResultsWebTest(unittest.TestCase):
                     expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
                     page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
                     page.reload()
-                    tab.click()
                     expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
                     expect(beta.locator(".candidate-name")).to_have_text(
-                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
+                        ["Morgan Echo", "Casey Delta", "Jordan Bravo"])
                     page.screenshot(path="/tmp/powerpacks-ce-beta-view.png")
-                    page.get_by_role("tab", name="Main search", exact=True).click()
-                    expect(beta).to_be_hidden()
-                    expect(page.locator("[data-pond-panel]:visible .candidate-name")).to_have_text(
-                        ["Jordan Bravo", "Morgan Echo", "Casey Delta"])
+                    expect(beta).to_be_visible()
+                    self.assertEqual(errors, [])
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_browser_main_results_have_traits_without_judge_badges(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), lambda request: {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page(viewport={"width": 1440, "height": 900},
+                                            reduced_motion="reduce")
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
+                    expect(page.locator(".badge")).to_have_count(0)
+                    row = page.locator(".candidate-row").filter(has_text="Jordan Bravo")
+                    details = row.locator(".person-details")
+                    expect(details).to_be_hidden()
+                    row.locator(".details-trigger").click()
+                    expect(details).to_be_visible()
+                    trait = details.locator(".trait-score-badge").first
+                    expect(trait).to_contain_text("%")
+                    page.set_viewport_size({"width": 375, "height": 812})
+                    expect(trait).to_be_visible()
+                    page.set_viewport_size({"width": 900, "height": 375})
+                    expect(trait).to_be_visible()
                     self.assertEqual(errors, [])
                     browser.close()
             finally:
@@ -627,6 +871,7 @@ class ResultsWebTest(unittest.TestCase):
         program = """
             import assert from 'node:assert/strict';
             const pending = [], saved = [];
+            const hostedFeedback = false;
             function announce(message) { throw new Error(message); }
             function post(path, values) {
               return new Promise(resolve => pending.push(() => {
@@ -749,7 +994,8 @@ class ResultsWebTest(unittest.TestCase):
                         current.get_by_role("button", name="CSV", exact=True).first.click()
                     with open(download.value.path(), newline="") as handle:
                         exported = list(csv.DictReader(handle))
-                    self.assertEqual(exported[0]["Labels"], "Backend | Infra")
+                    self.assertNotIn("Labels", exported[0])
+                    self.assertTrue(download.value.suggested_filename.startswith("backend-infra_"))
                     current.get_by_role("button", name="Clear all", exact=True).first.click()
                     with other.expect_response(lambda response: response.url.endswith("/tags")
                                                and response.request.method == "POST"):
@@ -795,11 +1041,143 @@ class ResultsWebTest(unittest.TestCase):
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn("powerset_tagged_", script)
         self.assertIn("powerset_pinned_", script)
-        self.assertIn('const LEGACY_PIN_TAG = "Pinned"', script)
+        self.assertIn('const PIN_TAG = "Pinned"', script)
         self.assertIn('const TAG_NAME_MAX = 40', script)
-        self.assertIn('"Name", "Title", "Company", "Location", "Sources", "Network",', script)
-        self.assertNotIn("data-pin-person", detail)
+        self.assertIn('"Name", "Title", "Company", "Location", "Network",', script)
+        self.assertIn("data-pin-person='" + self.PERSON + "'", detail)
         self.assertNotIn("data-result-filter='pinned'", detail)
+
+    def test_browser_overall_filters_export_all_matching_rows_and_tags(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            search = load_searches(root)[0]
+            rows, candidates = [], []
+            for index in range(125):
+                score = index % 5 + 1
+                person_id = f"score-person-{index}"
+                rows.append(replace(search.ponds[0].candidates[0], person_id=person_id,
+                                    name=f"Person {index}", cross_encoder_score=3,
+                                    cross_encoder_score_1_to_5=3))
+                candidates.append(replace(search.candidates[0], person_id=person_id,
+                    candidate_judgment=CandidateJudgment(
+                        score, 5, score, f"Qualification {index}", "Opportunity fits", "", "test", "ok")))
+            search = replace(search, ponds=(replace(search.ponds[0], candidates=tuple(rows)),),
+                             candidates=tuple(candidates))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: (search,)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}")
+                    export = page.get_by_role("button", name="CSV", exact=True)
+                    expect(export).to_be_visible()
+                    with page.expect_download() as download:
+                        export.click()
+                    with open(download.value.path(), newline="") as handle:
+                        self.assertEqual(len(list(csv.DictReader(handle))), 125)
+                    page.get_by_role("button", name="Overall score 4", exact=True).click()
+                    page.get_by_role("button", name="Overall score 5", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(50)
+                    with page.expect_download() as download:
+                        export.click()
+                    with open(download.value.path(), newline="") as handle:
+                        exported = list(csv.DictReader(handle))
+                    self.assertEqual(len(exported), 50)
+                    self.assertEqual({row["Overall Score"] for row in exported}, {"4", "5"})
+                    self.assertIn("Qualification 123", {row["Reasoning"] for row in exported})
+                    self.assertEqual(list(exported[0]), [
+                        "Name", "Title", "Company", "Location", "Network",
+                        "Overall Score", "Reasoning"])
+                    self.assertTrue(all(row["Name"].startswith('=HYPERLINK("https://linkedin.com/')
+                                        for row in exported))
+                    page.get_by_role("button", name="Add tag to Person 3", exact=True).click()
+                    page.get_by_role("textbox", name="Add tag", exact=True).fill("Pinned")
+                    page.get_by_role("textbox", name="Add tag", exact=True).press("Enter")
+                    page.keyboard.press("Escape")
+                    page.get_by_role("button", name="Tagged (1)", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(1)
+                    with page.expect_download() as download:
+                        export.click()
+                    with open(download.value.path(), newline="") as handle:
+                        self.assertNotIn("Labels", list(csv.DictReader(handle))[0])
+                    self.assertTrue(download.value.suggested_filename.startswith("pinned_"))
+                    page.get_by_role("button", name="Overall score 4", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(0)
+                    expect(export).to_be_disabled()
+                    page.get_by_role("button", name="All scores", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(1)
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_browser_export_uses_human_scores_without_moving_displayed_rows(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            search = load_searches(root)[0]
+            original = search.ponds[0].candidates
+            rows = tuple(replace(row, cross_encoder_score=3, cross_encoder_score_1_to_5=3)
+                         for row in original)
+            candidates = tuple(replace(search.candidate(row.person_id),
+                human_score={self.PERSON: 2, self.UNGRADED: 4, self.SECOND: None}[row.person_id],
+                candidate_judgment=CandidateJudgment(
+                    score, 5, score, "Relevant work", "Fits", "", "test", "ok"))
+                for row in rows for score in [3 if row.person_id == self.UNGRADED else 4])
+            search = replace(search, ponds=(replace(search.ponds[0], candidates=rows),),
+                             candidates=candidates)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: (search,), lambda request: {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}")
+                    page.get_by_role("button", name="Overall score 4", exact=True).click()
+                    page.get_by_role("button", name="Overall score 5", exact=True).click()
+                    displayed = page.locator(".candidate-row:visible")
+                    expect(displayed).to_have_count(2)
+                    order = displayed.evaluate_all("rows => rows.map(r => r.dataset.personId)")
+                    self.assertIn(self.PERSON, order)  # Model 4 stays visible despite human 2.
+                    self.assertNotIn(self.UNGRADED, order)  # Model 3 stays in its original group.
+                    with page.expect_download() as download:
+                        page.get_by_role("button", name="CSV", exact=True).click()
+                    with open(download.value.path(), newline="") as handle:
+                        exported = list(csv.DictReader(handle))
+                    self.assertEqual(len(exported), 2)
+                    self.assertEqual({r["Overall Score"] for r in exported}, {"4"})
+                    self.assertTrue(any("Casey Delta" in r["Name"] for r in exported))
+                    self.assertFalse(any("Jordan Bravo" in r["Name"] for r in exported))
+                    page.get_by_role("button", name="Score Morgan Echo", exact=True).click()
+                    page.locator('.score-grid input[value="3"]').check()
+                    page.locator('.feedback-dialog button[type="submit"]').click()
+                    expect(page.get_by_role("button", name="Score Morgan Echo", exact=True)
+                           ).to_have_text("Your score: 3/5")
+                    self.assertEqual(displayed.evaluate_all("rows => rows.map(r => r.dataset.personId)"), order)
+                    with page.expect_download() as download:
+                        page.get_by_role("button", name="CSV", exact=True).click()
+                    with open(download.value.path(), newline="") as handle:
+                        exported = list(csv.DictReader(handle))
+                    self.assertEqual(len(exported), 1)
+                    self.assertIn("Casey Delta", exported[0]["Name"])
+                    self.assertEqual(exported[0]["Overall Score"], "4")
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
     def test_rows_sort_by_score_and_unannotated_rows_have_no_model_badges(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -940,33 +1318,7 @@ class ResultsWebTest(unittest.TestCase):
             "found_query": "Distributed systems engineer",
             "found_run": "jordan-role-prior",
             "found_pond": 1,
-            "fit_experts": {
-                "role_fit": {
-                    "label": "strong-fit",
-                    "why": "Senior IC scope and systems work match the role.",
-                },
-                "company_taste": {
-                    "label": "strong",
-                    "why": "Bravo Systems hires strong reliability engineers.",
-                },
-                "craft_and_potential": {
-                    "label": "strong",
-                    "why": "Jordan repeatedly shipped high-quality reliability systems.",
-                },
-                "move_feasibility": {
-                    "label": "plausible",
-                    "why": "The role and compensation make a move plausible now.",
-                },
-            },
-            "jd_fit": {
-                "coverage": 0.6,
-                "traits": [
-                    {"trait": "Builds reliable distributed systems", "status": "doing_now",
-                     "evidence": "Led the reliability platform at Bravo Systems."},
-                    {"trait": "Postgres internals", "status": "thin",
-                     "evidence": "No database internals work on record."},
-                ],
-            },
+            "move_likelihood": {"label": "plausible", "why": "Still builds systems at a small startup; a staff IC move fits that scope."},
             "human_judgment": {"score": 4, "scale": 5, "note": "Score should be lower"},
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
@@ -1049,7 +1401,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(sent[0].metadata["person_name"], "Jordan Bravo")
         self.assertEqual(sent[0].metadata["human_judgment"]["score"], 4)
         self.assertEqual(labels[0]["human"]["score"], 4)
-        self.assertEqual(labels[0]["model"]["jd_fit"]["coverage"], 0.6)
+        self.assertEqual(labels[0]["model"]["move_likelihood"]["label"], "plausible")
 
     def test_score_is_saved_before_api_submission_and_survives_api_failure(self):
         with tempfile.TemporaryDirectory() as directory:

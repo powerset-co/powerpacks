@@ -13,6 +13,9 @@ roster for group chats, parsed once into `payloads.GroupInfo`, so the extractor
 can attribute group membership without a second wacli round trip.
 
 Changelog:
+  2026-09-23 (typed rows): `run_sync` / `refresh_group_info` read the typed
+    `runtime.CommandResult` (`.returncode`, `.combined_text`, `.json`) instead of
+    indexing the subprocess result dict. Behavior unchanged.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`;
     `normalize_group_info_payload` became the typed `GroupInfo.from_payload`
     parse (`payloads.py`) and the cache entry it writes is unchanged.
@@ -86,20 +89,20 @@ def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) ->
         timeout=timeout,
         heartbeat_message="Syncing WhatsApp Messages and Contacts.",
     )
-    text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}"
+    text = result.combined_text
     if linked_device_blocked(text):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
             "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-messages.",
             "command": runtime.command_text(cmd),
         })
-    if result["returncode"] != 0:
+    if result.returncode != 0:
         detail = text.strip()[-2000:] or "no wacli output captured"
         raise PrimitiveFailed(
-            f"sync failed rc={result['returncode']} timeout={timeout}s max_messages={max_messages}; "
+            f"sync failed rc={result.returncode} timeout={timeout}s max_messages={max_messages}; "
             f"command={runtime.command_text(cmd)}; output={detail}"
         )
-    return {"command": runtime.command_text(cmd), "returncode": result["returncode"], "max_messages": max_messages, "timeout": timeout}
+    return {"command": runtime.command_text(cmd), "returncode": result.returncode, "max_messages": max_messages, "timeout": timeout}
 
 
 def refresh_contacts(store: Path) -> dict[str, Any]:
@@ -138,10 +141,10 @@ def refresh_group_info(store: Path, *, timeout: int, min_interval: float) -> dic
             [binary.wacli_bin() or "wacli", "--store", str(store), "--json", "groups", "info", "--jid", jid],
             timeout=timeout,
         )
-        text = (result.get("stderr") or result.get("stdout") or "").lower()
-        if result["returncode"] == 0:
+        text = (result.stderr or result.stdout or "").lower()
+        if result.returncode == 0:
             summary["refreshed"] += 1
-            group = GroupInfo.from_payload(result.get("json") or {})
+            group = GroupInfo.from_payload(result.json)
             if group:
                 cache["groups"][group.jid] = group.as_cache_entry()
                 summary["cached_groups"] += 1

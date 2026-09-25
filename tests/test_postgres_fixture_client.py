@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import MagicMock, Mock, patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,6 +147,98 @@ class PostgresFixtureClientTests(unittest.TestCase):
         unscoped = postgres_client.fetch_source_attribution([PERSON_1])
 
         self.assertIn("employee@example.com", unscoped[PERSON_1]["operators"])
+
+    def test_network_attribution_dedupes_aliases_accounts_and_sentinels(self) -> None:
+        fixture = json.loads(self.fixture_path.read_text())
+        second_operator = "20000000-0000-0000-0000-000000000002"
+        fixture["users"] = [
+            {"id": OPERATOR_ID, "name": "Jordan Bravo", "email": "secret@example.com"},
+            {"id": second_operator, "name": "Jordan Bravo"},
+        ]
+        fixture['gmail_oauth_tokens'] = [
+            {'id': 'account-one', 'email': 'work@example.com'},
+            {'id': 'account-two', 'email': 'personal@example.com'},
+        ]
+        def source(channel, count, token=None, identifier="casey@example.com", operator=OPERATOR_ID):
+            return {"person_id": PERSON_1, "operator_id": operator,
+                    "source_channel": channel, "total_interactions": count,
+                    "gmail_token_id": token, "source_identifier": identifier}
+
+        fixture["operator_person_sources"] = [
+            source("email", 99),  # Legacy null-account duplicate is discarded.
+            source("gmail", 6, "account-one"),
+            source("email", 8, "account-one"),  # Alias uses max, not sum.
+            source("gmail", 3, "account-two"),  # Distinct account counts separately.
+            source("gmail", 4, "account-one", "other@example.com"),
+            source("gmail", 7, operator=second_operator),
+            source("gmail", 0, "linkedin_csv"),
+            source("gmail", 2, "csvangel"),
+            source("gmail", 1, "00000000-0000-0000-0000-twitter00000"),
+            source("gmail", 0, "00000000-0000-0000-0000-synthetic0001"),
+            source("imessage", 500, operator=OUT_OF_SCOPE_OPERATOR_ID),
+            source("imessage", 12),
+            source("whatsapp", 5),
+        ]
+        self.fixture_path.write_text(json.dumps(fixture))
+        result = postgres_client.fetch_network_attribution(
+            [PERSON_1, PERSON_2], allowed_operator_ids=[OPERATOR_ID, second_operator])
+        detail = result[PERSON_1]
+        self.assertEqual(detail["total_interactions"], 42)
+        self.assertEqual(detail["sources"][0],
+                         {"channel": "gmail", "total_interactions": 22, "operator_count": 2})
+        self.assertEqual({row["channel"] for row in detail["sources"]},
+                         {"gmail", "linkedin", "csv_import", "twitter", "synthetic", "imessage", "whatsapp"})
+        self.assertEqual([row["operator_id"] for row in detail["operators"]],
+                         [OPERATOR_ID, second_operator])
+        self.assertEqual([row["operator_name"] for row in detail["operators"]],
+                         ["Jordan Bravo", "Jordan Bravo"])
+        self.assertEqual([row["gmail_interactions"] for row in detail["operators"]], [15, 7])
+        self.assertEqual([row["message_interactions"] for row in detail["operators"]], [17, 0])
+        self.assertNotIn(PERSON_2, result)
+        self.assertEqual(detail['operators'][0]['gmail_account_details'], [
+            {'email': 'work@example.com', 'interactions': 12},
+            {'email': 'personal@example.com', 'interactions': 3},
+        ])
+        self.assertNotIn('secret@example.com', json.dumps(result))
+        self.assertNotIn("account-one", json.dumps(result))
+
+    def test_network_attribution_empty_scope_does_not_connect(self) -> None:
+        with patch.object(postgres_client, "ensure_psycopg2") as driver:
+            self.assertEqual(postgres_client.fetch_network_attribution(
+                [PERSON_1], allowed_operator_ids=[]), {})
+        driver.assert_not_called()
+
+    def test_network_attribution_database_failure_propagates(self) -> None:
+        driver = Mock()
+        driver.connect.side_effect = RuntimeError("synthetic connection failure")
+        with patch.object(postgres_client, "fixture_rows", return_value=None), \
+             patch.object(postgres_client, "ensure_psycopg2", return_value=driver):
+            with self.assertRaisesRegex(RuntimeError, "synthetic connection failure"):
+                postgres_client.fetch_network_attribution(
+                    [PERSON_1], allowed_operator_ids=[OPERATOR_ID])
+
+    def test_network_attribution_database_query_scopes_both_people_and_operators(self) -> None:
+        driver = MagicMock()
+        cursor = driver.connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [{
+            "person_id": PERSON_1, "operator_id": OPERATOR_ID, "operator_name": None,
+            "source_channel": "email", "gmail_token_id": None,
+            "source_identifier": "casey@example.com", "total_interactions": 4,
+        }]
+        with patch.object(postgres_client, "fixture_rows", return_value=None), \
+             patch.object(postgres_client, "ensure_psycopg2", return_value=driver):
+            result = postgres_client.fetch_network_attribution(
+                [PERSON_1], allowed_operator_ids=[OPERATOR_ID])
+        query, params = cursor.execute.call_args.args
+        self.assertIn("ops.person_id = ANY(%s::uuid[])", query)
+        self.assertIn("ops.operator_id = ANY(%s::text[])", query)
+        self.assertEqual(params, ([PERSON_1], [OPERATOR_ID]))
+        self.assertEqual(result[PERSON_1]["operators"], [{
+            "operator_id": OPERATOR_ID, "operator_name": "Unknown",
+            "channels": ["gmail"], "gmail_interactions": 4, "message_interactions": 0,
+            "gmail_account_details": [],
+        }])
+        self.assertNotIn("@", json.dumps(result))
 
 
 if __name__ == "__main__":

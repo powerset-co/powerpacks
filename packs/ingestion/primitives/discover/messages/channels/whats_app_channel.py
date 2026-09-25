@@ -31,6 +31,11 @@ hand-run of that CLI therefore leaves an orphan copy in
 ``.powerpacks/messages/`` that nothing reads.
 
 Changelog:
+  2026-09-23 (simplification audit): the hardcoded group-participant limit (30)
+    now uses ``extract_whatsapp.DEFAULT_MAX_GROUP_PARTICIPANTS`` and the QR-page
+    fallback uses ``wacli.paths.DEFAULT_QR_HTML`` — same values, one home each.
+    The participant limit now also honors the
+    ``POWERPACKS_WACLI_MAX_GROUP_PARTICIPANTS`` env override.
   2026-07-30 (steps return results / parse at the boundary): ``extract()`` became
     ``execute()`` and returns ``MessageChannelExtracted`` carrying
     ``provider="wacli"`` and the pairing nudge, instead of returning ``None``
@@ -90,6 +95,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.messages.extract_whatsapp import (  # noqa: E402
+    DEFAULT_MAX_GROUP_PARTICIPANTS,
     WhatsAppExtractor,
     WhatsAppExtractResult,
 )
@@ -104,7 +110,10 @@ from packs.ingestion.primitives.discover.messages.channels.message_channel_base 
     blocked_child,
     failed_child,
 )
-from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: E402
+    DEFAULT_QR_HTML,
+    DEFAULT_STORE,
+)
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa: E402
 
 
@@ -165,7 +174,7 @@ class WhatsAppChannel(MessageChannel, Node):
             manifest=self.extract_manifest,
             progress_jsonl=self.progress_jsonl,
             max_messages=self.max_messages,
-            max_group_participants=30,
+            max_group_participants=DEFAULT_MAX_GROUP_PARTICIPANTS,
             sync_timeout=DEFAULT_WACLI_SYNC_TIMEOUT,
         ))
         if result.status == "blocked_user_action":
@@ -173,12 +182,12 @@ class WhatsAppChannel(MessageChannel, Node):
                 message=result.message or "WhatsApp needs a QR scan.",
                 detail=result.raw,
                 whatsapp_provider="wacli",
-                qr_page=result.qr_page or str(MESSAGES_OUT_DIR / "wacli-login-qr.html"),
+                qr_page=result.qr_page or str(DEFAULT_QR_HTML),
                 include_imessage=self.other_enabled,
                 include_whatsapp=True,
             )
         if result.status != "completed":
-            return failed_child("extract_whatsapp", result.raw, "")
+            return failed_child("extract_whatsapp", result.raw)
         # The one pairing DECISION this channel makes: only a session that
         # predates full history sync earns the non-blocking "re-link for deeper
         # history" nudge. Every other pairing state contributes nothing.

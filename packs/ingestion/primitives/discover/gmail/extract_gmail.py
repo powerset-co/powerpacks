@@ -4,6 +4,16 @@
 Reads contact metadata only. Writes accounts, thread counts, aggregated contacts,
 targeted emails, the LinkedIn queue, people.csv, and manifest.json. Identity
 matching belongs to Deep Context.
+
+Changelog:
+  2026-09-23 (typed rows): every aggregated contact row is folded ONCE into
+    `msgvault.util.MsgvaultContactRow` at the top of `write_msgvault_artifacts`,
+    and the three row projections (`people_rows_from_msgvault`,
+    `linkedin_resolution_queue_rows`, `write_msgvault_artifacts`) work on
+    attributes instead of probing the dict. The public row builders still accept
+    the store's dict rows (deep_context and the tests pass those) — `from_row`
+    does the tolerant read. The per-account prior manifest is parsed once into
+    `util.GmailManifestResume`.
 """
 
 from __future__ import annotations
@@ -28,9 +38,11 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.msgvault.store import MsgvaultStore  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
     GMAIL_CALCULATION_FULL_RECOUNT,
+    GmailManifestResume,
 )
 from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
+    MsgvaultContactRow,
     classify_email,
     default_excluded_labels,
     domain_guess,
@@ -107,74 +119,78 @@ ACCOUNT_COLUMNS = ["account_id", "account_email", "provider", "source", "added_a
 PEOPLE_COLUMNS = list(PEOPLE_SCHEMA_COLUMNS)
 
 
-def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list[str]) -> list[dict[str, Any]]:
-    """Project aggregated msgvault contacts onto the canonical people schema."""
+def people_rows_from_msgvault(rows: Iterable[Any], source_artifacts: list[str]) -> list[dict[str, Any]]:
+    """Project aggregated msgvault contacts onto the canonical people schema.
+
+    Accepts the store's dict rows or already-typed `MsgvaultContactRow` values."""
     people: list[dict[str, Any]] = []
     for row in rows:
-        first_name, last_name = split_name(row.get("display_name") or "")
+        contact = MsgvaultContactRow.from_row(row)
+        first_name, last_name = split_name(contact.display_name)
         person = {col: "" for col in PEOPLE_COLUMNS}
-        try:
-            total_messages = int(float(row.get("total_messages") or 0))
-        except (TypeError, ValueError):
-            total_messages = 0
+        total_messages = contact.total_messages
         person.update({
-            "id": f"gmail:{short_hash(row['email'], 16)}",
+            "id": f"gmail:{short_hash(contact.email, 16)}",
             "first_name": first_name,
             "last_name": last_name,
-            "full_name": row.get("display_name") or "",
-            "primary_email": row["email"],
-            "all_emails": json.dumps([row["email"]]),
+            "full_name": contact.display_name,
+            "primary_email": contact.email,
+            "all_emails": json.dumps([contact.email]),
             "source_channels": "gmail_msgvault",
             "source_artifacts": json.dumps(source_artifacts, ensure_ascii=False),
             "interaction_counts": json.dumps({"gmail": total_messages}) if total_messages > 0 else "",
-            "last_interaction": normalize_interaction_timestamp(row.get("last_interaction")),
+            "last_interaction": normalize_interaction_timestamp(contact.last_interaction),
         })
         people.append(person)
     return people
 
 
-def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def linkedin_resolution_queue_rows(rows: Iterable[Any]) -> list[dict[str, Any]]:
     """Derive LinkedIn-resolution queue rows from aggregated contact rows.
 
+    Accepts the store's dict rows or already-typed `MsgvaultContactRow` values.
     Single home for this shape: `write_msgvault_artifacts` emits it as
     `linkedin_resolution_queue.csv`, and
     `deep_context/collection/email_context.py` imports it to re-derive the same
     candidate set."""
     queue: list[dict[str, Any]] = []
     for row in rows:
-        email = str(row.get("email") or "").strip().lower()
+        contact = MsgvaultContactRow.from_row(row)
+        email = contact.email.strip().lower()
         if not email:
             continue
         guess = domain_guess(email)
-        queue.append(
-            {
-                "handle": email,
-                "id": f"gmail:{short_hash(email, 16)}",
-                "account_emails": json.dumps(row.get("account_emails") or [], ensure_ascii=False),
-                "source_ids": json.dumps(row.get("source_ids") or [], ensure_ascii=False),
-                "display_name": row.get("display_name") or "",
-                "full_name": row.get("display_name") or "",
-                "primary_email": email,
-                "company_guess": guess.get("company_guess", ""),
-                "primary_email_type": row.get("primary_email_type") or classify_email(email),
-                "total_messages": row.get("total_messages", ""),
-                "thread_count": row.get("thread_count", ""),
-                "last_interaction": row.get("last_interaction", ""),
-                "source": "gmail_msgvault",
-                "source_channels": "gmail_msgvault",
-            }
-        )
+        queue.append({
+            "handle": email,
+            "id": f"gmail:{short_hash(email, 16)}",
+            "account_emails": json.dumps(contact.account_emails, ensure_ascii=False),
+            "source_ids": json.dumps(contact.source_ids, ensure_ascii=False),
+            "display_name": contact.display_name,
+            "full_name": contact.display_name,
+            "primary_email": email,
+            "company_guess": guess["company_guess"],
+            "primary_email_type": contact.primary_email_type or classify_email(email),
+            "total_messages": contact.total_messages or "",
+            "thread_count": contact.thread_count or "",
+            "last_interaction": contact.last_interaction,
+            "source": "gmail_msgvault",
+            "source_channels": "gmail_msgvault",
+        })
     return queue
 
 
 def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", *, include_automated: bool = False, limit: int | None = None, excluded_labels: Iterable[str] | None = None) -> dict[str, Any]:
     """Filter aggregated contacts (automated + one-way dropped), upsert every
     discover artifact CSV in the fixed account directory, and write the stage
-    manifest. Returns the manifest payload."""
-    automated_filtered = [row for row in rows if row.get("automated_filtered") and not include_automated]
-    non_automated = [row for row in rows if include_automated or not row.get("automated_filtered")]
-    one_way_filtered = [row for row in non_automated if not has_round_trip_interaction(row)]
-    filtered = [row for row in non_automated if has_round_trip_interaction(row)]
+    manifest. Returns the manifest payload.
+
+    The store's dict rows are folded into typed `MsgvaultContactRow` values ONCE
+    here; everything below reads attributes."""
+    contacts = [MsgvaultContactRow.from_row(row) for row in rows]
+    automated_filtered = [contact for contact in contacts if contact.automated_filtered and not include_automated]
+    non_automated = [contact for contact in contacts if include_automated or not contact.automated_filtered]
+    one_way_filtered = [contact for contact in non_automated if not has_round_trip_interaction(contact)]
+    filtered = [contact for contact in non_automated if has_round_trip_interaction(contact)]
     if limit is not None:
         filtered = filtered[: max(0, int(limit))]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -189,8 +205,8 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
 
     account_rows = []
     seen_accounts: set[str] = set()
-    for row in filtered:
-        for account in row.get("account_emails") or []:
+    for contact in filtered:
+        for account in contact.account_emails:
             if account in seen_accounts:
                 continue
             seen_accounts.add(account)
@@ -216,71 +232,62 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     upserts: dict[str, dict[str, int]] = {}
     upserts["accounts_csv"] = CsvIO.upsert_dict_rows(accounts_path, ACCOUNT_COLUMNS, account_rows, ["account_email"])
 
-    threads_rows = [
-        {
-            "email": row["email"],
-            "display_name": row["display_name"],
-            "thread_id": "",
-            "received_count": row["total_received"],
-            "sent_count": row["total_sent"],
-            "message_count": row["total_messages"],
-            "first_message_at": row["first_interaction"],
-            "last_message_at": row["last_interaction"],
-            "subject": "",
-            "discovered_at": discovered_at,
-        }
-        for row in filtered
-    ]
-    aggregated_rows = [
-        {
-            "email": row["email"],
-            "display_name": row["display_name"],
-            "total_sent": row["total_sent"],
-            "total_received": row["total_received"],
-            "total_messages": row["total_messages"],
-            "one_to_one_sent": row["one_to_one_sent"],
-            "one_to_one_received": row["one_to_one_received"],
-            "one_to_one_messages": row["one_to_one_messages"],
-            "group_sent": row["group_sent"],
-            "group_received": row["group_received"],
-            "group_messages": row["group_messages"],
-            "one_to_one_thread_count": row["one_to_one_thread_count"],
-            "group_thread_count": row["group_thread_count"],
-            "thread_count": row["thread_count"],
-            "first_interaction": row["first_interaction"],
-            "last_interaction": row["last_interaction"],
-            "sample_subjects": "[]",
-        }
-        for row in filtered
-    ]
-    targeted_rows = [
-        {
-            "display_name": row["display_name"],
-            "primary_email": row["email"],
-            "primary_email_type": row["primary_email_type"],
-            "all_emails": json.dumps([row["email"]]),
-            "email_count": 1,
-            "total_sent": row["total_sent"],
-            "total_received": row["total_received"],
-            "total_messages": row["total_messages"],
-            "one_to_one_sent": row["one_to_one_sent"],
-            "one_to_one_received": row["one_to_one_received"],
-            "one_to_one_messages": row["one_to_one_messages"],
-            "group_sent": row["group_sent"],
-            "group_received": row["group_received"],
-            "group_messages": row["group_messages"],
-            "one_to_one_thread_count": row["one_to_one_thread_count"],
-            "group_thread_count": row["group_thread_count"],
-            "thread_count": row["thread_count"],
-            "first_interaction": row["first_interaction"],
-            "last_interaction": row["last_interaction"],
-            "is_duplicate": False,
-            "potential_same_person_emails": "[]",
-            "sample_subjects": "[]",
-            "sample_calendar_titles": "[]",
-        }
-        for row in filtered
-    ]
+    threads_rows = [{
+        "email": contact.email,
+        "display_name": contact.display_name,
+        "thread_id": "",
+        "received_count": contact.total_received,
+        "sent_count": contact.total_sent,
+        "message_count": contact.total_messages,
+        "first_message_at": contact.first_interaction,
+        "last_message_at": contact.last_interaction,
+        "subject": "",
+        "discovered_at": discovered_at,
+    } for contact in filtered]
+    aggregated_rows = [{
+        "email": contact.email,
+        "display_name": contact.display_name,
+        "total_sent": contact.total_sent,
+        "total_received": contact.total_received,
+        "total_messages": contact.total_messages,
+        "one_to_one_sent": contact.one_to_one_sent,
+        "one_to_one_received": contact.one_to_one_received,
+        "one_to_one_messages": contact.one_to_one_messages,
+        "group_sent": contact.group_sent,
+        "group_received": contact.group_received,
+        "group_messages": contact.group_messages,
+        "one_to_one_thread_count": contact.one_to_one_thread_count,
+        "group_thread_count": contact.group_thread_count,
+        "thread_count": contact.thread_count,
+        "first_interaction": contact.first_interaction,
+        "last_interaction": contact.last_interaction,
+        "sample_subjects": "[]",
+    } for contact in filtered]
+    targeted_rows = [{
+        "display_name": contact.display_name,
+        "primary_email": contact.email,
+        "primary_email_type": contact.primary_email_type,
+        "all_emails": json.dumps([contact.email]),
+        "email_count": 1,
+        "total_sent": contact.total_sent,
+        "total_received": contact.total_received,
+        "total_messages": contact.total_messages,
+        "one_to_one_sent": contact.one_to_one_sent,
+        "one_to_one_received": contact.one_to_one_received,
+        "one_to_one_messages": contact.one_to_one_messages,
+        "group_sent": contact.group_sent,
+        "group_received": contact.group_received,
+        "group_messages": contact.group_messages,
+        "one_to_one_thread_count": contact.one_to_one_thread_count,
+        "group_thread_count": contact.group_thread_count,
+        "thread_count": contact.thread_count,
+        "first_interaction": contact.first_interaction,
+        "last_interaction": contact.last_interaction,
+        "is_duplicate": False,
+        "potential_same_person_emails": "[]",
+        "sample_subjects": "[]",
+        "sample_calendar_titles": "[]",
+    } for contact in filtered]
     resolution_queue_rows = linkedin_resolution_queue_rows(filtered)
     people_rows = people_rows_from_msgvault(
         filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)]
@@ -298,7 +305,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     )
     upserts["people_csv"] = CsvIO.upsert_dict_rows(people_path, PEOPLE_COLUMNS, people_rows, ["primary_email"])
 
-    existing_manifest = read_json(manifest_path, {}) or {}
+    existing_manifest = GmailManifestResume.from_document(read_json(manifest_path, {}) or {})
 
     manifest = {
         "task": "import_gmail_network_msgvault",
@@ -306,7 +313,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
         # Counts cover the whole local archive; sync's --after only bounds downloads.
         "calculation_mode": GMAIL_CALCULATION_FULL_RECOUNT,
-        "created_at": existing_manifest.get("created_at") or discovered_at,
+        "created_at": existing_manifest.created_at or discovered_at,
         "updated_at": discovered_at,
         "status": "completed",
         "source": "msgvault",

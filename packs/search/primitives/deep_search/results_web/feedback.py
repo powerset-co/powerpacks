@@ -24,20 +24,9 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
 )
 
 from .model import FIT_LABELS_FILE, Candidate, SearchResult
-from packs.search.primitives.shared.human_ratings import convert_rating
+from .feedback_payload import build_feedback_payload
 
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
-
-
-def _human_judgment(value: Mapping[str, Any] | None) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise ValueError("human judgment must be an object")
-    rating = convert_rating(value)
-    if rating["score"] is None:
-        raise ValueError("Choose a score from 1–5")
-    return {"score": rating["score"], "scale": rating["scale"]}
 
 
 def build_feedback_request(search: SearchResult, comment: str,
@@ -45,64 +34,8 @@ def build_feedback_request(search: SearchResult, comment: str,
                            environ: dict[str, str] | None = None,
                            human_judgment: Mapping[str, Any] | None = None,
                            ) -> FeedbackRequest:
-    """Compose one row from the run's search context plus, for a candidate, its
-    group, fit reason, and trait scores — enough to re-label the result later."""
-    queries = candidate.queries if candidate else search.queries
-    metadata: dict[str, object] = {
-        "source": "powerpacks-deep-search-results",
-        "action": "candidate" if candidate else "search",
-        "run_id": search.run_id,
-        "queries": list(queries),
-        "jd": search.jd_text,
-        "title": search.title,
-        "company": search.company,
-    }
-    if candidate:
-        group = search.group_of(candidate.person_id)
-        pond_row = candidate.in_pond(candidate.found_run, candidate.found_pond)
-        reviewed = _human_judgment(human_judgment)
-        if "score" in reviewed:
-            reviewed["note"] = comment
-        metadata.update({
-            "person_id": candidate.person_id,
-            "person_name": candidate.name,
-            "linkedin_url": candidate.linkedin_url,
-            "group": group.key if group else "",
-            "group_label": group.label if group else "",
-            "why": candidate.why,
-            "found_query": candidate.found_query,
-            "found_run": candidate.found_run,
-            "found_pond": candidate.found_pond,
-            "fit_experts": {
-                expert.dimension: {"label": expert.label, "why": expert.why}
-                for expert in candidate.fit_experts
-            },
-            "jd_fit": ({
-                "coverage": candidate.jd_fit.coverage,
-                "traits": [{"trait": row.trait, "status": row.status.value,
-                            "evidence": row.evidence} for row in candidate.jd_fit.traits],
-            } if candidate.jd_fit else {}),
-            "human_judgment": reviewed,
-            "person_title": candidate.title,
-            "person_company": candidate.company,
-            "person_location": candidate.location,
-        })
-        if pond_row:
-            metadata.update({
-                "reasoning": pond_row.reasoning,
-                "final_score": pond_row.final_score,
-                "traits": [{"name": trait.name, "score": trait.score,
-                            "confidence": trait.confidence, "reason": trait.reason}
-                           for trait in pond_row.traits],
-            })
-    return FeedbackRequest(
-        comment=comment or "Candidate fit reviewed.",
-        feedback_type=("taste_score" if human_judgment else "bad_rerank") if candidate else "bad_search",
-        category="search",
-        field_value=candidate.linkedin_url if candidate else search.run_id,
-        metadata={key: value for key, value in metadata.items() if value},
-        set_id=default_set_id(environ),
-    )
+    return FeedbackRequest(**build_feedback_payload(search, comment, candidate, human_judgment),
+                           set_id=default_set_id(environ))
 
 
 def record_fit_label(run_dir: Path, request: FeedbackRequest) -> Path:
@@ -116,7 +49,9 @@ def record_fit_label(run_dir: Path, request: FeedbackRequest) -> Path:
         "model": {
             "group": request.metadata.get("group", ""),
             "rerank_score": request.metadata.get("final_score", 0),
-            "jd_fit": request.metadata.get("jd_fit", {}),
+            "cross_encoder_score": request.metadata.get("cross_encoder_score"),
+            "move_likelihood": request.metadata.get("move_likelihood"),
+            "candidate_judgment": request.metadata.get("candidate_judgment"),
         },
         "comment": request.comment,
     }

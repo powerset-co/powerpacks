@@ -46,6 +46,7 @@ def create_preview(source: Path, destination: Path) -> Path:
                 "fit_experts": {}, "applied_precedent_ids": [],
                 "applied_fit_precedents": [], "group": "", "why": "",
                 "jd_fit": {"coverage": 0.0, "traits": []}, "fit_annotation_source": "",
+                "move_likelihood": None,
             })
             candidate.pop("fit_override", None)
 

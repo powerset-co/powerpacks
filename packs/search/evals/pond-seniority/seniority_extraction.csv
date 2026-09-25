@@ -1,0 +1,13 @@
+query_id,query,seniority_bands
+braintrust,Backend Engineer with observability experience in San Francisco OR New York City OR Seattle,"[""junior"", ""mid"", ""senior"", ""staff""]"
+icarus,Flight Test Engineer in Los Angeles Metropolitan Area,"[""junior"", ""mid"", ""senior"", ""staff""]"
+fortuna,Management Consultant in New York Metropolitan Area,"[""junior"", ""mid"", ""senior"", ""staff""]"
+lovable,Web Designer with frontend engineering experience in New York Metropolitan Area,"[""junior"", ""mid"", ""senior"", ""staff""]"
+tldraw,Software Engineer with frontend web application experience in the London Metropolitan Area,"[""junior"", ""mid"", ""senior"", ""staff""]"
+pylon,Account Manager with wholesale mortgage operations experience in New York City,"[""junior"", ""mid"", ""senior"", ""staff""]"
+bare-account-manager,Account Manager in New York City,"[""junior"", ""mid"", ""senior"", ""staff""]"
+product-manager,Product Manager in New York City,"[""junior"", ""mid"", ""senior"", ""staff""]"
+senior-account-manager,Senior Account Manager in New York City,"[""senior""]"
+head-account-management,Head of Account Management in New York City,"[""director"", ""vice-president""]"
+lead-engineer,Lead Software Engineer in San Francisco,"[""senior""]"
+staff-principal,Staff or Principal Software Engineer in New York City,"[""staff"", ""principal""]"

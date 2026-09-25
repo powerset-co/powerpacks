@@ -2,6 +2,14 @@
 
 Async fan-out LLM rerank over a JSONL of candidates or a Powerpacks task-state.
 
+For JD capability scoring, use `--jd-file` with `--capability-judge terra` (the
+existing default) or `--capability-judge jev` (the high-recall tree combiner).
+See [Jev architecture, metrics, and usage](jev/README.md). Jev returns a native
+0–1 qualification score and pass/reject decision; the default Luna path returns a 1–5 rating.
+The `terra` selector and module name are retained for CLI compatibility.
+Both JD paths first use the [cached structured JD cleaner](../clean_job_description/README.md).
+Raw postings remain available for retrieval and logistics review.
+
 Same shape as the production `SEARCH_V2_RERANK_MAX_CONCURRENT=400` path
 in network-search-api, but Powerpacks-local. Useful for:
 
@@ -156,6 +164,18 @@ python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
 
 The prompt lives in the primitive (`SYSTEM_PROMPT` in `llm_rerank_candidates.py`).
 `PROMPT.md` explains its provenance and relationship to the production app.
+
+CE beta uses the `qlora-20260913-epoch2-v1` training input format: the original
+JD, source job title/company, and retrieval pond query, followed by whitelisted
+original profile evidence with deduplicated company facts. Deep search forwards
+the job metadata; direct callers can supply `--cross-encoder-jd-file`,
+`--cross-encoder-job-title`, and `--cross-encoder-job-company`. Missing metadata
+stays empty. The service owns Qwen's outer prompt. Raw scores rank candidates
+within a JD; the displayed 1–5 transform is not a calibrated human rating.
+
+This input change creates new request cache keys and preserves previous paid
+outputs. Later model-weight revisions with identical input formatting require
+a new output directory to avoid reusing previous scores.
 
 ## What this primitive does NOT do
 

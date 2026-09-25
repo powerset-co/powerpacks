@@ -23,6 +23,64 @@ from tests.test_search_harness import _start, _payload
 
 
 class CrossEncoderSearchTests(unittest.TestCase):
+    def test_qualification_score_export_stays_native_and_persists_decision_metadata(self):
+        threshold = 0.29855554570561965
+        state = {"steps": [
+            {"id": "hydrate_people", "output": {"profiles": [{"person_id": "first"}]}},
+            {"id": "llm_rerank_candidates", "output": {
+                "ranked_candidate_ids": ["first"],
+                "cross_encoder": {
+                    "status": "ok", "model": "jev", "score_type": "qualification_score",
+                    "threshold": threshold,
+                    "scores": [{"id": "first", "score": 0.42, "passed": True}],
+                }}},
+        ]}
+
+        row = results_io.result_rows(state)[0]
+
+        self.assertEqual(row["cross_encoder_score"], 0.42)
+        self.assertIsNone(row["cross_encoder_score_1_to_5"])
+        self.assertEqual(row["cross_encoder_score_type"], "qualification_score")
+        self.assertEqual(row["cross_encoder_threshold"], threshold)
+        self.assertIs(row["cross_encoder_passed"], True)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "results.csv"
+            results_io.write_csv(path, [row])
+            exported = path.read_text().splitlines()
+        self.assertIn("cross_encoder_score_type", exported[0])
+        self.assertIn("cross_encoder_threshold", exported[0])
+        self.assertIn("cross_encoder_passed", exported[0])
+        self.assertIn("qualification_score", exported[1])
+
+    def test_native_rating_export_does_not_apply_qwen_sigmoid(self):
+        state = {"steps": [
+            {"id": "hydrate_people", "output": {"profiles": [{"person_id": "first"}]}},
+            {"id": "llm_rerank_candidates", "output": {
+                "ranked_candidate_ids": ["first"],
+                "cross_encoder": {"status": "ok", "model": "gemma", "score_type": "expected_rating_1_to_5",
+                                  "scores": [{"id": "first", "score": 2.25}]}}},
+        ]}
+        row = results_io.result_rows(state)[0]
+        self.assertEqual(row["cross_encoder_score"], 2.25)
+        self.assertEqual(row["cross_encoder_score_1_to_5"], 2.25)
+
+    def test_global_ce_setting_does_not_break_standalone_jsonl_reranker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = Path(tmp) / "profiles.jsonl"
+            profiles.write_text(json.dumps({"person_id": "fixture", "title": "Engineer"}) + "\n")
+            args = ["rerank", "--in", str(profiles), "--query", "engineers", "--dry-run"]
+            with mock.patch.dict(os.environ, {"POWERPACKS_CROSS_ENCODER_BETA": "1"}), \
+                 mock.patch.object(sys, "argv", args), \
+                 mock.patch.object(reranker.cross_encoder, "score_candidates") as ce, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(reranker.main(), 0)
+                ce.assert_not_called()
+            with mock.patch.object(sys, "argv", args + ["--cross-encoder-beta"]), \
+                 contextlib.redirect_stderr(io.StringIO()), \
+                 self.assertRaises(SystemExit) as error:
+                reranker.main()
+            self.assertEqual(error.exception.code, 2)
+
     def test_real_rerank_cli_uses_filtered_full_profiles_and_exports_both_scores(self):
         captured = []
 
@@ -54,7 +112,9 @@ class CrossEncoderSearchTests(unittest.TestCase):
             output = io.StringIO()
             with mock.patch.object(sys, "argv", ["rerank", "--state", str(state_path), "--write-state",
                     "--api-base", server.url, "--api-key", "test-key", "--cross-encoder-beta",
-                    "--cross-encoder-jd-file", str(jd)]), \
+                    "--cross-encoder-jd-file", str(jd), "--cross-encoder-job-title", "Storage Engineer",
+                    "--cross-encoder-job-company", "Example Systems",
+                    "--evaluation-query", "Different evaluation guidance"]), \
                     mock.patch.object(httpx, "Client", return_value=client), \
                     mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-powerset-key"}), \
                     contextlib.redirect_stdout(output):
@@ -69,12 +129,16 @@ class CrossEncoderSearchTests(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue())["cross_encoder"]["status"], "ok")
         self.assertEqual([pair["id"] for pair in captured[0]["pairs"]], ["keep"])
         pair = captured[0]["pairs"][0]
-        self.assertIn("Own distributed storage", pair["query"])
-        self.assertIn("software engineers", pair["query"])
+        self.assertEqual(pair["query"],
+            "Rank demonstrated job fit: skills, qualifications, experience and scope. "
+            "Ignore location, commute, onsite availability and relocation requirements when scoring. "
+            "Unknown evidence is not a demonstrated mismatch. Do not infer protected attributes.\n\n"
+            "Job: Storage Engineer at Example Systems\nPond: software engineers\n\n"
+            "Own distributed storage and recovery protocols")
         self.assertEqual(len(json.loads(pair["passage"])["positions"]), 2)
         self.assertNotIn("inferred_age", pair["passage"])
 
-    def test_deep_pond_passes_beta_flag_and_original_jd_to_pipeline(self):
+    def test_deep_pond_uses_luna_and_original_jd_even_when_ce_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             results_path = _start(root)
@@ -90,8 +154,11 @@ class CrossEncoderSearchTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "captured"):
                 search_harness.run_pond(run_dir=root, env_file="/dev/null")
             command = run.call_args.args[0]
-            self.assertIn("--cross-encoder-beta", command)
-            self.assertEqual(command[command.index("--cross-encoder-jd-file") + 1], str(root / "jd.txt"))
+            self.assertNotIn("--cross-encoder-beta", command)
+            self.assertEqual(command[command.index("--jd-file") + 1], str(root / "jd.txt"))
+            self.assertEqual(command[command.index("--job-title") + 1], "Search Engineer")
+            self.assertEqual(command[command.index("--job-company") + 1], "Acme")
+            self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-luna")
 
     def test_reranker_and_ce_overlap_on_same_full_profiles(self):
         llm_started, ce_started = threading.Event(), threading.Event()
@@ -156,11 +223,16 @@ class CrossEncoderSearchTests(unittest.TestCase):
             jd.write_text("Senior storage engineer", encoding="utf-8")
             args = pipeline.build_parser().parse_args([
                 "prepare", "--query", "engineers", "--cross-encoder-beta",
-                "--cross-encoder-jd-file", str(jd)])
+                "--cross-encoder-jd-file", str(jd), "--cross-encoder-job-title", "Storage Engineer",
+                "--cross-encoder-job-company", "Example Systems"])
             suffix = pipeline.execution_contract_suffix(args)
             self.assertIn("--cross-encoder-beta", suffix)
             self.assertIn(str(jd), suffix)
             self.assertIn("--cross-encoder-jd-file", suffix)
+            self.assertEqual(pipeline.cross_encoder_child_args(args), [
+                "--cross-encoder-beta", "--cross-encoder-jd-file", str(jd.resolve()),
+                "--cross-encoder-job-title", "Storage Engineer",
+                "--cross-encoder-job-company", "Example Systems"])
 
     def test_beta_status_and_usage_reach_pipeline_summary(self):
         ce = {"status": "ok", "usage": {"pairs": 1, "input_tokens": 220, "output_tokens": 0},

@@ -498,6 +498,109 @@ def fetch_source_attribution(
         return {}
 
 
+def fetch_network_attribution(
+    person_ids: list[str],
+    env_file: Path | None = None,
+    *,
+    allowed_operator_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Portable set-scoped counts, matching the API's source-row deduplication.
+
+    Unlike legacy person_source_summary totals, raw source rows normalize sentinel
+    channels and email aliases, MAX duplicates per account/identifier, and omit
+    tokenless Gmail duplicates. Account IDs stay internal. Database errors propagate
+    so callers cannot persist a failed lookup as an empty network.
+    """
+    if not person_ids or not allowed_operator_ids:
+        return {}
+    load_env_file(env_file)
+    rows = fixture_rows("operator_person_sources")
+    if rows is not None:
+        names = {str(row["id"]): row.get("name") for row in fixture_rows("users") or []}
+        accounts = {str(row['id']): row['email'] for row in fixture_rows('gmail_oauth_tokens') or []}
+        wanted, scope = set(person_ids), set(allowed_operator_ids)
+        rows = [dict(row, operator_name=names.get(str(row["operator_id"])),
+                     source_account=accounts.get(str(row.get('gmail_token_id'))))
+                for row in rows
+                if str(row["person_id"]) in wanted and str(row["operator_id"]) in scope]
+    else:
+        psycopg2 = ensure_psycopg2()
+        with psycopg2.connect(database_url()) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT ops.person_id::text, ops.operator_id::text, u.name AS operator_name,
+                           ops.source_channel, ops.gmail_token_id, ops.source_identifier,
+                           ops.total_interactions, got.email AS source_account
+                    FROM operator_person_sources ops
+                    LEFT JOIN users u ON u.id::text = ops.operator_id
+                    LEFT JOIN gmail_oauth_tokens got ON got.id::text = ops.gmail_token_id
+                    WHERE ops.person_id = ANY(%s::uuid[])
+                      AND ops.operator_id = ANY(%s::text[])
+                """, (person_ids, allowed_operator_ids))
+                rows = [dict(row) for row in cur.fetchall()]
+
+    # Same key and sentinel rules as network-search-api/services/source_attribution.py.
+    sentinels = {
+        "00000000-0000-0000-0000-twitter00000": "twitter",
+        "00000000-0000-0000-0000-synthetic0001": "synthetic",
+        "csvangel": "csv_import",
+        "linkedin_csv": "linkedin",
+    }
+    deduped: dict[tuple[str, str, str, str, str], int] = {}
+    operator_names: dict[str, str] = {}
+    account_emails: dict[str, str] = {}
+    token_backed_gmail: set[tuple[str, str, str]] = set()
+    for row in rows:
+        pid, op = str(row["person_id"]), str(row["operator_id"])
+        account, identifier = str(row.get("gmail_token_id") or ""), str(row.get("source_identifier") or "")
+        channel = sentinels.get(account, row["source_channel"])
+        channel = "gmail" if channel == "email" else channel
+        key = (pid, op, channel, account, identifier)
+        count = int(row.get("total_interactions") or 0)
+        deduped[key] = max(deduped.get(key, count), count)
+        operator_names[op] = row.get("operator_name") or "Unknown"
+        if row.get('source_account'):
+            account_emails[account] = row['source_account']
+        if channel == "gmail" and account:
+            token_backed_gmail.add((pid, op, identifier))
+
+    channel_counts: dict[str, dict[str, dict[str, int]]] = {}
+    account_counts: dict[tuple[str, str], dict[str, int]] = {}
+    for (pid, op, channel, account, identifier), count in deduped.items():
+        if channel == "gmail" and not account and (pid, op, identifier) in token_backed_gmail:
+            continue
+        counts = channel_counts.setdefault(pid, {}).setdefault(channel, {})
+        counts[op] = counts.get(op, 0) + count
+        if channel == 'gmail' and account in account_emails:
+            emails = account_counts.setdefault((pid, op), {})
+            email = account_emails[account]
+            emails[email] = emails.get(email, 0) + count
+
+    result = {}
+    for pid, channels in channel_counts.items():
+        sources = [
+            {"channel": channel, "total_interactions": sum(counts.values()), "operator_count": len(counts)}
+            for channel, counts in channels.items()
+        ]
+        sources.sort(key=lambda row: (-row["total_interactions"], row["channel"]))
+        op_ids = {op for counts in channels.values() for op in counts}
+        operators = [
+            {"operator_id": op, "operator_name": operator_names[op],
+             "channels": sorted(channel for channel, counts in channels.items() if op in counts),
+             "gmail_interactions": channels.get("gmail", {}).get(op, 0),
+             "gmail_account_details": [
+                 {'email': email, 'interactions': count}
+                 for email, count in sorted(account_counts.get((pid, op), {}).items(),
+                                            key=lambda item: (-item[1], item[0]))],
+             "message_interactions": sum(counts.get(op, 0) for channel, counts in channels.items()
+                                         if channel in {"imessage", "whatsapp", "phone", "messages"})}
+            for op in sorted(op_ids, key=lambda op: (-sum(counts.get(op, 0) for counts in channels.values()), op))
+        ]
+        result[pid] = {"person_id": pid, "sources": sources, "operators": operators,
+                       "total_interactions": sum(row["total_interactions"] for row in sources)}
+    return result
+
+
 def _threshold_conditions(prefix: str, min_value: Any, max_value: Any, column: str = "total_interactions") -> tuple[list[str], dict[str, Any]]:
     conditions: list[str] = []
     params: dict[str, Any] = {}

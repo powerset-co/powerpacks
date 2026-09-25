@@ -5,6 +5,10 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "csuite_shortcut_role_id": {
+      "type": "string",
+      "description": "C-suite role explicitly requested and confirmed by role extraction before payload review; applied without reinterpreting the query at execution."
+    },
     "semantic_query": {
       "type": "string",
       "minLength": 80,

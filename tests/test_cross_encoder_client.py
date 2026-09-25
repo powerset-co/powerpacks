@@ -1,5 +1,6 @@
 """Cross-encoder boundary checks use a local mock transport; no paid calls."""
 
+import hashlib
 import json
 import os
 import tempfile
@@ -10,6 +11,7 @@ from unittest.mock import patch
 import httpx
 
 from packs.search.primitives.llm_rerank_candidates import cross_encoder as ce
+from packs.search.primitives.shared.human_ratings import score_1_to_5
 
 
 def response_for(body):
@@ -24,16 +26,31 @@ def response_for(body):
 
 
 class CrossEncoderTests(unittest.TestCase):
+    def test_native_expected_ratings_keep_their_scale(self):
+        def respond(request, body):
+            payload = response_for(body)
+            payload.update(model="google/gemma-4-12B-it", score_type="expected_rating_1_to_5")
+            payload["scores"][0].update(score=2.25, score_1_to_5=2.25)
+            return httpx.Response(200, json=payload)
+        self.respond = respond
+        result = self.score()
+        self.assertEqual(result["score_type"], "expected_rating_1_to_5")
+        self.assertEqual(result["scores"], [{"id": "person-1", "score": 2.25}])
+        self.assertEqual(score_1_to_5(2.25, score_type=result["score_type"]), 2.25)
+
     def test_five_point_scale_preserves_order_and_handles_extreme_logits(self):
         raw = [-1000.0, -2.5, 0.0, 2.5, 1000.0]
         expected = [1.0, 1.30343272, 3.0, 4.69656728, 5.0]
         for score, normalized in zip(raw, expected):
-            self.assertAlmostEqual(ce.score_1_to_5(score), normalized)
+            self.assertAlmostEqual(score_1_to_5(score), normalized)
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.output = Path(self.directory.name)
+        sleep_patch = patch("time.sleep")
+        self.sleep = sleep_patch.start()
+        self.addCleanup(sleep_patch.stop)
         self.requests = []
         self.respond = lambda request, body: httpx.Response(200, json=response_for(body))
 
@@ -52,33 +69,62 @@ class CrossEncoderTests(unittest.TestCase):
             output_dir=self.output, api_key="test-powerset-key", **kwargs,
         )
 
-    def test_gateway_key_full_roles_and_demographic_removal(self):
+    def test_gateway_passage_matches_epoch_two_training_evidence(self):
         profile = {
+            "person_id": "person-1", "headline": "Builds storage", "title": "Engineer",
+            "company": "Example Systems", "summary": "Original résumé evidence",
             "name": "Jordan Bravo", "inferred_age": 40, "inferred_birth_year": 1986,
             "gender": "example", "birth_date": "1986-01-01", "years_of_experience": 15,
+            "city": "Example City", "location": "Example City", "trait_scores": {"Engineer": 1},
             "positions": [{"position_title": f"Role {index}", "start_date": "2010-01-01",
+                           "end_date": "null", "is_current": False, "dense_text": "Generated duties",
                            "description": "Backend systems", "company_description": "Data infrastructure",
                            "company_funding_total": 12345, "company_headcount": 100,
-                           "company": {"name": "Example Systems", "ethnicity": "example"}}
+                           "company_stage": "SEED", "investor_names": ["Example Ventures"],
+                           "company_name": "Example Systems"}
                           for index in range(12)],
-            "education": [{"school_name": "Example University", "start_year": 2004, "end_year": 2008}],
+            "education": [{"school_name": "Example University", "degree": "BS",
+                           "start_year": 2004, "end_year": 2008}],
         }
         result = self.score({"person-1": profile})
         request = self.requests[0]
         self.assertEqual(str(request.url), "https://proxy.powerset.dev/vendor/cross-encoder/rerank")
         self.assertEqual(request.headers["x-powerset-key"], "test-powerset-key")
+        self.assertEqual(request.headers["x-ce-score-type"], "expected_rating_1_to_5")
         self.assertNotIn("authorization", request.headers)
         self.assertEqual(self.client_constructor.call_args.kwargs["timeout"], 600)
-        passage = json.loads(json.loads(request.content)["pairs"][0]["passage"])
-        self.assertEqual(len(passage["positions"]), 12)
-        self.assertEqual(passage["positions"][-1]["company_funding_total"], 12345)
-        self.assertEqual(passage["education"], profile["education"])
-        self.assertEqual(passage["years_of_experience"], 15)
-        for field in ("inferred_age", "inferred_birth_year", "gender", "birth_date"):
-            self.assertNotIn(field, passage)
-        self.assertNotIn("ethnicity", passage["positions"][0]["company"])
+        # qlora-20260913-epoch2-v1 reference/lab/{ce_experiment,ce_expanded_data}.py.
+        expected = {
+            "headline": "Builds storage", "title": "Engineer", "company": "Example Systems",
+            "summary": "Original résumé evidence",
+            "education": [{"school_name": "Example University", "degree": "BS", "field_of_study": None}],
+            "positions": [{"title": f"Role {index}", "company": "Example Systems", "start": "2010-01-01",
+                           "is_current": False, "description": "Backend systems"} for index in range(12)],
+            "companies": [{"company": "Example Systems", "company_description": "Data infrastructure",
+                           "headcount": 100, "stage": "SEED", "funding_total": 12345,
+                           "investors": ["Example Ventures"]}],
+        }
+        self.assertEqual(json.loads(request.content)["pairs"][0]["passage"],
+                         json.dumps(expected, ensure_ascii=False, separators=(",", ":")))
         self.assertIn("inferred_age", profile)
         self.assertEqual(result["usage"]["input_tokens"], 100)
+
+    def test_company_dedup_keeps_distinct_facts_and_position_alias_precedence(self):
+        self.score({"p": {"positions": [
+            {"title": "Engineer", "position_title": "Unused alias", "company": "Example",
+             "start": " none ", "start_date": "2020", "headcount": 0, "company_headcount": 12},
+            {"position_title": "Engineer", "company_name": "Example", "company_headcount": 0},
+            {"title": "Engineer", "company": "Example", "headcount": 30, "investors": []},
+            {},
+        ]}})
+        passage = json.loads(json.loads(self.requests[0].content)["pairs"][0]["passage"])
+        self.assertEqual(passage, {
+            "positions": [{"title": "Engineer", "company": "Example", "start": "2020"},
+                          {"title": "Engineer", "company": "Example"},
+                          {"title": "Engineer", "company": "Example"}, {}],
+            "companies": [{"company": "Example", "headcount": 0},
+                          {"company": "Example", "headcount": 30, "investors": []}, {}],
+        })
 
     def test_environment_key(self):
         with patch.dict(os.environ, {"POWERSET_API_KEY": "env-test-key"}):
@@ -119,7 +165,8 @@ class CrossEncoderTests(unittest.TestCase):
         self.assertEqual(len(self.requests), 2)
         for request in self.requests:
             self.assertLessEqual(len(request.content), 700)
-            self.assertEqual(json.loads(json.loads(request.content)["pairs"][0]["passage"]), profile)
+            self.assertEqual(json.loads(json.loads(request.content)["pairs"][0]["passage"]),
+                             {**profile, "positions": [], "companies": []})
 
     def test_oversized_later_profile_fails_before_any_paid_calls(self):
         with self.assertRaisesRegex(ValueError, "131072"):
@@ -159,6 +206,34 @@ class CrossEncoderTests(unittest.TestCase):
         self.assertEqual(artifact.read_bytes(), original)
         self.assertNotEqual(first["artifacts"], changed["artifacts"])
 
+    def test_old_whole_profile_cache_is_preserved_and_not_reused(self):
+        profile = {"person_id": "p", "headline": "Engineer", "positions": []}
+        old_body = json.dumps({"pairs": [{"id": "p", "query": "Backend engineer", "passage":
+            json.dumps(profile, ensure_ascii=False, sort_keys=True, separators=(",", ":"))}]},
+            ensure_ascii=False, separators=(",", ":")).encode()
+        digest = hashlib.sha256(ce.ENDPOINT.encode() + b"\n" + old_body).hexdigest()
+        cache = self.output / "cross_encoder" / f"{digest}.json"
+        cache.parent.mkdir()
+        cached = json.dumps(response_for(json.loads(old_body)))
+        cache.write_text(cached)
+        result = self.score({"p": profile})
+        self.assertEqual(result["requests"], 1)
+        self.assertEqual(result["cached_batches"], 0)
+        self.assertNotIn(str(cache), result["artifacts"])
+        self.assertEqual(cache.read_text(), cached)
+
+    def test_new_score_contract_keeps_old_qwen_cache_separate(self):
+        _, body = ce._batches("Backend engineer", {"person-1": {"positions": []}})[0]
+        digest = hashlib.sha256(ce.ENDPOINT.encode() + b"\n" + body).hexdigest()
+        cache = self.output / "cross_encoder" / f"{digest}.json"
+        cache.parent.mkdir()
+        cached = json.dumps(response_for(json.loads(body)))
+        cache.write_text(cached)
+        result = self.score()
+        self.assertEqual(result["requests"], 1)
+        self.assertNotIn(str(cache), result["artifacts"])
+        self.assertEqual(cache.read_text(), cached)
+
     def test_invalid_response_is_redacted_and_not_cached(self):
         mutations = {
             "missing": lambda payload: payload["scores"].clear(),
@@ -169,6 +244,10 @@ class CrossEncoderTests(unittest.TestCase):
             "usage_count": lambda payload: payload["usage"].update(pairs=2),
             "tokens": lambda payload: payload["usage"].update(input_tokens=-1),
             "truncated": lambda payload: payload["usage"].update(truncated=1),
+            "unknown_score_type": lambda payload: payload.update(score_type="unknown"),
+            "rating_below_one": lambda payload: payload.update(score_type="expected_rating_1_to_5"),
+            "rating_above_five": lambda payload: (
+                payload.update(score_type="expected_rating_1_to_5"), payload["scores"][0].update(score=5.1)),
         }
         self.client_patch.stop()
         for name, mutate in mutations.items():
@@ -183,12 +262,31 @@ class CrossEncoderTests(unittest.TestCase):
                     self.score()
         self.assertEqual(list(self.output.rglob("*.json")), [])
 
-    def test_errors_never_echo_body_or_retry(self):
+    def test_gateway_errors_retry_three_times_without_echoing_body(self):
         self.respond = lambda request, body: httpx.Response(502, text="secret-key private-person-data")
         with self.assertRaisesRegex(RuntimeError, "HTTP 502") as error:
             self.score()
         self.assertNotIn("private-person-data", str(error.exception))
+        self.assertEqual(len(self.requests), 4)
+        self.assertEqual([call.args for call in self.sleep.call_args_list], [(30,)] * 3)
+
+    def test_gateway_retry_recovers_and_caches_success(self):
+        self.respond = lambda request, body: (
+            httpx.Response(503) if len(self.requests) < 4
+            else httpx.Response(200, json=response_for(body)))
+        first = self.score()
+        second = self.score()
+        self.assertEqual(first["requests"], 4)
+        self.assertEqual(second["requests"], 0)
+        self.assertEqual(second["cached_batches"], 1)
+        self.assertEqual(len(self.requests), 4)
+
+    def test_other_http_errors_do_not_retry(self):
+        self.respond = lambda request, body: httpx.Response(401)
+        with self.assertRaisesRegex(RuntimeError, "HTTP 401"):
+            self.score()
         self.assertEqual(len(self.requests), 1)
+        self.sleep.assert_not_called()
 
     def test_timeout_is_redacted(self):
         def fail(request, body):
@@ -206,7 +304,7 @@ class CrossEncoderTests(unittest.TestCase):
         def send(request, **kwargs):
             body = json.loads(request.content)
             calls.append(body["pairs"][0]["id"])
-            if len(calls) == 2:
+            if 2 <= len(calls) <= 5:
                 return httpx.Response(502, request=request)
             return httpx.Response(200, json=response_for(body), request=request)
 
@@ -214,7 +312,7 @@ class CrossEncoderTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTP 502"):
                 self.score({"a": {}, "b": {}})
             result = self.score({"a": {}, "b": {}})
-        self.assertEqual(calls, ["a", "b", "b"])
+        self.assertEqual(calls, ["a", "b", "b", "b", "b", "b"])
         self.assertEqual(result["cached_batches"], 1)
         self.assertEqual(result["requests"], 1)
 

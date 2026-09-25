@@ -62,20 +62,12 @@ Use the narrow path when the user names one:
   compatibility but is a no-op — restart is always unconditional.
 - `$deep-context heal` -> run only `bin/deep-context heal`: the same
   self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
-- `$deep-context refresh`, "resynthesize and show me the directory" -> run only
-  `bin/deep-context refresh`; it re-synthesizes stale dossiers (free when facts
-  are on the current synthesis contract; a contract bump re-runs everyone and
-  the dry estimate prints first — invoking refresh is the approval), rebuilds
-  parents, and opens the directory.
+- `$deep-context refresh` -> run `bin/deep-context refresh`; estimate first,
+  reuse existing facts, complete JEV worth/labels, rebuild parents, and open the directory.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
-  show the OpenAI estimate, get fresh approval, then run the exact paid command.
-  This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
-  dossier, including mixed-source people and people with an attached LinkedIn.
-  It ignores cached machine and human worth for selection, never uses LinkedIn
-  as evidence, and never overwrites the human-owned `network_worth` column.
-  Both commands first rebuild every raw bundle from the current message stores
-  (free, local, no LLM), so a deeper message sync is picked up automatically —
-  expect a higher estimate than the original run when history got deeper.
+  show the JEV estimate, obtain spend approval, then run the exact command.
+  This reclassifies saved facts using the JEV cache. It never uses LinkedIn as
+  evidence and never changes the human-owned `network_worth` column.
 - "Review complete proceed with enrichment" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
@@ -227,13 +219,14 @@ common case) — just run it, keep this cost gate out of the user-facing task co
 Only when the ceiling is **$25 or more** do you pause: show the contact count and
 cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
-printed by `dry` — do not invent a different scope. Synthesis also produces an
-initial `network_worth` recommendation and reason in each
-`facts/<parent_id>.jsonl`, then explicitly projects each completed facts payload
-into SQLite. The one parent-owned machine worth value and optional human
-override are read and written through the same SQLite row.
-Normal repeated synthesis rejudges only
-missing/Maybe machine verdicts; machine Yes/No and human Yes/No are stable.
+printed by `dry` — do not invent a different scope. Synthesis extracts facts.
+JEV then answers the 34 share-label and 7 worth questions together, storing
+`network_worth` and `labels` in each `facts/<parent_id>.jsonl` and explicitly
+projecting that completed payload into SQLite. The one parent-owned machine
+worth value and optional human override are read and written through the same
+SQLite row. Existing facts are reused without another GPT call; JEV resumes from
+its request cache; human decisions remain unchanged. Use `--force` explicitly to
+rebuild facts.
 
 Worth uses message context and contact identifiers only — never LinkedIn:
 
@@ -498,6 +491,35 @@ uv run --project . python packs/indexing/primitives/validate_search_index/valida
 ```
 
 Pass only on `status: ok`.
+
+### 9. Share (optional): share list, upload to Powerset
+
+Who leaves the laptop is a per-person decision — see
+`packs/ingestion/docs/share-and-upload.md`. Synthesize (step 3) already asked
+JEV the label questions and saved the answers with each person's facts; `share`
+is free and local.
+
+```bash
+bin/deep-context share   # labels.csv + share.csv, every merged person
+```
+
+Share follows worth: `share.csv` says yes to the worth-yes people, no to the
+owner, to a human `private`, and to everyone worth said no or maybe to. The JEV
+labels decide nothing — they raise at most one flag (family, partner, minor,
+sensitive context, clinician/lawyer/banker, automated sender, stranger) on a
+worth-yes person, which makes that row `confirm`. Confirm rows are for the UI to
+put to the user; they upload nothing until the user answers with a tag. Then the
+upload — without `--apply` it plans only, reads the cloud, writes one manifest:
+
+```bash
+uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py
+```
+
+Show the plan counts and get explicit approval before `--apply`: it upserts
+`persons`, reconciles this operator's `operator_person_sources` rows, writes or
+patches the five TurboPuffer namespaces, and mirrors the user's own `private`
+into `contact_tags`. People without a LinkedIn never reach the cloud
+(`skipped_no_linkedin`). `ALEPH_ENV=staging` targets the `_dev` namespaces.
 
 ## Completion report
 

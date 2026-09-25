@@ -23,7 +23,6 @@ BASE_ID_BATCH_SIZE = _search_common.BASE_ID_BATCH_SIZE
 K_RRF = _search_common.K_RRF
 allowed_operator_ids_from_payload = _search_common.allowed_operator_ids_from_payload
 adjacency_family_for_payload = _search_common.adjacency_family_for_payload
-apply_role_shortcuts = _search_common.apply_role_shortcuts
 bm25_queries_per_field = _search_common.bm25_queries_per_field
 comparison = _search_common.comparison
 company_filter_applies_to_role_search = _search_common.company_filter_applies_to_role_search

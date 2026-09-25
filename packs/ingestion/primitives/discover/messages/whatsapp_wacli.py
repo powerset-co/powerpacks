@@ -40,7 +40,7 @@ def status_report(store: Path) -> dict[str, Any]:
         "status": "ok",
         "wacli": wacli_info,
         "auth": status.as_payload(include_linked_jid=True),
-        "pairing": pairing.pairing_full_sync_status(store, authenticated=status.authenticated),
+        "pairing": pairing.pairing_full_sync_status(store, authenticated=status.authenticated).to_payload(),
         "doctor": doctor,
         "store_stats": stats,
     }
@@ -91,7 +91,7 @@ def main() -> int:
             emit({**envelope, **payload})
             # The exit code reflects the PAYLOAD status: a healthy-but-unpaired
             # install says "ok" and exits 0 (pairing state is in the payload).
-            return 0 if payload.get("status") == "ok" else 1
+            return 0 if payload["status"] == "ok" else 1
         if args.command == "ensure-wacli":
             emit({**envelope, **binary.ensure_wacli_report()})
             return 0

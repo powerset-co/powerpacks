@@ -12,6 +12,14 @@ on a malformed address (used for the discovery aggregation's participant rows);
 `common/contact_fields.py:normalize_email` is the plain strip+lowercase key.
 
 Changelog:
+  2026-09-23 (typed rows): added `MsgvaultContactRow`, the typed form of one
+    `MsgvaultStore.aggregate_contacts` row, with `from_row` as the ONE tolerant
+    read of that row shape (a dict row, or an already-typed row passed through).
+    `has_round_trip_interaction` now asks the typed row instead of probing the
+    dict, and `best_display_name`'s name tally no longer uses `dict.get`.
+  2026-09-23 (simplification audit): dropped the `if local_part else 0` guard on
+    the random-local-part vowel ratio — the enclosing `len(local_part) >= 20` test
+    already makes the divisor non-zero.
   2026-07-23 (audit): split out of `gmail/msgvault_store.py` — the pure
     module-level helpers + their constants moved here. The person-vs-role classifiers
     (`is_likely_person_name` / `is_generic_or_non_person`) moved further out to
@@ -24,6 +32,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -104,6 +113,78 @@ TRAVEL_SERVICE_DOMAINS = {
     "avis",
     "enterprise",
 }
+
+
+def _int_value(value: Any) -> int:
+    """Parse a count that may arrive as int, float-string, or "" (0 when unparseable)."""
+    try:
+        return int(float(str(value or "0")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _string_list(value: Any) -> list[str]:
+    """A list-valued row field as strings; anything else reads as empty."""
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item) for item in value]
+
+
+@dataclass(frozen=True)
+class MsgvaultContactRow:
+    """One aggregated contact row from `MsgvaultStore.aggregate_contacts`, as typed
+    values. `from_row` is the ONE tolerant read of that row shape — the store's dict
+    form, or an already-typed row passed straight through — so every consumer works
+    on attributes instead of probing the dict."""
+
+    email: str = ""
+    display_name: str = ""
+    total_sent: int = 0
+    total_received: int = 0
+    total_messages: int = 0
+    one_to_one_sent: int = 0
+    one_to_one_received: int = 0
+    one_to_one_messages: int = 0
+    group_sent: int = 0
+    group_received: int = 0
+    group_messages: int = 0
+    one_to_one_thread_count: int = 0
+    group_thread_count: int = 0
+    thread_count: int = 0
+    first_interaction: str = ""
+    last_interaction: str = ""
+    account_emails: list[str] = field(default_factory=list)
+    source_ids: list[str] = field(default_factory=list)
+    primary_email_type: str = ""
+    automated_filtered: bool = False
+
+    @classmethod
+    def from_row(cls, row: Any) -> "MsgvaultContactRow":
+        if isinstance(row, cls):
+            return row
+        row = row if isinstance(row, dict) else {}
+        return cls(
+            email=str(row.get("email") or ""),
+            display_name=str(row.get("display_name") or ""),
+            total_sent=_int_value(row.get("total_sent")),
+            total_received=_int_value(row.get("total_received")),
+            total_messages=_int_value(row.get("total_messages")),
+            one_to_one_sent=_int_value(row.get("one_to_one_sent")),
+            one_to_one_received=_int_value(row.get("one_to_one_received")),
+            one_to_one_messages=_int_value(row.get("one_to_one_messages")),
+            group_sent=_int_value(row.get("group_sent")),
+            group_received=_int_value(row.get("group_received")),
+            group_messages=_int_value(row.get("group_messages")),
+            one_to_one_thread_count=_int_value(row.get("one_to_one_thread_count")),
+            group_thread_count=_int_value(row.get("group_thread_count")),
+            thread_count=_int_value(row.get("thread_count")),
+            first_interaction=str(row.get("first_interaction") or ""),
+            last_interaction=str(row.get("last_interaction") or ""),
+            account_emails=_string_list(row.get("account_emails")),
+            source_ids=_string_list(row.get("source_ids")),
+            primary_email_type=str(row.get("primary_email_type") or ""),
+            automated_filtered=bool(row.get("automated_filtered")),
+        )
 
 
 def normalize_email(email: str) -> str:
@@ -214,7 +295,7 @@ def is_automated_email(email: str) -> tuple[bool, str]:
         return True, "hash-like pattern in email"
     if len(local_part) >= 20:
         vowel_count = sum(1 for c in local_part if c in "aeiou")
-        vowel_ratio = vowel_count / len(local_part) if local_part else 0
+        vowel_ratio = vowel_count / len(local_part)
         if vowel_ratio < 0.15 and re.match(r"^[a-z0-9_-]+$", local_part):
             return True, "random alphanumeric pattern"
     if len(local_part) > 40 and re.match(r"^[a-z0-9_-]+$", local_part):
@@ -248,7 +329,7 @@ def best_display_name(email: str, names: dict[str, int]) -> str:
         value = normalize_name(name, email)
         if not value or value.lower() == email_l:
             continue
-        cleaned[value] = cleaned.get(value, 0) + count
+        cleaned[value] = (cleaned[value] if value in cleaned else 0) + count
     if cleaned:
         return sorted(cleaned.items(), key=lambda item: (-item[1], item[0].casefold()))[0][0]
     return default_name_for_email(email)
@@ -297,6 +378,9 @@ def canonical_message_id(row: Any) -> str:
     return f"row:{row['message_id']}"
 
 
-def has_round_trip_interaction(row: dict[str, Any]) -> bool:
-    """True when a contact has BOTH sent and received messages (round trip)."""
-    return int(row.get("total_sent") or 0) > 0 and int(row.get("total_received") or 0) > 0
+def has_round_trip_interaction(row: Any) -> bool:
+    """True when a contact has BOTH sent and received messages (round trip).
+
+    Accepts the store's dict row or an already-typed `MsgvaultContactRow`."""
+    contact = MsgvaultContactRow.from_row(row)
+    return contact.total_sent > 0 and contact.total_received > 0

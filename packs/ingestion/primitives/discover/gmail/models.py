@@ -2,6 +2,9 @@
 shapes gmail/discover.py may emit. New fields are added here, never invented inline.
 
 Changelog:
+  2026-09-23 (typed rows): added `GmailExtractPayload`, the typed read of what
+    `GmailExtractor.run_msgvault` returns — discover parses the extractor payload
+    once there instead of probing the dict.
   2026-07-26 (contacts.csv deleted): DROPPED `contacts_csv` from
     GmailDiscoveryCompleted / GmailDiscoverySkipped with the file itself — it was
     byte-identical to `linkedin_resolution_queue_csv` and existed only for
@@ -28,6 +31,7 @@ Changelog:
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +53,36 @@ class GmailPrivacy(BaseModel):
     gmail_sync_ran: bool = False
     parallel_called: bool = False
     rapidapi_called: bool = False
+
+
+@dataclass(frozen=True)
+class GmailExtractPayload:
+    """What `GmailExtractor.run_msgvault` returns (and the error mirror discover
+    substitutes for a ValueError), parsed once — `from_payload` is the ONE reader
+    of its shape, so discover reads attributes instead of probing the dict. `raw`
+    keeps the original payload for the manifest's `children` entry and a failed
+    payload (both persisted verbatim)."""
+
+    status: str = ""
+    calculation_mode: str = ""
+    contacts_written: Any = ""
+    artifacts: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "GmailExtractPayload":
+        raw = payload if isinstance(payload, dict) else {}
+        counts = raw.get("counts")
+        counts = counts if isinstance(counts, dict) else {}
+        artifacts = raw.get("artifacts")
+        artifacts = artifacts if isinstance(artifacts, dict) else {}
+        return cls(
+            status=str(raw.get("status") or ""),
+            calculation_mode=str(raw.get("calculation_mode") or ""),
+            contacts_written=counts.get("contacts_written", ""),
+            artifacts=dict(artifacts),
+            raw=dict(raw),
+        )
 
 
 class GmailDiscoverySkipped(StageManifest):

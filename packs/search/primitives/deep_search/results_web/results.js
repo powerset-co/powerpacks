@@ -1,4 +1,32 @@
 const toast = document.querySelector(".toast");
+const readOnly = document.documentElement.dataset.readonly === "true";
+const hostedFeedback = document.documentElement.dataset.hostedFeedback === "true";
+const hostedRequests = new Map();
+
+function submitHostedFeedback(values) {
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      hostedRequests.delete(requestId);
+      reject(new Error("Saving timed out. Please try again."));
+    }, 30000);
+    hostedRequests.set(requestId, { resolve, reject, timeout });
+    window.parent.postMessage({ type: "powerpacks:feedback", requestId, values }, "*");
+  });
+}
+
+window.addEventListener("message", (event) => {
+  if (!hostedFeedback || event.source !== window.parent) return;
+  const message = event.data;
+  if (!message || message.type !== "powerpacks:feedback-result"
+      || !["submitted", "failed"].includes(message.status)) return;
+  const request = hostedRequests.get(message.requestId);
+  if (!request) return;
+  window.clearTimeout(request.timeout);
+  hostedRequests.delete(message.requestId);
+  if (message.status === "submitted") request.resolve();
+  else request.reject(new Error(typeof message.error === "string" ? message.error : "Could not save feedback."));
+});
 
 function announce(message, isError = false) {
   if (!toast) return;
@@ -12,6 +40,7 @@ function announce(message, isError = false) {
 }
 
 async function post(path, values) {
+  if (readOnly) throw new Error("This is a read-only snapshot");
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -31,7 +60,7 @@ async function post(path, values) {
 
 const FEEDBACK_STORAGE_KEY = "powerpacks:pending-feedback:v1";
 const humanRatings = JSON.parse(document.getElementById("human-ratings").textContent);
-const pendingFeedback = JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
+const pendingFeedback = readOnly ? [] : JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
 // Keep ratings queued by the old page, translating them once before replay.
 for (const values of pendingFeedback) {
   if (!values.human_judgment) continue;
@@ -60,6 +89,7 @@ function paintFeedback(values) {
     button.dataset.feedbackScore = String(score);
     button.dataset.feedbackNote = values.comment;
     button.textContent = `Your score: ${score}/5`;
+    updateTags(button.closest("[data-search-body]"));
   });
 }
 
@@ -132,6 +162,9 @@ const revealObserver = new IntersectionObserver((entries) => {
     if (!entry.isIntersecting) return;
     const sentinel = entry.target;
     const table = sentinel.closest("table");
+    const toolbar = table.closest("[data-pond-panel]").querySelector("[data-results-toolbar]");
+    if (toolbar.dataset.tagFilter === "tagged" || toolbar._selectedScores?.size
+        || toolbar._selectedOperators?.size) return;
     const hiddenRows = table.querySelectorAll("tr[data-lazy][hidden]");
     for (let i = 0; i < LAZY_BATCH && i < hiddenRows.length; i += 1) {
       hiddenRows[i].hidden = false;
@@ -151,8 +184,8 @@ function watchLazyRows(root) {
 const TAGGED_PREFIX = "powerset_tagged_";
 const LEGACY_PINNED_PREFIX = "powerset_pinned_";
 const TAG_NAME_MAX = 40;
-const LEGACY_PIN_TAG = "Pinned";
-const CSV_HEADERS = ["Labels", "Name", "Title", "Company", "Location", "Sources", "Network", "Email Count", "Reasoning"];
+const PIN_TAG = "Pinned";
+const CSV_HEADERS = ["Name", "Title", "Company", "Location", "Network", "Overall Score", "Reasoning"];
 const FILLER_WORDS = new Set([
   "a", "an", "the", "in", "at", "on", "for", "to", "of", "and", "or", "with", "who",
   "are", "is", "that", "from", "by", "as", "my", "our", "find", "search", "looking",
@@ -175,8 +208,8 @@ function readTagged(body) {
     const ids = JSON.parse(localStorage.getItem(key) || "null");
     if (Array.isArray(ids) && ids.length) {
       const assignments = {};
-      ids.forEach((id) => { if (typeof id === "string") assignments[id] = [LEGACY_PIN_TAG]; });
-      const migrated = { tags: [LEGACY_PIN_TAG], assignments };
+      ids.forEach((id) => { if (typeof id === "string") assignments[id] = [PIN_TAG]; });
+      const migrated = { tags: [PIN_TAG], assignments };
       localStorage.setItem(taggedKey(body), JSON.stringify(migrated));
       localStorage.removeItem(key);
       return migrated;
@@ -189,10 +222,12 @@ function writeTagged(body, data) {
   body.tagged = data;
   const values = {
     run_id: body.dataset.searchBody,
+    person_id: "",
+    comment: "",
     tagged: JSON.stringify(data),
   };
   body.tagSave = (body.tagSave || Promise.resolve())
-    .then(() => post("/tags", values))
+    .then(() => hostedFeedback ? submitHostedFeedback(values) : post("/tags", values))
     .catch((error) => announce(`Tags not saved: ${error.message}`, true));
   return body.tagSave;
 }
@@ -234,13 +269,21 @@ function removeTag(body, rawTag) {
   writeTagged(body, data);
 }
 
-function taggedRows(body, toolbar) {
+function exportScore(row) {
+  return row.querySelector("[data-feedback-score]").dataset.feedbackScore || row.dataset.personOverall;
+}
+
+function filteredRows(body, toolbar, scoreFor = (row) => row.dataset.personOverall) {
   const data = readTagged(body);
   const filters = toolbar?._selectedTagFilters || new Set();
+  const operators = toolbar._selectedOperators;
   const rows = new Map();
   toolbar.closest("[data-pond-panel]").querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
     const tags = data.assignments[row.dataset.personId] || [];
-    if (!tags.length || (filters.size && !tags.some((tag) => filters.has(tag)))) return;
+    if (toolbar.dataset.tagFilter === "tagged"
+        && (!tags.length || (filters.size && !tags.some((tag) => filters.has(tag))))) return;
+    if (toolbar._selectedScores?.size && !toolbar._selectedScores.has(scoreFor(row))) return;
+    if (operators?.size && !JSON.parse(row.dataset.personOperators).some((id) => operators.has(id))) return;
     const prior = rows.get(row.dataset.personId);
     if (!prior || Number(row.dataset.personScore) > Number(prior.dataset.personScore)) {
       rows.set(row.dataset.personId, row);
@@ -278,6 +321,15 @@ function renderTagFilters(toolbar, tags) {
 
 function updateTags(body) {
   const data = readTagged(body);
+  const pinTag = existingTag(data.tags, PIN_TAG);
+  body.querySelectorAll("[data-pin-person]").forEach((button) => {
+    const pinned = (data.assignments[button.dataset.pinPerson] || []).includes(pinTag);
+    button.setAttribute("aria-pressed", String(pinned));
+    button.setAttribute("aria-label", `${pinned ? "Unpin" : "Pin"} ${button.closest("tr").dataset.personName}`);
+    button.title = pinned ? "Remove from shortlist" : "Pin to shortlist";
+    button.disabled = readOnly && !hostedFeedback;
+    button.hidden = readOnly && !hostedFeedback && !pinned;
+  });
   body.querySelectorAll("[data-tag-person]").forEach((button) => {
     const tags = data.assignments[button.dataset.tagPerson] || [];
     const host = button.querySelector("[data-person-tags]");
@@ -301,26 +353,42 @@ function updateTags(body) {
       .filter(([id, tags]) => available.has(id) && tags.length).length;
     if (!count) toolbar.dataset.tagFilter = "all";
     const taggedOnly = toolbar.dataset.tagFilter === "tagged";
-    const filters = toolbar._selectedTagFilters ||= new Set();
-    panel.querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
-      const tags = data.assignments[row.dataset.personId] || [];
-      const matches = tags.length && (!filters.size || tags.some((tag) => filters.has(tag)));
-      if (taggedOnly && matches) row.removeAttribute("data-lazy");
-      row.hidden = taggedOnly ? !matches : row.hasAttribute("data-lazy");
+    const scores = toolbar._selectedScores ||= new Set();
+    const selectedRows = filteredRows(body, toolbar);
+    const selectedIds = new Set(selectedRows.map((row) => row.dataset.personId));
+    const operators = toolbar._selectedOperators || new Set();
+    toolbar.querySelectorAll('[data-operator-remove]').forEach((chip) => {
+      chip.hidden = !operators.has(chip.dataset.operatorRemove);
     });
-    panel.querySelectorAll(".lazy-sentinel").forEach((row) => { row.hidden = taggedOnly; });
+    toolbar.querySelectorAll('[data-operator-id]').forEach((input) => {
+      input.checked = operators.has(input.dataset.operatorId);
+    });
+    const filtering = taggedOnly || scores.size > 0 || operators.size > 0;
+    panel.querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
+      const matches = selectedIds.has(row.dataset.personId);
+      if (filtering && matches) row.removeAttribute("data-lazy");
+      row.hidden = filtering ? !matches : row.hasAttribute("data-lazy");
+    });
+    panel.querySelectorAll(".lazy-sentinel").forEach((row) => { row.hidden = filtering; });
     toolbar.querySelectorAll("[data-tagged-count]").forEach((node) => { node.textContent = count; });
     toolbar.querySelector("[data-result-filter='tagged']").hidden = !count;
     renderTagFilters(toolbar, data.tags);
     toolbar.querySelector("[data-tag-filters]").hidden = !taggedOnly || !data.tags.length;
-    const hasRows = taggedOnly && taggedRows(body, toolbar).length > 0;
-    toolbar.querySelector("[data-untag-all]").hidden = !hasRows;
-    toolbar.querySelector("[data-copy-results]").hidden = !hasRows;
-    toolbar.querySelector("[data-export-csv]").hidden = !hasRows;
-    toolbar.querySelector("[data-clear-tags]").hidden = !hasRows || toolbar.dataset.confirmClear === "true";
+    const hasRows = selectedRows.length > 0;
+    const hasExportRows = filteredRows(body, toolbar, exportScore).length > 0;
+    toolbar.querySelector("[data-result-count]").textContent = `${selectedRows.length} results`;
+    toolbar.querySelector("[data-untag-all]").hidden = !taggedOnly || !hasRows;
+    toolbar.querySelector("[data-copy-results]").disabled = !hasExportRows;
+    toolbar.querySelector("[data-export-csv]").disabled = !hasExportRows;
+    toolbar.querySelector("[data-clear-tags]").hidden = !taggedOnly || !hasRows || toolbar.dataset.confirmClear === "true";
     toolbar.querySelector("[data-clear-tags-confirm]").hidden = toolbar.dataset.confirmClear !== "true";
     toolbar.querySelectorAll("[data-result-filter]").forEach((button) => {
       const selected = button.dataset.resultFilter === toolbar.dataset.tagFilter;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    toolbar.querySelectorAll("[data-score-filter]").forEach((button) => {
+      const selected = button.dataset.scoreFilter === "all" ? !scores.size : scores.has(button.dataset.scoreFilter);
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
@@ -332,37 +400,42 @@ function escapeCsv(value) {
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-function csvFilename(title) {
+function csvFilename(title, labels) {
   const words = title.toLowerCase().replace(/[^a-z0-9\s-]/g, "").split(/\s+/)
     .filter((word) => word && !FILLER_WORDS.has(word)).slice(0, 5);
-  return `${words.join("-") || "results"}_${new Date().toISOString().slice(0, 10)}.csv`;
+  const prefix = labels.map((label) => label.toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, ""))
+    .filter(Boolean).join("_");
+  return `${prefix ? `${prefix}_` : ""}${words.join("-") || "results"}_${new Date().toISOString().slice(0, 10)}.csv`;
 }
 
-function exportValues(body, rows) {
-  const assignments = readTagged(body).assignments;
+function exportValues(rows) {
   return rows.map((row) => {
     const data = row.dataset;
     const name = data.personLinkedin
       ? `=HYPERLINK("${data.personLinkedin.replaceAll('"', '""')}","${data.personName.replaceAll('"', '""')}")`
       : data.personName;
-    return [(assignments[data.personId] || []).join(" | "), name, data.personTitle,
-      data.personCompany, data.personLocation, data.personSource,
-      data.personNetwork, "", data.personReasoning];
+    return [name, data.personTitle,
+      data.personCompany, data.personLocation, data.personNetwork,
+      exportScore(row), data.personReasoning];
   });
 }
 
-function exportTagged(body, toolbar) {
-  const values = exportValues(body, taggedRows(body, toolbar));
+function exportResults(body, toolbar) {
+  const rows = filteredRows(body, toolbar, exportScore);
+  const values = exportValues(rows);
+  const assignments = readTagged(body).assignments;
+  const labels = [...new Set(rows.flatMap((row) => assignments[row.dataset.personId] || []))];
   const csv = [CSV_HEADERS, ...values].map((row) => row.map(escapeCsv).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = csvFilename(body.dataset.searchTitle || "results");
+  link.download = csvFilename(body.dataset.searchTitle || "results", labels);
   document.body.append(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  announce(`Exported ${values.length} tagged result${values.length === 1 ? "" : "s"}`);
+  announce(`Exported ${values.length} result${values.length === 1 ? "" : "s"}`);
 }
 
 function escapeHtml(value) {
@@ -370,13 +443,13 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-async function copyTagged(body, toolbar) {
-  const rows = taggedRows(body, toolbar);
-  const values = exportValues(body, rows);
+async function copyResults(body, toolbar) {
+  const rows = filteredRows(body, toolbar, exportScore);
+  const values = exportValues(rows);
   const htmlRows = rows.map((row, index) => {
     const data = row.dataset;
     const cells = values[index].map((value, cellIndex) => {
-      if (cellIndex === 1 && data.personLinkedin) {
+      if (cellIndex === 0 && data.personLinkedin) {
         return `<td><a href="${escapeHtml(data.personLinkedin)}">${escapeHtml(data.personName)}</a></td>`;
       }
       return `<td>${escapeHtml(value)}</td>`;
@@ -385,13 +458,13 @@ async function copyTagged(body, toolbar) {
   });
   const html = `<table><thead><tr>${CSV_HEADERS.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${htmlRows.join("")}</tbody></table>`;
   const plain = [CSV_HEADERS, ...values.map((row, index) => [
-    row[0], rows[index].dataset.personName, ...row.slice(2)])]
+    rows[index].dataset.personName, ...row.slice(1)])]
     .map((row) => row.join("\t")).join("\n");
   await navigator.clipboard.write([new ClipboardItem({
     "text/html": new Blob([html], { type: "text/html" }),
     "text/plain": new Blob([plain], { type: "text/plain" }),
   })]);
-  announce(`Copied ${values.length} tagged result${values.length === 1 ? "" : "s"}`);
+  announce(`Copied ${values.length} result${values.length === 1 ? "" : "s"}`);
 }
 
 function closeTagPopover() {
@@ -496,6 +569,17 @@ function tagPopover(anchor, body) {
 
 async function loadSearchDetails(body) {
   if (!body || body.dataset.loaded === "true" || body.dataset.loading === "true") return;
+  if (readOnly) {
+    body.tagged = JSON.parse(document.getElementById("snapshot-tags").textContent);
+    body.dataset.loaded = "true";
+    if (!hostedFeedback) body.querySelectorAll("[data-feedback-run], [data-tag-person]").forEach((button) => {
+      button.disabled = true;
+      button.removeAttribute("title");
+    });
+    watchLazyRows(body);
+    updateTags(body);
+    return;
+  }
   body.dataset.loading = "true";
   try {
     const response = await fetch(`/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
@@ -603,11 +687,12 @@ function feedbackDialog(anchor) {
     send.textContent = "Send";
   }
   const selected = () => form.querySelector("input[name=score]:checked");
+  let saving = false;
   function updateSend() {
-    send.disabled = personId ? !selected() : !textarea.value.trim();
+    send.disabled = saving || (personId ? !selected() : !textarea.value.trim());
   }
   form.addEventListener("input", updateSend);
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (send.disabled) return;
     const comment = textarea.value.trim();
@@ -616,6 +701,25 @@ function feedbackDialog(anchor) {
       run_id: runId, person_id: personId, comment,
       ...(humanJudgment ? { human_judgment: JSON.stringify(humanJudgment) } : {}),
     };
+    if (hostedFeedback) {
+      saving = true;
+      send.disabled = cancel.disabled = textarea.disabled = fieldset.disabled = true;
+      errorText.hidden = true;
+      try {
+        await submitHostedFeedback(values);
+        paintFeedback(values);
+        dialog.close();
+        announce("Feedback saved.");
+      } catch (error) {
+        errorText.textContent = error.message;
+        errorText.hidden = false;
+      } finally {
+        saving = false;
+        cancel.disabled = textarea.disabled = fieldset.disabled = false;
+        updateSend();
+      }
+      return;
+    }
     try {
       localStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify([...pendingFeedback, values]));
     } catch (error) {
@@ -636,6 +740,7 @@ function feedbackDialog(anchor) {
   }, { once: true });
   dialog.addEventListener("keydown", (event) => {
     event.stopPropagation();
+    if (saving && event.key === "Escape") event.preventDefault();
     if (event.key === "Escape" && !rubric.hidden) {
       event.preventDefault();
       showRubric(false);
@@ -652,18 +757,6 @@ function feedbackDialog(anchor) {
 }
 
 document.addEventListener("click", (event) => {
-  const view = event.target.closest("[data-view-tab]");
-  if (view) {
-    const body = view.closest(".search-body");
-    body.querySelectorAll("[data-view-tab]").forEach((button) => {
-      button.setAttribute("aria-selected", String(button === view));
-    });
-    body.querySelectorAll("[data-view-panel]").forEach((panel) => {
-      panel.hidden = panel.dataset.viewPanel !== view.dataset.viewTab;
-    });
-    closeTagPopover();
-    return;
-  }
   const tab = event.target.closest("[data-pond-tab]");
   if (tab) {
     const body = tab.closest(".search-body");
@@ -677,7 +770,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const trigger = event.target.closest("[data-feedback-run]");
-  if (!trigger) return;
+  if (!trigger || (readOnly && !hostedFeedback)) return;
   event.preventDefault();
   event.stopPropagation();
   feedbackDialog(trigger);
@@ -686,19 +779,55 @@ document.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const body = event.target.closest(".search-body");
   if (!body) return;
+  const pin = event.target.closest("[data-pin-person]");
+  if (pin) {
+    if (readOnly && !hostedFeedback) return;
+    toggleTag(body, pin.dataset.pinPerson, PIN_TAG);
+    updateTags(body);
+    return;
+  }
   const tag = event.target.closest("[data-tag-person]");
   if (tag) {
+    if (readOnly && !hostedFeedback) return;
     event.stopPropagation();
     tagPopover(tag, body);
     return;
   }
   const filter = event.target.closest("[data-result-filter]");
   if (filter) {
-    filter.closest("[data-results-toolbar]").dataset.tagFilter = filter.dataset.resultFilter;
+    const toolbar = filter.closest("[data-results-toolbar]");
+    toolbar.dataset.tagFilter = toolbar.dataset.tagFilter === "tagged" ? "all" : "tagged";
     updateTags(body);
     return;
   }
   const toolbar = event.target.closest("[data-results-toolbar]");
+  const addOperator = event.target.closest("[data-add-operator]");
+  if (addOperator) {
+    const picker = addOperator.nextElementSibling;
+    if (picker.matches(":popover-open")) picker.hidePopover();
+    else {
+      openNetwork(addOperator);
+      picker.querySelector('input').focus();
+    }
+    return;
+  }
+  const removeOperator = event.target.closest("[data-operator-remove]");
+  if (removeOperator) {
+    toolbar._selectedOperators.delete(removeOperator.dataset.operatorRemove);
+    updateTags(body);
+    toolbar.querySelector('[data-add-operator]').focus();
+    return;
+  }
+  const scoreFilter = event.target.closest("[data-score-filter]");
+  if (scoreFilter) {
+    const scores = toolbar._selectedScores ||= new Set();
+    const score = scoreFilter.dataset.scoreFilter;
+    if (score === "all") scores.clear();
+    else if (scores.has(score)) scores.delete(score);
+    else scores.add(score);
+    updateTags(body);
+    return;
+  }
   const tagFilter = event.target.closest("[data-filter-tag]");
   if (tagFilter) {
     const filters = toolbar._selectedTagFilters ||= new Set();
@@ -722,11 +851,11 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (event.target.closest("[data-copy-results]")) {
-    void copyTagged(body, toolbar).catch(() => announce("Failed to copy", true));
+    void copyResults(body, toolbar).catch(() => announce("Failed to copy", true));
     return;
   }
   if (event.target.closest("[data-export-csv]")) {
-    exportTagged(body, toolbar);
+    exportResults(body, toolbar);
     return;
   }
   if (event.target.closest("[data-clear-tags]")) {
@@ -746,7 +875,61 @@ document.addEventListener("click", (event) => {
   }
 });
 
+document.addEventListener("change", (event) => {
+  if (!event.target.matches("[data-operator-id]")) return;
+  const operators = event.target.closest('[data-results-toolbar]')._selectedOperators ||= new Set();
+  if (event.target.checked) operators.add(event.target.dataset.operatorId);
+  else operators.delete(event.target.dataset.operatorId);
+  updateTags(event.target.closest(".search-body"));
+});
+
 document.querySelectorAll("[data-search-body]").forEach((body) => void loadSearchDetails(body));
+
+let networkPopoverId = 0;
+function openNetwork(trigger, { hover = false } = {}) {
+  const panel = trigger.nextElementSibling;
+  if (!panel.id) panel.id = `network-sources-${++networkPopoverId}`;
+  trigger.setAttribute("aria-controls", panel.id);
+  if (!panel.matches(":popover-open")) {
+    panel.dataset.hover = String(hover);
+    panel.showPopover();
+  } else if (!hover) panel.dataset.hover = "false";
+  const anchor = trigger.getBoundingClientRect();
+  panel.style.left = `${Math.max(12, Math.min(anchor.left, innerWidth - panel.offsetWidth - 12))}px`;
+  const top = anchor.bottom + panel.offsetHeight + 16 > innerHeight
+    ? anchor.top - panel.offsetHeight - 4 : anchor.bottom + 4;
+  panel.style.top = `${Math.max(12, top)}px`;
+  trigger.setAttribute("aria-expanded", "true");
+}
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-network-trigger]");
+  if (trigger) openNetwork(trigger);
+});
+document.addEventListener("pointerover", (event) => {
+  const network = event.target.closest(".network-attribution");
+  if (network) clearTimeout(network.closeTimer);
+  const trigger = event.target.closest("[data-network-trigger]");
+  if (trigger && event.pointerType === "mouse") openNetwork(trigger, { hover: true });
+});
+document.addEventListener("pointerout", (event) => {
+  const network = event.target.closest(".network-attribution");
+  if (network && !network.contains(event.relatedTarget)) {
+    const panel = network.querySelector(".network-popover");
+    network.closeTimer = setTimeout(() => {
+      if (panel.dataset.hover === "true") panel.hidePopover();
+    }, 150);
+  }
+});
+window.addEventListener("resize", () => {
+  document.querySelectorAll(".network-popover:popover-open").forEach((panel) => {
+    openNetwork(panel.previousElementSibling, { hover: panel.dataset.hover === "true" });
+  });
+});
+document.addEventListener("toggle", (event) => {
+  if (event.target.matches(".network-popover")) {
+    event.target.previousElementSibling.setAttribute("aria-expanded", String(event.newState === "open"));
+  }
+}, true);
 
 document.addEventListener("error", (event) => {
   if (event.target.matches?.(".avatar img")) event.target.hidden = true;

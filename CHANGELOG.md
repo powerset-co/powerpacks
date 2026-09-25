@@ -1,5 +1,183 @@
 # Changelog
 
+## [2.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.12.0...powerpacks-v2.13.0) (2026-09-25)
+
+
+### Features
+
+* **search:** add pin confidence and taste to judged candidates ([8546f77](https://github.com/powerset-co/powerpacks/commit/8546f7793ee49c79919e0eb25500ed6618588db9))
+* **search:** add pin confidence and taste to judged candidates ([5e5ba31](https://github.com/powerset-co/powerpacks/commit/5e5ba31b83a1bf50533642efc720553d98213417))
+
+
+### Bug Fixes
+
+* **ingestion:** read existing LinkedIn discovery status ([29be0d3](https://github.com/powerset-co/powerpacks/commit/29be0d35be6f8db8b406e074c6ba5a304529ac83))
+* **ingestion:** report a failed linkedin import manifest in status ([2b0267e](https://github.com/powerset-co/powerpacks/commit/2b0267e53c10ce7c47c4350f2877cc4c8caa85c2))
+* **search:** place Taste and Suggested Pin under the overall reasoning ([122b588](https://github.com/powerset-co/powerpacks/commit/122b5882f104b8bf04f69d104547ba771a0fe698))
+* **search:** round every row badge and control like the filters ([3bd5395](https://github.com/powerset-co/powerpacks/commit/3bd5395db4d9b01a2e8a715cc0c6b50e0e89de2c))
+* **search:** stack Suggested Pin under the overall score ([a9779da](https://github.com/powerset-co/powerpacks/commit/a9779da44c45fccc767c8dda328e929919dc6cd2))
+
+
+### Documentation
+
+* **ingestion:** trim import-gmail and import-messages skill instructions ([9f95571](https://github.com/powerset-co/powerpacks/commit/9f95571d3b97d0f59125f4eaa1b06f2612376983))
+* **search:** describe the Suggested Pin badge placement ([d5b2849](https://github.com/powerset-co/powerpacks/commit/d5b284921d0a6b6d8d5ee1cb73c3c28306a87b0e))
+
+## [2.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.11.1...powerpacks-v2.12.0) (2026-09-21)
+
+
+### Features
+
+* **search:** share email account breakdowns in results ([#550](https://github.com/powerset-co/powerpacks/issues/550)) ([35fccc9](https://github.com/powerset-co/powerpacks/commit/35fccc913b43cb532e997f030bfd81575c7daed7))
+
+## [2.11.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.11.0...powerpacks-v2.11.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **search:** always show selected operators as initials ([#548](https://github.com/powerset-co/powerpacks/issues/548)) ([eb6e0c7](https://github.com/powerset-co/powerpacks/commit/eb6e0c7472b029370cfe8f032f334a8e5b9f3423))
+
+## [2.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.10.1...powerpacks-v2.11.0) (2026-09-21)
+
+
+### Features
+
+* **search:** show per-operator message counts ([#546](https://github.com/powerset-co/powerpacks/issues/546)) ([ab7532f](https://github.com/powerset-co/powerpacks/commit/ab7532f9f8b80f11c1e441512ecd04428b72c634))
+
+## [2.10.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.10.0...powerpacks-v2.10.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **search:** compact multiple operator chips to initials ([#544](https://github.com/powerset-co/powerpacks/issues/544)) ([7bd36b2](https://github.com/powerset-co/powerpacks/commit/7bd36b2d9f9bd81a32b70eec55b35403dd8061f5))
+
+## [2.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.9.0...powerpacks-v2.10.0) (2026-09-21)
+
+
+### Features
+
+* **search:** select operators with avatar chips ([#542](https://github.com/powerset-co/powerpacks/issues/542)) ([3f55a0e](https://github.com/powerset-co/powerpacks/commit/3f55a0e5b249e089dc7e2045c4ec44bb4fe8b77f))
+
+## [2.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.8.0...powerpacks-v2.9.0) (2026-09-21)
+
+
+### Features
+
+* **search:** filter viewer results by operator ([#540](https://github.com/powerset-co/powerpacks/issues/540)) ([e2a68a2](https://github.com/powerset-co/powerpacks/commit/e2a68a24afd59cb1c3830622e1d1d10c830d6db0))
+
+## [2.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.7.0...powerpacks-v2.8.0) (2026-09-21)
+
+
+### Features
+
+* **search:** integrate structured JDs and optimized scoring ([6ba7c7e](https://github.com/powerset-co/powerpacks/commit/6ba7c7e3fe330375c9b959c1463d7b48908f87d1))
+* **search:** release structured JDs and optimized scoring ([6ba7c7e](https://github.com/powerset-co/powerpacks/commit/6ba7c7e3fe330375c9b959c1463d7b48908f87d1))
+
+
+### Bug Fixes
+
+* **search:** align structured JD and scoring integration ([ed8d126](https://github.com/powerset-co/powerpacks/commit/ed8d1263817ae74ead42fc17eac36cf27a8f53d5))
+* **search:** ground judge explanations in evidence ([2e7ae58](https://github.com/powerset-co/powerpacks/commit/2e7ae58ed9d9c9011e9a963996c6e285c4bc43db))
+* **search:** preserve the calibrated Jev rubric ([e427b72](https://github.com/powerset-co/powerpacks/commit/e427b72909093a50c5147942b8b2fa1486450c64))
+* **search:** retain shared profile evidence import ([323aa4c](https://github.com/powerset-co/powerpacks/commit/323aa4ce809ee2f12f1d8c7b047e63a2a06cc658))
+
+## [2.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.6.0...powerpacks-v2.7.0) (2026-09-21)
+
+
+### Features
+
+* **search:** hydrate network sources and enable hosted pins ([#536](https://github.com/powerset-co/powerpacks/issues/536)) ([796619e](https://github.com/powerset-co/powerpacks/commit/796619e670aac116127a37f8643cb71fce1c4dd5))
+
+## [2.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.5.0...powerpacks-v2.6.0) (2026-09-20)
+
+
+### Features
+
+* **powerset:** fetch missing TypeSafe key during updates ([8fca0e5](https://github.com/powerset-co/powerpacks/commit/8fca0e5671f2dc5fedefd3abb053664f82f6c760))
+* **powerset:** fetch missing TypeSafe key during updates ([d67a16e](https://github.com/powerset-co/powerpacks/commit/d67a16ece9b982c83bf0a534b1219e88e7c2351b))
+
+## [2.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.4.0...powerpacks-v2.5.0) (2026-09-18)
+
+
+### Features
+
+* enable reviewer-scoped hosted feedback ([c0d2b0d](https://github.com/powerset-co/powerpacks/commit/c0d2b0d5fe82c4cd08819fa6dc2fe51fb2924792))
+* enable reviewer-scoped hosted search feedback ([6d6fc27](https://github.com/powerset-co/powerpacks/commit/6d6fc27d286b019f078fd3056abdc6fe97817646))
+
+
+### Bug Fixes
+
+* version hosted assets by their content ([9c8f8b1](https://github.com/powerset-co/powerpacks/commit/9c8f8b1d94e56cc2fd315e5db95eb11dc8742b4b))
+
+## [2.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.3.1...powerpacks-v2.4.0) (2026-09-18)
+
+
+### Features
+
+* host local search snapshots with a shared renderer ([7d8ab00](https://github.com/powerset-co/powerpacks/commit/7d8ab001bed65e37e8c30444d97820df3c645b68))
+* package shared read-only search snapshots ([d414210](https://github.com/powerset-co/powerpacks/commit/d414210a78cbcc61877abc9eff69e3ea13997b8b))
+* upload private search snapshots after ponds ([5ad00cd](https://github.com/powerset-co/powerpacks/commit/5ad00cd6aa35b0b5306fb6c80849148b426173eb))
+
+
+### Bug Fixes
+
+* keep filtered results hidden on mobile ([fb8b844](https://github.com/powerset-co/powerpacks/commit/fb8b844948a7b4f3c154b4025d428aed627b42e8))
+* preserve result scores and CSV filtering ([735e912](https://github.com/powerset-co/powerpacks/commit/735e912dcddef78257c59a535d74442348430a0a))
+
+## [2.3.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.3.0...powerpacks-v2.3.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* **search:** preserve task state when resuming reviewed ponds ([#525](https://github.com/powerset-co/powerpacks/issues/525)) ([5bac531](https://github.com/powerset-co/powerpacks/commit/5bac531ca08adccaed441d1d2c4698404bc7f5f4))
+
+## [2.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.2.0...powerpacks-v2.3.0) (2026-09-17)
+
+
+### Features
+
+* **search:** replace JD reranking with Terra v5 ([#523](https://github.com/powerset-co/powerpacks/issues/523)) ([2eb0541](https://github.com/powerset-co/powerpacks/commit/2eb054149e6c806252cd1260a2bcb46e3fa20545))
+
+## [2.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.8...powerpacks-v2.2.0) (2026-09-16)
+
+
+### Features
+
+* **search:** add qualification and opportunity judges ([#522](https://github.com/powerset-co/powerpacks/issues/522)) ([71f54a0](https://github.com/powerset-co/powerpacks/commit/71f54a04089d61671f2b7eeef41bfd1a967d6b33))
+
+
+### Bug Fixes
+
+* **search:** preserve reviewed pond intent ([#519](https://github.com/powerset-co/powerpacks/issues/519)) ([beaff8c](https://github.com/powerset-co/powerpacks/commit/beaff8c7bdaecece1bfd4be5d17718ec827814d0))
+
+## [2.1.8](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.7...powerpacks-v2.1.8) (2026-09-15)
+
+
+### Bug Fixes
+
+* preserve native Gemma qualification ratings ([#517](https://github.com/powerset-co/powerpacks/issues/517)) ([97f90c6](https://github.com/powerset-co/powerpacks/commit/97f90c6882379bf16b3cac48f63757052e34c0fb))
+
+## [2.1.7](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.6...powerpacks-v2.1.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* enable CE on Powerpacks update ([#515](https://github.com/powerset-co/powerpacks/issues/515)) ([ee29b5b](https://github.com/powerset-co/powerpacks/commit/ee29b5b19123cd5d2267b196ed58381ec0871e3c))
+
+## [2.1.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.5...powerpacks-v2.1.6) (2026-09-15)
+
+
+### Bug Fixes
+
+* **search:** replace MoE with one CE-gated move-likelihood judge ([#513](https://github.com/powerset-co/powerpacks/issues/513)) ([36e970d](https://github.com/powerset-co/powerpacks/commit/36e970d6c8bfc00bf0207df14a517058df9c7daa))
+
+## [2.1.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.4...powerpacks-v2.1.5) (2026-09-14)
+
+
+### Bug Fixes
+
+* match CE beta inputs to trained checkpoint ([#511](https://github.com/powerset-co/powerpacks/issues/511)) ([a92784d](https://github.com/powerset-co/powerpacks/commit/a92784d9af97522bfb51be55c02825c7b94df265))
+
 ## [2.1.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.3...powerpacks-v2.1.4) (2026-09-14)
 
 

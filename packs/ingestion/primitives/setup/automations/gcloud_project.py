@@ -8,6 +8,16 @@ project > deterministic default), Gmail API enablement, and Google Console
 URL building/opening.
 
 Changelog:
+  2026-09-23 (typed rows): `local_msg_vault_projects` returns project ids, and
+    the gcloud subprocess probes read `CommandResult` fields, so no `.get`
+    remains in this module's business logic.
+  2026-09-23 (simplification audit):
+    - Deleted the unreachable account-pinning branch in `ensure_gcloud_auth`:
+      `needs_login` already encodes "expected set and account differs", so the
+      inner re-check could never fire.
+    - Dropped redundant `(text or "")` in the reauth/project-taken matchers; the
+      parameter is typed `str` and every caller passes captured gcloud output or
+      an error message.
   2026-07-29 (setup style pass):
     - `choose_project_id` reads `load_setup_state(home, app_name).project_id`
       instead of walking `oauth_apps.<name>` behind two isinstance guards.
@@ -46,6 +56,7 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     setup_state_path,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    CommandResult,
     command_error,
     progress,
     run_command,
@@ -65,15 +76,15 @@ PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 def gcloud_value(args: list[str]) -> str:
     """Return a gcloud config value, mapping failures and "(unset)" to ""."""
     result = run_command(["gcloud", *args], timeout=20)
-    if not result["ok"]:
+    if not result.ok:
         return ""
-    value = result["stdout"].strip()
+    value = result.stdout.strip()
     return "" if value == "(unset)" else value
 
 
 def is_gcloud_reauth_error(text: str) -> bool:
     """Return True when gcloud output means the auth token needs a fresh login."""
-    haystack = (text or "").lower()
+    haystack = text.lower()
     return (
         "problem refreshing your current auth tokens" in haystack
         or "reauthentication failed" in haystack
@@ -87,7 +98,7 @@ def is_project_taken_error(text: str) -> bool:
     # A deterministic project id can be globally reserved by another account, or
     # held in Google's 30-day soft-delete purge window, even when the active
     # account cannot describe it. gcloud surfaces this as "already in use".
-    haystack = (text or "").lower()
+    haystack = text.lower()
     return (
         "already in use by another project" in haystack
         or "requested entity already exists" in haystack
@@ -133,18 +144,12 @@ def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[s
     needs_login = bool(expected and account and account.lower() != expected.lower())
     if account and not needs_login:
         token = run_command(["gcloud", "auth", "print-access-token", "--quiet"], timeout=30)
-        if token["ok"]:
-            if expected and account.lower() != expected.lower():
-                return {
-                    "status": "error",
-                    "account": account,
-                    "expected_account": expected,
-                    "message": f"Google Cloud login must use {expected}; active account is {account}.",
-                    "login_ran": False,
-                }
+        if token.ok:
+            # The account is already pinned: needs_login is exactly "expected is
+            # set and the active account differs", so no second comparison here.
             progress(f"Google Cloud login confirmed as {account}.")
             return {"status": "ok", "account": account, "login_ran": False}
-        token_error = token.get("stderr") or token.get("stdout") or ""
+        token_error = token.stderr or token.stdout or ""
         if not is_gcloud_reauth_error(token_error):
             return {
                 "status": "error",
@@ -160,7 +165,7 @@ def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[s
     progress("Refreshing Google Cloud login...")
     result = run_visible_command(cmd, timeout=900)
     account = gcloud_value(["config", "get-value", "account", "--quiet"])
-    if result["ok"] and expected and account.lower() != expected.lower():
+    if result.ok and expected and account.lower() != expected.lower():
         return {
             "status": "error",
             "account": account,
@@ -168,11 +173,11 @@ def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[s
             "message": f"Google Cloud login must use {expected}; active account is {account or 'unknown'}.",
             "login_ran": True,
         }
-    token = run_command(["gcloud", "auth", "print-access-token", "--quiet"], timeout=30) if account else {"ok": False, "stderr": ""}
-    if result["ok"] and account and token["ok"]:
+    token = run_command(["gcloud", "auth", "print-access-token", "--quiet"], timeout=30) if account else CommandResult(ok=False, returncode=0)
+    if result.ok and account and token.ok:
         progress(f"Google Cloud login refreshed as {account}.")
         return {"status": "ok", "account": account, "login_ran": True}
-    return {"status": "error", "message": result.get("message") or "gcloud login did not finish"}
+    return {"status": "error", "message": result.message or "gcloud login did not finish"}
 
 
 def project_exists(project_id: str) -> bool:
@@ -180,7 +185,7 @@ def project_exists(project_id: str) -> bool:
     if not project_id or not shutil.which("gcloud"):
         return False
     result = run_command(["gcloud", "projects", "describe", project_id, "--format=json"], timeout=60)
-    return result["ok"]
+    return result.ok
 
 
 def choose_project_id(home: Path, requested_project: str, email: str, account: str, app_name: str = "") -> tuple[str, dict[str, Any]]:
@@ -206,7 +211,7 @@ def choose_project_id(home: Path, requested_project: str, email: str, account: s
         return validate_project_id(current), {"source": "gcloud_current_project"}
     candidates = local_msg_vault_projects()
     if candidates:
-        project_id = validate_project_id(str(candidates[0].get("projectId") or ""))
+        project_id = validate_project_id(candidates[0])
         if project_id:
             save_oauth_app_state(home, app_name, {"project_id": project_id})
             return project_id, {
@@ -244,7 +249,7 @@ def create_gcloud_project(
             ["gcloud", "projects", "create", attempt_id, "--name", project_name, "--format=json"],
             timeout=180,
         )
-        if result["ok"]:
+        if result.ok:
             progress(f"Google Cloud project {attempt_id} created.")
             return {
                 "status": "ok",
@@ -293,7 +298,7 @@ def enable_gmail_api(project: str | None) -> dict[str, Any]:
         return {"status": "skipped", "reason": "gcloud not installed"}
     progress(f"Enabling Gmail API for {project}. This can take a minute...")
     result = run_command(["gcloud", "services", "enable", GMAIL_SERVICE, "--project", project, "--quiet"], timeout=180)
-    if result["ok"]:
+    if result.ok:
         progress("Gmail API enabled.")
         return {"status": "ok", "project": project, "service": GMAIL_SERVICE}
     message = command_error(result)
@@ -338,6 +343,6 @@ def open_urls(urls: list[str]) -> list[str]:
         return opened
     for url in urls:
         result = run_command([*opener, url], timeout=10)
-        if result["ok"]:
+        if result.ok:
             opened.append(url)
     return opened

@@ -18,6 +18,12 @@ Outputs are fixed paths overwritten in place — `results.csv`, `progress.jsonl`
 module owns the run.
 
 Changelog:
+  2026-09-23 (typed rows): the rows read from `results.csv` are the typed
+    `depth_results.HistoryDepthRow`; the run loop mutates fields and branches on
+    `row.outcome` instead of `result_int(row, ...)` / `row.get(...)`. Outcomes,
+    counters, and the written artifact bytes unchanged.
+  2026-09-23 (simplification audit): the single-target branch builds its one-entry
+    `attempts` map once instead of writing the raw attempt and then overwriting it.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`.
     The store queries it selects with moved to `depth_db.py`, the wacli batch
     command to `backfill.py`, and the results/summary/manifest artifacts to
@@ -63,6 +69,7 @@ from packs.ingestion.primitives.discover.messages.wacli.depth_results import (  
     DEFAULT_HISTORY_DEPTH_NO_GROWTH_LIMIT,
     HISTORY_DEPTH_POLICY_VERSION,
     HISTORY_DEPTH_TERMINAL_OUTCOMES,
+    HistoryDepthRow,
 )
 from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_HISTORY_DEPTH_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.payloads import (  # noqa: E402
@@ -77,7 +84,6 @@ from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E
     history_chat_ref,
     history_depth_cutoff_ts,
     history_depth_state_digest,
-    result_int,
 )
 
 HISTORY_DEPTH_MORE_REMAIN_END_TYPES = {
@@ -114,7 +120,7 @@ def run_history_depth_stage(
     progress_path = out_dir / "progress.jsonl"
     manifest_path = out_dir / "manifest.json"
     initialized = results_path.exists()
-    rows: dict[str, dict[str, Any]] = depth_results.read_history_depth_results(results_path)
+    rows: dict[str, HistoryDepthRow] = depth_results.read_history_depth_results(results_path)
     current_states = depth_db.history_depth_chat_states(store)
     current_by_ref = {
         history_chat_ref(chat_jid): state
@@ -122,30 +128,30 @@ def run_history_depth_stage(
     }
     excluded_refs = {history_chat_ref(jid) for jid in (exclude_jids or set())}
     for chat_ref, row in rows.items():
-        if row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES:
+        if row.outcome in HISTORY_DEPTH_TERMINAL_OUTCOMES:
             continue
         if chat_ref in excluded_refs:
-            row["outcome"] = "out_of_scope"
-            row["error_category"] = "none"
-            row["updated_at"] = now_iso()
+            row.outcome = "out_of_scope"
+            row.error_category = "none"
+            row.updated_at = now_iso()
             continue
         current_state = current_by_ref.get(chat_ref)
         if current_state is None:
-            row["outcome"] = "gone"
-            row["error_category"] = "none"
-            row["updated_at"] = now_iso()
+            row.outcome = "gone"
+            row.error_category = "none"
+            row.updated_at = now_iso()
         elif current_state[1] < active_since_ts:
-            row["current_count"] = current_state[0]
-            row["current_latest_ts"] = current_state[1]
-            row["outcome"] = "out_of_scope"
-            row["error_category"] = "none"
-            row["updated_at"] = now_iso()
+            row.current_count = current_state[0]
+            row.current_latest_ts = current_state[1]
+            row.outcome = "out_of_scope"
+            row.error_category = "none"
+            row.updated_at = now_iso()
         elif current_state[0] > max_count:
-            row["current_count"] = current_state[0]
-            row["current_latest_ts"] = current_state[1]
-            row["outcome"] = "completed_threshold"
-            row["error_category"] = "none"
-            row["updated_at"] = now_iso()
+            row.current_count = current_state[0]
+            row.current_latest_ts = current_state[1]
+            row.outcome = "completed_threshold"
+            row.error_category = "none"
+            row.updated_at = now_iso()
     previous = depth_results.read_history_depth_manifest(manifest_path)
     pre_sync_states = before_states if before_states is not None else current_states
     pre_sync_digest = history_depth_state_digest(pre_sync_states)
@@ -180,7 +186,7 @@ def run_history_depth_stage(
     resume_refs = {
         chat_ref
         for chat_ref, row in rows.items()
-        if row.get("outcome") not in HISTORY_DEPTH_TERMINAL_OUTCOMES
+        if row.outcome not in HISTORY_DEPTH_TERMINAL_OUTCOMES
     }
     targets = depth_db.history_depth_targets(
         store,
@@ -228,34 +234,27 @@ def run_history_depth_stage(
     for target in targets:
         row = rows.get(target.chat_ref)
         if row is None:
-            rows[target.chat_ref] = {
-                "chat_ref": target.chat_ref,
-                "kind": target.kind,
-                "initial_count": target.current_count,
-                "current_count": target.current_count,
-                "current_latest_ts": target.current_latest_ts,
-                "target_rows_added": 0,
-                "unrelated_rows_added": 0,
-                "attempts": 0,
-                "requests_sent": 0,
-                "responses_seen": 0,
-                "transient_failures": 0,
-                "no_growth_attempts": 0,
-                "outcome": "pending",
-                "error_category": "none",
-                "updated_at": now_iso(),
-            }
+            rows[target.chat_ref] = HistoryDepthRow(
+                chat_ref=target.chat_ref,
+                kind=target.kind,
+                initial_count=target.current_count,
+                current_count=target.current_count,
+                current_latest_ts=target.current_latest_ts,
+                outcome="pending",
+                error_category="none",
+                updated_at=now_iso(),
+            )
         elif (
-            row.get("outcome") in {"gone", "out_of_scope"}
-            or result_int(row, "current_count") != target.current_count
-            or result_int(row, "current_latest_ts") != target.current_latest_ts
+            row.outcome in {"gone", "out_of_scope"}
+            or row.current_count != target.current_count
+            or row.current_latest_ts != target.current_latest_ts
             or target.state_changed
         ):
-            row["current_count"] = target.current_count
-            row["current_latest_ts"] = target.current_latest_ts
-            row["no_growth_attempts"] = 0
-            row["outcome"] = "pending"
-            row["error_category"] = "none"
+            row.current_count = target.current_count
+            row.current_latest_ts = target.current_latest_ts
+            row.no_growth_attempts = 0
+            row.outcome = "pending"
+            row.error_category = "none"
 
     # Persist every selected target before the first network request so budget
     # exhaustion or interruption cannot lose unvisited work.
@@ -266,8 +265,8 @@ def run_history_depth_stage(
         if candidate_row is None:
             return True
         return not (
-            candidate_row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES
-            and result_int(candidate_row, "current_count") == candidate.current_count
+            candidate_row.outcome in HISTORY_DEPTH_TERMINAL_OUTCOMES
+            and candidate_row.current_count == candidate.current_count
         )
 
     attempt_targets = [target for target in targets if target_needs_attempt(target)]
@@ -298,9 +297,8 @@ def run_history_depth_stage(
                 request_delay=request_delay,
                 timeout=command_timeout,
             )
-            attempts = {target.chat_ref: attempt}
             batch_unrelated_added = attempt.unrelated_added
-            attempts[target.chat_ref] = replace(attempt, unrelated_added=0)
+            attempts = {target.chat_ref: replace(attempt, unrelated_added=0)}
         else:
             attempts, batch_unrelated_added = backfill.run_history_backfill_batch_attempt(
                 store,
@@ -338,30 +336,30 @@ def run_history_depth_stage(
                     unrelated_added=attempt.unrelated_added + batch_unrelated_added,
                 )
 
-            row["attempts"] = result_int(row, "attempts") + 1
-            row["requests_sent"] = result_int(row, "requests_sent") + attempt.requests_sent
-            row["responses_seen"] = result_int(row, "responses_seen") + attempt.responses_seen
-            row["target_rows_added"] = result_int(row, "target_rows_added") + attempt.target_added
-            row["unrelated_rows_added"] = result_int(row, "unrelated_rows_added") + attempt.unrelated_added
-            row["current_count"] = attempt.after_count
+            row.attempts += 1
+            row.requests_sent += attempt.requests_sent
+            row.responses_seen += attempt.responses_seen
+            row.target_rows_added += attempt.target_added
+            row.unrelated_rows_added += attempt.unrelated_added
+            row.current_count = attempt.after_count
             if attempt.after_latest_ts:
-                row["current_latest_ts"] = attempt.after_latest_ts
-            row["error_category"] = attempt.error_category
-            row["updated_at"] = now_iso()
+                row.current_latest_ts = attempt.after_latest_ts
+            row.error_category = attempt.error_category
+            row.updated_at = now_iso()
 
             if attempt.returncode == 0 and attempt.target_added > 0:
-                row["no_growth_attempts"] = 0
+                row.no_growth_attempts = 0
                 if attempt.after_count > max_count:
-                    row["outcome"] = "completed_threshold"
+                    row.outcome = "completed_threshold"
                 elif attempt.end_type == "COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY":
-                    row["outcome"] = "recovered"
+                    row.outcome = "recovered"
                 else:
-                    row["outcome"] = "pending"
+                    row.outcome = "pending"
             elif attempt.retryable:
-                row["transient_failures"] = result_int(row, "transient_failures") + 1
+                row.transient_failures += 1
                 if attempt.target_added > 0:
-                    row["no_growth_attempts"] = 0
-                row["outcome"] = (
+                    row.no_growth_attempts = 0
+                row.outcome = (
                     "completed_threshold"
                     if attempt.after_count > max_count
                     else "pending"
@@ -372,30 +370,30 @@ def run_history_depth_stage(
                 and attempt.messages_received == 0
             ):
                 if attempt.end_type in HISTORY_DEPTH_MORE_REMAIN_END_TYPES:
-                    row["no_growth_attempts"] = 0
-                    row["outcome"] = "pending"
+                    row.no_growth_attempts = 0
+                    row.outcome = "pending"
                 else:
-                    row["no_growth_attempts"] = result_int(row, "no_growth_attempts") + 1
-                    row["outcome"] = (
+                    row.no_growth_attempts += 1
+                    row.outcome = (
                         "server_zero"
-                        if result_int(row, "no_growth_attempts") >= no_growth_limit
+                        if row.no_growth_attempts >= no_growth_limit
                         else "pending"
                     )
             elif attempt.returncode == 0:
-                row["outcome"] = "pending"
+                row.outcome = "pending"
             else:
-                row["outcome"] = "terminal_error"
+                row.outcome = "terminal_error"
 
             runtime.write_progress(progress_path, {
                 "event": "history_depth_attempt",
                 "chat_ref": target.chat_ref,
-                "attempt": result_int(row, "attempts"),
+                "attempt": row.attempts,
                 "requests_sent": attempt.requests_sent,
                 "responses_seen": attempt.responses_seen,
                 "messages_received": attempt.messages_received,
                 "target_added": attempt.target_added,
                 "unrelated_added": attempt.unrelated_added,
-                "outcome": row["outcome"],
+                "outcome": row.outcome,
                 "error_category": attempt.error_category,
             })
             summary = persist()
