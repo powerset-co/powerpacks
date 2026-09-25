@@ -2,7 +2,7 @@
 
 Created: 2026-08-06
 
-Change log:
+Changelog:
 - 2026-08-06: initial deferred-work inventory after the SQLite rewrite.
 - 2026-08-07: `union_bundles`/`build_bundle` folded into `CollectionBundle.union`/
   `CollectionBundle.of` in `collection/models.py`; the two items below that
@@ -10,6 +10,8 @@ Change log:
 - 2026-09-25: dropped the deleted `identity_reconcile/runner.py` from the
   OpenAI-concurrency fallback list, and `reconcile_linkedin` (node cut) from
   the manifest-owner and `enrich/` file lists.
+- 2026-09-25: `identity_evidence` → `identity_reconcile/judge.py`; dropped the
+  deleted `heal_review.py`.
 
 These items are deliberately outside the mechanical D2 cleanup round. They are
 not implicit acceptance criteria for that round.
@@ -241,7 +243,7 @@ its cause, not by being renamed.
 ### One LLM call pattern, written three times — and synthesis stalls between waves
 
 Three sites call `client.responses.create` with the same shape:
-`synthesis/runner.py` (`call_one`), `identity_evidence.py` (the identity judge),
+`synthesis/runner.py` (`call_one`), `identity_reconcile/judge.py` (the identity judge),
 `merge_candidates/judge.py` (the pair judge). The primitives are shared
 (`make_async_client`, `responses_kwargs`, `is_retryable`, `parse_json_response`,
 `usage_tokens`) but the LOOP is triplicated: acquire semaphore, retry with
@@ -250,7 +252,7 @@ backoff, parse the schema response, tally usage. Extract one schema-call object
 it.
 
 Concurrency is also inconsistent between them:
-- `identity_evidence.judge_batch` builds every coroutine and `asyncio.gather`s
+- `identity_reconcile/judge.judge_batch` builds every coroutine and `asyncio.gather`s
   them under a semaphore — true slot filling: a finished call frees its slot
   immediately.
 - `synthesis/runner.driver` chunks people into waves of `stage.chunk_people` and
@@ -271,7 +273,7 @@ each spelled out mid-function with its own magic fallback:
 
 - `synthesis/runner.py` fallback 16
 - `merge_candidates/judge.py` fallback 64
-- `enrich/research_reconcile/judging.py` fallback `identity_evidence.DEFAULT_IDENTITY_CONCURRENCY` (the only named one)
+- `enrich/research_reconcile/judging.py` → `identity_reconcile/judge.py` fallback `shared/openai_responses.DEFAULT_OPENAI_CONCURRENCY` (the only named one)
 
 So unless the env var is set, synthesis runs at a QUARTER of the judges'
 concurrency, for no stated reason. Compounds the wave-barrier finding: synthesis
@@ -406,8 +408,8 @@ the root keeps `__init__.py` and nothing else.
 | `collection/` | collect_person_context.py, context_sources.py, email_context.py, models, planning |
 | `synthesis/` | synthesize_person_context.py, compose_dossier.py, validate_dossiers.py, facts.py, models.py, rendering.py |
 | `merge_candidates/` | cluster_merge_candidates.py, build_parents.py, rendering.py |
-| `enrich/` | identity_evidence.py, judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
-| `review/` | web server/rendering/assets, guided_retarget.py, heal_review.py, reconcile_review_web.py, restart_review.py |
+| `enrich/` | judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
+| `review/` | web server/rendering/assets, guided_retarget.py, reconcile_review_web.py, restart_review.py |
 | `realize/` | apply_retargets.py, persist_review_identities.py |
 | `migration/` | migrate_sqlite.py, legacy.py, canonical_graph.py, parent_graph.py (the dying mass, together, so it deletes as one folder) |
 | `shared/` | common.py, check_readiness.py, readiness_models.py, build_owner.py, lookup_person.py, dossier_evidence.py |

@@ -2,7 +2,7 @@
 
 Created: 2026-08-06
 
-Change log:
+Changelog:
 - 2026-08-06: initial spec (post-SQLite-rewrite architecture; parents
   get-or-create contract landing on `parents-get-or-create`).
 - 2026-08-06: contract 3 landed — `ensure_parents/assignment.py` owns stable

@@ -1,7 +1,7 @@
 # Deep Context — stage spec (owner intent)
 
 Created: 2026-08-06
-Change log:
+Changelog:
 - 2026-09-25: the review app's self-heal is cut too, so no attached-link
   judging runs for now; stage 6's attached-link and multi-candidate-family
   lines state intent with no current code behind them.

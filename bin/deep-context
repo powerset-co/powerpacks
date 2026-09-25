@@ -15,7 +15,7 @@
 #   bin/deep-context lookup --phone "+1 415 555 1234"
 #
 # Reads message BODIES (Gmail + iMessage/WhatsApp DMs, plus small iMessage groups
-# only after explicit opt-in). Raw bundles are ephemeral + gitignored.
+# under standing owner authorization). Raw bundles are ephemeral + gitignored.
 
 set -euo pipefail
 
@@ -358,7 +358,7 @@ case "$cmd" in
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
     uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
       --people-csv .powerpacks/network-import/merged/people.csv "$@"
-    echo "✅ people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
+    echo "people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;
   share)
@@ -381,7 +381,7 @@ case "$cmd" in
     ;;
   purge-raw)
     rm -rf .powerpacks/deep-context/raw
-    echo "🧹 purged raw message bundles" >&2
+    echo "purged raw message bundles" >&2
     ;;
   *)
     echo "bin/deep-context: unknown command '$cmd'" >&2

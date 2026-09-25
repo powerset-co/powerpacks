@@ -12,7 +12,8 @@ the next full run (linkedin -> gmail -> messages -> deep-context) cache-hits.
 PRESERVED (paid/LLM/human, stable keys):
   facts/*.jsonl                keyed by contact identity (candidate:email/phone)
   deep-context.sqlite          human decisions + merge_verdicts paid cache
-  reconcile/verdicts.*         LinkedIn-judge verdicts, keyed by pub
+  reconcile/verdicts.*         legacy migration input (LinkedIn-judge verdicts); drop
+                               once no supported install predates powerpacks v1.19.0
   reconcile/deep-research/     Parallel results, keyed by parent slug
   import/linkedin/             source import + RapidAPI enrichment caches
   profile_cache_v2/            RapidAPI profile cache, keyed by pub
@@ -35,6 +36,7 @@ resolves each row against the state root into a frozen `ScrubTarget` /
 
 Created: 2026-07-18
 Changelog:
+  2026-09-25: reconcile/verdicts.* labelled legacy migration input.
   2026-07-29 (setup style pass): the plan and preserve rows became the frozen
     `ScrubTarget` / `PreservedPath` instead of bare dicts built inline and
     re-indexed by string key three times; payload key order is unchanged (the
@@ -86,6 +88,7 @@ SCRUB = [
 PRESERVE = [
     ("deep-context/facts", "OpenAI synthesis, keyed by contact identity"),
     ("deep-context/deep-context.sqlite", "human decisions + paid merge verdicts"),
+    # Legacy migration input; drop once no supported install predates powerpacks v1.19.0.
     ("deep-context/reconcile/verdicts.jsonl", "LinkedIn-judge verdicts"),
     ("deep-context/reconcile/verdicts.csv", "LinkedIn-judge verdicts (flat)"),
     ("deep-context/reconcile/deep-research", "Parallel research results"),

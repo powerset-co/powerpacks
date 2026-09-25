@@ -2,7 +2,9 @@
 
 Created: 2026-09-24
 
-Change log:
+Changelog:
+- 2026-09-25: point the parent-id map and human worth at the SQLite `people` and
+  `parents` tables.
 - 2026-09-25 (SQLite store): labels, the share list, and human tags became tables
   in `.powerpacks/deep-context/deep-context.sqlite` (`person_labels`, `share`,
   `person_tags`); `labels.csv` / `share.csv` / `tags.csv` are gone, and
@@ -65,7 +67,7 @@ Local:
   keys `aleph_companies_v1` by `urn:harmonic:company:<n>` — **the two never collide** (see
   Open).
 - Deep-context leaves per person are keyed by **parent id** (`parent-<12hex>`), not the
-  people.csv id; `review_store.parent_ids_by_person(index.json)` is the one map:
+  people.csv id; the SQLite `people` table (`person_id` → `parent_id`) is the one map:
   `deep-context/facts/<parent_id>.jsonl` (strict schema, `synthesize_person_context.py:253-337`;
   `relationship_category` present in only 14/552 files, `is_owner` true in 0),
   `deep-context/dossiers/<slug>.md` and `parents/<slug>.md` (YAML front matter incl.
@@ -73,8 +75,8 @@ Local:
   (`direction: from_me|from_them|from_other`, a capped sample — body-free fields only may be
   used), `people.csv.interaction_counts/last_interaction`. The human/mirror worth row is
   keyed `parent-worth:<parent_id>`.
-- Human decisions live in `network-import/overrides/review.csv` (`review_store.py:40-77`);
-  human > machine (`worth_view.py`). Nothing named private/tag/label/warmth exists locally.
+- Human decisions live on the SQLite `parents` table (`human_worth*` columns);
+  human > machine (`db/worth_views.py`). Nothing named private/tag/label/warmth exists locally.
 - Jev/TypeSafe client `packs/search/primitives/llm_rerank_candidates/jev/client.py`:
   `POST https://api.typesafe.ai/v1/systemone`, model `jev-1.13.0`, question types
   `noul` (probability), `choice` (probabilities over named options), `score` (over ordinal

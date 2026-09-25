@@ -8,6 +8,8 @@
 _Created 2026-06-24._
 
 ## Changelog
+- 2026-09-25: "What already exists" table points at the current Parallel client and
+  research paths.
 - 2026-08-13: Current implementation no longer normalizes Parallel output into
   `01_research_parallel.json` or auto-approves synthetic identities from a
   field-count completeness score. It persists one SDK `content + basis`
@@ -45,8 +47,8 @@ index like a real profile — so these people stop being invisible in search.
 
 | Capability | Where |
 |---|---|
-| Parallel.ai task-group client (create/add/poll/result) | `packs/ingestion/primitives/deep_research_contacts/deep_research_contacts.py` → `ParallelClient` |
-| Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/enrich/reconcile_deep_research.py` |
+| Parallel.ai task-group client (create/add/poll/result) | `packs/ingestion/primitives/deep_context/enrich/parallel_research/parallel_client.py` → `ParallelClient` |
+| Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/enrich/research_reconcile/reconcile_deep_research.py` |
 | `parallel_to_research_json()` → `01_research_parallel.json` (person/positions/education/social) | `deep_research_contacts.py` |
 | Retarget proposal → enrich → people-row → merge auto-include | `reconcile_deep_research.py` + `apply_retargets.py` + `overrides/retarget-people.csv` |
 | RapidAPI enrich + cache + people-row merge | `packs/ingestion/primitives/enrich/enrich_people.py` |

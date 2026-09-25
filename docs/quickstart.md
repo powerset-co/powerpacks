@@ -1,5 +1,6 @@
 <!--
 Changelog:
+- 2026-09-25: iMessage group bodies are read under standing owner authorization.
 - 2026-07-16: $import-messages and $import-gmail are contact-sync only.
   Removed the OpenRouter prerequisite and the llm_review_contacts
   troubleshooting row, replaced research_queue.csv/research_review.csv with
@@ -287,7 +288,7 @@ indexed. The approved decisions then re-merge and rebuild the Modal index. See t
 `$deep-context` is the ad-hoc surface over the same dossiers: person lookups
 ("who is <name/phone>?"), re-reviews, and the review UI. It reads Gmail and
 chat bodies (the explicit exception to metadata-only import); small iMessage
-group bodies require an explicit current-run opt-in. See the
+group bodies are read under standing owner authorization. See the
 [deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md).
 
 ---

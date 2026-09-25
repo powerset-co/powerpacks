@@ -1,5 +1,13 @@
 # Deep-context pipeline
 
+Created: 2026-07-13
+
+Changelog:
+- 2026-09-25: the post-review block is stop → apply-retargets → realize,
+  as the skill runs it; realize already persists review identities.
+- 2026-09-25: SQLite is the state record (the review manifest is gone); small
+  iMessage groups run under standing authorization; the app runs enrichment.
+
 `$deep-context` is the single processing workflow after `$setup`,
 `$import-gmail`, or `$import-messages`. It turns local conversation history into
 per-person dossiers, resolves duplicate identities, decides which imported
@@ -38,17 +46,16 @@ enrichment, review, realization, and indexing behavior now lives in
   LinkedIn URL or skipped; synthetic records are not directly indexed.
 - **State:** every stage overwrites fixed outputs plus one `manifest.json`.
   There are no run IDs, job ledgers, or browser-owned background jobs.
-- **Privacy exception:** this skill intentionally reads message bodies. Direct
-  messages are the default; small iMessage group bodies require explicit
-  current-run opt-in. WhatsApp group bodies are never read.
+- **Privacy exception:** this skill intentionally reads message bodies: direct
+  messages plus small iMessage group bodies under standing owner authorization.
+  WhatsApp group bodies are never read.
 
 ## End-to-end architecture
 
 ```mermaid
 flowchart TD
     A["Check sources, people, and unresolved candidates"] --> B["Confirm owner LinkedIn"]
-    B --> C{"Include small iMessage groups?"}
-    C --> D["Collect people + candidate messages"]
+    B --> D["Collect people + candidate messages"]
     D --> E{"Preview + approve OpenAI synthesis"}
     E --> F["Synthesize facts + worth from messages, compose dossiers, validate"]
     F --> G["Judge duplicate pairs and build canonical parents"]
@@ -72,7 +79,7 @@ flowchart TD
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
-    class C,E,K,M,P,R,U gate;
+    class E,K,M,P,R,U gate;
     class A,B,D,F,G,J,K1,L,M1,O,Q,R1,T local;
     class N cloud;
     class V output;
@@ -148,7 +155,7 @@ browser button and cannot be blocked by the Done page.
 | Stage | What it does | Main result |
 | --- | --- | --- |
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON and `owner.json` |
-| Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<parent_id>.json`, SQLite projection, receipt |
+| Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are always included. | `raw/<parent_id>.json`, SQLite projection, receipt |
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
@@ -180,25 +187,15 @@ bin/deep-context review worth
 ```
 
 After the browser opens, the agent blocks on
-`bin/deep-context review-status --wait` and acts on what it returns. The enrichment path
-uses:
-
-```bash
-bin/deep-context reconcile-deep-research --dry-run \
-  --include-candidates --include-plausibly-absent
-
-bin/deep-context reconcile-deep-research \
-  --include-candidates --include-plausibly-absent \
-  --approve --budget <approved-estimate>
-
-bin/deep-context assemble-synthetic
-```
+`bin/deep-context review-status --wait` and acts on what it returns. The review
+app runs preview, approved enrichment, synthetic assembly, and profile prefetch
+itself.
 
 After LinkedIn review:
 
 ```bash
+bin/deep-context stop
 bin/deep-context apply-retargets
-bin/deep-context persist-review-identities
 bin/deep-context realize
 
 uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
@@ -212,7 +209,7 @@ Approval rules:
 
 | Boundary | Approval |
 | --- | --- |
-| iMessage group bodies | Explicit current-run opt-in. |
+| iMessage group bodies | Standing owner authorization; never asked. |
 | Owner profile cache miss | Disclose the RapidAPI call and get approval. |
 | OpenAI synthesis | Show `bin/deep-context dry` estimate and get approval. |
 | Duplicate judging | Always preview. Run automatically when the estimate is at most $100; ask if it exceeds $100. |
@@ -278,33 +275,22 @@ For a researched result with no LinkedIn:
 - The intermediate synthetic row is review context only in the current guided
   workflow; it is never directly approved for indexing.
 
-## State, revisions, and repeatability
+## State and repeatability
 
-Deep Context uses fixed files and manifests rather than run IDs:
+SQLite is the record; the enrichment manifest is a display-only receipt:
 
 ```text
-.powerpacks/deep-context/review/manifest.json
+.powerpacks/deep-context/deep-context.sqlite
 .powerpacks/deep-context/reconcile/deep-research/manifest.json
 ```
 
-Starting a fresh People review creates a new `people_revision`. The effective
-Yes/Maybe/No decisions are sorted and hashed into a selection fingerprint.
-Enrichment is current only when its manifest matches both:
+Selection and reuse come from the current SQLite worth/candidate rows plus
+projected artifact fingerprints. Nothing reads the manifest to decide what is
+pending, current, or allowed to run. The Approve click rebuilds the queue and
+estimate from current SQLite and launches with that budget.
 
-1. the current `people_revision`; and
-2. the complete current decision fingerprint.
-
-The UI's spend approval is additionally bound to the estimate, net-new count,
-approved budget, selection hash, and review revision. If decisions change or a
-new review begins, the old preview/approval becomes stale and cannot start paid
-work.
-
-The browser state token includes:
-
-- live People and LinkedIn progress counts;
-- the current worth-selection fingerprint and review revision;
-- enrichment status, freshness, approval freshness, counts, and update time;
-- review stage, status, completed stages, and update time.
+The browser state token hashes the stage progress counts, the effective worth
+decisions, and whether enrichment is pending or running.
 
 External handoff changes are visible on the next one-second Enrich/Done poll,
 or from an early LinkedIn preview while enrichment is still changing its queue.
@@ -319,7 +305,7 @@ This gives repeatability without a ledger:
   completed.
 - Previously completed research can still reduce the new run's net-new cost.
 - Direct progress-step navigation is preview-only; the preview remains visible
-  and current with file changes, while file state still determines the actual
+  and current with SQLite changes, while SQLite still determines the actual
   workflow stage.
 - `$deep-context review` always opens the read-only `/directory` browser. The
   full workflow uses `review worth` to open the People stage without erasing
@@ -360,7 +346,6 @@ facts, not verbatim messages.
 |   |-- <slug>.md
 |   `-- manifest.json
 |-- review/
-|   |-- manifest.json
 |   `-- avatars/
 `-- reconcile/
     `-- deep-research/
@@ -389,7 +374,7 @@ Not every request needs the full workflow:
 | Look up one person by name/email/phone | `bin/deep-context lookup ...` | Free, read-only dossier lookup. |
 | Check readiness | `bin/deep-context check` | Free, read-only source/config check. |
 | Validate dossiers | `bin/deep-context validate` | Free validation only. |
-| Reopen review | `bin/deep-context review` | Opens the current file-derived stage; does not restart processing. |
+| Browse people | `bin/deep-context review` | Opens the read-only A-Z directory; `review <stage>` opens that stage. Does not restart processing. |
 
 ## Implementation map
 
@@ -398,8 +383,8 @@ Not every request needs the full workflow:
 | Agent workflow and approvals | [`deep-context/SKILL.md`](../skills/deep-context/SKILL.md) |
 | Command dispatcher | [`bin/deep-context`](../../../bin/deep-context) |
 | Collection and provenance | [`collection/collect_person_context.py`](../primitives/deep_context/collection/collect_person_context.py) |
-| Per-source body readers | [`context_sources.py`](../primitives/deep_context/context_sources.py) |
-| Gmail selection policy | [`email_context.py`](../primitives/deep_context/email_context.py) |
+| Per-source body readers | [`collection/context_sources.py`](../primitives/deep_context/collection/context_sources.py) |
+| Gmail selection policy | [`collection/email_context.py`](../primitives/deep_context/collection/email_context.py) |
 | Message-context synthesis and worth judge | [`synthesis/synthesize_person_context.py`](../primitives/deep_context/synthesis/synthesize_person_context.py) |
 | Dossier composition | [`synthesis/compose_dossier.py`](../primitives/deep_context/synthesis/compose_dossier.py) |
 | Duplicate judge | [`merge_candidates/cluster_merge_candidates.py`](../primitives/deep_context/merge_candidates/cluster_merge_candidates.py) |
