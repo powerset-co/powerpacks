@@ -6,7 +6,7 @@ description: Import iMessage/WhatsApp contact metadata locally. Sets up source a
 <!--
 Changelog:
 - 2026-09-25: the import floor is back (usable name, at least one message,
-  group-only contacts need ten); unnamed contacts are no longer imported.
+  the old group-only rule stays out); unnamed contacts are no longer imported.
 - 2026-09-23: Trimmed Step 2's wacli protocol detail (batch sizes, waits, chat
   identity fallback) down to the automatic strategy and resumability, pointing at
   `message-import-pipeline.md` for protocol detail; dropped the duplicated
@@ -17,8 +17,8 @@ Changelog:
 
 `$import-messages` imports iMessage and WhatsApp contact metadata as candidate
 people. A contact is imported when it has a usable phone or email, a
-researchable name, and at least one message; a contact seen only in group chats
-needs ten. Unnamed contacts are skipped and counted on the manifest. Deep
+researchable name, and at least one message. Unnamed contacts are skipped and
+counted on the manifest. Deep
 Context makes identity and worth decisions and combines people across sources.
 
 For the pipeline walkthrough and privacy map, see

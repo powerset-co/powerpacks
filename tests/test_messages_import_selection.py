@@ -66,12 +66,15 @@ class ContactFloorTests(unittest.TestCase):
             node.run()
             manifest = node.written
             self.assertEqual(manifest["status"], "completed")
-            self.assertEqual(manifest["stats"], {"people": 1, "candidates": 1})
+            self.assertEqual(manifest["stats"], {"people": 2, "candidates": 2})
             self.assertEqual(manifest["skipped"], {
-                "no_name": 1, "name_is_phone": 1, "below_min_messages": 1, "group_only_low_signal": 1,
+                "no_name": 1, "name_is_phone": 1, "below_min_messages": 1,
             })
             _headers, people = read_csv_rows(root / "import/messages/people.csv")
-            self.assertEqual([row["id"] for row in people], ["candidate:phone:+15550100123"])
+            self.assertEqual(
+                [row["id"] for row in people],
+                ["candidate:phone:+15550100123", "candidate:phone:+15550100127"],
+            )
 
 
 class SourceOnlyMessagesCliTests(unittest.TestCase):

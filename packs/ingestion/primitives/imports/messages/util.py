@@ -6,7 +6,9 @@ floor is identity-neutral mapping.
 
 Changelog:
   2026-09-25: restored the floor deleted by #486 (usable name, at least one
-    message, group-only contacts need GROUP_ONLY_MIN_MESSAGES). Email-keyed
+    message). The old group-only rule is not restored: discovery's
+    `message_count` includes group messages and `is_in_group_chats` means any
+    membership, so it dropped contacts who had direct messages. Email-keyed
     contacts stay eligible; the phone-shape check applies to phone keys only.
     No matcher, no skip flag, no CLI overrides.
 """
@@ -22,10 +24,6 @@ from packs.ingestion.schemas.people_schema import latest_interaction, normalize_
 
 
 MIN_MESSAGE_COUNT = 1
-# Group-appearance-only contacts below this volume are low-signal noise
-# (someone from a group thread, not a relationship). A positive WhatsApp
-# direct-chat count is explicit relationship evidence and bypasses it.
-GROUP_ONLY_MIN_MESSAGES = 10
 
 MIN_NAME_TOKENS = 2
 MIN_TOKEN_LEN = 2
@@ -92,8 +90,6 @@ def contact_floor_reason(row: MessageContact) -> str:
         return name_reason
     if row.message_count < MIN_MESSAGE_COUNT:
         return "below_min_messages"
-    if row.is_in_group_chats and row.whatsapp_message_count == 0 and row.message_count < GROUP_ONLY_MIN_MESSAGES:
-        return "group_only_low_signal"
     return ""
 
 

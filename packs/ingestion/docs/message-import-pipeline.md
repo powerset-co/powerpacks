@@ -3,7 +3,7 @@
 <!--
 Changelog:
 - 2026-09-25: the import floor is back; unnamed, message-less, and low-signal
-  group-only contacts are skipped and counted on the manifest.
+  contacts are skipped and counted on the manifest.
 -->
 
 `$import-messages` extracts local contact metadata and writes source candidates
@@ -74,8 +74,7 @@ interrupted sync. No additional state store is needed.
 A contact becomes a canonical candidate row when it clears the floor
 (`imports/messages/util.contact_floor_reason`): a phone with 10 to 15 digits or
 an email, a researchable name (not empty, not the phone number, at least two
-tokens), at least one message, and, for contacts seen only in group chats with
-no WhatsApp direct chat, at least ten messages. Skipped contacts are counted by
+tokens), and at least one message. Skipped contacts are counted by
 reason on the manifest's `skipped` block. The importer makes no identity or
 worth decisions and needs no people catalog, review file, or import
 confirmation.
