@@ -234,7 +234,8 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
                 wacli_db=wacli,
             ).run()
 
-        self.assertTrue(result.ready)
+        self.assertFalse(result.ready)
+        self.assertEqual(result.next_command, "bin/deep-context migrate-sqlite")
         self.assertEqual(result.message_people, 1)
         self.assertEqual(result.candidates.total, 1)
         self.assertFalse(missing_db.exists())

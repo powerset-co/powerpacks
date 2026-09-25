@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.collection.planning import projecte
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
+    OWNER_JSON,
     emit,
     load_env,
 )
@@ -48,6 +49,7 @@ from packs.ingestion.primitives.deep_context.shared.readiness_models import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 
+MIGRATE_COMMAND = "bin/deep-context migrate-sqlite"
 
 # Paired positionally with the `check_statuses` tuple built in run() — same
 # order (imessage, msgvault, openai key, owner.json), not matched by name.
@@ -170,6 +172,8 @@ class CheckReadiness:
         # (only its .messages/.has_owner/.owner_path are used — see sqlite_counts).
         imported = read_imported_people(self.people_csv)
         imported_counts = _import_counts(imported, db)
+        # Before the store exists, owner.json has not been imported yet: read the file.
+        owner_json = self.db_path.parent / OWNER_JSON.name
         projected = (
             sqlite_counts(db)
             if db is not None
@@ -178,8 +182,8 @@ class CheckReadiness:
                     message_people=0,
                     candidates=CandidateCounts(0, (), 0),
                     messages=MessageCounts(0, ()),
-                    has_owner=False,
-                    owner_path="",
+                    has_owner=owner_json.is_file(),
+                    owner_path=str(owner_json) if owner_json.is_file() else "",
                 )
             )
         )
@@ -229,7 +233,10 @@ class CheckReadiness:
                 checks.whatsapp_wacli.status,
             )
         )
-        ready = checks.people_csv.status == "ok" and any_source and has_key and not migration_required
+        # migrate-sqlite is the one creator of the store: it imports legacy artifacts or,
+        # on a fresh install, creates the empty store.
+        migrate = migration_required or not database_exists
+        ready = checks.people_csv.status == "ok" and any_source and has_key and not migrate
         # Order must track ADVICE_RULES above exactly — see the comment there.
         check_statuses = (
             checks.imessage_chat_db.status,
@@ -244,6 +251,8 @@ class CheckReadiness:
         ]
         if migration_required:
             advice.append("Legacy Deep Context artifacts need one SQLite import before processing.")
+        elif not database_exists:
+            advice.append("No Deep Context database yet: migrate-sqlite creates the empty store.")
 
         return ReadinessReport(
             source="check_readiness",
@@ -255,7 +264,7 @@ class CheckReadiness:
             checks=checks,
             advice=tuple(advice),
             updated_at=now_iso(),
-            next_command=("bin/deep-context migrate-sqlite" if migration_required else None),
+            next_command=MIGRATE_COMMAND if migrate else None,
         )
 
 

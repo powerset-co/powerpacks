@@ -1180,7 +1180,7 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
             )
         IdentityPolicy.settle_human_families(conn, g.parents)
         IdentityPolicy.clear_machine_winner_conflicts(conn, g.parents)
-        conn.execute("INSERT INTO meta (key, value) VALUES ('legacy_imported_at', ?)", (now_iso(),))
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('legacy_imported_at', ?)", (now_iso(),))
         violations = list(conn.execute("PRAGMA foreign_key_check"))
         if violations:
             raise LegacyImportError(f"legacy import left {len(violations)} orphan relations")
