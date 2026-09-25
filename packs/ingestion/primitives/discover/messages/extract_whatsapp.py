@@ -885,7 +885,7 @@ def main(argv: list[str] | None = None) -> int:
     output_csv = Path(args.output_csv)
     output_jsonl = Path(args.output_jsonl) if args.output_jsonl else None
     manifest = Path(args.manifest)
-    name_fallback_csv = Path(args.name_fallback_csv) if getattr(args, "name_fallback_csv", None) else None
+    name_fallback_csv = Path(args.name_fallback_csv) if args.name_fallback_csv else None
     try:
         contacts, diagnostics = export_contacts_from_store(
             store,

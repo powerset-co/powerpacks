@@ -206,7 +206,7 @@ class BuildParents(Node):
         plans, owner_excluded = _parent_plans(self.db)
         prior_artifacts: dict[str, list[ArtifactRow]] = defaultdict(list)
         for row in artifact_rows(self.db, kind=ArtifactKind.DOSSIER.value):
-            if row.kind == ArtifactKind.DOSSIER.value and row.person_id is None and row.candidate_key is None:
+            if row.person_id is None and row.candidate_key is None:
                 prior_artifacts[row.parent_id].append(row)
         owners_by_path: dict[str, set[str]] = defaultdict(set)
         for parent_id, rows in prior_artifacts.items():

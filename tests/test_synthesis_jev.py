@@ -1,11 +1,4 @@
-"""Worth tagging reuses paid synthesis and never sends worth back to GPT.
-
-Adapted from main's monolithic-module version after the SQLite rewrite split
-``deep_context.synthesize_person_context`` into
-``deep_context/synthesis/{prompting,selection,runner}`` over the canonical
-SQLite store: bundles now come from projected SOURCE_BUNDLE rows and worth is
-read back from ``facts.facts_json``, not a review.csv.
-"""
+"""Worth tagging reuses paid synthesis and never sends worth back to GPT."""
 from __future__ import annotations
 
 import json

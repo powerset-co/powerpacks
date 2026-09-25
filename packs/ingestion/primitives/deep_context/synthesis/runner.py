@@ -335,7 +335,7 @@ TAG_CHUNK_PEOPLE = 200
 def _load_facts_record(path: Path) -> dict[str, Any]:
     try:
         records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError:
         return {}
     return records[-1] if records else {}
 

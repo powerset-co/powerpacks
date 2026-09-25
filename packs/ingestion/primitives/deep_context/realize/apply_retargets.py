@@ -54,10 +54,9 @@ class RetargetCarry:
 def build_retarget_row(
     url: str,
     pub: str,
-    profile: ProfileResult | None,
+    raw: dict[str, Any],
     carry: RetargetCarry,
 ) -> dict[str, str]:
-    raw = _cached_retarget_profile(profile, pub)
     row = merge_provider_profile({}, normalize_rapidapi(raw, pub, url), raw)
     row.update({key: value for key, value in carry.to_payload().items() if value})
     output = {key: str(row.get(key) or "") for key in PEOPLE_SCHEMA_COLUMNS}
@@ -136,13 +135,14 @@ class ApplyRetargets:
                 details.append({"old": old, "status": "skipped", "reason": "no new_linkedin_url"})
                 continue
             profile: ProfileResult | None = profiles.get(marker.key.lower())
-            cache_hits += int(bool(_cached_retarget_profile(profile, pub)))
+            raw = _cached_retarget_profile(profile, pub)
+            cache_hits += int(bool(raw))
             parent_id = links[marker.key].parent_id
             rows.append(
                 build_retarget_row(
                     url,
                     pub,
-                    profile,
+                    raw,
                     _carry(self.db, parent_id),
                 )
             )
@@ -151,7 +151,7 @@ class ApplyRetargets:
                     "old": old,
                     "new": pub,
                     "status": "projected",
-                    "from_cache": bool(_cached_retarget_profile(profile, pub)),
+                    "from_cache": bool(raw),
                 }
             )
 

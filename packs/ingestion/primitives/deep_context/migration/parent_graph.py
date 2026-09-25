@@ -8,13 +8,25 @@ powerpacks v1.19.0.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.shared.common import slugify
-from packs.ingestion.primitives.deep_context.synthesis.facts import merge_facts
+from packs.ingestion.primitives.deep_context.synthesis.facts import merge_disjoint_fact_records
+from packs.ingestion.primitives.deep_context.synthesis.models import FactRecord
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import ParentAssignment
 from packs.ingestion.primitives.deep_context.merge_candidates.models import ChildEntry, ParentPlan
+
+
+def _merge_facts(chunks: Iterable[dict[str, object]]) -> dict[str, object]:
+    """Dict adapter over the disjoint merge for legacy per-person facts payloads."""
+    merged = merge_disjoint_fact_records(
+        record
+        for chunk in chunks
+        if (record := FactRecord.from_payload(chunk)) is not None
+    )
+    return merged.to_payload() if merged else {}
 
 
 def clusters_from_pairs(pairs: list[dict[str, Any]]) -> list[list[str]]:
@@ -74,7 +86,7 @@ def plan_parents(
             for item in confirmed
             if facts_by_person.get(item.person_id)
         ]
-        merged = merge_facts(records)
+        merged = _merge_facts(records)
         name = merged.get("canonical_name") or confirmed[0].name
         parent_id = assignment.resolve(
             [item.slug for item in confirmed], [item.person_id for item in confirmed],

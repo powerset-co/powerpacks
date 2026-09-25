@@ -341,8 +341,8 @@ class SqliteProducerTests(unittest.TestCase):
         )
         captured = {}
 
-        def build(url, pub, profile, carry):
-            del profile
+        def build(url, pub, raw, carry):
+            del raw
             captured.update(carry.to_payload())
             return {"public_identifier": pub, "linkedin_url": url}
 

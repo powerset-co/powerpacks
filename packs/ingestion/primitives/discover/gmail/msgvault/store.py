@@ -21,7 +21,6 @@ from packs.ingestion.primitives.discover.gmail.msgvault import (  # noqa: E402
     context_db,
     logbook_db,
 )
-from packs.ingestion.primitives.discover.gmail.msgvault.sync import sqlite_table_columns  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
     msgvault_db_uri,
@@ -87,10 +86,6 @@ class MsgvaultStore:
             )
         return self._con
 
-    def _table_columns(self, table: str) -> set[str]:
-        """Return a table's columns for schema-variant probes."""
-        return sqlite_table_columns(self.con, table)
-
     def require_schema(self) -> None:
         """Exit unless the required msgvault metadata tables exist."""
         required = {"sources", "participants", "messages", "message_recipients"}
@@ -103,9 +98,6 @@ class MsgvaultStore:
             raise SystemExit(
                 f"msgvault schema missing required tables: {', '.join(missing)}"
             )
-
-    def has_label_tables(self) -> bool:
-        return aggregation.has_label_tables(self.con)
 
     def iter_metadata(
         self,

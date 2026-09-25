@@ -23,9 +23,7 @@ def render_parent(plan: ParentPlan) -> str:
         confidence=round(merged.confidence, 2),
         summary=headline(merged) or "_Merged from the confirmed records below._",
         relationship=merged.relationship_to_owner,
-        fact_sections=render_fact_sections(
-            merged, field_of_study=False, empty_status_is_unknown=False,
-        ),
+        fact_sections=render_fact_sections(merged, field_of_study=False),
         identifiers=(*plan.emails, *plan.phones),
     )
 

@@ -55,18 +55,8 @@ def yaml_list(values: list[str]) -> str:
     return "[" + ", ".join(json.dumps(value, ensure_ascii=False) for value in values) + "]"
 
 
-def render_fact_sections(
-    merged: SynthesizedFacts, *, field_of_study: bool = True,
-    empty_status_is_unknown: bool = True,
-) -> str:
-    """Render fact sections shared by child and parent dossiers.
-
-    NOTE: ``empty_status_is_unknown=False`` (passed by
-    merge_candidates/rendering.py) currently has no observable effect —
-    EmployerFact.from_payload already defaults status to "unknown" before it
-    ever reaches the template, so both sides of the template's ternary
-    evaluate to the same non-empty value.
-    """
+def render_fact_sections(merged: SynthesizedFacts, *, field_of_study: bool = True) -> str:
+    """Render fact sections shared by child and parent dossiers."""
     has_identity = bool(
         merged.title or merged.employers or merged.school or merged.location
     )
@@ -74,7 +64,6 @@ def render_fact_sections(
         merged=merged,
         has_identity=has_identity,
         field_of_study=field_of_study,
-        empty_status_is_unknown=empty_status_is_unknown,
     ).strip()
 
 

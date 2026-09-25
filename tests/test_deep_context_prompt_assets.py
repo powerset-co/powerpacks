@@ -39,7 +39,6 @@ PROMPTS = {
 
 SYNTHESIS_POLICY_ASSETS = {
     "owner_identity_check": "72629fe1f2429acd338960415d076a3698f5a2ca3dfb35fb2b379effeb849806",
-    "worth_policy": "fce68ae6eb306e8cc9b0b3c1919bc36e1d37f01f2a8fe96a90fab57ccc4a3ab7",
 }
 
 

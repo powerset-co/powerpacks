@@ -77,7 +77,7 @@ class ShareEvidence:
         self.db = db
         self.people_csv = Path(people_csv)
 
-    def load(self, *, limit: int = 0) -> list[PersonEvidence]:
+    def load(self) -> list[PersonEvidence]:
         parent_of_person = {row.person_id: row.parent_id for row in queries.people(self.db)}
         parents = {row.parent_id: row for row in queries.parents(self.db)}
         parent_facts = {row.parent_id: row for row in queries.facts(self.db, parent_owned=True)}
@@ -111,8 +111,6 @@ class ShareEvidence:
                     messages=_messages(bundles.get(parent_id)),
                 )
             )
-            if limit and len(people) >= limit:
-                break
         return people
 
     def _artifacts(self, kind: str, extract: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:

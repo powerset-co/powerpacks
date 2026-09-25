@@ -66,13 +66,3 @@ def boolean(value: object) -> bool:
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
 
-
-def json_array(value: object) -> list[object]:
-    """A list, from a list or a JSON-encoded list; anything else is []."""
-    if isinstance(value, list):
-        return value
-    try:
-        parsed = json.loads(value or "[]")
-    except (json.JSONDecodeError, TypeError):
-        return []
-    return parsed if isinstance(parsed, list) else []

@@ -120,8 +120,6 @@ class Db:
                 self._validate_existing()
             else:
                 self._create()
-        except StoreError:
-            raise
         except sqlite3.Error as exc:
             raise StoreError(f"cannot open Deep Context database: {exc}") from exc
 

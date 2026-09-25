@@ -44,8 +44,6 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.result imp
 
 
 def _json(value: object, fallback: Any) -> Any:
-    if not value:
-        return fallback
     try:
         return json.loads(str(value))
     except (TypeError, ValueError):

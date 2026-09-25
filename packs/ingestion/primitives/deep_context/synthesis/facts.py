@@ -16,6 +16,8 @@ Calling the first one where the second belongs is the bug that produced an
 every multi-batch person in a 550-person paid run.
 
 Changelog:
+- 2026-09-25: the migration-only ``merge_facts`` adapter moved to its sole
+  caller, migration/parent_graph.py.
 - 2026-08-08: split into the two functions above and renamed. The batch call
   site (synthesis/runner.py) previously used the disjoint merge.
 """
@@ -103,7 +105,7 @@ def merge_disjoint_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFact
 
     Callers: parent construction (merge_candidates/build_parents.py), dossier
     evidence (shared/dossier_evidence.py), and two migration-only paths
-    (synthesis/normalization.py, ``merge_facts`` below). It is NOT the reducer
+    (synthesis/normalization.py, migration/parent_graph.py). It is NOT the reducer
     for one person's own batches — that is ``collapse_fact_records``.
     """
     records = list(chunks)
@@ -478,16 +480,6 @@ def collapse_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | No
         network_worth=worth,
         present=_COLLAPSED_FIELDS,
     )
-
-
-def merge_facts(chunks: Iterable[dict[str, object]]) -> dict[str, object]:
-    """Migration-only dict adapter; delete once no install predates v1.19.0."""
-    merged = merge_disjoint_fact_records(
-        record
-        for chunk in chunks
-        if (record := FactRecord.from_payload(chunk)) is not None
-    )
-    return merged.to_payload() if merged else {}
 
 
 def headline(merged: SynthesizedFacts | None) -> str:
