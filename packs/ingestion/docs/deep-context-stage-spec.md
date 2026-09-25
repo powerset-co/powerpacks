@@ -2,6 +2,9 @@
 
 Created: 2026-08-06
 Change log:
+- 2026-09-25: the standalone attached-link judge (`bin/deep-context reconcile`)
+  is cut for now; stage 6 attached-link judging runs only through the review
+  app's self-heal (no-profile links) and research judge.
 - 2026-08-06: stage 1 gains its own imported-people projection entry; stages
   project only the records they produce.
 - 2026-08-06: confident wrong-person verdicts detach individually in unresolved

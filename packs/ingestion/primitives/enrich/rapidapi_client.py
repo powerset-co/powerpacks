@@ -381,7 +381,7 @@ def hydrate_profiles(
     (public_identifier, linkedin_url) pair, fetching the misses.
 
     The ONE home for that policy — both judges that need a profile before
-    judging call this (the attached-link judge in reconcile_linkedin and the
+    judging call this (the attached-link heal in identity_reconcile and the
     retarget-proposal judge in reconcile_deep_research). Cache hits cost
     nothing; a miss is one RapidAPI credit and permanent failures are cached,
     so re-runs never re-bill a dead URL. A keyless install is not an error: it

@@ -119,8 +119,8 @@ class BuildOwner(Node):
     """Write owner.json and its complete SQLite projection.
 
     Downstream, the owner profile is required, not optional: selection.build_system_prompt
-    (synthesis) raises without one, and every enrich identity judge (reconcile_linkedin,
-    identity_reconcile, research_reconcile) anchors its overlap inference on it via
+    (synthesis) raises without one, and every enrich identity judge (identity_reconcile,
+    research_reconcile) anchors its overlap inference on it via
     dossier_evidence.owner_background. Consumers read the SQLite projection this class
     writes, not owner.json itself — see OWNER_JSON in shared/common.py.
     """

@@ -1,6 +1,6 @@
-"""Offline tests for reconcile's prefer-cache-always-retrieve profile fetch.
+"""Offline tests for the identity queue's prefer-cache-always-retrieve profile fetch.
 
-The RapidAPI client is mocked where reconcile_linkedin binds it; everything else
+The RapidAPI client is mocked where profiles.projection binds it; everything else
 (candidate selection, view rebuild from the cache, keyless skip, counts) runs
 for real against synthetic fixtures.
 """
@@ -11,7 +11,6 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest import mock
 
 from parallel.types import TaskGroupStatus, TaskRunJsonOutput
@@ -34,7 +33,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIUsage
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -51,19 +49,13 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
     ResearchQueueRow,
 )
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue as queue
-import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.runner as reconcile_runner
-import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.reconcile_linkedin as reconcile
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.reconcile_linkedin import ReconcileLinkedin
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidedResearch
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
-    IdentityEstimate,
     IdentityProfileSource,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
-    CONNECTION_RULE,
-    NO_PROFILE_RULE,
     IdentityJudgeResult,
     IdentityTask,
     IdentityUsage,
@@ -103,28 +95,6 @@ def task(
             }
         ),
     )
-
-
-def identity_estimate(**changes: object) -> IdentityEstimate:
-    values = {
-        "profile_fetch_misses": 0,
-        "parents": 0,
-        "tasks": 0,
-        "judgeable": 0,
-        "reused": 0,
-        "human_settled": 0,
-        "billed": 0,
-        "ground_truth_connections": 0,
-        "conflicts": 0,
-        "estimated_cost_usd_low": 0.0,
-        "estimated_cost_usd_high": 0.0,
-        "model": "gpt-5-mini",
-        "reasoning_effort": "high",
-        "elapsed_ms": 0,
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
-    values.update(changes)
-    return IdentityEstimate(**values)
 
 
 def profile_db(root: Path) -> Db:
@@ -210,26 +180,6 @@ JUDGE_ANSWER = {
     "recommend_deep_research": False,
     "reason": "same employer and role as the dossier",
 }
-
-
-def _stub_identity_judge(answer: dict[str, object]):
-    """Replace the OpenAI caller with one that returns `answer`, spending nothing.
-
-    Patched where `judge_batch` looks the class up, so the stage builds a caller
-    exactly as it does in production and only the network call is fake.
-    """
-
-    class _StubCaller:
-        def __init__(self, config) -> None:
-            self.usage = OpenAIUsage()
-
-        async def call(self, **_kwargs):
-            return SimpleNamespace(payload=dict(answer), usage=OpenAIUsage())
-
-        async def close(self) -> None:
-            """judge_batch closes the caller in a finally; nothing to release here."""
-
-    return mock.patch.object(judge, "OpenAIResponsesCaller", _StubCaller)
 
 
 class FetchCandidateTests(unittest.TestCase):
@@ -482,297 +432,6 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 fetched = queue.fetch_missing_profiles(profile_db(root), [t], root / "cache")
         self.assertEqual(fetched.fetch_failed, 1)
         self.assertFalse(fetched.tasks[0].linkedin.has_profile)
-
-
-class SqliteReconcileTests(unittest.TestCase):
-    def test_cli_dry_run_estimates_without_running_the_stage(self):
-        with TemporaryDirectory() as directory:
-            db_path = Path(directory) / "deep-context.sqlite"
-            Db(db_path)
-            with (
-                mock.patch.object(
-                    reconcile,
-                    "dry_run_estimate",
-                    return_value=identity_estimate(),
-                ) as estimate,
-                mock.patch.object(reconcile, "ReconcileLinkedin") as node,
-                mock.patch.object(reconcile, "emit") as emit,
-            ):
-                self.assertEqual(reconcile.main(["--db", str(db_path), "--dry-run"]), 0)
-            estimate.assert_called_once_with(
-                db=mock.ANY,
-                model=mock.ANY,
-                effort="high",
-                force=False,
-            )
-            node.assert_not_called()
-            emit.assert_called_once_with(identity_estimate().to_payload())
-
-    def test_paid_stage_requires_explicit_spend_approval(self):
-        with TemporaryDirectory() as directory:
-            db = Db(Path(directory) / "deep-context.sqlite")
-            estimate_payload = identity_estimate(
-                profile_fetch_misses=2,
-                billed=3,
-                parents=4,
-                tasks=5,
-                reused=1,
-                human_settled=1,
-            )
-            with (
-                mock.patch.object(
-                    reconcile,
-                    "dry_run_estimate",
-                    return_value=estimate_payload,
-                ),
-                mock.patch.object(reconcile, "run_stage") as run_stage,
-            ):
-                manifest = ReconcileLinkedin(db=db).execute()
-
-        self.assertEqual(manifest.status, "needs_approval")
-        self.assertEqual(
-            manifest.needs_approval,
-            {
-                "step": "reconcile_linkedin",
-                "provider": "RapidAPI and OpenAI",
-                "estimated_calls": 7,
-                "message": (
-                    "Approve up to 2 LinkedIn profile fetches and "
-                    "5 identity judgments."
-                ),
-            },
-        )
-        run_stage.assert_not_called()
-
-    def test_reapply_does_not_require_spend_approval(self):
-        with TemporaryDirectory() as directory:
-            db = Db(Path(directory) / "deep-context.sqlite")
-            completed = reconcile.ReconcileLinkedinManifest(status="completed")
-            with (
-                mock.patch.object(
-                    reconcile,
-                    "dry_run_estimate",
-                    side_effect=AssertionError("reapply must not enter the spend gate"),
-                ),
-                mock.patch.object(
-                    reconcile,
-                    "run_stage",
-                    return_value=completed,
-                ) as run_stage,
-            ):
-                manifest = ReconcileLinkedin(db=db, reapply=True).execute()
-
-        self.assertIs(manifest, completed)
-        self.assertTrue(run_stage.call_args.kwargs["reapply"])
-
-    def test_needs_approval_cli_uses_canonical_exit_code(self):
-        with TemporaryDirectory() as directory:
-            db_path = Path(directory) / "deep-context.sqlite"
-            Db(db_path)
-            gated = reconcile.ReconcileLinkedinManifest(
-                status="needs_approval",
-                needs_approval={"step": "reconcile_linkedin"},
-            )
-            with (
-                mock.patch.object(reconcile, "ReconcileLinkedin") as node,
-                mock.patch.object(reconcile, "emit") as emit,
-            ):
-                node.return_value.run.return_value = gated
-                code = reconcile.main(["--db", str(db_path)])
-
-        self.assertEqual(code, 20)
-        emit.assert_called_once_with(gated.to_payload())
-
-    def test_attached_link_judgment_is_file_first_and_sqlite_projected(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = Db(root / "deep-context.sqlite")
-            seed_identity(
-                db,
-                parent_id="parent-1",
-                person_id="person-1",
-                row_key="jordan-bravo",
-                name="Jordan Bravo",
-                machine_worth="maybe",
-                display_slug="jordan-bravo-p",
-                parent_public_identifier="jordan-bravo",
-                linkedin_url="https://www.linkedin.com/in/jordan-bravo",
-            )
-            facts, raw, cache, output = (root / "facts", root / "raw", root / "cache", root / "reconcile")
-            for path in (facts, raw, cache):
-                path.mkdir()
-            profile_path = profile_cache_path(cache, "jordan-bravo")
-            profile_payload = {
-                "raw_response": {},
-                "normalized_profile": {
-                    "success": True,
-                    "full_name": "Jordan Bravo",
-                    "headline": "Founder at Bravo Robotics",
-                    "experiences": [{
-                        "title": "Founder",
-                        "company_name": "Bravo Robotics",
-                    }],
-                    "education": [],
-                },
-            }
-            profile_path.write_text(json.dumps(profile_payload), encoding="utf-8")
-            profile_projection.project_profile_results(
-                db,
-                [
-                    (
-                        ProfileTarget(
-                            "jordan-bravo",
-                            "https://www.linkedin.com/in/jordan-bravo",
-                            "jordan-bravo",
-                            "parent-1",
-                        ),
-                        ProfileResult.from_payload(
-                            "jordan-bravo",
-                            "https://www.linkedin.com/in/jordan-bravo",
-                            profile_payload,
-                        ),
-                    )
-                ],
-                cache,
-            )
-            # Stub the PROVIDER, not the stage: this runs the same judging path
-            # production runs, with a fixed answer standing in for the model.
-            # (It used to pass no_llm=True, which ran a different code path
-            # entirely and asserted on the offline stub's own verdict.)
-            with _stub_identity_judge(JUDGE_ANSWER):
-                payload = ReconcileLinkedin(
-                    db=db,
-                    profile_cache_dir=cache,
-                    out_dir=output,
-                    approve_spend=True,
-                ).run()
-
-            link = db.query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0]
-            self.assertEqual((link["machine_action"], link["machine_approved"]), ("verify", "auto"))
-            self.assertIsNone(link["judgment_artifact_path"])
-            self.assertFalse((output / "verdicts.jsonl").exists())
-            self.assertEqual(payload.tasks, 1)
-            self.assertFalse((output / "verdicts.csv").exists())
-            self.assertFalse((output / "summary.md").exists())
-            self.assertFalse((root / "consolidate.csv").exists())
-
-    def test_llm_error_is_not_replaced_by_a_deterministic_verdict(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = profile_db(root)
-            failed = IdentityJudgeResult(
-                verdict=None,
-                usage=IdentityUsage(),
-                error="TimeoutError: exhausted retries",
-                fingerprint="failed-judge-fingerprint",
-            )
-            with (
-                mock.patch.object(
-                    reconcile_runner,
-                    "build_tasks",
-                    return_value=[task(has_profile=True)],
-                ),
-                mock.patch.object(
-                    judge,
-                    "judge_batch",
-                    return_value=[failed],
-                ) as judge_batch,
-            ):
-                manifest = ReconcileLinkedin(
-                    db=db,
-                    profile_cache_dir=root / "profiles",
-                    out_dir=root / "reconcile",
-                    approve_spend=True,
-                ).execute()
-
-            link = db.query(
-                "SELECT machine_action, machine_approved, judgment_fingerprint, "
-                "judgment_payload_json, machine_confidence, machine_judgment "
-                "FROM links WHERE row_key='jordan-bravo'"
-            )[0]
-
-        judge_batch.assert_called_once()
-        self.assertEqual((manifest.errors, manifest.needs_review), (1, 1))
-        self.assertFalse((root / "reconcile" / "verdicts.jsonl").exists())
-        self.assertEqual(
-            tuple(link),
-            ("review", None, "failed-judge-fingerprint", None, None, None),
-        )
-
-    def test_profileless_task_projects_an_explicit_rule_without_confidence(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = profile_db(root)
-            with (
-                mock.patch.object(reconcile_runner, "build_tasks", return_value=[task()]),
-                mock.patch.object(queue.projection, "provider_key_available", return_value=False),
-                mock.patch.object(judge, "judge_batch") as judge_batch,
-            ):
-                manifest = ReconcileLinkedin(
-                    db=db,
-                    profile_cache_dir=root / "profiles",
-                    out_dir=root / "reconcile",
-                    approve_spend=True,
-                ).execute()
-
-            link = db.query(
-                "SELECT machine_action, machine_approved, machine_confidence, "
-                "machine_judgment, machine_reason, judgment_fingerprint "
-                "FROM links WHERE row_key='jordan-bravo'"
-            )[0]
-
-        judge_batch.assert_not_called()
-        self.assertEqual((manifest.judged, manifest.needs_review), (0, 1))
-        self.assertEqual(
-            tuple(link),
-            (
-                "review",
-                None,
-                None,
-                None,
-                NO_PROFILE_RULE.reason,
-                NO_PROFILE_RULE.fingerprint,
-            ),
-        )
-        self.assertFalse((root / "reconcile" / "verdicts.jsonl").exists())
-
-    def test_linkedin_connection_projects_ground_truth_without_confidence(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = profile_db(root)
-            with (
-                mock.patch.object(
-                    reconcile_runner,
-                    "build_tasks",
-                    return_value=[task(from_connections=True)],
-                ),
-                mock.patch.object(judge, "judge_batch") as judge_batch,
-            ):
-                ReconcileLinkedin(
-                    db=db,
-                    profile_cache_dir=root / "profiles",
-                    out_dir=root / "reconcile",
-                    approve_spend=True,
-                ).execute()
-
-            link = db.query(
-                "SELECT machine_action, machine_approved, machine_confidence, "
-                "machine_judgment, machine_reason, judgment_fingerprint "
-                "FROM links WHERE row_key='jordan-bravo'"
-            )[0]
-
-        judge_batch.assert_not_called()
-        self.assertEqual(
-            tuple(link),
-            (
-                "verify",
-                "auto",
-                None,
-                None,
-                CONNECTION_RULE.reason,
-                CONNECTION_RULE.fingerprint,
-            ),
-        )
 
 
 if __name__ == "__main__":

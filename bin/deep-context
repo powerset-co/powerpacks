@@ -132,7 +132,6 @@ usage: bin/deep-context <command> [args]
                ambiguous remainder (spends OpenAI; run `cluster --dry-run` first)
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
-  reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
   migrate-sqlite  import existing Deep Context artifacts into canonical SQLite once
   refresh      complete dossiers and labels, rebuild parents, open the directory
                (free when facts are current; a contract bump re-runs everyone —
@@ -242,7 +241,7 @@ case "$cmd" in
       exit 0
     fi
     echo "bin/deep-context run is intentionally disabled: one chained command cannot" >&2
-    echo "pause for the required synthesis, cluster, and reconcile cost approvals." >&2
+    echo "pause for the required synthesis and cluster cost approvals." >&2
     echo "Follow packs/ingestion/skills/deep-context/SKILL.md and run each staged" >&2
     echo "preview/approval/execute command separately." >&2
     exit 2
@@ -258,11 +257,6 @@ case "$cmd" in
     ;;
   cluster)
     "${PY[@]}" "$PKG.merge_candidates.cluster_merge_candidates" "$@"
-    ;;
-  reconcile)
-    # Phase 3: verify each parent against its attached LinkedIn (self-heal).
-    # Use `reconcile --dry-run` for a free cost estimate first.
-    "${PY[@]}" "$PKG.enrich.identity_reconcile.reconcile_linkedin" "$@"
     ;;
   migrate-sqlite)
     # The sole cutover path from legacy artifacts to canonical runtime state.
@@ -347,15 +341,16 @@ case "$cmd" in
     review_stage=""
     prev_arg=""
     for arg in "$@"; do
-      case "$arg" in
-        worth|enrich|linkedin|directory) review_args+=(--stage "$arg"); review_stage="$arg" ;;
-        --force-restart) ;;  # compat no-op: restart is always unconditional
-        --stage=*) review_args+=("$arg"); review_stage="${arg#--stage=}" ;;
-        *)
-          review_args+=("$arg")
-          if [[ "$prev_arg" == "--stage" ]]; then review_stage="$arg"; fi
-          ;;
-      esac
+      if [[ "$prev_arg" == "--stage" ]]; then
+        review_args+=("$arg"); review_stage="$arg"
+      else
+        case "$arg" in
+          worth|enrich|linkedin|directory) review_args+=(--stage "$arg"); review_stage="$arg" ;;
+          --force-restart) ;;  # compat no-op: restart is always unconditional
+          --stage=*) review_args+=("$arg"); review_stage="${arg#--stage=}" ;;
+          *) review_args+=("$arg") ;;
+        esac
+      fi
       prev_arg="$arg"
     done
     if (( ! wants_help )); then

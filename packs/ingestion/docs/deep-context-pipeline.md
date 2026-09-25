@@ -53,9 +53,7 @@ flowchart TD
     D --> E{"Preview + approve OpenAI synthesis"}
     E --> F["Synthesize facts + worth from messages, compose dossiers, validate"]
     F --> G["Judge duplicate pairs and build canonical parents"]
-    G --> H{"Preview + approve reconcile"}
-    H --> I["Judge attached LinkedIn identity only"]
-    I --> J["People UI: review only Maybe; edit Yes / No"]
+    G --> J["People UI: review only Maybe; edit Yes / No"]
     J --> K{"People review complete"}
     K --> K1["App builds the preview in-process"]
     K1 --> L["Enrich page shows the exact estimate"]
@@ -75,8 +73,8 @@ flowchart TD
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
-    class C,E,H,K,M,P,R,U gate;
-    class A,B,D,F,G,I,J,K1,L,M1,O,Q,R1,T local;
+    class C,E,K,M,P,R,U gate;
+    class A,B,D,F,G,J,K1,L,M1,O,Q,R1,T local;
     class N cloud;
     class V output;
 ```
@@ -155,7 +153,7 @@ browser button and cannot be blocked by the Done page.
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
-| Reconcile | Before the browser opens, compares the one `DossierEvidence` packet with attached LinkedIn profiles. Its SQL queue admits effective-Yes/Maybe and excludes effective-No before hydration or judging. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts and fixed reconcile manifest |
+| Attached-LinkedIn judging | There is no standalone step. The review app judges attached LinkedIns itself: every `review` boot's self-heal re-judges links skipped for having no usable profile, and research results are judged when enrichment completes. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts |
 | People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
 | Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
 | Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |
@@ -179,9 +177,7 @@ bin/deep-context validate
 bin/deep-context cluster --dry-run # free slam-dunk count + ambiguous-pair estimate
 bin/deep-context cluster           # settle slam dunks, then judge the remainder
 bin/deep-context parents
-bin/deep-context reconcile --dry-run
-bin/deep-context reconcile
-bin/deep-context review --stage worth --fresh
+bin/deep-context review worth
 ```
 
 After the browser opens, the agent blocks on
@@ -221,7 +217,6 @@ Approval rules:
 | Owner profile cache miss | Disclose the RapidAPI call and get approval. |
 | OpenAI synthesis | Show `bin/deep-context dry` estimate and get approval. |
 | Duplicate judging | Always preview. Run automatically when the estimate is at most $100; ask if it exceeds $100. |
-| Reconcile | Show `reconcile --dry-run` estimate and get fresh approval. |
 | Parallel enrichment | The Enrich Contacts page approves the exact current positive net-new estimate. The agent must use the approved `--budget`. Zero net-new work needs no spend approval and advances from cache. |
 | Modal indexing | Disclose the merged-CSV upload and expected quiet runtime, then get approval. |
 
@@ -333,8 +328,8 @@ This gives repeatability without a ledger:
   and current with file changes, while file state still determines the actual
   workflow stage.
 - `$deep-context review` always opens the read-only `/directory` browser. The
-  full workflow uses `review --stage worth --fresh` to begin a new review
-  revision without erasing sticky human decisions.
+  full workflow uses `review worth` to open the People stage without erasing
+  sticky human decisions.
 
 ## What leaves the machine
 
@@ -342,7 +337,7 @@ This gives repeatability without a ledger:
 | --- | --- | --- |
 | OpenAI synthesis | Sampled message text, necessary message metadata, owner context, and small iMessage group bodies under standing owner authorization. | Unselected messages and raw source databases. |
 | OpenAI duplicate judge | Structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
-| OpenAI reconcile | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
+| OpenAI identity judge (self-heal and research) | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
 | Parallel.ai | Display name, email, phone, source channel, dossier-derived relationship/work/school/location/topics, and rejected LinkedIn evidence for the approved lookup scope. | Raw message bodies. |
 | RapidAPI | A LinkedIn URL requiring profile hydration. | Gmail or chat content. |
 | Modal | The canonical merged people CSV, including contact and interaction fields. | Raw msgvault, Messages, wacli, and Deep Context raw bundles. |
@@ -374,7 +369,6 @@ facts, not verbatim messages.
 |   |-- manifest.json
 |   `-- avatars/
 `-- reconcile/
-    |-- manifest.json
     `-- deep-research/
         |-- manifest.json
         `-- <handle>/
@@ -417,7 +411,7 @@ Not every request needs the full workflow:
 | Dossier composition | [`synthesis/compose_dossier.py`](../primitives/deep_context/synthesis/compose_dossier.py) |
 | Duplicate judge | [`merge_candidates/cluster_merge_candidates.py`](../primitives/deep_context/merge_candidates/cluster_merge_candidates.py) |
 | Canonical parents | [`merge_candidates/build_parents.py`](../primitives/deep_context/merge_candidates/build_parents.py) |
-| Attached-LinkedIn identity judge | [`enrich/identity_reconcile/reconcile_linkedin.py`](../primitives/deep_context/enrich/identity_reconcile/reconcile_linkedin.py) |
+| Attached-LinkedIn identity judge (self-heal and research) | [`enrich/identity_reconcile/judge.py`](../primitives/deep_context/enrich/identity_reconcile/judge.py) |
 | Review UI and deterministic status | [`review/reconcile_review_web.py`](../primitives/deep_context/review/reconcile_review_web.py) |
 | Parallel enrichment | [`enrich/research_reconcile/reconcile_deep_research.py`](../primitives/deep_context/enrich/research_reconcile/reconcile_deep_research.py) |
 | No-LinkedIn research cards | [`enrich/synthetic/assemble.py`](../primitives/deep_context/enrich/synthetic/assemble.py) |

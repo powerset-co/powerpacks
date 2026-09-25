@@ -23,11 +23,10 @@ class ComposeDossierManifest(StageManifest):
     dossiers_written: int = 0
     orphans_removed: int = 0
     # status stays "completed" even when parents were skipped — the repo
-    # convention (reconcile_linkedin's `errors`, synthesize's `errors` +
-    # `stop_reasons`) is a visible count/detail field, not a distinct status
-    # value; `skipped`/`skip_reasons` are that field for this stage. A
-    # reader checks `skipped` the same way it already checks `errors`
-    # elsewhere.
+    # convention (synthesize's `errors` + `stop_reasons`) is a visible
+    # count/detail field, not a distinct status value; `skipped`/`skip_reasons`
+    # are that field for this stage. A reader checks `skipped` the same way it
+    # already checks `errors` elsewhere.
     skipped: int = 0
     skip_reasons: tuple[DossierSkip, ...] = ()
     dossier_dir: str = ""

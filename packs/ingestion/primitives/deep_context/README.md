@@ -12,6 +12,9 @@ Change log:
   one `Db.merge_parents` transaction and only changed dossiers are rendered.
 - 2026-08-07: every stage moved under its owning package; public stage receipts
   moved to `manifests/`, and the dated pre-SQLite path moved to `migration/`.
+- 2026-09-25: the standalone attached-link judge (`bin/deep-context reconcile`)
+  is cut for now; attached links are judged by the review app's heal pass and
+  research judge.
 
 This is the engineering spec for the `deep_context` package: the data flow, the
 contracts every stage obeys, and a per-file map. The product/UX guide is
@@ -186,8 +189,10 @@ flowchart TD
 ```
 
 Attached and heal queues exclude effective-No parents in SQL before paid work;
-research keeps its stricter effective-Yes gate. Attached, batch-research, heal,
-and guided entry points share the same evidence packet, prompt, thresholds,
+research keeps its stricter effective-Yes gate. There is no standalone
+attached-link pass: the review app judges attached links through the heal pass
+at every `review` boot and through research. Batch-research, heal, and guided
+entry points share the same evidence packet, prompt, thresholds,
 async judge pool, and strict SQLite settlement. Cleared machine decisions are
 recorded and hydrated at judge time; a settlement without the exact judge-input
 fingerprint is rejected.

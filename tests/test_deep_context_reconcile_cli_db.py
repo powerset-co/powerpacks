@@ -16,7 +16,6 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import ResearchOutcome
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import reconcile_linkedin
 from packs.ingestion.primitives.deep_context.merge_candidates import (
     build_parents,
     cluster_merge_candidates,
@@ -61,7 +60,6 @@ class ReconcileCliDbTest(unittest.TestCase):
             persist_review_identities,
             prefetch,
             reconcile,
-            reconcile_linkedin,
             restart_review,
             synthesize_person_context,
             validate_dossiers,

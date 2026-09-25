@@ -48,7 +48,7 @@ def _payload(
         },
         "status": status,
         "next": (
-            "rerun `bin/deep-context review --stage worth --fresh` — the queue "
+            "rerun `bin/deep-context review worth` — the queue "
             "re-opens with the machine verdicts intact"
             if applied
             else "pass --apply to clear the human review state atomically"

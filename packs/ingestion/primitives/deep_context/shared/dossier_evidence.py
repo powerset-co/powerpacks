@@ -251,7 +251,7 @@ def owner_background(db: Db) -> str:
     """Render the canonical owner payload with the existing prompt policy.
 
     The identity-judge anchor: every enrich reconciliation/healing prompt
-    (reconcile_linkedin, identity_reconcile, research_reconcile) calls this,
+    (identity_reconcile, research_reconcile) calls this,
     not owner_background_block directly, so a missing owner silently renders "".
     """
     owner = queries.owner_profile(db)
