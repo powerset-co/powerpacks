@@ -49,7 +49,10 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import (
+    ACTIVE_GUIDANCE_STATES,
+    GuidanceRequest,
+)
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import (
     GuidanceOutcome,
 )
@@ -69,6 +72,10 @@ from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection
+from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    OpenAIResponsesCaller,
+)
+from packs.ingestion.primitives.enrich.rapidapi_client import RapidApiClient
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
 )
@@ -131,7 +138,23 @@ def judge_result(verdict: str, confidence: float, reason: str) -> IdentityJudgeR
     )
 
 
+def refuse_paid_call(*_args, **_kwargs):
+    raise AssertionError("paid call in unit test")
+
+
 class DeepContextSqliteWebTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # Every test here runs with the RapidAPI profile fetch and the OpenAI
+        # caller refused at their definitions, so a missing stub fails loudly
+        # instead of billing the repo-root .env.
+        for patcher in (
+            mock.patch.object(RapidApiClient, "get_profile", refuse_paid_call),
+            mock.patch.object(OpenAIResponsesCaller, "__init__", refuse_paid_call),
+        ):
+            patcher.start()
+            cls.addClassCleanup(patcher.stop)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -172,9 +195,19 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             RowKind.PUB.value,
             paid_profile=1,
         )
+        # Cleanups run after tearDown joins the worker thread, so these stubs
+        # cover the whole guided run.
+        for patcher in (
+            mock.patch.object(projection, "hydrate_profiles", return_value={"ok": 0, "failed": 0}),
+            stub_identity_judge(JUDGE_REJECTS),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.queue = GuidedRetargetWorker(
             self.db,
             runner=lambda _: guided_result("https://www.linkedin.com/in/jordan-bravo-correct"),
+            research_dir=self.root / "deep-research",
+            profile_cache_dir=self.root / "profile-cache",
         )
         handler = review_server.make_handler(
             confirm_threshold=0.7,
@@ -247,6 +280,15 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                     return payload
             time.sleep(0.01)
         self.fail(f"enrichment job did not reach {status}")
+
+    def wait_for_guidance_done(self) -> list[dict]:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            rows = query(self.db, "SELECT guidance, state, detail_json FROM guidance")
+            if rows[0]["state"] not in ACTIVE_GUIDANCE_STATES:
+                return rows
+            time.sleep(0.01)
+        self.fail("guided retarget worker did not finish")
 
     def cache_enrichment_result(self, adapter: SqliteReviewAdapter) -> None:
         state = adapter.snapshot()
@@ -724,9 +766,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
         self.assertEqual(status, 200)
         self.assertEqual(payload["item"]["state"], "queued")
-        guidance = query(self.db, "SELECT guidance, state FROM guidance")
+        guidance = self.wait_for_guidance_done()
         self.assertEqual(guidance[0]["guidance"], "Find the synthetic operator I met through Casey.")
-        self.assertIn(guidance[0]["state"], {"pending", "running", "applied"})
+        self.assertEqual(guidance[0]["state"], "failed")
+        self.assertEqual(json.loads(guidance[0]["detail_json"])["detail"], JUDGE_REJECTS["reason"])
 
     def test_urlless_guidance_without_contact_identifier_is_rejected_at_intake(self) -> None:
         """A research subject exists because a message channel discovered it, so
