@@ -1,5 +1,37 @@
 # Changelog
 
+## [3.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.14.0...powerpacks-v3.0.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deep-context:** Deep Context state lives in .powerpacks/deep-context/deep-context.sqlite; the share stage's CSV outputs are tables; `cluster` drops the OpenAI model, effort, timeout, retry and confidence flags; the Messages import contract is v8 and re-imports.
+
+### Features
+
+* **search:** profile-only Jev capability judge, default for JD runs ([8c34766](https://github.com/powerset-co/powerpacks/commit/8c347665400f6f0434cbaecb164cf3174eb2c99e))
+* **search:** profile-only Jev capability judge, default for JD runs ([f2a7c9a](https://github.com/powerset-co/powerpacks/commit/f2a7c9ad447fd3a186bf1ae4ca66a897c0235d33))
+* **search:** skip the Luna filter on Jev JD runs ([78e5a63](https://github.com/powerset-co/powerpacks/commit/78e5a63e6acfdc31f0ec7425ce2b2395fa7dd998))
+
+
+### Bug Fixes
+
+* **ingestion:** keep the group-only rule in the import floor ([#562](https://github.com/powerset-co/powerpacks/issues/562)) ([badce40](https://github.com/powerset-co/powerpacks/commit/badce40baaf1966787a2fbf353cb28010b7e76ef))
+* **search:** keep the 40 most recent positions in Jev requests ([e0ecbc3](https://github.com/powerset-co/powerpacks/commit/e0ecbc343ee9a7df604b96da0b2cc6fefae94c49))
+* **search:** let a fresh hydrate win the rerank frontier ([8e18458](https://github.com/powerset-co/powerpacks/commit/8e18458cd32b3857bb22e67309814099027a50e7))
+* **search:** never show the screen's own score in the viewer ([19cc697](https://github.com/powerset-co/powerpacks/commit/19cc697232fce38601d845d6cd7c01ca7c7b4114))
+* **search:** trim Jev positions after normalization ([67f87ec](https://github.com/powerset-co/powerpacks/commit/67f87ec77f96fc28fd262fd4b3ff261317bdca8d))
+
+
+### Documentation
+
+* **search:** say the pin-stage Jev signals are kept as training data ([3404d17](https://github.com/powerset-co/powerpacks/commit/3404d17930b3346f6674f9f0d67b4cb85ff6dbf5))
+
+
+### Code Refactoring
+
+* **deep-context:** SQLite-backed pipeline and review UI ([#453](https://github.com/powerset-co/powerpacks/issues/453)) ([1dbae39](https://github.com/powerset-co/powerpacks/commit/1dbae39093e580626ee5434d105fd3dc7caf7b4d))
+
 ## [2.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.13.0...powerpacks-v2.14.0) (2026-09-25)
 
 
