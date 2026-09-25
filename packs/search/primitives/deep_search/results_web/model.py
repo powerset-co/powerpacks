@@ -253,7 +253,7 @@ class Candidate:
 
     @property
     def suggested_pin(self) -> bool:
-        """The pin judge recommended an introduction; shown as a Suggested chip beside the pin control."""
+        """The pin judge recommended an introduction; shown as a Suggested Pin badge under the overall score."""
         return self.pin_judgment is not None and self.pin_judgment.decision == "introduce"
 
     def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
