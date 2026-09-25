@@ -311,6 +311,28 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(api.calls), 2)
         self.assertEqual(list((self.output / "jev").glob("*.json")) if (self.output / "jev").exists() else [], [])
 
+    def test_long_careers_keep_the_forty_most_recent_positions_and_their_companies(self) -> None:
+        positions = [{"title": "Advisor", "company": f"Board {index}", "start": {"year": 2000 + index // 2},
+                      "end": {"year": 2001 + index // 2}, "description": "Advised."} for index in range(45)]
+        positions.insert(20, {"title": "Engineer", "company": "Current Systems", "start": "2024-01",
+                              "is_current": True, "description": "Builds things."})
+        positions.append({"title": "Founder", "company": "Undated Co", "description": "No dates."})
+        companies = [{"company": f"Board {index}", "stage": "seed"} for index in range(45)]
+        companies += [{"company": "Current Systems", "stage": "series_a"}, {"company": "Undated Co", "stage": "seed"}]
+        request = self._request(profile={"positions": positions, "companies": companies})
+        kept = request["state"]["profile"]["positions"]
+        self.assertEqual(len(kept), 40)
+        self.assertEqual([role["company"] for role in kept][:2], ["Board 6", "Board 7"])
+        self.assertIn("Current Systems", [role["company"] for role in kept])
+        self.assertNotIn("Undated Co", [role["company"] for role in kept])
+        self.assertEqual({role["company"] for role in kept} - {"Current Systems"},
+                         {f"Board {index}" for index in range(6, 45)})
+        self.assertEqual({company["company"] for company in request["state"]["profile"]["companies"]},
+                         {role["company"] for role in kept})
+        self.assertEqual(len(request["state"]["roles"]), 40)
+        short = self._request()
+        self.assertEqual(len(short["state"]["profile"]["positions"]), 2)
+
     def test_invalid_company_blocks_fail_before_any_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "companies must contain objects"):
             self._request(profile={**self.profile, "companies": ["not-an-object"]})
