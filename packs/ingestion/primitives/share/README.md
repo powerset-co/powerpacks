@@ -26,6 +26,14 @@ person, so the list can never be partial. A context-bearing person without saved
 JEV labels must complete deep-context synthesis first. LinkedIn-only people get
 deterministic labels. Human tags are never changed by machine labeling.
 
+Its `manifest.json` (`ShareManifest`) is `completed` when both tables are
+rewritten, or `failed` when a context-bearing person has no saved labels (the
+write is skipped).
+
+| declared reads | declared writes | manifest |
+|---|---|---|
+| `merged/people.csv` (external), `deep-context/deep-context.sqlite` (external) | — (tables `person_labels` + `share`; no file outputs) | `share/manifest.json` (`ShareManifest`) |
+
 | File | Role | Reads | Writes |
 |---|---|---|---|
 | `questions.py` | 34 label questions JEV answers during synthesis | — | — |
