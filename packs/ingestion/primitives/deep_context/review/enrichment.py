@@ -199,10 +199,7 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
         confirm_threshold,
         state,
     )
-    if enrichment.status in {
-        ReceiptStatus.RUNNING,
-        "submitted",
-    }:
+    if enrichment.status == ReceiptStatus.RUNNING:
         return enrichment
     # A completed plan is done unless its cached research still needs the free
     # local chain, which the $0 continue launches.
@@ -227,7 +224,5 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
             approved_budget_usd=estimate,
             estimated_usd=estimate,
             would_submit=expected_count,
-            selection_fingerprint=state.selection.fingerprint,
-            review_revision=state.selection.review_revision,
         ),
     )

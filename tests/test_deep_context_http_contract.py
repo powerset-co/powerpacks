@@ -636,8 +636,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 approved_budget_usd=0.05,
                 estimated_usd=0.05,
                 would_submit=1,
-                selection_fingerprint="selection-one",
-                review_revision="",
             ),
         )
         with mock.patch.object(

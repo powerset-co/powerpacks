@@ -25,11 +25,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
     EnrichmentQueueRow,
-)
-from packs.ingestion.primitives.deep_context.db.people_views import (
     ParentViewRow,
-    person_detail,
 )
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
 from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db import queries as db_queries

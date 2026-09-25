@@ -24,8 +24,6 @@ class EnrichmentApproval:
     approved_budget_usd: float
     estimated_usd: float
     would_submit: int
-    selection_fingerprint: str
-    review_revision: IsoTimestamp
 
 
 @dataclass(frozen=True)
@@ -48,7 +46,6 @@ class EnrichmentView:
     approvable: bool
     approval: EnrichmentApproval | None = None
     approved_budget_usd: float | None = None
-    progress_json: str | None = None
     error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -73,20 +70,9 @@ class EnrichmentView:
             payload["approval"] = asdict(self.approval)
         if self.approved_budget_usd is not None:
             payload["approved_budget_usd"] = self.approved_budget_usd
-        if self.progress_json is not None:
-            payload["progress"] = json.loads(self.progress_json)
         if self.error is not None:
             payload["error"] = self.error
         return payload
-
-
-@dataclass(frozen=True)
-class ReviewCounts:
-    parents: int
-    candidates: int
-    pending: int
-    approved: int
-    rejected: int
 
 
 @dataclass(frozen=True)

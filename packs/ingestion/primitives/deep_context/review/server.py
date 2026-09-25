@@ -24,13 +24,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.people_views import (
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue, worth_rows
+from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
     ParentViewRow,
-    person_detail,
+    WorthRow,
 )
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue, worth_rows
-from packs.ingestion.primitives.deep_context.db.view_models import WorthRow
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import (
     EnrichmentPipeline,
 )
@@ -53,13 +53,13 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     _phase_view,
     _primary_candidate,
     _step,
+    _value,
     directory_page_html,
     decision_rows_html,
     linkedin_finished_body,
     markdown_to_html,
     page_html,
     render_decision_table,
-    render_enrichment,
     render_decision_tabs,
     render_enrichment,
     render_linkedin_card,
@@ -97,10 +97,6 @@ def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:
         if slug and slug not in latest:
             latest[slug] = item
     return {slug: item.detail or "the job did not finish" for slug, item in latest.items() if item.state == "failed"}
-
-
-def _value(params: dict[str, list[str]], key: str, default: str = "") -> str:
-    return str((params.get(key) or [default])[0])
 
 
 def _index(params: dict[str, list[str]], size: int) -> int:
@@ -174,7 +170,7 @@ def make_handler(
             return None
         row_key, parent = resolved
         candidate = api.candidate(parent, row_key)
-        if not parent or not candidate:
+        if not candidate:
             return None
         if slug and parent.slug != slug:
             raise StoreError("stale or mismatched person card")
@@ -477,7 +473,7 @@ def make_handler(
                 return self.send_bytes(b"cross-origin request rejected", "text/plain", 403)
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)
             form = urllib.parse.parse_qs(self.rfile.read(length).decode())
-            pub = (form.get("pub") or [""])[0]
+            pub = _value(form, "pub")
             if parsed.path == "/auth/login":
                 return self.send_json({"ok": True, "status": start_auth_login()})
             if parsed.path == "/approve-enrichment":
@@ -519,7 +515,7 @@ def make_handler(
                     {"ok": True, "enrichment": api.enrichment().as_dict(), "panel": running}
                 )
             if parsed.path == "/complete":
-                stage = (form.get("stage") or [""])[0].strip().lower()
+                stage = _value(form, "stage").strip().lower()
                 if stage not in STAGES:
                     error = StoreError(f"unknown review stage: {stage}")
                     return self.send_bytes(str(error).encode(), "text/plain; charset=utf-8", 409)
@@ -535,13 +531,13 @@ def make_handler(
                     }
                 )
             if parsed.path == "/feedback":
-                comment = (form.get("comment") or [""])[0].strip()
-                action = (form.get("action") or [""])[0].strip()
+                comment = _value(form, "comment").strip()
+                action = _value(form, "action").strip()
                 if not comment or len(comment) > 4000:
                     return self.send_bytes(b"comment must be 1-4000 characters", "text/plain", 400)
                 if action not in FEEDBACK_ACTIONS:
                     return self.send_bytes(b"unknown feedback action", "text/plain", 400)
-                slug = (form.get("parent_slug") or [""])[0].strip()
+                slug = _value(form, "parent_slug").strip()
                 if pub.startswith(PARENT_WORTH_PREFIX):
                     parent = person_detail(db, pub.removeprefix(PARENT_WORTH_PREFIX))
                     worth_key = parent.worth_row.key if parent else ""
@@ -572,8 +568,8 @@ def make_handler(
                     status,
                 )
             if parsed.path == "/retarget":
-                guidance = (form.get("guidance") or [""])[0].strip()
-                slug = (form.get("parent_slug") or [""])[0].strip()
+                guidance = _value(form, "guidance").strip()
+                slug = _value(form, "parent_slug").strip()
                 if not guidance or len(guidance) > 2000:
                     return self.send_bytes(b"guidance must be 1-2000 characters", "text/plain", 400)
                 if not retargets_enabled:
@@ -626,10 +622,10 @@ def make_handler(
                     }
                 )
             if parsed.path == "/worth":
-                value = (form.get("worth") or [""])[0].strip().lower()
+                value = _value(form, "worth").strip().lower()
                 if value not in {"yes", "no", "restore"}:
                     return self.send_bytes(b"worth must be yes, no, or restore", "text/plain", 400)
-                slug = (form.get("parent_slug") or [""])[0].strip()
+                slug = _value(form, "parent_slug").strip()
                 parent: ParentViewRow | None = person_detail(db, slug) if slug else None
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
@@ -637,7 +633,7 @@ def make_handler(
                 if not key or (pub and pub != key):
                     return self.send_bytes(b"worth row not found", "text/plain", 404)
                 try:
-                    api.set_worth(key, value, (form.get("note") or [""])[0].strip()[:2000])
+                    api.set_worth(key, value, _value(form, "note").strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
                 row: WorthRow | None = next((item for item in worth_rows(db) if item.key == key), None)
@@ -665,10 +661,10 @@ def make_handler(
                         "state_token": state.state_token,
                     }
                 )
-            decision = (form.get("decision") or [""])[0]
-            new_url = (form.get("new_url") or [""])[0]
-            slug = (form.get("parent_slug") or [""])[0]
-            note = (form.get("note") or [""])[0].strip()[:2000]
+            decision = _value(form, "decision")
+            new_url = _value(form, "new_url")
+            slug = _value(form, "parent_slug")
+            note = _value(form, "note").strip()[:2000]
             if not pub or decision not in {"keep", "detach", "fix", "reset", "exclude"}:
                 return self.send_bytes(b"bad request", "text/plain", 400)
             try:

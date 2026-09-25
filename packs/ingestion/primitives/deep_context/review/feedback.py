@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
-from packs.ingestion.primitives.deep_context.db.people_views import (
+from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
     ParentViewRow,
 )

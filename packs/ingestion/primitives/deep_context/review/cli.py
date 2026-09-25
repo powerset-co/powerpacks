@@ -94,7 +94,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 def cmd_status(args: argparse.Namespace) -> None:
     status = workflow_status()
-    if getattr(args, "wait", False):
+    if args.wait:
         started = time.monotonic()
         deadline = started + max(1, int(args.timeout))
         while status["next_action"] not in _AGENT_ACTIONS and time.monotonic() < deadline:

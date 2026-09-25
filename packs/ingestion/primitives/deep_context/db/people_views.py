@@ -13,19 +13,12 @@ from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_SELECT, 
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     AvatarPayload,
-    CandidateViewRow,
     ParentLookupRow,
     ParentViewRow,
     PersonLookupRow,
 )
 
-__all__ = [
-    "CandidateViewRow",
-    "ParentViewRow",
-    "avatar_payload",
-    "person_detail",
-    "person_lookup",
-]
+
 def person_lookup(
     db: Db,
     *,

@@ -11,11 +11,11 @@ from pathlib import Path
 from markupsafe import Markup, escape
 from markdown_it import MarkdownIt
 
-from packs.ingestion.primitives.deep_context.db.people_views import (
+from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
     ParentViewRow,
+    WorthRow,
 )
-from packs.ingestion.primitives.deep_context.db.view_models import WorthRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.review.models import EnrichmentView
@@ -46,7 +46,7 @@ def _nonempty(items: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(item for item in items if item.strip())
 
 
-# The 34 share-label questions carry a short display title each; the badges show
+# 33 badge titles: the 27 share labels plus the 6 worth signals. The badges show
 # every label whose probability clears the threshold, highest first.
 _LABEL_TITLES = (
     ("is_family", "Family"), ("is_close_friend", "Close friend"),
@@ -261,29 +261,22 @@ def render_decision_tabs(progress: StageProgress, active: str, *, preview: bool 
     )
 
 
+def _value(params: dict[str, list[str]], key: str, default: str = "") -> str:
+    return str((params.get(key) or [default])[0])
+
+
 def _phase_view(params: dict[str, list[str]]) -> str:
-    requested = str((params.get("stage") or [""])[0]).lower()
+    requested = _value(params, "stage").lower()
     return requested if requested in {"worth", "enrich", "linkedin", "done"} else "worth"
 
 
 def render_enrichment(enrichment: EnrichmentView) -> str:
-    status = enrichment.status or enrichment.state or "not_started"
-    if status in {ReceiptStatus.RUNNING, "submitted"}:
+    status = enrichment.status
+    if status == ReceiptStatus.RUNNING:
         total = max(0, enrichment.counts.total)
         completed = min(total, max(0, enrichment.counts.completed))
         percent = round((completed / total) * 100) if total else 0
-        # phase_done/phase_total describe the ACTIVE phase; fall back to
-        # whole-run research counts when the payload is absent.
-        progress = {}
-        try:
-            progress = json.loads(enrichment.progress_json or "{}")
-        except (TypeError, ValueError):
-            progress = {}
-        label = (
-            f"{progress.get('phase_done') or 0} of {progress.get('phase_total') or 0} checked"
-            if progress.get("phase") == "judging_retargets"
-            else f"{completed} of {total} complete"
-        )
+        label = f"{completed} of {total} complete"
         return _render(
             "enrichment.html.j2", mode="running", completed=completed,
             total=total, percent=percent, label=label,
@@ -301,11 +294,10 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
             "enrichment.html.j2",
             mode="approval",
             approval_label=label,
-            approval_detail="",
         )
     if status == "completed":
         return _render("enrichment.html.j2", mode="completed")
-    if status in {ReceiptStatus.FAILED, "completed_with_errors"}:
+    if status == ReceiptStatus.FAILED:
         return _render("enrichment.html.j2", mode="failed", error=enrichment.error)
     return _render("enrichment.html.j2", mode="preparing")
 
@@ -347,7 +339,7 @@ def linkedin_finished_body(progress: StageProgress, *, linkedin_complete: bool,
         progress=progress,
         linkedin_complete=linkedin_complete,
         retargets_in_flight=retargets_in_flight,
-        auto_continue=auto_continue and not linkedin_complete,
+        auto_continue=auto_continue,
         go_back=Markup(GO_BACK_HTML),
     )
 
@@ -377,7 +369,7 @@ def directory_page_html(parents: list[ParentViewRow], params: dict[str, list[str
         for parent in sorted(parents, key=lambda parent: parent.name.lower())
         if parent.slug
     ]
-    selected = str((params.get("person") or [""])[0]).lower()
+    selected = _value(params, "person").lower()
     parent: ParentViewRow | None = next(
         (item for item in parents if item.slug.lower() == selected), None
     )

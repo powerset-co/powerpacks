@@ -7,10 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.shared.common import REVIEW_MANIFEST
-from packs.ingestion.primitives.deep_context.db.identity_views import (
-    linkedin_parents,
-    resolve_identity_key,
-)
+from packs.ingestion.primitives.deep_context.db.identity_views import resolve_identity_key
 from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceSnapshotRow,
     PARENT_WORTH_PREFIX,
@@ -18,10 +15,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewExportRow,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import (
-    CandidateViewRow,
-    ParentViewRow,
     avatar_payload,
     person_detail,
+)
+from packs.ingestion.primitives.deep_context.db.view_models import (
+    CandidateViewRow,
+    ParentViewRow,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import (
     guidance_rows,
@@ -46,7 +45,6 @@ from packs.ingestion.primitives.deep_context.review.models import (
     DecisionResult,
     EnrichmentView,
     GuidanceViewRow,
-    ReviewCounts,
 )
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
@@ -285,14 +283,3 @@ class SqliteReviewAdapter:
             "next_action": workflow.next_action,
             "state_token": workflow.state_token,
         }
-
-    def counts(self) -> ReviewCounts:
-        parents = linkedin_parents(self.db)
-        candidates = [row for parent in parents for row in parent.candidates]
-        return ReviewCounts(
-            parents=len(parents),
-            candidates=len(candidates),
-            pending=sum(row.pending for row in candidates),
-            approved=sum(row.approved in {"yes", "auto"} for row in candidates),
-            rejected=sum(row.approved == "no" for row in candidates),
-        )

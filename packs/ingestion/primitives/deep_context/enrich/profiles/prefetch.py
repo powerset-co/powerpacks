@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
-from packs.ingestion.primitives.deep_context.db.people_views import ParentViewRow
+from packs.ingestion.primitives.deep_context.db.view_models import ParentViewRow
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     ProfileResult,
