@@ -140,7 +140,7 @@ uv run --project . python packs/search/primitives/deep_search/search_harness.py 
   --run-dir <run> --env-file .env
 ```
 
-The viewer stacks two badges under the overall score: **Taste X.X** for every judged
+The viewer puts two badges under the overall reasoning: **Taste X.X** for every judged
 candidate (`Taste N/A` when Reporting has no score) and **Suggested Pin** when the judge's
 decision is `introduce`. The details panel shows the confidence and reason.
 

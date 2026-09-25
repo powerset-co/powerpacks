@@ -219,7 +219,7 @@ def _education_item(education: Education) -> str:
 
 
 def _suggested_pin_chip(candidate: Candidate | None) -> str:
-    """The pin judge's introduce decision, stacked under the overall score."""
+    """The pin judge's introduce decision, under the overall reasoning."""
     if not candidate or not candidate.suggested_pin:
         return ""
     return (f"<b class='trait-score-badge suggested-pin-chip' "
@@ -227,7 +227,7 @@ def _suggested_pin_chip(candidate: Candidate | None) -> str:
 
 
 def _taste_badge(candidate: Candidate | None) -> str:
-    """Reporting taste score under the overall score for every judged candidate; N/A when none is on file."""
+    """Reporting taste score under the overall reasoning for every judged candidate; N/A when none is on file."""
     if not candidate or not candidate.candidate_judgment:
         return ""
     if candidate.taste_score is None:
@@ -236,8 +236,16 @@ def _taste_badge(candidate: Candidate | None) -> str:
 
 
 def _judge_badges(candidate: Candidate | None) -> str:
-    """Everything that stacks under the overall score: taste, then the suggested pin."""
+    """The row under the overall reasoning: taste, then the suggested pin."""
     return _taste_badge(candidate) + _suggested_pin_chip(candidate)
+
+
+def _overall_indicator(overall: int, reason: str, candidate: Candidate | None) -> str:
+    """Overall score badge, its reasoning, and the judge badges beneath the reasoning."""
+    return (f"<div class='trait-indicator'><b class='trait-score-badge "
+            f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>"
+            f"<div class='trait-body'><p>{_e(reason)}</p>"
+            f"<div class='judge-badges'>{_judge_badges(candidate)}</div></div></div>")
 
 
 def _person_details(pond_candidate: PondCandidate, candidate: Candidate | None = None) -> str:
@@ -377,10 +385,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             if judgment and overall is not None:
                 reason = (judgment.opportunity_reason
                           if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
-                indicators += (
-                    f"<div class='trait-indicator'><span class='score-stack'><b class='trait-score-badge "
-                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>{_judge_badges(graded)}</span>"
-                    f"<p>{_e(reason)}</p></div>")
+                indicators += _overall_indicator(overall, reason, graded)
             else:
                 reason = qualification_reason
         else:
@@ -392,10 +397,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             else:
                 reason = "Did not pass screen" if overall is not None else "Not judged"
             if overall is not None:
-                indicators = (
-                    f"<div class='trait-indicator'><span class='score-stack'><b class='trait-score-badge "
-                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>{_judge_badges(graded)}</span>"
-                    f"<p>{_e(reason)}</p></div>")
+                indicators = _overall_indicator(overall, reason, graded)
             else:
                 indicators = '<p class="no-traits">Not judged</p>'
     display_score = (pond_candidate.cross_encoder_score
