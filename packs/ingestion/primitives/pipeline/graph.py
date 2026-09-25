@@ -29,6 +29,7 @@ import packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_ca
 import packs.ingestion.primitives.deep_context.collection.collect_person_context  # noqa: E402,F401
 import packs.ingestion.primitives.deep_context.synthesis.compose_dossier  # noqa: E402,F401
 import packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.migration.seed  # noqa: E402,F401
 import packs.ingestion.primitives.deep_context.realize.persist_review_identities  # noqa: E402,F401
 import packs.ingestion.primitives.deep_context.enrich.profiles.prefetch  # noqa: E402,F401
 import packs.ingestion.primitives.deep_context.enrich.research_reconcile.reconcile_deep_research  # noqa: E402,F401

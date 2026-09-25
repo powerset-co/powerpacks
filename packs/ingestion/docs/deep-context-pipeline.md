@@ -3,6 +3,9 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-09-25: `ensure-parents` creates the store; `seed` carries a legacy install's
+  merges, facts, human decisions and Parallel results onto the cold parents by
+  identifier; migrate-sqlite is no longer routed.
 - 2026-09-25: the merge pair judge is JEV, not OpenAI; the merge cutoff is p(yes) ≥ 0.5.
 - 2026-09-25: the page listens to the event stream, it does not poll; the
   unwritten review/manifest.json is no longer advertised.
@@ -157,7 +160,7 @@ browser button and cannot be blocked by the Done page.
 
 | Stage | What it does | Main result |
 | --- | --- | --- |
-| Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON and `owner.json` |
+| Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. `ensure-parents` projects the fan-in export into stable parents (creating the store on a fresh install); on an install with pre-SQLite artifacts, `seed` then carries its merges, facts, human decisions and Parallel results onto those parents by identifier, once. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON, SQLite parents, `owner.json` |
 | Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are always included. | `raw/<parent_id>.json`, SQLite projection, receipt |
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
@@ -177,6 +180,8 @@ The normal full workflow uses staged commands:
 
 ```bash
 bin/deep-context check
+bin/deep-context ensure-parents
+bin/deep-context seed              # legacy installs only, once (free)
 bin/deep-context owner --linkedin-url <url> --email <email>
 bin/deep-context collect --deep-cap 1600
 bin/deep-context dry

@@ -6,6 +6,7 @@ from their concrete home so the domain model can be read without the SQL text.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -167,6 +168,18 @@ HUMAN_REVIEW_ACTIONS = frozenset(
     }
 )
 PARENT_WORTH_PREFIX = "parent-worth:"
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+
+
+def row_kind_for_key(key: str) -> RowKind:
+    """The links kind a review row key denotes by its shape."""
+    if key.startswith(PARENT_WORTH_PREFIX):
+        return RowKind.PARENT
+    if key.startswith("candidate:email:"):
+        return RowKind.CANDIDATE_EMAIL
+    if key.startswith("candidate:phone:"):
+        return RowKind.CANDIDATE_PHONE
+    return RowKind.PERSON_UUID if _UUID_RE.match(key) else RowKind.PUB
 # These provenance-specific risk limits are policy, not caller tuning knobs:
 # changing one changes which paid judgments auto-apply before human review.
 IDENTITY_THRESHOLDS = {

@@ -64,26 +64,30 @@ class DeepContextMigrationTests(unittest.TestCase):
                 wacli_db=self.wacli,
             ).run()
 
-    def test_readiness_requires_migration_without_creating_database(self) -> None:
+    def test_readiness_routes_a_legacy_install_to_ensure_parents_without_creating_database(self) -> None:
         result = self.readiness()
 
         self.assertFalse(result.ready)
-        self.assertEqual(result.checks.canonical_sqlite.status, "migration_required")
-        self.assertEqual(result.next_command, "bin/deep-context migrate-sqlite")
+        self.assertEqual(result.checks.canonical_sqlite.status, "missing")
+        self.assertEqual(result.next_command, "bin/deep-context ensure-parents")
         self.assertFalse(self.db_path.exists())
 
-    def test_empty_database_requires_migration_but_populated_database_does_not(self) -> None:
+    def test_a_populated_store_beside_legacy_decisions_needs_the_seed_until_carried_over(self) -> None:
+        (self.deep_context / "index.json").write_text("{}", encoding="utf-8")
         database = Db(self.db_path)
-        self.assertEqual(
-            self.readiness(database).checks.canonical_sqlite.status,
-            "migration_required",
-        )
+        self.assertEqual(self.readiness(database).checks.canonical_sqlite.status, "empty")
         database.project_rows(
             (
                 ParentRow("parent-one", "parent-one"),
                 PersonRow("person-a", "parent-one"),
             )
         )
+
+        self.assertEqual(self.readiness(database).checks.canonical_sqlite.status, "seed_required")
+        self.assertEqual(self.readiness(database).next_command, "bin/deep-context seed")
+
+        with database.transaction() as conn:
+            conn.execute("INSERT INTO meta (key, value) VALUES ('legacy_imported_at', '2026-09-25T00:00:00Z')")
 
         self.assertEqual(self.readiness(database).checks.canonical_sqlite.status, "ok")
 

@@ -1,4 +1,9 @@
-"""Project the live imported-person roster into stable SQLite parent families."""
+"""Project the live imported-person roster into stable SQLite parent families.
+
+Changelog:
+- 2026-09-25: the CLI creates the canonical store when it is missing; this is
+  the first cold step, so nothing else has to create it.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     DEFAULT_PEOPLE_CSV,
     emit,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     project_imported_people,
     read_imported_people,
@@ -64,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     payload = EnsureParents(
-        db=open_existing_db(args.db),
+        db=Db(Path(args.db)),
         people_csv=Path(args.people_csv),
     ).run()
     emit(payload.to_payload())

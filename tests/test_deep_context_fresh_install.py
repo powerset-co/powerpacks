@@ -2,6 +2,7 @@
 
 Changelog:
 - 2026-09-25: created with the fix that routes a missing store to migrate-sqlite.
+- 2026-09-25: a missing store routes to ensure-parents, which creates it; migrate-sqlite is unrouted.
 - 2026-09-25: check routes an empty store to ensure-parents and a missing owner
   to the owner command; owner-required errors name the real command.
 """
@@ -20,15 +21,13 @@ from unittest import mock
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
-from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
-from packs.ingestion.primitives.deep_context.migration import migrate_sqlite
+from packs.ingestion.primitives.deep_context.ensure_parents import ensure_parents
 from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
 from packs.ingestion.primitives.deep_context.shared.readiness_models import ReadinessReport
 from packs.ingestion.primitives.deep_context.synthesis.compose_dossier import ComposeDossier
 from packs.ingestion.primitives.deep_context.synthesis.selection import build_system_prompt
 from packs.shared.csv_io import CsvIO
 
-MIGRATE_COMMAND = "bin/deep-context migrate-sqlite"
 ENSURE_PARENTS_COMMAND = "bin/deep-context ensure-parents"
 OWNER_COMMAND = "bin/deep-context owner --linkedin-url <url> --email <email>"
 
@@ -98,33 +97,30 @@ class FreshInstallTests(unittest.TestCase):
             (OwnerContextRow("owner", owner.read_text(encoding="utf-8"), str(owner), "fp-owner"),)
         )
 
-    def migrate(self) -> tuple[int, dict[str, object]]:
+    def ensure_parents(self) -> tuple[int, dict[str, object]]:
         out = StringIO()
         with redirect_stdout(out):
-            code = migrate_sqlite.main([])
+            code = ensure_parents.main(["--db", str(self.db_path), "--people-csv", str(self.people_csv)])
         return code, json.loads(out.getvalue())
 
-    def test_check_routes_a_fresh_install_to_migrate_sqlite(self) -> None:
+    def test_check_routes_a_fresh_install_to_ensure_parents(self) -> None:
         result = self.readiness()
 
         self.assertEqual(result.checks.canonical_sqlite.status, "missing")
-        self.assertEqual(result.next_command, MIGRATE_COMMAND)
+        self.assertEqual(result.next_command, ENSURE_PARENTS_COMMAND)
         self.assertFalse(result.ready)
         self.assertFalse(self.db_path.exists())
 
-    def test_migrate_creates_an_empty_store_that_ensure_parents_fills(self) -> None:
-        code, payload = self.migrate()
+    def test_ensure_parents_creates_the_store_and_fills_it(self) -> None:
+        code, payload = self.ensure_parents()
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "completed")
         self.assertTrue(self.db_path.is_file())
-        self.assertEqual({key: value for key, value in payload["counts"].items() if value}, {})
-        # A repeat on the still-empty store completes instead of tripping on meta.
-        self.assertEqual(self.migrate()[0], 0)
+        self.assertEqual(payload["people_projected"], 2)
+        # A repeat on the filled store is idempotent.
+        self.assertEqual(self.ensure_parents()[1]["people_projected"], 2)
 
-        result = EnsureParents(db=open_existing_db(self.db_path), people_csv=self.people_csv).run()
-
-        self.assertEqual(result.people_projected, 2)
         after = self.readiness()
         self.assertEqual(after.checks.canonical_sqlite.status, "ok")
         self.assertFalse(after.ready)
@@ -135,8 +131,7 @@ class FreshInstallTests(unittest.TestCase):
         self.assertTrue(with_owner.ready)
 
     def test_check_requires_the_typesafe_key_for_worth_labels_and_the_merge_judge(self) -> None:
-        self.migrate()
-        EnsureParents(db=open_existing_db(self.db_path), people_csv=self.people_csv).run()
+        self.ensure_parents()
         self.project_owner()
 
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""}):
@@ -147,7 +142,7 @@ class FreshInstallTests(unittest.TestCase):
         self.assertTrue(any("TYPESAFE_API_KEY" in line for line in result.advice))
 
     def test_check_routes_an_empty_store_to_ensure_parents(self) -> None:
-        self.migrate()
+        Db(self.db_path)
 
         result = self.readiness()
 
@@ -155,8 +150,7 @@ class FreshInstallTests(unittest.TestCase):
         self.assertEqual(result.next_command, ENSURE_PARENTS_COMMAND)
 
     def test_check_routes_projected_people_without_an_owner_to_the_owner_command(self) -> None:
-        self.migrate()
-        EnsureParents(db=open_existing_db(self.db_path), people_csv=self.people_csv).run()
+        self.ensure_parents()
 
         result = self.readiness()
 

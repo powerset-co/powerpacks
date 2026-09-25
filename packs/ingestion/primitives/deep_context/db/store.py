@@ -617,7 +617,7 @@ def open_existing_db(db_path: str | Path) -> Db:
     if not path.is_file():
         raise SystemExit(
             f"Deep Context database is missing: {path}; "
-            "run the explicit legacy import first"
+            "run ensure-parents first"
         )
     try:
         return Db(path)

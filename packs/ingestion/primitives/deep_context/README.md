@@ -3,6 +3,9 @@
 Created: 2026-08-06
 
 Changelog:
+- 2026-09-25: `migration/seed.py` carries a legacy install's decisions onto
+  the cold parents by identifier after ensure-parents; the whole-graph
+  legacy import is unrouted.
 - 2026-09-25: the merge pair judge runs on JEV (p(yes) ≥ 0.5 merges); the
   OpenAI pair judge and its model/effort/retry knobs are gone.
 - 2026-08-06: initial spec (post-SQLite-rewrite architecture; parents
@@ -171,7 +174,7 @@ flowchart LR
 | `enrich/` | Parallel research, profile hydration, identity judging, synthetic fallback | SQLite queue, provider caches | research artifacts, SQLite verdicts |
 | `review/` | worth and identity web review, guided retarget, and restart | named SQLite views | human decisions via `db/store` |
 | `realize/` | paid-free projection of approved identity decisions | SQLite, cached profiles | network exports |
-| `migration/` | dated pre-SQLite import and whole-graph proof path | legacy artifacts | canonical SQLite bootstrap |
+| `migration/` | `seed.py`: identifier-keyed carry-over of legacy merges, facts, human decisions and research onto cold parents; `legacy.py`: the retired whole-graph import | legacy artifacts, SQLite | SQLite merges/facts/decisions/research, `facts/`, `reconcile/deep-research/` |
 | `shared/` | common paths, readiness, owner, lookup, and dossier evidence | varies | owner cache where applicable |
 | `manifests/` | one public receipt model per stage contract | — | serialized stage receipts |
 | `db/` | THE record, typed reads, policy views, and transactional writes | — | `deep-context.sqlite` |

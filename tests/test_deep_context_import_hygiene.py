@@ -20,6 +20,7 @@ EXPECTED_DB_OPERATIONS = {
     "identity_views.resolve_identity_key",
     "identity_views.synthetic_fallback",
     "merge_queries.merge_people",
+    "models.row_kind_for_key",
     "people_views.avatar_payload",
     "people_views.person_detail",
     "people_views.person_lookup",

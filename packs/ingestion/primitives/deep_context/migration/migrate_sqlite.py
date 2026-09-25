@@ -1,4 +1,10 @@
-"""Import the fixed pre-SQLite Deep Context artifacts exactly once."""
+"""Import the fixed pre-SQLite Deep Context artifacts exactly once.
+
+Changelog:
+- 2026-09-25: no longer routed by `check`; `migration/seed.py` carries legacy
+  decisions onto cold parents instead (its `legacy_decisions_present` is the
+  detector now). Kept callable for one release.
+"""
 
 from __future__ import annotations
 
@@ -31,23 +37,6 @@ SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 
 # Migration is the sole path allowed to create the canonical database; every
 # steady-state stage opens an existing store before constructing its worker.
-
-
-def legacy_artifacts_present(deep_context_dir: Path, review_csv: Path) -> bool:
-    """Detect a pre-SQLite install without opening or mutating its artifacts."""
-    root = Path(deep_context_dir)
-    if Path(review_csv).is_file() or (root / "index.json").is_file():
-        return True
-    return any(
-        next((directory.glob(pattern)), None) is not None
-        for directory, pattern in (
-            (root / "facts", "*.jsonl"),
-            (root / "raw", "*.json"),
-            (root / "dossiers", "*.md"),
-            (root / "reconcile", "verdicts.jsonl"),
-        )
-        if directory.is_dir()
-    )
 
 
 def main(argv: list[str] | None = None) -> int:

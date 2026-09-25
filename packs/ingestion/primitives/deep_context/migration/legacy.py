@@ -9,6 +9,10 @@ Removal countdown (2026-08-06): delete once no supported install predates
 powerpacks v1.19.0.
 
 Changelog:
+  2026-09-25: `check` no longer routes here (migration/seed.py carries legacy
+    decisions onto cold parents); the review-row human rule, the row-kind rule and
+    the native research envelope now live in seed.py, db/models.py and
+    enrich/parallel_research/projection.py.
   2026-09-25: a populated canonical DB is refused before any legacy artifact
     is read, so a rerun reports the real reason instead of a raw-bundle error.
   2026-08-17: legacy synthetic CSV rows are re-keyed to their stable parent id
@@ -50,7 +54,11 @@ from packs.ingestion.primitives.deep_context.db.projectors import ProjectionValu
 from packs.ingestion.primitives.deep_context.db.schema import UPSERTS
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.projection import (
+    native_research_payload,
+)
 from packs.ingestion.primitives.deep_context.migration import canonical_graph
+from packs.ingestion.primitives.deep_context.migration.seed import human_worth_mark
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 LEGACY_INDEX_JSON = Path(".powerpacks/deep-context/index.json")
@@ -93,10 +101,8 @@ class LegacyGraphMigration:
             raise LegacyImportError(str(exc)) from exc
 
 
-_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 _ACTIONS = {item.value for item in m.ReviewAction}
 _APPROVALS = {item.value for item in m.ApprovedState}
-_HUMAN_WORTH = {item.value for item in m.HumanWorth}
 _MACHINE_WORTH = {item.value for item in m.MachineWorth}
 _REVIEW_METADATA = {"public_identifier", "source", "updated_at"}
 _HumanLink = tuple[str, str, str, str | None, str | None, str | None]
@@ -329,15 +335,9 @@ def _owner(path: Path | None) -> m.OwnerContextRow | None:
 
 
 def _human_signal(row: dict[str, str]) -> tuple[str, str] | None:
-    mark = str(row.get("network_worth") or "").strip().lower()
-    if mark not in _HUMAN_WORTH:
-        if (
-            str(row.get("action") or "").strip().lower() == m.ReviewAction.EXCLUDE.value
-            and str(row.get("approved") or "").strip().lower() == m.ApprovedState.YES.value
-        ):
-            mark = m.HumanWorth.NO.value
-        else:
-            return None
+    mark = human_worth_mark(row)
+    if mark is None:
+        return None
     return mark, str(row.get("updated_at") or "")
 
 
@@ -481,7 +481,7 @@ def _review(g: _Graph) -> None:
             key,
             parent_id,
             ProjectionValue.text(row.get("public_identifier")) or key,
-            _kind(key).value,
+            m.row_kind_for_key(key).value,
             ProjectionValue.text(row.get("linkedin_url")),
             machine_action=action if approved != m.ApprovedState.YES.value else None,
             machine_approved=(
@@ -545,19 +545,6 @@ def _review(g: _Graph) -> None:
                     g.child_signals[child] = candidate
 
 
-def _kind(key: str) -> m.RowKind:
-    # Never called with a MESSAGE_LINKEDIN_PREFIX key: every caller (_review,
-    # _verdicts, _finish_graph's fact_keys backfill) skips that key shape
-    # before reaching here — see primitives/common/legacy.py.
-    if key.startswith(m.PARENT_WORTH_PREFIX):
-        return m.RowKind.PARENT
-    if key.startswith("candidate:email:"):
-        return m.RowKind.CANDIDATE_EMAIL
-    if key.startswith("candidate:phone:"):
-        return m.RowKind.CANDIDATE_PHONE
-    return m.RowKind.PERSON_UUID if _UUID_RE.match(key) else m.RowKind.PUB
-
-
 def _contributed(**values: object) -> dict[str, object]:
     """Keep only the fields this source actually spoke to.
 
@@ -619,7 +606,7 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
         verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
         prior = g.links.get(key)
         g.links[key] = replace(
-            prior or m.LinkRow(key, parent_id, key, _kind(key).value, source=m.WriterSource.LEGACY_MIGRATION.value),
+            prior or m.LinkRow(key, parent_id, key, m.row_kind_for_key(key).value, source=m.WriterSource.LEGACY_MIGRATION.value),
             # Facts about THIS file, always true when a verdict line exists:
             # the row is verdict-backed, and here is where that verdict lives.
             parent_id=parent_id,
@@ -811,7 +798,7 @@ def _finish_graph(g: _Graph) -> None:
     fact_keys -= covered
     for key in fact_keys - set(g.links):
         parent_id = g.person_parent[key]
-        g.links[key] = m.LinkRow(key, parent_id, key, _kind(key).value, source=m.WriterSource.LEGACY_MIGRATION.value)
+        g.links[key] = m.LinkRow(key, parent_id, key, m.row_kind_for_key(key).value, source=m.WriterSource.LEGACY_MIGRATION.value)
         g.memberships[key] = {key}
     g.links = {key: replace(row, candidate_origin=0, raw_import=0) for key, row in g.links.items()}
     for key in fact_keys:
@@ -856,7 +843,7 @@ def _finish_graph(g: _Graph) -> None:
             g.errors.append("legacy verdict has no current candidate membership")
         if mismatched:
             g.errors.append(
-                f"{_kind(key).value} candidate has {len(mismatched)} cross-parent members "
+                f"{m.row_kind_for_key(key).value} candidate has {len(mismatched)} cross-parent members "
                 f"(indexed={sum(value in g.indexed_people for value in mismatched)}, "
                 f"members={len(person_ids)}, source={g.links[key].source or 'none'})"
             )
@@ -1017,7 +1004,10 @@ def _research(g: _Graph, directory: Path | None) -> None:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise LegacyImportError(f"cannot parse research {result_dir.name}: {exc}") from exc
-        payload = _native_research_payload(payload, result_dir.name)
+        try:
+            payload = native_research_payload(payload, result_dir.name)
+        except ValueError as exc:
+            raise LegacyImportError(str(exc)) from exc
         artifact_key = f"research:{result_dir.name}"
         g.artifacts.append(
             _artifact(
@@ -1039,47 +1029,6 @@ def _research(g: _Graph, directory: Path | None) -> None:
                 updated_at=now_iso(),
             )
         )
-
-
-def _native_research_payload(payload: object, handle: str) -> dict[str, Any]:
-    """Convert the retired normalized result once, at the legacy boundary."""
-    if not isinstance(payload, dict):
-        raise LegacyImportError(f"research {handle} must be a JSON object")
-    if payload.get("type") == "json" and isinstance(payload.get("content"), dict):
-        return payload
-    person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
-    location = payload.get("location") if isinstance(payload.get("location"), dict) else {}
-    social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    headline = payload.get("headline") if isinstance(payload.get("headline"), dict) else {}
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    notes = ProjectionValue.text(metadata.get("research_notes")) or ProjectionValue.text(
-        person.get("notes")
-    )
-    return {
-        "type": "json",
-        "content": {
-            "real_name": ProjectionValue.text(person.get("full_name")),
-            "work_experience": (
-                payload.get("positions") if isinstance(payload.get("positions"), list) else []
-            ),
-            "education": payload.get("education") if isinstance(payload.get("education"), list) else [],
-            "location_city": ProjectionValue.text(location.get("city")),
-            "location_country": ProjectionValue.text(location.get("country")),
-            "linkedin_url": ProjectionValue.text(social.get("linkedin_url")),
-            "github_url": ProjectionValue.text(social.get("github_url")),
-            "summary": (
-                ProjectionValue.text(summary.get("text"))
-                or ProjectionValue.text(headline.get("text"))
-                or ""
-            ),
-        },
-        "basis": (
-            [{"field": "real_name", "reasoning": notes, "citations": []}]
-            if notes
-            else []
-        ),
-    }
 
 
 def _merges(g: _Graph, verdict_path: Path | None, accepted_path: Path | None) -> None:

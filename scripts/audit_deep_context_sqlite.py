@@ -2,8 +2,9 @@
 """Fail when Deep Context bypasses its SQLite projection boundary.
 
 Durable stage artifacts remain useful for inspection and paid-work reuse. The
-only general artifact reader is ``migration/legacy.py``; ``imported_people.py`` is the
-one current input boundary for the import fan-in's people.csv. Current writers
+only general artifact readers are ``migration/legacy.py`` and ``migration/seed.py``
+(legacy trees); ``imported_people.py`` is the one current input boundary for the
+import fan-in's people.csv. Current writers
 parse just-written outputs into frozen projection rows at a named boundary and
 write through ``Db.project_rows``; all later consumers hydrate from SQLite.
 """
@@ -29,6 +30,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 
 PACKAGE = REPO / "packs/ingestion/primitives/deep_context"
 LEGACY_READER = PACKAGE / "migration/legacy.py"
+SEED_READER = PACKAGE / "migration/seed.py"
 IMPORTED_PEOPLE_READER = PACKAGE / "ensure_parents/imported_people.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
 PARENT_IDENTITY_PROOF = PACKAGE / "tools/parent_identity_proof.py"
@@ -396,7 +398,7 @@ def _allowed_file_read(
     parents: dict[ast.AST, ast.AST],
     tree: ast.AST,
 ) -> bool:
-    if path in {LEGACY_READER, PROJECTOR_READER}:
+    if path in {LEGACY_READER, SEED_READER, PROJECTOR_READER}:
         return True
     if _static_asset_read(relative, call, parents, tree):
         return True
@@ -541,12 +543,12 @@ def audit_source(path: Path, source: str) -> list[Violation]:
             if whole_graph_call and path not in WHOLE_GRAPH_CALLERS:
                 add(node, "migration-only-graph", called)
             if _is_csv_reader(node, aliases) and path not in {
-                LEGACY_READER, IMPORTED_PEOPLE_READER,
+                LEGACY_READER, SEED_READER, IMPORTED_PEOPLE_READER,
             }:
                 add(
                     node,
                     "csv-input-boundary",
-                    "only migration/legacy.py and imported_people.py may parse CSV",
+                    "only migration/legacy.py, migration/seed.py and imported_people.py may parse CSV",
                 )
             if called.rsplit(".", 1)[-1] in FORBIDDEN_HELPERS:
                 add(node, "no-file-state-helper", called)
@@ -637,6 +639,7 @@ def audit() -> list[Violation]:
             csv_readers.append(path)
     expected_csv_readers = sorted((
         LEGACY_READER,
+        SEED_READER,
         IMPORTED_PEOPLE_READER,
     ))
     if csv_readers != expected_csv_readers:
