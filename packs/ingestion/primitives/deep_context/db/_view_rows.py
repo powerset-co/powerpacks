@@ -288,14 +288,8 @@ def _all_parents(db: Db) -> list[ParentViewRow]:
     return _hydrate_parents(db, rows, pending_only=False)
 
 
-# Same reviewable-parent filter as _all_parents, on top of one worth decision.
-_DECISION_FILTER = """WHERE lower(w.effective_worth)=? AND EXISTS (
-              SELECT 1 FROM people pe
-              WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
-            ) AND EXISTS (
-              SELECT 1 FROM candidate_policy c WHERE c.parent_id=p.parent_id
-                AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
-            )"""
+# Exactly the worth rows worth_counts counts, so each tab total matches its table.
+_DECISION_FILTER = "WHERE w.effective_worth=?"
 
 
 def _decision_page(
@@ -306,7 +300,7 @@ def _decision_page(
 ) -> list[ParentViewRow]:
     """One page of a worth pile (yes/no), in the full table's name order."""
     rows = db.query(
-        LINKEDIN_CTE + PARENT_SELECT.format(where=_DECISION_FILTER) + " LIMIT ? OFFSET ?",
+        WORTH_CTE + PARENT_SELECT.format(where=_DECISION_FILTER) + " LIMIT ? OFFSET ?",
         (decision, limit, offset),
     )
     return _hydrate_parents(db, rows, pending_only=False)

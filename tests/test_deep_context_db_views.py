@@ -22,6 +22,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import (
+    decision_parents,
     enrichment_queue,
     linkedin_parents,
     linkedin_progress,
@@ -155,6 +156,24 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(
             asdict(worth_counts(self.db)),
             {"total": 4, "pending": 1, "yes": 1, "no": 1},
+        )
+
+    def test_decision_tables_list_every_counted_worth_parent_without_links(self) -> None:
+        self.add_parent("alpha", "yes")
+        self.add_parent("bravo", "yes")
+        self.add_parent("charlie", "maybe", human="no")
+        counts = worth_counts(self.db)
+
+        yes = decision_parents(self.db, "yes")
+        no = decision_parents(self.db, "no")
+
+        self.assertEqual([row.parent_id for row in yes], ["alpha", "bravo"])
+        self.assertEqual([row.parent_id for row in no], ["charlie"])
+        self.assertEqual((len(yes), len(no)), (counts.yes, counts.no))
+        self.assertEqual([row.candidates for row in yes + no], [(), (), ()])
+        self.assertEqual(
+            [row.parent_id for row in decision_parents(self.db, "yes", offset=1, limit=1)],
+            ["bravo"],
         )
 
     def test_owner_person_is_excluded_without_hiding_merged_family(self) -> None:
