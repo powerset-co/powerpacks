@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
@@ -71,6 +72,7 @@ from packs.ingestion.primitives.discover.messages.wacli.sync import (  # noqa: E
 from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E402
     canonicalize_phone,
     clean_name,
+    jid_to_phone,
 )
 
 

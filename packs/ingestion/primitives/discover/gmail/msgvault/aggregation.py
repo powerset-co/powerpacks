@@ -6,6 +6,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator
 
+from packs.ingestion.primitives.discover.gmail.msgvault.sync import sqlite_table_columns
 from packs.ingestion.primitives.discover.gmail.msgvault.util import (
     best_display_name,
     canonical_message_id,
@@ -14,14 +15,6 @@ from packs.ingestion.primitives.discover.gmail.msgvault.util import (
     normalize_email,
     normalize_label_names,
 )
-
-
-def _table_columns(con: sqlite3.Connection, table: str) -> set[str]:
-    try:
-        rows = con.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.Error:
-        return set()
-    return {str(row[1]) for row in rows}
 
 
 def has_label_tables(con: sqlite3.Connection) -> bool:
@@ -56,7 +49,7 @@ def iter_metadata(
         """
         params.extend(labels)
 
-    message_columns = _table_columns(con, "messages")
+    message_columns = sqlite_table_columns(con, "messages")
     sender_join = ""
     sender_select = "NULL AS sender_email, NULL AS sender_display_name,"
     if "sender_id" in message_columns:

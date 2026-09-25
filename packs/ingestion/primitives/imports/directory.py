@@ -252,13 +252,13 @@ def replace_directory_source_rows(
     rows: list[dict[str, str]],
 ) -> dict[str, Any]:
     """Replace one writer-owned source slice without touching other sources."""
-    existing: dict[str, dict[str, str]] = {}
+    existing: dict[str, DirectoryRow] = {}
     if directory_csv.exists():
         for row in read_csv_rows(directory_csv)[1]:
             normalized = normalized_directory_row(row, source="directory")
-            if normalized and normalized["source"] != source:
-                existing[normalized["source_key"]] = normalized
-    merged = merge_directory_rows(rows, existing)
+            if normalized.source_key and normalized.source != source:
+                existing[normalized.source_key] = normalized
+    merged = merge_directory_rows([normalized_directory_row(row) for row in rows], existing)
     write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
     return {
         "directory_csv": str(directory_csv),
