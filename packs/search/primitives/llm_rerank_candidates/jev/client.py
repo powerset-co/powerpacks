@@ -78,7 +78,8 @@ def _validate_probability(value: object) -> float:
     return result
 
 
-def _validate_response(response: object, request: dict) -> dict:
+def validate_response(response: object, request: dict) -> dict:
+    """Public for pin_confidence, which reuses Jev on its own question set."""
     try:
         if not isinstance(response, dict) or response.get("model") != MODEL:
             raise ValueError
@@ -192,7 +193,7 @@ def _validate_cache(
         response = json.loads(record["raw_response"])
     except (KeyError, TypeError, json.JSONDecodeError):
         raise RuntimeError("Jev cached response is invalid; candidate remains unscored") from None
-    return _validate_response(response, request)
+    return validate_response(response, request)
 
 
 def _choice(answers: dict, name: str, options: list[str]) -> str:
@@ -287,7 +288,7 @@ async def _request(
             _record_paid_usage(payload, int((time.monotonic() - started) * 1000))
             raw_response = response.text or json.dumps(payload, ensure_ascii=False)
             checkpoint(raw_response, effective)
-            return _validate_response(payload, request), effective, attempts
+            return validate_response(payload, request), effective, attempts
         if response.status_code == HTTPStatus.BAD_REQUEST and not compacted and "max_tokens_exceeded" in response.text:
             effective = _compact_request(request)
             compacted = True
@@ -385,6 +386,21 @@ async def answer_requests(
         if isinstance(row, BaseException):
             raise row
     return dict(zip(requests, rows))
+
+
+async def evaluate_once(*, client: Any, request: dict, api_key: str) -> dict:
+    """Evaluate an exact question set once, without capability-specific compaction or retries."""
+    started = time.monotonic()
+    response = await client.post(ENDPOINT, json=request,
+                                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+    response.raise_for_status()
+    try:
+        payload = response.json()
+    except ValueError:
+        _record_paid_usage(None, int((time.monotonic() - started) * 1000))
+        raise RuntimeError("Jev returned malformed JSON; candidate remains unscored") from None
+    _record_paid_usage(payload, int((time.monotonic() - started) * 1000))
+    return validate_response(payload, request)
 
 
 async def score_candidates(

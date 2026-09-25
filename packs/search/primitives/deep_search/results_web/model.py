@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -123,6 +124,38 @@ def _candidate_judgment(raw: dict[str, Any] | None) -> CandidateJudgment | None:
 
 
 @dataclass(frozen=True)
+class PinJudgment:
+    decision: str | None
+    reason: str
+    model: str
+    status: str
+
+
+def _pin_judgment(raw: dict[str, Any] | None) -> PinJudgment | None:
+    if raw is None:
+        return None
+    if raw.get("decision") not in (None, "introduce", "review", "not_supported"):
+        raise ValueError("Pin judgment decision must be introduce, review or not_supported")
+    return PinJudgment(raw.get("decision"), _text(raw.get("reason")), raw["model"], raw["status"])
+
+
+def _taste_score(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+        raise ValueError("Taste score must be a finite number")
+    return float(raw)
+
+
+def _pin_confidence(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    if type(raw) is not int or not 0 <= raw <= 100:
+        raise ValueError("Pin confidence must be an integer between 0 and 100")
+    return raw
+
+
+@dataclass(frozen=True)
 class Iteration:
     pond_n: int
     query: str
@@ -214,6 +247,14 @@ class Candidate:
     human_note: str = ""
     candidate_judgment: CandidateJudgment | None = None
     network_attribution: PersonAttribution | None = None
+    taste_score: float | None = None
+    pin_confidence: int | None = None
+    pin_judgment: PinJudgment | None = None
+
+    @property
+    def suggested_pin(self) -> bool:
+        """The pin judge recommended an introduction; shown as a Suggested Pin badge under the overall reasoning."""
+        return self.pin_judgment is not None and self.pin_judgment.decision == "introduce"
 
     def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
         return next((row.candidate for row in self.ponds
@@ -483,6 +524,9 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
         human_note=_text(raw.get("human_note")),
         candidate_judgment=_candidate_judgment(raw.get("candidate_judgment")),
         network_attribution=_person_attribution(attribution),
+        taste_score=_taste_score(raw.get("taste_score")),
+        pin_confidence=_pin_confidence(raw.get("pin_confidence")),
+        pin_judgment=_pin_judgment(raw.get("pin_judgment")),
     )
 
 
