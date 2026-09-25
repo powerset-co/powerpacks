@@ -27,6 +27,7 @@ FIELDS = [
     "all_phones",
     "source_channels",
     "superseded_person_ids",
+    "headline",
 ]
 
 
@@ -56,6 +57,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
                     "id": "person-1",
                     "all_emails": '["other@example.test"]',
                     "source_channels": "whatsapp",
+                    "headline": "CEO @ Example Labs",
                 },
             ]
         )
@@ -64,6 +66,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].person_id, "person-1")
+        self.assertEqual(rows[0].headline, "CEO @ Example Labs")
         self.assertEqual(rows[0].emails, ("jordan@example.test", "other@example.test"))
         self.assertEqual(
             rows[0].source_channels,

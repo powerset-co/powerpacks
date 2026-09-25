@@ -75,6 +75,30 @@ class JevWorthTests(unittest.TestCase):
         assert seen[0]['output_dir'] == tmp_path
 
 
+    def test_notable_title_rule(self):
+        for headline in ("CEO @ AngelList", "Co-Founder & CTO", "Managing Director, Growth",
+                         "Chief Revenue Officer at Harmonic", "General Partner, Example Ventures"):
+            assert runner.notable_title(headline), headline
+        for headline in ("Partnerships Manager", "VP Engineering", "Software Engineer", "Chief of Staff", ""):
+            assert not runner.notable_title(headline), headline
+
+
+    def test_classify_notable_headline_is_yes_without_a_new_request(self):
+        tmp_path = self.tmp_path
+        seen = []
+        async def answer_requests(requests, **kwargs):
+            seen.extend(requests.values())
+            return {key: SimpleNamespace(response={'answers': _answers(), 'usage': {'input_tokens': 5, 'output_tokens': 0}}, cached=True) for key in requests}
+        with patch.object(runner, 'answer_requests', answer_requests), patch.object(runner, 'predict', return_value='maybe'):
+            plain = asyncio.run(runner.classify(facts={}, bundle={}, owner={}, reference_date='2026-01-01', output_dir=tmp_path))
+            notable = asyncio.run(runner.classify(facts={}, bundle={}, owner={}, reference_date='2026-01-01', output_dir=tmp_path, headline='CEO, AngelList'))
+        assert plain['network_worth']['decision'] == 'maybe'
+        assert notable['network_worth'] == {'decision': 'yes', 'reason': runner.NOTABLE_REASON_PREFIX + 'CEO, AngelList'}
+        assert notable['labels'] == plain['labels']
+        # The headline never enters the JEV request, so the cache key is unchanged.
+        assert seen[0] == seen[1]
+
+
     def test_cached_estimate_costs_nothing(self):
         tmp_path = self.tmp_path
         request = questions.build_request(facts={}, bundle={}, owner={}, reference_date='2026-01-01')

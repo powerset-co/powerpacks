@@ -1,11 +1,14 @@
 """Estimate and answer one worth-plus-label request using the standard JEV cache.
 
 Changelog:
+  2026-09-25: a notable imported LinkedIn headline (NOTABLE_TITLE_RE) makes
+      worth yes after the JEV answers; the request is unchanged.
   2026-09-24: score labels (warmth) are the expected level, not the argmax.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +19,16 @@ from packs.ingestion.primitives.deep_context.jev_worth.questions import REQUEST_
 from packs.search.primitives.llm_rerank_candidates.jev.client import (
     INPUT_PRICE_PER_MILLION, answer_requests, cache_path, request_digest,
 )
+
+# Owner rule (2026-09-25): a notable imported LinkedIn headline is worth yes no
+# matter how thin the message evidence is. Applied after the JEV answers, so the
+# request and its cache key never change. "Vice President" is not "president".
+NOTABLE_TITLE_RE = re.compile(
+    r"\b(?:c[etofimpr]o|chief\s+(?:[a-z]+\s+){0,3}officer|co-?founder|founder|(?<!vice )president|"
+    r"chair(?:man|woman)?|general\s+partner|managing\s+partner|managing\s+director|partner)\b",
+    re.IGNORECASE,
+)
+NOTABLE_REASON_PREFIX = 'Notable title: '
 
 # Positive/negative observations are phrased from the answer, never the verdict.
 _REASON_PHRASES = {
@@ -156,10 +169,18 @@ def _reason(answers: dict[str, dict], *, decision: str) -> str:
     return ' '.join(sentences)
 
 
+def notable_title(headline: str) -> bool:
+    """True when an imported LinkedIn headline names a notable role."""
+    return NOTABLE_TITLE_RE.search(headline or '') is not None
+
+
 async def classify(
     *, facts: dict[str, Any], bundle: dict[str, Any], owner: dict[str, Any],
     reference_date: str, output_dir: Path, api_key: str | None = None, client: Any | None = None,
+    headline: str = '',
 ) -> dict:
+    """Answer the worth-plus-label request; `headline` is the person's imported
+    LinkedIn headline and only feeds the notable-title rule, never the request."""
     request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=reference_date)
     digest = request_digest(request)
     answered = await answer_requests(
@@ -169,8 +190,11 @@ async def classify(
     answer = answered[digest]
     answers = answer.response['answers']
     decision = predict(answers)
+    worth = {'decision': decision, 'reason': _reason(answers, decision=decision)}
+    if decision != 'yes' and notable_title(headline):
+        worth = {'decision': 'yes', 'reason': NOTABLE_REASON_PREFIX + headline.strip()}
     return {
-        'network_worth': {'decision': decision, 'reason': _reason(answers, decision=decision)},
+        'network_worth': worth,
         'labels': _labels(answers),
         'usage': {**answer.response['usage'], 'cached': answer.cached},
     }

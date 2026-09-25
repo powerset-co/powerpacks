@@ -4,6 +4,10 @@
 its only Deep Context reader. It converts rows to frozen values at the boundary,
 then get-or-creates stable parent ownership before message collection starts.
 Everything downstream reads the SQLite projection.
+
+Changelog:
+  2026-09-25: `headline` (the imported LinkedIn headline) rides the row; the
+      worth stage's notable-title rule reads it.
 """
 
 from __future__ import annotations
@@ -63,6 +67,7 @@ class ImportedPerson:
     public_identifier: str = ""
     interaction_counts: dict[str, int] = field(default_factory=dict)
     last_interaction: str = ""
+    headline: str = ""
 
 
 def _text(value: object) -> str:
@@ -110,6 +115,7 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             public_identifier=_public_identifier(raw),
             interaction_counts=parse_interaction_counts(raw.get("interaction_counts")),
             last_interaction=_text(raw.get("last_interaction")),
+            headline=_text(raw.get("headline")),
         )
         prior: ImportedPerson | None = combined.get(person_id)
         if prior is None:
@@ -127,6 +133,7 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             public_identifier=incoming.public_identifier or prior.public_identifier,
             interaction_counts={**prior.interaction_counts, **incoming.interaction_counts},
             last_interaction=max(prior.last_interaction, incoming.last_interaction),
+            headline=incoming.headline or prior.headline,
         )
     return tuple(combined[key] for key in sorted(combined))
 

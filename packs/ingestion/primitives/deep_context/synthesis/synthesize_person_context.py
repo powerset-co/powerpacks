@@ -9,6 +9,8 @@ The stage keeps the fixed artifacts and payload contract:
 ``<out-dir>/<parent_id>.jsonl`` plus ``<out-dir>/manifest.json``.
 
 Changelog:
+- 2026-09-25: `--people-csv` (the fan-in roster) feeds the worth stage's
+  notable-title rule; a notable LinkedIn headline is worth yes.
 - 2026-09-25: the default model is gpt-6-luna (DEFAULT_SYNTHESIS_MODEL); the
   shared DEFAULT_MODEL stays gpt-5.2 for the pair judge and enrichment.
 - 2026-08-08: a --model/--reasoning-effort switch since the last completed
@@ -28,6 +30,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso, read_json
 from packs.ingestion.primitives.common.legacy import scrub_retired_message_linkedin_facts
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
+    DEFAULT_PEOPLE_CSV,
     emit,
     FACTS_DIR,
     FACTS_MANIFEST,
@@ -82,6 +85,7 @@ class SynthesizePersonContext(Node):
         db: Db,
         raw_dir: Path | None = None,
         out_dir: Path | None = None,
+        people_csv: Path | None = None,
         model: str = DEFAULT_SYNTHESIS_MODEL,
         reasoning_effort: str = "medium",
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
@@ -95,6 +99,7 @@ class SynthesizePersonContext(Node):
         self.config = SynthesisConfig(
             raw_dir=Path(raw_dir or RAW_DIR),
             facts_dir=Path(out_dir or FACTS_DIR),
+            people_csv=Path(people_csv or DEFAULT_PEOPLE_CSV),
             responses=OpenAIResponsesConfig.resolve(
                 model=model,
                 effort=reasoning_effort,
@@ -222,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--raw-dir", default=str(RAW_DIR))
     parser.add_argument("--out-dir", default=str(FACTS_DIR))
+    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--model", default=DEFAULT_SYNTHESIS_MODEL)
     parser.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
@@ -244,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         db=open_existing_db(args.db),
         raw_dir=Path(args.raw_dir),
         out_dir=Path(args.out_dir),
+        people_csv=Path(args.people_csv),
         model=args.model,
         reasoning_effort=args.reasoning_effort,
         chunk_chars=args.chunk_chars,

@@ -1,4 +1,9 @@
-"""Typed synthesis planning and execution state."""
+"""Typed synthesis planning and execution state.
+
+Changelog:
+  2026-09-25: SynthesisConfig carries `people_csv`, the roster the notable-title
+      rule reads headlines from.
+"""
 
 from __future__ import annotations
 
@@ -310,6 +315,7 @@ class SynthesisPlan:
 class SynthesisConfig:
     raw_dir: Path
     facts_dir: Path
+    people_csv: Path
     responses: OpenAIResponsesConfig
     chunk_chars: int
     max_batches: int

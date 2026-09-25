@@ -1,4 +1,10 @@
-"""OpenAI Responses runner: concurrent per-person batch fan-out, merge, and fixed fact writes."""
+"""OpenAI Responses runner: concurrent per-person batch fan-out, merge, and fixed fact writes.
+
+Changelog:
+  2026-09-25: the tagging pass reads each parent's imported LinkedIn headline from
+      the roster (parent_headlines) and re-tags a saved non-yes verdict when the
+      title is notable; the cached JEV answer makes that free.
+"""
 
 from __future__ import annotations
 
@@ -24,8 +30,12 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
-from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as stored_facts
+from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as stored_facts, people as person_rows
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
+    ImportedPerson,
+    read_imported_people,
+)
 from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.deep_context.synthesis.facts import collapse_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.models import (
@@ -222,7 +232,8 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
             for batch in person_batches
         )
         total_batches += len(person_batches)
-    for parent_id, path in _tagging_paths(db, config, bundles, owner):
+    headlines = parent_headlines(db, config.people_csv)
+    for parent_id, path in _tagging_paths(db, config, bundles, owner, headlines=headlines):
         if parent_id in synthesized_ids:
             continue
         record, bundle_payload, timestamp = _tagging_inputs(bundles, parent_id, path)
@@ -371,8 +382,37 @@ def _tagging_inputs(
     return record, bundle, timestamp
 
 
-def _needs_tagging(config: SynthesisConfig, facts: dict[str, Any], request: dict[str, Any]) -> bool:
+def parent_headlines(db: Db, people_csv: Path) -> dict[str, str]:
+    """Each parent's imported LinkedIn headline, read once from the roster.
+
+    A parent takes the first non-empty headline among its members, members with
+    a public identifier first; a parent with no roster row or no headline is
+    absent from the map.
+    """
+    roster = {person.person_id: person for person in read_imported_people(people_csv)}
+    members: dict[str, list[ImportedPerson]] = {}
+    for row in person_rows(db):
+        person = roster.get(str(row.person_id))
+        if person is not None:
+            members.setdefault(str(row.parent_id), []).append(person)
+    headlines: dict[str, str] = {}
+    for parent_id, people in members.items():
+        ordered = sorted(people, key=lambda person: (not person.public_identifier, person.person_id))
+        headline = next((person.headline for person in ordered if person.headline), "")
+        if headline:
+            headlines[parent_id] = headline
+    return headlines
+
+
+def _needs_tagging(
+    config: SynthesisConfig, facts: dict[str, Any], request: dict[str, Any], *, headline: str,
+) -> bool:
     if not facts.get("labels"):
+        return True
+    decision = str((facts.get("network_worth") or {}).get("decision") or "")
+    # A notable title decides worth in code; a saved non-yes verdict is redone
+    # from the cached JEV answer, so the re-tag costs nothing.
+    if jev_worth.notable_title(headline) and decision != "yes":
         return True
     return not jev_worth.estimate(request, output_dir=config.facts_dir.parent)["cached"]
 
@@ -382,7 +422,10 @@ def _tagging_paths(
     config: SynthesisConfig,
     bundles: dict[str, CollectionBundle],
     owner: dict[str, Any],
+    *,
+    headlines: dict[str, str] | None = None,
 ) -> list[tuple[str, Path]]:
+    headlines = headlines or {}
     paths: list[tuple[str, Path]] = []
     projected = {
         row.artifact_key: row
@@ -400,7 +443,7 @@ def _tagging_paths(
         if not facts:
             continue
         request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=timestamp[:10])
-        if _needs_tagging(config, facts, request):
+        if _needs_tagging(config, facts, request, headline=headlines.get(fact.parent_id, "")):
             paths.append((fact.parent_id, path))
     return paths
 
@@ -424,7 +467,8 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
     """
     owner = asdict(plan.owner) if plan.owner else {}
     bundles = selection.effective_parent_bundles(db)
-    paths = _tagging_paths(db, config, bundles, owner)
+    headlines = parent_headlines(db, config.people_csv)
+    paths = _tagging_paths(db, config, bundles, owner, headlines=headlines)
     if not paths:
         return JevUsage()
     load_env()
@@ -442,6 +486,7 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
                     owner=owner,
                     reference_date=timestamp[:10],
                     output_dir=config.facts_dir.parent,
+                    headline=headlines.get(parent_id, ""),
                 )
                 facts = record.setdefault("facts", {})
                 facts["network_worth"] = result["network_worth"]

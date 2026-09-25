@@ -225,7 +225,40 @@ class SynthesisJevTests(unittest.TestCase):
             "usage": {"input_tokens": 200, "output_tokens": 50, "cached": False},
         }
 
-    def _node(self, root: Path, *, bundle: dict | None = BUNDLE):
+    def test_notable_roster_headline_retags_a_non_yes_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            people_csv = root / "people.csv"
+            people_csv.write_text(
+                "id,full_name,headline,public_identifier\nperson-1,Jordan Bravo,CEO @ Example Labs,jordan-bravo\n",
+                encoding="utf-8",
+            )
+            node, database = self._node(root, people_csv=people_csv)
+            path = self._write_facts(root, facts={
+                "canonical_name": "Jordan Bravo",
+                "labels": {"is_professional": 0.9},
+                "network_worth": {"decision": "maybe", "reason": "thin"},
+            })
+            owner = {"name": "Mailbox Owner"}
+            bundles = selection.effective_parent_bundles(database)
+            headlines = runner.parent_headlines(database, people_csv)
+            self.assertEqual(headlines, {"p1": "CEO @ Example Labs"})
+
+            with patch.object(runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}):
+                # Tagged, cached, but a notable title and a non-yes verdict: re-tag at $0.
+                self.assertEqual(
+                    runner._tagging_paths(database, node.config, bundles, owner, headlines=headlines),
+                    [("p1", path.resolve())],
+                )
+                tagged = json.loads(path.read_text(encoding="utf-8"))
+                tagged["facts"]["network_worth"] = {"decision": "yes", "reason": "fine"}
+                path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
+                self.assertEqual(
+                    runner._tagging_paths(database, node.config, bundles, owner, headlines=headlines),
+                    [],
+                )
+
+    def _node(self, root: Path, *, bundle: dict | None = BUNDLE, people_csv: Path | None = None):
         database = Db(root / "deep-context.sqlite")
         rows = [
             OwnerContextRow(
@@ -255,6 +288,7 @@ class SynthesisJevTests(unittest.TestCase):
             db=database,
             raw_dir=root / "raw",
             out_dir=root / "facts",
+            people_csv=people_csv,
             concurrency=1,
         )
         return node, database
