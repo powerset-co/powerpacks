@@ -77,7 +77,7 @@ creates an empty store and reports "0 rows, completed".
 Fix: stage classes take `db: Db` (required); `main()` is the only place a path
 becomes a Db, via `open_existing_db`. Delete the `db_path` parameter and the
 reconciliation line. Only `check_readiness` (must report on a possibly-absent DB)
-and `migrate_sqlite` (the sanctioned creator) stay path-based.
+and `ensure_parents` (the creator on a fresh install) stay path-based.
 
 Affected: shared/build_owner, shared/check_readiness*, collection/collect_person_context,
 synthesis/compose_dossier, shared/lookup_person, enrich/parallel_research/models,

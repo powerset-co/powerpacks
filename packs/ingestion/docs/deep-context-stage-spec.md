@@ -122,6 +122,7 @@ Never: exports feeding back as inputs; identity logic at export time.
 Purpose: absorb a pre-SQLite install exactly once, preserving paid artifacts
   and human decisions.
 Reads: legacy files (index.json, review.csv, facts, verdicts, research).
-Writes: SQLite.    Detection: check-readiness routes to migrate-sqlite.
+Writes: SQLite.    Detection: check-readiness routes to ensure-parents, then seed
+  for legacy decisions; migrate-sqlite is unrouted.
 Removal condition: delete legacy.py, migration-only graph machinery, and
   parent_identity_proof once no install predates the migration.

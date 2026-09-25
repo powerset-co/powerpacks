@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.collection.models import ChatDbProb
 from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
+from packs.ingestion.primitives.deep_context.migration import seed
 from packs.ingestion.primitives.deep_context.migration.seed import (
     SEEDED_AT_KEY,
     Seed,
@@ -173,6 +174,12 @@ class SeedFixture(unittest.TestCase):
 
 
 class SeedTests(SeedFixture):
+    def test_bare_slugs_follow_the_roster_normalization(self) -> None:
+        self.assertEqual(seed._slug("jordan%2Dbravo"), "jordan-bravo")
+        self.assertEqual(seed._slug("Jordan-Bravo/"), "jordan-bravo")
+        self.assertEqual(seed._slug("https://www.linkedin.com/in/jordan%2Dbravo/"), "jordan-bravo")
+        self.assertEqual(seed._slug("candidate:email:casey@example.com"), "")
+
     def test_merges_first_then_facts_decisions_and_research_land_by_identifier(self) -> None:
         db = self.cold_store()
         self.assertEqual(len(queries.parents(db)), 5)

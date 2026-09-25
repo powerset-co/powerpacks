@@ -31,6 +31,7 @@ import hashlib
 import json
 import re
 import sys
+import urllib.parse
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -173,7 +174,8 @@ def _slug(value: object) -> str:
         return ""
     if "linkedin.com/" in text.lower():
         return extract_public_identifier(text)
-    text = text.lower().rstrip("/")
+    # The roster stores slugs percent-decoded and lowercased (row_public_identifier).
+    text = urllib.parse.unquote(text).lower().rstrip("/")
     if ":" in text or "@" in text or " " in text or _UUID_RE.match(text) or _PARENT_ID_RE.match(text):
         return ""
     return text
