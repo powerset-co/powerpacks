@@ -4,7 +4,9 @@ The harness runs this after the domain/opportunity judges, per pond, with all th
   taste  Reporting `GET /api/taste/scores`, up to 100 URLs per call, every judged candidate, free
   judge  gpt-6-sol at low reasoning on the shortlist prompt, one verdict per overall 4/5 candidate:
          decision, priority 0-100, reason
-  Jev    four evidence signals per overall 4/5 candidate (TypeSafe)
+  Jev    four evidence signals per overall 4/5 candidate (TypeSafe); stored on the judgment record
+         as `signals` and read by nothing yet. Kept deliberately as training data for a combiner
+         (Arthur, 2026-09-25); about a cent per pond.
 A source that fails leaves its fields null with the error in provenance; the stage never fails a pond.
 
 Fields written on every judged candidate row:
