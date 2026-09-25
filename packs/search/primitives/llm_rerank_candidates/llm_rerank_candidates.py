@@ -834,12 +834,14 @@ def latest_step(state: dict[str, Any], step_id: str) -> dict[str, Any] | None:
 
 
 def state_frontier_ids(state: dict[str, Any]) -> list[str]:
-    # On a filter+rerank retry, the new filter is appended after the prior
-    # rerank. The newest frontier is authoritative, including an empty one.
+    # The newest frontier is authoritative, including an empty one: a retried
+    # filter is appended after the prior rerank, and a --force rerun appends a
+    # fresh hydrate (the whole frontier on the Jev path, which has no filter).
     for step in reversed(state.get("steps", [])):
         output = step.get("output", {}) if isinstance(step, dict) else {}
         key = ({"llm_rerank_candidates": "ranked_candidate_ids",
-                "llm_filter_candidates": "passed_candidate_ids"}.get(step.get("id"))
+                "llm_filter_candidates": "passed_candidate_ids",
+                "hydrate_people": "profile_ids"}.get(step.get("id"))
                if isinstance(step, dict) else None)
         ids = output.get(key) if key else None
         if isinstance(ids, list):
