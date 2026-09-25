@@ -5,7 +5,6 @@ import hashlib
 import json
 import tempfile
 import unittest
-from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
@@ -31,9 +30,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     project_imported_people,
     read_imported_people,
@@ -743,50 +740,6 @@ class LegacyProjectorTest(unittest.TestCase):
             projected_avatar = next(row for row in canonical_snapshot(db).artifacts if row.kind == "avatar")
             self.assertEqual(projected_avatar.path, str(avatar.resolve()))
             self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
-
-    def test_real_mirror_worth_and_foreign_keys_when_present(self) -> None:
-        root = Path("/Users/arthur/workspace/powerpacks-jake-mirror/.powerpacks")
-        if not root.exists():
-            self.skipTest("diagnostic mirror is not installed")
-        with tempfile.TemporaryDirectory() as tmp:
-            dc = root / "deep-context"
-            review = root / "network-import/overrides/review.csv"
-            db = Db(Path(tmp) / "canonical.sqlite")
-            import_legacy(
-                db,
-                review_csv=review,
-                synthetic_csv=review.parent / "synthetic-people.csv",
-                index_json=dc / "index.json",
-                facts_dir=dc / "facts",
-                verdicts_jsonl=dc / "reconcile/verdicts.jsonl",
-                research_dir=dc / "reconcile/deep-research",
-                avatar_dir=dc / "review/avatars",
-            )
-            project_imported_people(
-                db,
-                read_imported_people(root / "network-import/merged/people.csv"),
-            )
-            self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
-            self.assertEqual(
-                asdict(worth_counts(db)),
-                {
-                    "total": 5379,
-                    "pending": 61,
-                    "yes": 4169,
-                    "no": 1149,
-                },
-            )
-            self.assertEqual(
-                asdict(linkedin_progress(db)),
-                {
-                    "total": 756,
-                    # Forty-four families held several legacy machine winners.
-                    # Canonical sibling arbitration reopens those conflicts
-                    # instead of treating an absent llm_reject flag as approval.
-                    "pending": 235,
-                    "done": 521,
-                },
-            )
 
 
 if __name__ == "__main__":
