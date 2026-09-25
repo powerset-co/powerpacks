@@ -257,7 +257,13 @@ class CheckReadiness:
         # migrate-sqlite is the one creator of the store: it imports legacy artifacts or,
         # on a fresh install, creates the empty store.
         migrate = migration_required or not database_exists
-        ready = checks.people_csv.status == "ok" and any_source and has_key and not migrate
+        ready = (
+            checks.people_csv.status == "ok"
+            and any_source
+            and has_key
+            and not migrate
+            and projected.has_owner
+        )
         # Order must track ADVICE_RULES above exactly — see the comment there.
         check_statuses = (
             checks.imessage_chat_db.status,

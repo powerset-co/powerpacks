@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
+from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
 from packs.ingestion.primitives.deep_context.migration import migrate_sqlite
@@ -82,6 +83,20 @@ class FreshInstallTests(unittest.TestCase):
                 wacli_db=self.wacli,
             ).run()
 
+    def project_owner(self) -> None:
+        owner = self.deep_context / "owner.json"
+        owner.write_text('{"name": "Jordan Bravo"}', encoding="utf-8")
+        open_existing_db(self.db_path).project_rows(
+            (OwnerContextRow("owner", owner.read_text(encoding="utf-8"), str(owner), "fp-owner"),)
+        )
+
+    def project_owner(self) -> None:
+        owner = self.deep_context / "owner.json"
+        owner.write_text('{"name": "Jordan Bravo"}', encoding="utf-8")
+        open_existing_db(self.db_path).project_rows(
+            (OwnerContextRow("owner", owner.read_text(encoding="utf-8"), str(owner), "fp-owner"),)
+        )
+
     def migrate(self) -> tuple[int, dict[str, object]]:
         out = StringIO()
         with redirect_stdout(out):
@@ -111,7 +126,12 @@ class FreshInstallTests(unittest.TestCase):
         self.assertEqual(result.people_projected, 2)
         after = self.readiness()
         self.assertEqual(after.checks.canonical_sqlite.status, "ok")
-        self.assertTrue(after.ready)
+        self.assertFalse(after.ready)
+
+        self.project_owner()
+        with_owner = self.readiness()
+        self.assertIsNone(with_owner.next_command)
+        self.assertTrue(with_owner.ready)
 
     def test_check_routes_an_empty_store_to_ensure_parents(self) -> None:
         self.migrate()
@@ -129,6 +149,7 @@ class FreshInstallTests(unittest.TestCase):
 
         self.assertEqual(result.checks.owner_json.status, "absent")
         self.assertEqual(result.next_command, OWNER_COMMAND)
+        self.assertFalse(result.ready)
         self.assertTrue(any(OWNER_COMMAND in line for line in result.advice))
 
     def test_owner_required_errors_name_the_owner_command(self) -> None:

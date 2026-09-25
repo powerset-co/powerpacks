@@ -23,6 +23,7 @@ from packs.ingestion.primitives.deep_context.shared.check_readiness import Check
 from packs.ingestion.primitives.deep_context.shared.readiness_models import readiness_payload
 from packs.ingestion.primitives.deep_context.collection.collect_person_context import CollectPersonContext
 from packs.ingestion.primitives.deep_context.db.models import (
+    OwnerContextRow,
     ParentRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
@@ -535,6 +536,11 @@ class SqliteCollectionTest(unittest.TestCase):
                 },
             ],
         )
+
+        # Ready means synthesis can run, which needs the owner profile.
+        owner = self.root / "owner.json"
+        owner.write_text('{"name": "Jordan Bravo"}', encoding="utf-8")
+        self.db.project_rows((OwnerContextRow("owner", owner.read_text(encoding="utf-8"), str(owner), "fp-owner"),))
 
         with (
             mock.patch.object(
