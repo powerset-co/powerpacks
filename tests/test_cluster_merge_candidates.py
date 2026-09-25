@@ -17,6 +17,7 @@ from unittest import mock
 
 import packs.ingestion.primitives.deep_context.merge_candidates.judge as judge
 import packs.ingestion.primitives.deep_context.merge_candidates.receipts as receipts
+import packs.search.primitives.llm_rerank_candidates.jev.client as jev_client
 from packs.ingestion.primitives.common.contact_fields import identifier_phones
 from packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates import (
     ClusterMergeCandidates,
@@ -589,10 +590,12 @@ class TestJevJudge(unittest.TestCase):
     def test_dry_run_estimates_from_the_jev_price_without_spending(self):
         with tempfile.TemporaryDirectory() as directory:
             node = self._node(Path(directory))
-            with mock.patch.object(judge, "answer_requests", scripted_answers()) as fake:
+            async def no_spend(*args, **kwargs):
+                raise AssertionError("dry run reached the JEV HTTP door")
+
+            with mock.patch.object(jev_client, "_request", no_spend):
                 estimate = node.estimate()
 
-            self.assertEqual(len(fake.calls), 0)
             self.assertEqual(estimate["status"], "dry_run")
             self.assertEqual(estimate["candidate_pairs_to_judge"], 2)
             self.assertEqual(estimate["model"], MODEL_ID)
