@@ -48,7 +48,6 @@ from packs.ingestion.primitives.imports.common import (  # noqa: E402
     write_manifest,
 )
 from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
-    SHORT_CODE_OR_INVALID_PHONE,
     contact_floor_reason,
     contact_to_person,
 )
@@ -142,11 +141,7 @@ class MessagesImport(Node):
             if reason:
                 skipped[reason] += 1
                 continue
-            person = contact_to_person(contact, self.contacts_csv)
-            if person is None:
-                skipped[SHORT_CODE_OR_INVALID_PHONE] += 1
-                continue
-            people.append(person)
+            people.append(contact_to_person(contact, self.contacts_csv))
 
         self.import_dir.mkdir(parents=True, exist_ok=True)
         write_csv_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, people)

@@ -81,8 +81,13 @@ def _bad_name_reason(name: str, phone: str) -> str:
 
 
 def contact_floor_reason(row: MessageContact) -> str:
-    """First failing floor reason for a source contact ("" = passes)."""
+    """First failing floor reason for a source contact ("" = passes).
+
+    The floor owns identifier validity: a contact that passes always has a
+    candidate key, so `contact_to_person` never has to refuse one."""
     is_email = "@" in row.phone
+    if not candidate_key_for(row.phone if is_email else "", "" if is_email else row.phone):
+        return SHORT_CODE_OR_INVALID_PHONE
     if not is_email and not MIN_PHONE_DIGITS <= len(_digits(row.phone)) <= MAX_PHONE_DIGITS:
         return SHORT_CODE_OR_INVALID_PHONE
     name_reason = _bad_name_reason(row.name, "" if is_email else row.phone)
@@ -131,13 +136,11 @@ def contact_last_interaction(row: MessageContact) -> str:
     )
 
 
-def contact_to_person(row: MessageContact, contacts_csv: Path) -> dict[str, str] | None:
-    """Keep the source identity and metadata; only an absent key prevents import."""
+def contact_to_person(row: MessageContact, contacts_csv: Path) -> dict[str, str]:
+    """Keep the source identity and metadata of a contact that cleared the floor."""
     email = row.phone if "@" in row.phone else ""
     phone = "" if email else row.phone
     key = candidate_key_for(email, phone)
-    if not key:
-        return None
 
     name_parts = row.name.split(None, 1)
     counts = contact_interaction_counts(row)
