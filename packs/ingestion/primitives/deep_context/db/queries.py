@@ -1,4 +1,8 @@
-"""Narrow typed reads for canonical people, facts, and artifacts."""
+"""Narrow typed reads for canonical people, facts, and artifacts.
+
+Changelog:
+- 2026-09-25: selected candidate keys bind as one JSON array (`schema.ID_SET`).
+"""
 
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     PersonSourceRow,
 )
+from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 
@@ -216,9 +221,8 @@ def artifacts(
         selected = tuple(dict.fromkeys(candidate_keys))
         if not selected:
             return ()
-        placeholders = ",".join("?" for _ in selected)
-        clauses.append(f"candidate_key IN ({placeholders})")
-        params.extend(selected)
+        clauses.append(f"candidate_key IN {ID_SET}")
+        params.append(id_set(selected))
     if parent_owned is not None:
         clauses.append("person_id IS NULL" if parent_owned else "person_id IS NOT NULL")
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""

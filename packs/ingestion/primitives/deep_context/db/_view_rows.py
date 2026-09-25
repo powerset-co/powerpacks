@@ -1,6 +1,7 @@
 """Private row shapers shared by the named review queries.
 
 Changelog:
+- 2026-09-25: candidate hydration binds its parent ids as one JSON array; `_worth_rows` can select one parent.
 - 2026-09-25: the worth Yes/No tables list every row with that effective worth;
   the links predicate that hid unresearched people is gone.
 """
@@ -27,6 +28,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PARENT_WORTH_PREFIX,
     ResearchHandle,
 )
+from packs.ingestion.primitives.deep_context.db.schema import id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
 from packs.ingestion.primitives.deep_context.db.view_models import (
@@ -92,9 +94,16 @@ def _worth_row(row: sqlite3.Row) -> WorthRow:
     )
 
 
-def _worth_rows(db: Db, *, pending_only: bool) -> list[WorthRow]:
-    where = f"WHERE {WORTH_GATE_MAYBE} AND w.has_synthetic=0" if pending_only else ""
-    rows = db.query(WORTH_CTE + WORTH_SELECT.format(where=where))
+def _worth_rows(db: Db, *, pending_only: bool, parent_id: str | None = None) -> list[WorthRow]:
+    clauses: list[str] = []
+    params: tuple[str, ...] = ()
+    if pending_only:
+        clauses.append(f"{WORTH_GATE_MAYBE} AND w.has_synthetic=0")
+    if parent_id is not None:
+        clauses.append("w.parent_id=?")
+        params = (parent_id,)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = db.query(WORTH_CTE + WORTH_SELECT.format(where=where), params)
     return [_worth_row(row) for row in rows]
 
 
@@ -266,11 +275,8 @@ def _hydrate_parents(
     if not parent_rows:
         return []
     candidates_by_id: dict[str, list[CandidateViewRow]] = {str(row["parent_id"]): [] for row in parent_rows}
-    sql = LINKEDIN_CTE + CANDIDATE_SELECT.format(
-        parent_placeholders=",".join("?" for _ in candidates_by_id),
-        pending="AND c.is_pending=1" if pending_only else "",
-    )
-    for row in db.query(sql, tuple(candidates_by_id)):
+    sql = LINKEDIN_CTE + CANDIDATE_SELECT.format(pending="AND c.is_pending=1" if pending_only else "")
+    for row in db.query(sql, (id_set(tuple(candidates_by_id)),)):
         candidates_by_id[row["parent_id"]].append(_candidate_row(row))
     return [_parent_row(row, tuple(candidates_by_id[row["parent_id"]])) for row in parent_rows]
 

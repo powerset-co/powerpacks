@@ -1,6 +1,13 @@
-"""LinkedIn review, enrichment, and identity receipt projections."""
+"""LinkedIn review, enrichment, and identity receipt projections.
+
+Changelog:
+- 2026-09-25: approved families read through `_family_rows`, one JSON-bound id set.
+"""
 
 from __future__ import annotations
+
+import sqlite3
+from collections.abc import Sequence
 
 from packs.ingestion.primitives.deep_context.db._view_rows import (
     _all_parents,
@@ -25,6 +32,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
+from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
@@ -60,6 +68,22 @@ def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
 # an import cycle back into this module.
 
 
+def _family_rows(db: Db, parent_ids: Sequence[str]) -> list[sqlite3.Row]:
+    """Members and identifiers of the given families; the ids bind as one JSON array."""
+    return db.query(
+        f"""
+SELECT p.parent_id, p.display_name, pe.person_id, pe.is_ghost,
+       pi.kind, pi.normalized_value, pi.display_value
+FROM parents p
+JOIN people pe USING(parent_id)
+LEFT JOIN person_identifiers pi USING(person_id)
+WHERE p.parent_id IN {ID_SET}
+ORDER BY p.parent_id, pe.person_id, pi.kind, pi.normalized_value
+""",
+        (id_set(parent_ids),),
+    )
+
+
 def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
     links_by_key = {row.row_key: row for row in links(db)}
     approved = [
@@ -73,20 +97,7 @@ def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
     if not approved:
         return []
 
-    parent_ids = sorted({link.parent_id for _, link in approved})
-    placeholders = ",".join("?" for _ in parent_ids)
-    rows = db.query(
-        f"""
-SELECT p.parent_id, p.display_name, pe.person_id, pe.is_ghost,
-       pi.kind, pi.normalized_value, pi.display_value
-FROM parents p
-JOIN people pe USING(parent_id)
-LEFT JOIN person_identifiers pi USING(person_id)
-WHERE p.parent_id IN ({placeholders})
-ORDER BY p.parent_id, pe.person_id, pi.kind, pi.normalized_value
-""",
-        tuple(parent_ids),
-    )
+    rows = _family_rows(db, sorted({link.parent_id for _, link in approved}))
     names: dict[str, str] = {}
     real_members: dict[str, list[str]] = {}
     identifiers: dict[str, dict[str, set[str]]] = {}

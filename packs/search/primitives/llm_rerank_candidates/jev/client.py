@@ -6,6 +6,7 @@ answers out, reusing the exact-request cache under `<output_dir>/jev/`.
 question set, then turns the answers into a qualification score.
 
 Changelog:
+  2026-09-25: MAX_CONCURRENCY 4 -> 32 after measuring the endpoint's headroom.
   2026-09-25: profile-only request. Request compaction is gone with the per-position
     questions (the request no longer duplicates position bodies), cache records no longer
     carry an effective-request kind, and features build from answers alone. Cache validation
@@ -54,7 +55,9 @@ MODEL = MODEL_ID
 SCORE_TYPE = "qualification_score"
 THRESHOLD = F1_CUTOFF
 MODEL_ASSET_SHA256 = hashlib.sha256(MODEL_ASSET.read_bytes()).hexdigest()
-MAX_CONCURRENCY = 4
+# Measured 2026-09-25 on 600 live requests: 16 in flight ran 55/s and 32 ran 66/s
+# with zero retries, against 7/s at 4. 429s still back off via Retry-After.
+MAX_CONCURRENCY = 32
 MAX_RETRIES = 2
 TIMEOUT_SECONDS = 120
 MAX_INPUT_TOKENS = 64_000

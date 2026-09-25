@@ -1,4 +1,8 @@
-"""Narrow typed reads for candidate, research, guidance, and review state."""
+"""Narrow typed reads for candidate, research, guidance, and review state.
+
+Changelog:
+- 2026-09-25: selected row keys and parent ids bind as one JSON array each (`schema.ID_SET`).
+"""
 
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.queries import typed_rows
+from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 
@@ -39,17 +44,15 @@ def links(
         selected = tuple(dict.fromkeys(selected_row_keys))
         if not selected:
             return ()
-        placeholders = ",".join("?" for _ in selected)
-        clauses.append(f"row_key IN ({placeholders})")
-        params.extend(selected)
+        clauses.append(f"row_key IN {ID_SET}")
+        params.append(id_set(selected))
     selected_parent_ids = (parent_id,) if parent_id is not None else parent_ids
     if selected_parent_ids is not None:
         selected = tuple(dict.fromkeys(selected_parent_ids))
         if not selected:
             return ()
-        placeholders = ",".join("?" for _ in selected)
-        clauses.append(f"parent_id IN ({placeholders})")
-        params.extend(selected)
+        clauses.append(f"parent_id IN {ID_SET}")
+        params.append(id_set(selected))
     if kind is not None:
         clauses.append("kind=?")
         params.append(kind)
