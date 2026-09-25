@@ -208,24 +208,24 @@ class TestDeepenCommands(unittest.TestCase):
         self.assertNotIn("history fill", commands)
 
     def test_whatsapp_store_depth_for_check_and_deepen(self):
-        directory = Path(tempfile.mkdtemp())
-        db = directory / "wacli.db"
-        with sqlite3.connect(db) as con:
-            con.execute("CREATE TABLE messages (ts INTEGER)")
-            con.executemany("INSERT INTO messages VALUES (?)", [(1_700_000_000,), (1_700_086_400,)])
-        csv = self._write("Founder,Cell,Emails,WhatsApp Groups\nJordan Bravo,,,\n")
-        args = Namespace(
-            csv=str(csv), channels="whatsapp", msgvault_db="unused-msgvault.db",
-            chat_db="unused-chat.db", wacli_db=str(db), limit=0, slug="",
-            run=False, rounds=1,
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "wacli.db"
+            with sqlite3.connect(db) as con:
+                con.execute("CREATE TABLE messages (ts INTEGER)")
+                con.executemany("INSERT INTO messages VALUES (?)", [(1_700_000_000,), (1_700_086_400,)])
+            csv = self._write("Founder,Cell,Emails,WhatsApp Groups\nJordan Bravo,,,\n")
+            args = Namespace(
+                csv=str(csv), channels="whatsapp", msgvault_db="unused-msgvault.db",
+                chat_db="unused-chat.db", wacli_db=str(db), limit=0, slug="",
+                run=False, rounds=1,
+            )
 
-        for command, key in ((lx.cmd_check, "store_depth"), (lx.cmd_deepen, "current_depth")):
-            depth = command(args)[key]["whatsapp"]
-            self.assertEqual(depth["status"], "ok")
-            self.assertEqual(depth["messages"], 2)
-            self.assertEqual(depth["earliest"], "2023-11-14T22:13:20Z")
-            self.assertEqual(depth["latest"], "2023-11-15T22:13:20Z")
+            for command, key in ((lx.cmd_check, "store_depth"), (lx.cmd_deepen, "current_depth")):
+                depth = command(args)[key]["whatsapp"]
+                self.assertEqual(depth["status"], "ok")
+                self.assertEqual(depth["messages"], 2)
+                self.assertEqual(depth["earliest"], "2023-11-14T22:13:20Z")
+                self.assertEqual(depth["latest"], "2023-11-15T22:13:20Z")
 
 
 if __name__ == "__main__":
