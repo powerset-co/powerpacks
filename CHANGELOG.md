@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.13.0...powerpacks-v2.14.0) (2026-09-25)
+
+
+### Features
+
+* **share:** label, share and upload the local network to Powerset ([#557](https://github.com/powerset-co/powerpacks/issues/557)) ([e38a584](https://github.com/powerset-co/powerpacks/commit/e38a5842f5cbbfae10172b6a706f51fc71cccb4d))
+
 ## [2.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.12.0...powerpacks-v2.13.0) (2026-09-25)
 
 
