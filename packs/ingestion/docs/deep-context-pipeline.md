@@ -3,6 +3,8 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-09-25: the seed upgrade path, the deletion of the old migration and the
+  store scale fixes ship together as 3.1.0; 3.0.0 was the breaking cut.
 - 2026-09-25: a notable imported LinkedIn headline is worth Yes (code rule after
   the JEV answers); label badges show titles without percentages.
 - 2026-09-25: `ensure-parents` creates the store; `seed` carries a legacy install's
