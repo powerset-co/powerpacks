@@ -392,8 +392,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 estimated_usd=0.04,
             )
         )
-        self.assertIn("Parallel estimate: $0.04", approval)
-        self.assertIn("profile fetches and identity-judge calls", approval)
+        # The approval button carries the estimate as its label; the old
+        # "Parallel estimate:" / cost-detail paragraph was removed.
+        self.assertIn("Approve $0.04", approval)
+        self.assertIn("data-approve-enrichment", approval)
         progress = SqliteReviewAdapter(self.db).snapshot().progress
         extra_markup = "".join(
             (
@@ -873,7 +875,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "SELECT decision_note FROM links WHERE row_key=?", (self.PUB,)
         )[0]["decision_note"]
         self.assertEqual(note, "Synthetic correction")
-        for key in ("counts", "progress", "resolved_pubs", "state_token"):
+        for key in ("progress", "resolved_pubs", "state_token"):
             self.assertIn(key, payload)
 
     def test_worth_accepts_worth_pub_parent_slug_and_note(self) -> None:

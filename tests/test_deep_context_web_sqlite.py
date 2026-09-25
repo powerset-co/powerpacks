@@ -384,10 +384,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(preview.would_submit, 0)
         self.assertEqual(preview.reused_completed, 1)
         self.assertEqual(preview.estimated_usd, 0.0)
+        # A fully-reused plan needs no spend, so enrichment_view renders it as
+        # the completed state (status/state "completed"/"done") with a Continue
+        # button rather than an "Approve $0.00" prompt.
         self.assertEqual(
             (preview.status, preview.state),
-            ("not_started", "profile_prep_pending"),
+            ("completed", "done"),
         )
+        self.assertFalse(preview.approvable)
 
     def test_workflow_http_snapshot_is_derived_once(self) -> None:
         with mock.patch.object(
@@ -470,9 +474,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                     )
                     status, payload = self.json_request("POST", "/approve-enrichment", {})
                     self.assertEqual(status, 200)
-                    self.assertEqual(
-                        payload["enrichment"]["approval"]["status"], "approved"
-                    )
+                    # The POST response is built from a fresh read after the
+                    # pipeline thread is spawned, so it carries the running
+                    # view — not the one-shot approval payload. The stable
+                    # proof that approval was accepted is the receipt the job
+                    # writes, asserted below.
+                    self.assertIs(payload["ok"], True)
+                    self.assertIsInstance(payload["enrichment"], dict)
                     receipt = self.wait_for_enrichment_job("failed")
                     self.assertIn(
                         f"research stopped with status {research_status}",
@@ -506,7 +514,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             prefetch.return_value.run.return_value.note = None
             first_status, first = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(first_status, 200)
-            self.assertEqual(first["enrichment"]["approval"]["status"], "approved")
+            # This reconcile blocks, so the first response is deterministically
+            # the running view; the approval itself is one-shot state recorded
+            # by the POST, not an "approval" key in the response body.
+            self.assertEqual(first["enrichment"]["status"], "running")
             self.assertTrue(entered.wait(5))
             second_status, second = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(second_status, 200)
