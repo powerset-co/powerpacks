@@ -37,6 +37,9 @@ WITH eligible_links AS (
          COALESCE(r.machine_worth, 'maybe') AS machine_worth,
          COALESCE(r.machine_worth_reason, '') AS machine_worth_reason,
          CASE WHEN r.machine_worth IS NULL THEN 'default' ELSE 'llm' END AS machine_source,
+         -- The winning fact carries the machine verdict's identity, so its
+         -- synthesized facts hold that person's share labels.
+         r.facts_json AS machine_facts_json,
          COALESCE(p.human_worth, r.machine_worth, 'maybe') AS effective_worth,
          (SELECT json_group_array(person_id) FROM (
             SELECT person_id FROM people
@@ -201,7 +204,7 @@ PARENT_SELECT = """
 SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
        w.machine_worth, w.machine_worth_reason, w.machine_source, w.effective_worth,
        p.human_worth, p.human_worth_note, p.human_worth_at,
-       w.person_ids_json,
+       w.person_ids_json, w.machine_facts_json,
        (SELECT json_group_array(source) FROM (
          SELECT DISTINCT ps.source FROM people pe JOIN person_sources ps USING(person_id)
          WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 ORDER BY ps.source

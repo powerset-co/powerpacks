@@ -47,6 +47,23 @@ def _json(value: object, fallback: Any) -> Any:
         return fallback
 
 
+def _fact_labels(facts_json: object) -> tuple[tuple[str, float | str], ...]:
+    """Share labels saved inside one synthesized facts payload."""
+    payload = parse_json_object(facts_json)
+    labels = payload.get("labels") if payload else None
+    if not isinstance(labels, dict):
+        return ()
+    return tuple(
+        sorted(
+            (
+                str(key),
+                float(value) if isinstance(value, (int, float)) else str(value),
+            )
+            for key, value in labels.items()
+        )
+    )
+
+
 def _worth_row(row: sqlite3.Row) -> WorthRow:
     human: WorthHumanRow | None = None
     if row["human_worth"]:
@@ -233,6 +250,7 @@ def _parent_row(
         worth=WorthSummary(worth.effective, worth.source),
         machine_worth=worth.machine,
         candidates=candidates,
+        labels=_fact_labels(row["machine_facts_json"]),
     )
 
 

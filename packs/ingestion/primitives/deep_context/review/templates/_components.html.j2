@@ -95,6 +95,7 @@
     <div class='eyebrow-row'>{{ source_badges(parent) }}</div>
     {%- endif %}
     <h2>{{ name }}</h2>
+    {{ label_badges(parent) }}
     {%- if url %}
     <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>↗</span></a>
     {%- endif %}

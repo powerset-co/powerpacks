@@ -156,6 +156,8 @@ class ParentViewRow:
     worth: WorthSummary
     machine_worth: WorthMachineRow
     candidates: tuple[CandidateViewRow, ...] = ()
+    # Share labels from the parent's synthesized facts, sorted for stability.
+    labels: tuple[tuple[str, float | str], ...] = ()
 
 
 @dataclass(frozen=True)

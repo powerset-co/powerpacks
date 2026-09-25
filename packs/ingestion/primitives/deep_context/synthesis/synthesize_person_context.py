@@ -30,6 +30,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     FACTS_DIR,
     FACTS_MANIFEST,
     FACTS_TEMPLATE,
+    JEV_CACHE_TEMPLATE,
     OWNER_JSON,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
@@ -64,7 +65,12 @@ class SynthesizePersonContext(Node):
         Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
         Artifact(path=str(OWNER_JSON), required=False),
     )
-    outputs = (Artifact(path=FACTS_TEMPLATE, required=False),)
+    outputs = (
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        # The JEV request cache: written and re-read by this same node during the
+        # labelling phase, so it is a one-way export like the facts above.
+        Artifact(path=JEV_CACHE_TEMPLATE, required=False),
+    )
     payload = SynthesizePersonContextManifest
     manifest = str(FACTS_MANIFEST)
 
@@ -150,7 +156,7 @@ class SynthesizePersonContext(Node):
 
     def estimate(self) -> dict[str, Any]:
         """Estimate calls and cost without spending or replacing the manifest."""
-        payload = runner.estimate(self.config, self._plan())
+        payload = runner.estimate(self.db, self.config, self._plan())
         payload["updated_at"] = now_iso()
         return payload
 
@@ -168,6 +174,9 @@ class SynthesizePersonContext(Node):
         scrub_retired_message_linkedin_facts(self.config.facts_dir)
         plan = self._migrate_parent_cache()
         tally = runner.run_paid(self.db, self.config, plan)
+        # JEV labels the saved facts after every GPT checkpoint is durable, and
+        # re-projects each tagged record so SQLite carries its worth and labels.
+        jev_usage = runner.tag_saved_facts(self.db, self.config, plan)
         fact_count, without_worth = parent_fact_counts(self.db)
         worth_sync = WorthSyncResult(
             path=str(self.db.db_path),
@@ -200,9 +209,10 @@ class SynthesizePersonContext(Node):
                 tally.tokens["input_tokens"],
                 billed_output,
                 self.config.responses.model,
-            ),
+            ) + jev_usage.cost_usd,
             out_dir=str(self.config.facts_dir),
             worth_sync=worth_sync,
+            jev=jev_usage,
             elapsed_ms=int((time.monotonic() - started) * 1000),
             updated_at=now_iso(),
         )
@@ -229,7 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--rejudge",
         action="store_true",
-        help="Rejudge every message-backed dossier despite cached machine/human worth; preserve the human column",
+        help="Reclassify saved facts with JEV, reusing identical cached requests; preserve human worth",
     )
     parser.add_argument("--dry-run", action="store_true", help="Estimate calls/cost, spend nothing")
     return parser

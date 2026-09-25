@@ -11,13 +11,14 @@
   <summary class='decision-row-summary'>
     <span class='decision-row-caret' aria-hidden='true'></span>
     {{ ui.avatar(parent, primary_candidate(parent)) }}
-    <div class='decision-row-main'><strong>{{ name }}</strong><span>{{ reason }}</span></div>
+    <div class='decision-row-main'><div class='person-name-line'><strong>{{ name }}</strong>{{ label_badges(parent, show_scores=false) }}</div></div>
     <div class='decision-row-actions'>
       <button class='button button-ghost' data-worth='{{ target }}' data-pub='{{ parent.worth_row.key }}'
               data-parent='{{ parent.slug }}' aria-label='Mark {{ name }} {{ flip_label }}'>{{ flip_label }}</button>
     </div>
   </summary>
   <div class='decision-row-detail'>
+    <div class='decision-expanded-profile'><h2>{{ name }}</h2>{{ label_badges(parent, show_scores=false) }}</div>
     <dl class='row-facts'>
       {%- set contacts = candidate_contacts(primary_candidate(parent)) if primary_candidate(parent) else '' %}
       {%- if contacts %}

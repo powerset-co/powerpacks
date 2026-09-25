@@ -8,7 +8,7 @@ import urllib.parse
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from markupsafe import Markup
+from markupsafe import Markup, escape
 from markdown_it import MarkdownIt
 
 from packs.ingestion.primitives.deep_context.db.people_views import (
@@ -46,6 +46,68 @@ def _nonempty(items: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(item for item in items if item.strip())
 
 
+# The 34 share-label questions carry a short display title each; the badges show
+# every label whose probability clears the threshold, highest first.
+_LABEL_TITLES = (
+    ("is_family", "Family"), ("is_close_friend", "Close friend"),
+    ("is_founder", "Founder"), ("is_investor", "Investor"),
+    ("is_coworker_current", "Coworker"), ("is_coworker_past", "Former coworker"),
+    ("is_classmate", "Classmate"), ("is_mentor_or_advisor", "Mentor / advisor"),
+    ("is_client", "Client"), ("is_recruiter", "Recruiter"),
+    ("is_service_provider", "Service provider"), ("is_automated_sender", "Automated sender"),
+    ("is_stranger", "Stranger"), ("is_transactional", "Transactional"),
+    ("is_professional", "Work-related"), ("is_personal", "Personal"),
+    ("is_vendor_or_partner", "Vendor / partner"), ("is_mentee_or_report", "Mentee / report"),
+    ("is_neighbor_or_local", "Neighbor / local"), ("met_in_person", "Met in person"),
+    ("owner_would_intro", "Would introduce"), ("they_would_take_owner_call", "Would take your call"),
+    ("notable", "Public figure"), ("sensitive_context", "Sensitive topics"),
+    ("is_healthcare_legal_or_financial_provider", "Medical / legal / financial services"),
+    ("confidential_dealings", "Confidential"), ("is_minor", "Under 18"),
+    ("real_relationship", "Direct contact"), ("work_signal", "Work-related"),
+    ("professional_standing", "Established professional"), ("noise", "Spam / broadcasts"),
+    ("transactional_only", "Transactional"), ("evidence_incomplete", "Limited context"),
+)
+_VISIBLE_LABELS = 3
+_LABEL_THRESHOLD = 0.85
+
+
+def _label_badges(parent: ParentViewRow, *, show_scores: bool = True) -> Markup:
+    """The visible share-label badges for one parent, scores hidden on hover."""
+
+    def sort_key(item: tuple[str, float]) -> float:
+        return -item[1]
+
+    labels = dict(parent.labels)
+    scores: dict[str, float] = {}
+    for key, title in _LABEL_TITLES:
+        if key in labels:
+            scores[title] = max(scores.get(title, 0.0), float(labels[key]))
+    relationship = str(labels.get("relationship_kind") or "")
+    if relationship and relationship != "unknown" and "relationship_kind_p" in labels:
+        title = relationship.replace("_", " ").capitalize()
+        scores[title] = max(scores.get(title, 0.0), float(labels["relationship_kind_p"]))
+    names = [
+        f"{title} {score:.0%}" if show_scores else title
+        for title, score in sorted(scores.items(), key=sort_key)
+        if score >= _LABEL_THRESHOLD
+    ]
+    if not names:
+        return Markup("")
+    shown = "".join(
+        f"<span class='person-label'>{escape(name)}</span>"
+        for name in names[:_VISIBLE_LABELS]
+    )
+    remaining = names[_VISIBLE_LABELS:]
+    if remaining:
+        tooltip = " · ".join(remaining)
+        shown += (
+            f"<span class='person-label-more' tabindex='0' role='button' "
+            f"aria-label='{escape('More labels: ' + tooltip)}'>+{len(remaining)}"
+            f"<span class='person-label-tooltip' role='tooltip'>{escape(tooltip)}</span></span>"
+        )
+    return Markup(f"<span class='person-labels'>{shown}</span>")
+
+
 def _candidate_contacts(candidate: CandidateViewRow) -> str:
     # The same phone arrives as E.164 and bare-local; collapse to one entry
     # per number, preferring whichever display came first.
@@ -71,6 +133,7 @@ _TEMPLATES.globals.update(
     initials=_initials,
     nonempty=_nonempty,
     primary_candidate=_primary_candidate,
+    label_badges=_label_badges,
 )
 _TEMPLATES.filters["urlencode"] = urllib.parse.quote
 GO_BACK_HTML = _render("go_back.html.j2")

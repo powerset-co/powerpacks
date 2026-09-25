@@ -28,7 +28,6 @@ DEFAULT_TARGET_CONFIDENCE = 0.85
 SYSTEM_PROMPT = load_prompt("person_synthesis_system")
 OWNER_PROMPT_SUFFIX = f"\n\n{load_prompt('owner_context_suffix')}\n\n"
 OWNER_IDENTITY_CHECK = load_prompt("owner_identity_check")
-WORTH_POLICY = load_prompt("worth_policy")
 FACT_SCHEMA: dict[str, Any] = json.loads(
     Path(__file__).with_name("fact_schema.json").read_text(encoding="utf-8")
 )
@@ -59,7 +58,6 @@ SYNTHESIS_VERSION = hashlib.sha1(
             "contract": SYNTHESIS_CONTRACT_VERSION,
             "system_prompt": SYSTEM_PROMPT,
             "schema": FACT_SCHEMA,
-            "worth_policy": WORTH_POLICY,
             "owner_prompt_suffix": OWNER_PROMPT_SUFFIX,
             "owner_identity_check": OWNER_IDENTITY_CHECK,
             "owner_identity_block": owner_identity_block(
@@ -159,9 +157,7 @@ def render_batch(
             "facts unless a message contradicts them; raise `confidence` only as the picture "
             "gets more complete and certain):\n" + json.dumps(compact, ensure_ascii=False)
         )
-    parts.append(
-        render_chunk(person, batch) + "\n\nWORTH SOURCE POLICY:\n" + WORTH_POLICY
-    )
+    parts.append(render_chunk(person, batch))
     return "\n\n".join(parts)
 
 

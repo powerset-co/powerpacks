@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import tiktoken
 
+from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.jev_worth import runner as jev_worth
+from packs.ingestion.primitives.deep_context.jev_worth.questions import build_request
+from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller,
     estimate_cost_usd,
@@ -17,10 +24,11 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.synthesis import prompting
+from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.deep_context.synthesis.facts import collapse_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
+    JevUsage,
     SynthesizedFacts,
     SynthesisCallResult,
     SynthesisConfig,
@@ -30,6 +38,10 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     SynthesisTally,
     SynthesisUsage,
     TOKEN_KEYS,
+)
+from packs.search.primitives.llm_rerank_candidates.jev.client import (
+    INPUT_PRICE_PER_MILLION,
+    MAX_CONCURRENCY,
 )
 
 # Empirical batches/sec for the dry-run wall-clock estimate only; real
@@ -172,13 +184,28 @@ async def synthesize_person(
     return SynthesisResult(person.person_id, record, errors, total_failure=total_failure)
 
 
-def estimate(config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
+def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
     encoder = tiktoken.get_encoding("o200k_base")
+    owner = asdict(plan.owner) if plan.owner else {}
+    bundles = selection.effective_parent_bundles(db)
     total_tokens = total_batches = people = 0
+    jev_cost = 0.0
+    jev_people = 0
+    synthesized_ids = {bundle.person_id for bundle in plan.bundles}
     for bundle in plan.bundles:
         if not bundle.messages:
             continue
         people += 1
+        # The JEV request needs facts that don't exist yet, so a placeholder
+        # profile of the expected output size stands in for the token count only.
+        request = build_request(
+            facts={"summary": "x " * 750},
+            bundle=bundle.to_payload(),
+            owner=owner,
+            reference_date=now_iso()[:10],
+        )
+        jev_cost += jev_worth.estimate(request)["cost_usd"]
+        jev_people += 1
         person_batches = prompting.batches(
             bundle.messages,
             chunk_chars=config.chunk_chars,
@@ -193,6 +220,18 @@ def estimate(config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
             for batch in person_batches
         )
         total_batches += len(person_batches)
+    for path in _tagging_paths(config, bundles, owner):
+        if path.stem in synthesized_ids:
+            continue
+        record, bundle_payload, timestamp = _tagging_inputs(config, bundles, path)
+        request = build_request(
+            facts=record["facts"],
+            bundle=bundle_payload,
+            owner=owner,
+            reference_date=timestamp[:10],
+        )
+        jev_cost += jev_worth.estimate(request, output_dir=config.facts_dir.parent)["cost_usd"]
+        jev_people += 1
     # Still called floor/ceiling for output-shape stability: the two numbers
     # are now the same value because both scenarios ARE the same scenario.
     estimated_cost_usd = estimate_cost_usd(
@@ -214,8 +253,10 @@ def estimate(config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
         "orphan_facts_removed": 0,
         "rejudge": config.rejudge,
         "max_batches": config.max_batches,
-        "estimated_cost_floor_usd": estimated_cost_usd,
-        "estimated_cost_ceiling_usd": estimated_cost_usd,
+        "estimated_cost_floor_usd": estimated_cost_usd + jev_cost,
+        "estimated_cost_ceiling_usd": estimated_cost_usd + jev_cost,
+        "jev_people": jev_people,
+        "jev_estimated_cost_usd": jev_cost,
         "estimated_wall_seconds_ceiling": round(total_batches / CHUNKS_PER_SEC, 1),
         "note": "approximate (output/reasoning tokens vary with --reasoning-effort); every person's batches all run now (no adaptive stop), so floor and ceiling are the same number.",
     }
@@ -283,3 +324,128 @@ def run_paid(
 
     asyncio.run(driver())
     return tally
+
+
+# People held in memory per JEV chunk; API concurrency is the MAX_CONCURRENCY
+# semaphore, not this bound.
+TAG_CHUNK_PEOPLE = 200
+
+
+def _load_facts_record(path: Path) -> dict[str, Any]:
+    try:
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return records[-1] if records else {}
+
+
+def _backup_facts(path: Path) -> None:
+    backup = path.with_suffix(path.suffix + ".bkup")
+    if path.exists() and not backup.exists():
+        shutil.copy2(path, backup)
+
+
+def _chunked(seq: list[Any], size: int) -> Any:
+    for index in range(0, len(seq), max(1, size)):
+        yield seq[index:index + size]
+
+
+def _bundle_payload(bundles: dict[str, CollectionBundle], parent_id: str) -> dict[str, Any]:
+    bundle = bundles.get(parent_id)
+    return bundle.to_payload() if bundle else {}
+
+
+def _tagging_inputs(
+    config: SynthesisConfig,
+    bundles: dict[str, CollectionBundle],
+    path: Path,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    record = _load_facts_record(path)
+    bundle = _bundle_payload(bundles, path.stem)
+    # A tagged record carries its own updated_at; only an untagged one falls back
+    # to the file's mtime, so --rejudge reproduces the same request (and cache key).
+    timestamp = str(
+        record.get("updated_at")
+        or datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    )
+    return record, bundle, timestamp
+
+
+def _needs_tagging(config: SynthesisConfig, facts: dict[str, Any], request: dict[str, Any]) -> bool:
+    if config.rejudge or not facts.get("labels"):
+        return True
+    return not jev_worth.estimate(request, output_dir=config.facts_dir.parent)["cached"]
+
+
+def _tagging_paths(
+    config: SynthesisConfig,
+    bundles: dict[str, CollectionBundle],
+    owner: dict[str, Any],
+) -> list[Path]:
+    paths: list[Path] = []
+    for path in sorted(config.facts_dir.glob("*.jsonl")):
+        record, bundle, timestamp = _tagging_inputs(config, bundles, path)
+        facts = record.get("facts") or {}
+        if not facts:
+            continue
+        request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=timestamp[:10])
+        if _needs_tagging(config, facts, request):
+            paths.append(path)
+    return paths
+
+
+def _tally_jev(total: dict[str, Any], usage: dict[str, Any]) -> None:
+    total["people"] += 1
+    total["cached"] += int(usage["cached"])
+    if usage["cached"]:
+        return
+    total["input_tokens"] += usage["input_tokens"]
+    total["output_tokens"] += usage["output_tokens"]
+    total["cost_usd"] += usage["input_tokens"] * INPUT_PRICE_PER_MILLION / 1_000_000
+
+
+def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> JevUsage:
+    """Label the facts already on disk with JEV, rewriting each record in place.
+
+    Runs after the GPT checkpoints are durable, so a failed label request never
+    repeats extraction. Each tagged record is re-projected so SQLite's facts_json
+    and machine_worth carry the new worth and labels.
+    """
+    owner = asdict(plan.owner) if plan.owner else {}
+    bundles = selection.effective_parent_bundles(db)
+    paths = _tagging_paths(config, bundles, owner)
+    if not paths:
+        return JevUsage()
+    load_env()
+    usage: dict[str, Any] = {"people": 0, "cached": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+
+    async def tag_all() -> None:
+        semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+
+        async def tag(path: Path) -> None:
+            async with semaphore:
+                record, bundle, timestamp = _tagging_inputs(config, bundles, path)
+                result = await jev_worth.classify(
+                    facts=record.get("facts") or {},
+                    bundle=bundle,
+                    owner=owner,
+                    reference_date=timestamp[:10],
+                    output_dir=config.facts_dir.parent,
+                )
+                facts = record.setdefault("facts", {})
+                facts["network_worth"] = result["network_worth"]
+                facts["labels"] = result["labels"]
+                record["updated_at"] = timestamp
+                record["jev_usage"] = result["usage"]
+                lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                lines[-1] = json.dumps(record, ensure_ascii=False)
+                _backup_facts(path)
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                project_parent_fact(db, path, path.stem)
+                _tally_jev(usage, result["usage"])
+
+        for chunk in _chunked(paths, TAG_CHUNK_PEOPLE):
+            await asyncio.gather(*(tag(path) for path in chunk))
+
+    asyncio.run(tag_all())
+    return JevUsage(**usage)

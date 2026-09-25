@@ -28,7 +28,7 @@ PROMPTS = {
     "person_synthesis_system": (
         "packs.ingestion.primitives.deep_context.synthesis.prompting",
         "SYSTEM_PROMPT",
-        "7e0bff6b0617d53d40e93d8932cffe1a7bec6d49df286ce7099363e80a9ace97",
+        "c032ddf9205685153ab7233ecf2de50f9789d41cdb1eb23fa6be06c16eea35f9",
     ),
     "owner_context_suffix": (
         "packs.ingestion.primitives.deep_context.synthesis.prompting",

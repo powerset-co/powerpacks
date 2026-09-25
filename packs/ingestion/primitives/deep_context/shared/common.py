@@ -51,6 +51,9 @@ RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{parent_id}.json")
 RAW_MANIFEST = RAW_DIR / "manifest.json"
 FACTS_TEMPLATE = str(FACTS_DIR / "{parent_id}.jsonl")
 FACTS_MANIFEST = FACTS_DIR / "manifest.json"
+# The JEV exact-request cache: one file per sha256 of the canonical request,
+# written and read by synthesis's JEV labelling phase (not a per-parent template).
+JEV_CACHE_TEMPLATE = str(ROOT / "jev" / "{request_sha256}.json")
 DOSSIER_TEMPLATE = str(DOSSIER_DIR / "{slug}.md")
 DOSSIERS_MANIFEST = DOSSIER_DIR / "manifest.json"
 # merge_candidates (cluster_merge_candidates) writes MERGE_CSV/MERGE_MD/MERGE_MANIFEST for human

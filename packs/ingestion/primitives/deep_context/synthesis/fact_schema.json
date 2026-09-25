@@ -73,15 +73,6 @@
     "is_owner": {
       "type": "boolean",
       "description": "True if this 'contact' is actually the mailbox owner on another email address."
-    },
-    "network_worth": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "decision": {"type": "string", "enum": ["yes", "maybe", "no"]},
-        "reason": {"type": "string"}
-      },
-      "required": ["decision", "reason"]
     }
   },
   "required": [
@@ -100,7 +91,6 @@
     "owned_identifiers",
     "shared_context",
     "confidence",
-    "is_owner",
-    "network_worth"
+    "is_owner"
   ]
 }

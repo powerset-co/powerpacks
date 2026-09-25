@@ -111,14 +111,14 @@ class DeepContextSynthesisTests(unittest.TestCase):
         self.assertEqual(asset, prompting.FACT_SCHEMA)
         self.assertEqual(
             hashlib.sha256(canonical).hexdigest(),
-            "417f25c6ac74e1008038ef317cfe026b0a142423914c3ead33ad37f8e3086a79",
+            "b108f626a394f8bbbf33522a2d26b1b8840e87799e2b6473d6fafe8036139583",
         )
-        self.assertEqual(prompting.SYNTHESIS_VERSION, "17f80443e758")
+        self.assertEqual(prompting.SYNTHESIS_VERSION, "52b1189e667e")
 
     def test_bundle_evidence_fingerprint_serialization_is_pinned(self) -> None:
         self.assertEqual(
             self.fingerprint({"person_id": "p1", "messages": []}),
-            "faf93accb97ae052c1248f3fa5ba7cb82b0397189429df0db1ecfa4c131791f0",
+            "943e8f23c0f4f8cece9b64d0f4f0f91e25a1d6e1556a68c1c0fcecb1a030bef3",
         )
         self.assertEqual(
             self.fingerprint(
@@ -134,7 +134,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     "messages_available": 1,
                 }
             ),
-            "11c3bb41f0e9383e3284eb4136f2792b5fe8062f81daf4bb78bdceda0445225a",
+            "b05a916ea5a16e54c5d4274976ea2702c396dca3c3ed640d616c17df72ed37ef",
         )
 
     def test_terminal_provider_failure_returns_no_fabricated_facts(self) -> None:
@@ -1250,12 +1250,23 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 concurrency=1,
             )
             plan = node._plan()
+            # JEV labels the saved record in a second phase; mock the answered
+            # request so this stays a pure GPT-checkpoint test.
+            jev_usage = {"input_tokens": 200, "output_tokens": 40, "cached": False}
+            jev_answer = {
+                "network_worth": {"decision": "yes", "reason": "Real correspondence"},
+                "labels": {"is_professional": 0.9},
+                "usage": jev_usage,
+            }
 
             with (
                 mock.patch.object(
                     openai_responses,
                     "AsyncOpenAI",
                     return_value=_FakeClient(response),
+                ),
+                mock.patch.object(
+                    runner.jev_worth, "classify", mock.AsyncMock(return_value=jev_answer)
                 ),
             ):
                 payload = node.run()
@@ -1270,7 +1281,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 "chunk_index": 0,
                 "synthesis_version": prompting.SYNTHESIS_VERSION,
                 "input_evidence_fingerprint": expected_fingerprint,
-                "facts": facts,
+                "facts": {**facts, "labels": jev_answer["labels"]},
                 "usage": usage,
                 "batches_used": 1,
                 "batches_total": 1,
@@ -1278,18 +1289,26 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 "messages_available": 1,
                 "final_confidence": 0.91,
                 "stop_reason": "completed",
+                "jev_usage": jev_usage,
             }
-            self.assertEqual(
-                (facts_dir / "parent-1.jsonl").read_bytes(),
-                (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"),
-            )
+            # The tagging phase stamps updated_at from the file mtime for a record
+            # that never had one, so compare every other key and shape exactly.
+            written = json.loads((facts_dir / "parent-1.jsonl").read_text(encoding="utf-8"))
+            self.assertIn("updated_at", written)
+            written.pop("updated_at")
+            self.assertEqual(written, record)
             self.assertEqual(payload.people_done, 1)
             self.assertEqual(payload.tokens, usage)
+            self.assertEqual(payload.jev.people, 1)
+            self.assertEqual(payload.jev.cached, 0)
+            self.assertGreater(payload.jev.cost_usd, 0)
             row = database.query(
-                "SELECT machine_worth, confidence FROM facts WHERE subject_key=?",
+                "SELECT machine_worth, confidence, facts_json FROM facts WHERE subject_key=?",
                 ("parent-1",),
             )[0]
             self.assertEqual((row["machine_worth"], row["confidence"]), ("yes", 0.91))
+            # The share stage reads labels from SQLite, not the jsonl.
+            self.assertEqual(json.loads(row["facts_json"])["labels"], jev_answer["labels"])
             artifact = database.query("SELECT input_fingerprint FROM artifacts WHERE artifact_key='facts:parent-1'")[0]
             self.assertEqual(artifact["input_fingerprint"], expected_fingerprint)
 

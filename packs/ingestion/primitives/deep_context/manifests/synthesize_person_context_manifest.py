@@ -4,7 +4,7 @@ from pydantic import Field
 
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.deep_context.synthesis import prompting
-from packs.ingestion.primitives.deep_context.synthesis.models import WorthSyncResult
+from packs.ingestion.primitives.deep_context.synthesis.models import JevUsage, WorthSyncResult
 from packs.ingestion.primitives.pipeline.contract import StageManifest
 
 DEFAULT_MAX_BATCHES = 20
@@ -33,5 +33,6 @@ class SynthesizePersonContextManifest(StageManifest):
     estimated_cost_usd: float = 0.0
     out_dir: str = ""
     worth_sync: WorthSyncResult | None = None
+    jev: JevUsage = Field(default_factory=JevUsage)
     elapsed_ms: int = 0
     updated_at: IsoTimestamp | None = None

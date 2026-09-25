@@ -37,7 +37,7 @@ from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisPlan
 
 
-def _effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
+def effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
     """Preview the parent bundles cache normalization will project, without writes.
 
     Mirrors what collection/normalization.py:normalize_cached_bundles would
@@ -95,7 +95,6 @@ def pending_target_bundles(
     chunk_chars: int,
     max_batches: int,
     force: bool,
-    rejudge: bool = False,
     model_changed: bool = False,
 ) -> list[CollectionBundle]:
     """Decide, per parent, whether to skip (cache hit) or spend on synthesis.
@@ -114,7 +113,7 @@ def pending_target_bundles(
         )
         for row in artifacts(db, kind=ArtifactKind.FACTS.value, parent_owned=True)
     }
-    effective_bundles = _effective_parent_bundles(db)
+    effective_bundles = effective_parent_bundles(db)
     child_fact_parents = {str(row.parent_id) for row in facts(db, parent_owned=False)}
     # A parent with child-owned facts but no parent-owned FACTS artifact (legacy
     # per-child layout) borrows a cache entry from a REAL fingerprint recorded on
@@ -139,10 +138,10 @@ def pending_target_bundles(
     for pid, bundle in sorted(effective_bundles.items()):
         if pid in owner_only_parents:
             continue
-        # Force, rejudge, and a model/effort change are explicit paid overrides;
-        # normal runs resume only when the prompt contract, the exact bounded
+        # Force and a model/effort change are explicit paid overrides; normal
+        # runs resume only when the prompt contract, the exact bounded
         # evidence, AND the answering model/effort all still match.
-        if not force and not rejudge and not model_changed:
+        if not force and not model_changed:
             fingerprint, version = cached.get(pid, ("", ""))
             # The version catches prompt/schema edits, while the evidence hash
             # catches message or owner-context changes. Either mismatch must
@@ -178,17 +177,20 @@ def build_plan(
     rejudge: bool,
     model_changed: bool = False,
 ) -> SynthesisPlan:
-    return SynthesisPlan(
-        system_prompt,
-        tuple(
+    # --rejudge never resynthesizes: it replays the JEV labelling phase over the
+    # facts already on disk, so an explicit --force is the only way to rebill GPT.
+    bundles = (
+        ()
+        if rejudge and not force
+        else tuple(
             pending_target_bundles(
                 db,
                 system_prompt=system_prompt,
                 chunk_chars=chunk_chars,
                 max_batches=max_batches,
                 force=force,
-                rejudge=rejudge,
                 model_changed=model_changed,
             )
-        ),
+        )
     )
+    return SynthesisPlan(system_prompt, bundles, owner_profile(db))

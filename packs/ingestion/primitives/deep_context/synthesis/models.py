@@ -7,9 +7,21 @@ from pathlib import Path
 from typing import Any, Self
 
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesConfig,
 )
+
+
+def labels_from_payload(payload: object) -> dict[str, float | str]:
+    """Parse a JEV label map (choice -> option, other questions -> number)."""
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): value if isinstance(value, str) else float(value)
+        for key, value in payload.items()
+        if isinstance(value, str) or (isinstance(value, (int, float)) and not isinstance(value, bool))
+    }
 
 
 @dataclass(frozen=True)
@@ -149,6 +161,9 @@ class SynthesizedFacts:
     # today because build_parents.py already excludes owner rows before merging.
     is_owner: bool | None = None
     network_worth: NetworkWorthFact | None = None
+    # JEV's own labels (choice argmax/expected level/noul probability) for the
+    # person; empty until the tagging phase writes them.
+    labels: dict[str, float | str] = field(default_factory=dict)
     present: frozenset[str] = frozenset()
 
     @classmethod
@@ -200,6 +215,7 @@ class SynthesizedFacts:
             confidence=float(payload.get("confidence") or 0.0),
             is_owner=(bool(payload.get("is_owner")) if "is_owner" in payload else None),
             network_worth=NetworkWorthFact.from_payload(payload.get("network_worth")),
+            labels=labels_from_payload(payload.get("labels")),
             present=frozenset(str(key) for key in payload),
         )
 
@@ -225,6 +241,7 @@ class SynthesizedFacts:
                 "network_worth",
                 self.network_worth.to_payload() if self.network_worth else {},
             ),
+            ("labels", dict(self.labels)),
         )
         return {key: value for key, value in values if key in self.present}
 
@@ -286,6 +303,7 @@ TOKEN_KEYS = ("input_tokens", "output_tokens", "reasoning_tokens")
 class SynthesisPlan:
     system_prompt: str
     bundles: tuple[CollectionBundle, ...]
+    owner: OwnerProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -391,6 +409,17 @@ class SynthesisResult:
     # facts (record.facts is None with nothing to blame it on but bad luck).
     # run_paid must not persist that record — see SynthesisTally.total_failures.
     total_failure: bool = False
+
+
+@dataclass(frozen=True)
+class JevUsage:
+    """Aggregate JEV labelling spend for one run; cached requests cost nothing."""
+
+    people: int = 0
+    cached: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
 
 
 @dataclass(frozen=True)

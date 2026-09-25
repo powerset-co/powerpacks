@@ -74,6 +74,29 @@ WRITER_HASH_BOUNDARIES = {
     ): "project_rows",
 }
 TYPED_ARTIFACT_READ_BOUNDARIES: set[tuple[str, str]] = set()
+# JEV is a frozen offline mapping plus a labelling phase that re-reads the
+# parent-owned facts record it is about to rewrite and re-project (see
+# synthesis/runner.py:tag_saved_facts); jev_worth/export_model.py is a local
+# exporter over cached experiment files, never part of a stage. None of these
+# make SQLite non-canonical, so they read at a named boundary too.
+JEV_ARTIFACT_READ_BOUNDARIES: set[tuple[str, str]] = {
+    (
+        "packs/ingestion/primitives/deep_context/synthesis/runner.py",
+        "_load_facts_record",
+    ),
+    (
+        "packs/ingestion/primitives/deep_context/synthesis/runner.py",
+        "tag_saved_facts.tag_all.tag",
+    ),
+    (
+        "packs/ingestion/primitives/deep_context/jev_worth/export_model.py",
+        "_features",
+    ),
+    (
+        "packs/ingestion/primitives/deep_context/jev_worth/export_model.py",
+        "export",
+    ),
+}
 WRITER_REUSE_BOUNDARIES = {
     (
         "packs/ingestion/primitives/deep_context/shared/build_owner.py",
@@ -181,6 +204,10 @@ def _resolved_name(node: ast.AST, aliases: dict[str, str]) -> str:
     if not raw:
         return ""
     seen: set[str] = set()
+    # A prefix is expanded at most once: `from datetime import datetime` aliases
+    # "datetime" to "datetime.datetime", so re-expanding the same prefix would
+    # grow the string ("datetime.datetime.fromtimestamp", ...) forever.
+    expanded: set[str] = set()
     while raw not in seen:
         seen.add(raw)
         exact = aliases.get(raw)
@@ -189,8 +216,9 @@ def _resolved_name(node: ast.AST, aliases: dict[str, str]) -> str:
             continue
         first, separator, rest = raw.partition(".")
         replacement = aliases.get(first)
-        if not replacement:
+        if not replacement or first in expanded:
             break
+        expanded.add(first)
         raw = replacement + (separator + rest if separator else "")
     return raw
 
@@ -348,6 +376,11 @@ def _static_asset_read(
     if relative.endswith("/synthesis/prompting.py"):
         expression = ast.unparse(call.func.value) if isinstance(call.func, ast.Attribute) else ""
         return method == "read_text" and "fact_schema.json" in expression and "__file__" in expression
+    if "/jev_worth/" in relative:
+        # The frozen mapping/questions JSON next to the module, same pattern as
+        # synthesis/prompting.py's fact_schema.json above.
+        expression = ast.unparse(call.func) if isinstance(call.func, ast.Attribute) else ""
+        return method == "read_text" and "__file__" in expression and ".json" in expression
     if relative.endswith(("/review/server.py", "/review/rendering.py")):
         static_names = _static_asset_names(tree)
         if receiver in static_names:
@@ -370,6 +403,8 @@ def _allowed_file_read(
     called = _name(call.func)
     scope = _scope(call, parents)
     if (relative, scope) in TYPED_ARTIFACT_READ_BOUNDARIES:
+        return True
+    if (relative, scope) in JEV_ARTIFACT_READ_BOUNDARIES:
         return True
     required_projection = WRITER_REUSE_BOUNDARIES.get((relative, scope, called))
     if required_projection:
