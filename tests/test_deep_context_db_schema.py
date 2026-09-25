@@ -279,6 +279,55 @@ class DeepContextSchemaTests(unittest.TestCase):
                 ]
                 self.assertEqual(actual, list(expected))
 
+    def test_human_linkedin_url_settles_the_whole_family(self) -> None:
+        url = "https://www.linkedin.com/in/jordan-bravo-2"
+        family = ("aaa", "mmm", "zzz")
+        columns = (
+            "SELECT row_key, decision_action, decision_source, decision_note, "
+            "replacement_url, replacement_public_identifier FROM links ORDER BY row_key"
+        )
+        for order in ("verify-then-retarget", "retarget-then-verify"):
+            with self.subTest(order=order):
+                self.db = Db(Path(self.temp.name) / f"{order}.sqlite")
+                self.parent()
+                for key in family:
+                    self.candidate(key)
+                self.db.decide_identity("mmm", ReviewAction.EXCLUDE.value, note="not Jordan")
+
+                if order == "verify-then-retarget":
+                    self.db.decide_identity("aaa", ReviewAction.VERIFY.value)
+                    settled = self.db.decide_identity(
+                        "zzz",
+                        ReviewAction.RETARGET.value,
+                        replacement_url=url,
+                        replacement_public_identifier="jordan-bravo-2",
+                    )
+                    expected = [
+                        ("aaa", "detach", "sibling-settle", None, None, None),
+                        ("mmm", "exclude", "deep-context-review", "not Jordan", None, None),
+                        ("zzz", "retarget", "deep-context-review", None, url, "jordan-bravo-2"),
+                    ]
+                else:
+                    self.db.decide_identity(
+                        "zzz",
+                        ReviewAction.RETARGET.value,
+                        replacement_url=url,
+                        replacement_public_identifier="jordan-bravo-2",
+                        note="casey@example.com says this is Jordan",
+                    )
+                    self.db.decide_identity("aaa", ReviewAction.VERIFY.value)
+                    expected = [
+                        ("aaa", "verify", "deep-context-review", None, None, None),
+                        ("mmm", "exclude", "deep-context-review", "not Jordan", None, None),
+                        ("zzz", "detach", "sibling-settle", "casey@example.com says this is Jordan", None, None),
+                    ]
+
+                self.assertEqual([tuple(row) for row in query(self.db, columns)], expected)
+                self.assertFalse(query(self.db, "SELECT row_key FROM links WHERE decision_action IS NULL"))
+                if order == "verify-then-retarget":
+                    # The human-excluded row is kept, so it is not among the rewritten keys.
+                    self.assertEqual(set(settled), {"zzz", "aaa"})
+
     def test_human_decision_door_rejects_machine_only_review_action(self) -> None:
         self.parent()
         self.candidate("candidate-1")
