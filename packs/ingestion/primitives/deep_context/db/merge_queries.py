@@ -73,7 +73,9 @@ def merge_people(db: Db) -> list[MergePerson]:
     """Hydrate exactly one merge-judge input per canonical parent.
 
     Evidence is read MERGE_SURVEY_BATCH parents at a time and dropped before
-    the next batch, so memory stays bounded on large installs."""
+    the next batch, so source-bundle text is held one batch at a time; the
+    returned MergePerson list (identifiers and rendered samples) grows with
+    the install, as the pair judge needs every person."""
     roster = _Roster.load(db)
     parents = parent_rows(db)
     people: list[MergePerson] = []
@@ -91,7 +93,8 @@ def merge_people(db: Db) -> list[MergePerson]:
 
 @dataclass(frozen=True)
 class _Roster:
-    """The install-wide lookups every merge person shares: small rows, read once."""
+    """The install-wide lookups every merge person shares, read once: facts,
+    identifiers and members for every person (tens of MB at 40k people)."""
 
     facts: dict[str, FactRow]
     identifiers: dict[str, dict[str, list[str]]]

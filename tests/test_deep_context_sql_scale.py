@@ -23,10 +23,12 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityP
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     FactRow,
+    LinkRow,
     ParentRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
     PersonRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, DbMaintenance
 from packs.ingestion.primitives.deep_context.merge_candidates import judge
@@ -99,14 +101,28 @@ class IdSetQueryTests(unittest.TestCase):
     def test_artifacts_by_candidate_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db = _store(Path(directory), 1, facts=True)
+            parent_id = _ids(1)[0]
+            key = "candidate:email:person0@example.com"
+            db.project_rows((LinkRow(key, parent_id, key, "candidate_email", candidate_origin=True, source=WriterSource.SYNTHESIS.value),))
+            db.project_rows((ArtifactRow(
+                f"research:{key}", "research", parent_id, str(Path(directory) / "r.json"), "2" * 64, "projected",
+                candidate_key=key, payload_json="{}",
+            ),))
             keys = [f"candidate:email:person{i}@example.com" for i in range(ONCE)]
-            self.assertEqual(queries.artifacts(db, candidate_keys=keys), ())
+            # One of the 33k keys exists: the big set finds exactly it, the empty set nothing.
+            self.assertEqual([row.artifact_key for row in queries.artifacts(db, candidate_keys=keys)], [f"research:{key}"])
+            self.assertEqual(queries.artifacts(db, candidate_keys=keys[1:]), ())
             self.assertEqual(queries.artifacts(db, candidate_keys=()), ())
 
     def test_links_by_row_keys_and_parent_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db = _store(Path(directory), 1)
-            self.assertEqual(identity_queries.links(db, row_keys=_ids(TWICE), parent_ids=_ids(TWICE)), ())
+            parent_id = _ids(1)[0]
+            db.project_rows((LinkRow("jordan-0", parent_id, "jordan-0", "pub", source=WriterSource.SYNTHESIS.value),))
+            row_keys = ["jordan-0", *_ids(TWICE)]
+            found = identity_queries.links(db, row_keys=row_keys, parent_ids=_ids(TWICE))
+            self.assertEqual([row.row_key for row in found], ["jordan-0"])
+            self.assertEqual(identity_queries.links(db, row_keys=_ids(TWICE), parent_ids=_ids(TWICE)[1:]), ())
 
     def test_approved_family_rows_for_every_parent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -150,6 +166,19 @@ class MergeSurveyTests(unittest.TestCase):
         count = merge_queries.MERGE_SURVEY_BATCH * 2 + 100
         with tempfile.TemporaryDirectory() as directory:
             db = _store(Path(directory), count, facts=True, bundles=True, identifiers=True)
+            # Every seventh parent is a two-person family, so a misgrouped identifier
+            # or person would land on the wrong parent's packet.
+            ids = _ids(count)
+            db.project_rows(tuple(
+                PersonRow(f"sibling-{i}", pid, child_slug=f"sibling-{i}", display_name=f"Jordan {i}")
+                for i, pid in enumerate(ids) if i % 7 == 0
+            ))
+            db.project_rows(tuple(
+                PersonIdentifiersProjection(f"sibling-{i}", (
+                    PersonIdentifierRow(f"sibling-{i}", "email", f"sibling{i}@example.com"),
+                ))
+                for i in range(count) if i % 7 == 0
+            ))
             batches: list[int] = []
             narrow = merge_queries.dossier_evidence_rows
 
@@ -163,9 +192,13 @@ class MergeSurveyTests(unittest.TestCase):
             self.assertEqual(len(people), count)
             self.assertEqual(len(batches), math.ceil(count / merge_queries.MERGE_SURVEY_BATCH))
             self.assertLessEqual(max(batches), merge_queries.MERGE_SURVEY_BATCH)
-            for person in people[:50] + people[-50:]:
+            # Every parent, so batch boundaries (499/500, 999/1000) are covered.
+            for person in people:
+                index = int(person.parent_id.removeprefix("parent-"), 16)
                 self.assertEqual(person.evidence, DossierEvidence.from_parent_db(db, person.parent_id))
-                self.assertEqual(person.emails, (f"jordan{int(person.person_id.split('-')[1])}@example.com",))
+                expected = {f"jordan{index}@example.com"} | ({f"sibling{index}@example.com"} if index % 7 == 0 else set())
+                self.assertEqual(set(person.emails), expected)
+                self.assertEqual(len(person.member_person_ids), 2 if index % 7 == 0 else 1)
 
 
 class JudgeChunkTests(unittest.TestCase):
@@ -214,9 +247,18 @@ class WorthRowTests(unittest.TestCase):
             self.assertEqual((row.key, row.effective), (key, "yes"))
             self.assertIsNone(worth_views.worth_row(db, "parent-worth:parent-000000000fff"))
 
-    def test_the_review_server_does_not_read_every_worth_row_for_one_decision(self) -> None:
+    def test_a_worth_decision_reads_its_row_by_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = _store(Path(directory), 3, facts=True)
+            parent_id = _ids(3)[2]
+            with mock.patch.object(worth_views, "_worth_rows", wraps=worth_views._worth_rows) as read:
+                row = worth_views.worth_row(db, f"parent-worth:{parent_id}")
+            self.assertEqual(row.key, f"parent-worth:{parent_id}")
+            read.assert_called_once()
+            self.assertEqual(read.call_args.kwargs.get("parent_id"), parent_id)
+        # The server binds the one-row read, not the whole worth table.
+        self.assertIs(review_server.worth_row, worth_views.worth_row)
         self.assertFalse(hasattr(review_server, "worth_rows"))
-        self.assertTrue(hasattr(review_server, "worth_row"))
 
 
 if __name__ == "__main__":
