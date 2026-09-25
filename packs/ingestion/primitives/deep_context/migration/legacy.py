@@ -9,6 +9,8 @@ Removal countdown (2026-08-06): delete once no supported install predates
 powerpacks v1.19.0.
 
 Changelog:
+  2026-09-25: a populated canonical DB is refused before any legacy artifact
+    is read, so a rerun reports the real reason instead of a raw-bundle error.
   2026-08-17: legacy synthetic CSV rows are re-keyed to their stable parent id
     and converted to the native Parallel result envelope during the one-time
     import. Current synthetic assembly contains no compatibility branch.
@@ -1113,7 +1115,7 @@ def _merges(g: _Graph, verdict_path: Path | None, accepted_path: Path | None) ->
         )
 
 
-def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
+def _refuse_populated(db: Db) -> None:
     tables = (
         "parents",
         "people",
@@ -1128,10 +1130,13 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
         "guidance",
         "merge_verdicts",
     )
+    occupied = [name for name in tables if db.query(f"SELECT 1 FROM {name} LIMIT 1")]
+    if occupied:
+        raise LegacyImportError(f"canonical DB is not empty: {', '.join(occupied)}")
+
+
+def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
     with db.transaction() as conn:
-        occupied = [name for name in tables if conn.execute(f"SELECT 1 FROM {name} LIMIT 1").fetchone()]
-        if occupied:
-            raise LegacyImportError(f"canonical DB is not empty: {', '.join(occupied)}")
         if owner:
             conn.execute(UPSERTS["owner_context"], asdict(owner))
         projection = m.CanonicalGraphProjection(
@@ -1203,6 +1208,7 @@ def import_legacy(
     raw_dir: Path | None = None,
 ) -> dict[str, int]:
     """Import old fixed artifacts once; unresolved ownership aborts all writes."""
+    _refuse_populated(db)
     owner = _owner(owner_json)
     graph = _load_graph(review_csv, index_json, facts_dir)
     _review(graph)

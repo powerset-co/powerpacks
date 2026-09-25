@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import tempfile
@@ -121,6 +122,43 @@ class DeepContextMigrationTests(unittest.TestCase):
         self.assertEqual(migrated_counts, projected_counts)
         self.assertEqual(projected_counts, (1, 1))
         self.assertEqual(database.query("SELECT COUNT(*) AS n FROM facts")[0]["n"], 1)
+
+    def test_migration_on_populated_store_refuses_before_reading_raw_bundles(self) -> None:
+        database = Db(self.db_path)
+        database.project_rows(
+            (
+                ParentRow("parent-one", "parent-one"),
+                PersonRow("person-a", "parent-one"),
+            )
+        )
+        raw = self.deep_context / "raw"
+        raw.mkdir()
+        (raw / "person-b.json").write_text(json.dumps({"person_id": "person-b"}), encoding="utf-8")
+        review = self.state / "network-import/overrides/review.csv"
+        with (
+            mock.patch.multiple(
+                migrate_sqlite,
+                LINKEDIN_OVERRIDES_CSV=review,
+                SYNTHETIC_PEOPLE_CSV=review.parent / "synthetic-people.csv",
+                LEGACY_INDEX_JSON=self.deep_context / "index.json",
+                FACTS_DIR=self.facts,
+                VERDICTS_JSONL=self.deep_context / "reconcile/verdicts.jsonl",
+                DEEP_RESEARCH_DIR=self.deep_context / "reconcile/deep-research",
+                OWNER_JSON=self.deep_context / "owner.json",
+                PROFILE_CACHE_DIR=self.state / "network-import/profile_cache_v2",
+                REVIEW_DIR=self.deep_context / "review",
+                LEGACY_MERGE_VERDICTS_CSV=self.deep_context / "merge-verdicts.csv",
+                MERGE_CSV=self.deep_context / "merge-candidates.csv",
+                RAW_DIR=raw,
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            code = migrate_sqlite.main(["--db", str(self.db_path)])
+
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "refused")
+        self.assertEqual(payload["error"], "canonical DB is not empty: parents, people")
 
     def test_migration_marks_paid_research_for_stable_handle_reuse(self) -> None:
         index = self.deep_context / "index.json"
