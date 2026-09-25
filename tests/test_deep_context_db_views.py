@@ -776,5 +776,37 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.db.decide_identity("synthetic:state", "verify")
         self.assertEqual(workflow_state(self.db).next_action, "realize")
 
+    def test_collected_parent_without_facts_queues_synthesize(self) -> None:
+        self.add_factsless_parent("linkedin-only")
+        self.assertEqual(workflow_state(self.db).next_action, "realize")
+
+        self.add_factsless_parent("collected")
+        project_artifact(
+            self.db,
+            ArtifactRow(
+                "source_bundle:collected",
+                "source_bundle",
+                "collected",
+                "/raw/collected.json",
+                "sha-collected",
+                "projected",
+            ),
+        )
+        state = workflow_state(self.db)
+        self.assertEqual(state.next_action, "synthesize")
+        self.assertEqual(state.progress.synthesize_pending, 1)
+
+        project_artifact(
+            self.db,
+            ArtifactRow("facts:collected", "facts", "collected", "/facts/collected.jsonl", "sha-facts", "projected"),
+        )
+        project_fact(
+            self.db,
+            FactRow("collected", "collected", "facts:collected", machine_worth="maybe"),
+        )
+        state = workflow_state(self.db)
+        self.assertEqual(state.next_action, "review_people")
+        self.assertEqual(state.progress.synthesize_pending, 0)
+
 if __name__ == "__main__":
     unittest.main()

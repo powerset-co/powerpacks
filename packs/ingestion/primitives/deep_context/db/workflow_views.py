@@ -1,4 +1,9 @@
-"""Queue-derived Deep Context workflow state."""
+"""Queue-derived Deep Context workflow state.
+
+Changelog:
+- 2026-09-25: a parent with a collected source bundle and no facts queues
+  `synthesize`, ahead of every review queue.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts,
 @dataclass(frozen=True)
 class StageProgress:
     total: int
+    synthesize_pending: int
     worth_total: int
     worth_pending: int
     worth_yes: int
@@ -55,6 +61,13 @@ class WorkflowState:
 
 
 def _stage_progress(db: Db) -> StageProgress:
+    synthesize_pending = db.query(
+        """
+SELECT count(DISTINCT a.parent_id) AS n FROM artifacts a
+WHERE a.kind='source_bundle' AND a.status='projected'
+  AND NOT EXISTS(SELECT 1 FROM facts f WHERE f.parent_id=a.parent_id)
+"""
+    )[0]["n"]
     worth = worth_counts(db)
     linkedin = _linkedin_progress(db)
     lookup_ready = db.query(
@@ -120,6 +133,7 @@ SELECT count(DISTINCT parent_id) AS n FROM (
     )[0]["n"]
     return StageProgress(
         total=int(total),
+        synthesize_pending=int(synthesize_pending),
         worth_total=worth.total,
         worth_pending=worth.pending,
         worth_yes=worth.yes,
@@ -159,11 +173,12 @@ def _review_selection(db: Db) -> ReviewSelection:
 
 
 def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState:
-    """Apply the four queue predicates and return one deterministic state token."""
+    """Apply the ordered queue predicates and return one deterministic state token."""
     progress = _stage_progress(db)
     selection = _review_selection(db)
     enrichment_pending = progress.enrichment_pending
     rules = (
+        (bool(progress.synthesize_pending), "synthesize"),
         (bool(progress.worth_pending), "review_people"),
         (bool(enrichment_pending), "enrich"),
         (bool(progress.linkedin_pending), "review_linkedin"),

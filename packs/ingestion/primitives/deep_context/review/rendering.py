@@ -137,6 +137,7 @@ _TEMPLATES.globals.update(
 )
 _TEMPLATES.filters["urlencode"] = urllib.parse.quote
 GO_BACK_HTML = _render("go_back.html.j2")
+SYNTHESIZE_HTML = _render("synthesize_pending.html.j2")
 
 
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
@@ -330,6 +331,8 @@ def _carousel_nav() -> str:
 
 
 def worth_finished_body(progress: StageProgress, *, auto_continue: bool = False) -> str:
+    if progress.synthesize_pending:
+        return SYNTHESIZE_HTML
     return _render(
         "worth_finished.html.j2", progress=progress, auto_continue=auto_continue,
     )
@@ -337,6 +340,8 @@ def worth_finished_body(progress: StageProgress, *, auto_continue: bool = False)
 
 def linkedin_finished_body(progress: StageProgress, *, linkedin_complete: bool,
                            retargets_in_flight: int = 0, auto_continue: bool = False) -> str:
+    if progress.synthesize_pending:
+        return SYNTHESIZE_HTML
     return _render(
         "linkedin_finished.html.j2",
         progress=progress,
@@ -365,7 +370,7 @@ def render_person_detail(parent: ParentViewRow) -> str:
 
 
 def directory_page_html(parents: list[ParentViewRow], params: dict[str, list[str]],
-                        *, handoff: bool = False) -> bytes:
+                        *, next_action: str) -> bytes:
     entries = [
         {"slug": parent.slug, "name": parent.name,
          "worth": parent.worth_row.effective.lower()}
@@ -387,10 +392,10 @@ def directory_page_html(parents: list[ParentViewRow], params: dict[str, list[str
         for decision in ("yes", "maybe", "no")
         if decision != "maybe" or counts[decision]
     )
+    banner = {"synthesize": SYNTHESIZE_HTML, "realize": GO_BACK_HTML}.get(next_action, "")
     content = _render(
         "directory.html.j2",
-        handoff=handoff,
-        go_back=Markup(GO_BACK_HTML),
+        banner=Markup(banner),
         tabs=tabs,
         detail=Markup(detail),
         payload=Markup(payload),

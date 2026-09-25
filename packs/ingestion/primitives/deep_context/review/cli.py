@@ -24,6 +24,10 @@ from .server import make_handler
 from .sqlite_adapter import SqliteReviewAdapter
 
 
+# The actions the agent runs itself; every other action waits on the user.
+_AGENT_ACTIONS = frozenset({"synthesize", "realize"})
+
+
 def _url(host: str, port: int, stage: str) -> str:
     route = "directory" if stage == "directory" else f"?stage={stage}"
     return f"http://{host}:{port}/{route}"
@@ -37,6 +41,7 @@ def workflow_status(**_: object) -> dict[str, object]:
     api = SqliteReviewAdapter(open_existing_db(CANONICAL_DB))
     payload = api.workflow_status()
     commands = {
+        "synthesize": "bin/deep-context dry",
         "review_people": "bin/deep-context review",
         "enrich": "wait for the user to approve Enrich Contacts in the review UI",
         "review_linkedin": "wait for LinkedIn Yes/No decisions in the review UI",
@@ -92,11 +97,11 @@ def cmd_status(args: argparse.Namespace) -> None:
     if getattr(args, "wait", False):
         started = time.monotonic()
         deadline = started + max(1, int(args.timeout))
-        while status["next_action"] != "realize" and time.monotonic() < deadline:
+        while status["next_action"] not in _AGENT_ACTIONS and time.monotonic() < deadline:
             time.sleep(1)
             status = workflow_status()
         status["waited_seconds"] = int(time.monotonic() - started)
-        if status["next_action"] != "realize":
+        if status["next_action"] not in _AGENT_ACTIONS:
             status["status"] = "waiting"
     print(json.dumps(status, indent=2))
 

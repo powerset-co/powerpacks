@@ -31,6 +31,7 @@ from packs.ingestion.primitives.deep_context.review.models import (
 
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
+    "synthesize": "worth",
     "review_people": "worth",
     "enrich": "enrich",
     "review_linkedin": "linkedin",
@@ -174,7 +175,8 @@ def review_manifest(
         )
     else:
         counts = ()
-    completed = tuple(name for name, is_pending in pending if not is_pending)
+    # Strict sequence: nothing downstream of pending synthesis is complete.
+    completed = () if progress.synthesize_pending else tuple(name for name, is_pending in pending if not is_pending)
     return ReviewManifest(
         stage=selected,
         status=("completed" if selected == "done" or selected in completed else "awaiting_user"),

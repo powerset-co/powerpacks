@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import tempfile
 import threading
@@ -19,7 +20,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
     IdentityMachineProjection,
+    ParentRow,
     PersonIdentifierRow,
+    PersonRow,
     ProjectionStatus,
     ResearchRow,
     ResearchStatus,
@@ -61,6 +64,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
     IdentityUsage,
     IdentityVerdict,
 )
+from packs.ingestion.primitives.deep_context.review import cli as review_cli
 from packs.ingestion.primitives.deep_context.review import server as review_server
 from packs.ingestion.primitives.deep_context.review import enrichment as review_enrichment
 from packs.ingestion.primitives.deep_context.review import sqlite_adapter as review_adapter
@@ -1313,6 +1317,64 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             if resumed._thread:
                 resumed._thread.join(timeout=2)
         self.assertEqual(state, "applied")
+
+
+class SynthesisPendingWebTests(unittest.TestCase):
+    """A collected store whose synthesis never ran is not a finished review."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "deep-context.sqlite"
+        self.db = Db(self.db_path)
+        self.db.project_rows(
+            (
+                ParentRow("collected", "collected", "Casey Delta", "casey-delta"),
+                PersonRow("collected-person", "collected", display_name="Casey Delta"),
+                ArtifactRow(
+                    "source_bundle:collected",
+                    ArtifactKind.SOURCE_BUNDLE.value,
+                    "collected",
+                    "/raw/collected.json",
+                    "sha-collected",
+                    ProjectionStatus.PROJECTED.value,
+                ),
+            )
+        )
+        self.http = InProcessHttpClient(review_server.make_handler(db=self.db))
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def page(self, path: str) -> str:
+        status, _, body, _ = self.http.request("GET", path, None)
+        self.assertEqual(status, 200)
+        return body.decode()
+
+    def test_status_names_synthesize(self) -> None:
+        payload = json.loads(self.page("/api/status"))
+        self.assertEqual((payload["stage"], payload["next_action"]), ("worth", "synthesize"))
+
+        with mock.patch.object(review_cli, "CANONICAL_DB", self.db_path):
+            status = review_cli.workflow_status()
+        self.assertEqual(status["command"], "bin/deep-context dry")
+
+    def test_wait_returns_at_once_on_synthesize(self) -> None:
+        with (
+            mock.patch.object(review_cli, "CANONICAL_DB", self.db_path),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            review_cli.main(["status", "--wait", "--timeout", "3"])
+        payload = json.loads(out.getvalue())
+        self.assertEqual((payload["next_action"], payload["status"], payload["waited_seconds"]), ("synthesize", "ok", 0))
+
+    def test_every_stage_says_synthesis_has_not_run(self) -> None:
+        for path in ("/?stage=worth", "/api/worth-card", "/?stage=enrich", "/?stage=linkedin", "/?stage=done", "/directory"):
+            with self.subTest(path=path):
+                page = self.page(path)
+                self.assertIn("Synthesis has not run", page)
+                self.assertIn("bin/deep-context dry", page)
+                for claim in ("Decisions ready", "Contacts enriched", "Review complete", "All set", "✓"):
+                    self.assertNotIn(claim, page)
 
 
 if __name__ == "__main__":

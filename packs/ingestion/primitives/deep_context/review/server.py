@@ -48,6 +48,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     GO_BACK_HTML,
     REVIEW_CSS,
     REVIEW_JS,
+    SYNTHESIZE_HTML,
     _carousel_nav,
     _phase_view,
     _primary_candidate,
@@ -265,12 +266,18 @@ def make_handler(
                 search = ""
             content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
         elif view == "enrich":
-            content = render_enrichment(enrichment)
+            content = (
+                SYNTHESIZE_HTML
+                if progress.synthesize_pending and enrichment.status == "completed"
+                else render_enrichment(enrichment)
+            )
         elif view == "linkedin":
             content = (
                 "<div class='linkedin-stage'><div class='linkedin-panel' "
                 f"data-linkedin-panel>{linkedin_body(params)}</div></div>"
             )
+        elif progress.synthesize_pending:
+            content = SYNTHESIZE_HTML
         else:
             content = (
                 "<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
@@ -278,12 +285,14 @@ def make_handler(
                 f"{GO_BACK_HTML}</div>"
             )
         active = {"worth": 0, "enrich": 1, "linkedin": 2, "done": 2}[view]
+        # Strict sequence: no step is complete while synthesis is pending.
+        synthesized = not progress.synthesize_pending
         specs = (
             (
                 1,
                 "Review Decisions",
                 active == 0,
-                not progress.worth_pending,
+                synthesized and not progress.worth_pending,
                 progress.worth_pending,
                 "/?stage=worth&preview=1",
             ),
@@ -291,7 +300,7 @@ def make_handler(
                 2,
                 "Enrich Contacts",
                 active == 1,
-                (
+                synthesized and (
                     enrichment.status == "completed"
                     if enrichment is not None
                     else progress.enrichment_pending == 0
@@ -303,7 +312,7 @@ def make_handler(
                 3,
                 "Check LinkedIn",
                 active == 2,
-                not progress.linkedin_pending,
+                synthesized and not progress.linkedin_pending,
                 progress.linkedin_pending,
                 "/?stage=linkedin&preview=1",
             ),
@@ -439,8 +448,8 @@ def make_handler(
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(render_person_detail(parent).encode())
             if parsed.path == "/directory":
-                handoff = api.snapshot().next_action == "realize"
-                return self.send_bytes(directory_page_html(linkedin_parents(db), params, handoff=handoff))
+                next_action = api.snapshot().next_action
+                return self.send_bytes(directory_page_html(linkedin_parents(db), params, next_action=next_action))
             if parsed.path == "/api/avatar":
                 try:
                     row_key = api.resolve_row_key(_value(params, "pub"))
