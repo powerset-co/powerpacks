@@ -3,6 +3,8 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-09-25: the page listens to the event stream, it does not poll; the
+  unwritten review/manifest.json is no longer advertised.
 - 2026-09-25: the post-review block is stop → apply-retargets → realize,
   as the skill runs it; realize already persists review identities.
 - 2026-09-25: SQLite is the state record (the review manifest is gone); small
@@ -292,10 +294,11 @@ estimate from current SQLite and launches with that budget.
 The browser state token hashes the stage progress counts, the effective worth
 decisions, and whether enrichment is pending or running.
 
-External handoff changes are visible on the next one-second Enrich/Done poll,
-or from an early LinkedIn preview while enrichment is still changing its queue.
-Local People/LinkedIn changes are visible immediately from their mutation
-response without a follow-up poll.
+External handoff changes reach the page through the server's `/api/events`
+stream on Enrich and Done, and on an early LinkedIn preview while enrichment is
+still changing its queue; the page re-snapshots `/api/status` on each nudge and
+never polls. Local People/LinkedIn changes are visible immediately from their
+mutation response.
 
 This gives repeatability without a ledger:
 

@@ -297,13 +297,13 @@ The browser observes SQLite through the existing HTTP API and automatically
 refreshes or moves to the current stage. People and LinkedIn decisions commit
 directly to SQLite, and each save returns the new state token. No status poll is
 part of a decision click.
-The `/api/status` observer runs only while external changes are possible: on
-Enrich and Done, plus a LinkedIn preview opened before enrichment completes.
-It checks immediately and every second, with another immediate check when
-a hidden tab becomes visible again. Once enrichment is current, LinkedIn stops
-polling and remains a purely local buffered review queue.
-A non-empty replacement URL on a polled preview pauses reload/navigation until
-it is saved; merely focusing an empty field does not. Open the UI once; do not
+The page listens to the server's `/api/events` stream only while external
+changes are possible: on Enrich and Done, plus a LinkedIn preview opened
+before enrichment completes. It snapshots `/api/status` once on load and again
+on every server nudge; it never polls. Once enrichment is current, LinkedIn
+stops listening and remains a purely local buffered review queue.
+A non-empty replacement URL on a listening preview pauses reload/navigation
+until it is saved; merely focusing an empty field does not. Open the UI once; do not
 open additional tabs or repeatedly open stage URLs as the workflow advances.
 
 The main Review tab shows only people the model marked `maybe`, one at a time
