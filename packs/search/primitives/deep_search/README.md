@@ -2,13 +2,14 @@
 
 Deep mode generates one query directly from the JD, then runs one broad candidate
 population at a time through the ordinary search pipeline. The user reviews the
-initial query and filters once. Each pond compiles, retrieves, filters, and reranks;
+initial query and filters once. Each pond compiles, retrieves, hydrates, and screens;
 the viewer shows candidates for human scoring. A model proposes the next pond.
 
-The cheap Luna filter remains. Terra v5 replaces Luna reranking and Gemma CE for
-JD searches. Candidates rated at least 3/5 then receive independent Terra domain
-and opportunity judgments in parallel. Overall is `min(domain, opportunity cap)`;
-human feedback is never changed. Ordinary non-JD reranking is unchanged.
+Jev screens every hydrated row; there is no Luna filter ahead of it. Candidates that
+pass then receive independent Terra domain and opportunity judgments in parallel.
+Overall is `min(domain, opportunity cap)`; human feedback is never changed.
+`--capability-judge terra` keeps the Luna filter followed by the Luna rating screen
+(pass = rated at least 3/5). Ordinary non-JD reranking is unchanged.
 
 ## Flow
 
@@ -19,8 +20,8 @@ flowchart TD
     REVIEW -->|--query-approved| INIT[Initialize results.json with JD hash, queries, corpus]
     INIT --> COMPILE[compile-pond: ordinary parallel extractors + pattern defaults]
     COMPILE --> CHECK[Agent checks query against compiled geography and reviews payload]
-    CHECK --> RUN[run-pond: retrieval → Luna filter → Terra v5]
-    RUN --> JUDGES[Capability >= 3: parallel domain + opportunity]
+    CHECK --> RUN[run-pond: retrieval → hydrate → Jev capability screen]
+    RUN --> JUDGES[Capability pass: parallel domain + opportunity]
     JUDGES --> SOURCES[Save authorized set source counts and operator attribution]
     SOURCES --> VIEW[Viewer: overall = min of domain and opportunity cap]
     VIEW --> DECIDE[decide: next query or stop]
@@ -91,7 +92,8 @@ The v5 request hash includes the prompt, JD, full profile, date, and settings.
 Successful responses are reused from `terra-capability/terra/`; API failures
 stop ranking without fabricating rejections. Domain/opportunity checkpoints live
 in `ponds/pond-NN/candidate-judgments/`, keyed by exact request rather than rank.
-Explicit user-reviewed evaluation criteria also reach Terra, not just the filter.
+Explicit user-reviewed evaluation criteria reach the capability judge (and the Luna
+filter on the Terra path).
 A failed downstream judgment leaves
 overall unknown, not a negative score.
 

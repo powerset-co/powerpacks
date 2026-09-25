@@ -47,7 +47,7 @@ The runner then executes without another gate:
    `--top-k 1000` on local DuckDB; `limit=0` means keep the full retrieved
    frontier locally)
 6. `hydrate_people`
-7. `llm_filter_candidates`
+7. `llm_filter_candidates` (not on JD runs judged by Jev: Jev reads every hydrated row)
 8. `llm_rerank_candidates`
 9. `persist_search_results`
 

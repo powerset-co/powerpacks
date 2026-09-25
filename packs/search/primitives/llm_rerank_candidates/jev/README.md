@@ -17,7 +17,8 @@ flowchart LR
 
 ## Selection
 
-Jev is the default capability judge. Set `TYPESAFE_API_KEY` for Jev and
+Jev is the default capability judge and reads every hydrated row; no Luna filter runs
+ahead of it. Set `TYPESAFE_API_KEY` for Jev and
 `OPENAI_API_KEY` for the one-time Sol JD structuring call. The cleaner is shared by both
 judges and cached across ponds; the raw JD remains available to retrieval and later
 logistics review. Keys never go in requests saved to disk.

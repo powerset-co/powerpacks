@@ -14,6 +14,8 @@ For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
 
 Changelog:
+    2026-09-25: JD runs judged by Jev skip `llm_filter_candidates`; Jev reads every
+        hydrated row. The Luna filter still precedes `--capability-judge terra`.
     2026-09-13: Local title expansion matches complete extracted role phrases,
         not individual words from the whole search query.
 """
@@ -868,8 +870,12 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
             return ((step.get("output") or {}).get("role_search_filters") or {})
     return {}
 
+def _judged_by_jev(args) -> bool:
+    """Jev screens every hydrated row itself; the Luna filter runs only ahead of the Terra path."""
+    return bool(getattr(args, "jd_file", None)) and getattr(args, "capability_judge", None) == "jev"
+
 def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
-    use_jev = bool(getattr(args, "jd_file", None) and getattr(args, "capability_judge", "terra") == "jev")
+    use_jev = _judged_by_jev(args)
     payload = {
         "state": str(state),
         "model": (jev.MODEL if use_jev else terra.MODEL) if getattr(args, "jd_file", None) else args.model,
@@ -958,9 +964,9 @@ def run_pipeline(args) -> dict[str, Any]:
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
-        llm_steps=[
-            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]),
-        ]
+        llm_steps=[]
+        if not _judged_by_jev(args):
+            llm_steps.append(("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]))
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
@@ -1061,7 +1067,9 @@ def run_pipeline_local(args) -> dict[str, Any]:
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
-        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"])]
+        llm_steps=[]
+        if not _judged_by_jev(args):
+            llm_steps.append(("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]))
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:

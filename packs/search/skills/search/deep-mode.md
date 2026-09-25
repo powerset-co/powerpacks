@@ -177,10 +177,11 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
 ```
 
 The capability screen is Jev by default (`--capability-judge jev`) and needs
-`TYPESAFE_API_KEY` in the environment. The Jev tree uses a cutoff calibrated to
+`TYPESAFE_API_KEY` in the environment. Jev reads every hydrated row; no Luna filter
+runs ahead of it. The Jev tree uses a cutoff calibrated to
 93% recall of the Luna screen; it returns a native qualification score and pass
-decision, not a 1–5 rating. `--capability-judge terra` selects the Luna rating
-path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
+decision, not a 1–5 rating. `--capability-judge terra` selects the Luna filter and
+Luna rating path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
 See [the Jev README](../../primitives/llm_rerank_candidates/jev/README.md) for metrics.
 
 The viewer shows native qualification scores for Jev; the Luna path sorts by

@@ -1373,7 +1373,6 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
-        "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
         "--model", jev.MODEL if capability_judge == "jev" else terra.MODEL,
         "--reasoning-effort", "none" if capability_judge == "jev" else terra.REASONING_EFFORT,
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],

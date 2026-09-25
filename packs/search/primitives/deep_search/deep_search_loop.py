@@ -137,8 +137,6 @@ def main() -> None:
     ap.add_argument("--query-reasoning-effort", default="medium", help="Pond-1 query generator reasoning effort")
     ap.add_argument("--expand-model", default="gpt-5.6-luna", help="Per-pond query expansion model")
     ap.add_argument("--expand-reasoning-effort", default="medium", help="Per-pond expansion reasoning effort")
-    ap.add_argument("--filter-model", default="gpt-5.6-luna", help="Per-pond filter model")
-    ap.add_argument("--filter-reasoning-effort", default="none", help="Per-pond filter reasoning effort")
     ap.add_argument("--rerank-model", default="gpt-5.6-luna", help="Per-pond rerank model")
     ap.add_argument("--rerank-reasoning-effort", default="medium", help="Per-pond rerank reasoning effort")
     args = ap.parse_args()
