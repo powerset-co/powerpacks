@@ -1,4 +1,8 @@
-"""Typed file-writer boundaries for parent-owned Deep Context artifacts."""
+"""Typed file-writer boundaries for parent-owned Deep Context artifacts.
+
+Changelog:
+- 2026-09-25: ProjectionValue, the legacy import's door to these policies, went with legacy.py.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.shared.coerce import clean_text, number_or_none
+from packs.ingestion.primitives.deep_context.shared.coerce import clean_text
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactReplacement,
@@ -55,15 +59,6 @@ def _content_type(data: bytes) -> str:
     if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return "image/webp"
     return "application/octet-stream"
-
-
-class ProjectionValue:
-    """Legacy-import access to projector-normalized scalar policies."""
-
-    text = staticmethod(clean_text)
-    number = staticmethod(number_or_none)
-    sha256 = staticmethod(_sha256)
-    content_type = staticmethod(_content_type)
 
 
 def project_parent_fact(db: Db, path: Path, parent_id: str) -> ParentFactProjection:

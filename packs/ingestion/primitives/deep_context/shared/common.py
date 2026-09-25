@@ -1,4 +1,8 @@
-"""Paths and small identity helpers shared by Deep Context and logbook."""
+"""Paths and small identity helpers shared by Deep Context and logbook.
+
+Changelog:
+- 2026-09-25: VERDICTS_JSONL and LINKEDIN_OVERRIDES_CSV went with the legacy importer; the seed names its own legacy paths.
+"""
 
 from __future__ import annotations
 
@@ -68,9 +72,6 @@ RECONCILE_DIR = ROOT / "reconcile"
 # written by enrich (research_reconcile, profiles/prefetch, synthetic/assemble)
 DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
 ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
-# Pre-SQLite identity-judge export. Runtime reconciliation never writes or reads
-# it; migration imports it once for installs that predate the SQLite verdict rows.
-VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"
 REVIEW_DIR = ROOT / "review"  # staged human review UI state + cached avatars
 
 DEFAULT_PEOPLE_CSV = DEFAULT_BASE_DIR / "merged" / "people.csv"
@@ -82,10 +83,6 @@ PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
 # profile-fetch primitives outside deep_context. Read here by build_owner,
 # profiles/prefetch, and research judging — a hit here means no RapidAPI spend.
 OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
-LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
-# Legacy pre-SQLite review-decisions file. Nothing in this repo writes it anymore:
-# check_readiness only checks for its presence (legacy_artifacts_present) and migration
-# reads it once to import old decisions into CANONICAL_DB.
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"  # written and read only by realize.apply_retargets
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 # build_owner writes this file, but most consumers never read it back: build_owner also

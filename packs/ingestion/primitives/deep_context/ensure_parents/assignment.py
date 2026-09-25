@@ -20,6 +20,9 @@ that predate the database cross the one-time legacy import boundary first.
 Splits are out of scope. An id is claimed by at most one cluster per build; a
 cluster left with no unclaimed candidate mints a fresh id, which is exactly what
 the old membership hash produced.
+
+Changelog:
+- 2026-09-25: `reserve`, the proof harness's seam, went with the proof tool.
 """
 
 from __future__ import annotations
@@ -51,14 +54,6 @@ class ParentAssignment:
         self.parent_by_child = parent_by_child
         self.facts = facts
         self.claimed: set[str] = set()
-
-    def reserve(self, parent_id: str) -> None:
-        """Proof harness only: reserve an owner id during migration replay.
-
-        Removal countdown (2026-08-06): delete once no supported install
-        predates powerpacks v1.19.0.
-        """
-        self.claimed.add(parent_id)
 
     def resolve(self, child_slugs: Sequence[str], child_person_ids: Sequence[str]) -> str:
         candidates = []

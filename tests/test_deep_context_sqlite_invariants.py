@@ -103,14 +103,14 @@ def render() -> str:
             ["artifact-file-read"],
         )
 
-    def test_csv_parser_exists_only_at_legacy_or_import_input_boundary(self) -> None:
+    def test_csv_parser_exists_only_at_seed_or_import_input_boundary(self) -> None:
         source = """import csv
 
 def rows(values: list[str]) -> object:
     return csv.DictReader(values)
 """
         banned = self.audit_source("consumer.py", source)
-        allowed = self.audit_source("migration/legacy.py", source)
+        allowed = self.audit_source("migration/seed.py", source)
         imported = self.audit_source("ensure_parents/imported_people.py", source)
         self.assertEqual([item.rule for item in banned], ["csv-input-boundary"])
         self.assertEqual(allowed, [])
@@ -159,13 +159,13 @@ def two(verdict):
         )
         self.assertEqual(violations, [])
 
-    def test_allows_legacy_and_projector_boundaries(self) -> None:
+    def test_allows_seed_and_projector_boundaries(self) -> None:
         source = """from pathlib import Path
 
 def project(path: Path) -> bytes:
     return path.read_bytes()
 """
-        self.assertEqual(self.audit_source("migration/legacy.py", source), [])
+        self.assertEqual(self.audit_source("migration/seed.py", source), [])
         self.assertEqual(self.audit_source("db/projectors.py", source), [])
 
     def test_provider_projection_never_rehydrates_artifact_files(self) -> None:
@@ -226,19 +226,6 @@ def hydrate(db: object, root: object, rows: list[dict[str, object]]) -> object:
 """,
         )
         self.assertEqual([item.rule for item in violations], ["untyped-projector"])
-
-    def test_whole_graph_calls_are_migration_and_proof_only(self) -> None:
-        source = """from packs.ingestion.primitives.deep_context.migration.legacy import LegacyGraphMigration as Migration
-
-def rebuild(db: object, projection: object) -> object:
-    return Migration.apply(db, projection)
-"""
-        banned = self.audit_source("consumer.py", source)
-        legacy = self.audit_source("migration/legacy.py", source)
-        proof = self.audit_source("tools/parent_identity_proof.py", source)
-        self.assertEqual([item.rule for item in banned], ["migration-only-graph"])
-        self.assertEqual(legacy, [])
-        self.assertEqual(proof, [])
 
     def test_runtime_respects_sqlite_projection_boundary(self) -> None:
         result = subprocess.run(

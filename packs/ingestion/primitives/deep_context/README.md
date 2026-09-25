@@ -74,7 +74,7 @@ flowchart TD
    `.powerpacks/deep-context/` is a cache, receipt, or re-derivable export.
    No stage reads a CSV/JSON baton to make a decision. The one live import
    boundary is `ensure_parents/imported_people.py`; old Deep Context artifacts
-   cross only `migration/legacy.py`, and proof tooling reads only throwaway copies.
+   cross only `migration/seed.py`.
 2. **`manifest.json` is a write-only receipt** — counts, timing, error text
    for humans and agents to read after a run. Nothing derives control flow
    from it; pending-ness is always computed from named SQLite reads under

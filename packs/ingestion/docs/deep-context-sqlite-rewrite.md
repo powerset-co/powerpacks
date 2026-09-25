@@ -54,10 +54,10 @@ SQLite is the runtime record after bootstrap. `review.csv`,
 Legacy synthetic exports, verdict logs, and lookup snapshots must never compete
 with it through mtime checks, implicit refreshes, or read fallbacks.
 
-One explicit legacy importer may read the existing files and populate a fresh
-database. That importer is allowed to be ugly because it is the single
-boundary that absorbs old shapes. It is isolated entirely in `migration/legacy.py`,
-tested, and removable after old installs have migrated. No second CSV reader,
+One explicit seed may read the existing files and carry decisions onto the
+cold parents. That reader is allowed to be tolerant because it is the single
+boundary that absorbs old shapes. It is isolated entirely in `migration/seed.py`,
+tested, and removable after old installs have upgraded. No second CSV reader,
 compatibility parser, or shared baton loader is permitted elsewhere in Deep
 Context.
 
@@ -203,7 +203,7 @@ must prevent orphan decisions and mismatched candidate kinds.
 The database package should expose only what the product uses:
 
 - open/create a supported database;
-- explicit `import_legacy(...)` for a fresh database;
+- explicit `seed` after ensure-parents for an install with legacy files;
 - explicit idempotent artifact projectors for facts, people/parents,
   candidates, synthetic profiles, research results, dossier/profile snapshots,
   and job state;

@@ -12,6 +12,7 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-09-25: `message_linkedin_aliases` went with the legacy importer, its only caller.
   2026-08-09: deep-context — `scrub_retired_message_linkedin_facts` runs at
     synthesis entry, so the retired-prefix facts files delete themselves on
     every install instead of waiting for someone to notice them. This is the
@@ -43,7 +44,6 @@ import hashlib
 import json
 from typing import Any
 from packs.ingestion.schemas.people_schema import (
-    generate_person_id,
     legacy_message_linkedin_id,
 )
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
@@ -220,16 +220,9 @@ def migrate_parent_slug_artifacts(
 # directory UUIDv5), so any review row naming the pub yields the EXACT
 # equivalence. This is a key migration, not a guess.
 #
-# The explicit legacy importer calls this once, so grouping sees one identity
-# per human.
-#
-# This only folds FACTS onto the durable person id (`people`/`facts`). The
-# `links` table is a separate concern: `deep_context/migration/legacy.py`
-# (`_review`, `_verdicts`, `_finish_graph`) skips minting a `links` row for any
-# `MESSAGE_LINKEDIN_PREFIX` key outright (added 2026-08-07), because the
-# messages import always matched a real slug at record time, so a `pub`-kind
-# sibling row for the same person already exists on the same parent — a
-# `links` row under the retired key would be a pure duplicate.
+# The seed (`deep_context/migration/seed.py`) never carries a decision keyed by
+# this prefix: the messages import always matched a real slug at record time,
+# so the same person already has a `pub`-kind row on the same parent.
 #
 # REMOVAL CONDITION: delete once no `facts/*.jsonl` file remains under a
 # `MESSAGE_LINKEDIN_PREFIX` person id — the live import can no longer mint the
@@ -239,8 +232,8 @@ def migrate_parent_slug_artifacts(
 # zero without anyone doing it by hand: every synthesis run deletes the stranded
 # files, and nothing can create a new one. Once every supported install has run
 # synthesis once, this whole section plus `people_schema.
-# legacy_message_linkedin_id` and the `MESSAGE_LINKEDIN_PREFIX` branches in
-# `deep_context/migration/legacy.py` all go together.
+# legacy_message_linkedin_id` and the seed's `MESSAGE_LINKEDIN_PREFIX` branch
+# all go together.
 # -----------------------------------------------------------------------------
 
 MESSAGE_LINKEDIN_PREFIX = "message-linkedin:"
@@ -264,22 +257,6 @@ def scrub_retired_message_linkedin_facts(facts_dir: Path | None) -> int:
     for path in stale:
         path.unlink()
     return len(stale)
-
-
-def message_linkedin_aliases(rows: list[dict[str, str]]) -> dict[str, str]:
-    """Retired message-linkedin pid (lower) -> the same human's durable person_id.
-
-    Entries for pubs with no stranded facts are inert.
-    """
-    aliases: dict[str, str] = {}
-    for row in rows:
-        pub = str(row.get("public_identifier") or "").strip().lower()
-        # real LinkedIn pubs only — review keys can also be person-id-shaped
-        # (candidate:phone:..., synth-...) and those never minted a legacy id
-        if not pub or ":" in pub or pub.startswith("synth-"):
-            continue
-        aliases[legacy_message_linkedin_id(pub)] = generate_person_id(pub)
-    return aliases
 
 
 # -----------------------------------------------------------------------------

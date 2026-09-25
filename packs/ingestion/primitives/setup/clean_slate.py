@@ -12,7 +12,7 @@ the next full run (linkedin -> gmail -> messages -> deep-context) cache-hits.
 PRESERVED (paid/LLM/human, stable keys):
   facts/*.jsonl                keyed by contact identity (candidate:email/phone)
   deep-context.sqlite          human decisions + merge_verdicts paid cache
-  reconcile/verdicts.*         legacy migration input (LinkedIn-judge verdicts); drop
+  reconcile/verdicts.*         pre-SQLite LinkedIn-judge verdicts, read by nothing now; drop
                                once no supported install predates powerpacks v1.19.0
   reconcile/deep-research/     Parallel results, keyed by parent slug
   import/linkedin/             source import + RapidAPI enrichment caches
@@ -88,7 +88,7 @@ SCRUB = [
 PRESERVE = [
     ("deep-context/facts", "OpenAI synthesis, keyed by contact identity"),
     ("deep-context/deep-context.sqlite", "human decisions + paid merge verdicts"),
-    # Legacy migration input; drop once no supported install predates powerpacks v1.19.0.
+    # Pre-SQLite export nothing reads; kept for backups. Drop once no supported install predates v1.19.0.
     ("deep-context/reconcile/verdicts.jsonl", "LinkedIn-judge verdicts"),
     ("deep-context/reconcile/verdicts.csv", "LinkedIn-judge verdicts (flat)"),
     ("deep-context/reconcile/deep-research", "Parallel research results"),

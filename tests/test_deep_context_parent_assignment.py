@@ -162,14 +162,6 @@ class ParentAssignmentRuleTest(unittest.TestCase):
         self.assertEqual(first, "parent-shared")
         self.assertEqual(second, mint_parent_id(["person-b"]))
 
-    def test_reserved_owner_ids_stay_out_of_cluster_resolution(self) -> None:
-        assignment = ParentAssignment({"jordan-a": "parent-owned"}, {})
-        assignment.reserve("parent-owned")
-        self.assertEqual(
-            assignment.resolve(["jordan-a"], ["person-a"]),
-            mint_parent_id(["person-a"]),
-        )
-
     def test_sqlite_membership_is_the_only_assignment_source(self) -> None:
         snapshot = CanonicalSnapshot(
             parents=(),

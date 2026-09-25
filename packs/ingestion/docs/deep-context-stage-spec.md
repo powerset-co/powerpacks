@@ -118,11 +118,11 @@ Never: exports feeding back as inputs; identity logic at export time.
    coalesce is precedence: a human decision beats a machine verdict.
 9. A stage projects what it produces and never projects another stage's input.
 
-## 9. migration  (sanctioned legacy, dying)
-Purpose: absorb a pre-SQLite install exactly once, preserving paid artifacts
-  and human decisions.
-Reads: legacy files (index.json, review.csv, facts, verdicts, research).
+## 9. seed  (legacy installs, once)
+Purpose: after ensure-parents, carry a pre-SQLite install's merges, raw
+  bundles, facts, human decisions and Parallel results onto the cold parents
+  by identifier, exactly once.
+Reads: legacy files (index.json, review.csv, facts, raw, merge verdicts, research).
 Writes: SQLite.    Detection: check-readiness routes to ensure-parents, then seed
-  for legacy decisions; migrate-sqlite is unrouted.
-Removal condition: delete legacy.py, migration-only graph machinery, and
-  parent_identity_proof once no install predates the migration.
+  while the legacy files are present and the store has not carried them over.
+Removal condition: delete seed.py once no supported install predates the store.

@@ -135,7 +135,6 @@ usage: bin/deep-context <command> [args]
                ambiguous remainder (spends TypeSafe; run `cluster --dry-run` first)
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
-  migrate-sqlite  whole-graph legacy import; unrouted, `seed` replaces it
   review       restart the review server and print the staged UI URL once
                /healthz answers. Active enrichment or guided
                re-research only prints a warning (both are durable: identical
@@ -249,10 +248,6 @@ case "$cmd" in
     # After ensure-parents: legacy merges, facts, human decisions and Parallel
     # results land on the cold parents by identifier. Refuses a seeded store.
     "${PY[@]}" "$PKG.migration.seed" "$@"
-    ;;
-  migrate-sqlite)
-    # The retired whole-graph import; `check` no longer routes here.
-    "${PY[@]}" "$PKG.migration.migrate_sqlite" "$@"
     ;;
   assemble-synthetic)
     # Free, local: project pending synthetic identities from EXISTING SQLite research

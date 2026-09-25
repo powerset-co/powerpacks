@@ -1,4 +1,9 @@
-"""Migration-proof whole-graph snapshot from canonical Deep Context SQLite."""
+"""Whole-graph snapshot of canonical Deep Context SQLite, read by tests only.
+
+Changelog:
+- 2026-09-25: the proof tool that motivated this read is gone; the test suites
+  that inspect a whole store still read it. Steady-state stages never do.
+"""
 
 from __future__ import annotations
 
@@ -111,11 +116,7 @@ def _dossiers(
 
 
 def canonical_snapshot(db: Db) -> CanonicalSnapshot:
-    """Whole graph for the migration proof; steady-state stages use narrow queries.
-
-    Removal countdown (2026-08-06): delete with parent_identity_proof once no
-    supported install predates powerpacks v1.19.0.
-    """
+    """Whole graph for test inspection; steady-state stages use narrow queries."""
     parent_rows = queries.parents(db)
     people_rows = queries.people(db)
     identifier_rows = queries.identifiers(db)
