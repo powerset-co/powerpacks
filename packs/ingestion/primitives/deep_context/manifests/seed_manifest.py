@@ -9,6 +9,10 @@ class SeedManifest(StageManifest):
     legacy_root: str = ""
     merges_applied: int = 0
     families_ambiguous: int = 0
+    bundles_carried: int = 0
+    bundles_duplicate_dropped: int = 0
+    bundles_two_plus: int = 0
+    bundles_unmatched: int = 0
     facts_carried: int = 0
     facts_duplicate_dropped: int = 0
     facts_two_plus: int = 0

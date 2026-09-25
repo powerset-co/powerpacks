@@ -143,11 +143,13 @@ bin/deep-context check
 ```
 
 `seed` is free and local. It merges the cold parents a legacy same-person
-family spans, copies each legacy facts record onto its cold parent, replays
-the human worth and LinkedIn decisions from `overrides/review.csv`, and
-projects Parallel research results so enrichment reuses them. Machine review
-rows, dossiers and the profile cache are not carried. A seeded store refuses a
-second run.
+family spans, re-owns each legacy raw bundle and facts record to its cold
+parent, replays the human worth and LinkedIn decisions from
+`overrides/review.csv`, and projects Parallel research results so enrichment
+reuses them. Machine review rows, dossiers and the profile cache are not
+carried. A seeded store refuses a second run. The next `collect` and
+`synthesize` refresh the carried bundles and facts from the live message
+stores; unchanged people re-synthesize once on the new model.
 
 Do not run `seed` for a narrow `$deep-context check`; report its
 `next_command` and stop.

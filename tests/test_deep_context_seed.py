@@ -121,6 +121,16 @@ class SeedFixture(unittest.TestCase):
             _facts_record("Riley Charlie", "2026-09-01T00:00:00+00:00", worth="maybe"), encoding="utf-8")
         (legacy_dc / "facts/person-ghost.jsonl").write_text(
             _facts_record("Nobody Known", "2026-09-01T00:00:00+00:00"), encoding="utf-8")
+        (legacy_dc / "raw").mkdir()
+        for subject, name, email, collected_at in (
+            ("person-jordan", "Jordan Bravo", "jordan@example.com", "2026-09-02T00:00:00+00:00"),
+            ("candidate:email:casey@example.com", "Casey Alpha", "casey@example.com", "2026-09-01T00:00:00+00:00"),
+        ):
+            (legacy_dc / f"raw/{subject}.json").write_text(json.dumps({
+                "person_id": subject, "full_name": name, "emails": [email], "phones": [],
+                "source_channels": ["gmail_msgvault"], "messages": [], "messages_available": 0,
+                "capped": False, "collected_at": collected_at,
+            }), encoding="utf-8")
         research = legacy_dc / "reconcile/deep-research/morgan-delta-parent"
         research.mkdir(parents=True)
         (research / "00_parallel_result.json").write_text(json.dumps({
@@ -148,6 +158,9 @@ class SeedFixture(unittest.TestCase):
                              "updated_at": "2026-09-01T00:00:00Z"})
             writer.writerow({"public_identifier": "candidate:email:nobody@example.com",
                              "network_worth": "yes", "updated_at": "2026-09-01T00:00:00Z"})
+            writer.writerow({"public_identifier": "message-linkedin:abc123def456", "action": "detach",
+                             "approved": "yes", "source": "deep-context-review",
+                             "updated_at": "2026-09-05T00:00:00Z"})
         (overrides / "synthetic-people.csv").write_text(
             "id,full_name,approved\nsynthetic:one,Sam Foxtrot,yes\n", encoding="utf-8")
 
@@ -215,8 +228,24 @@ class SeedTests(SeedFixture):
             (link["decision_action"], link["decision_approved"], link["decision_source"]),
             ("verify", "yes", "deep-context-review"),
         )
-        self.assertEqual((manifest.identity_carried, manifest.identity_unmatched), (1, 0))
+        # The retired message-linkedin key carries a click the seed cannot place: counted, not lost.
+        self.assertEqual((manifest.identity_carried, manifest.identity_unmatched), (1, 1))
         self.assertEqual(manifest.machine_review_rows_not_carried, 1)
+
+        # The family's raw bundle rides along so compose has message evidence; the
+        # sibling's bundle lands on the same parent and is dropped as the older one.
+        self.assertEqual(
+            (manifest.bundles_carried, manifest.bundles_duplicate_dropped, manifest.bundles_unmatched),
+            (1, 1, 0),
+        )
+        bundle = db.query(
+            "SELECT person_id, payload_json, path FROM artifacts WHERE kind='source_bundle' AND parent_id=?",
+            (family,),
+        )
+        self.assertEqual(len(bundle), 1)
+        self.assertIsNone(bundle[0]["person_id"])
+        self.assertEqual(json.loads(bundle[0]["payload_json"])["person_id"], family)
+        self.assertEqual(Path(bundle[0]["path"]), (self.deep_context / f"raw/{family}.json").resolve())
         self.assertEqual(manifest.synthetic_rows_not_carried, 1)
 
         morgan = parent_of["person-morgan"]

@@ -4,14 +4,16 @@
 An install that predates the SQLite store keeps its old artifacts under its
 `.powerpacks` tree. `ensure-parents` mints fresh parents from the current
 `merged/people.csv`; this stage then carries over, keyed by identifier (email,
-phone, LinkedIn public identifier) onto those parents, exactly four things, in
+phone, LinkedIn public identifier) onto those parents, exactly five things, in
 this order:
 
   1. merges: legacy same-person families (index.json multi-child parents and
      accepted merge verdicts) whose members land on distinct cold parents
-  2. facts: each legacy facts record, written as the cold parent's facts file
-  3. human decisions from review.csv: worth marks and identity clicks
-  4. Parallel research results, keyed by the cold parent's slug so enrichment
+  2. raw bundles: each legacy message bundle, re-owned by the cold parent so
+     compose has evidence before the next collect
+  3. facts: each legacy facts record, written as the cold parent's facts file
+  4. human decisions from review.csv: worth marks and identity clicks
+  5. Parallel research results, keyed by the cold parent's slug so enrichment
      reuses them instead of re-billing
 
 Machine review rows, dossiers, the profile cache, synthetic rows and avatars
@@ -20,6 +22,8 @@ counted and left alone. A seeded store records `meta.seeded_at` and refuses
 a second run.
 
 Changelog:
+- 2026-09-25: raw bundles ride along when the legacy tree still has them;
+  an identity click on a retired message-linkedin key is counted unmatched.
 - 2026-09-25: created; check routes legacy installs here instead of the
   whole-graph migrate-sqlite import (owner decision A).
 """
@@ -68,7 +72,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
     row_kind_for_key,
 )
-from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
+from packs.ingestion.primitives.deep_context.db.projectors import (
+    project_parent_fact,
+    project_parent_source_bundle,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.projection import (
     native_research_payload,
@@ -79,6 +86,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     DEEP_RESEARCH_DIR,
     DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
+    RAW_DIR,
     emit,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
@@ -392,6 +400,9 @@ class LegacyTree:
     def facts_files(self) -> list[Path]:
         return sorted((self.root / LEGACY_FACTS_DIR).glob("*.jsonl"))
 
+    def bundle_files(self) -> list[Path]:
+        return sorted((self.root / LEGACY_RAW_DIR).glob("*.json"))
+
     def research_results(self) -> list[tuple[str, Path]]:
         """(legacy handle, result file) for every research dir holding one."""
         directory = self.root / LEGACY_RESEARCH_DIR
@@ -443,12 +454,14 @@ class Seed(Node):
         db: Db,
         legacy_root: Path = DEFAULT_LEGACY_ROOT,
         people_csv: Path = DEFAULT_PEOPLE_CSV,
+        raw_dir: Path = RAW_DIR,
         facts_dir: Path = FACTS_DIR,
         research_dir: Path = DEEP_RESEARCH_DIR,
     ) -> None:
         self.db = db
         self.legacy_root = Path(legacy_root)
         self.people_csv = Path(people_csv)
+        self.raw_dir = Path(raw_dir)
         self.facts_dir = Path(facts_dir)
         self.research_dir = Path(research_dir)
 
@@ -465,6 +478,7 @@ class Seed(Node):
         legacy = LegacyTree(self.legacy_root)
 
         merges, ambiguous = self._merge_families(cold, legacy)
+        bundles = self._carry_bundles(cold, legacy)
         facts = self._carry_facts(cold, legacy)
         worth, identity, machine_rows = self._carry_decisions(cold, legacy)
         research = self._carry_research(cold, legacy)
@@ -477,6 +491,10 @@ class Seed(Node):
             legacy_root=str(self.legacy_root),
             merges_applied=merges,
             families_ambiguous=ambiguous,
+            bundles_carried=bundles.carried,
+            bundles_duplicate_dropped=bundles.duplicate_dropped,
+            bundles_two_plus=bundles.two_plus,
+            bundles_unmatched=bundles.unmatched,
             facts_carried=facts.carried,
             facts_duplicate_dropped=facts.duplicate_dropped,
             facts_two_plus=facts.two_plus,
@@ -514,6 +532,39 @@ class Seed(Node):
                 cold.merge(survivor, absorbed)
                 merges += 1
         return merges, ambiguous
+
+    def _carry_bundles(self, cold: ColdIndex, legacy: LegacyTree) -> _Tally:
+        """Re-own each legacy message bundle to its cold parent; the newest
+        `collected_at` wins when two land on one parent."""
+        tally = _Tally()
+        chosen: dict[str, tuple[str, Path, dict[str, Any]]] = {}
+        for path in legacy.bundle_files():
+            payload = _json_object(path)
+            if payload is None:
+                tally.unmatched += 1
+                continue
+            subject = path.stem.lower()
+            ids = legacy.key_ids(subject)
+            ids.update(legacy.raw_ids(subject))
+            parent_id = tally.one(cold.resolve(ids))
+            if parent_id is None:
+                continue
+            collected_at = _text(payload.get("collected_at"))
+            prior = chosen.get(parent_id)
+            if prior is not None:
+                tally.duplicate_dropped += 1
+                if prior[0] >= collected_at:
+                    continue
+            chosen[parent_id] = (collected_at, path, payload)
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        for parent_id, (_, _, payload) in chosen.items():
+            # The projector checks the bundle names its owner; the cold parent is it now.
+            payload["person_id"] = parent_id
+            target = self.raw_dir / f"{parent_id}.json"
+            target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            project_parent_source_bundle(self.db, target, parent_id)
+        tally.carried = len(chosen)
+        return tally
 
     def _carry_facts(self, cold: ColdIndex, legacy: LegacyTree) -> _Tally:
         tally = _Tally()
@@ -574,8 +625,14 @@ class Seed(Node):
             parents = cold.decide(primary, secondary)
             if mark is not None:
                 self._carry_worth(row, mark, worth.one(parents), worth)
-            if decision is not None and not key.startswith((MESSAGE_LINKEDIN_PREFIX, PARENT_WORTH_PREFIX)):
-                self._carry_identity(key, row, decision, identity.one(parents), identity)
+            if decision is None:
+                continue
+            if key.startswith((MESSAGE_LINKEDIN_PREFIX, PARENT_WORTH_PREFIX)):
+                # A click on a retired alias key has no candidate row to settle on.
+                print(f"[seed] identity decision on a retired key not carried: {key}", file=sys.stderr)
+                identity.unmatched += 1
+                continue
+            self._carry_identity(key, row, decision, identity.one(parents), identity)
         return worth, identity, machine_rows
 
     def _carry_worth(self, row: dict[str, str], mark: str, parent_id: str | None, tally: _Tally) -> None:
