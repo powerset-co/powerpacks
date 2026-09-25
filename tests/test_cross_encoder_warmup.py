@@ -164,9 +164,9 @@ class WarmupPipelineTests(unittest.TestCase):
             self.execute(self.args("--confirm-llm"))
         self.warm.assert_called_once_with(api_key="synthetic-process-key")
 
-    def test_disabled_search_only_and_filter_only_never_warm(self):
+    def test_disabled_and_search_only_never_warm(self):
         for backend in ("powerset", "local"):
-            for mode in ("disabled", "--search-only", "--filter-only"):
+            for mode in ("disabled", "--search-only"):
                 with self.subTest(backend=backend, mode=mode):
                     self.ledger.write_text("{}")
                     args = self.args("--execute-approved", *([] if mode == "disabled" else [mode]), backend=backend)

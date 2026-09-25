@@ -6,6 +6,11 @@ answers out, reusing the exact-request cache under `<output_dir>/jev/`.
 question set, then turns the answers into a qualification score.
 
 Changelog:
+  2026-09-25: profile-only request. Request compaction is gone with the per-position
+    questions (the request no longer duplicates position bodies), cache records no longer
+    carry an effective-request kind, and features build from answers alone. Cache validation
+    no longer checks the capability judge's prompt version, so deep-context's jev_worth
+    records survive this bump.
   2026-09-24: made the cache path reusable by request callers.
   2026-09-24 (share stage): the cache/semaphore/request/checkpoint body of
     `score_candidates`' inner `score_one` became the module-level
@@ -113,49 +118,25 @@ def validate_response(response: object, request: dict) -> dict:
             raise ValueError
         return response
     except (KeyError, TypeError, ValueError, OverflowError):
-        raise RuntimeError("Jev returned an invalid response; candidate remains unscored") from None
-
-
-def _compact_request(request: dict) -> dict:
-    """Remove duplicated role bodies while preserving every profile and company fact."""
-    result = json.loads(json.dumps(request))
-    for index, role in enumerate(result["state"]["roles"]):
-        result["state"]["roles"][index] = {
-            "dates": role["dates"],
-            "original_position_index": index,
-        }
-        for kind in ("function", "execution", "quality"):
-            question = result["questions"][f"role_{index}_{kind}"]
-            question["instructions"] = (
-                question["instructions"]
-                .replace(f"roles[{index}].original_role", f"profile.positions[{index}]")
-                .replace(
-                    f"roles[{index}].company_context",
-                    f"profile.companies entries matching the employer in profile.positions[{index}]",
-                )
-            )
-    return result
+        raise RuntimeError("Jev returned an invalid response; ranking stops without a decision") from None
 
 
 def _cache_record(
     raw_response: str,
     request_hash: str,
-    effective_request: dict,
+    request: dict,
     *,
     request_version: str,
     question_version: str,
 ) -> dict:
-    effective_kind = "full" if request_digest(effective_request) == request_hash else "compact"
     return {
         "raw_response": raw_response,
         "request_sha256": request_hash,
-        "effective_request_sha256": request_digest(effective_request),
-        "effective_request_kind": effective_kind,
         "model": MODEL,
         "request_version": request_version,
         "question_version": question_version,
         "prompt_version": PROMPT_VERSION,
-        "assessment_date": effective_request["state"]["reference_date"],
+        "assessment_date": request["state"]["reference_date"],
         "model_asset_sha256": MODEL_ASSET_SHA256,
         "threshold": THRESHOLD,
     }
@@ -169,30 +150,21 @@ def _validate_cache(
     request_version: str,
     question_version: str,
 ) -> dict:
+    # The request hash and the caller's own versions bind a record; the capability judge's
+    # prompt version is provenance only, so other question sets survive its bumps.
     expected = {
         "request_sha256": request_hash,
         "model": MODEL,
         "request_version": request_version,
         "question_version": question_version,
-        "prompt_version": PROMPT_VERSION,
         "assessment_date": request["state"]["reference_date"],
     }
     if not isinstance(record, dict) or any(record.get(key) != value for key, value in expected.items()):
         raise RuntimeError("Jev cache binding changed; preserved without another paid request")
-    effective_kind = record.get("effective_request_kind")
-    expected_effective_hash = (
-        request_hash
-        if effective_kind == "full"
-        else request_digest(_compact_request(request))
-        if effective_kind == "compact"
-        else None
-    )
-    if record.get("effective_request_sha256") != expected_effective_hash:
-        raise RuntimeError("Jev cache binding changed; preserved without another paid request")
     try:
         response = json.loads(record["raw_response"])
     except (KeyError, TypeError, json.JSONDecodeError):
-        raise RuntimeError("Jev cached response is invalid; candidate remains unscored") from None
+        raise RuntimeError("Jev cached response is invalid; ranking stops without a decision") from None
     return validate_response(response, request)
 
 
@@ -202,9 +174,9 @@ def _choice(answers: dict, name: str, options: list[str]) -> str:
 
 
 def _evidence_summary(answers: dict) -> str:
-    function = answers["function_match"]["probabilities"]
-    function_score = sum(int(option) * probability for option, probability in function.items()) / 3
-    direct = answers["direct_execution"]["noul"]
+    transfer = answers["transfer"]["probabilities"]
+    transfer_score = sum(int(option) * probability for option, probability in transfer.items()) / 3
+    execution = answers["independent_execution_quality"]["noul"]
     basis = _choice(answers, "evidence_basis", ["description", "summary", "repeated_roles", "isolated_title", "none"])
     continuity = _choice(
         answers,
@@ -212,7 +184,7 @@ def _evidence_summary(answers: dict) -> str:
         ["current", "recent", "senior_adjacent", "stale_switch", "unknown", "none"],
     )
     return (
-        f"Jev signals: function {function_score:.2f}; direct execution {direct:.2f}; "
+        f"Jev signals: transfer {transfer_score:.2f}; independent execution {execution:.2f}; "
         f"evidence {basis}; continuity {continuity}."
     )
 
@@ -258,9 +230,7 @@ async def _request(
     request: dict,
     api_key: str,
     checkpoint: Any,
-) -> tuple[dict, dict, int]:
-    effective = request
-    compacted = False
+) -> tuple[dict, int]:
     attempts = 0
     retries = 0
     while True:
@@ -269,12 +239,12 @@ async def _request(
         try:
             response = await client.post(
                 ENDPOINT,
-                json=effective,
+                json=request,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             )
         except httpx.HTTPError:
             if retries == MAX_RETRIES:
-                raise RuntimeError("Jev request failed; candidate remains unscored") from None
+                raise RuntimeError("Jev request failed; ranking stops without a decision") from None
             await asyncio.sleep(2**retries)
             retries += 1
             continue
@@ -283,21 +253,17 @@ async def _request(
                 payload = response.json()
             except (TypeError, ValueError):
                 _record_paid_usage(None, int((time.monotonic() - started) * 1000))
-                checkpoint(response.text, effective)
-                raise RuntimeError("Jev returned malformed JSON; candidate remains unscored") from None
+                checkpoint(response.text)
+                raise RuntimeError("Jev returned malformed JSON; ranking stops without a decision") from None
             _record_paid_usage(payload, int((time.monotonic() - started) * 1000))
             raw_response = response.text or json.dumps(payload, ensure_ascii=False)
-            checkpoint(raw_response, effective)
-            return validate_response(payload, request), effective, attempts
-        if response.status_code == HTTPStatus.BAD_REQUEST and not compacted and "max_tokens_exceeded" in response.text:
-            effective = _compact_request(request)
-            compacted = True
-            continue
+            checkpoint(raw_response)
+            return validate_response(payload, request), attempts
         if response.status_code in RETRYABLE_STATUS and retries < MAX_RETRIES:
             await _retry_delay(response, retries)
             retries += 1
             continue
-        raise RuntimeError(f"Jev HTTP {response.status_code}; candidate remains unscored")
+        raise RuntimeError(f"Jev HTTP {response.status_code}; ranking stops without a decision")
 
 
 @dataclass(frozen=True)
@@ -352,15 +318,15 @@ async def answer_requests(
             return AnsweredRequest(response=response, cache=cache, cached=True, attempts=0)
         async with semaphore:
             if not key:
-                raise RuntimeError("Jev requires TYPESAFE_API_KEY; candidate remains unscored")
+                raise RuntimeError("Jev requires TYPESAFE_API_KEY; ranking stops without a decision")
             if client is None:
                 owned_client = client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
 
-            def checkpoint(raw_response: str, effective_request: dict) -> None:
+            def checkpoint(raw_response: str) -> None:
                 saved = _cache_record(
                     raw_response,
                     request_hash,
-                    effective_request,
+                    request,
                     request_version=request_version,
                     question_version=question_version,
                 )
@@ -371,7 +337,7 @@ async def answer_requests(
                 except FileExistsError:
                     raise RuntimeError("Jev cache changed concurrently; preserved without overwrite") from None
 
-            response, _, attempts = await _request(client, request, key, checkpoint)
+            response, attempts = await _request(client, request, key, checkpoint)
             return AnsweredRequest(response=response, cache=cache, cached=False, attempts=attempts)
 
     try:
@@ -389,7 +355,7 @@ async def answer_requests(
 
 
 async def evaluate_once(*, client: Any, request: dict, api_key: str) -> dict:
-    """Evaluate an exact question set once, without capability-specific compaction or retries."""
+    """Evaluate an exact question set once, without retries or caching."""
     started = time.monotonic()
     response = await client.post(ENDPOINT, json=request,
                                  headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
@@ -398,7 +364,7 @@ async def evaluate_once(*, client: Any, request: dict, api_key: str) -> dict:
         payload = response.json()
     except ValueError:
         _record_paid_usage(None, int((time.monotonic() - started) * 1000))
-        raise RuntimeError("Jev returned malformed JSON; candidate remains unscored") from None
+        raise RuntimeError("Jev returned malformed JSON; ranking stops without a decision") from None
     _record_paid_usage(payload, int((time.monotonic() - started) * 1000))
     return validate_response(payload, request)
 
@@ -468,7 +434,7 @@ async def score_candidates(
         usage_bucket["output_tokens"] += usage["output_tokens"]
     for person_id, request_hash in candidate_requests.items():
         answers = records[request_hash].response["answers"]
-        score = predict(build_features(requests[request_hash]["state"]["roles"], answers))
+        score = predict(build_features(answers))
         result["cached_candidates"] += int(records[request_hash].cached)
         result["scores"].append(
             {

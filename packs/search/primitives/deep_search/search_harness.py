@@ -1107,7 +1107,7 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
                              profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
                              run_dir: Path, pond_n: int, judge_client: Any | None = None,
                              http: Any | None = None) -> list[dict[str, Any]]:
-    """Taste for every judged candidate; pin verdict and Jev signals for overall 4/5. All concurrent."""
+    """Taste for every judged candidate; pin verdict for overall 4/5. All concurrent."""
     rows = [dict(candidate) for candidate in candidates]
     judged = [index for index, row in enumerate(rows) if row.get("candidate_judgment")]
     if not judged:
@@ -1120,7 +1120,7 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
     hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
     as_of = str(results["created_at"])[:10]
     checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "pin-confidence"
-    keys = {name: os.environ.get(name) for name in ("POWERSET_API_KEY", "OPENAI_API_KEY", "TYPESAFE_API_KEY")}
+    keys = {name: os.environ.get(name) for name in ("POWERSET_API_KEY", "OPENAI_API_KEY")}
     urls = {index: pin_confidence.canonical_linkedin(rows[index].get("linkedin_url")) for index in judged}
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.pin_confidence"
@@ -1138,7 +1138,6 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
 
     async def annotate_all() -> list[dict[str, Any]]:
         judge_semaphore = asyncio.Semaphore(CANDIDATE_JUDGE_CONCURRENCY)
-        jev_semaphore = asyncio.Semaphore(jev.MAX_CONCURRENCY)
         judge = judge_client or (make_async_openai_client(keys["OPENAI_API_KEY"]) if keys["OPENAI_API_KEY"] else None)
         client = http or httpx.AsyncClient(timeout=jev.TIMEOUT_SECONDS)
 
@@ -1169,23 +1168,6 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
                 verdict = None
             return index, "judge", verdict, provenance
 
-        async def jev_one(index: int) -> tuple[int, str, Any, dict[str, Any]]:
-            request = pin_confidence.jev_request(state(index))
-            input_sha, checkpoint, record, cached = checkpoint_for("jev", request)
-            if cached:
-                response = json.loads(record["raw"])
-            else:
-                async with jev_semaphore:
-                    response = await jev.evaluate_once(client=client, request=request,
-                                                       api_key=keys["TYPESAFE_API_KEY"])
-                record = {"input_sha": input_sha, "raw": json.dumps(response),
-                          "usage": response.get("usage", {})}
-                _write_json(checkpoint, record)
-            jev.validate_response(response, request)
-            return index, "jev", pin_confidence.jev_signals(response, request), {
-                "candidate_index": index, "kind": "jev", "model": jev.MODEL, "input_sha": input_sha,
-                "checkpoint": str(checkpoint), "cached": cached, "usage": record.get("usage", {})}
-
         async def guarded(kind: str, coro: Any, index: int | None = None) -> tuple[int | None, str, Any, dict[str, Any]]:
             try:
                 return await coro
@@ -1203,17 +1185,12 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
                     if url in (payload or {}):
                         rows[row_index]["taste_score"] = payload[url]
                 return
-            judgment = rows[index]["pin_judgment"] or {
-                "model": pin_confidence.PIN_JUDGE_MODEL, "decision": None, "reason": "", "signals": None,
-                "status": "ok" if judge is not None else "skipped"}
-            if kind == "judge":
-                if payload is None:
-                    judgment["status"] = "error"
-                else:
-                    judgment.update(decision=payload["decision"], reason=payload["reason"])
-                    rows[index]["pin_confidence"] = payload["priority"]
+            judgment = {"model": pin_confidence.PIN_JUDGE_MODEL, "decision": None, "reason": "", "status": "ok"}
+            if payload is None:
+                judgment["status"] = "error"
             else:
-                judgment["signals"] = payload
+                judgment.update(decision=payload["decision"], reason=payload["reason"])
+                rows[index]["pin_confidence"] = payload["priority"]
             rows[index]["pin_judgment"] = judgment
 
         tasks = []
@@ -1227,10 +1204,6 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
             tasks += [guarded("judge", judge_one(index), index) for index in pinnable]
         else:
             records.append({"kind": "judge", "error": "OPENAI_API_KEY is not set"})
-        if keys["TYPESAFE_API_KEY"]:
-            tasks += [guarded("jev", jev_one(index), index) for index in pinnable]
-        else:
-            records.append({"kind": "jev", "error": "TYPESAFE_API_KEY is not set"})
         try:
             await drain_pool(tasks, handle)
         finally:
@@ -1353,7 +1326,7 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
-             capability_judge: str = "terra",
+             capability_judge: str = "jev",
              client: Any | None = None) -> Path:
     if capability_judge not in {"terra", "jev"}:
         raise ValueError("capability_judge must be terra or jev")
@@ -1373,7 +1346,6 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
-        "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
         "--model", jev.MODEL if capability_judge == "jev" else terra.MODEL,
         "--reasoning-effort", "none" if capability_judge == "jev" else terra.REASONING_EFFORT,
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
@@ -1839,7 +1811,7 @@ def main() -> None:
             elif name in {"reannotate-saved", "pin-saved"}:
                 command.add_argument("--pond", type=int)
             if name == "run-pond":
-                command.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+                command.add_argument("--capability-judge", choices=("terra", "jev"), default="jev")
         elif name == "set-query":
             command.add_argument("--query", required=True)
         elif name == "review-payload":

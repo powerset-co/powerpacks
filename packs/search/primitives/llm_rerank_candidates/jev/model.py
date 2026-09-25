@@ -1,4 +1,9 @@
-"""Dependency-free inference for the frozen Jev company-capability model."""
+"""Dependency-free inference for the frozen Jev profile-capability model.
+
+Changelog:
+  2026-09-25: jev-profile-capability-v2 bundle: 31 features from seven profile questions,
+    five JD-fold estimators, cutoff at 93% out-of-fold recall of Luna >= 3.
+"""
 
 from __future__ import annotations
 
@@ -16,11 +21,12 @@ from packs.search.primitives.llm_rerank_candidates.jev.features import FEATURE_N
 MODEL_ASSET = Path(__file__).with_name("model.json")
 FORMAT_VERSION = 1
 MODEL_ID = "jev-1.13.0"
-BUNDLE_ID = "jev-company-capability-pilot-v1"
-FEATURE_SCHEMA_VERSION = "jev-company-features-v1"
-QUESTION_VERSION = "jev-capability-v1-20260918"
-PROMPT_VERSION = "jev-capability-v1-20260918"
-F1_CUTOFF = 0.29855554570561965
+BUNDLE_ID = "jev-profile-capability-v2"
+FEATURE_SCHEMA_VERSION = "jev-profile-features-v2"
+QUESTION_VERSION = "jev-capability-v2-20260925"
+PROMPT_VERSION = "jev-capability-v2-20260925"
+# Out-of-fold cutoff at 93% recall of Luna >= 3 on the teacher set; must equal the bundle's cutoff.
+F1_CUTOFF = 0.20825752133005385
 ENSEMBLE_SIZE = 5
 TREES_PER_ESTIMATOR = 100
 NODE_WIDTH = 7

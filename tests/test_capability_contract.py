@@ -55,23 +55,18 @@ class CapabilityContractTests(unittest.TestCase):
         ):
             self.assertEqual(self.digest(), original)
 
-    def test_prompt_spec_contains_exact_dated_rubric_and_jev_templates(self) -> None:
+    def test_prompt_spec_carries_the_exact_jev_questions_and_dated_terra_rubric(self) -> None:
         spec = capability_contract.prompt_spec(judge="jev", as_of="2026-09-19")
-        self.assertIn("2026-09-19", spec["rating_rubric"])
-        self.assertEqual(spec["rating_rubric"], build_request(
-            jd="Build systems.", profile={}, as_of="2026-09-19")["state"]["rating_rubric"])
-        self.assertEqual(len(spec["shared_questions"]), 18)
-        self.assertEqual(spec["request_version"], "jev-capability-request-v2-20260920")
-        self.assertEqual(
-            set(spec["role_question_template"]),
-            {"role_0_function", "role_0_execution", "role_0_quality"},
-        )
-        self.assertIn("roles[0]", spec["role_question_template"]["role_0_function"]["instructions"])
+        self.assertNotIn("rating_rubric", spec)
+        self.assertEqual(spec["questions"], build_request(
+            jd="Build systems.", profile={}, as_of="2026-09-19")["questions"])
+        self.assertEqual(len(spec["questions"]), 7)
+        self.assertEqual(spec["request_version"], "jev-capability-request-v3-20260925")
         self.assertEqual(len(spec["model_asset_sha256"]), 64)
 
         terra_spec = capability_contract.prompt_spec(judge="terra", as_of="2026-09-20")
         self.assertIn("2026-09-20", terra_spec["rating_rubric"])
-        self.assertNotIn("shared_questions", terra_spec)
+        self.assertNotIn("questions", terra_spec)
 
 
 if __name__ == "__main__":

@@ -176,15 +176,16 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-For the Jev capability screen, add `--capability-judge jev` to `run-pond` and
-provide `TYPESAFE_API_KEY` in the environment. The selected Jev tree uses the
-evaluated high-recall cutoff; it returns a native qualification score and pass
-decision, not a 1–5 rating. The default `--capability-judge terra` selects the
-Luna capability path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
+The capability screen is Jev by default (`--capability-judge jev`) and needs
+`TYPESAFE_API_KEY` in the environment. Jev reads every hydrated row; no Luna filter
+runs ahead of it. The Jev tree uses a cutoff calibrated to
+93% recall of the Luna screen; it returns a native qualification score and pass
+decision, not a 1–5 rating. `--capability-judge terra` selects the Luna filter and
+Luna rating path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
 See [the Jev README](../../primitives/llm_rerank_candidates/jev/README.md) for metrics.
 
-The viewer shows native qualification scores for Jev; the default path sorts by
-overall score, then capability rating. Each result has a **Score** button
+The viewer shows the judges' overall for either screen, sorted by overall; a person
+the judges never saw shows "Did not pass screen" or "Not judged". Each result has a **Score** button
 for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
 and submitted through the existing Powerset feedback endpoint.
 Custom tags are saved in `<run>/tags.json`, shared across browsers, and included

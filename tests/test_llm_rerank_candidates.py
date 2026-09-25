@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from packs.search.primitives.llm_rerank_candidates import llm_rerank_candidates as reranker
 from packs.shared.csv_io import CsvIO
 
 
@@ -328,6 +329,17 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
         ]}
 
         self.assertEqual(mod.state_frontier_ids(state), ["new"])
+
+    def test_rehydrated_frontier_outranks_a_prior_rerank(self) -> None:
+        # A --force rerun re-hydrates after an earlier rerank; with no filter step on
+        # the Jev path, the fresh hydrate output is the newest frontier.
+        state = {"steps": [
+            {"id": "execute_role_search", "output": {"candidate_ids": ["a", "b", "c"]}},
+            {"id": "hydrate_people", "output": {"profile_ids": ["a", "b"]}},
+            {"id": "llm_rerank_candidates", "output": {"ranked_candidate_ids": ["a", "b"]}},
+            {"id": "hydrate_people", "output": {"profile_ids": ["a", "b", "c"]}},
+        ]}
+        self.assertEqual(reranker.state_frontier_ids(state), ["a", "b", "c"])
 
     def test_completed_empty_filter_writes_empty_artifacts_without_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as td:

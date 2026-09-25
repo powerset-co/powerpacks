@@ -2,13 +2,14 @@
 
 Deep mode generates one query directly from the JD, then runs one broad candidate
 population at a time through the ordinary search pipeline. The user reviews the
-initial query and filters once. Each pond compiles, retrieves, filters, and reranks;
+initial query and filters once. Each pond compiles, retrieves, hydrates, and screens;
 the viewer shows candidates for human scoring. A model proposes the next pond.
 
-The cheap Luna filter remains. Terra v5 replaces Luna reranking and Gemma CE for
-JD searches. Candidates rated at least 3/5 then receive independent Terra domain
-and opportunity judgments in parallel. Overall is `min(domain, opportunity cap)`;
-human feedback is never changed. Ordinary non-JD reranking is unchanged.
+Jev screens every hydrated row; there is no Luna filter ahead of it. Candidates that
+pass then receive independent Terra domain and opportunity judgments in parallel.
+Overall is `min(domain, opportunity cap)`; human feedback is never changed.
+`--capability-judge terra` keeps the Luna filter followed by the Luna rating screen
+(pass = rated at least 3/5). Ordinary non-JD reranking is unchanged.
 
 ## Flow
 
@@ -19,8 +20,8 @@ flowchart TD
     REVIEW -->|--query-approved| INIT[Initialize results.json with JD hash, queries, corpus]
     INIT --> COMPILE[compile-pond: ordinary parallel extractors + pattern defaults]
     COMPILE --> CHECK[Agent checks query against compiled geography and reviews payload]
-    CHECK --> RUN[run-pond: retrieval → Luna filter → Terra v5]
-    RUN --> JUDGES[Capability >= 3: parallel domain + opportunity]
+    CHECK --> RUN[run-pond: retrieval → hydrate → Jev capability screen]
+    RUN --> JUDGES[Capability pass: parallel domain + opportunity]
     JUDGES --> SOURCES[Save authorized set source counts and operator attribution]
     SOURCES --> VIEW[Viewer: overall = min of domain and opportunity cap]
     VIEW --> DECIDE[decide: next query or stop]
@@ -76,7 +77,9 @@ cap into execution. The summary retains every retrieved row. The viewer sorts by
 overall score, then capability rating, and shows one explanation. Ratings 1–2
 show "Did not pass screen".
 
-`llm_rerank_candidates.py --jd-file` uses the exact
+`llm_rerank_candidates.py --jd-file` judges with Jev by default (seven profile
+questions and a trained tree; see the [Jev README](../llm_rerank_candidates/jev/README.md)).
+`--capability-judge terra` uses the exact
 [Terra v5 rubric](../../prompts/terra-capability-v5.txt): high reasoning, Flex,
 one full original profile per request, integer 1–5 output. The shared rubric and
 JD precede candidate evidence with an explicit prompt-cache breakpoint. Both
@@ -91,7 +94,8 @@ The v5 request hash includes the prompt, JD, full profile, date, and settings.
 Successful responses are reused from `terra-capability/terra/`; API failures
 stop ranking without fabricating rejections. Domain/opportunity checkpoints live
 in `ponds/pond-NN/candidate-judgments/`, keyed by exact request rather than rank.
-Explicit user-reviewed evaluation criteria also reach Terra, not just the filter.
+Explicit user-reviewed evaluation criteria reach the capability judge (and the Luna
+filter on the Terra path).
 A failed downstream judgment leaves
 overall unknown, not a negative score.
 
@@ -151,15 +155,12 @@ Each judged candidate row, in `shortlist_grades` and in the summary, carries:
  "pin_confidence": 88,
  "pin_judgment": {"model": "gpt-6-sol", "decision": "introduce",
                   "reason": "Two short sentences about the work.",
-                  "signals": {"scope_match": 0.81, "role_company_corroboration": 0.40,
-                              "function_evidence": {"direct": 0.7, "transferable": 0.2, "corroborated_inference": 0.05, "unknown": 0.05, "contradicted": 0.0},
-                              "mechanism_depth": 0.66},
                   "status": "ok"}}
 ```
 
 `taste_score` is null when Reporting has no score for the person. `pin_confidence` is the
 judge's priority, null below overall 4 or on failure. Keys: `POWERSET_API_KEY` (taste),
-`OPENAI_API_KEY` (judge), `TYPESAFE_API_KEY` (Jev). The prompt and questions are the ones
+`OPENAI_API_KEY` (judge). The prompt is the one
 measured in the lab pin audit on 300 Sail matches: the prompt ranks pinned above unpinned
 at AUC 0.71 on gpt-6-sol/low, 0.73 on GLM-5.3, 0.65–0.70 on other OpenAI models and
 efforts; taste alone 0.63. No rating, pin or feedback is ever sent to either model.

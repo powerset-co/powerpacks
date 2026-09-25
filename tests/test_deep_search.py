@@ -498,8 +498,6 @@ class TestLoopParserDefaults(unittest.TestCase):
         self.assertEqual(parser_defaults.query_reasoning_effort, "medium")
         self.assertEqual(parser_defaults.expand_model, "gpt-5.6-luna")
         self.assertEqual(parser_defaults.expand_reasoning_effort, "medium")
-        self.assertEqual(parser_defaults.filter_model, "gpt-5.6-luna")
-        self.assertEqual(parser_defaults.filter_reasoning_effort, "none")
         self.assertEqual(parser_defaults.rerank_model, "gpt-5.6-luna")
         self.assertEqual(parser_defaults.rerank_reasoning_effort, "medium")
 

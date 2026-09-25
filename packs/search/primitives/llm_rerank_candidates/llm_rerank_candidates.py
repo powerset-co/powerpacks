@@ -834,12 +834,14 @@ def latest_step(state: dict[str, Any], step_id: str) -> dict[str, Any] | None:
 
 
 def state_frontier_ids(state: dict[str, Any]) -> list[str]:
-    # On a filter+rerank retry, the new filter is appended after the prior
-    # rerank. The newest frontier is authoritative, including an empty one.
+    # The newest frontier is authoritative, including an empty one: a retried
+    # filter is appended after the prior rerank, and a --force rerun appends a
+    # fresh hydrate (the whole frontier on the Jev path, which has no filter).
     for step in reversed(state.get("steps", [])):
         output = step.get("output", {}) if isinstance(step, dict) else {}
         key = ({"llm_rerank_candidates": "ranked_candidate_ids",
-                "llm_filter_candidates": "passed_candidate_ids"}.get(step.get("id"))
+                "llm_filter_candidates": "passed_candidate_ids",
+                "hydrate_people": "profile_ids"}.get(step.get("id"))
                if isinstance(step, dict) else None)
         ids = output.get(key) if key else None
         if isinstance(ids, list):
@@ -1195,8 +1197,8 @@ def main() -> int:
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
     parser.add_argument("--jd-file", help="JD for capability ranking instead of trait reranking")
-    parser.add_argument("--capability-judge", choices=("terra", "jev"), default="terra",
-                        help="JD judge: terra selects the Luna capability path; jev selects the experimental tree combiner")
+    parser.add_argument("--capability-judge", choices=("terra", "jev"),
+                        help="JD judge: jev (default with --jd-file) is the tree combiner; terra selects the Luna path")
     parser.add_argument("--job-title", default="")
     parser.add_argument("--job-company", default="")
     parser.add_argument("--jd-cleaner-output-dir",
@@ -1228,9 +1230,11 @@ def main() -> int:
     parser.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
-    judge = jev if args.capability_judge == "jev" else terra
     if args.capability_judge == "jev" and not args.jd_file:
         parser.error("--capability-judge jev requires --jd-file")
+    if args.jd_file and args.capability_judge is None:
+        args.capability_judge = capability_contract.DEFAULT_JUDGE
+    judge = jev if args.capability_judge == "jev" else terra
     if args.cross_encoder_beta and not args.state:
         parser.error("--cross-encoder-beta requires --state for saved scoring outputs")
     if args.jd_file and args.system_file:

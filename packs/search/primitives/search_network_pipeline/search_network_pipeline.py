@@ -14,6 +14,8 @@ For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
 
 Changelog:
+    2026-09-25: JD runs judged by Jev skip `llm_filter_candidates`; Jev reads every
+        hydrated row. The Luna filter still precedes `--capability-judge terra`.
     2026-09-13: Local title expansion matches complete extracted role phrases,
         not individual words from the whole search query.
 """
@@ -850,7 +852,7 @@ def latest_step(state: Path, step_id: str) -> dict[str, Any]:
 
 
 def _capability_judge_changed(args, state: Path) -> bool:
-    if not getattr(args, "jd_file", None) or args.search_only or args.filter_only:
+    if not getattr(args, "jd_file", None) or args.search_only:
         return False
     saved = latest_step(state, "llm_rerank_candidates")
     if not saved:
@@ -868,13 +870,16 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
             return ((step.get("output") or {}).get("role_search_filters") or {})
     return {}
 
+def _judged_by_jev(args) -> bool:
+    """Jev screens every hydrated row itself; the Luna filter runs only ahead of the Terra path."""
+    return bool(getattr(args, "jd_file", None)) and getattr(args, "capability_judge", None) == "jev"
+
 def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
-    use_jev = bool(getattr(args, "jd_file", None) and getattr(args, "capability_judge", "terra") == "jev")
+    use_jev = _judged_by_jev(args)
     payload = {
         "state": str(state),
         "model": (jev.MODEL if use_jev else terra.MODEL) if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
-        "mode": "filter_only" if args.filter_only else "filter_rerank",
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
@@ -901,7 +906,7 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
     return payload
 
 def _warm_cross_encoder(args, ledger: dict[str, Any], state: Path) -> None:
-    if (getattr(args, "jd_file", None) or not getattr(args, "cross_encoder_beta", False) or args.search_only or args.filter_only
+    if (getattr(args, "jd_file", None) or not getattr(args, "cross_encoder_beta", False) or args.search_only
             or done(ledger, "llm_rerank_candidates")):
         return
     aid = approval_id("llm", _llm_approval_payload(args, state))
@@ -958,11 +963,10 @@ def run_pipeline(args) -> dict[str, Any]:
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
-        llm_steps=[
-            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]),
-        ]
-        if not args.filter_only:
-            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
+        llm_steps=[]
+        if not _judged_by_jev(args):
+            llm_steps.append(("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]))
+        llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
             replace_judge = judge_changed and step == "llm_rerank_candidates"
             if done(l,step) and not (args.force or getattr(args,"force_llm",False) or replace_judge):
@@ -1061,9 +1065,10 @@ def run_pipeline_local(args) -> dict[str, Any]:
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
-        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"])]
-        if not args.filter_only:
-            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
+        llm_steps=[]
+        if not _judged_by_jev(args):
+            llm_steps.append(("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]))
+        llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
             replace_judge = judge_changed and step == "llm_rerank_candidates"
             if not (done(l,step) and not (args.force or getattr(args,"force_llm",False) or replace_judge)):
@@ -1099,8 +1104,11 @@ def run_pipeline_local(args) -> dict[str, Any]:
     }
 
 def _validate_capability_input(args) -> None:
-    if getattr(args, "capability_judge", "terra") == "jev" and not getattr(args, "jd_file", None):
+    """A JD run judges with Jev unless told otherwise; a run without a JD has no capability judge."""
+    if getattr(args, "capability_judge", None) == "jev" and not getattr(args, "jd_file", None):
         raise Failed("--capability-judge jev requires --jd-file")
+    if getattr(args, "jd_file", None) and getattr(args, "capability_judge", None) is None:
+        args.capability_judge = capability_contract.DEFAULT_JUDGE
 
 
 def cmd_run(args):
@@ -1154,7 +1162,6 @@ def cmd_prepare(args):
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
-        if getattr(args,"filter_only",False): extra += " --filter-only"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
         if getattr(args,"current_role",False): extra += " --current-role"
         emit({
@@ -1211,7 +1218,6 @@ def cmd_prepare_local(args):
         )
         extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
-        if getattr(args,"filter_only",False): extra += " --filter-only"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
         if getattr(args,"current_role",False): extra += " --current-role"
         emit({
@@ -1250,7 +1256,7 @@ def add_backend(p):
 def add_run(p):
     add_backend(p)
     p.add_argument("--jd-file", help="JD: replace trait reranking with capability scoring")
-    p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+    p.add_argument("--capability-judge", choices=("terra", "jev"))
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
@@ -1275,7 +1281,6 @@ def add_run(p):
     p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)")
     p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)")
     p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration")
-    p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator")
     p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate")
     p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage")
     p.add_argument("--model",default=DEFAULT_MODEL)
@@ -1296,7 +1301,7 @@ def build_parser() -> argparse.ArgumentParser:
     p=sub.add_parser("prepare")
     add_backend(p)
     p.add_argument("--jd-file", help="JD for capability scoring")
-    p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
+    p.add_argument("--capability-judge", choices=("terra", "jev"))
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
@@ -1318,7 +1323,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     p.add_argument("--timeout",type=int,default=60)
     p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command")
-    p.add_argument("--filter-only",action="store_true",help="Emit an execute_command that runs the cheap LLM filter but skips per-run LLM rerank (for multi-profile fan-out)")
     p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands pinned as a hard retrieval filter; applied to the prepared payload and threaded into the emitted execute_command")
     p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true on the prepared payload and thread --current-role into the emitted execute_command so only CURRENT in-band positions qualify a person")
     p.add_argument("--preserve-query-semantic",action="store_true",help="Use the raw --query verbatim as role_search_filters.semantic_query instead of the LLM-rewritten prose; keeps expansion's bm25 + structured filters. Higher recall (the vector stays specific per probe) — recommended for recall/ground-truth sourcing and wide-search probes.")
