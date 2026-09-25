@@ -314,7 +314,6 @@ class SynthesisConfig:
     chunk_chars: int
     max_batches: int
     force: bool
-    rejudge: bool
 
 
 @dataclass(frozen=True)

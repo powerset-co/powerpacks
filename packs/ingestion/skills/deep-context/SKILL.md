@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, LinkedIn self-heal, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, asks the user only about uncertain additions, runs one budget-gated lookup for the editable Yes decisions plus eligible wrong-link recovery, verifies found LinkedIns, then realizes the approved network and index.
+description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, asks the user only about uncertain additions, runs one budget-gated lookup for the editable Yes decisions plus eligible wrong-link recovery, verifies found LinkedIns, then realizes the approved network and index.
 ---
 
 # deep-context
@@ -32,42 +32,14 @@ Use the narrow path when the user names one:
   (Yes/No tabs, search, full dossier + LinkedIn pane). A stage word opens the
   staged workflow there directly: `$deep-context review linkedin` ->
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
-  the server's `--stage` flag. `review <stage>` (and bare `review`) always
-  runs one fixed order: (1) SELF-HEAL first, before touching the server, with
-  its progress visible (fresh-fetch re-judge of judge-skipped
-  LinkedIn cards + free dead-link termination; a RapidAPI fetch per healed
-  candidate plus ~cents of OpenAI judging, no approval stop — invoking review
-  is the consent); (2) RESTART the review server — stop any running one
-  (review state is in SQLite; nothing is lost), then serve without
-  auto-opening a browser; (3) OPEN the staged UI
-  as an explicit final step — the wrapper polls the fresh server's /healthz,
-  and prints the URL — the wrapper never launches a browser; surface the
-  printed URL to the user (open it only if they ask). Before running `review <stage>`, create a
-  task list in your harness's todo/task tool with the flow's definitive steps
-  — (1) Self-heal, (2) restart server, (3) open the
-  staged UI, plus any follow-ups the heal surfaces (e.g. a recovery batch
-  offer) — and check each off as the wrapper's output confirms it, STRICTLY IN
-  ORDER — the follow-ups item resolves only after the UI is open, even
-  when the heal was a no-op — so the user always sees where the flow is
-  and nothing is silently skipped.
-  NEVER open, navigate to, or surface the review URL before the wrapper
-  prints its `review UI:` line — the wrapper owns the browser; the harness
-  only mirrors checklist state from wrapper output (the heal step completes
-  only when the heal summary JSON line is seen, the open step only when
-  `review UI:` appears). Nothing is deferred: in-flight
+  the server's `--stage` flag. `review <stage>` (and bare `review`) restarts
+  the review server, then prints the staged UI URL once `/healthz` answers.
+  Wait for the wrapper's `review UI:` line before opening the page. In-flight
   enrichment or guided re-research only prints a warning before the restart —
   both are durable (identical guided resubmits reuse projected research;
   enrichment recomputes pending work from projected SQLite artifacts).
   `--force-restart` is accepted for
   compatibility but is a no-op — restart is always unconditional.
-- `$deep-context heal` -> run only `bin/deep-context heal`: the same
-  self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
-- `$deep-context refresh` -> run `bin/deep-context refresh`; estimate first,
-  reuse existing facts, complete JEV worth/labels, rebuild parents, and open the directory.
-- `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
-  show the JEV estimate, obtain spend approval, then run the exact command.
-  This reclassifies saved facts using the JEV cache. It never uses LinkedIn as
-  evidence and never changes the human-owned `network_worth` column.
 - "Review complete proceed with enrichment" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
@@ -125,7 +97,7 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
-[Heal] Self-heal (runs inside review)
+[Match] Review attached LinkedIn matches
 [People] Wait for review to complete
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person
@@ -244,11 +216,6 @@ Worth uses message context and contact identifiers only — never LinkedIn:
   the other. A recognizable name or plausible area code is weak context only
   and must not become an invented identity or fact.
 
-`bin/deep-context rejudge` is the explicit reset: it selects every collected
-message-backed dossier regardless of candidate status, source combination,
-existing LinkedIn, cached machine verdict, or human verdict. It refreshes the
-machine columns beside a human decision but preserves the human column itself.
-
 Then run:
 
 ```bash
@@ -298,29 +265,8 @@ Launch the local UI once in a background terminal:
 bin/deep-context review worth
 ```
 
-Every `review <stage>` boot runs the SELF-HEAL pass (`bin/deep-context heal`)
-FIRST — before touching the server, with its output streaming, so boot never
-looks hung and stale cards fix themselves. It then RESTARTS the review server
-(stops any running one, then serves) so the UI
-always serves the current code (state is in SQLite; nothing is lost), and
-finally OPENS the staged UI once the fresh server answers /healthz. Never skip
-the launch because "a server is already up" — a leftover server keeps serving
-the stale Python it loaded at startup.
-
-The self-heal pass: (1) a FRESH profile fetch plus re-judge for every
-worth-eligible undecided LinkedIn card the judge previously skipped as "no
-usable profile" (the same SQL worth gate, normal judge, and write path, so
-confirm/detach bars auto-apply), and (2) free termination of confirmed-dead
-links — detach plus a free identity stand from an existing synthetic row or
-research output, else the person stays a pending re-research card. This spends
-real money without pausing: a fresh RapidAPI call per healed candidate plus
-OpenAI judge calls (~cents for tens of people). Invoking `review`/`heal` IS the
-consent — there is no approval stop; the pre-run count lines are information,
-and `--cap` (default 200) is only a runaway backstop. Typical sessions heal a
-handful of new cards (the first run after this ships is the big one); a clean
-store prints one `[heal] ... (nothing to do)` line and spends nothing. The
-summary is written to the stage manifest as display-only metadata. It does not
-control `review-status`, whose next action comes only from SQLite queue queries.
+Opening review serves the current SQLite review. The app shows the existing
+worth and identity queues; it does not reset human choices or call providers.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
 read of canonical SQLite (no daemons, no sockets, no thread ids; it always

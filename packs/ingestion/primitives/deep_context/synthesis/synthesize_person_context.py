@@ -88,7 +88,6 @@ class SynthesizePersonContext(Node):
         timeout: int = 120,
         max_retries: int = DEFAULT_MAX_RETRIES,
         force: bool = False,
-        rejudge: bool = False,
     ) -> None:
         self.db = db
         self.config = SynthesisConfig(
@@ -104,7 +103,6 @@ class SynthesizePersonContext(Node):
             chunk_chars=chunk_chars,
             max_batches=max_batches,
             force=force,
-            rejudge=rejudge,
         )
 
     def bindings(self) -> dict[str, str]:
@@ -118,7 +116,6 @@ class SynthesizePersonContext(Node):
             chunk_chars=self.config.chunk_chars,
             max_batches=self.config.max_batches,
             force=self.config.force,
-            rejudge=self.config.rejudge,
             model_changed=self._model_or_effort_changed(),
         )
 
@@ -201,7 +198,6 @@ class SynthesizePersonContext(Node):
             reasoning_effort=self.config.responses.effort,
             owner_context=True,
             orphan_facts_removed=0,
-            rejudge=self.config.rejudge,
             max_batches=self.config.max_batches,
             concurrency=self.config.responses.concurrency,
             tokens=tally.tokens,
@@ -236,11 +232,6 @@ def build_parser() -> argparse.ArgumentParser:
     # entirely — every eligible person is resynthesized and re-billed, not just
     # the ones whose cache actually missed.
     parser.add_argument("--force", action="store_true")
-    parser.add_argument(
-        "--rejudge",
-        action="store_true",
-        help="Reclassify saved facts with JEV, reusing identical cached requests; preserve human worth",
-    )
     parser.add_argument("--dry-run", action="store_true", help="Estimate calls/cost, spend nothing")
     return parser
 
@@ -259,7 +250,6 @@ def main(argv: list[str] | None = None) -> int:
         timeout=args.timeout,
         max_retries=args.max_retries,
         force=args.force,
-        rejudge=args.rejudge,
     )
     if args.dry_run:
         # estimate() is not execute(): a free tiktoken-only projection, no db

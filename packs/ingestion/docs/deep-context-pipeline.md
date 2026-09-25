@@ -30,7 +30,7 @@ enrichment, review, realization, and indexing behavior now lives in
   lookup indexes for name, email, and phone.
 - **People decision:** the model assigns Yes/Maybe/No. Only genuine uncertainty
   appears in the main review queue; Yes and No remain visible and editable.
-- **Enrichment:** attached-link judging and self-heal cover effective-Yes/Maybe
+- **Enrichment:** attached-link judging covers effective-Yes/Maybe
   parents; effective-No is excluded in SQL before paid work. Parallel research
   remains restricted to effective-Yes. Completed research is reused and only
   net-new submissions are priced.
@@ -153,7 +153,7 @@ browser button and cannot be blocked by the Done page.
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
-| Attached-LinkedIn judging | There is no standalone step. The review app judges attached LinkedIns itself: every `review` boot's self-heal re-judges links skipped for having no usable profile, and research results are judged when enrichment completes. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts |
+| Attached-LinkedIn judging | There is no standalone step. The review app judges research results when enrichment completes and applies guided retargets. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts |
 | People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
 | Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
 | Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |
@@ -252,11 +252,6 @@ input/output at the migration or realization boundary only.
   but do not block enrichment and are excluded from lookup until marked Yes.
 - On a normal repeated full run, only missing/Maybe dossier worth is rescored.
   Machine Yes/No and human Yes/No are reused.
-- `$deep-context rejudge` deliberately rescores every collected Gmail,
-  iMessage, WhatsApp, or mixed-source dossier regardless of candidate status,
-  attached LinkedIn, cached machine verdict, or human verdict. LinkedIn is
-  never evidence; refreshed machine columns may sit beside but never overwrite
-  the human-owned `network_worth`.
 - The enrichment selection is the current effective Yes table: model Yes unless
   a human removed it, plus anyone a human added.
 
@@ -337,7 +332,7 @@ This gives repeatability without a ledger:
 | --- | --- | --- |
 | OpenAI synthesis | Sampled message text, necessary message metadata, owner context, and small iMessage group bodies under standing owner authorization. | Unselected messages and raw source databases. |
 | OpenAI duplicate judge | Structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
-| OpenAI identity judge (self-heal and research) | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
+| OpenAI identity judge (research) | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
 | Parallel.ai | Display name, email, phone, source channel, dossier-derived relationship/work/school/location/topics, and rejected LinkedIn evidence for the approved lookup scope. | Raw message bodies. |
 | RapidAPI | A LinkedIn URL requiring profile hydration. | Gmail or chat content. |
 | Modal | The canonical merged people CSV, including contact and interaction fields. | Raw msgvault, Messages, wacli, and Deep Context raw bundles. |
@@ -396,7 +391,6 @@ Not every request needs the full workflow:
 | Check readiness | `bin/deep-context check` | Free, read-only source/config check. |
 | Validate dossiers | `bin/deep-context validate` | Free validation only. |
 | Reopen review | `bin/deep-context review` | Opens the current file-derived stage; does not restart processing. |
-| Rejudge all message-backed worth decisions | `bin/deep-context rejudge --dry-run`, then approved `rejudge` | Rescores every collected dossier without LinkedIn evidence; preserves the human column. |
 
 ## Implementation map
 
@@ -411,7 +405,7 @@ Not every request needs the full workflow:
 | Dossier composition | [`synthesis/compose_dossier.py`](../primitives/deep_context/synthesis/compose_dossier.py) |
 | Duplicate judge | [`merge_candidates/cluster_merge_candidates.py`](../primitives/deep_context/merge_candidates/cluster_merge_candidates.py) |
 | Canonical parents | [`merge_candidates/build_parents.py`](../primitives/deep_context/merge_candidates/build_parents.py) |
-| Attached-LinkedIn identity judge (self-heal and research) | [`enrich/identity_reconcile/judge.py`](../primitives/deep_context/enrich/identity_reconcile/judge.py) |
+| Attached-LinkedIn identity judge (research) | [`enrich/identity_reconcile/judge.py`](../primitives/deep_context/enrich/identity_reconcile/judge.py) |
 | Review UI and deterministic status | [`review/reconcile_review_web.py`](../primitives/deep_context/review/reconcile_review_web.py) |
 | Parallel enrichment | [`enrich/research_reconcile/reconcile_deep_research.py`](../primitives/deep_context/enrich/research_reconcile/reconcile_deep_research.py) |
 | No-LinkedIn research cards | [`enrich/synthetic/assemble.py`](../primitives/deep_context/enrich/synthetic/assemble.py) |

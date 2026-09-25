@@ -26,7 +26,6 @@ class SynthesizePersonContextManifest(StageManifest):
     reasoning_effort: str = ""
     owner_context: bool = False
     orphan_facts_removed: int = 0
-    rejudge: bool = False
     max_batches: int = DEFAULT_MAX_BATCHES
     concurrency: int = 0
     tokens: dict[str, int] = Field(default_factory=dict)

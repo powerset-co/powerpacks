@@ -116,7 +116,6 @@ class OwnerProjectionTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
-                rejudge=False,
             )
             counts = sqlite_counts(db)
 
@@ -272,7 +271,6 @@ class OwnerProjectionTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
-                rejudge=False,
             )
 
             self.assertEqual(counts["artifacts"], 1)

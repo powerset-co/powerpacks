@@ -174,23 +174,16 @@ def build_plan(
     chunk_chars: int,
     max_batches: int,
     force: bool,
-    rejudge: bool,
     model_changed: bool = False,
 ) -> SynthesisPlan:
-    # --rejudge never resynthesizes: it replays the JEV labelling phase over the
-    # facts already on disk, so an explicit --force is the only way to rebill GPT.
-    bundles = (
-        ()
-        if rejudge and not force
-        else tuple(
-            pending_target_bundles(
-                db,
-                system_prompt=system_prompt,
-                chunk_chars=chunk_chars,
-                max_batches=max_batches,
-                force=force,
-                model_changed=model_changed,
-            )
+    bundles = tuple(
+        pending_target_bundles(
+            db,
+            system_prompt=system_prompt,
+            chunk_chars=chunk_chars,
+            max_batches=max_batches,
+            force=force,
+            model_changed=model_changed,
         )
     )
     return SynthesisPlan(system_prompt, bundles, owner_profile(db))

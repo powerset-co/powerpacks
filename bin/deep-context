@@ -74,7 +74,7 @@ review_server_has_active_enrichment() {
 }
 
 open_review_ui_when_healthy() {
-  # The ONLY place a browser is ever launched (`review` and `refresh`): poll
+  # The ONLY place a browser is ever launched (`review`): poll
   # the fresh server's /healthz (bounded, ~10s), print the URL, then open.
   # LAUNCH ORDER CONTRACT: callers background this helper strictly AFTER the
   # old server is stopped and immediately before spawning serve in the
@@ -133,15 +133,8 @@ usage: bin/deep-context <command> [args]
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
   migrate-sqlite  import existing Deep Context artifacts into canonical SQLite once
-  refresh      complete dossiers and labels, rebuild parents, open the directory
-               (free when facts are current; a contract bump re-runs everyone —
-               the dry estimate prints first and invoking refresh approves it)
-  review       open the review UI in a fixed order: (1) SELF-HEAL first,
-               output streaming (see `heal`); (2) RESTART the review server —
-               stop any running one and serve without auto-opening a browser;
-               (3) OPEN the staged UI once /healthz
-               answers (the URL always prints; macOS `open` is skipped
-               gracefully when unavailable). Active enrichment or guided
+  review       restart the review server and print the staged UI URL once
+               /healthz answers. Active enrichment or guided
                re-research only prints a warning (both are durable: identical
                resubmits reuse projected research; enrichment resumes from
                projected artifacts + its SQLite job receipt). --force-restart
@@ -151,12 +144,6 @@ usage: bin/deep-context <command> [args]
                (review linkedin | worth | enrich; default: the read-only
                people directory, A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
-  heal         the pre-serve self-heal pass, runnable on its own: a FRESH
-               profile fetch + re-judge for every undecided
-               judge-skipped LinkedIn card (RapidAPI per fetch + OpenAI
-               ~cents; invoking it IS the consent — no approval stop), and
-               free dead-link termination. Idempotent; a clean store prints
-               one "(nothing to do)" line. --cap N is a runaway backstop.
   stop         stop the review UI server (free)
   review-status  read canonical SQLite and print the exact next workflow action
                (--wait [--timeout N] blocks until the next action is the agent's)
@@ -164,9 +151,6 @@ usage: bin/deep-context <command> [args]
                people with NO real LinkedIn (free, local; approved rows merge)
   profile-prefetch  preview/fetch cached profiles for LinkedIn review
                (default dry run; --fetch spends RapidAPI + OpenAI)
-  rejudge      reclassify saved dossiers with JEV worth and labels; identical
-               requests reuse cache (try --dry-run to estimate uncached work).
-               Human network_worth cells remain untouched; LinkedIn is never evidence.
   restart      clear all HUMAN review decisions (worth marks, Check-LinkedIn
                clicks incl. pasted URLs, synthetic approvals) keeping every
                machine verdict incl. auto-verify/detach — replay the full
@@ -276,50 +260,12 @@ case "$cmd" in
     "${PY[@]}" "$PKG.enrich.profiles.prefetch" "$@"
     ;;
   restart)
-    # The complement of rejudge: clear the HUMAN decisions (worth marks +
-    # synthetic approvals), keep every machine verdict. Free and backed up.
+    # Clear HUMAN decisions while keeping machine verdicts. Free and backed up.
     "${PY[@]}" "$PKG.review.restart_review" "$@"
     ;;
-  rejudge|re-review)
-    # Rejudge saved facts with JEV; preserve human decisions.
-    if [[ "$cmd" == "re-review" ]]; then
-      echo "warning: 're-review' is deprecated; use 'bin/deep-context rejudge'" >&2
-    fi
-    # Rebuild message bundles first (free, local, no LLM) — also on --dry-run,
-    # so the estimate prices the bundles that will actually be judged.
-    # Groups are standing owner authorization. Candidate:<key> identities are
-    # ordinary merged people rows, so collection includes them without a flag.
-    "${PY[@]}" "$PKG.collection.collect_person_context"
-    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --rejudge "$@"
-    ;;
-  refresh)
-    if (( wants_help )); then
-      echo "bin/deep-context refresh - complete dossiers and labels, rebuild parents, open the directory." >&2
-      echo "Existing facts are reused; missing facts and labels may spend —" >&2
-      echo "the dry estimate prints first, and invoking refresh IS the approval to spend it." >&2
-      echo "Flags: --port N (directory server port, default 8765)." >&2
-      exit 0
-    fi
-    refresh_port="$(review_port_from_args "$@")"
-    stop_review_server "$refresh_port"
-    echo "refresh: operating on $ROOT/.powerpacks" >&2
-    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --dry-run
-    echo "refresh: completing dossiers and labels (the estimate above is this run's spend)…" >&2
-    "${PY[@]}" "$PKG.synthesis.synthesize_person_context"
-    "${PY[@]}" "$PKG.merge_candidates.build_parents"
-    # Serve never auto-opens a browser; the explicit open step fires only once
-    # the fresh server answers /healthz (started after the old server stops).
-    open_review_ui_when_healthy "$refresh_port" "directory" &
-    "${PY[@]}" "$PKG.review.reconcile_review_web" serve --stage directory "$@"
-    ;;
   review)
-    # Review boots in one fixed, visible order (bare `review` included):
-    #   1. SELF-HEAL — before touching the server: fresh-fetch/re-judge of
-    #      judge-skipped links + free dead-link termination, output
-    #      streaming ([heal] progress on stderr, summary JSON on stdout).
-    #      A heal failure never blocks the UI.
-    #      Invoking review IS the consent (no approval stop).
-    #   2. RESTART the review server — stop any running reconcile_review_web
+    # Review boots in one fixed order (bare `review` included):
+    #   1. RESTART the review server — stop any running reconcile_review_web
     #      listener on the target port (state is in SQLite; nothing is
     #      lost), then serve WITHOUT --open so the server never auto-launches
     #      a browser. Active
@@ -327,7 +273,7 @@ case "$cmd" in
     #      durable (identical guided resubmits reuse projected research;
     #      enrichment resumes from projected artifacts + its SQLite job
     #      receipt). --force-restart is a compat no-op.
-    #   3. OPEN the staged UI — an explicit final step: poll the fresh
+    #   2. OPEN the staged UI — poll the fresh
     #      server's /healthz (bounded, ~10s), print the URL, then macOS
     #      `open` (skipped gracefully when unavailable). CHOSEN STRUCTURE:
     #      serve stays foreground (its normal blocking role); the watcher is
@@ -355,8 +301,6 @@ case "$cmd" in
     done
     if (( ! wants_help )); then
       review_port="$(review_port_from_args "$@")"
-      "${PY[@]}" "$PKG.review.heal_review" \
-        || echo "warning: self-heal pass failed; restarting and serving anyway" >&2
       if review_server_has_active_enrichment "$review_port" \
           || review_server_has_active_retargets "$review_port"; then
         echo "warning: active enrichment/guided re-research detected; restarting anyway; guidance, projected research, and the SQLite job receipt are durable" >&2
@@ -366,10 +310,6 @@ case "$cmd" in
       open_review_ui_when_healthy "$review_port" "$review_stage" &
     fi
     "${PY[@]}" "$PKG.review.reconcile_review_web" serve "${review_args[@]}"
-    ;;
-  heal)
-    # The pre-serve self-heal pass on its own (also runs inside `review`).
-    "${PY[@]}" "$PKG.review.heal_review" "$@"
     ;;
   stop|stop-review)
     # Stop only this review server. Refuse while its in-process enrichment run

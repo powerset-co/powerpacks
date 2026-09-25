@@ -210,7 +210,6 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 chunk_chars=1,
                 max_batches=20,
                 force=False,
-                rejudge=False,
             )
             result = await runner.synthesize_person(
                 caller, person, config=config, system_prompt="fixture system",
@@ -268,7 +267,6 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
-                rejudge=False,
             )
             with mock.patch.object(
                 runner,
@@ -302,7 +300,6 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
-                rejudge=False,
             )
             return await runner.synthesize_person(
                 caller, person, config=config, system_prompt="fixture system",
