@@ -1,24 +1,23 @@
 """Pin confidence and taste for judged candidates: requests, parsers, and the taste read.
 
-The harness runs this after the domain/opportunity judges, per pond, with all three sources concurrent:
+The harness runs this after the domain/opportunity judges, per pond, with both sources concurrent:
   taste  Reporting `GET /api/taste/scores`, up to 100 URLs per call, every judged candidate, free
   judge  gpt-6-sol at low reasoning on the shortlist prompt, one verdict per overall 4/5 candidate:
          decision, priority 0-100, reason
-  Jev    four evidence signals per overall 4/5 candidate (TypeSafe); stored on the judgment record
-         as `signals` and read by nothing yet. Kept deliberately as training data for a combiner
-         (Arthur, 2026-09-25); about a cent per pond.
 A source that fails leaves its fields null with the error in provenance; the stage never fails a pond.
 
 Fields written on every judged candidate row:
   taste_score     float | None   Reporting talent-index score; None when unscored or unreachable
   pin_confidence  int | None     judge priority 0-100; None below overall 4 or on failure
-  pin_judgment    {model, decision, reason, signals, status} | None
+  pin_judgment    {model, decision, reason, status} | None
 
-The prompt and the four Jev questions are the ones measured in the lab pin audit
-(powerpacks-lab experiments/shortlist_priority/pin-audit.md). On 300 Sail matches the prompt ranked
+The prompt is the one measured in the lab pin audit
+(powerpacks-lab experiments/shortlist_priority/pin-audit.md). On 300 Sail matches it ranked
 pinned above unpinned at AUC 0.711 on gpt-6-sol/low, 0.727 on GLM-5.3, 0.65-0.70 on every other
 OpenAI model and effort; taste alone 0.63. Sol at low uses the key every install has. Production
 input differs from the lab's: no role brief, no normalized tenure, production company context.
+Four extra Jev questions per 4/5 candidate were measured there too (+0.006 AUC, within noise)
+and removed 2026-09-25.
 """
 from __future__ import annotations
 
@@ -32,7 +31,6 @@ from urllib.parse import urlencode
 import httpx
 
 from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_evidence
-from packs.search.primitives.llm_rerank_candidates.jev import client as jev
 
 PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 TASTE_HOST = "https://reporting.powerset.co"
@@ -122,17 +120,3 @@ def parse_judgment(raw: str) -> dict[str, Any]:
     return {"decision": decision, "priority": priority, "reason": reason.strip()}
 
 
-def jev_questions() -> dict[str, Any]:
-    return json.loads((PROMPTS / "pin-confidence-questions.json").read_text(encoding="utf-8"))
-
-
-def jev_request(state: Mapping[str, Any]) -> dict[str, Any]:
-    return {"model": jev.MODEL, "state": {**state, "evidence_policy": EVIDENCE_POLICY},
-            "questions": jev_questions()}
-
-
-def jev_signals(response: Mapping[str, Any], request: Mapping[str, Any]) -> dict[str, Any]:
-    """One value per question: the probability for noul questions, the probability table for choices."""
-    answers = response["answers"]
-    return {name: (answers[name]["noul"] if question["type"] == "noul" else answers[name]["probabilities"])
-            for name, question in request["questions"].items()}

@@ -155,15 +155,12 @@ Each judged candidate row, in `shortlist_grades` and in the summary, carries:
  "pin_confidence": 88,
  "pin_judgment": {"model": "gpt-6-sol", "decision": "introduce",
                   "reason": "Two short sentences about the work.",
-                  "signals": {"scope_match": 0.81, "role_company_corroboration": 0.40,
-                              "function_evidence": {"direct": 0.7, "transferable": 0.2, "corroborated_inference": 0.05, "unknown": 0.05, "contradicted": 0.0},
-                              "mechanism_depth": 0.66},
                   "status": "ok"}}
 ```
 
 `taste_score` is null when Reporting has no score for the person. `pin_confidence` is the
 judge's priority, null below overall 4 or on failure. Keys: `POWERSET_API_KEY` (taste),
-`OPENAI_API_KEY` (judge), `TYPESAFE_API_KEY` (Jev). The prompt and questions are the ones
+`OPENAI_API_KEY` (judge). The prompt is the one
 measured in the lab pin audit on 300 Sail matches: the prompt ranks pinned above unpinned
 at AUC 0.71 on gpt-6-sol/low, 0.73 on GLM-5.3, 0.65–0.70 on other OpenAI models and
 efforts; taste alone 0.63. No rating, pin or feedback is ever sent to either model.

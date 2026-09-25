@@ -13,7 +13,6 @@ from packs.search.primitives.deep_search.results_web import rendering
 from packs.search.primitives.deep_search.results_web.model import (
     Candidate, CandidateJudgment, PinJudgment, _pin_confidence, _pin_judgment, _taste_score,
 )
-from packs.search.primitives.llm_rerank_candidates.jev import client as jev
 
 VERDICT = {"decision": "introduce", "priority": 88, "reason": "Built the serving control plane at scale.",
            "inference": "none", "unresolved": [], "evidence": []}
@@ -22,7 +21,7 @@ CANDIDATES = [
     {"person": "p2", "linkedin_url": "https://www.linkedin.com/in/casey-c?x=1", "candidate_judgment": {"overall_score": 3}},
     {"person": "p3", "linkedin_url": "https://www.linkedin.com/in/unjudged", "candidate_judgment": None},
 ]
-KEYS = {"POWERSET_API_KEY": "ps", "OPENAI_API_KEY": "oa", "TYPESAFE_API_KEY": "ts"}
+KEYS = {"POWERSET_API_KEY": "ps", "OPENAI_API_KEY": "oa"}
 JUDGED = CandidateJudgment(4, 5, 4, "Strong work", "Fine", "", "gpt-5.6-terra + gpt-5.6-luna", "ok")
 
 
@@ -31,18 +30,6 @@ def _candidate(**fields) -> Candidate:
                 avatar_url="", move_likelihood=None, why="", found_run="r", found_pond=1, found_query="q",
                 queries=(), ponds=())
     return Candidate(**{**base, **fields})
-
-
-def _jev_answers(request: dict) -> dict:
-    answers = {}
-    for name, question in request["questions"].items():
-        if question["type"] == "noul":
-            answers[name] = {"type": "noul", "noul": 0.8}
-        else:
-            options = list(question["criteria"])
-            answers[name] = {"type": "choice", "probabilities": {
-                option: (1.0 if index == 0 else 0.0) for index, option in enumerate(options)}}
-    return {"model": jev.MODEL, "answers": answers, "usage": {"input_tokens": 100, "output_tokens": 0}}
 
 
 def _judge_client(calls: list, *, content: str | None = None, fail: bool = False):
@@ -56,7 +43,7 @@ def _judge_client(calls: list, *, content: str | None = None, fail: bool = False
     return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
 
-def _http(jev_calls: list, *, taste_status: int = 200, jev_status: int = 200) -> httpx.AsyncClient:
+def _http(*, taste_status: int = 200) -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "reporting.powerset.co":
             if taste_status != 200:
@@ -65,12 +52,6 @@ def _http(jev_calls: list, *, taste_status: int = 200, jev_status: int = 200) ->
             return httpx.Response(200, json={"scoring_mode": "employee", "results": [
                 {"linkedin_url": url, "status": "scored" if url.endswith("/jordan-bravo") else "not_scored",
                  "score": 7.58 if url.endswith("/jordan-bravo") else None, "scored_at": None} for url in urls]})
-        if request.url.host == "api.typesafe.ai":
-            body = json.loads(request.content)
-            jev_calls.append(body)
-            if jev_status != 200:
-                return httpx.Response(jev_status, json={"error": "down"})
-            return httpx.Response(200, json=_jev_answers(body))
         return httpx.Response(404)
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -111,10 +92,6 @@ class PinConfidenceHelperTests(unittest.TestCase):
                          ("gpt-6-sol", "low", {"type": "json_object"}))
         self.assertIn("Would you confidently introduce this person", request["messages"][0]["content"])
         self.assertEqual(json.loads(request["messages"][1]["content"]), state)
-        jev_request = pc.jev_request(state)
-        self.assertEqual(set(jev_request["questions"]),
-                         {"scope_match", "role_company_corroboration", "function_evidence", "mechanism_depth"})
-        self.assertEqual(jev_request["state"]["evidence_policy"], pc.EVIDENCE_POLICY)
 
     def test_viewer_parsers_validate_the_two_fields(self):
         self.assertEqual(_taste_score(7.58), 7.58)
@@ -157,37 +134,34 @@ class PinConfidenceStageTests(unittest.TestCase):
             results=results, run_dir=run_dir, pond_n=1, judge_client=judge, http=http)
 
     def test_taste_for_every_judged_candidate_and_paid_calls_only_for_four_and_five(self):
-        judge_calls, jev_calls = [], []
-        judge, http = _judge_client(judge_calls), _http(jev_calls)
+        judge_calls = []
+        judge, http = _judge_client(judge_calls), _http()
         with tempfile.TemporaryDirectory() as raw, mock.patch.object(harness, "_save"), \
                 mock.patch.object(harness, "_price_usage_log"), mock.patch.dict(os.environ, KEYS):
             run_dir, results = Path(raw), {"created_at": "2026-09-24"}
             (run_dir / "jd.txt").write_text("Synthetic JD")
             rows = self._run(run_dir, results, judge, http)
             self.assertEqual(rows, self._run(run_dir, results, judge, http))
-        self.assertEqual((len(judge_calls), len(jev_calls)), (1, 1))
+        self.assertEqual(len(judge_calls), 1)
         self.assertEqual((judge_calls[0]["model"], judge_calls[0]["reasoning_effort"]), ("gpt-6-sol", "low"))
         self.assertNotIn("overall_score", json.dumps(judge_calls[0]["messages"]))
-        self.assertNotIn("overall_score", json.dumps(jev_calls[0]))
         top, mid, unjudged = rows
         self.assertEqual((top["taste_score"], top["pin_confidence"]), (7.58, 88))
         self.assertEqual(top["pin_judgment"]["decision"], "introduce")
         self.assertEqual(top["pin_judgment"]["reason"], VERDICT["reason"])
         self.assertEqual((top["pin_judgment"]["model"], top["pin_judgment"]["status"]), ("gpt-6-sol", "ok"))
-        self.assertEqual(set(top["pin_judgment"]["signals"]),
-                         {"scope_match", "role_company_corroboration", "function_evidence", "mechanism_depth"})
-        self.assertEqual(top["pin_judgment"]["signals"]["scope_match"], 0.8)
+        self.assertNotIn("signals", top["pin_judgment"])
         self.assertEqual((mid["taste_score"], mid["pin_confidence"], mid["pin_judgment"]), (None, None, None))
         self.assertNotIn("taste_score", unjudged)
         records = results["raw_model_responses"][0]
         self.assertEqual(records["kind"], "pin_confidence")
-        self.assertEqual({record["kind"] for record in records["checkpoints"]}, {"taste", "judge", "jev"})
+        self.assertEqual({record["kind"] for record in records["checkpoints"]}, {"taste", "judge"})
         self.assertTrue(all(record["cached"] for record in records["checkpoints"] if "cached" in record))
 
     def test_failures_and_missing_keys_leave_nulls_and_never_raise(self):
         with self.subTest("providers down"):
-            judge_calls, jev_calls = [], []
-            judge, http = _judge_client(judge_calls, fail=True), _http(jev_calls, taste_status=500, jev_status=503)
+            judge_calls = []
+            judge, http = _judge_client(judge_calls, fail=True), _http(taste_status=500)
             with tempfile.TemporaryDirectory() as raw, mock.patch.object(harness, "_save"), \
                     mock.patch.object(harness, "_price_usage_log"), mock.patch.dict(os.environ, KEYS):
                 run_dir, results = Path(raw), {"created_at": "2026-09-24"}
@@ -195,22 +169,20 @@ class PinConfidenceStageTests(unittest.TestCase):
                 top = self._run(run_dir, results, judge, http)[0]
             self.assertEqual((top["taste_score"], top["pin_confidence"]), (None, None))
             self.assertEqual(top["pin_judgment"]["status"], "error")
-            self.assertIsNone(top["pin_judgment"]["signals"])
             errors = [record["error"] for record in results["raw_model_responses"][0]["checkpoints"] if record.get("error")]
-            self.assertEqual(len(errors), 3)
+            self.assertEqual(len(errors), 2)
         with self.subTest("invalid verdict"):
-            judge_calls, jev_calls = [], []
-            judge, http = _judge_client(judge_calls, content="not json"), _http(jev_calls)
+            judge_calls = []
+            judge, http = _judge_client(judge_calls, content="not json"), _http()
             with tempfile.TemporaryDirectory() as raw, mock.patch.object(harness, "_save"), \
                     mock.patch.object(harness, "_price_usage_log"), mock.patch.dict(os.environ, KEYS):
                 run_dir, results = Path(raw), {"created_at": "2026-09-24"}
                 (run_dir / "jd.txt").write_text("Synthetic JD")
                 top = self._run(run_dir, results, judge, http)[0]
             self.assertEqual((top["taste_score"], top["pin_confidence"], top["pin_judgment"]["status"]), (7.58, None, "error"))
-            self.assertEqual(top["pin_judgment"]["signals"]["scope_match"], 0.8)
         with self.subTest("no keys"):
-            judge_calls, jev_calls = [], []
-            judge, http = _judge_client(judge_calls), _http(jev_calls)
+            judge_calls = []
+            judge, http = _judge_client(judge_calls), _http()
             with tempfile.TemporaryDirectory() as raw, mock.patch.object(harness, "_save"), \
                     mock.patch.object(harness, "_price_usage_log"), \
                     mock.patch.dict(os.environ, {key: "" for key in KEYS}):
@@ -218,12 +190,12 @@ class PinConfidenceStageTests(unittest.TestCase):
                 (run_dir / "jd.txt").write_text("Synthetic JD")
                 top = self._run(run_dir, results, None, http)[0]
             self.assertEqual((top["taste_score"], top["pin_confidence"], top["pin_judgment"]), (None, None, None))
-            self.assertEqual((len(judge_calls), len(jev_calls)), (0, 0))
+            self.assertEqual(len(judge_calls), 0)
             self.assertEqual({record["kind"] for record in results["raw_model_responses"][0]["checkpoints"]},
-                             {"taste", "judge", "jev"})
+                             {"taste", "judge"})
 
     def test_summary_carries_the_fields_from_the_latest_frame(self):
-        judgment = {"model": pc.PIN_JUDGE_MODEL, "decision": "introduce", "reason": "Built it.", "signals": None, "status": "ok"}
+        judgment = {"model": pc.PIN_JUDGE_MODEL, "decision": "introduce", "reason": "Built it.", "status": "ok"}
         results = {"iterations": [{"pond_n": 1, "query": "Engineers", "shortlist_grades": [
             {"person": "p1", "name": "Jordan Bravo", "company": "Acme", "score": 0.9,
              "taste_score": 7.58, "pin_confidence": 88, "pin_judgment": judgment},
@@ -235,8 +207,8 @@ class PinConfidenceStageTests(unittest.TestCase):
                          (None, None, None))
 
     def test_pin_saved_runs_only_the_pin_stage_on_saved_rows(self):
-        judge_calls, jev_calls = [], []
-        judge, http = _judge_client(judge_calls), _http(jev_calls)
+        judge_calls = []
+        judge, http = _judge_client(judge_calls), _http()
         stage = harness._annotate_pin_confidence
         with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, KEYS), \
                 mock.patch.object(harness, "_price_usage_log"), \
