@@ -4,8 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.share.tags import TAG_VOCABULARY, TagStore
-from packs.shared.csv_io import CsvIO
+from deep_context_sqlite_test_helpers import query, scalar
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore
 
 
 class VocabularyTests(unittest.TestCase):
@@ -21,8 +22,8 @@ class TagStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.path = Path(self.temp.name) / "tags.csv"
-        self.store = TagStore(Path(self.temp.name))
+        self.db = Db(Path(self.temp.name) / "deep-context.sqlite")
+        self.store = TagStore(self.db)
 
     def test_apply_upserts_one_row_per_person(self) -> None:
         self.store.apply("person-a", add={"private"}, remove=set(), note="family")
@@ -31,7 +32,7 @@ class TagStoreTests(unittest.TestCase):
         rows = self.store.load()
         self.assertEqual(sorted(rows), ["person-a", "person-b"])
         self.assertEqual(rows["person-a"].tags, {"private", "is_family"})
-        self.assertEqual(len(CsvIO.read_dict_rows_normalized(self.path)), 2)
+        self.assertEqual(scalar(self.db, "SELECT count(*) FROM person_tags"), 2)
 
     def test_a_note_is_kept_until_a_new_one_replaces_it(self) -> None:
         self.store.apply("person-a", add={"private"}, remove=set(), note="family")
@@ -47,6 +48,7 @@ class TagStoreTests(unittest.TestCase):
 
     def test_an_untagged_store_is_empty_not_missing(self) -> None:
         self.assertEqual(self.store.load(), {})
+        self.assertEqual(query(self.db, "SELECT * FROM person_tags"), [])
 
 
 if __name__ == "__main__":

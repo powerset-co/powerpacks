@@ -1,0 +1,14 @@
+{% import '_components.html.j2' as ui with context -%}
+<article class='decision-card identity-card worth-card' data-card>
+  {{ ui.scroll_region(ui.profile(parent, candidate, true)) }}
+  <details class='worth-why'>
+    <summary>Why? Give feedback (optional)</summary>
+    <textarea data-worth-note rows='2' maxlength='2000'></textarea>
+  </details>
+  <div class='binary-actions'>
+    <button class='button button-outline' data-worth='no'
+            data-pub='{{ parent.worth_row.key }}' data-parent='{{ parent.slug }}'>No</button>
+    <button class='button button-primary' data-worth='yes'
+            data-pub='{{ parent.worth_row.key }}' data-parent='{{ parent.slug }}'>Yes</button>
+  </div>
+</article>

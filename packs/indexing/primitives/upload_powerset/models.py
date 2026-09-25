@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Frozen value types for the Powerset upload, parsed once at the boundary.
 
-Flow: share.csv row -> ShareRow from the ingestion schema; people.csv row ->
+Flow: share table row -> ShareDecisionRow from the deep-context store; people.csv row ->
 LocalPerson (channel labels already mapped to cloud names); local_person_profiles
 row -> PersonProfile (the persons upsert payload); operator_person_sources row ->
 SourceRow; contact_tags row -> TagRow. Everything downstream of these
 constructors takes typed values.
 
 Changelog:
-  2026-09-24: created; share contract and namespace definitions have one owner.
+  2026-09-24: the share contract is the store's `share` table row.
+  2026-09-24: created; namespace definitions have one owner.
 """
 
 from __future__ import annotations

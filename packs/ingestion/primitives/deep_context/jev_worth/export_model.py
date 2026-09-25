@@ -9,13 +9,17 @@ import argparse
 import json
 from pathlib import Path
 
+# deep-context keeps every import at the module boundary (see
+# tests/test_deep_context_import_hygiene.py), so the offline exporter's
+# numpy/scikit-learn dependency lives here rather than inside fit(). Install
+# that extra before importing this module (the module is unused at runtime).
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
 
 def fit(records: list[dict]) -> tuple[dict, object]:
-    import numpy as np
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-
     names = sorted(records[0]['features'])
     train = [record for record in records if record['split'] == 'train']
     matrix = np.array([[record['features'][name] for name in names] for record in train])

@@ -1,4 +1,4 @@
-"""Deterministic identifier matching in the merge-candidate clusterer.
+"""Identifier matching in the merge-candidate clusterer.
 
 The regression these lock in: two records for the same human, carrying the same
 phone number in different formats ('(m)/(c) 914-555-0466' in a signature vs
@@ -10,35 +10,107 @@ All names/identifiers here are synthetic.
 import json
 import tempfile
 import unittest
+from csv import DictReader
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
-from packs.ingestion.primitives.deep_context import cluster_merge_candidates as cmc
-from packs.ingestion.primitives.deep_context.common import normalize_name
+import packs.ingestion.primitives.deep_context.merge_candidates.judge as judge
+import packs.ingestion.primitives.deep_context.merge_candidates.receipts as receipts
+import packs.search.primitives.llm_rerank_candidates.jev.client as jev_client
+from packs.ingestion.primitives.common.contact_fields import identifier_phones
+from packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates import (
+    ClusterMergeCandidates,
+    build_parser,
+)
+from packs.ingestion.primitives.deep_context.shared.common import normalize_name
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow,
+    FactRow,
+    MergeVerdictRow,
+    ParentRow,
+    PersonIdentifierRow,
+    PersonIdentifiersProjection,
+    PersonRow,
+)
+from packs.ingestion.primitives.deep_context.db.merge_queries import merge_people
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import (
+    generate_pairs,
+    jaro_winkler,
+    slam_dunk_verdict,
+)
+from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
+    JUDGE_SYSTEM,
+    SAME_PERSON_CUTOFF,
+    TONE_CUTOFF,
+    decision_from_answers,
+    judge_prompt,
+    shared_identifier_note,
+)
+from packs.ingestion.primitives.deep_context.merge_candidates.models import (
+    MergePerson,
+)
+from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
+    load_cached_verdicts,
+    pair_sig,
+    person_sig,
+    survey_pairs,
+)
+from packs.search.primitives.llm_rerank_candidates.jev.client import (
+    INPUT_PRICE_PER_MILLION,
+    AnsweredRequest,
+)
+from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
 
 
 def person(name, emails=(), extra_emails=(), phones=(), extra_phones=()):
-    return {
-        "slug": name.lower().replace(" ", "-"),
-        "person_id": f"pid-{name.lower().replace(' ', '-')}",
-        "name": name,
-        "name_key": normalize_name(name),
-        "emails": list(emails),
-        "extra_emails": list(extra_emails),
-        "phone_digits": list(phones),
-        "extra_phones": list(extra_phones),
-        "profile": {},
-        "from_me": [],
-        "from_them": [],
-    }
+    slug = name.lower().replace(" ", "-")
+    return MergePerson(
+        slug=slug,
+        person_id=f"pid-{slug}",
+        name=name,
+        name_key=normalize_name(name),
+        emails=tuple(emails),
+        extra_emails=tuple(extra_emails),
+        phone_digits=tuple(phones),
+        extra_phones=tuple(extra_phones),
+    )
+
+
+def seed_person(
+    db, *, person_id, slug, name, facts_path, facts, phone="",
+):
+    parent_id = f"parent-{person_id}"
+    rows = [
+        ParentRow(parent_id, f"parent-worth:{parent_id}", name, slug),
+        PersonRow(person_id, parent_id, slug, slug, name),
+    ]
+    if phone:
+        rows.append(PersonIdentifiersProjection(person_id, (
+            PersonIdentifierRow(person_id, "phone", phone, phone),
+        )))
+    rows.extend((
+        ArtifactRow(
+            f"facts:{parent_id}", "facts", parent_id, str(facts_path),
+            "0" * 64, "projected",
+        ),
+        FactRow(
+            parent_id, parent_id, f"facts:{parent_id}",
+            facts_json=json.dumps(facts),
+        ),
+    ))
+    db.project_rows(tuple(rows))
 
 
 class TestIdentifierPhones(unittest.TestCase):
     def test_signature_and_e164_meet_as_one_key(self):
-        mined = cmc.identifier_phones(["(m)/(c) 914-555-0466", "+19145550466"])
+        mined = identifier_phones(["(m)/(c) 914-555-0466", "+19145550466"])
         self.assertEqual(mined, {"9145550466"})
 
     def test_emails_urls_and_short_digits_are_skipped(self):
-        self.assertEqual(cmc.identifier_phones([
+        self.assertEqual(identifier_phones([
             "casey@example.com",
             "https://example.com/in/casey-91455504",
             "example.com/casey",
@@ -46,40 +118,40 @@ class TestIdentifierPhones(unittest.TestCase):
         ]), set())
 
     def test_non_us_number_keeps_full_digits(self):
-        self.assertEqual(cmc.identifier_phones(["+44 20 7946 0958"]), {"442079460958"})
+        self.assertEqual(identifier_phones(["+44 20 7946 0958"]), {"442079460958"})
 
 
 class TestSlamDunkVerdict(unittest.TestCase):
     def test_identical_name_plus_shared_phone_merges_in_code(self):
         a = person("Jordan Bravo", extra_phones=["9145550466"])
         b = person("Jordan Bravo", phones=["9145550466"])
-        verdict = cmc.slam_dunk_verdict(a, b)
+        verdict = slam_dunk_verdict(a, b)
         self.assertIsNotNone(verdict)
-        self.assertTrue(verdict["same_person"])
-        self.assertGreaterEqual(verdict["confidence"], 0.99)
-        self.assertIn("deterministic", verdict["reason"])
+        self.assertTrue(verdict.same_person)
+        self.assertGreaterEqual(verdict.confidence, 0.99)
+        self.assertIn("slam dunk", verdict.reason)
 
     def test_identical_name_plus_shared_email_merges_in_code(self):
         a = person("Jordan Bravo", emails=["jordan@example.com"])
         b = person("Jordan Bravo", extra_emails=["jordan@example.com"])
-        self.assertTrue(cmc.slam_dunk_verdict(a, b)["same_person"])
+        self.assertTrue(slam_dunk_verdict(a, b).same_person)
 
     def test_different_names_go_to_the_judge(self):
         a = person("Jordan Bravo", phones=["9145550466"])
         b = person("Casey Bravo", phones=["9145550466"])
-        self.assertIsNone(cmc.slam_dunk_verdict(a, b))
+        self.assertIsNone(slam_dunk_verdict(a, b))
 
     def test_identical_name_without_shared_identifier_goes_to_the_judge(self):
         a = person("Jordan Bravo", emails=["jordan@example.com"])
         b = person("Jordan Bravo", phones=["9145550466"])
-        self.assertIsNone(cmc.slam_dunk_verdict(a, b))
+        self.assertIsNone(slam_dunk_verdict(a, b))
 
 
 class TestSharedIdentifierNote(unittest.TestCase):
     def test_shared_phone_is_rendered_normalized_with_provenance(self):
         a = person("Jordan Bravo", extra_phones=["9145550466"])
         b = person("Casey Bravo", phones=["9145550466"])
-        note = cmc.shared_identifier_note(a, b)
+        note = shared_identifier_note(a, b)
         self.assertIn("SHARED IDENTIFIERS", note)
         self.assertIn("+1 (914) 555-0466", note)
         self.assertIn("A: owned message evidence", note)
@@ -88,30 +160,66 @@ class TestSharedIdentifierNote(unittest.TestCase):
     def test_no_overlap_renders_nothing(self):
         a = person("Jordan Bravo", phones=["9145550466"])
         b = person("Casey Delta", phones=["3105550100"])
-        self.assertEqual(cmc.shared_identifier_note(a, b), "")
+        self.assertEqual(shared_identifier_note(a, b), "")
+
+    def test_shared_email_handle_across_domains_is_named(self):
+        a = person("Kai Bravo", emails=["kbravo@example.com"])
+        b = person("K Bravo", extra_emails=["kbravo@example.org"])
+        note = shared_identifier_note(a, b)
+        self.assertIn("SHARED IDENTIFIERS", note)
+        self.assertIn(
+            "- email handle kbravo is identical on BOTH records; only the domains differ "
+            "(A: example.com; B: example.org)",
+            note,
+        )
+
+    def test_shared_full_email_is_not_repeated_as_a_handle(self):
+        a = person("Kai Bravo", emails=["kbravo@example.com"])
+        b = person("K Bravo", emails=["kbravo@example.com"])
+        note = shared_identifier_note(a, b)
+        self.assertIn("- email kbravo@example.com is in BOTH records", note)
+        self.assertNotIn("email handle", note)
 
     def test_judge_prompt_carries_the_section_only_on_overlap(self):
         a = person("Jordan Bravo", extra_phones=["9145550466"])
         b = person("Casey Bravo", phones=["9145550466"])
-        self.assertIn("SHARED IDENTIFIERS", cmc.judge_prompt(a, b))
+        self.assertIn("SHARED IDENTIFIERS", judge_prompt(a, b))
         c = person("Casey Delta", phones=["3105550100"])
-        self.assertNotIn("SHARED IDENTIFIERS", cmc.judge_prompt(a, c))
+        self.assertNotIn("SHARED IDENTIFIERS", judge_prompt(a, c))
 
 
 class TestPairGeneration(unittest.TestCase):
+    def test_jaro_winkler_matches_published_reference_values(self):
+        # Standard examples reproduced in Winkler/Jaro implementation references.
+        self.assertAlmostEqual(jaro_winkler("MARTHA", "MARHTA"), 0.9611111111)
+        self.assertAlmostEqual(jaro_winkler("DIXON", "DICKSONX"), 0.8133333333)
+        self.assertAlmostEqual(jaro_winkler("JELLYFISH", "SMELLYFISH"), 0.8962962963)
+
     def test_owned_message_phone_pairs_across_different_names(self):
         people = [
             person("Jordan Bravo", extra_phones=["9145550466"]),
             person("JB", phones=["9145550466"]),
             person("Casey Delta", phones=["3105550100"]),
         ]
-        pairs = cmc.generate_pairs(people)
-        self.assertIn((0, 1), pairs)
-        self.assertNotIn((0, 2), pairs)
+        pairs = generate_pairs(people)
+        person_pairs = {
+            frozenset((pair.first.person_id, pair.second.person_id)) for pair in pairs
+        }
+        self.assertIn(frozenset((people[0].person_id, people[1].person_id)), person_pairs)
+        self.assertNotIn(frozenset((people[0].person_id, people[2].person_id)), person_pairs)
+
+    def test_oversized_blocking_bucket_is_reported_and_skipped(self):
+        people = [
+            person(f"Jordan Bravo {number}")
+            for number in range(201)
+        ]
+        with mock.patch("sys.stderr") as stderr:
+            self.assertEqual(generate_pairs(people), [])
+        self.assertTrue(any("201 members (cap 200)" in str(call) for call in stderr.write.call_args_list))
 
     def test_person_sig_changes_when_an_owned_phone_appears(self):
-        before = cmc._person_sig(person("Jordan Bravo"))
-        after = cmc._person_sig(person("Jordan Bravo", extra_phones=["9145550466"]))
+        before = person_sig(person("Jordan Bravo"))
+        after = person_sig(person("Jordan Bravo", extra_phones=["9145550466"]))
         self.assertNotEqual(before, after)
 
 
@@ -129,33 +237,374 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
                     f'---\nname: "{name}"\nemails: []\nphones: []\n---\n', encoding="utf-8")
                 (raw / f"{person_id}.json").write_text('{"messages": []}', encoding="utf-8")
             (facts_dir / "a.jsonl").write_text(json.dumps({"facts": facts}) + "\n", encoding="utf-8")
-            index = {
-                "slugs": {"jordan-a": {"person_id": "a"}, "casey-b": {"person_id": "b"}},
-                "by_phone": {"4155550100": ["casey-b"]},
-            }
-            return cmc.load_people(index, dossiers, raw, facts_dir)
+            db = Db(base / "deep-context.sqlite")
+            seed_person(
+                db, person_id="a", slug="jordan-a", name="Jordan Alpha",
+                facts_path=facts_dir / "a.jsonl", facts=facts,
+            )
+            seed_person(
+                db, person_id="b", slug="casey-b", name="Casey Bravo",
+                facts_path=facts_dir / "b.jsonl", facts={}, phone="4155550100",
+            )
+            return merge_people(db)
 
     def test_third_party_phone_in_untyped_identifiers_does_not_pair(self):
         people = self._load({
             "identifiers": ["Contact: Casey +1 415 555 0100"],
             "owned_identifiers": {"emails": [], "phones": [], "urls": []},
         })
-        self.assertEqual(people[0]["extra_phones"], [])
-        self.assertNotIn((0, 1), cmc.generate_pairs(people))
+        self.assertEqual(people[0].extra_phones, ())
+        self.assertEqual(generate_pairs(people), [])
 
     def test_owned_message_phone_still_pairs_with_contact_record(self):
         people = self._load({
             "identifiers": ["+1 415 555 0100"],
             "owned_identifiers": {"emails": [], "phones": ["+1 415 555 0100"], "urls": []},
         })
-        self.assertEqual(people[0]["extra_phones"], ["4155550100"])
-        self.assertIn((0, 1), cmc.generate_pairs(people))
+        self.assertEqual(people[0].extra_phones, ("4155550100",))
+        pairs = generate_pairs(people)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(
+            {pairs[0].first.person_id, pairs[0].second.person_id},
+            {people[0].person_id, people[1].person_id},
+        )
+
+    def test_loads_one_merge_person_per_parent_with_union_identifiers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            parent_id = "parent-family"
+            db.project_rows((
+                ParentRow(parent_id, f"parent-worth:{parent_id}", "Jordan Bravo", "jordan-family"),
+                PersonRow("child-b", parent_id, "jordan-b", "jordan-family", "Jordan B"),
+                PersonRow("child-a", parent_id, "jordan-a", "jordan-family", "Jordan A"),
+                PersonIdentifiersProjection("child-a", (
+                    PersonIdentifierRow("child-a", "email", "a@example.com", "a@example.com"),
+                )),
+                PersonIdentifiersProjection("child-b", (
+                    PersonIdentifierRow("child-b", "phone", "4155550100", "+1 415 555 0100"),
+                )),
+                ArtifactRow(
+                    f"facts:{parent_id}", "facts", parent_id, str(root / "facts.jsonl"),
+                    "0" * 64, "projected",
+                ),
+                FactRow(
+                    parent_id, parent_id, f"facts:{parent_id}",
+                    facts_json=json.dumps({"canonical_name": "Jordan Bravo"}),
+                ),
+            ))
+
+            people = merge_people(db)
+
+            self.assertEqual(len(people), 1)
+            self.assertEqual(people[0].parent_id, parent_id)
+            self.assertEqual(people[0].person_id, "child-a")
+            self.assertEqual(people[0].member_person_ids, ("child-a", "child-b"))
+            self.assertEqual(people[0].emails, ("a@example.com",))
+            self.assertEqual(people[0].phone_digits, ("4155550100",))
 
 
 class TestJudgeSystemRule(unittest.TestCase):
     def test_prompt_states_the_shared_phone_rule(self):
-        self.assertIn("SHARED PHONE NUMBER", cmc.JUDGE_SYSTEM)
-        self.assertIn("0.99", cmc.JUDGE_SYSTEM)
+        self.assertIn("SHARED PHONE NUMBER", JUDGE_SYSTEM)
+        self.assertIn("0.99", JUDGE_SYSTEM)
+
+    def test_pair_signature_bytes_stay_pinned(self):
+        first = person(
+            "Jordan Bravo", emails=["jordan@example.com"], phones=["9145550466"],
+        )
+        second = person(
+            "Jordan Bravo", extra_emails=["jordan@example.com"],
+            extra_phones=["9145550466"],
+        )
+        self.assertEqual(pair_sig(first, second), "996774661b3e1d0b")
+
+
+class TestCacheAndArtifacts(unittest.TestCase):
+    def test_no_legacy_cache_loader_remains(self):
+        self.assertFalse(hasattr(receipts, "load_legacy_verdicts"))
+
+    def test_cache_key_resolves_representative_children_to_current_parents(self):
+        cache = load_cached_verdicts((
+            MergeVerdictRow(
+                "child-a", "child-b", "a", "b", "evidence-v1", "llm",
+                1, 0.9, 1, updated_at="2026-08-06T00:00:00Z",
+            ),
+        ), {"child-a": "parent-a", "child-b": "parent-b"})
+        self.assertEqual(
+            set(cache), {frozenset({"parent-a", "parent-b"})},
+        )
+
+    def test_shared_observed_identifier_reaches_the_judge(self):
+        """Two parents holding one phone is exactly what the judge is for.
+
+        This used to assert the opposite — the pair was dropped unjudged
+        because a shared identifier was assumed to mean the identity graph had
+        already joined them. Two separate parents carrying that identifier is
+        the counterexample, and dropping them stranded a real duplicate on the
+        owner's install permanently.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            seed_person(
+                db, person_id="a", slug="jordan-a", name="Jordan Alpha",
+                facts_path=root / "a.jsonl", facts={}, phone="4155550100",
+            )
+            seed_person(
+                db, person_id="b", slug="casey-b", name="Casey Bravo",
+                facts_path=root / "b.jsonl", facts={}, phone="4155550100",
+            )
+
+            survey = survey_pairs(db)
+
+            self.assertEqual(len(survey.to_judge), 1)
+            self.assertEqual(survey.slam, [])
+
+    def test_near_identical_name_sharing_a_phone_is_judged_not_dropped(self):
+        """The live case: one character apart, so slam-dunk equality misses it."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            seed_person(
+                db, person_id="a", slug="jordan-bravo-a", name="Jordan Bravo",
+                facts_path=root / "a.jsonl", facts={}, phone="4155550100",
+            )
+            seed_person(
+                db, person_id="b", slug="jordanu-bravo-b", name="Jordanu Bravo",
+                facts_path=root / "b.jsonl", facts={}, phone="4155550100",
+            )
+
+            survey = survey_pairs(db)
+
+            self.assertEqual(survey.slam, [])
+            self.assertEqual(len(survey.to_judge), 1)
+
+    def test_survey_splits_cache_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dossiers = root / "dossiers"
+            raw = root / "raw"
+            facts = root / "facts"
+            for path in (dossiers, raw, facts):
+                path.mkdir()
+            db = Db(root / "deep-context.sqlite")
+            with mock.patch.object(
+                receipts, "split_cached_pairs", wraps=receipts.split_cached_pairs,
+            ) as split:
+                receipts.survey_pairs(db)
+            split.assert_called_once()
+
+    def test_slam_dunk_node_keeps_csv_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dossiers = root / "dossiers"
+            raw = root / "raw"
+            facts = root / "facts"
+            for path in (dossiers, raw, facts):
+                path.mkdir()
+            db = Db(root / "deep-context.sqlite")
+            for slug, person_id in (("jordan-a", "a"), ("jordan-b", "b")):
+                (dossiers / f"{slug}.md").write_text(
+                    '---\nname: "Jordan Bravo"\nemails: []\nphones: []\n---\n',
+                    encoding="utf-8",
+                )
+                (raw / f"{person_id}.json").write_text('{"messages": []}', encoding="utf-8")
+                facts_path = facts / f"{person_id}.jsonl"
+                facts_path.write_text(json.dumps({"facts": {}}) + "\n", encoding="utf-8")
+                seed_person(
+                    db, person_id=person_id, slug=slug, name="Jordan Bravo",
+                    facts_path=facts_path, facts={}, phone="9145550466",
+                )
+            output = root / "merge-candidates.csv"
+            payload = ClusterMergeCandidates(
+                db=db,
+                dossier_dir=dossiers,
+                out_csv=output,
+                out_md=root / "merge-candidates.md",
+            ).run()
+
+            with output.open(newline="", encoding="utf-8") as handle:
+                rows = list(DictReader(handle))
+            self.assertEqual(list(rows[0]), [
+                "slug_a", "name_a", "slug_b", "name_b", "confidence",
+                "tone_consistent", "reason",
+            ])
+            self.assertEqual((rows[0]["slug_a"], rows[0]["slug_b"]), ("jordan-a", "jordan-b"))
+            self.assertEqual(output.read_bytes(), (
+                b"slug_a,name_a,slug_b,name_b,confidence,tone_consistent,reason\r\n"
+                b"jordan-a,Jordan Bravo,jordan-b,Jordan Bravo,0.99,True,"
+                b"slam dunk: identical name + shared +1 (914) 555-0466\r\n"
+            ))
+            self.assertFalse(output.with_name("merge-verdicts.csv").exists())
+            cached = canonical_snapshot(db).merge_verdicts
+            self.assertEqual(len(cached), 1)
+            self.assertEqual(cached[0].signature, "5891307a843e8091")
+            self.assertEqual(cached[0].accepted, 1)
+            self.assertEqual(payload.pairs_slam_dunk, 1)
+
+
+def scripted_answers(*, p_yes: float = 0.9, fail_on: str | None = None):
+    """Fake answer_requests where judge.py binds it; fail on dossiers naming fail_on."""
+    calls: list[dict] = []
+
+    async def answer_requests(requests, *, output_dir, api_key, client, concurrency,
+                              request_version, question_version):
+        ((digest, request),) = requests.items()
+        calls.append(request)
+        if fail_on and fail_on in request["state"]["dossier"]:
+            raise RuntimeError("Jev HTTP 503; candidate remains unscored")
+        response = {
+            "model": MODEL_ID,
+            "answers": {
+                "same_person": {
+                    "type": "choice",
+                    "probabilities": {"yes": p_yes, "no": round(1 - p_yes, 6)},
+                },
+                "tone_consistent": {"type": "noul", "noul": 0.8},
+            },
+            "usage": {"input_tokens": 1000, "output_tokens": 10},
+        }
+        return {digest: AnsweredRequest(
+            response=response, cache=output_dir / "jev" / f"{digest}.json", cached=False, attempts=1,
+        )}
+
+    answer_requests.calls = calls
+    return answer_requests
+
+
+class TestJevDecision(unittest.TestCase):
+    def _answers(self, p_yes: float, tone: float = 0.8) -> dict:
+        return {
+            "same_person": {"type": "choice", "probabilities": {"yes": p_yes, "no": 1 - p_yes}},
+            "tone_consistent": {"type": "noul", "noul": tone},
+        }
+
+    def test_p_yes_at_the_cutoff_is_a_merge_and_below_is_not(self):
+        below = decision_from_answers(self._answers(SAME_PERSON_CUTOFF - 0.01))
+        self.assertFalse(below.same_person)
+        self.assertAlmostEqual(below.confidence, SAME_PERSON_CUTOFF - 0.01)
+        at = decision_from_answers(self._answers(SAME_PERSON_CUTOFF))
+        self.assertTrue(at.same_person)
+        self.assertEqual(at.confidence, SAME_PERSON_CUTOFF)
+        self.assertEqual(at.judge, "llm")
+        self.assertEqual(at.reason, "")
+
+    def test_tone_noul_maps_through_its_own_cutoff(self):
+        self.assertTrue(decision_from_answers(self._answers(0.9, TONE_CUTOFF)).tone_consistent)
+        self.assertFalse(decision_from_answers(self._answers(0.9, TONE_CUTOFF - 0.01)).tone_consistent)
+
+
+class TestJevJudge(unittest.TestCase):
+    def _node(self, root: Path) -> ClusterMergeCandidates:
+        db = Db(root / "deep-context.sqlite")
+        for person_id, slug, name, phone in (
+            ("a", "jordan-alpha", "Jordan Alpha", "4155550100"),
+            ("b", "casey-bravo", "Casey Bravo", "4155550100"),
+            ("c", "riley-charlie", "Riley Charlie", "4155550111"),
+            ("d", "morgan-delta", "Morgan Delta", "4155550111"),
+        ):
+            seed_person(
+                db, person_id=person_id, slug=slug, name=name,
+                facts_path=root / f"{person_id}.jsonl", facts={}, phone=phone,
+            )
+        return ClusterMergeCandidates(
+            db=db,
+            dossier_dir=root,
+            output_dir=root,
+            out_csv=root / "merge-candidates.csv",
+            out_md=root / "merge-candidates.md",
+        )
+
+    def test_failed_pair_writes_no_verdict_and_is_judged_next_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            failing = scripted_answers(fail_on="Casey Bravo")
+
+            with mock.patch.object(judge, "answer_requests", failing), \
+                    mock.patch("sys.stderr") as stderr:
+                payload = node.run()
+
+            self.assertEqual(len(failing.calls), 2)
+            cached = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual([(row.person_a, row.person_b) for row in cached], [("c", "d")])
+            self.assertEqual(payload.errors, 1)
+            self.assertEqual(payload.pairs_judged, 1)
+            self.assertIn("[cluster]", "".join(
+                str(call.args[0]) for call in stderr.write.call_args_list
+            ))
+
+            second = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", second):
+                payload = node.run()
+
+            self.assertEqual(len(second.calls), 1)
+            self.assertEqual(payload.pairs_reused, 1)
+            self.assertEqual(payload.pairs_judged, 1)
+            self.assertEqual(payload.errors, 0)
+            cached = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual(
+                [(row.person_a, row.person_b) for row in cached], [("a", "b"), ("c", "d")],
+            )
+
+    def test_request_carries_the_pair_text_and_the_two_questions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            fake = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", fake):
+                node.run()
+
+            request = fake.calls[0]
+            self.assertEqual(request["model"], MODEL_ID)
+            self.assertEqual(set(request["questions"]), {"same_person", "tone_consistent"})
+            self.assertEqual(request["questions"]["same_person"]["instructions"], JUDGE_SYSTEM)
+            self.assertEqual(set(request["questions"]["same_person"]["criteria"]), {"yes", "no"})
+            self.assertTrue(request["state"]["dossier"].endswith("Are A and B the same person?"))
+            self.assertIn("CONTACT A", request["state"]["dossier"])
+            self.assertIn("SHARED IDENTIFIERS", request["state"]["dossier"])
+
+    def test_p_yes_is_the_stored_confidence_and_the_cutoff_decides_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.9)):
+                payload = node.run()
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual({(row.judge, row.same_person, row.confidence, row.reason, row.accepted)
+                              for row in rows}, {("llm", 1, 0.9, "", 1)})
+            self.assertEqual(payload.model, MODEL_ID)
+            self.assertEqual(payload.tokens, {"input_tokens": 2000, "output_tokens": 20})
+            self.assertAlmostEqual(payload.estimated_cost_usd, 2000 * INPUT_PRICE_PER_MILLION / 1_000_000)
+
+            Path(directory, "below").mkdir()
+            node = self._node(Path(directory) / "below")
+            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.49)):
+                node.run()
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual({(row.same_person, row.confidence, row.accepted) for row in rows},
+                             {(0, 0.49, 0)})
+
+    def test_cluster_has_no_confidence_override(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["--confidence", "0.4"])
+
+    def test_dry_run_estimates_from_the_jev_price_without_spending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            async def no_spend(*args, **kwargs):
+                raise AssertionError("dry run reached the JEV HTTP door")
+
+            with mock.patch.object(jev_client, "_request", no_spend):
+                estimate = node.estimate()
+
+            self.assertEqual(estimate["status"], "dry_run")
+            self.assertEqual(estimate["candidate_pairs_to_judge"], 2)
+            self.assertEqual(estimate["model"], MODEL_ID)
+            self.assertGreater(estimate["estimated_input_tokens"], 0)
+            self.assertAlmostEqual(
+                estimate["estimated_cost_usd"],
+                estimate["estimated_input_tokens"] * INPUT_PRICE_PER_MILLION / 1_000_000,
+            )
+            self.assertNotIn("estimated_cost_usd_low", estimate)
 
 
 if __name__ == "__main__":

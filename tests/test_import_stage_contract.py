@@ -7,7 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.common import load_people
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
+from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.queries import people as sqlite_people, identifiers as sqlite_identifiers
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
@@ -64,10 +67,11 @@ class DeepContextHandoffTests(unittest.TestCase):
             }]}))
             contacts = root / "contacts.csv"
             CsvIO.write_dict_rows(contacts, CSV_HEADERS, [
-                {"phone": "casey@example.com", "name": "Casey", "source": "imessage",
-                 "imessage_message_count": "3", "imessage_last_message": "2026-09-03T00:00:00+00:00"},
-                {"phone": "+15550100123", "name": "", "source": "whatsapp",
-                 "whatsapp_message_count": "0", "is_in_group_chats": "true"},
+                {"phone": "casey@example.com", "name": "Casey Bravo", "source": "imessage",
+                 "message_count": "3", "imessage_message_count": "3",
+                 "imessage_last_message": "2026-09-03T00:00:00+00:00"},
+                {"phone": "+15550100123", "name": "Jordan Bravo", "source": "whatsapp",
+                 "message_count": "2", "whatsapp_message_count": "2", "is_in_group_chats": "true"},
             ])
             gmail = GmailImport(manifest_json=manifest, import_dir=root / "import")
             messages = MessagesImport(contacts_csv=contacts, import_dir=root / "import")
@@ -87,11 +91,17 @@ class DeepContextHandoffTests(unittest.TestCase):
                 result = merger.run()
                 self.assertEqual(result.stats.dropped_unkeyable, 0)
                 self.assertEqual(result.stats.rows, 3)
-                people = list(load_people(merger.people_csv))
+                people = read_imported_people(merger.people_csv)
                 self.assertEqual(len(people), 3)
                 self.assertEqual({email for person in people for email in person.emails},
                                  {"casey@example.com", "unnamed@example.com"})
                 self.assertEqual({phone for person in people for phone in person.phones}, {"+15550100123"})
+                db = Db(root / f"context-{known}.sqlite")
+                EnsureParents(db=db, people_csv=merger.people_csv).run()
+                self.assertEqual({row.person_id for row in sqlite_people(db)},
+                                 {person.person_id for person in people})
+                self.assertEqual({row.normalized_value for row in sqlite_identifiers(db)},
+                                 {"casey@example.com", "unnamed@example.com", "+15550100123"})
                 rows = CsvIO.read_dict_rows(merger.people_csv)
                 casey = next(row for row in rows if row["primary_email"] == "casey@example.com")
                 self.assertEqual(json.loads(casey["interaction_counts"]), {"email": 8, "imessage": 3})

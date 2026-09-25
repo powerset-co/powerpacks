@@ -1,0 +1,83 @@
+"""Normalize projected message bundles to one durable bundle per parent.
+
+Returns 0 immediately unless SOURCE_BUNDLE artifacts with a non-null person_id
+(the old per-child bundle layout) exist — on a current install this is a query
+and a return.
+"""
+
+# Legacy (2026-08-07): delete once no install still carries per-child SOURCE_BUNDLE rows.
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from packs.ingestion.primitives.common.jsonio import parse_json_object, write_json
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactReplacement,
+    ArtifactRow,
+)
+from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
+from packs.ingestion.primitives.deep_context.db.queries import (
+    artifacts as artifact_rows,
+    parents,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
+
+
+def normalize_cached_bundles(db: Db, out_dir: Path) -> int:
+    """Collapse legacy child projections using cached payloads only.
+
+    Opens no message store — rebuilds each parent bundle via CollectionBundle.union
+    from already-cached artifact payloads, so running it on every collect is free.
+    """
+    names = {row.parent_id: row.display_name or "" for row in parents(db)}
+    source_artifacts = artifact_rows(db, kind=ArtifactKind.SOURCE_BUNDLE.value)
+    parent_owned = {artifact.parent_id for artifact in source_artifacts if artifact.person_id is None}
+    grouped: dict[str, list[ArtifactRow]] = {}
+    for artifact in source_artifacts:
+        if artifact.person_id:
+            grouped.setdefault(artifact.parent_id, []).append(artifact)
+    if not grouped:
+        return 0
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    migrated = 0
+    for parent_id, child_artifacts in sorted(grouped.items()):
+        path = out_dir / f"{parent_id}.json"
+        if parent_id not in parent_owned:
+            bundles = [
+                bundle
+                for artifact in child_artifacts
+                if (bundle := CollectionBundle.from_payload(parse_json_object(artifact.payload_json))) is not None
+            ]
+            if not bundles:
+                continue
+            write_json(
+                path,
+                CollectionBundle.union(
+                    parent_id,
+                    names.get(parent_id, ""),
+                    bundles,
+                ).to_payload(),
+            )
+            project_parent_source_bundle(db, path, parent_id)
+        for artifact in child_artifacts:
+            db.project_rows(
+                (
+                    ArtifactReplacement(
+                        ArtifactKind.SOURCE_BUNDLE.value,
+                        (),
+                        person_id=artifact.person_id,
+                    ),
+                )
+            )
+            old = Path(artifact.path)
+            # Only deletes files this stage owns in its own output dir — never a
+            # path an artifact row happens to point at elsewhere.
+            if old.parent.resolve() == out_dir.resolve() and old != path:
+                old.unlink(missing_ok=True)
+        migrated += 1
+    return migrated

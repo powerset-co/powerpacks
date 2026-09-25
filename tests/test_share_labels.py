@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-from datetime import datetime
 import tempfile
 import unittest
-from datetime import date
 from pathlib import Path
 
-from packs.ingestion.primitives.share.share_list import ShareList
+from deep_context_sqlite_test_helpers import message_payload, seed_identity
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactRow,
+    ProjectionStatus,
+)
+from packs.ingestion.primitives.deep_context.db.share_views import person_labels, share_decisions
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.share.labels import (
     share_decision,
@@ -19,52 +23,22 @@ from packs.ingestion.primitives.share.labels import (
     deterministic_labels,
     labels_from_answers,
 )
-from packs.ingestion.primitives.share.models import JevLabels, LabelRow, MessageStats, PersonEvidence
+from packs.ingestion.primitives.share.models import NO_MESSAGES, JevLabels, LabelRow, MessageStats, PersonEvidence
 from packs.ingestion.primitives.share.questions import NOUL_LABELS, build_questions
+from packs.ingestion.primitives.share.share_list import ShareList
 from packs.shared.csv_io import CsvIO
 
 REFERENCE_DATE = "2026-09-24"
 
-PEOPLE_HEADER = [
+PEOPLE_COLUMNS = [
     "id",
     "public_identifier",
     "full_name",
-    "headline",
-    "current_title",
-    "current_company",
-    "city",
-    "state",
-    "country",
     "source_channels",
     "interaction_counts",
     "last_interaction",
     "superseded_person_ids",
 ]
-
-
-class _Response:
-    def __init__(self, status_code: int, payload: object = None, *, text: str = ""):
-        self.status_code = status_code
-        self._payload = payload
-        self.text = text
-        self.headers = {"Retry-After": "0"}
-
-    def json(self) -> object:
-        return self._payload
-
-
-class _Client:
-    """The fake Jev transport from tests/test_jev_client.py, answering every question."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    async def post(self, endpoint: str, **kwargs) -> _Response:
-        self.calls.append(kwargs["json"])
-        return _Response(200, _payload(kwargs["json"]))
-
-    async def aclose(self) -> None:
-        return None
 
 
 def _answer(question: dict) -> dict:
@@ -78,32 +52,17 @@ def _answer(question: dict) -> dict:
     }
 
 
-def _payload(request: dict) -> dict:
-    return {
-        "model": request["model"],
-        "answers": {name: _answer(question) for name, question in request["questions"].items()},
-        "usage": {"input_tokens": 2000, "output_tokens": 120},
-    }
-
-
 def _person(**overrides) -> PersonEvidence:
     fields = {
         "person_id": "person-a",
         "public_identifier": "jordan-bravo",
         "full_name": "Jordan Bravo",
-        "headline": "Reliability engineer",
-        "current_title": "Engineer",
-        "current_company": "Example Systems",
-        "city": "Springfield",
-        "state": "CA",
-        "country": "US",
         "source_channels": ("gmail_msgvault",),
         "interaction_counts": {"gmail": 4},
         "last_interaction": "2026-09-01T00:00:00+00:00",
         "superseded_person_ids": (),
         "network_worth": "yes",
         "dossier": "---\ngenerated_at: 2026-09-10T08:00:00+00:00\n---\n# Jordan Bravo\nWorked together on storage.",
-        "evidence_date": "2026-09-10",
         "facts": {"canonical_name": "Jordan Bravo", "shared_context": [{"overlap": "employer"}]},
         "shared_overlaps": frozenset({"employer"}),
         "messages": MessageStats(
@@ -134,108 +93,19 @@ def _jev(*, kind: str = "acquaintance", **probabilities) -> JevLabels:
     return labels_from_answers(answers)
 
 
-def _write_install(root: Path) -> ShareEvidence:
-    """A synthetic install: one message-backed person and one LinkedIn-only person."""
-    people_csv = root / "people.csv"
-    CsvIO.write_dict_rows(
-        people_csv,
-        PEOPLE_HEADER,
-        [
-            {
-                "id": "person-a",
-                "public_identifier": "jordan-bravo",
-                "full_name": "Jordan Bravo",
-                "headline": "Reliability engineer",
-                "current_title": "Engineer",
-                "current_company": "Example Systems",
-                "city": "Springfield",
-                "country": "US",
-                "source_channels": "gmail_msgvault",
-                "interaction_counts": '{"gmail": 4}',
-                "last_interaction": "2026-09-01T00:00:00+00:00",
-                "superseded_person_ids": "",
-            },
-            {
-                "id": "person-b",
-                "public_identifier": "casey-delta",
-                "full_name": "Casey Delta",
-                "source_channels": "linkedin_csv",
-                "interaction_counts": "{}",
-                "superseded_person_ids": "",
-            },
-        ],
-    )
-    (root / "index.json").write_text(
-        json.dumps(
-            {
-                "slugs": {"jordan-bravo-aaaa": {"person_id": "person-a", "name": "Jordan Bravo"}},
-                "parents": {
-                    "jordan-bravo-aaaa": {
-                        "parent_id": "parent-aaaa",
-                        "children": ["jordan-bravo-aaaa"],
-                        "name": "Jordan Bravo",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (root / "facts").mkdir()
-    (root / "facts" / "parent-aaaa.jsonl").write_text(
-        json.dumps(
-            {
-                "facts": {
-                    "canonical_name": "Jordan Bravo",
-                    "owned_identifiers": ["owner@example.com"],
-                    "shared_context": [{"overlap": "school"}],
-                    "network_worth": {"decision": "yes"},
-                }
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    (root / "parents").mkdir()
-    (root / "parents" / "jordan-bravo-aaaa.md").write_text(
-        "---\ngenerated_at: 2026-09-10T08:00:00+00:00\n---\n# Jordan Bravo\nStorage work.", encoding="utf-8"
-    )
-    (root / "dossiers").mkdir()
-    (root / "raw").mkdir()
-    (root / "raw" / "parent-aaaa.json").write_text(
-        json.dumps(
-            {
-                "person_id": "parent-aaaa",
-                "groups": ["weekend-crew"],
-                "messages": [
-                    {
-                        "at": "2026-01-01T00:00:00+00:00",
-                        "channel": "gmail",
-                        "direction": "from_them",
-                        "subject": "SECRET-SUBJECT",
-                        "text": "SECRET-BODY",
-                    },
-                    {
-                        "at": "2026-09-01T00:00:00+00:00",
-                        "channel": "gmail",
-                        "direction": "from_me",
-                        "subject": "SECRET-SUBJECT",
-                        "text": "SECRET-BODY",
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (root / "review.csv").write_text("public_identifier,network_worth,llm_worth\n", encoding="utf-8")
-    return ShareEvidence(
-        people_csv=people_csv,
-        index_json=root / "index.json",
-        facts_dir=root / "facts",
-        raw_dir=root / "raw",
-        dossier_dir=root / "dossiers",
-        parents_dir=root / "parents",
-        overrides_csv=root / "review.csv",
-    )
+def _saved_labels(**overrides) -> dict:
+    """Labels as synthesize saves them: every question answered, the given cells overridden."""
+    saved: dict = {}
+    for name, question in build_questions().items():
+        if question["type"] == "noul":
+            saved[name] = 0.0
+        elif question["type"] == "score":
+            saved[name] = 0
+        else:
+            saved[name] = "unknown"
+            saved[f"{name}_p"] = 1.0
+    saved.update(overrides)
+    return saved
 
 
 class DeterministicLabelTests(unittest.TestCase):
@@ -342,23 +212,86 @@ class QuestionContractTests(unittest.TestCase):
         self.assertAlmostEqual(labels.scores["warmth"], 0.75)  # 0.7·0 + 0.075·(1+2+3+4)
         self.assertAlmostEqual(labels.probabilities["is_family"], 0.9)
 
-    def test_the_request_is_dated_by_its_evidence_not_by_today(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = _write_install(Path(directory))
-            facts_file = next(evidence.facts_dir.glob("*.jsonl"))
-            synthesized = datetime(2026, 9, 10, 8, 0).timestamp()
-            os.utime(facts_file, (synthesized, synthesized))
-            person = next(p for p in evidence.load() if p.person_id == "person-a")
-        self.assertEqual(person.evidence_date, "2026-09-10")
+
+def _write_people(root: Path) -> Path:
+    path = root / "people.csv"
+    CsvIO.write_dict_rows(
+        path,
+        PEOPLE_COLUMNS,
+        [
+            {
+                "id": "person-a",
+                "public_identifier": "jordan-bravo",
+                "full_name": "Jordan Bravo",
+                "source_channels": "gmail_msgvault",
+                "interaction_counts": '{"gmail": 4}',
+                "last_interaction": "2026-09-01T00:00:00+00:00",
+                "superseded_person_ids": "",
+            },
+            {
+                "id": "person-b",
+                "public_identifier": "casey-delta",
+                "full_name": "Casey Delta",
+                "source_channels": "linkedin_csv",
+                "interaction_counts": "{}",
+                "superseded_person_ids": "",
+            },
+        ],
+    )
+    return path
 
 
-
-def _keys(value: object) -> set[str]:
-    if isinstance(value, dict):
-        return set(value) | {key for item in value.values() for key in _keys(item)}
-    if isinstance(value, list):
-        return {key for item in value for key in _keys(item)}
-    return set()
+def _seed_store(root: Path, *, save_labels: bool) -> Db:
+    """One message-backed person and one LinkedIn-only person in the canonical store."""
+    db = Db(root / "deep-context.sqlite")
+    work = root / "artifacts"
+    work.mkdir(exist_ok=True)
+    seed_identity(
+        db,
+        parent_id="parent-aaaa",
+        person_id="person-a",
+        row_key="jordan-bravo-aaaa",
+        name="Jordan Bravo",
+        machine_worth="yes",
+        public_identifier="jordan-bravo",
+        artifact_root=work,
+        dossier_body="---\ngenerated_at: 2026-09-10T08:00:00+00:00\n---\n# Jordan Bravo\nStorage work.",
+        labels=_saved_labels(relationship_kind="family") if save_labels else {},
+    )
+    bundle = {
+        "person_id": "parent-aaaa",
+        "name": "Jordan Bravo",
+        "groups": ["weekend-crew"],
+        "messages": [
+            message_payload("SECRET-BODY", channel="gmail", at="2026-01-01T00:00:00+00:00",
+                            direction="from_them", subject="SECRET-SUBJECT"),
+            message_payload("SECRET-BODY", channel="gmail", at="2026-09-01T00:00:00+00:00",
+                            direction="from_me", subject="SECRET-SUBJECT"),
+        ],
+    }
+    bundle_path = work / "parent-aaaa.json"
+    bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+    db.project_rows((
+        ArtifactRow(
+            "source-bundle:parent-aaaa",
+            ArtifactKind.SOURCE_BUNDLE.value,
+            "parent-aaaa",
+            str(bundle_path),
+            hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
+            ProjectionStatus.PROJECTED.value,
+            payload_json=json.dumps(bundle),
+        ),
+    ))
+    seed_identity(
+        db,
+        parent_id="parent-bbbb",
+        person_id="person-b",
+        row_key="casey-delta-bbbb",
+        name="Casey Delta",
+        machine_worth="maybe",
+        public_identifier="casey-delta",
+    )
+    return db
 
 
 class ShareNodeTests(unittest.TestCase):
@@ -366,69 +299,55 @@ class ShareNodeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.evidence = _write_install(self.root)
         self.out = self.root / "share"
+        self.people_csv = _write_people(self.root)
 
-    def _save_labels(self):
-        path = next(self.evidence.facts_dir.glob("*.jsonl"))
-        rec = json.loads(path.read_text().splitlines()[-1])
-        answers = {name: _answer(question) for name, question in build_questions().items()}
-        labels = labels_from_answers(answers)
-        rec["facts"]["labels"] = {
-            **labels.choices, **{f"{name}_p": value for name, value in labels.choice_p.items()},
-            **labels.scores, **labels.probabilities,
-        }
-        path.write_text(json.dumps(rec) + "\n")
+    def _evidence(self, db: Db) -> ShareEvidence:
+        return ShareEvidence(db, people_csv=self.people_csv)
 
-    def test_share_requires_the_labels_synthesize_saved(self):
-        payload = ShareList(out_dir=self.out, evidence=self.evidence).run().to_payload()
+    def _run(self, db: Db) -> dict:
+        # The canonical inputs are declared external artifacts; the explicit db
+        # and evidence point at the temp store, so only the readability precheck
+        # needs the real files to stand in.
+        return ShareList(db=db, out_dir=self.out, evidence=self._evidence(db)).run().to_payload()
+
+    def test_share_requires_the_labels_synthesize_saved(self) -> None:
+        db = _seed_store(self.root, save_labels=False)
+        payload = self._run(db)
         self.assertEqual(payload["status"], "failed")
         self.assertIn("synthesize", payload["error"])
-        self.assertFalse((self.out / "labels.csv").exists())
-        self.assertFalse((self.out / "share.csv").exists())
+        self.assertEqual(person_labels(db), ())
+        self.assertEqual(share_decisions(db), ())
 
-    def test_one_pass_writes_labels_and_share_for_everyone(self):
-        self._save_labels()
-        payload = ShareList(out_dir=self.out, evidence=self.evidence).run().to_payload()
+    def test_one_pass_writes_labels_and_share_for_everyone(self) -> None:
+        db = _seed_store(self.root, save_labels=True)
+        payload = self._run(db)
         self.assertEqual(payload["status"], "completed")
         self.assertEqual((payload["people"], payload["saved_labels"], payload["deterministic_only"]), (2, 1, 1))
-        labels = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "labels.csv")}
-        self.assertEqual(labels["person-a"]["relationship_kind"], "family")
-        self.assertEqual(labels["person-a"]["flag"], "family")
-        self.assertEqual(labels["person-b"]["linkedin_only"], "yes")
-        share = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "share.csv")}
+        labels = {row.person_id: row for row in person_labels(db)}
+        self.assertEqual(json.loads(labels["person-a"].labels_json)["relationship_kind"], "family")
+        self.assertEqual(labels["person-a"].flag, "family")
+        self.assertTrue(json.loads(labels["person-b"].labels_json)["linkedin_only"])
+        share = {row.person_id: row for row in share_decisions(db)}
         # Worth yes plus a flag asks the human; the unjudged LinkedIn-only row stays home.
-        self.assertEqual((share["person-a"]["share"], share["person-a"]["reason"]), ("confirm", "family"))
-        self.assertEqual((share["person-b"]["share"], share["person-b"]["reason"]), ("no", "worth_maybe"))
+        self.assertEqual((share["person-a"].share, share["person-a"].reason), ("confirm", "family"))
+        self.assertEqual((share["person-b"].share, share["person-b"].reason), ("no", "worth_maybe"))
         manifest = json.loads((self.out / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["stage"] if "stage" in manifest else manifest["source"], "share")
+        self.assertEqual(manifest["source"], "share")
         self.assertEqual(manifest["by_reason"], {"family": 1, "worth_maybe": 1})
         self.assertEqual((manifest["confirm"], manifest["share_no"], manifest["share_yes"]), (1, 1, 0))
 
 
 class EvidenceJoinTests(unittest.TestCase):
-    def test_parentless_review_uses_public_identifier_for_worth(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = _write_install(Path(directory))
-            CsvIO.write_dict_rows(
-                evidence.overrides_csv,
-                ["public_identifier", "network_worth", "llm_worth"],
-                [{"public_identifier": "casey-delta", "network_worth": "no"}],
-            )
-            casey = next(person for person in evidence.load() if person.person_id == "person-b")
-        self.assertEqual(casey.network_worth, "no")
-
-    def test_facts_without_dossier_use_facts_file_date(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = _write_install(Path(directory))
-            (evidence.parents_dir / "jordan-bravo-aaaa.md").unlink()
-            jordan = next(person for person in evidence.load() if person.person_id == "person-a")
-            expected = date.fromtimestamp((evidence.facts_dir / "parent-aaaa.jsonl").stat().st_mtime).isoformat()
-        self.assertEqual(jordan.evidence_date, expected)
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.people_csv = _write_people(self.root)
 
     def test_facts_dossier_and_messages_join_through_the_parent_id(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            people = _write_install(Path(directory)).load()
+        db = _seed_store(self.root, save_labels=True)
+        people = ShareEvidence(db, people_csv=self.people_csv).load()
         by_id = {person.person_id: person for person in people}
         self.assertEqual(by_id["person-a"].facts["canonical_name"], "Jordan Bravo")
         self.assertIn("Storage work", by_id["person-a"].dossier)
@@ -438,12 +357,17 @@ class EvidenceJoinTests(unittest.TestCase):
         self.assertTrue(by_id["person-b"].linkedin_only)
 
     def test_absent_cells_stay_absent(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            people = _write_install(Path(directory)).load()
-        casey = next(person for person in people if person.person_id == "person-b")
-        self.assertIsNone(casey.headline)
+        db = _seed_store(self.root, save_labels=True)
+        casey = next(
+            person for person in ShareEvidence(db, people_csv=self.people_csv).load()
+            if person.person_id == "person-b"
+        )
+        self.assertEqual(casey.public_identifier, "casey-delta")
         self.assertIsNone(casey.last_interaction)
         self.assertEqual(casey.interaction_counts, {})
+        self.assertIsNone(casey.facts)
+        self.assertIsNone(casey.dossier)
+        self.assertEqual(casey.messages, NO_MESSAGES)
 
 
 if __name__ == "__main__":

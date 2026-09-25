@@ -1,0 +1,4 @@
+{% if href %}<a class='step{{ state }}' href='{{ href }}'>{% else %}<div class='step{{ state }}'>{% endif %}
+  <span>{{ marker }}</span>
+  <div>{{ label }}{% if count %}<small>{{ count }} left</small>{% endif %}</div>
+{% if href %}</a>{% else %}</div>{% endif %}

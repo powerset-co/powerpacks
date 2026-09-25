@@ -31,7 +31,8 @@ from packs.indexing.primitives.upload_powerset.models import (
     UploadPlan,
 )
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
-from packs.ingestion.schemas.share_schema import HUMAN_PRIVATE, HUMAN_SHARE, SHARE_YES, ShareRow
+from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow
+from packs.ingestion.schemas.share_schema import HUMAN_PRIVATE, HUMAN_SHARE, SHARE_YES
 
 
 def _desired_sources(person: LocalPerson, cloud_id: str) -> list[SourceRow]:
@@ -55,7 +56,7 @@ def _desired_sources(person: LocalPerson, cloud_id: str) -> list[SourceRow]:
 def build_plan(
     *,
     operator_id: str,
-    share_rows: tuple[ShareRow, ...],
+    share_rows: tuple[ShareDecisionRow, ...],
     people: dict[str, LocalPerson],
     cloud: CloudState,
     namespace_names: dict[str, str],

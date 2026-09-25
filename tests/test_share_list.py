@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.share.labels import ACTIVE_P, share_decision
+from deep_context_sqlite_test_helpers import connect, seed_identity
+from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactRow, ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.share_views import person_labels, share_decisions
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
+from packs.ingestion.primitives.share.labels import ACTIVE_P, share_decision
 from packs.ingestion.primitives.share.models import HumanTags, LabelRow
 from packs.ingestion.primitives.share.questions import build_questions
 from packs.ingestion.primitives.share.share_list import ShareList
-from packs.ingestion.primitives.share.tags import TagStore
-from packs.ingestion.schemas.share_schema import ShareRow
+from packs.ingestion.primitives.share.store import TagStore
 from packs.shared.csv_io import CsvIO
 
 PEOPLE_HEADER = ["id", "public_identifier", "full_name", "source_channels", "interaction_counts", "superseded_person_ids"]
@@ -68,24 +72,27 @@ class ShareDecisionTests(unittest.TestCase):
         )
         self.assertEqual(
             share_decision(label, None, updated_at=UPDATED_AT).labels,
-            ("is_family", "is_personal", "automated_sender"),
+            "is_family|is_personal|automated_sender",
         )
 
     def test_a_linkedin_only_worth_yes_row_shares_with_no_labels(self) -> None:
         row = share_decision(_label(), None, updated_at=UPDATED_AT)
-        self.assertEqual((row.share, row.reason, row.labels), ("yes", "worth_yes", ()))
+        self.assertEqual((row.share, row.reason, row.labels), ("yes", "worth_yes", ""))
 
 
 class ShareListTests(unittest.TestCase):
-    """The node end to end on a synthetic install: three people with saved labels
+    """The node end to end on a synthetic store: three people with saved labels
     — worth yes, worth yes plus an automated-sender flag, worth maybe — and the
     flagged person's old candidate id superseded."""
+
+    SUPERSEDED = "candidate:email:casey@example.com"
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.out = self.root / "share"
+        self.db = Db(self.root / "deep-context.sqlite")
         people_csv = self.root / "people.csv"
         CsvIO.write_dict_rows(
             people_csv,
@@ -96,92 +103,74 @@ class ShareListTests(unittest.TestCase):
                     "id": "person-b",
                     "public_identifier": "casey-delta",
                     "full_name": "Casey Delta",
-                    "superseded_person_ids": '["candidate:email:casey@example.com"]',
+                    "superseded_person_ids": json.dumps([self.SUPERSEDED]),
                 },
                 {"id": "person-c", "public_identifier": "riley-echo", "full_name": "Riley Echo"},
             ],
         )
-        (self.root / "index.json").write_text(json.dumps({
-            "slugs": {
-                "jordan-bravo-aaaa": {"person_id": "person-a"},
-                "casey-delta-bbbb": {"person_id": "person-b"},
-                "riley-echo-cccc": {"person_id": "person-c"},
-            },
-            "parents": {
-                "jordan-bravo-aaaa": {"parent_id": "parent-aaaa", "children": ["jordan-bravo-aaaa"]},
-                "casey-delta-bbbb": {"parent_id": "parent-bbbb", "children": ["casey-delta-bbbb"]},
-                "riley-echo-cccc": {"parent_id": "parent-cccc", "children": ["riley-echo-cccc"]},
-            },
-        }), encoding="utf-8")
-        (self.root / "facts").mkdir()
-        for parent_id, worth, automated in (
-            ("parent-aaaa", "yes", 0.1),
-            ("parent-bbbb", "yes", 0.9),
-            ("parent-cccc", "maybe", 0.1),
+        for parent_id, person_id, row_key, name, slug, worth, automated in (
+            ("parent-aaaa", "person-a", "jordan-bravo-aaaa", "Jordan Bravo", "jordan-bravo", "yes", 0.1),
+            ("parent-bbbb", "person-b", "casey-delta-bbbb", "Casey Delta", "casey-delta", "yes", 0.9),
+            ("parent-cccc", "person-c", "riley-echo-cccc", "Riley Echo", "riley-echo", "maybe", 0.1),
         ):
-            (self.root / "facts" / f"{parent_id}.jsonl").write_text(
-                json.dumps({"facts": {
-                    "network_worth": {"decision": worth},
-                    "labels": _saved_labels(is_automated_sender=automated),
-                }}) + "\n",
-                encoding="utf-8",
+            seed_identity(
+                self.db,
+                parent_id=parent_id,
+                person_id=person_id,
+                row_key=row_key,
+                name=name,
+                machine_worth=worth,
+                public_identifier=slug,
+                labels=_saved_labels(is_automated_sender=automated),
             )
-        for name in ("raw", "dossiers", "parents"):
-            (self.root / name).mkdir()
-        (self.root / "review.csv").write_text("public_identifier,network_worth,llm_worth\n", encoding="utf-8")
-        self.evidence = ShareEvidence(
-            people_csv=people_csv,
-            index_json=self.root / "index.json",
-            facts_dir=self.root / "facts",
-            raw_dir=self.root / "raw",
-            dossier_dir=self.root / "dossiers",
-            parents_dir=self.root / "parents",
-            overrides_csv=self.root / "review.csv",
-        )
+        self.evidence = ShareEvidence(self.db, people_csv=people_csv)
 
     def _run(self) -> dict:
-        return ShareList(out_dir=self.out, evidence=self.evidence).run().to_payload()
+        # The canonical inputs are declared external artifacts; the explicit db
+        # and evidence point at the temp store, so only the readability precheck
+        # needs the real files to stand in.
+        return ShareList(db=self.db, out_dir=self.out, evidence=self.evidence).run().to_payload()
 
-    def test_share_csv_follows_people_csv_order_and_counts_by_reason(self) -> None:
+    def test_share_table_follows_people_csv_order_and_counts_by_reason(self) -> None:
         payload = self._run()
-        rows = CsvIO.read_dict_rows_normalized(self.out / "share.csv")
-        self.assertEqual([row["person_id"] for row in rows], ["person-a", "person-b", "person-c"])
-        self.assertEqual([row["share"] for row in rows], ["yes", "confirm", "no"])
-        self.assertEqual([row["reason"] for row in rows], ["worth_yes", "automated_sender", "worth_maybe"])
+        rows = share_decisions(self.db)
+        self.assertEqual([row.person_id for row in rows], ["person-a", "person-b", "person-c"])
+        self.assertEqual([row.share for row in rows], ["yes", "confirm", "no"])
+        self.assertEqual([row.reason for row in rows], ["worth_yes", "automated_sender", "worth_maybe"])
         self.assertEqual((payload["share_yes"], payload["share_no"], payload["confirm"]), (1, 1, 1))
         self.assertEqual(payload["by_reason"], {"worth_yes": 1, "automated_sender": 1, "worth_maybe": 1})
 
-    def test_the_flag_that_fired_is_written_to_labels_csv(self) -> None:
+    def test_the_flag_that_fired_is_written_to_person_labels(self) -> None:
         self._run()
-        labels = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "labels.csv")}
-        self.assertEqual(labels["person-b"]["flag"], "automated_sender")
-        self.assertEqual(labels["person-a"]["flag"], "")
-        self.assertEqual(labels["person-c"]["network_worth"], "maybe")
+        labels = {row.person_id: row for row in person_labels(self.db)}
+        self.assertEqual(labels["person-b"].flag, "automated_sender")
+        self.assertIsNone(labels["person-a"].flag)
+        self.assertEqual(labels["person-c"].worth, "maybe")
+        self.assertEqual(labels["person-a"].worth, "yes")
+        self.assertEqual(json.loads(labels["person-b"].labels_json)["is_automated_sender"], 0.9)
 
     def test_a_tag_on_a_superseded_id_decides_the_surviving_row(self) -> None:
-        TagStore(self.out).apply(
-            "candidate:email:casey@example.com", add={"share"}, remove=set(), note=None
-        )
+        TagStore(self.db).apply(self.SUPERSEDED, add={"share"}, remove=set(), note=None)
         self._run()
-        rows = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "share.csv")}
+        rows = {row.person_id: row for row in share_decisions(self.db)}
         # The human's `share` beats the flag that would have asked them to confirm.
-        self.assertEqual(rows["person-b"]["share"], "yes")
-        self.assertEqual(rows["person-b"]["reason"], "human_share")
-        self.assertEqual(rows["person-b"]["source"], "human")
+        self.assertEqual(rows["person-b"].share, "yes")
+        self.assertEqual(rows["person-b"].reason, "human_share")
+        self.assertEqual(rows["person-b"].source, "human")
 
     def test_a_tag_on_the_surviving_id_wins_over_the_superseded_one(self) -> None:
-        store = TagStore(self.out)
-        store.apply("candidate:email:casey@example.com", add={"share"}, remove=set(), note=None)
+        store = TagStore(self.db)
+        store.apply(self.SUPERSEDED, add={"share"}, remove=set(), note=None)
         store.apply("person-b", add={"private"}, remove=set(), note=None)
         self._run()
-        rows = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "share.csv")}
-        self.assertEqual(rows["person-b"]["reason"], "human_private")
+        rows = {row.person_id: row for row in share_decisions(self.db)}
+        self.assertEqual(rows["person-b"].reason, "human_private")
 
     def test_a_human_share_tag_lifts_a_worth_maybe_person(self) -> None:
-        TagStore(self.out).apply("person-c", add={"share"}, remove=set(), note=None)
+        TagStore(self.db).apply("person-c", add={"share"}, remove=set(), note=None)
         self._run()
-        rows = {row["person_id"]: row for row in CsvIO.read_dict_rows_normalized(self.out / "share.csv")}
-        self.assertEqual((rows["person-c"]["share"], rows["person-c"]["reason"]), ("yes", "human_share"))
+        rows = {row.person_id: row for row in share_decisions(self.db)}
+        self.assertEqual((rows["person-c"].share, rows["person-c"].reason), ("yes", "human_share"))
 
     def test_the_manifest_is_the_node_manifest(self) -> None:
         self._run()
@@ -191,12 +180,82 @@ class ShareListTests(unittest.TestCase):
         self.assertIn("fingerprints", manifest)
 
 
+class ShareWithoutFactsTests(unittest.TestCase):
+    """Synthesis has not run: people and parents exist, facts do not. A stale
+    parent dossier from an earlier `parents` run is not facts."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.out = root / "share"
+        self.db = Db(root / "deep-context.sqlite")
+        people_csv = root / "people.csv"
+        CsvIO.write_dict_rows(
+            people_csv,
+            PEOPLE_HEADER,
+            [
+                {"id": "person-a", "full_name": "Jordan Bravo"},
+                {"id": "person-b", "full_name": "Casey Delta"},
+            ],
+        )
+        self.db.project_rows((
+            ParentRow("parent-a", "parent-worth:parent-a", "Jordan Bravo", "jordan"),
+            PersonRow("person-a", "parent-a", "jordan", "jordan", "Jordan Bravo"),
+            ParentRow("parent-b", "parent-worth:parent-b", "Casey Delta", "casey"),
+            PersonRow("person-b", "parent-b", "casey", "casey", "Casey Delta"),
+            ArtifactRow(
+                "dossier-parent:parent-a", "dossier", "parent-a", "/parents/jordan.md",
+                "stub", "projected", payload_json=json.dumps({"body": "# Jordan Bravo\n"}),
+            ),
+        ))
+        self.evidence = ShareEvidence(self.db, people_csv=people_csv)
+
+    def _run(self) -> dict:
+        return ShareList(db=self.db, out_dir=self.out, evidence=self.evidence).run().to_payload()
+
+    def test_every_person_is_decided_from_worth(self) -> None:
+        payload = self._run()
+        self.assertEqual(payload["status"], "completed")
+        rows = share_decisions(self.db)
+        self.assertEqual(
+            [(row.person_id, row.share, row.reason) for row in rows],
+            [("person-a", "no", "worth_maybe"), ("person-b", "no", "worth_maybe")],
+        )
+        self.assertEqual(payload["deterministic_only"], 2)
+
+    def test_only_people_with_facts_lacking_labels_fail_the_node(self) -> None:
+        facts = {"canonical_name": "Casey Delta"}
+        self.db.project_rows((
+            ArtifactRow(
+                "facts:parent-b", "facts", "parent-b", "/facts/parent-b.jsonl",
+                "fixture", "projected", payload_json=json.dumps({"facts": facts}),
+            ),
+            FactRow("parent-b", "parent-b", "facts:parent-b", facts_json=json.dumps(facts)),
+        ))
+        payload = self._run()
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("1 people have facts without JEV labels", payload["error"])
+
+
 class ShareSchemaTests(unittest.TestCase):
-    def test_an_unknown_share_value_stops_the_parse(self) -> None:
-        row = {"person_id": "person-a", "public_identifier": "jordan-bravo", "share": "yse",
-               "reason": "worth_yes", "labels": "", "source": "machine", "updated_at": ""}
-        with self.assertRaises(ValueError):
-            ShareRow.from_csv_row(row)
+    def test_an_unknown_share_value_is_rejected_by_the_store_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "deep-context.sqlite")
+            seed_identity(
+                db,
+                parent_id="parent-a",
+                person_id="person-a",
+                row_key="jordan-a",
+                name="Jordan Bravo",
+                machine_worth="yes",
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                with connect(db) as connection:
+                    connection.execute(
+                        "INSERT INTO share (person_id, public_identifier, share, reason, labels, source, updated_at)"
+                        " VALUES ('person-a', 'jordan-bravo', 'yse', 'worth_yes', '', 'machine', '')"
+                    )
 
 
 def _saved_labels(**probabilities: float) -> dict:

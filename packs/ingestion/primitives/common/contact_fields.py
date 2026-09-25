@@ -25,7 +25,7 @@ Changelog:
     import from packs.ingestion.schemas.message_contacts (the message-contact CSV
     contract home) instead of being redefined here.
   2026-07-23 (audit dedup): absorbs the plain normalize_email (strip + lowercase)
-    that deep_context.common and imports/merge_network_sources each duplicated;
+    that deep_context.shared.common and imports/merge_network_sources each duplicated;
     the strict, validating normalize_email in discover/gmail/msgvault/util is a
     different contract and stays separate.
   2026-07-23 (audit): absorbs the person-vs-role classifiers is_likely_person_name
@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -164,6 +165,48 @@ def phones_from_row(row: dict[str, str]) -> list[str]:
     for key in ("primary_phone", "phone", "phone_e164", "all_phones", "phones"):
         phones.extend(phones_from_value(row.get(key, "")))
     return sorted(set(phones))
+
+
+def identifier_emails(identifiers: Iterable[str]) -> set[str]:
+    """Extract merge-candidate email keys from owned identifier evidence.
+
+    PINNED: this deliberately accepts the merge judge's looser dotted-domain
+    evidence shape instead of applying the stricter import email validator.
+    Tightening it would change merge blocking and paid-judge queue membership.
+    """
+    values = (str(identifier).strip() for identifier in identifiers)
+    return {
+        value.lower()
+        for value in values
+        if "@" in value and "." in value.rsplit("@", 1)[-1]
+    }
+
+
+def identifier_phones(identifiers: Iterable[str]) -> set[str]:
+    """Extract merge-candidate phone keys from owned identifier evidence.
+
+    PINNED: merge evidence accepts 7-15 digits, rejects URL/domain lookalikes,
+    and drops a leading US country code. Import normalization is intentionally
+    stricter; changing this variant alters merge blocking and paid-judge work.
+    """
+    phones: set[str] = set()
+    for raw in identifiers:
+        value = str(raw).strip()
+        if not value or "@" in value or re.search(r"[a-z]{2,}\.[a-z]{2,}", value.lower()):
+            continue
+        digits = re.sub(r"[^\d]", "", value)
+        if len(digits) == 11 and digits.startswith("1"):
+            digits = digits[1:]
+        if 7 <= len(digits) <= 15:
+            phones.add(digits)
+    return phones
+
+
+def format_phone_digits(digits: str) -> str:
+    """Render a normalized digit key for human-readable evidence."""
+    if len(digits) == 10:
+        return f"+1 ({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    return f"+{digits}"
 
 
 def normalize_name_key(value: str) -> str:

@@ -14,7 +14,7 @@ architecture and current-versus-historical document status.
 | `$setup` | [`setup`](setup/SKILL.md) | LinkedIn-only setup, fan-in, Modal build, and local validation. | [LinkedIn and Modal indexing](../../indexing/docs/linkedin-modal-pipeline.md) |
 | `$import-gmail` | [`import-gmail`](import-gmail/SKILL.md) | Gmail/msgvault sync and source metadata import; Deep Context handles processing. | [Gmail import pipeline](../docs/gmail-import-pipeline.md) |
 | `$import-messages` | [`import-messages`](import-messages/SKILL.md) | iMessage/WhatsApp sync and source metadata import; Deep Context handles processing. | [Message import pipeline](../docs/message-import-pipeline.md) |
-| `$deep-context` | [`deep-context`](deep-context/SKILL.md) | Message-body dossiers, duplicate grouping, LinkedIn self-heal, and reviewed overrides. | [Deep-context pipeline](../docs/deep-context-pipeline.md) |
+| `$deep-context` | [`deep-context`](deep-context/SKILL.md) | Message-body dossiers, duplicate grouping, LinkedIn research, and reviewed overrides. | [Deep-context pipeline](../docs/deep-context-pipeline.md) |
 | `$import-twitter` | [`import-twitter`](import-twitter/SKILL.md) | Twitter/X network import and LinkedIn validation. | Skill is the current guide. |
 
 `$import-email` and `$import-contacts` are retired names. Use `$import-gmail` and

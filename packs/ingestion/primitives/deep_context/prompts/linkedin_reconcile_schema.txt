@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {"type": "string", "enum": ["confirmed", "wrong_person", "needs_review"]},
+    "confidence": {"type": "number"},
+    "supporting_evidence": {"type": "array", "items": {"type": "string"}},
+    "contradicting_evidence": {"type": "array", "items": {"type": "string"}},
+    "linkedin_plausibly_absent": {"type": "boolean"},
+    "recommend_deep_research": {"type": "boolean"},
+    "reason": {"type": "string"}
+  },
+  "required": [
+    "verdict",
+    "confidence",
+    "supporting_evidence",
+    "contradicting_evidence",
+    "linkedin_plausibly_absent",
+    "recommend_deep_research",
+    "reason"
+  ]
+}

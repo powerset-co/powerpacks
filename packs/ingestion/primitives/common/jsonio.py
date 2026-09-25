@@ -9,6 +9,8 @@ copies it replaces:
 - `emit` — pretty JSON to stdout (indent=2, sort_keys) for a primitive's final
   result payload.
 - `read_json` — safe read; returns `default` on missing file or decode error.
+- `parse_json_object` — tolerant in-memory object decode; returns `{}` for
+  empty, malformed, or non-object JSON.
 - `write_json` — mkdir parents, indent=2, sort_keys, single trailing newline.
 - `read_jsonl` — newline-delimited JSON objects into a list; `[]` for a missing
   file, blank lines skipped, a malformed line raises.
@@ -81,6 +83,15 @@ def read_json(path: Path, default: Any = None) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default
+
+
+def parse_json_object(value: str | None) -> dict[str, Any]:
+    """Decode an in-memory JSON object, returning `{}` for unusable input."""
+    try:
+        payload = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def write_json(path: Path, payload: Any) -> None:

@@ -26,6 +26,8 @@ from packs.indexing.primitives.upload_powerset.models import (
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
+from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.schemas.share_schema import (
     FAMILY,
     HUMAN_PRIVATE,
@@ -34,8 +36,8 @@ from packs.ingestion.schemas.share_schema import (
     SHARE_NO,
     SHARE_YES,
     WORTH_NO,
-    ShareRow,
 )
+from deep_context_sqlite_test_helpers import seed_identity
 
 OPERATOR = "00000000-0000-0000-0000-0000000000aa"
 OTHER_OPERATOR = "00000000-0000-0000-0000-0000000000bb"
@@ -61,8 +63,26 @@ CLOUD_PERSONS_COLUMNS = [
 ]
 
 
-def share_row(person_id: str, slug: str, *, share: str = SHARE_YES, reason: str = "") -> ShareRow:
-    return ShareRow(person_id, slug, share, reason, (), "machine", "2026-09-24T00:00:00Z")
+def share_row(person_id: str, slug: str, *, share: str = SHARE_YES, reason: str = "",
+              labels: str = "") -> ShareDecisionRow:
+    return ShareDecisionRow(person_id, slug, share, reason, labels, "machine", "2026-09-24T00:00:00Z")
+
+
+def share_db(root: Path, rows: list[ShareDecisionRow]) -> Path:
+    """A canonical store whose `share` table carries `rows` (people rows satisfy the FK)."""
+    path = root / "deep-context.sqlite"
+    db = Db(path)
+    for index, person_id in enumerate(sorted({row.person_id for row in rows})):
+        seed_identity(
+            db,
+            parent_id=f"parent-{index}",
+            person_id=person_id,
+            row_key=f"row-{index}",
+            name=f"Person {index}",
+            machine_worth="yes",
+        )
+    db.replace_share_rows((), tuple(rows))
+    return path
 
 
 def local_person(person_id: str, slug: str, **kwargs) -> LocalPerson:
@@ -392,14 +412,12 @@ class DryRunTests(unittest.TestCase):
             f"{NEW_PERSON},jordan-bravo,linkedin_csv,,,,\n"
             f"{STALE_PERSON},riley-echo,linkedin_csv,,,,\n"
         )
-        share_csv = root / "share.csv"
-        share_csv.write_text(
-            "person_id,public_identifier,share,reason,labels,source,updated_at\n"
-            f"{NEW_PERSON},jordan-bravo,yes,worth_yes,,machine,2026-09-24T00:00:00Z\n"
-            f"{CLOUD_PERSON},casey-lane,no,human_private,,human,2026-09-24T00:00:00Z\n"
-            f"{STALE_PERSON},riley-echo,confirm,family,is_family,machine,2026-09-24T00:00:00Z\n"
-        )
-        return {"db": db, "people_csv": people_csv, "share_csv": share_csv, "out_dir": root / "out"}
+        canonical_db = share_db(root, [
+            share_row(NEW_PERSON, "jordan-bravo"),
+            share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=HUMAN_PRIVATE),
+            share_row(STALE_PERSON, "riley-echo", share=SHARE_CONFIRM, reason=FAMILY, labels="is_family"),
+        ])
+        return {"db": db, "people_csv": people_csv, "share_db": canonical_db, "out_dir": root / "out"}
 
     def test_dry_run_selects_only_and_writes_one_manifest(self):
         namespace = FakeNamespace()
@@ -458,7 +476,7 @@ class ApplyTests(unittest.TestCase):
             con.execute("CREATE TABLE local_companies (id VARCHAR, company_name VARCHAR)")
             con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
             uploader = upload_powerset.UploadPowerset(
-                db=Path(tmp) / "local-search.duckdb", share_csv=Path(tmp) / "share.csv",
+                db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
                 people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
             with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace):
                 result = uploader._apply(con, cursor, plan)

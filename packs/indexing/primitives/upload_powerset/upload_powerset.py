@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Push the shared slice of the local search index to Powerset (the cloud hub).
 
-Flow: read share.csv + merged/people.csv + local-search.duckdb -> read the cloud
+Flow: read the canonical store's `share` table + merged/people.csv +
+local-search.duckdb -> read the cloud
 state for those people (persons rows, this operator's powerpacks source rows,
 every operator that can see them, this operator's private tags, which
 company/school docs already exist) -> plan.build_plan reconciles the two ->
@@ -15,6 +16,7 @@ share list. An un-share removes the operator from allowed_operator_ids and
 deletes its source rows; documents are never deleted.
 
 Changelog:
+  2026-09-24: read the share list from SQLite, not share.csv.
   2026-09-24: shared = the three-way share value `yes`; `confirm` rows stay home.
   2026-09-24: created; delegated local reads and centralized namespace contracts.
 """
@@ -42,6 +44,11 @@ import postgres_client  # noqa: E402
 import turbopuffer_search_backend as tp_backend  # noqa: E402
 
 from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
+from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow  # noqa: E402
+from packs.ingestion.primitives.deep_context.db.share_views import share_decisions  # noqa: E402
+from packs.ingestion.primitives.deep_context.db.store import open_existing_db  # noqa: E402
+from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB  # noqa: E402
+from packs.ingestion.schemas.share_schema import SHARE_YES  # noqa: E402
 from packs.indexing.primitives.upload_powerset import local_index, postgres, turbopuffer_writer  # noqa: E402
 from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
     CloudState,
@@ -51,12 +58,11 @@ from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES  # noqa: E402
-from packs.ingestion.schemas.share_schema import SHARE_YES, ShareRow  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
-DEFAULT_SHARE_CSV = REPO / ".powerpacks/share/share.csv"
+DEFAULT_SHARE_DB = REPO / CANONICAL_DB
 DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
 
 PREVIEW_IDS = 10
@@ -69,7 +75,7 @@ class UploadPowerset:
         self,
         *,
         db: Path,
-        share_csv: Path,
+        share_db: Path,
         people_csv: Path,
         out_dir: Path = DEFAULT_OUT_DIR,
         operator_id: str | None = None,
@@ -77,7 +83,7 @@ class UploadPowerset:
         env_file: Path | None = None,
     ) -> None:
         self.db = db
-        self.share_csv = share_csv
+        self.share_db = share_db
         self.people_csv = people_csv
         self.out_dir = out_dir
         self.operator_id = operator_id
@@ -87,7 +93,7 @@ class UploadPowerset:
 
     def run(self) -> dict[str, Any]:
         postgres_client.load_env_file(self.env_file)
-        share_rows = tuple(ShareRow.from_csv_row(row) for row in CsvIO.read_dict_rows(self.share_csv))
+        share_rows = share_decisions(open_existing_db(self.share_db))
         people = {person.person_id: person
                   for person in (LocalPerson.from_csv_row(row) for row in CsvIO.read_dict_rows(self.people_csv))}
         con = duckdb.connect(str(self.db), read_only=True)
@@ -121,7 +127,7 @@ class UploadPowerset:
         self.manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         return payload | {"manifest": str(self.manifest_path)}
 
-    def _plan(self, con: Any, cur: Any, operator_id: str, share_rows: tuple[ShareRow, ...],
+    def _plan(self, con: Any, cur: Any, operator_id: str, share_rows: tuple[ShareDecisionRow, ...],
               people: dict[str, LocalPerson]) -> UploadPlan:
         with_slug = [row for row in share_rows if row.public_identifier]
         shared_ids = sorted(row.person_id for row in with_slug if row.share == SHARE_YES)
@@ -224,7 +230,8 @@ def plan_preview(plan: UploadPlan) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=str(DEFAULT_DB))
-    parser.add_argument("--share-csv", default=str(DEFAULT_SHARE_CSV))
+    parser.add_argument("--share-db", default=str(DEFAULT_SHARE_DB),
+                        help="canonical deep-context store holding the share table")
     parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--operator-id", default=None, help="override the credentials-derived users.id")
@@ -235,7 +242,7 @@ def main() -> int:
 
     payload = UploadPowerset(
         db=Path(args.db),
-        share_csv=Path(args.share_csv),
+        share_db=Path(args.share_db),
         people_csv=Path(args.people_csv),
         out_dir=Path(args.out_dir),
         operator_id=args.operator_id,

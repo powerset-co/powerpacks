@@ -1,0 +1,6 @@
+{% import '_components.html.j2' as ui with context -%}
+{% set body -%}
+<p>Collected messages have no facts yet. Go back to Codex and run:</p>
+<div class='handoff-copy'><code>bin/deep-context dry</code><button class='button button-outline' type='button' data-copy-continue data-phrase='bin/deep-context dry' data-toast='Copied'>Copy</button></div>
+{%- endset %}
+{{ ui.empty_state('Synthesis has not run', body) }}

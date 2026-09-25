@@ -1,4 +1,9 @@
-"""Message-contact CSV columns and parsed import values."""
+"""Message-contact CSV columns and parsed import values.
+
+Changelog:
+  2026-09-25: `MessageContact` parses `is_in_group_chats` and `message_count`,
+    the two columns the restored import floor reads.
+"""
 
 from __future__ import annotations
 
@@ -34,6 +39,9 @@ GROUP_SEPARATOR = " | "
 # `<channel>_message_count` / `<channel>_last_message` columns for.
 MESSAGE_CHANNELS = ("imessage", "whatsapp")
 
+# `is_in_group_chats` is written as `true`/`false` by discovery.
+_TRUE_TOKENS = frozenset({"1", "true", "yes", "y"})
+
 # Repo-relative paths to the companion schema docs, surfaced in schema-mismatch
 # errors so a user can convert a legacy CSV into this contract.
 SCHEMA_DOC = "packs/ingestion/schemas/contacts-csv.md"
@@ -51,6 +59,10 @@ def _parse_int(value: str | None) -> int:
         return 0
 
 
+def _parse_bool(value: str | None) -> bool:
+    return (value or "").strip().lower() in _TRUE_TOKENS
+
+
 @dataclass(frozen=True)
 class MessageContact:
     """Contact metadata parsed once from a message-contact CSV row."""
@@ -58,6 +70,8 @@ class MessageContact:
     phone: str
     name: str
     source: str
+    is_in_group_chats: bool
+    message_count: int
     imessage_message_count: int
     whatsapp_message_count: int
     last_message: str
@@ -70,6 +84,8 @@ class MessageContact:
             phone=(row.get("phone") or "").strip(),
             name=(row.get("name") or "").strip(),
             source=(row.get("source") or "").strip().lower(),
+            is_in_group_chats=_parse_bool(row.get("is_in_group_chats")),
+            message_count=_parse_int(row.get("message_count")),
             imessage_message_count=_parse_int(row.get("imessage_message_count")),
             whatsapp_message_count=_parse_int(row.get("whatsapp_message_count")),
             last_message=row.get("last_message") or "",

@@ -6,15 +6,12 @@ mailbox owner's background. Raw message text never enters here.
 
 Flow: `build_request(...)` -> `{model, state, questions}` for `jev/client.py`.
 
-`REQUEST_VERSION` binds the client's per-request cache records as both
-request and question version. Changing a question changes the request digest AND this version, so
-answers are re-asked rather than silently reused under new wording.
-
 `reference_date` is the date the evidence was synthesized (the facts file's
 date), never today: liveness is a deterministic label, and a request that only
 changes with its evidence is a request that is billed once.
 
 Changelog:
+  2026-09-25: dropped the unread REQUEST_VERSION; jev_worth/questions.py owns the version.
   2026-09-24: assembled the request state here and kept one version.
   2026-09-24: created.
 """
@@ -24,8 +21,6 @@ from __future__ import annotations
 from typing import Any
 
 from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
-
-REQUEST_VERSION = "share-labels-request-v1-20260924"
 
 # The dossier is the only unbounded state field; a parent dossier here runs
 # ~300-2,000 characters, so the cap only ever trims a pathological outlier.

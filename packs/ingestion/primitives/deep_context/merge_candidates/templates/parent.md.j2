@@ -1,0 +1,34 @@
+---
+parent_id: {{ plan.parent_id }}
+name: {{ name_json }}
+slug: {{ plan.slug }}
+kind: parent
+children: {{ children_yaml }}
+needs_review: []
+emails: {{ emails_yaml }}
+phones: {{ phones_yaml }}
+confidence: {{ confidence }}
+---
+
+# {{ plan.name }}
+
+## Summary
+
+{{ summary }}
+
+## Confirmed children (merged)
+
+_LLM-judged same person; their facts are merged into this profile._
+
+{% for child in plan.confirmed %}- [[{{ child.slug }}]] **{{ child.name }}**{% if child.score %} — judge {{ '%.2f' | format(child.score) }}{% endif %}{% if child.reason %} ({{ child.reason }}){% endif %}  ·  {{ child.channels | join(', ') }}
+{% endfor %}{% if relationship %}
+## Relationship & cadence
+
+{{ relationship }}
+{% endif %}{% if fact_sections %}
+{{ fact_sections }}
+{% endif %}{% if identifiers %}
+## Identifiers
+
+{% for identifier in identifiers %}- {{ identifier }}
+{% endfor %}{% endif %}

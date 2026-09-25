@@ -1,0 +1,6 @@
+# Deep-context dossiers ({{ catalog | length }})
+
+_Generated {{ generated_at }}._
+
+{% for name, summary, slug in catalog %}- [[{{ slug }}]] **{{ name }}**{% if summary %} — {{ summary }}{% endif %}
+{% endfor %}

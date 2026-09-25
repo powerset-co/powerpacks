@@ -14,50 +14,107 @@ fi
 
 # Focused offline baseline gate. Source-specific integration suites use local
 # fixtures and fake providers; they do not read user data or make network calls.
+# Deep Context tests import their synthetic helper from the tests directory, so
+# that directory stays on PYTHONPATH.
+export PYTHONPATH="$ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
+
+# Baseline suites, then the SQLite Deep Context and share rewrite suites.
 exec "$UV_BIN" run --project . python -m unittest \
+  tests.test_candidate_judge_evidence \
+  tests.test_candidate_judges \
+  tests.test_capability_contract \
+  tests.test_clean_job_description \
+  tests.test_company_context \
   tests.test_core_layout \
-  tests.test_ingestion_messages_contract \
+  tests.test_cross_encoder_client \
+  tests.test_cross_encoder_search \
+  tests.test_cross_encoder_warmup \
+  tests.test_deep_search_results_web \
+  tests.test_discover \
+  tests.test_enrich_primitives \
   tests.test_extract_imessage_failures \
-  tests.test_messages_import_selection \
+  tests.test_fetch_job_posting \
   tests.test_gmail_import \
   tests.test_import_contacts_quality \
   tests.test_import_stage_contract \
   tests.test_import_status \
   tests.test_index_contacts_pipeline \
-  tests.test_pipeline_contract \
-  tests.test_fetch_job_posting \
-  tests.test_job_location \
-  tests.test_jd_query \
-  tests.test_location_normalization \
-  tests.test_pipeline_visualize \
-  tests.test_wacli_payloads \
-  tests.test_people_identity \
-  tests.test_whatsapp_wacli \
+  tests.test_ingestion_messages_contract \
   tests.test_interaction_counts \
-  tests.test_discover \
-  tests.test_messages_pack \
-  tests.test_enrich_primitives \
-  tests.test_mcp_install \
-  tests.test_pull_runtime_keys \
-  tests.test_update_powerpacks \
+  tests.test_jd_query \
+  tests.test_jev_client \
+  tests.test_jev_model \
+  tests.test_jev_pipeline \
+  tests.test_job_location \
+  tests.test_llm_rerank_candidates \
   tests.test_local_duckdb_backend \
   tests.test_local_search_pipeline \
-  tests.test_llm_rerank_candidates \
+  tests.test_location_normalization \
+  tests.test_mcp_install \
+  tests.test_messages_import_selection \
+  tests.test_messages_pack \
+  tests.test_people_identity \
+  tests.test_pipeline_contract \
+  tests.test_pipeline_visualize \
+  tests.test_preview_search_labels \
+  tests.test_pull_runtime_keys \
+  tests.test_search_harness \
   tests.test_terra_capability \
   tests.test_terra_pipeline \
-  tests.test_clean_job_description \
-  tests.test_capability_contract \
-  tests.test_jev_model \
-  tests.test_jev_client \
-  tests.test_jev_pipeline \
+  tests.test_update_powerpacks \
   tests.test_usage_capture \
-  tests.test_deep_search_results_web \
-  tests.test_search_harness \
-  tests.test_company_context \
-  tests.test_candidate_judge_evidence \
-  tests.test_candidate_judges \
-  tests.test_preview_search_labels \
-  tests.test_cross_encoder_client \
-  tests.test_cross_encoder_search \
-  tests.test_cross_encoder_warmup \
-  -v
+  tests.test_wacli_payloads \
+  tests.test_whatsapp_wacli \
+  tests.test_clean_slate \
+  tests.test_cluster_merge_candidates \
+  tests.test_deep_context_canonical_graph \
+  tests.test_deep_context_collection_sqlite \
+  tests.test_deep_context_db_parent_merge \
+  tests.test_deep_context_db_projectors \
+  tests.test_deep_context_db_schema \
+  tests.test_deep_context_db_store \
+  tests.test_deep_context_db_views \
+  tests.test_deep_context_dossier \
+  tests.test_deep_context_enrichment_projection \
+  tests.test_deep_context_http_contract \
+  tests.test_deep_context_identity_invariants \
+  tests.test_deep_context_identity_queue \
+  tests.test_deep_context_import_hygiene \
+  tests.test_deep_context_imported_people \
+  tests.test_deep_context_incremental_parents \
+  tests.test_deep_context_judgment_policy \
+  tests.test_deep_context_legacy_scrubs \
+  tests.test_deep_context_lookup_sqlite \
+  tests.test_deep_context_migrate_sqlite \
+  tests.test_deep_context_owner_projection \
+  tests.test_deep_context_parent_assignment \
+  tests.test_deep_context_parent_identity_proof \
+  tests.test_deep_context_parent_projection \
+  tests.test_deep_context_prefetch_rate \
+  tests.test_deep_context_prompt_assets \
+  tests.test_deep_context_reconcile_cli_db \
+  tests.test_deep_context_restart_sqlite \
+  tests.test_deep_context_review_rendering \
+  tests.test_deep_context_sqlite_invariants \
+  tests.test_deep_context_sqlite_producers \
+  tests.test_deep_context_synthesis \
+  tests.test_deep_context_synthetic_prefetch \
+  tests.test_deep_context_web_sqlite \
+  tests.test_deep_research_contacts \
+  tests.test_email_context \
+  tests.test_identity_evidence_identifiers \
+  tests.test_ingestion_jsonio \
+  tests.test_legacy_synthetic_migration \
+  tests.test_llm_config \
+  tests.test_logbook \
+  tests.test_messages_chatdb \
+  tests.test_persist_review_identities \
+  tests.test_profile_labels \
+  tests.test_profile_models_identity \
+  tests.test_reconcile_fetch \
+  tests.test_share_evidence_labels \
+  tests.test_share_labels \
+  tests.test_share_list \
+  tests.test_share_tags \
+  tests.test_synthesis_jev \
+  tests.test_upload_powerset -v

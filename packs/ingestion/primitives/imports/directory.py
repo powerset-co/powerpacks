@@ -195,18 +195,6 @@ def merge_directory_rows(rows: list[DirectoryRow], existing_by_key: dict[str, Di
     return [best[key].to_row() for key in sorted(best)]
 
 
-def commit_directory_rows(directory_csv: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
-    existing: dict[str, DirectoryRow] = {}
-    if directory_csv.exists():
-        for row in read_csv_rows(directory_csv)[1]:
-            normalized = normalized_directory_row(row, source="directory")
-            if normalized.source_key:
-                existing[normalized.source_key] = normalized
-    merged = merge_directory_rows([normalized_directory_row(row) for row in rows], existing)
-    write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
-    return {"directory_csv": str(directory_csv), "existing_rows": len(existing), "imported_rows": len(rows), "rows": len(merged)}
-
-
 def merge_jsonish_lists(current: str, incoming: str) -> str:
     values: list[str] = []
     for value in (current, incoming):
@@ -244,3 +232,25 @@ def union_alias_list(current: str, incoming: str, primary_current: str = "", pri
             if value and value not in seen:
                 seen.append(value)
     return json.dumps(seen, ensure_ascii=False) if seen else ""
+
+
+def replace_directory_source_rows(
+    directory_csv: Path,
+    source: str,
+    rows: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Replace one writer-owned source slice without touching other sources."""
+    existing: dict[str, DirectoryRow] = {}
+    if directory_csv.exists():
+        for row in read_csv_rows(directory_csv)[1]:
+            normalized = normalized_directory_row(row, source="directory")
+            if normalized.source_key and normalized.source != source:
+                existing[normalized.source_key] = normalized
+    merged = merge_directory_rows([normalized_directory_row(row) for row in rows], existing)
+    write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
+    return {
+        "directory_csv": str(directory_csv),
+        "existing_rows": len(existing),
+        "imported_rows": len(rows),
+        "rows": len(merged),
+    }

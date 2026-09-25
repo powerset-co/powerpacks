@@ -37,3 +37,21 @@ All source candidates use canonical `candidate:` IDs and the people schema.
 Import manifests record counts, status, and fingerprints; unchanged inputs return
 the existing manifest. Gmail and Messages never read or modify `directory.csv`.
 There is no separate candidates file or import-time review file.
+
+## Declared nodes
+
+`pipeline/graph.py` declares four import nodes: `gmail_import`
+([gmail/README.md](gmail/README.md)), `messages_import`
+([messages/README.md](messages/README.md)), `linkedin_import`
+([linkedin/README.md](linkedin/README.md)), and `merge_people` (this directory).
+
+| node | reads | writes | manifest |
+|---|---|---|---|
+| `merge_people` | `import/linkedin/people.csv` (external, optional), `import/gmail/people.csv` (optional), `import/messages/people.csv` (optional), `directory.csv` (optional) | `merged/people.csv` (full_rewrite) | `merged/manifest.json` (`MergePeopleManifest`) |
+
+`merge_people` (`PeopleMerge`, `merge_people.py`) is free and applies no human
+decisions. Status: `completed`, or `not_ready`
+(`reason: missing_import_people_csvs`, when no source file was readable), plus
+the template `failed`. The only distinction it makes is the `public_identifier`
+column — a person either has one or does not; the merge admits nobody and drops
+nobody.

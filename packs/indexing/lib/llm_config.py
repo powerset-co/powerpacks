@@ -12,7 +12,6 @@ import os
 from typing import Any
 
 from packs.indexing.lib.openai_usage_tiers import (
-    env_or_profile_int,
     openai_usage_tier_profile,
 )
 
@@ -22,6 +21,9 @@ DEFAULT_MODEL = "gpt-5.2"
 # 180-item role_ids enum (picks random values like investment_banker for
 # Instructor). gpt-5.1 classifies correctly.
 DEFAULT_ROLE_MODEL = "gpt-5.1"
+# Deep-context synthesis reads message bundles at volume; gpt-6-luna extracts
+# as well as gpt-5.2 on that job at a fraction of the price.
+DEFAULT_SYNTHESIS_MODEL = "gpt-6-luna"
 # Prod parity (combined_enrichment.py): reasoning calls cap at 2000.
 DEFAULT_MAX_COMPLETION_TOKENS = 2000
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
@@ -37,6 +39,8 @@ DEFAULT_CHECKPOINT_EVERY = int(_profile.get("paid_checkpoint_every", 512))
 
 # Known pricing per 1K tokens (USD).
 CHAT_MODEL_PRICES_PER_1K_USD: dict[str, dict[str, float]] = {
+    "gpt-6-luna": {"input": 0.00010, "output": 0.00050},
+    "gpt-5.6-luna": {"input": 0.00100, "output": 0.00600},
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},
     "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
     "gpt-5.1": {"input": 0.00125, "output": 0.01000},
@@ -51,8 +55,8 @@ CHAT_MODEL_PRICES_PER_1K_USD: dict[str, dict[str, float]] = {
 
 
 def is_reasoning_model(model: str) -> bool:
-    """Return True if *model* is a reasoning model (gpt-5.x, o1, o3)."""
-    return any(x in model.lower() for x in ["o1", "o3", "gpt-5", "5.1", "5.2"])
+    """Return True if *model* is a reasoning model (gpt-5.x, gpt-6.x, o1, o3)."""
+    return any(x in model.lower() for x in ["o1", "o3", "gpt-5", "gpt-6", "5.1", "5.2"])
 
 
 def openai_service_tier() -> str:

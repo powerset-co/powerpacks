@@ -21,18 +21,18 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa:
 
 # The converted nodes. Importing them IS the registration (and would already have
 # raised TypeError if any declaration were incomplete).
-import packs.ingestion.primitives.deep_context.apply_retargets  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.assemble_synthetic_profile  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.build_owner  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.build_parents  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.cluster_merge_candidates  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.collect_person_context  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.compose_dossier  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.persist_review_identities  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.prefetch_profiles  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.reconcile_deep_research  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.reconcile_linkedin  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.synthesize_person_context  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.realize.apply_retargets  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.enrich.synthetic.assemble  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.shared.build_owner  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.merge_candidates.build_parents  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.collection.collect_person_context  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.synthesis.compose_dossier  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.realize.persist_review_identities  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.enrich.profiles.prefetch  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.enrich.research_reconcile.reconcile_deep_research  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.synthesis.synthesize_person_context  # noqa: E402,F401
 import packs.ingestion.primitives.discover.gmail.discover  # noqa: E402,F401
 import packs.ingestion.primitives.discover.messages.discover  # noqa: E402,F401
 import packs.ingestion.primitives.enrich.enrich_people  # noqa: E402,F401
@@ -71,9 +71,7 @@ def _scopes_intersect(first: Artifact, second: Artifact) -> bool:
     are compared as STRINGS — `owns_rows_where` is a declaration and this checker
     never evaluates it — so two writers naming the same slice still conflict."""
     rows_intersect = (
-        _claims_all_rows(first)
-        or _claims_all_rows(second)
-        or first.owns_rows_where == second.owns_rows_where
+        _claims_all_rows(first) or _claims_all_rows(second) or first.owns_rows_where == second.owns_rows_where
     )
     columns_intersect = (
         _claims_all_columns(first)
@@ -112,7 +110,7 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
     schema_mismatches: list[dict[str, Any]] = []
     for path, declared in producers.items():
         for index, (name, item) in enumerate(declared):
-            for other_name, other in declared[index + 1:]:
+            for other_name, other in declared[index + 1 :]:
                 overlap = sorted(set(item.owns_columns) & set(other.owns_columns))
                 if _scopes_intersect(item, other):
                     if overlap:
@@ -121,59 +119,68 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
                         reason = "two writers own the same row slice"
                     else:
                         reason = "a writer claims the whole file"
-                    two_writer_conflicts.append({
-                        "path": path,
-                        "nodes": [name, other_name],
-                        "overlapping_columns": overlap,
-                        "reason": reason,
-                    })
+                    two_writer_conflicts.append(
+                        {
+                            "path": path,
+                            "nodes": [name, other_name],
+                            "overlapping_columns": overlap,
+                            "reason": reason,
+                        }
+                    )
                 if item.row_model is not other.row_model:
-                    schema_mismatches.append({
-                        "path": path,
-                        "nodes": [name, other_name],
-                        "reason": "declared with two different row models",
-                    })
+                    schema_mismatches.append(
+                        {
+                            "path": path,
+                            "nodes": [name, other_name],
+                            "reason": "declared with two different row models",
+                        }
+                    )
     for node in nodes:
         for item in (*node.inputs, *node.outputs):
             if item.row_model is None:
                 continue
             unknown = [column for column in item.owns_columns if column not in item.row_model.columns()]
             if unknown:
-                schema_mismatches.append({
-                    "path": item.path,
-                    "nodes": [node.name],
-                    "reason": f"owns columns absent from {item.row_model.__name__}: {unknown}",
-                })
+                schema_mismatches.append(
+                    {
+                        "path": item.path,
+                        "nodes": [node.name],
+                        "reason": f"owns columns absent from {item.row_model.__name__}: {unknown}",
+                    }
+                )
 
     edges = {
-        node.name: sorted({
-            name
-            for item in node.inputs
-            for name in (
-                [producer for producer, _artifact in producers.get(item.path, [])]
-                + ([manifest_producers[item.path]] if item.path in manifest_producers else [])
-            )
-            if name != node.name
-        })
+        node.name: sorted(
+            {
+                name
+                for item in node.inputs
+                for name in (
+                    [producer for producer, _artifact in producers.get(item.path, [])]
+                    + ([manifest_producers[item.path]] if item.path in manifest_producers else [])
+                )
+                if name != node.name
+            }
+        )
         for node in nodes
     }
     # Cycle detection excludes `feedback=True` writes (the persist stage's
     # directory.csv slice feeds the NEXT realization of the importers/merge —
     # the one deliberate loop). Everything else about the edge stays scored.
     forward_producers = {
-        path: [name for name, item in declared if not item.feedback]
-        for path, declared in producers.items()
+        path: [name for name, item in declared if not item.feedback] for path, declared in producers.items()
     }
     forward_edges = {
-        node.name: sorted({
-            name
-            for item in node.inputs
-            for name in (
-                forward_producers.get(item.path, [])
-                + ([manifest_producers[item.path]] if item.path in manifest_producers else [])
-            )
-            if name != node.name
-        })
+        node.name: sorted(
+            {
+                name
+                for item in node.inputs
+                for name in (
+                    forward_producers.get(item.path, [])
+                    + ([manifest_producers[item.path]] if item.path in manifest_producers else [])
+                )
+                if name != node.name
+            }
+        )
         for node in nodes
     }
     return {

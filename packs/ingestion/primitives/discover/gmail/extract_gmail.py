@@ -151,7 +151,7 @@ def linkedin_resolution_queue_rows(rows: Iterable[Any]) -> list[dict[str, Any]]:
     Accepts the store's dict rows or already-typed `MsgvaultContactRow` values.
     Single home for this shape: `write_msgvault_artifacts` emits it as
     `linkedin_resolution_queue.csv`, and
-    `deep_context/build_email_context.py` imports it to re-derive the same
+    `deep_context/collection/email_context.py` imports it to re-derive the same
     candidate set."""
     queue: list[dict[str, Any]] = []
     for row in rows:
@@ -210,9 +210,25 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
             if account in seen_accounts:
                 continue
             seen_accounts.add(account)
-            account_rows.append({"account_id": f"msgvault:{short_hash(account, 12)}", "account_email": account, "provider": "gmail", "source": "msgvault", "added_at": discovered_at})
+            account_rows.append(
+                {
+                    "account_id": f"msgvault:{short_hash(account, 12)}",
+                    "account_email": account,
+                    "provider": "gmail",
+                    "source": "msgvault",
+                    "added_at": discovered_at,
+                }
+            )
     if account_email and account_email not in seen_accounts:
-        account_rows.append({"account_id": f"msgvault:{short_hash(account_email, 12)}", "account_email": account_email, "provider": "gmail", "source": "msgvault", "added_at": discovered_at})
+        account_rows.append(
+            {
+                "account_id": f"msgvault:{short_hash(account_email, 12)}",
+                "account_email": account_email,
+                "provider": "gmail",
+                "source": "msgvault",
+                "added_at": discovered_at,
+            }
+        )
     upserts: dict[str, dict[str, int]] = {}
     upserts["accounts_csv"] = CsvIO.upsert_dict_rows(accounts_path, ACCOUNT_COLUMNS, account_rows, ["account_email"])
 
@@ -273,12 +289,20 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "sample_calendar_titles": "[]",
     } for contact in filtered]
     resolution_queue_rows = linkedin_resolution_queue_rows(filtered)
-    people_rows = people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)])
+    people_rows = people_rows_from_msgvault(
+        filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)]
+    )
 
     upserts["gmail_threads_csv"] = CsvIO.upsert_dict_rows(threads_path, THREAD_COLUMNS, threads_rows, ["email"])
-    upserts["gmail_contacts_aggregated_csv"] = CsvIO.upsert_dict_rows(aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"])
-    upserts["targeted_emails_csv"] = CsvIO.upsert_dict_rows(targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"])
-    upserts["linkedin_resolution_queue_csv"] = CsvIO.upsert_dict_rows(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"])
+    upserts["gmail_contacts_aggregated_csv"] = CsvIO.upsert_dict_rows(
+        aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"]
+    )
+    upserts["targeted_emails_csv"] = CsvIO.upsert_dict_rows(
+        targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"]
+    )
+    upserts["linkedin_resolution_queue_csv"] = CsvIO.upsert_dict_rows(
+        resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"]
+    )
     upserts["people_csv"] = CsvIO.upsert_dict_rows(people_path, PEOPLE_COLUMNS, people_rows, ["primary_email"])
 
     existing_manifest = GmailManifestResume.from_document(read_json(manifest_path, {}) or {})
@@ -325,7 +349,13 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         },
         "schema_reference": {
             "msgvault_tables": ["sources", "participants", "messages", "message_recipients"],
-            "key_fields": ["participants.email_address", "participants.display_name", "message_recipients.display_name", "messages.sent_at", "sources.identifier"],
+            "key_fields": [
+                "participants.email_address",
+                "participants.display_name",
+                "message_recipients.display_name",
+                "messages.sent_at",
+                "sources.identifier",
+            ],
         },
     }
     write_json(manifest_path, manifest)
@@ -405,17 +435,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Gmail discovery engine: msgvault metadata -> local network artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sources = sub.add_parser("msgvault-accounts", aliases=["msgvault-sources"], help="List Gmail source accounts in a local msgvault SQLite archive")
-    sources.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
+    sources = sub.add_parser(
+        "msgvault-accounts",
+        aliases=["msgvault-sources"],
+        help="List Gmail source accounts in a local msgvault SQLite archive",
+    )
+    sources.add_argument(
+        "--db",
+        default=str(DEFAULT_MSGVAULT_DB),
+        help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)",
+    )
 
-    msgvault = sub.add_parser("msgvault", aliases=["import-msgvault"], help="Import Gmail contact metadata from a local msgvault SQLite archive")
-    msgvault.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
+    msgvault = sub.add_parser(
+        "msgvault",
+        aliases=["import-msgvault"],
+        help="Import Gmail contact metadata from a local msgvault SQLite archive",
+    )
+    msgvault.add_argument(
+        "--db",
+        default=str(DEFAULT_MSGVAULT_DB),
+        help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)",
+    )
     msgvault.add_argument("--account-email", default="", help="Optional Gmail source account filter")
     msgvault.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     msgvault.add_argument("--limit", type=int)
-    msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
-    msgvault.add_argument("--exclude-label", action="append", default=[], help="Exclude messages with this msgvault/Gmail label name; may be repeated")
-    msgvault.add_argument("--include-category-mail", action="store_true", help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates")
+    msgvault.add_argument(
+        "--include-automated", action="store_true", help="Include noreply/automated service addresses"
+    )
+    msgvault.add_argument(
+        "--exclude-label",
+        action="append",
+        default=[],
+        help="Exclude messages with this msgvault/Gmail label name; may be repeated",
+    )
+    msgvault.add_argument(
+        "--include-category-mail",
+        action="store_true",
+        help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates",
+    )
 
     return parser
 

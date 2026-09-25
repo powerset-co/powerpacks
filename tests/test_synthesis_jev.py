@@ -1,149 +1,298 @@
 """Worth tagging reuses paid synthesis and never sends worth back to GPT."""
+from __future__ import annotations
+
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-from packs.ingestion.primitives.deep_context import synthesize_person_context as synth
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow,
+    OwnerContextRow,
+    ParentRow,
+    PersonRow,
+)
+from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.shared import openai_responses
+from packs.ingestion.primitives.deep_context.synthesis import (
+    prompting,
+    runner,
+    selection,
+)
+from packs.ingestion.primitives.deep_context.synthesis.synthesize_person_context import (
+    SynthesizePersonContext,
+)
+from deep_context_sqlite_test_helpers import message_payload
+
+
+BUNDLE = {
+    "person_id": "p1",
+    "full_name": "Jordan Bravo",
+    "source_channels": ["gmail_msgvault"],
+    "messages": [
+        message_payload(
+            "Ready.",
+            channel="gmail",
+            at="2026-01-02T03:04:05Z",
+            subject="Launch",
+        )
+    ],
+}
 
 
 class SynthesisJevTests(unittest.TestCase):
-    def test_gpt_prompt_and_schema_do_not_judge_worth(self):
-        self.assertNotIn("network_worth", synth.SYSTEM_PROMPT)
-        self.assertNotIn("network_worth", synth.FACT_SCHEMA["properties"])
-        self.assertNotIn("WORTH SOURCE POLICY", synth.render_batch({}, [], None))
+    def test_gpt_prompt_and_schema_do_not_judge_worth(self) -> None:
+        self.assertNotIn("network_worth", prompting.SYSTEM_PROMPT)
+        self.assertNotIn("network_worth", prompting.FACT_SCHEMA["properties"])
+        bundle = CollectionBundle.from_payload(BUNDLE)
+        self.assertNotIn(
+            "WORTH SOURCE POLICY",
+            prompting.render_batch(bundle, list(bundle.messages), None),
+        )
 
-    def test_cached_maybe_and_old_facts_never_trigger_gpt(self):
+    def test_only_untagged_or_uncached_saved_facts_are_tagging_targets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            raw, facts = root / "raw", root / "facts"
-            raw.mkdir()
-            facts.mkdir()
-            bundle = raw / "p1.json"
-            bundle.write_text(json.dumps({"person_id": "p1", "messages": [{"text": "Hello"}]}))
-            (facts / "p1.jsonl").write_text(json.dumps({
-                "synthesis_version": "previous-paid-version",
-                "facts": {"canonical_name": "Jordan Bravo", "network_worth": {"decision": "maybe"}},
-            }) + "\n")
-            self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id=""), [])
-            self.assertEqual(synth.pending_target_paths(raw, facts, force=True, person_id=""), [bundle])
+            node, database = self._node(root)
+            path = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
+            owner = {"name": "Mailbox Owner"}
+            bundles = selection.effective_parent_bundles(database)
 
-    def _node(self, root, **kwargs):
-        return synth.SynthesizePersonContext(raw_dir=root / "raw", out_dir=root / "facts",
-                                            review_csv=root / "review.csv", no_owner=True,
-                                            concurrency=1, **kwargs)
+            with patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+            ):
+                # Untagged facts are always a tagging target, even when the
+                # request is already cached.
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
+                tagged = json.loads(path.read_text(encoding="utf-8"))
+                tagged["facts"]["labels"] = {"is_professional": 0.9}
+                path.write_text(json.dumps(tagged) + "\n", encoding="utf-8")
+                # Saved labels + a cached request: nothing to redo.
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [])
+            with patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}
+            ):
+                # Saved labels but a changed request (cache miss) relabels anyway.
+                self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner), [("p1", path.resolve())])
 
-    def _write_facts(self, root):
-        (root / "facts").mkdir()
-        path = root / "facts" / "p1.jsonl"
-        path.write_text(json.dumps({"synthesis_version": "old", "usage": {"input_tokens": 400},
-                                    "facts": {"canonical_name": "Jordan Bravo", "network_worth": {"decision": "maybe"}}}) + "\n")
-        return path
-
-    def _answer(self):
-        return {"network_worth": {"decision": "yes", "reason": "professional context"},
-                "labels": {"friend": 0.9},
-                "usage": {"input_tokens": 200, "output_tokens": 50, "cached": False}}
-
-    def test_existing_facts_are_tagged_without_gpt_and_only_once(self):
-        from unittest.mock import AsyncMock, patch
+    def test_tagging_reads_the_projected_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            path = self._write_facts(root)
-            (root / "raw").mkdir()
-            (root / "raw" / "manifest.json").write_text('{"status": "completed"}')
-            with patch.object(synth.jev_worth, "classify", AsyncMock(return_value=self._answer())) as classify, \
-                    patch.object(synth, "make_async_client", side_effect=AssertionError("must reuse GPT facts")), \
-                    patch.object(synth, "load_env"), \
-                    patch.object(synth.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}):
-                result = self._node(root).execute()
-                self._node(root).execute()
+            node, database = self._node(root)
+            path = root / "facts" / "renamed.jsonl"
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(json.dumps({"facts": {"canonical_name": "Jordan Bravo"}}) + "\n", encoding="utf-8")
+            project_parent_fact(database, path, "p1")
+            bundles = selection.effective_parent_bundles(database)
+
+            with patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+            ):
+                # The path comes from the projected artifact, not from the parent id.
+                self.assertEqual(
+                    runner._tagging_paths(database, node.config, bundles, {"name": "Mailbox Owner"}),
+                    [("p1", path.resolve())],
+                )
+
+    def test_tagging_ignores_stale_and_missing_fact_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, database = self._node(root)
+            current = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
+            self._mark_facts_cached(root, node)
+            stale = root / "facts" / "merged-away.jsonl"
+            stale.write_text(json.dumps({"facts": {"canonical_name": "Merged Away"}}) + "\n")
+            database.project_rows((ParentRow("p2", "p2"), PersonRow("person-2", "p2")))
+            missing = root / "facts" / "p2.jsonl"
+            missing.write_text(json.dumps({"facts": {"canonical_name": "Missing File"}}) + "\n")
+            project_parent_fact(database, missing, "p2")
+            missing.unlink()
+
+            with patch.object(
+                runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
+            ) as classify, patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+            ):
+                self.assertEqual(node.estimate()["jev_people"], 1)
+                result = node.execute()
+
             classify.assert_awaited_once()
-            record = json.loads(path.read_text())
+            self.assertEqual(result.jev.people, 1)
+            self.assertEqual(classify.await_args.kwargs["facts"]["canonical_name"], "Jordan Bravo")
+            self.assertTrue(stale.exists())
+            self.assertFalse(missing.exists())
+            self.assertEqual(json.loads(current.read_text())["facts"]["labels"], {"is_professional": 0.9})
+
+    def test_existing_facts_are_tagged_without_gpt_and_only_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, database = self._node(root)
+            path = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
+            self._mark_facts_cached(root, node)
+
+            with patch.object(
+                openai_responses, "AsyncOpenAI", side_effect=AssertionError("must reuse GPT facts")
+            ), patch.object(
+                runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
+            ) as classify, patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+            ):
+                result = node.execute()
+                node.execute()
+            classify.assert_awaited_once()
+            record = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(record["facts"]["network_worth"]["decision"], "yes")
-            self.assertEqual(record["facts"]["labels"], {"friend": 0.9})
-            self.assertEqual(record["usage"]["input_tokens"], 400)
-            self.assertEqual(json.loads(path.with_suffix(".jsonl.bkup").read_text())["facts"]["network_worth"]["decision"], "maybe")
-            self.assertEqual(result.jev["people"], 1)
+            self.assertEqual(record["facts"]["labels"], {"is_professional": 0.9})
+            backup = json.loads(path.with_suffix(".jsonl.bkup").read_text(encoding="utf-8"))
+            self.assertEqual(backup["facts"], {"canonical_name": "Jordan Bravo"})
+            self.assertEqual(result.jev.people, 1)
             self.assertGreater(result.estimated_cost_usd, 0)
+            # The share stage reads labels from SQLite's facts.facts_json, not the
+            # jsonl, so tagging must re-project each record.
+            facts_json = database.query(
+                "SELECT facts_json, machine_worth FROM facts WHERE subject_key='p1'"
+            )[0]
+            self.assertEqual(json.loads(facts_json["facts_json"])["labels"], {"is_professional": 0.9})
+            self.assertEqual(facts_json["machine_worth"], "yes")
 
-    def test_jev_failure_preserves_new_gpt_checkpoint_for_retry(self):
-        from unittest.mock import AsyncMock, patch
+    def test_jev_failure_preserves_new_gpt_checkpoint_for_retry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "raw").mkdir()
-            (root / "raw" / "p1.json").write_text(json.dumps({
-                "person_id": "p1", "messages": [{"text": "Work project", "channel": "gmail"}],
-            }))
-            client = AsyncMock()
-            with patch.object(synth, "make_async_client", return_value=client), \
-                    patch.object(synth, "load_env"), \
-                    patch.object(synth, "_call_one", AsyncMock(return_value=(
-                        {"canonical_name": "Jordan Bravo", "confidence": 0.95},
-                        {"input_tokens": 100, "output_tokens": 50, "reasoning_tokens": 0}, ""))) as gpt, \
-                    patch.object(synth.jev_worth, "classify", AsyncMock(side_effect=RuntimeError("JEV unavailable"))):
+            node, _ = self._node(root, bundle=None)
+            path = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
+            self.assertFalse(path.with_suffix(".jsonl.bkup").exists())
+
+            with patch.object(
+                runner.jev_worth, "classify", AsyncMock(side_effect=RuntimeError("JEV unavailable"))
+            ):
                 with self.assertRaisesRegex(RuntimeError, "JEV unavailable"):
-                    self._node(root).execute()
-                gpt.assert_awaited_once()
-            checkpoint = json.loads((root / "facts" / "p1.jsonl").read_text())
-            self.assertEqual(checkpoint["facts"]["canonical_name"], "Jordan Bravo")
-            with patch.object(synth, "make_async_client", side_effect=AssertionError("must reuse GPT facts")), \
-                    patch.object(synth, "load_env"), \
-                    patch.object(synth.jev_worth, "classify", AsyncMock(return_value=self._answer())):
-                self._node(root).execute()
+                    node.execute()
 
-    def test_rejudge_only_replays_jev_and_preserves_human_worth(self):
-        from unittest.mock import AsyncMock, patch
-        from packs.ingestion.primitives.deep_context.review_store import load_override_rows, write_override_rows, OVERRIDE_COLUMNS
+            # A failed label request never rewrites or hides the GPT checkpoint.
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8"))["facts"]["canonical_name"],
+                "Jordan Bravo",
+            )
+            self.assertFalse(path.with_suffix(".jsonl.bkup").exists())
+
+    def test_estimate_includes_facts_only_tagging_without_gpt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            path = self._write_facts(root)
-            write_override_rows(root / "review.csv", {"p1": {
-                **dict.fromkeys(OVERRIDE_COLUMNS, ""), "public_identifier": "p1", "person_id": "p1", "network_worth": "no",
-            }})
-            with patch.object(synth, "make_async_client", side_effect=AssertionError("must reuse GPT facts")), \
-                    patch.object(synth, "load_env"), \
-                    patch.object(synth.jev_worth, "classify", AsyncMock(return_value=self._answer())) as classify:
-                self._node(root).execute()
-                timestamp = json.loads(path.read_text())["updated_at"]
-                self._node(root, rejudge=True).execute()
-            self.assertEqual(classify.await_count, 2)
-            self.assertEqual(classify.await_args.kwargs["reference_date"], timestamp[:10])
-            row = load_override_rows(root / "review.csv")["p1"]
-            self.assertEqual(row["network_worth"], "no")
-            self.assertEqual(row["llm_worth"], "yes")
+            node, _ = self._node(root)
+            self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
+            self._mark_facts_cached(root, node)
 
-    def test_estimate_includes_facts_only_tagging_without_gpt(self):
-        from unittest.mock import patch
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self._write_facts(root)
-            with patch.object(synth.jev_worth, "estimate", return_value={"cost_usd": 0.01, "cached": False}):
-                estimate = self._node(root).estimate()
+            with patch.object(
+                runner.jev_worth, "estimate", return_value={"cost_usd": 0.01, "cached": False}
+            ):
+                estimate = node.estimate()
             self.assertEqual(estimate["people"], 0)
             self.assertEqual(estimate["jev_people"], 1)
             self.assertEqual(estimate["estimated_cost_floor_usd"], 0.01)
             self.assertEqual(estimate["estimated_cost_ceiling_usd"], 0.01)
 
-    def test_changed_request_relabels_even_with_saved_labels(self):
-        from unittest.mock import AsyncMock, patch
+    def test_changed_request_relabels_even_with_saved_labels(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            path = self._write_facts(root)
-            record = json.loads(path.read_text())
-            record["facts"]["labels"] = {"friend": 0.1}
-            path.write_text(json.dumps(record) + "\n")
-            with patch.object(synth.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}), \
-                    patch.object(synth.jev_worth, "classify", AsyncMock(return_value=self._answer())) as classify, \
-                    patch.object(synth, "load_env"), \
-                    patch.object(synth, "make_async_client", side_effect=AssertionError("must reuse GPT facts")):
-                self._node(root).execute()
-            classify.assert_awaited_once()
-            self.assertEqual(json.loads(path.read_text())["facts"]["labels"]["friend"], 0.9)
+            node, _ = self._node(root)
+            path = self._write_facts(
+                root,
+                facts={"canonical_name": "Jordan Bravo", "labels": {"is_professional": 0.1}},
+            )
+            self._mark_facts_cached(root, node)
 
-    def test_rejudge_does_not_synthesize_unprocessed_raw_bundle(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "raw").mkdir()
-            (root / "raw" / "p1.json").write_text('{"person_id": "p1", "messages": []}')
-            self.assertEqual(self._node(root, rejudge=True)._plan().paths, [])
+            with patch.object(
+                runner.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}
+            ), patch.object(
+                runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
+            ) as classify:
+                node.execute()
+            classify.assert_awaited_once()
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8"))["facts"]["labels"],
+                {"is_professional": 0.9},
+            )
+
+    # --- fixtures ---------------------------------------------------------
+
+    def _answer(self) -> dict:
+        return {
+            "network_worth": {"decision": "yes", "reason": "professional context"},
+            "labels": {"is_professional": 0.9},
+            "usage": {"input_tokens": 200, "output_tokens": 50, "cached": False},
+        }
+
+    def _node(self, root: Path, *, bundle: dict | None = BUNDLE):
+        database = Db(root / "deep-context.sqlite")
+        rows = [
+            OwnerContextRow(
+                "owner",
+                json.dumps({"name": "Mailbox Owner"}),
+                str(root / "owner.json"),
+                "0" * 64,
+            ),
+            ParentRow("p1", "p1"),
+            PersonRow("person-1", "p1"),
+        ]
+        if bundle is not None:
+            rows.append(
+                ArtifactRow(
+                    "source-bundle:p1",
+                    "source_bundle",
+                    "p1",
+                    str(root / "raw" / "p1.json"),
+                    "1" * 64,
+                    "projected",
+                    payload_json=json.dumps(bundle),
+                )
+            )
+        database.project_rows(tuple(rows))
+        (root / "raw").mkdir(exist_ok=True)
+        node = SynthesizePersonContext(
+            db=database,
+            raw_dir=root / "raw",
+            out_dir=root / "facts",
+            concurrency=1,
+        )
+        return node, database
+
+    def _write_facts(
+        self,
+        root: Path,
+        *,
+        facts: dict,
+        artifact: bool = True,
+    ) -> Path:
+        facts_dir = root / "facts"
+        facts_dir.mkdir(exist_ok=True)
+        path = facts_dir / "p1.jsonl"
+        path.write_text(json.dumps({"synthesis_version": "old", "facts": facts}) + "\n", encoding="utf-8")
+        if artifact:
+            self._project(root, path)
+        return path
+
+    def _mark_facts_cached(self, root: Path, node) -> None:
+        """Rewrite the record so selection's fingerprint/version check skips GPT."""
+        path = root / "facts" / "p1.jsonl"
+        bundle = next(iter(selection.effective_parent_bundles(node.db).values()))
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["synthesis_version"] = prompting.SYNTHESIS_VERSION
+        record["input_evidence_fingerprint"] = prompting.input_evidence_fingerprint(
+            bundle,
+            system_prompt=selection.build_system_prompt(node.db),
+            chunk_chars=node.config.chunk_chars,
+            max_batches=node.config.max_batches,
+        )
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        self._project(root, path)
+
+    def _project(self, root: Path, path: Path) -> None:
+        database = Db(root / "deep-context.sqlite")
+        project_parent_fact(database, path, "p1")
+
+
+if __name__ == "__main__":
+    unittest.main()

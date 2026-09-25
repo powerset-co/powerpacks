@@ -100,15 +100,14 @@ sizes if the total goes over.
 ### `$deep-context` sessions
 
 The review UI already files pane-level worth/retarget feedback automatically
-(`review_web/feedback.py`); use `$feedback` for session-level issues the panes
+(`review/feedback.py`); use `$feedback` for session-level issues the panes
 cannot express (a bad merge run, a stuck stage, systematic wrong-LinkedIn
 patterns). Deep-context specifics:
 
 - Identifiers: parent slug + `person_ids`, candidate LinkedIn slugs/URLs with
   their confidences, machine/human worth DECISIONS and confidences.
-- Artifacts: `.powerpacks/deep-context/index.json` and the stage
-  `manifest.json` files (facts / parents / reconcile) — counts, statuses, and
-  slugs by construction.
+- Artifacts: canonical SQLite identifiers and the stage `manifest.json` files
+  (facts / parents / reconcile) — counts, statuses, and slugs by construction.
 - Still never: dossier markdown, facts text, `llm_worth_reason` / judge reason
   prose — all synthesized from message bodies.
 

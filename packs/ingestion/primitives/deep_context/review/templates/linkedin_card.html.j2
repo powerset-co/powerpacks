@@ -1,0 +1,47 @@
+{% import '_components.html.j2' as ui with context -%}
+{%- if candidates | length > 1 -%}
+<article class='decision-card identity-card identity-card-multi' data-card data-parent='{{ parent.slug }}'>
+  {{ ui.person_menu(candidates[0].row_key, parent.slug) }}
+  {% set body -%}
+  {% if failure_note %}<div class='reresearch-failed'>Re-research failed: {{ failure_note }}</div>{% endif %}
+  {{ ui.profile(parent, candidates[0], true, person_only=true) }}
+  <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
+  <ul class='linkedin-options'>
+    {%- for candidate in candidates %}
+    {{ ui.option(candidate, parent) }}
+    {%- endfor %}
+  </ul>
+  {%- endset %}
+  {{ ui.scroll_region(body) }}
+  <div class='identity-decision'>
+    <div class='binary-actions'>
+      <button type='button' class='button button-outline' data-open-guidance
+              aria-expanded='false'>None of these</button>
+      <button class='button button-outline' data-decide='detach'
+              data-toast='Skipped' data-pub='{{ candidates[0].row_key }}'
+              data-parent='{{ parent.slug }}'>Skip</button>
+    </div>
+    {{ ui.guidance_form(candidates[0], parent.slug) }}
+  </div>
+</article>
+{%- else -%}
+{%- set candidate = candidates[0] -%}
+<article class='decision-card identity-card' data-card data-parent='{{ parent.slug }}'>
+  {{ ui.person_menu(candidate.row_key, parent.slug) }}
+  {% set body -%}
+  {% if failure_note %}<div class='reresearch-failed'>Re-research failed: {{ failure_note }}</div>{% endif %}
+  {{ ui.profile(parent, candidate, true) }}
+  {%- endset %}
+  {{ ui.scroll_region(body) }}
+  <div class='identity-decision'>
+    <div class='question'>Is this the right profile? Or <button type='button' class='skip-link' data-skip-link>Skip</button>?</div>
+    <div class='binary-actions'>
+      <button class='button button-outline' data-open-guidance
+              aria-expanded='false'>No</button>
+      <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}'
+              data-parent='{{ parent.slug }}'>Use this profile</button>
+    </div>
+    {{ ui.guidance_form(candidate, parent.slug) }}
+  </div>
+</article>
+{%- endif -%}

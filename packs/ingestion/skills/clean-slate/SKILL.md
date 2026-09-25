@@ -8,6 +8,7 @@ Created: 2026-07-19
 Changelog:
 - 2026-07-19: New skill wrapping bin/clean-slate (built 2026-07-19 as the
   pipeclean reset; previously only routed inside $deep-context).
+- 2026-09-25: `reconcile/verdicts.*` labelled legacy migration input.
 -->
 
 # clean-slate
@@ -69,18 +70,22 @@ Preserved in place, keyed by stable identifiers — the reason a full re-walk
 costs ~nothing:
 
 - `deep-context/facts/` (OpenAI synthesis; keyed by contact identity)
-- `deep-context/merge-verdicts.csv` (cluster pair judgments)
-- `deep-context/reconcile/verdicts.*` (LinkedIn judge, keyed by pub)
+- `deep-context/deep-context.sqlite` (canonical human decisions and the
+  `merge_verdicts` paid pair-judgment cache)
+- `deep-context/reconcile/verdicts.*` (legacy migration input: LinkedIn judge,
+  keyed by pub; drop once no supported install predates powerpacks v1.19.0)
 - `deep-context/reconcile/deep-research/` (Parallel results)
 - `network-import/import/linkedin/` (source import + enrichment caches)
 - `network-import/profile_cache_v2/` (RapidAPI), owner bio, message stores,
   `logbook/`, `memory/`, `ingestion/` wiring
 
 Scrubbed (all derived; regenerates free on the re-walk): `merged/`,
-`directory.csv`, `overrides/` (review decisions incl. mirrors),
+`directory.csv`, `overrides/` (file mirrors; canonical human decisions remain
+in SQLite),
 `import/gmail` + `import/messages*`, `discover/`, `search-index/`, the
-deep-context index/parents/dossiers/merge-candidates/raw/review state, and
-reconcile summaries.
+deep-context index/parents/dossiers/merge-candidates/raw/review state, the
+derived share export (`person_labels` + `share`; the human's `person_tags` stay),
+and reconcile summaries.
 
 Never run `--apply` without showing the dry run and getting an explicit yes
 in this conversation. Never delete anything to "clean up further" — moving to

@@ -1,5 +1,11 @@
 # iMessage and WhatsApp import pipeline
 
+<!--
+Changelog:
+- 2026-09-25: the import floor is back; unnamed, message-less, and low-signal
+  contacts are skipped and counted on the manifest.
+-->
+
 `$import-messages` extracts local contact metadata and writes source candidates
 to one `people.csv`. Deep Context owns matching, worth review, person merging,
 enrichment, and indexing.
@@ -65,10 +71,13 @@ interrupted sync. No additional state store is needed.
 
 ## Importing
 
-Every contact with a usable phone or email becomes a canonical candidate row.
-Unnamed, contact-only, and group-only entries are retained. The importer makes
-no identity or worth decisions and needs no people catalog, review file, or
-import confirmation.
+A contact becomes a canonical candidate row when it clears the floor
+(`imports/messages/util.contact_floor_reason`): a phone with 10 to 15 digits or
+an email, a researchable name (not empty, not the phone number, at least two
+tokens), and at least one message. Skipped contacts are counted by
+reason on the manifest's `skipped` block. The importer makes no identity or
+worth decisions and needs no people catalog, review file, or import
+confirmation.
 
 `.powerpacks/network-import/import/messages/people.csv` uses the canonical
 people schema, with `candidate:phone:` or `candidate:email:` IDs and no LinkedIn

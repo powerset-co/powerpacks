@@ -2,7 +2,13 @@
 
 Created: 2026-09-24
 
-Change log:
+Changelog:
+- 2026-09-25: point the parent-id map and human worth at the SQLite `people` and
+  `parents` tables.
+- 2026-09-25 (SQLite store): labels, the share list, and human tags became tables
+  in `.powerpacks/deep-context/deep-context.sqlite` (`person_labels`, `share`,
+  `person_tags`); `labels.csv` / `share.csv` / `tags.csv` are gone, and
+  `share/tags.py` became `share/store.py`.
 - 2026-09-24: first version — labels (Jev), tags (human), share list, upload to
   Powerset (TurboPuffer + Postgres). Written before the code; edit as the code lands.
 - 2026-09-24 (node convention): JEV answers the label questions inside
@@ -61,7 +67,7 @@ Local:
   keys `aleph_companies_v1` by `urn:harmonic:company:<n>` — **the two never collide** (see
   Open).
 - Deep-context leaves per person are keyed by **parent id** (`parent-<12hex>`), not the
-  people.csv id; `review_store.parent_ids_by_person(index.json)` is the one map:
+  people.csv id; the SQLite `people` table (`person_id` → `parent_id`) is the one map:
   `deep-context/facts/<parent_id>.jsonl` (strict schema, `synthesize_person_context.py:253-337`;
   `relationship_category` present in only 14/552 files, `is_owner` true in 0),
   `deep-context/dossiers/<slug>.md` and `parents/<slug>.md` (YAML front matter incl.
@@ -69,8 +75,8 @@ Local:
   (`direction: from_me|from_them|from_other`, a capped sample — body-free fields only may be
   used), `people.csv.interaction_counts/last_interaction`. The human/mirror worth row is
   keyed `parent-worth:<parent_id>`.
-- Human decisions live in `network-import/overrides/review.csv` (`review_store.py:40-77`);
-  human > machine (`worth_view.py`). Nothing named private/tag/label/warmth exists locally.
+- Human decisions live on the SQLite `parents` table (`human_worth*` columns);
+  human > machine (`db/worth_views.py`). Nothing named private/tag/label/warmth exists locally.
 - Jev/TypeSafe client `packs/search/primitives/llm_rerank_candidates/jev/client.py`:
   `POST https://api.typesafe.ai/v1/systemone`, model `jev-1.13.0`, question types
   `noul` (probability), `choice` (probabilities over named options), `score` (over ordinal
@@ -108,18 +114,19 @@ Cloud (production, read-only checks):
 
 1. **Worth produces labels; Share exports them locally.** Worth persists machine
    `network_worth` and `labels` with the facts; its request cache lives under
-   `.powerpacks/deep-context/jev/`. Share writes `.powerpacks/share/labels.csv`,
-   human `tags.csv`, derived `share.csv`, and `manifest.json`.
+   `.powerpacks/deep-context/jev/`. Share writes the derived `person_labels` and
+   `share` tables, reads the human's `person_tags` table, and writes one run
+   manifest in `.powerpacks/share/manifest.json`.
 2. **JEV answers 34 share questions and 7 worth questions together.** A frozen
    mapping trained only on original machine decisions produces worth. Inputs are
    synthesized facts, a facts-derived dossier/profile, message counts, and owner
    context. Old worth answers, old labels, LinkedIn enrichment, and raw message
    bodies are excluded. `synthesize --dry-run` estimates the uncached calls.
    Share makes no paid calls; LinkedIn-only people receive deterministic labels.
-3. **Human tags win.** `tags.csv` rows: `person_id, tags, note, updated_at`; tags are a
+3. **Human tags win.** `person_tags` rows: `person_id, tags, note, updated_at`; tags are a
    `|`-joined set from the same label vocabulary plus `private` and `share`. Machine never
-   writes `tags.csv`. The UI writes it through `share/tags.py:TagStore`; there is no `tag`
-   CLI.
+   writes `person_tags`. The UI writes it through `share/store.py:TagStore`; there is no
+   `tag` CLI.
 4. **Share follows worth; the labels only ask.** The share decision is
    `PersonEvidence.network_worth` — the effective worth the user already reviewed, human
    over machine. No JEV label shares or blocks anyone. A first-rule-wins
@@ -130,7 +137,7 @@ Cloud (production, read-only checks):
    uploaded until a human answers, in the UI, with a `private` or `share` tag.
    `confidential_dealings` is a label only — on this network it fired on 87 people, 50 of
    them recruiters.
-5. **`share.csv` is the contract between the two halves**, one row per `people.csv` row:
+5. **The `share` table is the contract between the two halves**, one row per `people.csv` row:
    `person_id, public_identifier, share (yes|no|confirm), reason, labels (|-joined active
    labels), source (human|machine), updated_at`. First rule wins, the rule name is the
    reason: `owner` → no, `human_private` → no, `human_share` → yes, `worth_no` → no,
@@ -139,7 +146,7 @@ Cloud (production, read-only checks):
    people.csv row — the upload reconciles the cloud to it, so a partial list would un-share
    the rest. Rows keyed by a `superseded_person_ids` member follow the surviving row.
 6. **Upload = reconcile, not append.** `packs/indexing/primitives/upload_powerset/` reads
-   `share.csv` + the DuckDB and makes the cloud state for THIS operator equal the share list:
+   the `share` table + the DuckDB and makes the cloud state for THIS operator equal the share list:
    - `persons`: upsert the shared people **that have a `public_identifier`** with the cloud
      pipeline's column list and the COALESCE turned around — `COALESCE(persons.col,
      EXCLUDED.col)`: the cloud owns a person it already has, a laptop only fills NULLs;
@@ -171,7 +178,7 @@ Cloud (production, read-only checks):
 7. **No new nouns in user-facing text**: label, tag, private, share, upload, hub = Powerset.
    No UI in this round.
 
-## Question set (labels.csv columns)
+## Question set (`person_labels` cells)
 
 Deterministic (no LLM): `cadence` (dormant >2y | stale >1y | occasional | regular | frequent,
 from counts + last_interaction), `recency_days`, `channels` (|-joined), `direction`
@@ -198,13 +205,13 @@ Jev — noul (probability columns): `is_family`, `is_close_friend`, `is_personal
 deterministic `direction` label is the same counts.)
 Derived: `flag` (which confirm rule fired, or empty).
 
-Threshold for a noul label to be "active" in `share.csv.labels`: p ≥ 0.6. Choice/score:
+Threshold for a noul label to be "active" in `share.labels`: p ≥ 0.6. Choice/score:
 argmax. All thresholds live in one table in `share/labels.py`.
 
 ## Files
 
 Agent A (share stage):
-- `packs/ingestion/primitives/share/{__init__,models,questions,evidence,labels,tags,share}.py`,
+- `packs/ingestion/primitives/share/{__init__,models,questions,evidence,labels,store,share_list,share}.py`,
   `share/README.md` (mermaid + file table), tests `tests/test_share_*.py`.
 - `packs/search/primitives/llm_rerank_candidates/jev/client.py`: lift `score_one` into a
   request-keyed `answer(request, *, output_dir, api_key, client, concurrency)` used by both
@@ -222,7 +229,7 @@ CLAUDE.md routing line, `packs/indexing/README.md` row.
 
 ## Verification (real surface)
 
-1. `bin/deep-context share` (free) → `labels.csv` + `share.csv`, 766 rows each; spot-check
+1. `bin/deep-context share` (free) → `person_labels` + `share`, 766 rows each; spot-check
    10 people by hand against their dossiers (family/homie/service correctly separated;
    `flag` fires on the obvious ones).
 2. The manifest's `share_yes` / `share_no` / `confirm` counts match the worth the review UI
