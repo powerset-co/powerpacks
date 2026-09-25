@@ -114,8 +114,9 @@ class ClusterMergeCandidates(Node):
         people, to_judge = survey.people, survey.to_judge
         verdicts = survey.initial_verdicts()
         usage = MergeUsage()
+        errors = 0
         if to_judge:
-            judged, usage = judge_pairs(
+            judged, usage, errors = judge_pairs(
                 to_judge,
                 model=self.model,
                 requested_effort=self.reasoning_effort,
@@ -141,7 +142,8 @@ class ClusterMergeCandidates(Node):
             people=len(people),
             pairs_total=len(survey.pairs),
             pairs_slam_dunk=len(survey.slam),
-            pairs_judged=len(to_judge),
+            pairs_judged=len(to_judge) - errors,
+            errors=errors,
             pairs_reused=len(survey.reused),
             candidate_pairs=len(confirmed),
             clusters=len(clusters),

@@ -12,8 +12,10 @@ import tempfile
 import unittest
 from csv import DictReader
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+import packs.ingestion.primitives.deep_context.merge_candidates.judge as judge
 import packs.ingestion.primitives.deep_context.merge_candidates.receipts as receipts
 from packs.ingestion.primitives.common.contact_fields import identifier_phones
 from packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates import ClusterMergeCandidates
@@ -49,6 +51,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     person_sig,
     survey_pairs,
 )
+from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIUsage
 
 
 def person(name, emails=(), extra_emails=(), phones=(), extra_phones=()):
@@ -410,6 +413,97 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertEqual(cached[0].signature, "eeadbe96795d2bec")
             self.assertEqual(cached[0].accepted, 1)
             self.assertEqual(payload.pairs_slam_dunk, 1)
+
+
+_SAME_PERSON = {
+    "same_person": True, "confidence": 0.9, "tone_toward_a": "casual",
+    "tone_toward_b": "casual", "tone_consistent": True, "reason": "same phone",
+}
+
+
+def scripted_caller(outcomes: list):
+    """Fake the OpenAI caller where judge.py looks it up; pop one outcome per call."""
+
+    class _ScriptedCaller:
+        calls = 0
+
+        def __init__(self, config) -> None:
+            self.usage = OpenAIUsage()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc) -> None:
+            return None
+
+        async def call(self, **_kwargs):
+            type(self).calls += 1
+            outcome = outcomes.pop(0) if outcomes else TimeoutError("timed out")
+            if isinstance(outcome, Exception):
+                raise outcome
+            return SimpleNamespace(payload=dict(outcome), usage=OpenAIUsage())
+
+    return _ScriptedCaller
+
+
+class TestFailedJudgeCall(unittest.TestCase):
+    def _node(self, root: Path) -> ClusterMergeCandidates:
+        db = Db(root / "deep-context.sqlite")
+        seed_person(
+            db, person_id="a", slug="jordan-alpha", name="Jordan Alpha",
+            facts_path=root / "a.jsonl", facts={}, phone="4155550100",
+        )
+        seed_person(
+            db, person_id="b", slug="casey-bravo", name="Casey Bravo",
+            facts_path=root / "b.jsonl", facts={}, phone="4155550100",
+        )
+        return ClusterMergeCandidates(
+            db=db,
+            dossier_dir=root,
+            out_csv=root / "merge-candidates.csv",
+            out_md=root / "merge-candidates.md",
+        )
+
+    def test_timeout_then_success_writes_one_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            caller = scripted_caller([TimeoutError("timed out"), _SAME_PERSON])
+
+            with mock.patch.object(judge, "OpenAIResponsesCaller", caller):
+                payload = node.run()
+
+            self.assertEqual(caller.calls, 2)
+            cached = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual(len(cached), 1)
+            self.assertEqual(cached[0].same_person, 1)
+            self.assertEqual(payload.pairs_judged, 1)
+            self.assertEqual(payload.errors, 0)
+
+    def test_persistent_failure_writes_no_verdict_and_is_judged_next_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            failing = scripted_caller([])
+
+            with mock.patch.object(judge, "OpenAIResponsesCaller", failing), \
+                    mock.patch("sys.stderr") as stderr:
+                payload = node.run()
+
+            self.assertEqual(failing.calls, 2)
+            self.assertEqual(canonical_snapshot(node.db).merge_verdicts, ())
+            self.assertEqual(payload.errors, 1)
+            self.assertEqual(payload.pairs_judged, 0)
+            self.assertIn("[cluster]", "".join(
+                str(call.args[0]) for call in stderr.write.call_args_list
+            ))
+
+            second = scripted_caller([_SAME_PERSON])
+            with mock.patch.object(judge, "OpenAIResponsesCaller", second):
+                payload = node.run()
+
+            self.assertEqual(second.calls, 1)
+            self.assertEqual(payload.pairs_reused, 0)
+            self.assertEqual(payload.pairs_judged, 1)
+            self.assertEqual(len(canonical_snapshot(node.db).merge_verdicts), 1)
 
 
 if __name__ == "__main__":

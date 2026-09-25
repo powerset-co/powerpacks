@@ -11,6 +11,7 @@ class ClusterMergeManifest(StageManifest):
     pairs_slam_dunk: int = 0
     pairs_judged: int = 0
     pairs_reused: int = 0
+    errors: int = 0
     candidate_pairs: int = 0
     clusters: int = 0
     confidence_threshold: float = 0.0

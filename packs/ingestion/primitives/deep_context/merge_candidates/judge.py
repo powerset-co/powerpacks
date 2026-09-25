@@ -1,7 +1,17 @@
-"""Prompt rendering and OpenAI judging for ambiguous identity pairs."""
+"""Prompt rendering and OpenAI judging for ambiguous identity pairs.
+
+A judge call that still fails after one immediate retry yields no verdict, so
+the pair is judged again on the next run; the failure is counted and reported
+on stderr.
+
+Changelog:
+- 2026-09-25: a failed call no longer becomes a cached "not same person, 0"
+  verdict; retry once, then leave the pair unjudged.
+"""
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import format_phone_digits
@@ -21,6 +31,7 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 
 JUDGE_SYSTEM = load_prompt("identity_merge_system")
 JUDGE_LLM = "llm"
+_JUDGE_RETRIES = 1
 JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -70,29 +81,30 @@ async def judge_pair(
     first: MergePerson,
     second: MergePerson,
 ) -> MergeJudgeResult:
-    try:
-        response = await caller.call(
-            system_prompt=JUDGE_SYSTEM,
-            user_prompt=judge_prompt(first, second),
-            schema=JUDGE_SCHEMA,
-            schema_name="same_person",
-            context="judge",
-        )
+    error = ""
+    for _attempt in range(1 + _JUDGE_RETRIES):
+        try:
+            response = await caller.call(
+                system_prompt=JUDGE_SYSTEM,
+                user_prompt=judge_prompt(first, second),
+                schema=JUDGE_SCHEMA,
+                schema_name="same_person",
+                context="judge",
+            )
+        except Exception as exc:  # noqa: BLE001 - an unjudged pair is retried next run
+            error = f"{type(exc).__name__}: {exc}"[:200]
+            continue
         return MergeJudgeResult(
             MergeDecision.from_payload(response.payload, judge=JUDGE_LLM),
             MergeUsage.from_payload(response.usage.as_dict()),
         )
-    except Exception as exc:  # noqa: BLE001 - SDK retries before result recording
-        return MergeJudgeResult(
-            MergeDecision.from_payload({}, judge=JUDGE_LLM),
-            MergeUsage(),
-            f"{type(exc).__name__}: {exc}"[:200],
-        )
+    return MergeJudgeResult(MergeDecision.from_payload({}, judge=JUDGE_LLM), MergeUsage(), error)
 
 
 def judge_pairs(pairs: list[MergePairCandidate], *, model: str,
                 requested_effort: str, requested_concurrency: int | None, timeout: int,
-                max_retries: int) -> tuple[list[MergePairVerdict], MergeUsage]:
+                max_retries: int) -> tuple[list[MergePairVerdict], MergeUsage, int]:
+    """Judge pairs; return verdicts for the successful ones, usage, and the failure count."""
     config = OpenAIResponsesConfig.resolve(
         model=model,
         effort=requested_effort,
@@ -102,6 +114,7 @@ def judge_pairs(pairs: list[MergePairCandidate], *, model: str,
     )
     usage = MergeUsage()
     verdicts: list[MergePairVerdict] = []
+    errors: list[str] = []
 
     async def driver() -> None:
         nonlocal usage
@@ -111,6 +124,9 @@ def judge_pairs(pairs: list[MergePairCandidate], *, model: str,
             )
         for pair, result in zip(pairs, results, strict=True):
             usage = usage + result.usage
+            if result.error:
+                errors.append(result.error)
+                continue
             verdicts.append(MergePairVerdict(
                 pair.first,
                 pair.second,
@@ -119,4 +135,10 @@ def judge_pairs(pairs: list[MergePairCandidate], *, model: str,
             ))
 
     asyncio.run(driver())
-    return verdicts, usage
+    if errors:
+        print(
+            f"[cluster] {len(errors)} judge call(s) failed; re-judged next run "
+            f"(last: {errors[-1]})",
+            file=sys.stderr,
+        )
+    return verdicts, usage, len(errors)
