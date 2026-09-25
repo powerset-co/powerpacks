@@ -289,11 +289,17 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
         )
     if status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
         # The button carries the estimate ("Approve $X"); no redundant
-        # paragraph above it.
+        # paragraph above it. Cached-only plans spend nothing, so their
+        # continue is not an approval and must not read like one.
+        label = (
+            f"Approve ${enrichment.estimated_usd:.2f}"
+            if enrichment.would_submit
+            else "Continue"
+        )
         return _render(
             "enrichment.html.j2",
             mode="approval",
-            approval_label=f"Approve ${enrichment.estimated_usd:.2f}",
+            approval_label=label,
             approval_detail="",
         )
     if status == "completed":

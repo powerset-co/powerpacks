@@ -409,8 +409,9 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
 - **People review completes** → the app builds the free preview
   (`reconcile-deep-research --dry-run`) and the Enrich Contacts page renders
   the exact `Approve $X.XX` estimate (gross eligible, completed-result reuse,
-  net-new submissions, budget). When net-new is zero it continues from cache
-  immediately — no approval exists for zero dollars.
+  net-new submissions, budget). When net-new is zero the button reads
+  `Continue` — no approval exists for zero dollars, and the click reruns the
+  cached chain so imported or cached installs still get their follow-ups.
 - **The user clicks Approve $X.XX** → that click IS the spend approval: the
   app runs the approved Parallel pass with exactly that budget cap.
 - **Research completes** → the app chains the free follow-ups automatically:

@@ -390,6 +390,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 status="needs_approval",
                 state="needs_approval",
                 estimated_usd=0.04,
+                would_submit=3,
             )
         )
         # The approval button carries the estimate as its label; the old

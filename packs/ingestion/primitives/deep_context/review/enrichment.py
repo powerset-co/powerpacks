@@ -45,6 +45,7 @@ def enrichment_view(
     *,
     enrichment_running: bool = False,
     running_error: str | None = None,
+    applied_fingerprint: str | None = None,
 ) -> EnrichmentView:
     """Render state from the DB plan plus the one local pipeline thread.
 
@@ -85,12 +86,22 @@ def enrichment_view(
             state="running",
             approvable=False,
         )
-    status = "completed" if not total else (
-        ReceiptStatus.NEEDS_APPROVAL if pending else ("completed" if plan.reused_completed else "not_started")
-    )
-    route_state = "done" if not total else (
-        "needs_approval" if pending else ("done" if plan.reused_completed else "profile_prep_pending")
-    )
+    # A plan whose paid research is all cached still has an unapplied local
+    # chain (synthetic assembly and profile prefetch). It costs nothing, so it
+    # is not a spend approval; it is a $0 continue that reruns the chain so
+    # cached installs lose nothing. Once this process ran the chain for the
+    # current plan, the stage is finished and Continue advances instead.
+    applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
+    if not total:
+        status, route_state = "completed", "done"
+    elif pending:
+        status, route_state = ReceiptStatus.NEEDS_APPROVAL, "needs_approval"
+    elif plan.reused_completed and not applied:
+        status, route_state = "completed", "profile_prep_pending"
+    elif plan.reused_completed:
+        status, route_state = "completed", "done"
+    else:
+        status, route_state = "not_started", "profile_prep_pending"
     payload = EnrichmentView(
         source="reconcile_deep_research",
         eligible=len(plan.eligible),
@@ -189,8 +200,11 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
     if enrichment.status in {
         ReceiptStatus.RUNNING,
         "submitted",
-        "completed",
     }:
+        return enrichment
+    # A completed plan is done unless its cached research still needs the free
+    # local chain, which the $0 continue launches.
+    if enrichment.status == "completed" and enrichment.state != "profile_prep_pending":
         return enrichment
     if (
         enrichment.status != ReceiptStatus.NEEDS_APPROVAL

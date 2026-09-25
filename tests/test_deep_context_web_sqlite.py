@@ -384,12 +384,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(preview.would_submit, 0)
         self.assertEqual(preview.reused_completed, 1)
         self.assertEqual(preview.estimated_usd, 0.0)
-        # A fully-reused plan needs no spend, so enrichment_view renders it as
-        # the completed state (status/state "completed"/"done") with a Continue
-        # button rather than an "Approve $0.00" prompt.
+        # A fully-reused plan needs no spend, but its cached research still
+        # needs the free local chain (synthetic assembly, profile prefetch).
+        # The stage reads complete and the button is a $0 continue, not an
+        # "Approve $0.00" prompt.
         self.assertEqual(
             (preview.status, preview.state),
-            ("completed", "done"),
+            ("completed", "profile_prep_pending"),
         )
         self.assertFalse(preview.approvable)
 
@@ -441,15 +442,30 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
-            status, _, _ = self.request("GET", "/?stage=enrich")
+            status, _, raw = self.request("GET", "/?stage=enrich")
             self.assertEqual(status, 200)
+            page = raw.decode()
+            # Cached research is not a $0.00 spend approval: the button is a
+            # Continue that reruns the free local chain.
+            self.assertIn("Continue", page)
+            self.assertNotIn("Approve $", page)
             self.assertEqual(reconcile.call_count, 0)
             status, payload = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(status, 200)
-            self.assertEqual(payload["enrichment"]["approval"]["status"], "approved")
+            # The POST response is built from a fresh read after the pipeline
+            # thread is spawned, so it carries the then-current stage — not
+            # the one-shot approval block. The accepted $0 continue is proven
+            # by the receipt the job writes and the reconcile call below.
+            self.assertIs(payload["ok"], True)
+            self.assertIsInstance(payload["enrichment"], dict)
             self.wait_for_enrichment_job("applied")
-            status, _, _ = self.request("GET", "/?stage=enrich")
+            status, _, raw = self.request("GET", "/?stage=enrich")
             self.assertEqual(status, 200)
+            page = raw.decode()
+            # Once the chain ran in this process the cached plan is applied,
+            # so the page advances through the plain stage Continue.
+            self.assertIn("Contacts enriched", page)
+            self.assertNotIn("data-approve-enrichment", page)
         self.assertEqual(reconcile.call_count, 1)
         self.assertEqual(reconcile.call_args.kwargs["budget"], 0.0)
         self.assertIs(reconcile.call_args.kwargs["approve"], True)

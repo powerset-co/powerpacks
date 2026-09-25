@@ -108,6 +108,9 @@ class SqliteReviewAdapter:
     def _last_error(self) -> str | None:
         return self.pipeline.last_error if self.pipeline is not None else None
 
+    def _applied_fingerprint(self) -> str | None:
+        return getattr(self.pipeline, "applied_fingerprint", None)
+
     def snapshot(self, *, enrichment_running: bool | None = None) -> WorkflowState:
         if enrichment_running is None:
             enrichment_running = self._running()
@@ -147,6 +150,7 @@ class SqliteReviewAdapter:
             state,
             enrichment_running=enrichment_running,
             running_error=running_error,
+            applied_fingerprint=self._applied_fingerprint(),
         )
 
     def set_worth(self, key: str, value: str, note: str = "") -> None:

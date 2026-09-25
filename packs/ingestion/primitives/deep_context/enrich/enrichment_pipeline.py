@@ -55,6 +55,10 @@ class EnrichmentPipeline:
         # The most recent run's failure text, if any — in memory only; a
         # restart forgets it and the approve button returns.
         self.last_error: str | None = None
+        # Fingerprint of the last chain that finished cleanly in this process.
+        # The review view reads it to offer stage Continue instead of a $0
+        # rerun of the cached chain; a restart forgets it and reruns once.
+        self.applied_fingerprint: str | None = None
 
     def running(self) -> bool:
         return self._running.locked()
@@ -154,6 +158,7 @@ class EnrichmentPipeline:
             try:
                 self._run(budget, progress)
                 self.last_error = None
+                self.applied_fingerprint = request_fingerprint
                 self._write(
                     "completed",
                     request_fingerprint,
