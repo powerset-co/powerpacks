@@ -30,7 +30,7 @@ class TerraPipelineTests(unittest.TestCase):
                         {"id": "expand_search_request", "status": "completed", "output": payload}]}))
                     args = pipeline.build_parser().parse_args(["run", "--backend", backend,
                         "--state", str(state), "--ledger", str(root / "pipeline.json"), "--db", str(db),
-                        "--filter-only", "--confirm-llm", "--filter-batch-size", "7",
+                        "--confirm-llm", "--filter-batch-size", "7",
                         *(["--jd-file", str(jd)] if jd_mode else [])])
                     result = {"returncode": 0, "json": {**payload, "state": str(state),
                               "hydrated": 1, "passed_count": 1}}

@@ -316,11 +316,6 @@ files on the happy path. Start a fresh run for every search request.
      pass `--limit` to `prepare`, which threads it through). This caps
      retrieval and the whole downstream pipeline. For standalone user
      searches, do not add a limit unless the user asks for one.
-   - If **filter-only mode** was requested (profile searches do this), append
-     `--filter-only`. The run keeps the cheap conservative LLM filter but
-     skips the expensive per-search LLM rerank; final ranking is owned by the
-     caller's evaluation pass. Never use `--filter-only` for standalone user
-     searches — they need the rerank for good ordering.
 5. Keep execution quiet until the command finishes or emits a concrete
    `blocked_approval` / `blocked_user_action`.
 
