@@ -1,7 +1,14 @@
-"""Narrow typed reads for message collection and dossier evidence."""
+"""Narrow typed reads for message collection and dossier evidence.
+
+Changelog:
+- 2026-09-25: id sets bind as one JSON array read through json_each, so the
+  variable count no longer grows with the install (27k parents bound twice
+  exceeded SQLite's 32,766-variable limit and blocked the cluster survey).
+"""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -21,6 +28,14 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
 )
 
 
+# One bound JSON array stands in for an id list of any size.
+ID_SET = "(SELECT value FROM json_each(?))"
+
+
+def _id_set(values: Sequence[str]) -> str:
+    return json.dumps(list(values))
+
+
 def dossier_evidence_rows(
     db: Db,
     subject_ids: Sequence[str],
@@ -29,69 +44,69 @@ def dossier_evidence_rows(
     wanted = tuple(sorted({value.strip().lower() for value in subject_ids if value.strip()}))
     if not wanted:
         return DossierEvidenceRows((), (), (), (), ())
-    placeholders = ",".join("?" for _ in wanted)
+    wanted_json = _id_set(wanted)
     matched_people = typed_rows(
         db,
         f"""
 SELECT * FROM people
-WHERE lower(person_id) IN ({placeholders})
-   OR lower(parent_id) IN ({placeholders})
+WHERE lower(person_id) IN {ID_SET}
+   OR lower(parent_id) IN {ID_SET}
 ORDER BY person_id
 """,
         PersonRow,
-        wanted + wanted,
+        (wanted_json, wanted_json),
     )
     direct_parents = typed_rows(
         db,
-        f"SELECT * FROM parents WHERE lower(parent_id) IN ({placeholders}) ORDER BY parent_id",
+        f"SELECT * FROM parents WHERE lower(parent_id) IN {ID_SET} ORDER BY parent_id",
         ParentSnapshotRow,
-        wanted,
+        (wanted_json,),
     )
     parent_ids = tuple(sorted({row.parent_id for row in matched_people} | {row.parent_id for row in direct_parents}))
     if not parent_ids:
         return DossierEvidenceRows((), matched_people, (), (), ())
-    parent_placeholders = ",".join("?" for _ in parent_ids)
+    parents_json = _id_set(parent_ids)
     family_people = typed_rows(
         db,
-        f"SELECT * FROM people WHERE parent_id IN ({parent_placeholders}) ORDER BY person_id",
+        f"SELECT * FROM people WHERE parent_id IN {ID_SET} ORDER BY person_id",
         PersonRow,
-        parent_ids,
+        (parents_json,),
     )
     family_parents = typed_rows(
         db,
-        f"SELECT * FROM parents WHERE parent_id IN ({parent_placeholders}) ORDER BY parent_id",
+        f"SELECT * FROM parents WHERE parent_id IN {ID_SET} ORDER BY parent_id",
         ParentSnapshotRow,
-        parent_ids,
+        (parents_json,),
     )
     family_facts = typed_rows(
         db,
-        f"SELECT * FROM facts WHERE parent_id IN ({parent_placeholders}) ORDER BY subject_key",
+        f"SELECT * FROM facts WHERE parent_id IN {ID_SET} ORDER BY subject_key",
         FactRow,
-        parent_ids,
+        (parents_json,),
     )
     source_bundles = typed_rows(
         db,
         f"""
 SELECT * FROM artifacts
-WHERE parent_id IN ({parent_placeholders})
+WHERE parent_id IN {ID_SET}
   AND kind='source_bundle'
   AND status='projected'
 ORDER BY artifact_key
 """,
         ArtifactRow,
-        parent_ids,
+        (parents_json,),
     )
     identifiers = typed_rows(
         db,
         f"""
 SELECT pi.* FROM person_identifiers pi
 JOIN people pe USING(person_id)
-WHERE pe.parent_id IN ({parent_placeholders})
+WHERE pe.parent_id IN {ID_SET}
   AND pi.kind IN ('email', 'phone')
 ORDER BY pi.person_id, pi.kind, pi.normalized_value
 """,
         PersonIdentifierRow,
-        parent_ids,
+        (parents_json,),
     )
     return DossierEvidenceRows(
         family_parents,
