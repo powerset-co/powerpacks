@@ -96,19 +96,22 @@ textarea:focus-visible,
   z-index: 50;
   height: var(--topbar-height);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: 228px minmax(0, 1fr);
   align-items: center;
-  gap: 16px;
   padding: 0 20px;
   background: color-mix(in srgb, var(--background) 88%, transparent);
   backdrop-filter: saturate(140%) blur(10px);
   border-bottom: 1px solid var(--line);
 }
+/* App-shell nav: the brand takes the rail's width (its divider continues the rail line
+   on pages that have one) and the page tabs start where the main pane starts. */
 .brand {
-  justify-self: start;
+  justify-self: stretch;
+  align-self: stretch;
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  border-right: 1px solid var(--line);
   color: var(--foreground);
   font-size: 11px;
   font-weight: 800;
@@ -123,16 +126,7 @@ textarea:focus-visible,
   background: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
-.topbar-title {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -.01em;
-  white-space: nowrap;
-}
-.topbar-nav { justify-self: end; display: inline-flex; gap: 2px; }
+.topbar-nav { justify-self: start; display: inline-flex; gap: 2px; margin-left: 10px; }
 .topbar-nav a {
   padding: 6px 10px;
   border-radius: var(--radius-s);
@@ -322,7 +316,6 @@ main { width: min(100% - 40px, 1240px); margin: 0 auto; padding: 24px 0 96px; }
   padding: 10px 8px;
   background: color-mix(in srgb, var(--background) 92%, transparent);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--line);
 }
 .catalog-search { flex: 1 1 240px; }
 .catalog-count { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -665,8 +658,8 @@ button.pond-row:hover { border-color: var(--line-strong); background: rgba(255, 
 }
 
 @media (max-width: 680px) {
-  .topbar { padding: 0 14px; grid-template-columns: auto minmax(0, 1fr) auto; }
-  .topbar-title { display: none; }
+  .topbar { padding: 0 14px; grid-template-columns: auto minmax(0, 1fr); }
+  .brand { padding-right: 14px; }
   main { width: min(100% - 24px, 1240px); padding-top: 16px; }
   .catalog-head { display: none; }
   .catalog-row { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; }
