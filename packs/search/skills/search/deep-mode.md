@@ -188,6 +188,13 @@ The viewer shows the judges' overall for either screen, sorted by overall; a per
 the judges never saw shows "Did not pass screen" or "Not judged". Each result has a **Score** button
 for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
 and submitted through the existing Powerset feedback endpoint.
+On approved Powerset JD runs, the stored current-staff roster and prior-work embeddings
+prepare alongside the pond. After Jev, candidates with a passing capability screen
+receive an independent Team Similarity Rank across the run's deduplicated pass set.
+The rank uses original titles, descriptions, and employer names from five recent jobs;
+it does not change judge scores, result order, tags, or pins. The collapsed Team table
+shows all stored current staff. `<run>/team-status.json` records unavailable company,
+roster, or API data; local-only runs never call the employee API.
 Custom tags are saved in `<run>/tags.json`, shared across browsers, and included
 in tagged-results CSV exports. Existing browser-only tags are imported when a run
 has no saved tag file; an existing file, including cleared tags, takes precedence.
