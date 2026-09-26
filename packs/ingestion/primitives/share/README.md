@@ -44,7 +44,7 @@ write is skipped).
 | `store.py` | `TagStore`: the human's tags | `person_tags` | `person_tags` |
 | `share_list.py` | The `share` node: labels + share list in one pass | evidence, `person_tags` | `person_labels`, `share`, manifest.json |
 | `share.py` | CLI | command arguments | command results |
-| `web/model.py` | `SharePeople`: one typed row per roster person for the People page | people.csv, `share`, `person_labels`, `person_tags`, `parents`, `facts`, dossier artifacts | — |
+| `web/model.py` | `SharePeople`: one typed row per parent (the roster people merged under it) for the People page | people.csv, `share`, `person_labels`, `person_tags`, `parents`, `facts`, dossier artifacts | — |
 | `web/server.py` | `ShareRoutes` (mounted in the review server at `/people`, `/api/people/*`, beside the searches list at `/searches`) and a standalone server for tests | the rows | `person_tags` + `share` in one transaction (`Db.decide_share`) |
 | `web/people.html`, `people.css`, `people.js` | the page: decision tabs, facets, quick filters, virtualized table, drawer, bulk bar | `/api/people/rows`, `/api/people/person` | `POST /api/people/tags` |
 

@@ -1,13 +1,14 @@
+import { VirtualTable } from "./virtual-table.js";
+
 // People page: every person once, filtered client-side; bulk share / private tags in one write.
-// Vocabulary: person, worth, share / confirm / not sharing, tag, label, flag.
-// Rows are keyed DOM nodes: a click, a selection or a focus move patches attributes in
-// place; only rows entering or leaving the visible window are built or dropped.
+// Vocabulary: person, worth, share / confirm / not sharing, tag, label, reason.
+// TanStack Virtual decides which rows exist; they are keyed DOM nodes, so a click, a
+// selection or a focus move patches attributes in place and only rows entering or
+// leaving the window are built or dropped.
 
 const API = "/api/people/";
-const ROW_H = 40;
-const OVERSCAN = 8;
-const ENTER_ROWS = 14;
-const ENTER_STAGGER_MS = 14;
+const ROW_H = 36;
+const OVERSCAN = 24;
 const COUNT_TWEEN_MS = 320;
 const FILTERS_KEY = "powerpacks:people-filters:v2";
 const YEAR = 365;
@@ -111,13 +112,12 @@ function warmthBucket(value) {
 // `get` returns the row's values for the facet; `text` renders one value. The
 // default facets stay open; the rest collapse under "More filters".
 const FACETS = [
-  { key: "flag", label: "Flag", get: (r) => (r.flag ? [r.flag] : []), words: "reason" },
+  { key: "reason", label: "Reason", get: (r) => [r.reason] },
   { key: "worth", label: "Worth", get: (r) => [r.worth || "unjudged"], order: ["yes", "maybe", "no", "unjudged"] },
   { key: "relationship_kind", label: "Relationship", get: (r) => (r.relationship_kind ? [r.relationship_kind] : []) },
   { key: "last", label: "Last contact", get: (r) => [r.last], order: LAST },
   { key: "channels", label: "Sources", get: (r) => r.channels, order: ["gmail", "imessage", "whatsapp", "linkedin"] },
   { key: "linkedin", label: "LinkedIn", get: (r) => [r.public_identifier ? "Has LinkedIn" : "No LinkedIn"], order: ["Has LinkedIn", "No LinkedIn"] },
-  { key: "reason", label: "Reason", get: (r) => [r.reason], more: true },
   { key: "worth_source", label: "Worth decided by", get: (r) => (r.worth_source ? [r.worth_source] : []), words: "source", more: true },
   { key: "tags", label: "Your tags", get: (r) => r.tags, more: true },
   { key: "labels", label: "Relationship labels", get: (r) => r.labels, more: true, search: true },
@@ -139,11 +139,12 @@ const VISIBLE_VALUES = 8;
 
 // Quick filters: named facet selections with explicit predicates, counted within the tab.
 const QUICK = [
-  { name: "Family", set: { flag: ["family"] } },
-  { name: "Sensitive context", set: { flag: ["sensitive_context"] } },
+  { name: "Family", set: { relationship_kind: ["family"] } },
+  { name: "Sensitive context", set: { labels: ["sensitive_context"] } },
   { name: "Service providers", set: { relationship_kind: ["service_provider"] } },
   { name: "Recruiters", set: { labels: ["is_recruiter"] } },
-  { name: "Strangers or automated senders", set: { flag: ["stranger", "automated_sender"] } },
+  { name: "Strangers", set: { labels: ["is_stranger"] } },
+  { name: "Automated senders", set: { labels: ["is_automated_sender"] } },
   { name: "Last contact > 2 years", set: { last: [LAST[2]] } },
   { name: "Close friends", set: { relationship_kind: ["close_friend"] } },
 ];
@@ -234,7 +235,7 @@ async function load() {
     row.search = `${row.name} ${row.title} ${row.company} ${row.location}`.toLowerCase();
     return row;
   });
-  state.byId = new Map(state.rows.map((row) => [row.person_id, row]));
+  state.byId = new Map(state.rows.map((row) => [row.parent_id, row]));
 }
 
 function filterRows() {
@@ -398,7 +399,7 @@ const COLUMNS = [
 ];
 
 function renderGridHead() {
-  const selectedHere = state.matching.filter((row) => state.selected.has(row.person_id)).length;
+  const selectedHere = state.matching.filter((row) => state.selected.has(row.parent_id)).length;
   const allSelected = state.matching.length > 0 && selectedHere === state.matching.length;
   els.gridHead.innerHTML = COLUMNS.map((column, position) => {
     if (position === 0) return `<label class='check c-check'><input type='checkbox' data-select-all aria-label='Select all ${state.matching.length.toLocaleString()} matching people' ${allSelected ? "checked" : ""}></label>`;
@@ -410,13 +411,10 @@ function renderGridHead() {
 }
 
 function rowCells(row) {
-  const sub = row.title || row.company
-    ? `${escapeHtml(row.title)}${row.title && row.company ? "<span class='sep'>·</span>" : ""}${escapeHtml(row.company)}`
-    : escapeHtml(row.location);
-  const avatar = row.has_avatar ? `<img src='${API}avatar?id=${encodeURIComponent(row.person_id)}' alt='' loading='lazy' referrerpolicy='no-referrer'>` : "";
+  const avatar = row.has_avatar ? `<img src='${API}avatar?id=${encodeURIComponent(row.parent_id)}' alt='' referrerpolicy='no-referrer'>` : "";
   return `<label class='check c-check'><input type='checkbox' data-select aria-label='Select ${escapeHtml(row.name)}'></label>
     <div class='person c-person'><span class='avatar'>${avatar}<span>${escapeHtml(initials(row.name))}</span></span>
-      <span class='who'><b>${escapeHtml(row.name)}</b><small>${sub}</small></span></div>
+      <span class='who'><b>${escapeHtml(row.name)}</b></span></div>
     <div class='sources c-sources'>${row.channels.map(channelIcon).join("")}</div>
     <div class='why c-why ${row.share_source === "human" ? "human" : ""}'>${escapeHtml(label("reason", row.reason))}</div>
     <div class='rel c-rel'>${escapeHtml(sentence(row.relationship_kind))}</div>
@@ -426,81 +424,48 @@ function rowCells(row) {
     <div class='cell-num c-msgs right ${row.interactions ? "" : "dim"}'>${row.interactions ? row.interactions.toLocaleString() : "—"}</div>`;
 }
 
-const rowNodes = new Map();
 function buildRow(row) {
   const node = document.createElement("div");
   node.className = "row";
   node.setAttribute("role", "row");
-  node.dataset.id = row.person_id;
+  node.dataset.id = row.parent_id;
   node.innerHTML = rowCells(row);
   return node;
 }
 function syncRow(node, row, position) {
-  const selected = state.selected.has(row.person_id);
+  const selected = state.selected.has(row.parent_id);
   setAttr(node, "data-index", position);
   setAttr(node, "aria-selected", selected);
   setAttr(node, "data-focus", position === state.focus);
-  setAttr(node, "data-open", row.person_id === state.drawerId);
+  setAttr(node, "data-open", row.parent_id === state.drawerId);
   setAttr(node, "data-pending", Boolean(row.pending));
   const box = node.querySelector("[data-select]");
   if (box.checked !== selected) box.checked = selected;
 }
 function refreshRow(id) {
-  const node = rowNodes.get(id);
+  const node = peopleTable.nodes.get(id);
   if (node) node.innerHTML = rowCells(state.byId.get(id));
 }
 
-let renderQueued = false;
 let enterRows = false;
+const peopleTable = new VirtualTable({
+  viewport: els.viewport, content: els.rows, estimateSize: () => ROW_H,
+  getKey: (row) => row.parent_id, createRow: buildRow, syncRow,
+});
+// Rows mount well below the fold so a flick never shows blank rows filling in.
+peopleTable.virtualizer.setOptions({ ...peopleTable.virtualizer.options, overscan: OVERSCAN });
 function renderRows() {
-  renderQueued = false;
-  const total = state.matching.length;
-  els.spacer.style.height = `${total * ROW_H}px`;
-  const top = els.viewport.scrollTop;
-  const height = els.viewport.clientHeight || 600;
-  const start = Math.max(0, Math.floor(top / ROW_H) - OVERSCAN);
-  const end = Math.min(total, Math.ceil((top + height) / ROW_H) + OVERSCAN);
-  els.rows.style.transform = `translateY(${start * ROW_H}px)`;
-  let cursor = els.rows.firstElementChild;
-  let entered = 0;
-  for (let position = start; position < end; position += 1) {
-    const row = state.matching[position];
-    let node = rowNodes.get(row.person_id);
-    if (!node) {
-      node = buildRow(row);
-      rowNodes.set(row.person_id, node);
-      if (enterRows && entered < ENTER_ROWS) {
-        node.classList.add("row-enter");
-        node.style.animationDelay = `${entered * ENTER_STAGGER_MS}ms`;
-        entered += 1;
-      }
-    }
-    syncRow(node, row, position);
-    if (node === cursor) cursor = cursor.nextElementSibling;
-    else els.rows.insertBefore(node, cursor);
-  }
-  while (cursor) {
-    const stale = cursor;
-    cursor = cursor.nextElementSibling;
-    if (rowNodes.get(stale.dataset.id) === stale) rowNodes.delete(stale.dataset.id);
-    stale.remove();
-  }
+  peopleTable.setItems(state.matching, { animate: enterRows });
   enterRows = false;
-  els.empty.hidden = total > 0;
-  if (!total) els.empty.innerHTML = emptyText();
+  els.empty.hidden = state.matching.length > 0;
+  if (!state.matching.length) els.empty.innerHTML = emptyText();
 }
 function emptyText() {
   if (!state.rows.length) return "No people to review yet. Run <code>bin/deep-context share</code>, then reload.";
   if (state.filters.size || state.text) return "No people match these filters. <button type='button' class='btn btn-ghost' data-clear-filters>Clear filters</button>";
   return { confirm: "No one needs confirmation.", yes: "No people marked for sharing.", no: "No people marked as not sharing." }[state.tab];
 }
-function scheduleRows() {
-  if (renderQueued) return;
-  renderQueued = true;
-  // A hidden tab gets no animation frames; render on a timer so the page is ready when it shows.
-  if (document.visibilityState === "hidden") window.setTimeout(renderRows, 0);
-  else window.requestAnimationFrame(renderRows);
-}
+function scheduleRows() { renderRows(); }
 
 function renderBulkbar() {
   const count = state.selected.size;
@@ -534,7 +499,7 @@ function renderAll({ rows = true } = {}) {
 function resetView() {
   state.selected.clear();
   state.focus = -1;
-  els.viewport.scrollTop = 0;
+  peopleTable.virtualizer.scrollToOffset(0);
   enterRows = true;
   renderAll();
 }
@@ -566,7 +531,7 @@ function nextTags(row, action) {
 
 async function writeTags(people, { undo }) {
   state.saving = true;
-  people.forEach(({ person_id }) => { const row = state.byId.get(person_id); if (row) row.pending = true; });
+  people.forEach(({ parent_id }) => { const row = state.byId.get(parent_id); if (row) row.pending = true; });
   renderBulkbar();
   scheduleRows();
   try {
@@ -576,17 +541,17 @@ async function writeTags(people, { undo }) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Try again.");
     for (const patch of payload.rows) {
-      const row = state.byId.get(patch.person_id);
+      const row = state.byId.get(patch.parent_id);
       if (!row) continue;
       Object.assign(row, { share: patch.share, reason: patch.reason, share_source: patch.share_source, tags: patch.tags });
-      refreshRow(patch.person_id);
+      refreshRow(patch.parent_id);
     }
     state.undo = undo;
     state.selected.clear();
-    if (state.drawerId && people.some((entry) => entry.person_id === state.drawerId)) openDrawer(state.drawerId, { refresh: true });
+    if (state.drawerId && people.some((entry) => entry.parent_id === state.drawerId)) openDrawer(state.drawerId, { refresh: true });
     return payload.rows.length;
   } finally {
-    people.forEach(({ person_id }) => { const row = state.byId.get(person_id); if (row) row.pending = false; });
+    people.forEach(({ parent_id }) => { const row = state.byId.get(parent_id); if (row) row.pending = false; });
     state.saving = false;
     renderAll();
   }
@@ -594,8 +559,8 @@ async function writeTags(people, { undo }) {
 
 async function applyAction(action, ids = [...state.selected]) {
   if (state.saving || !ids.length) return;
-  const people = ids.map((id) => ({ person_id: id, tags: nextTags(state.byId.get(id), action) }));
-  const previous = ids.map((id) => ({ person_id: id, tags: [...state.byId.get(id).tags] }));
+  const people = ids.map((id) => ({ parent_id: id, tags: nextTags(state.byId.get(id), action) }));
+  const previous = ids.map((id) => ({ parent_id: id, tags: [...state.byId.get(id).tags] }));
   try {
     const count = await writeTags(people, { undo: previous });
     announce({
@@ -620,9 +585,9 @@ async function undoLast() {
 }
 
 function selectAllMatching() {
-  const all = state.matching.every((row) => state.selected.has(row.person_id));
+  const all = state.matching.every((row) => state.selected.has(row.parent_id));
   if (all) state.selected.clear();
-  else state.matching.forEach((row) => state.selected.add(row.person_id));
+  else state.matching.forEach((row) => state.selected.add(row.parent_id));
   renderGridHead();
   renderBulkbar();
   scheduleRows();
@@ -645,9 +610,7 @@ function clearSelection() {
 function moveFocus(step) {
   if (!state.matching.length) return;
   state.focus = Math.min(state.matching.length - 1, Math.max(0, state.focus + step));
-  const top = state.focus * ROW_H;
-  if (top < els.viewport.scrollTop) els.viewport.scrollTop = top;
-  else if (top + ROW_H > els.viewport.scrollTop + els.viewport.clientHeight) els.viewport.scrollTop = top + ROW_H - els.viewport.clientHeight;
+  peopleTable.virtualizer.scrollToIndex(state.focus, { align: "auto" });
   scheduleRows();
 }
 
@@ -700,6 +663,16 @@ async function openDrawer(id, { refresh = false } = {}) {
 }
 
 const CHOICES = ["relationship_kind", "mode", "hierarchy", "intro_source", "seniority", "function"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Event dates are ISO prefixes ("2024-10-30", "2024-10", "2011"), sometimes two of them
+// ("2012-02 to 2012-03"); each one reads as a date and the rest shows as written.
+function eventDate(value) {
+  return String(value || "").replace(/\b(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?\b/g, (_, year, month, day) => {
+    const name = month ? MONTHS[Number(month) - 1] : "";
+    if (day) return `${name} ${Number(day)}, ${year}`;
+    return name ? `${name} ${year}` : year;
+  });
+}
 const dt = (key, value) => (value ? `<dt>${escapeHtml(key)}</dt><dd>${value}</dd>` : "");
 const lines = (values) => values.map(escapeHtml).join("<br>");
 
@@ -712,7 +685,7 @@ function swapStyle() {
 function renderDrawer(row, detail) {
   const badge = row.share === "yes" ? "badge-ok" : row.share === "confirm" ? "badge-warn" : "badge-muted";
   const avatar = detail?.avatar_url ? `<img src='${escapeHtml(detail.avatar_url)}' alt='' referrerpolicy='no-referrer'>`
-    : row.has_avatar ? `<img src='${API}avatar?id=${encodeURIComponent(row.person_id)}' alt='' referrerpolicy='no-referrer'>` : "";
+    : row.has_avatar ? `<img src='${API}avatar?id=${encodeURIComponent(row.parent_id)}' alt='' referrerpolicy='no-referrer'>` : "";
   const headline = detail?.headline || [row.title, row.company].filter(Boolean).join(" · ");
   const shares = row.tags.includes("share");
   const keepsPrivate = row.tags.includes("private");
@@ -752,18 +725,28 @@ function renderDrawer(row, detail) {
   }
   const probabilities = Object.entries(detail.probabilities || {}).sort((a, b) => b[1] - a[1]);
   const contact = [...(detail.emails || []), ...(detail.phones || [])];
+  const timeline = detail.events.length ? `<div class='dsec'><h3>Timeline</h3>
+      <ol class='timeline'>${detail.events.map((event) => `<li><time>${escapeHtml(eventDate(event.date))}</time><span>${escapeHtml(event.summary)}</span></li>`).join("")}</ol>
+    </div>` : "";
   const relationship = probabilities.length ? `<div class='dsec'><h3>Relationship</h3>
       <dl class='kv'>${CHOICES.filter((key) => row[key]).map((key) => dt(FACET_BY_KEY.get(key).label,
         `${escapeHtml(facetText(FACET_BY_KEY.get(key), row[key]))} <small>${Math.round(((detail.choice_p || {})[key] || 0) * 100)}%</small>`)).join("")}
         ${row.warmth !== null && row.warmth !== undefined ? dt("Warmth", `${Number(row.warmth).toFixed(1)} of 4 <small>${escapeHtml(row.warmthBucket)}</small>`) : ""}</dl>
     </div>` : "<div class='dsec'><h3>Relationship</h3><p class='dim'>No relationship labels available.</p></div>";
-  const facts = detail.relationship_to_owner || (detail.topics || []).length || (detail.employers || []).length ? `<div class='dsec'><h3>Facts</h3>
+  const factRows = [
+    dt("Employers", detail.employers.length ? lines(detail.employers) : ""),
+    dt("School", detail.school ? escapeHtml(detail.school) : ""),
+    dt("Location", detail.location ? escapeHtml(detail.location) : ""),
+    dt("Also known as", detail.aliases.length ? escapeHtml(detail.aliases.join(", ")) : ""),
+    dt("Shared context", detail.shared_context.length ? lines(detail.shared_context.map(sentence)) : ""),
+  ].join("");
+  const facts = detail.relationship_to_owner || factRows ? `<div class='dsec'><h3>Facts</h3>
       ${detail.relationship_to_owner ? `<p>${escapeHtml(detail.relationship_to_owner)}</p>` : ""}
-      <dl class='kv'>${dt("Employers", (detail.employers || []).length ? lines(detail.employers) : "")}
-        ${dt("School", detail.school ? escapeHtml(detail.school) : "")}
-        ${dt("Topics", (detail.topics || []).length ? escapeHtml(detail.topics.join(", ")) : "")}</dl>
+      ${factRows ? `<dl class='kv'>${factRows}</dl>` : ""}
     </div>` : "";
-  const dossier = detail.dossier_html ? `<div class='dsec'><h3>Dossier</h3><div class='dossier'>${detail.dossier_html}</div></div>` : "";
+  const topics = detail.topics.length ? `<details class='dsec'><summary><h3>Topics <small>${detail.topics.length}</small></h3></summary>
+      <ul class='plain'>${detail.topics.map((topic) => `<li>${escapeHtml(topic)}</li>`).join("")}</ul></details>` : "";
+  const dossier = detail.dossier_html ? `<details class='dsec'><summary><h3>Dossier</h3></summary><div class='dossier'>${detail.dossier_html}</div></details>` : "";
   const contactSection = `<div class='dsec'><h3>Contact</h3>
       <dl class='kv'>
         ${dt("Interactions", `<span class='num'>${row.interactions.toLocaleString()}</span>`)}
@@ -775,15 +758,14 @@ function renderDrawer(row, detail) {
   const confidence = probabilities.length ? `<details class='dsec'><summary><h3>Label confidence</h3></summary>
       <div class='bars'>${probabilities.map(([name, p]) => `<div class='barrow ${p >= .6 ? "active" : ""}'><span class='name'>${escapeHtml(label("labels", name))}</span><span class='track'><span class='fill' style='transform:scaleX(${p.toFixed(3)})'></span></span><span class='p'>${Math.round(p * 100)}%</span></div>`).join("")}</div>
     </details>` : "";
-  els.drawer.innerHTML = `<div${swapStyle()}>${head}${relationship}${facts}${dossier}${contactSection}${confidence}</div>`;
+  els.drawer.innerHTML = `<div${swapStyle()}>${head}${timeline}${facts}${relationship}${topics}${dossier}${contactSection}${confidence}</div>`;
 }
 
 // ---------- events ----------
 
-els.viewport.addEventListener("scroll", scheduleRows, { passive: true });
-window.addEventListener("resize", () => { scheduleRows(); moveInk(); });
-// The viewport takes its final height after the first paint; re-render when it does.
-new ResizeObserver(scheduleRows).observe(els.viewport);
+window.addEventListener("resize", moveInk);
+// Avatars fade in once loaded instead of popping over the initials.
+els.rows.addEventListener("load", (event) => { if (event.target.matches("img")) event.target.dataset.loaded = "1"; }, true);
 
 root.addEventListener("click", async (event) => {
   const target = event.target;
@@ -882,13 +864,13 @@ document.addEventListener("keydown", (event) => {
     case "1": case "2": case "3": setTab(DECISIONS[Number(event.key) - 1]); break;
     case "j": case "ArrowDown": event.preventDefault(); moveFocus(1); break;
     case "k": case "ArrowUp": event.preventDefault(); moveFocus(-1); break;
-    case "x": case " ": if (state.focus >= 0) { event.preventDefault(); toggleSelected(state.matching[state.focus].person_id); } break;
+    case "x": case " ": if (state.focus >= 0) { event.preventDefault(); toggleSelected(state.matching[state.focus].parent_id); } break;
     case "A": if (event.shiftKey) { event.preventDefault(); selectAllMatching(); } break;
     case "s": if (state.selected.size) void applyAction("share"); break;
     case "p": if (state.selected.size) void applyAction("private"); break;
     case "w": if (state.selected.size) void applyAction("worth"); break;
     case "z": void undoLast(); break;
-    case "Enter": if (state.focus >= 0) toggleDrawer(state.matching[state.focus].person_id); break;
+    case "Enter": if (state.focus >= 0) toggleDrawer(state.matching[state.focus].parent_id); break;
     case "Escape":
       if (state.drawerId) closeDrawer();
       else if (state.selected.size) clearSelection();
@@ -909,7 +891,7 @@ document.addEventListener("keydown", (event) => {
     els.rows.innerHTML = "";
     return;
   }
-  els.rows.innerHTML = "";
+  els.rows.replaceChildren(peopleTable.before, peopleTable.after);
   restoreFilters();
   els.search.value = state.text;
   enterRows = true;

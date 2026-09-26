@@ -3,10 +3,11 @@
 Flow: `ShareRoutes` mounts under `/people` and `/api/people/` in the review
 server (`bin/deep-context review people`); `make_handler` serves the same
 routes alone for tests. GET `/api/people/rows` ->
-`SharePeople.load()` as one columnar payload; POST `/api/people/tags` carries
-the tags each selected person should hold (absolute sets, so undo re-posts
-the previous sets), writes the tag rows and re-decides those people's share
-rows through `labels.share_decision` from `person_labels`, in one transaction.
+`SharePeople.load()` as one columnar payload, one row per parent; POST
+`/api/people/tags` carries the tags each selected parent should hold (absolute
+sets, so undo re-posts the previous sets), writes the tag rows for every person
+under those parents and re-decides their share rows through
+`labels.share_decision` from `person_labels`, in one transaction.
 
 Changelog:
   2026-09-26: created.
@@ -32,7 +33,7 @@ from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
-from packs.ingestion.primitives.share.web import PEOPLE_CSS, PEOPLE_HTML, PEOPLE_JS
+from packs.ingestion.primitives.share.web import PEOPLE_CSS, PEOPLE_HTML, PEOPLE_JS, VIRTUAL_CORE_JS
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
 from packs.search.primitives.deep_search.results_web import RESULTS_CSS
 
@@ -49,59 +50,66 @@ ASSETS = {
     "results.css": (RESULTS_CSS, "text/css; charset=utf-8"),
     "people.css": (PEOPLE_CSS, "text/css; charset=utf-8"),
     "people.js": (PEOPLE_JS, "text/javascript; charset=utf-8"),
+    "virtual-table.js": (Path(__file__).resolve().parents[4] / "shared/web/virtual-table.js", "text/javascript; charset=utf-8"),
+    "vendor/tanstack-virtual-core.js": (VIRTUAL_CORE_JS, "text/javascript; charset=utf-8"),
 }
 
 TagChanges = dict[str, frozenset[str]]
 
 
 def parse_tag_request(body: bytes, known_ids: set[str]) -> TagChanges:
-    """The one write the UI makes: the tags each selected person should hold."""
+    """The one write the UI makes: the tags each selected parent should hold."""
     try:
         request = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"invalid JSON body: {exc}") from exc
     people = request.get("people") if isinstance(request, dict) else None
     if not isinstance(people, list) or not people:
-        raise ValueError("people must be a non-empty list of {person_id, tags}")
+        raise ValueError("people must be a non-empty list of {parent_id, tags}")
     changes: TagChanges = {}
     for entry in people:
-        if not isinstance(entry, dict) or not isinstance(entry.get("person_id"), str) \
+        if not isinstance(entry, dict) or not isinstance(entry.get("parent_id"), str) \
                 or not isinstance(entry.get("tags"), list) \
                 or not all(isinstance(tag, str) for tag in entry["tags"]):
-            raise ValueError("each entry needs a person_id and a list of tags")
+            raise ValueError("each entry needs a parent_id and a list of tags")
         bad = sorted(set(entry["tags"]) - TAG_VOCABULARY)
         if bad:
             raise ValueError(f"unknown tags: {', '.join(bad)}")
-        changes[entry["person_id"]] = frozenset(entry["tags"])
+        changes[entry["parent_id"]] = frozenset(entry["tags"])
     unknown = sorted(set(changes) - known_ids)
     if unknown:
         raise ValueError(f"{len(unknown)} person ids are not on the share list")
     return changes
 
 
-def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> tuple[ShareDecisionRow, ...]:
-    """Write the tags and the share rows they re-decide, together.
+def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> dict[str, tuple[ShareDecisionRow, ...]]:
+    """Write the tags and the share rows they re-decide, together, for every
+    person under each parent. Returns the re-decided rows by parent.
 
-    The tags land on the roster id. A person whose only tags were inherited
+    The tags land on the roster ids. A person whose only tags were inherited
     from a merged-away id keeps that note, and from now on the roster row is
     the one the node reads first (`share_list` resolves the survivor first).
     """
     held = TagStore(db).load()
     labels = {row.person_id: row for row in share_views.person_labels(db)}
+    families = people.families()
     updated_at = now_iso()
     tag_rows: list[PersonTagRow] = []
-    share_rows: list[ShareDecisionRow] = []
-    for person_id, tags in changes.items():
-        prior = held.get(person_id) or next(
-            (held[old] for old in people.roster[person_id].superseded_person_ids if old in held), None)
-        human = HumanTags(person_id=person_id, tags=tags, note=prior.note if prior else None,
-                          updated_at=updated_at)
-        tag_rows.append(PersonTagRow(person_id=person_id, tags=join_tags(tags), note=human.note,
-                                     updated_at=updated_at))
-        share_rows.append(share_decision(label_row_from_export(labels[person_id]), human,
+    decided: dict[str, tuple[ShareDecisionRow, ...]] = {}
+    for parent_id, tags in changes.items():
+        share_rows = []
+        for member in families[parent_id]:
+            prior = held.get(member.person_id) or next(
+                (held[old] for old in member.superseded_person_ids if old in held), None)
+            human = HumanTags(person_id=member.person_id, tags=tags, note=prior.note if prior else None,
+                              updated_at=updated_at)
+            tag_rows.append(PersonTagRow(person_id=member.person_id, tags=join_tags(tags), note=human.note,
                                          updated_at=updated_at))
-    db.decide_share(tuple(tag_rows), tuple(share_rows))
-    return tuple(share_rows)
+            share_rows.append(share_decision(label_row_from_export(labels[member.person_id]), human,
+                                             updated_at=updated_at))
+        decided[parent_id] = tuple(share_rows)
+    db.decide_share(tuple(tag_rows), tuple(row for rows in decided.values() for row in rows))
+    return decided
 
 
 class ShareRoutes:
@@ -152,17 +160,17 @@ class ShareRoutes:
             status = HTTPStatus.REQUEST_ENTITY_TOO_LARGE if length > 0 else HTTPStatus.BAD_REQUEST
             self._send_json(handler, {"error": "request body must be 1 byte to 4 MiB"}, status=status)
             return True
-        known = {row.person_id for row in self.load()}
+        known = {row.parent_id for row in self.load()}
         try:
             changes = parse_tag_request(handler.rfile.read(length), known)
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return True
-        rows = decide_tags(self.db, self.people, changes)
+        decided = decide_tags(self.db, self.people, changes)
         self._send_json(handler, {"rows": [
-            {"person_id": row.person_id, "share": row.share, "reason": row.reason,
-             "share_source": row.source, "tags": sorted(changes[row.person_id])}
-            for row in rows]})
+            {"parent_id": parent_id, "share": rows[0].share, "reason": rows[0].reason,
+             "share_source": rows[0].source, "tags": sorted(changes[parent_id])}
+            for parent_id, rows in decided.items()]})
         return True
 
     @staticmethod

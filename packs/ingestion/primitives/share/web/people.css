@@ -1,6 +1,6 @@
 /* People page layout. Tokens and shared components come from results.css. */
 
-.people-shell { --drawer-w: 440px; display: grid; grid-template-rows: var(--topbar-height) 1fr; height: 100dvh; overflow: hidden; }
+.people-shell { --drawer-w: 440px; --row-h: 36px; display: grid; grid-template-rows: var(--topbar-height) 1fr; height: 100dvh; overflow: hidden; }
 .people-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 0; }
 
 /* ---- left rail: facets with live counts ---- */
@@ -72,7 +72,7 @@
 .grid { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 .grid-head, .row {
   display: grid;
-  grid-template-columns: 36px minmax(220px, 1.6fr) 100px 150px 124px 96px 84px 92px 82px;
+  grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 84px 92px 82px;
   align-items: center;
   gap: 10px;
   padding: 0 20px 0 12px;
@@ -87,7 +87,7 @@
 .grid-viewport { position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; outline: none; scrollbar-width: thin; }
 .grid-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--primary); }
 .grid-spacer { position: relative; }
-.grid-rows { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+.grid-rows { position: relative; }
 .row { position: relative; height: var(--row-h); border-bottom: 1px solid var(--line); cursor: default; transition: background var(--t-fast) var(--ease-out), opacity var(--t-med) var(--ease-out); }
 .row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--primary); transform: scaleX(0); transform-origin: left; transition: transform var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out); }
 .row:hover { background: rgba(255, 255, 255, .025); }
@@ -102,15 +102,15 @@
 .check { display: grid; place-items: center; width: 24px; height: 24px; margin: 0; }
 .check input { width: 15px; height: 15px; margin: 0; accent-color: var(--primary); cursor: pointer; }
 .person { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.person .avatar { width: 28px; height: 28px; flex-basis: 28px; font-size: 10px; }
-.person .who { display: grid; gap: 0; min-width: 0; line-height: 1.25; }
-.person .who b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.person .who small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.person .who small .sep { margin: 0 4px; color: var(--faint); }
+.person .avatar { width: 26px; height: 26px; flex-basis: 26px; font-size: 10px; }
+.person .avatar img { opacity: 0; transition: opacity var(--t-fast) var(--ease-out); }
+.person .avatar img[data-loaded] { opacity: 1; }
+.person .who { display: block; min-width: 0; line-height: 1.25; }
+.person .who b { display: block; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .why { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .why.human { color: var(--info); }
 /* The same pills the search viewer draws for a candidate's sources. */
-.sources { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.sources { display: inline-flex; flex-wrap: nowrap; gap: 4px; overflow: hidden; }
 .source { display: inline-flex; align-items: center; justify-content: center; height: 20px; padding: 0 7px; border: 1px solid; border-radius: 999px; }
 .source svg { width: 11px; height: 11px; }
 .source[data-c="gmail"] { background: #22c55e33; color: #4ade80; border-color: #22c55e4d; }
@@ -137,19 +137,19 @@
 .grid-empty { margin: 40px auto; max-width: 520px; color: var(--muted); text-align: center; line-height: 1.6; animation: rise-in var(--t-med) var(--ease-out) both; }
 .grid-empty code { padding: 2px 6px; border-radius: 4px; background: var(--secondary); color: var(--foreground); font-size: 12px; }
 .grid-loading { display: grid; gap: 1px; padding: 0 20px 0 12px; }
-.grid-loading .skeleton { height: 39px; margin: 0 0 1px; border-radius: 0; }
+.grid-loading .skeleton { height: calc(var(--row-h) - 1px); margin: 0 0 1px; border-radius: 0; }
 
 /* Columns leave in priority order as the pane narrows (window or drawer). */
 @container people (max-width: 1180px) {
-  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 100px 150px 124px 96px 84px 92px; }
+  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 84px 92px; }
   .grid-head .c-msgs, .row .c-msgs { display: none; }
 }
 @container people (max-width: 1060px) {
-  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 100px 150px 124px 96px 92px; }
+  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 92px; }
   .grid-head .c-warmth, .row .c-warmth { display: none; }
 }
 @container people (max-width: 940px) {
-  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 100px 150px 96px 92px; }
+  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 96px 92px; }
   .grid-head .c-rel, .row .c-rel { display: none; }
 }
 @container people (max-width: 800px) {
@@ -191,6 +191,15 @@ details.dsec summary { display: flex; align-items: center; gap: 6px; cursor: poi
 details.dsec summary::-webkit-details-marker { display: none; }
 details.dsec summary::after { content: ""; width: 5px; height: 5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform var(--t-fast) var(--ease-out); }
 details.dsec[open] summary::after { transform: rotate(45deg); }
+details.dsec summary h3 small { margin-left: 4px; color: var(--faint); font-weight: 600; letter-spacing: 0; }
+/* The relationship in order: a dated line per notable event. */
+.timeline { position: relative; display: grid; gap: 10px; margin: 2px 0 0; padding: 0 0 0 14px; list-style: none; border-left: 1px solid var(--line-strong); }
+.timeline li { position: relative; display: grid; gap: 2px; font-size: 12.5px; line-height: 1.5; }
+.timeline li::before { content: ""; position: absolute; left: -18px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--card); border: 1.5px solid var(--muted); }
+.timeline li:last-child::before { background: var(--primary); border-color: var(--primary); }
+.timeline time { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.timeline span { color: var(--foreground); }
+.plain { display: grid; gap: 4px; margin: 0; padding-left: 16px; font-size: 12.5px; line-height: 1.5; color: var(--foreground); }
 .dsec p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--foreground); }
 .dsec p .btn { margin-left: 4px; min-height: 26px; padding-inline: 8px; }
 .dsec p.dim { color: var(--muted); }
