@@ -192,11 +192,14 @@ details.dsec summary::-webkit-details-marker { display: none; }
 details.dsec summary::after { content: ""; width: 5px; height: 5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform var(--t-fast) var(--ease-out); }
 details.dsec[open] summary::after { transform: rotate(45deg); }
 details.dsec summary h3 small { margin-left: 4px; color: var(--faint); font-weight: 600; letter-spacing: 0; }
-/* The relationship in order: a dated line per notable event. */
+details.dsec summary .badge { margin-left: 2px; }
+details.dsec:not([open]) { gap: 0; }
+details.dsec summary:hover h3 { color: var(--foreground); }
+/* The relationship, most recent first: a dated line per notable event. */
 .timeline { position: relative; display: grid; gap: 10px; margin: 2px 0 0; padding: 0 0 0 14px; list-style: none; border-left: 1px solid var(--line-strong); }
 .timeline li { position: relative; display: grid; gap: 2px; font-size: 12.5px; line-height: 1.5; }
 .timeline li::before { content: ""; position: absolute; left: -18px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--card); border: 1.5px solid var(--muted); }
-.timeline li:last-child::before { background: var(--primary); border-color: var(--primary); }
+.timeline li:first-child::before { background: var(--primary); border-color: var(--primary); }
 .timeline time { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .timeline span { color: var(--foreground); }
 .plain { display: grid; gap: 4px; margin: 0; padding-left: 16px; font-size: 12.5px; line-height: 1.5; color: var(--foreground); }

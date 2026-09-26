@@ -148,10 +148,10 @@ class PersonDetail:
 
 
 def _events(facts: dict[str, Any]) -> tuple[FactEvent, ...]:
-    """The notable events in date order; dates are ISO prefixes, so text order is time order."""
+    """The notable events, most recent first; dates are ISO prefixes, so text order is time order."""
     events = (FactEvent(date=str(row.get("date") or ""), summary=str(row.get("summary") or ""))
               for row in facts.get("notable_events") or [] if isinstance(row, dict))
-    return tuple(sorted((event for event in events if event.summary), key=lambda event: event.date))
+    return tuple(sorted((event for event in events if event.summary), key=lambda event: event.date, reverse=True))
 
 
 def _shared_context(facts: dict[str, Any]) -> tuple[str, ...]:

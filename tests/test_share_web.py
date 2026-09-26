@@ -153,7 +153,7 @@ class RowModelTests(ShareWebFixture):
                          (json.dumps(facts),))
         detail = SharePeople(self.db, people_csv=self.people_csv).detail("parent-bbbb")
         self.assertEqual([(event.date, event.summary) for event in detail.events],
-                         [("2024-10-30", "Introduced by a mutual friend."), ("2026-03", "Caught up over coffee.")])
+                         [("2026-03", "Caught up over coffee."), ("2024-10-30", "Introduced by a mutual friend.")])
         self.assertEqual(detail.shared_context, ("school: Example University",))
         self.assertEqual(detail.aliases, ("Casey D (work)", "CD"))
         self.assertEqual(detail.location, "Oakland")

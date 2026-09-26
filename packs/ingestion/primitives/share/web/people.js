@@ -154,7 +154,7 @@ const state = {
   tab: "confirm", filters: new Map(), text: "", sort: { key: "name", dir: 1 },
   matching: [], counts: new Map(), quickCounts: [], selected: new Set(), focus: -1,
   drawerId: null, undo: null, saving: false, expanded: new Set(), collapsed: new Set(), moreOpen: false, labelSearch: "",
-  hintOpen: false,
+  hintOpen: false, sections: new Set(["decision", "timeline"]),
 };
 
 // ---------- helpers ----------
@@ -663,6 +663,10 @@ async function openDrawer(id, { refresh = false } = {}) {
 }
 
 const CHOICES = ["relationship_kind", "mode", "hierarchy", "intro_source", "seniority", "function"];
+function section(key, title, body, { count = 0, badge = "" } = {}) {
+  if (!body) return "";
+  return `<details class='dsec' data-section='${key}' ${state.sections.has(key) ? "open" : ""}><summary><h3>${escapeHtml(title)}${count ? ` <small>${count.toLocaleString()}</small>` : ""}</h3>${badge}</summary>${body}</details>`;
+}
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // Event dates are ISO prefixes ("2024-10-30", "2024-10", "2011"), sometimes two of them
 // ("2012-02 to 2012-03"); each one reads as a date and the rest shows as written.
@@ -709,12 +713,12 @@ function renderDrawer(row, detail) {
       <button type='button' class='btn btn-ghost' data-one='worth' aria-pressed='${!shares && !keepsPrivate}' ${state.saving || (!shares && !keepsPrivate) ? "disabled" : ""}>Use worth</button>
       <span>${state.saving ? "Saving…" : "Removes your choice; worth and flags decide."}</span>
     </div>
-    <div class='dsec'><h3>Decision</h3>
-      <p><span class='badge ${badge}'>${label("share", row.share)}</span> &nbsp;${escapeHtml(label("reason", row.reason))}</p>
+    ${section("decision", "Decision", `
+      <p>${escapeHtml(label("reason", row.reason))}</p>
       <p class='dim'>${worthLine}${detail?.worth_reason ? `: ${escapeHtml(detail.worth_reason)}` : ""}</p>
       ${detail?.worth_note ? `<p class='note'>${escapeHtml(detail.worth_note)}</p>` : ""}
-      ${detail?.note ? `<p class='note'>${escapeHtml(detail.note)}</p>` : ""}
-    </div>`;
+      ${detail?.note ? `<p class='note'>${escapeHtml(detail.note)}</p>` : ""}`,
+      { badge: `<span class='badge ${badge}'>${label("share", row.share)}</span>` })}`;
   if (detail === null) {
     els.drawer.innerHTML = `<div${swapStyle()}>${head}<div class='dsec' aria-busy='true'><h3>Details</h3><p class='dim'>Loading details…</p><div class='skeleton' style='height:12px;width:70%'></div><div class='skeleton' style='height:12px;width:50%'></div></div></div>`;
     return;
@@ -725,14 +729,14 @@ function renderDrawer(row, detail) {
   }
   const probabilities = Object.entries(detail.probabilities || {}).sort((a, b) => b[1] - a[1]);
   const contact = [...(detail.emails || []), ...(detail.phones || [])];
-  const timeline = detail.events.length ? `<div class='dsec'><h3>Timeline</h3>
-      <ol class='timeline'>${detail.events.map((event) => `<li><time>${escapeHtml(eventDate(event.date))}</time><span>${escapeHtml(event.summary)}</span></li>`).join("")}</ol>
-    </div>` : "";
-  const relationship = probabilities.length ? `<div class='dsec'><h3>Relationship</h3>
-      <dl class='kv'>${CHOICES.filter((key) => row[key]).map((key) => dt(FACET_BY_KEY.get(key).label,
+  const timeline = section("timeline", "Timeline", detail.events.length
+    ? `<ol class='timeline'>${detail.events.map((event) => `<li><time>${escapeHtml(eventDate(event.date))}</time><span>${escapeHtml(event.summary)}</span></li>`).join("")}</ol>`
+    : "", { count: detail.events.length });
+  const relationship = section("relationship", "Relationship", probabilities.length
+    ? `<dl class='kv'>${CHOICES.filter((key) => row[key]).map((key) => dt(FACET_BY_KEY.get(key).label,
         `${escapeHtml(facetText(FACET_BY_KEY.get(key), row[key]))} <small>${Math.round(((detail.choice_p || {})[key] || 0) * 100)}%</small>`)).join("")}
-        ${row.warmth !== null && row.warmth !== undefined ? dt("Warmth", `${Number(row.warmth).toFixed(1)} of 4 <small>${escapeHtml(row.warmthBucket)}</small>`) : ""}</dl>
-    </div>` : "<div class='dsec'><h3>Relationship</h3><p class='dim'>No relationship labels available.</p></div>";
+        ${row.warmth !== null && row.warmth !== undefined ? dt("Warmth", `${Number(row.warmth).toFixed(1)} of 4 <small>${escapeHtml(row.warmthBucket)}</small>`) : ""}</dl>`
+    : "<p class='dim'>No relationship labels available.</p>");
   const factRows = [
     dt("Employers", detail.employers.length ? lines(detail.employers) : ""),
     dt("School", detail.school ? escapeHtml(detail.school) : ""),
@@ -740,24 +744,20 @@ function renderDrawer(row, detail) {
     dt("Also known as", detail.aliases.length ? escapeHtml(detail.aliases.join(", ")) : ""),
     dt("Shared context", detail.shared_context.length ? lines(detail.shared_context.map(sentence)) : ""),
   ].join("");
-  const facts = detail.relationship_to_owner || factRows ? `<div class='dsec'><h3>Facts</h3>
-      ${detail.relationship_to_owner ? `<p>${escapeHtml(detail.relationship_to_owner)}</p>` : ""}
-      ${factRows ? `<dl class='kv'>${factRows}</dl>` : ""}
-    </div>` : "";
-  const topics = detail.topics.length ? `<details class='dsec'><summary><h3>Topics <small>${detail.topics.length}</small></h3></summary>
-      <ul class='plain'>${detail.topics.map((topic) => `<li>${escapeHtml(topic)}</li>`).join("")}</ul></details>` : "";
-  const dossier = detail.dossier_html ? `<details class='dsec'><summary><h3>Dossier</h3></summary><div class='dossier'>${detail.dossier_html}</div></details>` : "";
-  const contactSection = `<div class='dsec'><h3>Contact</h3>
-      <dl class='kv'>
+  const facts = section("facts", "Facts", (detail.relationship_to_owner ? `<p>${escapeHtml(detail.relationship_to_owner)}</p>` : "")
+    + (factRows ? `<dl class='kv'>${factRows}</dl>` : ""));
+  const topics = section("topics", "Topics", detail.topics.length
+    ? `<ul class='plain'>${detail.topics.map((topic) => `<li>${escapeHtml(topic)}</li>`).join("")}</ul>` : "", { count: detail.topics.length });
+  const dossier = section("dossier", "Dossier", detail.dossier_html ? `<div class='dossier'>${detail.dossier_html}</div>` : "");
+  const contactSection = section("contact", "Contact", `<dl class='kv'>
         ${dt("Interactions", `<span class='num'>${row.interactions.toLocaleString()}</span>`)}
         ${dt("Last contact", row.last_interaction ? escapeHtml(formatDate(row.last_interaction)) : "")}
         ${dt("Contact frequency", row.cadence ? `${escapeHtml(label("cadence", row.cadence))}${row.direction ? ` <small>writes: ${escapeHtml(label("direction", row.direction).toLowerCase())}</small>` : ""}` : "")}
         ${dt("Email and phone", contact.length ? lines(contact) : "")}
-      </dl>
-    </div>`;
-  const confidence = probabilities.length ? `<details class='dsec'><summary><h3>Label confidence</h3></summary>
-      <div class='bars'>${probabilities.map(([name, p]) => `<div class='barrow ${p >= .6 ? "active" : ""}'><span class='name'>${escapeHtml(label("labels", name))}</span><span class='track'><span class='fill' style='transform:scaleX(${p.toFixed(3)})'></span></span><span class='p'>${Math.round(p * 100)}%</span></div>`).join("")}</div>
-    </details>` : "";
+      </dl>`);
+  const confidence = section("confidence", "Label confidence", probabilities.length
+    ? `<div class='bars'>${probabilities.map(([name, p]) => `<div class='barrow ${p >= .6 ? "active" : ""}'><span class='name'>${escapeHtml(label("labels", name))}</span><span class='track'><span class='fill' style='transform:scaleX(${p.toFixed(3)})'></span></span><span class='p'>${Math.round(p * 100)}%</span></div>`).join("")}</div>`
+    : "", { count: probabilities.length });
   els.drawer.innerHTML = `<div${swapStyle()}>${head}${timeline}${facts}${relationship}${topics}${dossier}${contactSection}${confidence}</div>`;
 }
 
@@ -833,6 +833,8 @@ root.addEventListener("click", async (event) => {
 
 root.addEventListener("toggle", (event) => {
   if (event.target.matches("[data-hint]")) state.hintOpen = event.target.open;
+  const key = event.target.dataset?.section;
+  if (key) { if (event.target.open) state.sections.add(key); else state.sections.delete(key); }
 }, true);
 
 root.addEventListener("input", (event) => {
