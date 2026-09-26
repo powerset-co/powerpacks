@@ -26,6 +26,24 @@ GROUPS = (
 
 
 @dataclass(frozen=True)
+class TeamMember:
+    name: str
+    title: str
+    linkedin_url: str
+    location: str
+    started_on: str
+
+
+@dataclass(frozen=True)
+class TeamSimilarity:
+    rank: int
+    candidate_count: int
+    score: float
+    method: str
+    closest_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TraitScore:
     name: str
     score: float
@@ -250,6 +268,7 @@ class Candidate:
     taste_score: float | None = None
     pin_confidence: int | None = None
     pin_judgment: PinJudgment | None = None
+    team_similarity: TeamSimilarity | None = None
 
     @property
     def suggested_pin(self) -> bool:
@@ -279,6 +298,8 @@ class SearchResult:
     groups: tuple[CandidateGroup, ...]
     jd_text: str
     candidates: tuple[Candidate, ...]
+    team: tuple[TeamMember, ...] = ()
+    team_fetched_at: str = ""
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -481,7 +502,8 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
 
 
 def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
-               attribution: dict[str, Any] | None = None) -> Candidate:
+               attribution: dict[str, Any] | None = None,
+               similarity: dict[str, Any] | None = None) -> Candidate:
     person_id = _text(raw.get("person"))
     found_by = raw.get("found_by") or []
     sources: list[CandidatePond] = []
@@ -527,6 +549,8 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
         taste_score=_taste_score(raw.get("taste_score")),
         pin_confidence=_pin_confidence(raw.get("pin_confidence")),
         pin_judgment=_pin_judgment(raw.get("pin_judgment")),
+        team_similarity=(TeamSimilarity(**{**similarity,
+            "closest_names": tuple(similarity["closest_names"])}) if similarity else None),
     )
 
 
@@ -584,7 +608,11 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         if raw is not None and score is not None:
             raw.update(human_score=score, human_note=label["human"]["note"])
     attribution = payload.get('person_attribution') or {}
-    candidates = {key: _candidate(row, raw_runs, attribution.get(key))
+    team_path = root / run_id / "team.json"
+    team = json.loads(team_path.read_text()) if team_path.is_file() else {}
+    similarity_path = root / run_id / "team-similarity.json"
+    similarities = json.loads(similarity_path.read_text()) if similarity_path.is_file() else {}
+    candidates = {key: _candidate(row, raw_runs, attribution.get(key), similarities.get(key))
                   for key, row in raw_candidates.items()}
     groups = tuple(CandidateGroup(
         key=key,
@@ -603,6 +631,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         groups=groups,
         jd_text=jd_path.read_text(encoding="utf-8").strip() if jd_path.is_file() else "",
         candidates=tuple(candidates.values()),
+        team=tuple(TeamMember(**row) for row in team.get("members", [])),
+        team_fetched_at=team.get("fetched_at", ""),
     )
 
 

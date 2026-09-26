@@ -3,6 +3,21 @@ const readOnly = document.documentElement.dataset.readonly === "true";
 const hostedFeedback = document.documentElement.dataset.hostedFeedback === "true";
 const hostedRequests = new Map();
 
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-team-page]");
+  if (!button) return;
+  const table = button.closest("[data-team-table]");
+  const rows = [...table.querySelectorAll("[data-team-row]")];
+  const page = Math.max(0, Math.min(Math.ceil(rows.length / 10) - 1,
+    Number(table.dataset.page || 0) + Number(button.dataset.teamPage)));
+  table.dataset.page = String(page);
+  rows.forEach((row, index) => { row.hidden = index < page * 10 || index >= (page + 1) * 10; });
+  table.querySelector("[data-team-range]").textContent =
+    `${page * 10 + 1}–${Math.min((page + 1) * 10, rows.length)} of ${rows.length}`;
+  table.querySelector('[data-team-page="-1"]').disabled = page === 0;
+  table.querySelector('[data-team-page="1"]').disabled = (page + 1) * 10 >= rows.length;
+});
+
 function submitHostedFeedback(values) {
   const requestId = crypto.randomUUID();
   return new Promise((resolve, reject) => {
