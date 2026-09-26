@@ -24,7 +24,8 @@ Use the narrow path when the user names one:
 
 - `$deep-context lookup ...`, "who is <name/phone/email>?" -> run only
   `bin/deep-context lookup ...` (free, read-only).
-- `$deep-context check` -> run only `bin/deep-context check` (free, read-only).
+- `$deep-context check` -> run only `bin/deep-context check` (free); report
+  `next_command` and stop.
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
@@ -119,8 +120,10 @@ bin/deep-context check
 uv run --project . python packs/ingestion/primitives/imports/status.py status
 ```
 
-`check` is read-only. Combine current source imports, then project their
-people into SQLite; `ensure-parents` creates the store on a fresh install.
+`check` sets aside the recognized August SQLite layout as
+`deep-context.sqlite.bkup-schema-<UTC timestamp>` beside the store; otherwise
+it only reads. Combine current source imports, then project their people into
+SQLite; `ensure-parents` creates the store on a fresh install.
 Imports do not merge people or write identity decisions:
 
 ```bash
@@ -147,7 +150,9 @@ family spans, re-owns each legacy raw bundle and facts record to its cold
 parent, replays the human worth and LinkedIn decisions from
 `overrides/review.csv`, and projects Parallel research results so enrichment
 reuses them. Machine review rows, dossiers and the profile cache are not
-carried. A seeded store refuses a second run. Carried facts with a message
+carried. Unmatched worth and identity decisions remain in the legacy files; the
+manifest counts them as `worth_unmatched` and `identity_unmatched`.
+A seeded store refuses a second run. Carried facts with a message
 baseline skip synthesis while that evidence is unchanged. New or changed
 evidence, `--force`, or a model/effort change makes the person pending. Without
 a carried bundle there is no baseline to compare. Synthesis appends extraction
@@ -162,18 +167,17 @@ Do not run `seed` for a narrow `$deep-context check`; report its
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
 source. Stop on unreadable iMessage Full Disk Access.
 
-Inspect `.powerpacks/deep-context/owner.json`. If it exists, confirm it by showing
-just the LinkedIn profile — `Your LinkedIn Profile: <name> <linkedin_url>` — not the
-raw fields. If it does not exist, ask for the user's LinkedIn URL and email.
+Inspect `.powerpacks/deep-context/owner.json`. If it exists, run
+`bin/deep-context owner` once to project it into SQLite (no flags, no RapidAPI).
+If it does not exist, ask for the user's LinkedIn URL and email.
 Disclose that a profile-cache miss calls RapidAPI and get approval before:
 
 ```bash
 bin/deep-context owner --linkedin-url <url> --email <email>
 ```
 
-owner.json is required: `dry` and `compose` fail without it. When `check`
-reports `checks.owner_json.status` `absent`, its `next_command` is that owner
-command.
+Owner context is required: `dry` and `compose` fail without it. `check` routes
+to owner only after `ensure-parents` and any required `seed`.
 
 ### 2. Message scope
 

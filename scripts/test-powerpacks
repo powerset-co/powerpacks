@@ -86,6 +86,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_http_contract \
   tests.test_deep_context_identity_invariants \
   tests.test_deep_context_identity_queue \
+  tests.test_deep_context_fresh_install \
   tests.test_deep_context_import_hygiene \
   tests.test_deep_context_imported_people \
   tests.test_deep_context_judgment_policy \

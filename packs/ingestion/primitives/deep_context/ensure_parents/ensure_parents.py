@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
@@ -68,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    scrub_august_deep_context_store(Path(args.db))
     payload = EnsureParents(
         db=Db(Path(args.db)),
         people_csv=Path(args.people_csv),
