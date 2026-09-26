@@ -1018,7 +1018,7 @@ if (catalog) {
       if (matches) shown += 1;
     });
     versionChips.forEach((chip) => chip.setAttribute("aria-pressed", String(state.version.has(chip.dataset.value))));
-    count.textContent = `${shown} of ${rows.length}`;
+    count.textContent = `${shown} of ${rows.length} searches`;
     empty.hidden = shown > 0;
     sessionStorage.setItem(CATALOG_KEY, JSON.stringify({ ...state, version: [...state.version] }));
   }

@@ -1,8 +1,8 @@
 """The People page's routes: the page, its assets, the people payload, one write.
 
 Flow: `ShareRoutes` mounts under `/people` and `/api/people/` in the review
-server (`bin/deep-context review people`); `main()` serves the same routes
-alone on a free port for tests and scale checks. GET `/api/people/rows` ->
+server (`bin/deep-context review people`); `make_handler` serves the same
+routes alone for tests. GET `/api/people/rows` ->
 `SharePeople.load()` as one columnar payload; POST `/api/people/tags` carries
 the tags each selected person should hold (absolute sets, so undo re-posts
 the previous sets), writes the tag rows and re-decides those people's share
@@ -14,23 +14,21 @@ Changelog:
 
 from __future__ import annotations
 
-import argparse
 import gzip
 import json
 import sys
 import urllib.parse
-import webbrowser
 from dataclasses import asdict
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import share_views
 from packs.ingestion.primitives.deep_context.db.models import PersonTagRow, ShareDecisionRow
-from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, DEFAULT_PEOPLE_CSV
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE_CSV
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
@@ -41,7 +39,6 @@ from packs.search.primitives.deep_search.results_web import RESULTS_CSS
 PAGE_PATH = "/people"
 API_PREFIX = "/api/people/"
 ASSET_PREFIX = "/people/assets/"
-DEFAULT_PORT = 8767
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
@@ -206,7 +203,7 @@ def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV) -> ShareRoutes:
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
-    """A handler that serves only the share routes (tests, scale checks)."""
+    """A handler that serves only the People routes (tests)."""
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -229,35 +226,3 @@ def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
 
     return Handler
 
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--db", type=Path, default=CANONICAL_DB)
-    parser.add_argument("--people-csv", type=Path, default=DEFAULT_PEOPLE_CSV)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--open", action="store_true")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    routes = share_routes(open_existing_db(args.db), args.people_csv)
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(routes))
-    host, port = server.server_address
-    url = f"http://{host}:{port}{PAGE_PATH}"
-    print(json.dumps({"primitive": "people_web", "status": "serving", "url": url,
-                      "db": str(args.db), "people": len(routes.load())}, indent=2))
-    if args.open:
-        webbrowser.open(url)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nshutting down", file=sys.stderr)
-    finally:
-        server.server_close()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

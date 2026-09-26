@@ -2,24 +2,24 @@
 
 Flow: `SearchRoutes` answers the list (`/`, manifests only), one run
 (`/run?run_id=`, loaded on first open and cached until its results or labels
-change), `/api/search`, `/tags` and `/feedback`. `main()` serves them alone
-(the viewer the search skill opens); the review server mounts the same routes
-under `/searches` so the share page and the searches share one origin.
+change), `/api/search`, `/tags` and `/feedback`. The deep-context review
+server mounts them under `/searches` (`bin/deep-context review searches`),
+with or without a deep-context store; `make_handler` serves them alone for
+tests.
 
 Changelog:
   2026-09-26: routes became mountable under a base path; the list page reads
-      the catalog; runs load one at a time.
+      the catalog; runs load one at a time; the standalone `main()` went, the
+      review server is the one local server.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 import urllib.parse
-import webbrowser
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable
 
@@ -266,9 +266,10 @@ class SearchRoutes:
 
 def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]],
                  feedback_sender: FeedbackSender = submit_results_feedback, *,
-                 catalog: Catalog | None = None, load_one: LoadSearch | None = None):
-    """A handler serving only the viewer routes at the root, plus `/healthz`."""
-    routes = SearchRoutes(results_root, load, feedback_sender, catalog=catalog, load_one=load_one)
+                 catalog: Catalog | None = None, load_one: LoadSearch | None = None,
+                 base: str = "") -> type[BaseHTTPRequestHandler]:
+    """A handler serving only the viewer routes (under `base`), plus `/healthz`."""
+    routes = SearchRoutes(results_root, load, feedback_sender, catalog=catalog, load_one=load_one, base=base)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -330,45 +331,3 @@ def search_routes(root: Path, *, base: str = "", run_id: str | None = None) -> S
 
     return SearchRoutes(root, load, catalog=catalog, load_one=load_one, base=base)
 
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    scope = parser.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--run-dir", help="show one completed deep-search run")
-    scope.add_argument("--root", help="show every summarized run under this root")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8766)
-    parser.add_argument("--open", action="store_true")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    run_dir = Path(args.run_dir).resolve() if args.run_dir else None
-    root = run_dir.parent if run_dir else Path(args.root).resolve()
-    routes = search_routes(root, run_id=run_dir.name if run_dir else None)
-    if run_dir and routes.one(run_dir.name) is None:
-        parser.error(f"no summarized results found in {run_dir}")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(
-        root, routes.load, catalog=routes.catalog, load_one=routes.load_one))
-    host, port = server.server_address
-    url = f"http://{host}:{port}/" + (f"run?run_id={urllib.parse.quote(run_dir.name)}" if run_dir else "")
-    payload = {"primitive": "deep_search_results_web", "status": "serving",
-               "url": url, "results_root": str(root), "searches": routes.count()}
-    if run_dir:
-        payload["run_dir"] = str(run_dir)
-    print(json.dumps(payload, indent=2))
-    if args.open:
-        webbrowser.open(url)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nshutting down", file=sys.stderr)
-    finally:
-        server.server_close()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

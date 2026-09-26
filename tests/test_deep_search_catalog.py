@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
+from http.server import ThreadingHTTPServer
 import unittest
 import urllib.request
 from pathlib import Path
@@ -12,7 +13,7 @@ from unittest import mock
 
 from packs.search.primitives.deep_search import search_harness
 from packs.search.primitives.deep_search.results_web.model import load_catalog, load_search, load_searches
-from packs.search.primitives.deep_search.results_web.server import ThreadingHTTPServer, _run_loader, make_handler
+from packs.search.primitives.deep_search.results_web.server import _run_loader, make_handler
 
 CANDIDATE = "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"
 
@@ -167,7 +168,7 @@ class BrowserCatalogTests(CatalogTests):
                 page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
                 # The newest stamped version is selected by default; the unversioned run is hidden.
                 expect(page.locator(".catalog-row:visible")).to_have_count(1)
-                expect(page.locator("[data-catalog-count]")).to_have_text("1 of 2")
+                expect(page.locator("[data-catalog-count]")).to_have_text("1 of 2 searches")
                 page.get_by_role("button", name="2026-09-26").click()
                 expect(page.locator(".catalog-row:visible")).to_have_count(2)
                 page.get_by_role("button", name="unversioned").click()

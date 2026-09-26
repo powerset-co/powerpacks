@@ -1,10 +1,15 @@
 // People page: every person once, filtered client-side; bulk share / private tags in one write.
 // Vocabulary: person, worth, share / confirm / not sharing, tag, label, flag.
+// Rows are keyed DOM nodes: a click, a selection or a focus move patches attributes in
+// place; only rows entering or leaving the visible window are built or dropped.
 
 const API = "/api/people/";
 const ROW_H = 40;
 const OVERSCAN = 8;
-const FILTERS_KEY = "powerpacks:people-filters:v1";
+const ENTER_ROWS = 14;
+const ENTER_STAGGER_MS = 14;
+const COUNT_TWEEN_MS = 320;
+const FILTERS_KEY = "powerpacks:people-filters:v2";
 const YEAR = 365;
 const DECISIONS = ["confirm", "yes", "no"];
 
@@ -26,21 +31,51 @@ const els = {
   toast: root.querySelector(".toast"),
 };
 
+// ---------- copy ----------
+
+const BRANDS = { gmail: "Gmail", imessage: "iMessage", whatsapp: "WhatsApp", linkedin: "LinkedIn", jev: "JEV" };
+// Plain words for the machine values; anything unmapped falls back to sentence case.
 const TEXT = {
-  share: { yes: "Share", confirm: "Confirm", no: "Not sharing" },
+  share: { yes: "Sharing", confirm: "Needs confirmation", no: "Not sharing" },
   reason: {
-    worth_yes: "worth yes", worth_maybe: "worth maybe", worth_no: "worth no", owner: "the owner",
-    human_share: "you said share", human_private: "you said private",
-    family: "family", romantic_partner: "partner", minor: "minor", sensitive_context: "sensitive context",
-    sensitive_provider: "clinician / lawyer / banker", automated_sender: "automated sender", stranger: "stranger",
+    worth_yes: "Worth: yes", worth_maybe: "Worth: maybe", worth_no: "Worth: no", owner: "You (the owner)",
+    human_share: "You chose to share", human_private: "You chose to keep private",
+    family: "Family", romantic_partner: "Partner", minor: "Minor", sensitive_context: "Sensitive context",
+    sensitive_provider: "Clinician, lawyer, or banker", automated_sender: "Automated sender", stranger: "Stranger",
+  },
+  worth: { yes: "Yes", maybe: "Maybe", no: "No", unjudged: "Not assessed" },
+  source: { human: "You", machine: "AI" },
+  mode: { professional_only: "Work only", personal_only: "Personal only", mixed: "Work and personal" },
+  hierarchy: { manager: "They managed you", peer: "Same level", report: "You managed them", none: "No reporting line" },
+  intro_source: { mutual_friend: "Mutual friend", cold_outreach: "Unsolicited contact" },
+  seniority: { mid: "Mid-level" },
+  function: { founder_exec: "Founder or executive", people: "People and recruiting" },
+  direction: { they_initiate: "Mostly them", i_initiate: "Mostly you", mutual: "Both" },
+  cadence: { dormant: "No contact in over 2 years", stale: "No contact in over 1 year" },
+  labels: {
+    is_coworker_current: "Current colleague", is_coworker_past: "Former colleague", is_vendor_or_partner: "Vendor or partner",
+    is_mentor_or_advisor: "Mentor or adviser", is_mentee_or_report: "Someone you mentor or manage",
+    is_neighbor_or_local: "Neighbor or local contact", is_healthcare_legal_or_financial_provider: "Healthcare, legal, or financial provider",
+    owner_would_intro: "You would introduce them", they_would_take_owner_call: "They would take your call",
+    notable: "Publicly notable",
   },
 };
-const humanize = (value) => String(value ?? "").replace(/^is_/, "").replaceAll("_", " ");
-const label = (kind, value) => (TEXT[kind] && TEXT[kind][value]) || humanize(value);
+const humanize = (value) => String(value ?? "").replace(/^is_/, "").replaceAll("_", " ").trim();
+// Sentence case, brand names kept: "close friend" -> "Close friend", "imessage" -> "iMessage".
+function sentence(value) {
+  const words = humanize(value).split(" ").filter(Boolean);
+  if (!words.length) return "";
+  const cased = words.map((word) => BRANDS[word.toLowerCase()] || word);
+  if (!BRANDS[words[0].toLowerCase()]) cased[0] = cased[0][0].toUpperCase() + cased[0].slice(1);
+  return cased.join(" ");
+}
+const label = (kind, value) => (TEXT[kind] && TEXT[kind][value]) || sentence(value);
+const plural = (count, noun) => `${count.toLocaleString()} ${count === 1 ? noun : (noun === "person" ? "people" : `${noun}s`)}`;
+const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 // One icon per source family, the same glyphs the search viewer uses.
 const CHANNEL = {
-  gmail: { title: "Email", path: "<rect width='20' height='16' x='2' y='4' rx='2'/><path d='m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7'/>" },
+  gmail: { title: "Gmail", path: "<rect width='20' height='16' x='2' y='4' rx='2'/><path d='m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7'/>" },
   imessage: { title: "iMessage", path: "<path d='M7.9 20A9 9 0 1 0 4 16.1L2 22Z'/>" },
   whatsapp: { title: "WhatsApp", path: "<path d='M7.9 20A9 9 0 1 0 4 16.1L2 22Z'/><path d='M9 10a3 3 0 0 0 6 4'/>" },
   linkedin: { title: "LinkedIn", fill: true, path: "<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/>" },
@@ -53,53 +88,53 @@ function channelIcon(channel) {
 }
 
 function warmthCell(value) {
-  if (value === null || value === undefined) return "<div class='warmth-cell dim'>—</div>";
+  if (value === null || value === undefined) return "<div class='warmth-cell c-warmth dim'>—</div>";
   const on = Math.round(Number(value));
   const bars = [1, 2, 3, 4].map((level) => `<i class='${level <= on ? "on" : ""}'></i>`).join("");
-  return `<div class='warmth-cell' title='Warmth ${Number(value).toFixed(1)} of 4'><span class='warmth-bar'>${bars}</span>${Number(value).toFixed(1)}</div>`;
+  return `<div class='warmth-cell c-warmth' title='Warmth ${Number(value).toFixed(1)} of 4'><span class='warmth-bar'>${bars}</span>${Number(value).toFixed(1)}</div>`;
 }
 
+const LAST = ["< 1 year", "1–2 years", "> 2 years", "Never"];
 function lastBucket(days) {
-  if (days === null || days === undefined) return "never";
-  if (days <= YEAR) return "<1y";
-  if (days <= 2 * YEAR) return "1–2y";
-  return ">2y";
+  if (days === null || days === undefined) return LAST[3];
+  if (days < YEAR) return LAST[0];
+  if (days <= 2 * YEAR) return LAST[1];
+  return LAST[2];
 }
+const WARMTH = ["Distant (0–1)", "Friendly (1–2)", "Close (2–3)", "Inner circle (3–4)"];
 function warmthBucket(value) {
   if (value === null || value === undefined) return "";
-  if (value < 1) return "0–1 distant";
-  if (value < 2) return "1–2 friendly";
-  if (value < 3) return "2–3 close";
-  return "3–4 inner circle";
+  return WARMTH[Math.min(3, Math.floor(value))];
 }
 
 // Facets: OR within one, AND across, always within the selected decision tab.
-// `get` returns the row's values for the facet. Default facets stay open; the
-// rest collapse under "More filters".
+// `get` returns the row's values for the facet; `text` renders one value. The
+// default facets stay open; the rest collapse under "More filters".
 const FACETS = [
-  { key: "flag", label: "Flag", get: (r) => (r.flag ? [r.flag] : []), text: (v) => label("reason", v) },
+  { key: "flag", label: "Flag", get: (r) => (r.flag ? [r.flag] : []), words: "reason" },
   { key: "worth", label: "Worth", get: (r) => [r.worth || "unjudged"], order: ["yes", "maybe", "no", "unjudged"] },
   { key: "relationship_kind", label: "Relationship", get: (r) => (r.relationship_kind ? [r.relationship_kind] : []) },
-  { key: "last", label: "Last contact", get: (r) => [r.last], order: ["<1y", "1–2y", ">2y", "never"] },
+  { key: "last", label: "Last contact", get: (r) => [r.last], order: LAST },
   { key: "channels", label: "Sources", get: (r) => r.channels, order: ["gmail", "imessage", "whatsapp", "linkedin"] },
-  { key: "linkedin", label: "LinkedIn", get: (r) => [r.public_identifier ? "has LinkedIn" : "no LinkedIn"], order: ["has LinkedIn", "no LinkedIn"] },
-  { key: "reason", label: "Why", get: (r) => [r.reason], text: (v) => label("reason", v), more: true },
-  { key: "worth_source", label: "Worth decided by", get: (r) => (r.worth_source ? [r.worth_source] : []), more: true },
+  { key: "linkedin", label: "LinkedIn", get: (r) => [r.public_identifier ? "Has LinkedIn" : "No LinkedIn"], order: ["Has LinkedIn", "No LinkedIn"] },
+  { key: "reason", label: "Reason", get: (r) => [r.reason], more: true },
+  { key: "worth_source", label: "Worth decided by", get: (r) => (r.worth_source ? [r.worth_source] : []), words: "source", more: true },
   { key: "tags", label: "Your tags", get: (r) => r.tags, more: true },
-  { key: "labels", label: "Labels ≥ 60%", get: (r) => r.labels, text: humanize, more: true, search: true },
+  { key: "labels", label: "Relationship labels", get: (r) => r.labels, more: true, search: true },
   { key: "function", label: "Function", get: (r) => (r.function ? [r.function] : []), more: true },
   { key: "seniority", label: "Seniority", get: (r) => (r.seniority ? [r.seniority] : []), more: true },
-  { key: "mode", label: "Register", get: (r) => (r.mode ? [r.mode] : []), more: true },
-  { key: "warmth", label: "Warmth", get: (r) => (r.warmthBucket ? [r.warmthBucket] : []), more: true },
+  { key: "mode", label: "Conversation", get: (r) => (r.mode ? [r.mode] : []), more: true },
+  { key: "warmth", label: "Warmth", get: (r) => (r.warmthBucket ? [r.warmthBucket] : []), order: WARMTH, more: true },
   { key: "direction", label: "Who writes", get: (r) => (r.direction ? [r.direction] : []), more: true },
-  { key: "hierarchy", label: "Hierarchy", get: (r) => (r.hierarchy ? [r.hierarchy] : []), more: true },
+  { key: "hierarchy", label: "Reporting relationship", get: (r) => (r.hierarchy ? [r.hierarchy] : []), more: true },
   { key: "intro_source", label: "How you met", get: (r) => (r.intro_source ? [r.intro_source] : []), more: true },
   { key: "evidence", label: "Evidence", get: (r) => [
-    ...(r.linkedin_only ? ["no JEV labels"] : []), ...(r.group_chat_only ? ["group chats only"] : []),
-    ...(r.shared_employer ? ["shared employer"] : []), ...(r.shared_school ? ["shared school"] : []),
+    ...(r.linkedin_only ? ["No relationship labels"] : []), ...(r.group_chat_only ? ["Group chats only"] : []),
+    ...(r.shared_employer ? ["Shared employer"] : []), ...(r.shared_school ? ["Shared school"] : []),
   ], more: true },
 ];
 const FACET_BY_KEY = new Map(FACETS.map((facet) => [facet.key, facet]));
+const facetText = (facet, value) => label(facet.words || facet.key, value);
 const VISIBLE_VALUES = 8;
 
 // Quick filters: named facet selections with explicit predicates, counted within the tab.
@@ -108,8 +143,8 @@ const QUICK = [
   { name: "Sensitive context", set: { flag: ["sensitive_context"] } },
   { name: "Service providers", set: { relationship_kind: ["service_provider"] } },
   { name: "Recruiters", set: { labels: ["is_recruiter"] } },
-  { name: "Strangers / automated", set: { flag: ["stranger", "automated_sender"] } },
-  { name: "Last contact > 2y", set: { last: [">2y"] } },
+  { name: "Strangers or automated senders", set: { flag: ["stranger", "automated_sender"] } },
+  { name: "Last contact > 2 years", set: { last: [LAST[2]] } },
   { name: "Close friends", set: { relationship_kind: ["close_friend"] } },
 ];
 
@@ -118,6 +153,7 @@ const state = {
   tab: "confirm", filters: new Map(), text: "", sort: { key: "name", dir: 1 },
   matching: [], counts: new Map(), quickCounts: [], selected: new Set(), focus: -1,
   drawerId: null, undo: null, saving: false, expanded: new Set(), collapsed: new Set(), moreOpen: false, labelSearch: "",
+  hintOpen: false,
 };
 
 // ---------- helpers ----------
@@ -136,12 +172,31 @@ function formatDate(value) {
   if (Number.isNaN(date.getTime())) return value.slice(0, 10);
   return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 }
-function announce(message, isError = false) {
-  els.toast.textContent = message;
-  els.toast.classList.toggle("error", isError);
+function setAttr(node, name, value) {
+  const text = String(value);
+  if (node.getAttribute(name) !== text) node.setAttribute(name, text);
+}
+// Counts roll to their new value instead of jumping.
+function tweenCount(node, to) {
+  const from = Number(node.dataset.value ?? to);
+  node.dataset.value = String(to);
+  if (from === to || document.visibilityState === "hidden" || REDUCED_MOTION.matches) { node.textContent = to.toLocaleString(); return; }
+  const startedAt = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - startedAt) / COUNT_TWEEN_MS);
+    const eased = 1 - (1 - t) ** 3;
+    node.textContent = Math.round(from + (to - from) * eased).toLocaleString();
+    if (t < 1) window.requestAnimationFrame(step);
+  };
+  window.requestAnimationFrame(step);
+}
+function announce(message, { error = false, undo = false } = {}) {
+  els.toast.innerHTML = `<span>${escapeHtml(message)}</span>`
+    + (undo ? "<button type='button' data-action='undo'>Undo <span class='kbd'>Z</span></button>" : "");
+  els.toast.classList.toggle("error", error);
   els.toast.classList.add("show");
   window.clearTimeout(announce.timer);
-  announce.timer = window.setTimeout(() => els.toast.classList.remove("show"), isError ? 6000 : 2200);
+  announce.timer = window.setTimeout(() => els.toast.classList.remove("show"), error ? 8000 : 6000);
 }
 function saveFilters() {
   const filters = Object.fromEntries([...state.filters].map(([key, values]) => [key, [...values]]));
@@ -167,7 +222,7 @@ function restoreFilters() {
 
 async function load() {
   const response = await fetch(`${API}rows`);
-  if (!response.ok) throw new Error((await response.text()) || "Could not load people");
+  if (!response.ok) throw new Error((await response.text()) || "Couldn't load people.");
   const payload = await response.json();
   const { columns } = payload;
   const index = Object.fromEntries(columns.map((column, position) => [column, position]));
@@ -234,12 +289,35 @@ function filterRows() {
 
 // ---------- rendering ----------
 
+// The three decision counts are the tabs. Built once; counts roll and the ink slides.
 function renderHead() {
   const totals = Object.fromEntries(DECISIONS.map((decision) => [decision, state.rows.filter((row) => row.share === decision).length]));
-  els.head.innerHTML = DECISIONS.map((decision) => `
-    <button type='button' class='stat stat-${decision}' data-tab='${decision}' aria-pressed='${state.tab === decision}'>
-      <b>${totals[decision].toLocaleString()}</b><span>${label("share", decision)}</span></button>`).join("")
-    + `<span class='head-note'>${state.rows.length.toLocaleString()} people</span>`;
+  if (!els.head.childElementCount) {
+    els.head.innerHTML = DECISIONS.map((decision) => `
+      <button type='button' class='stat stat-${decision}' data-tab='${decision}' aria-pressed='false'>
+        <b>0</b><span>${label("share", decision)}</span></button>`).join("")
+      + "<i class='tab-ink' aria-hidden='true'></i><span class='head-note'></span>";
+  }
+  for (const decision of DECISIONS) {
+    const tab = els.head.querySelector(`[data-tab='${decision}']`);
+    setAttr(tab, "aria-pressed", state.tab === decision);
+    tweenCount(tab.querySelector("b"), totals[decision]);
+  }
+  els.head.querySelector(".head-note").textContent = plural(state.rows.length, "person");
+  moveInk();
+}
+function moveInk() {
+  const active = els.head.querySelector("[data-tab][aria-pressed='true']");
+  const ink = els.head.querySelector(".tab-ink");
+  if (!active || !ink) return;
+  const first = !ink.dataset.placed;
+  if (first) ink.style.transition = "none";
+  ink.style.transform = `translateX(${active.offsetLeft}px)`;
+  ink.style.width = `${active.offsetWidth}px`;
+  if (first) {
+    ink.dataset.placed = "1";
+    window.requestAnimationFrame(() => { ink.style.transition = ""; });
+  }
 }
 
 function renderQuick() {
@@ -261,24 +339,35 @@ function renderRail() {
     let values = [...new Set([...counts.keys(), ...held])];
     if (facet.order) values.sort((a, b) => (facet.order.indexOf(a) + 1 || 99) - (facet.order.indexOf(b) + 1 || 99));
     else values.sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0) || String(a).localeCompare(String(b)));
-    if (facet.search && state.labelSearch) values = values.filter((value) => humanize(value).includes(state.labelSearch));
+    if (facet.search && state.labelSearch) values = values.filter((value) => facetText(facet, value).toLowerCase().includes(state.labelSearch));
     const expanded = state.expanded.has(facet.key);
     const shown = expanded || values.length <= VISIBLE_VALUES + 1 ? values : values.slice(0, VISIBLE_VALUES);
     const hidden = values.length - shown.length;
     if (!values.length) return "";
     return `<div class='facet' data-facet='${facet.key}' data-open='${!state.collapsed.has(facet.key)}'>
-      <button type='button' class='facet-head' data-facet-toggle='${facet.key}'>${escapeHtml(facet.label)}${held.size ? " <i class='active-dot' aria-hidden='true'></i>" : ""}</button>
-      <div class='facet-body'>
+      <button type='button' class='facet-head' data-facet-toggle='${facet.key}' aria-expanded='${!state.collapsed.has(facet.key)}'>${escapeHtml(facet.label)}${held.size ? " <i class='active-dot' aria-hidden='true'></i>" : ""}</button>
+      <div class='facet-body'><div class='facet-list'>
         ${facet.search ? `<input type='search' class='field facet-search' data-label-search value='${escapeHtml(state.labelSearch)}' placeholder='Find a label' aria-label='Find a label'>` : ""}
-        ${shown.map((value) => `<button type='button' class='facet-value' data-facet-key='${facet.key}' data-facet-value='${escapeHtml(value)}' aria-pressed='${held.has(value)}' ${!counts.get(value) && !held.has(value) ? "disabled" : ""}><span class='label'>${escapeHtml((facet.text || humanize)(value))}</span><span class='count'>${(counts.get(value) || 0).toLocaleString()}</span></button>`).join("")}
+        ${shown.map((value) => `<button type='button' class='facet-value' data-facet-key='${facet.key}' data-facet-value='${escapeHtml(value)}' aria-pressed='${held.has(value)}' ${!counts.get(value) && !held.has(value) ? "disabled" : ""}><span class='label'>${escapeHtml(facetText(facet, value))}</span><span class='count'>${(counts.get(value) || 0).toLocaleString()}</span></button>`).join("")}
         ${hidden > 0 ? `<button type='button' class='facet-more' data-facet-expand='${facet.key}'>${hidden} more…</button>` : ""}
         ${expanded && values.length > VISIBLE_VALUES + 1 ? `<button type='button' class='facet-more' data-facet-collapse='${facet.key}'>Show fewer</button>` : ""}
-      </div></div>`;
+      </div></div></div>`;
   };
   els.rail.innerHTML = facets.map(block).join("")
     + `<button type='button' class='facet-head rail-divider' data-more-toggle aria-expanded='${state.moreOpen}'>More filters</button>`
     + (state.moreOpen ? more.map(block).join("") : "")
-    + `<p class='rail-hint'><span class='kbd'>1</span><span class='kbd'>2</span><span class='kbd'>3</span> tab · <span class='kbd'>/</span> search · <span class='kbd'>j</span><span class='kbd'>k</span> move · <span class='kbd'>x</span> select · <span class='kbd'>⇧A</span> select all matching · <span class='kbd'>s</span> share · <span class='kbd'>p</span> private · <span class='kbd'>w</span> use worth · <span class='kbd'>z</span> undo · <span class='kbd'>Enter</span> open</p>`;
+    + `<details class='rail-hint' ${state.hintOpen ? "open" : ""} data-hint><summary>Keyboard shortcuts</summary><dl>
+        <dt><span class='kbd'>1</span><span class='kbd'>2</span><span class='kbd'>3</span></dt><dd>Switch tab</dd>
+        <dt><span class='kbd'>/</span></dt><dd>Search</dd>
+        <dt><span class='kbd'>J</span><span class='kbd'>K</span></dt><dd>Move</dd>
+        <dt><span class='kbd'>X</span></dt><dd>Select</dd>
+        <dt><span class='kbd'>⇧A</span></dt><dd>Select all matching</dd>
+        <dt><span class='kbd'>S</span></dt><dd>Share</dd>
+        <dt><span class='kbd'>P</span></dt><dd>Keep private</dd>
+        <dt><span class='kbd'>W</span></dt><dd>Use worth</dd>
+        <dt><span class='kbd'>Z</span></dt><dd>Undo</dd>
+        <dt><span class='kbd'>Enter</span></dt><dd>Open or close details</dd>
+      </dl></details>`;
 }
 
 function renderChips() {
@@ -286,58 +375,83 @@ function renderChips() {
   for (const [key, values] of state.filters) {
     const facet = FACET_BY_KEY.get(key);
     for (const value of values) {
-      chips.push(`<button type='button' class='chip' aria-pressed='true' data-chip-key='${key}' data-chip-value='${escapeHtml(value)}' title='Remove'><em>${escapeHtml(facet.label)}</em> ${escapeHtml((facet.text || humanize)(value))}<span class='x' aria-hidden='true'>×</span></button>`);
+      chips.push(`<button type='button' class='chip' aria-pressed='true' data-chip-key='${key}' data-chip-value='${escapeHtml(value)}' title='Remove'><em>${escapeHtml(facet.label)}</em> ${escapeHtml(facetText(facet, value))}<span class='x' aria-hidden='true'>×</span></button>`);
     }
   }
-  if (chips.length) chips.push("<button type='button' class='btn btn-ghost bar-clear' data-clear-filters>Clear</button>");
+  if (chips.length) chips.push("<button type='button' class='btn btn-ghost bar-clear' data-clear-filters>Clear filters</button>");
   els.chips.innerHTML = chips.join("");
   const inTab = state.rows.filter((row) => row.share === state.tab).length;
-  els.count.textContent = `${state.matching.length.toLocaleString()} of ${inTab.toLocaleString()} ${label("share", state.tab).toLowerCase()}`;
+  const shown = state.matching.length;
+  els.count.textContent = shown === inTab ? plural(inTab, "person") : `${shown.toLocaleString()} of ${inTab.toLocaleString()} people`;
 }
 
 const COLUMNS = [
-  { key: "", label: "" },
-  { key: "name", label: "Person" },
-  { key: "sources", label: "Sources", sortable: false },
-  { key: "reason", label: "Why" },
-  { key: "relationship", label: "Relationship" },
-  { key: "worth", label: "Worth" },
-  { key: "warmth", label: "Warmth" },
-  { key: "last", label: "Last contact", right: true },
-  { key: "messages", label: "Messages", right: true },
+  { key: "", cls: "c-check", label: "" },
+  { key: "name", cls: "c-person", label: "Person" },
+  { key: "sources", cls: "c-sources", label: "Sources", sortable: false },
+  { key: "reason", cls: "c-why", label: "Reason" },
+  { key: "relationship", cls: "c-rel", label: "Relationship" },
+  { key: "worth", cls: "c-worth", label: "Worth" },
+  { key: "warmth", cls: "c-warmth", label: "Warmth" },
+  { key: "last", cls: "c-last", label: "Last contact", right: true },
+  { key: "messages", cls: "c-msgs", label: "Interactions", right: true },
 ];
 
 function renderGridHead() {
-  const allSelected = state.matching.length > 0 && state.matching.every((row) => state.selected.has(row.person_id));
+  const selectedHere = state.matching.filter((row) => state.selected.has(row.person_id)).length;
+  const allSelected = state.matching.length > 0 && selectedHere === state.matching.length;
   els.gridHead.innerHTML = COLUMNS.map((column, position) => {
-    if (position === 0) return `<label class='check'><input type='checkbox' data-select-all aria-label='Select all matching' ${allSelected ? "checked" : ""}></label>`;
-    if (column.sortable === false) return `<span>${column.label}</span>`;
+    if (position === 0) return `<label class='check c-check'><input type='checkbox' data-select-all aria-label='Select all ${state.matching.length.toLocaleString()} matching people' ${allSelected ? "checked" : ""}></label>`;
+    if (column.sortable === false) return `<span class='${column.cls}'>${column.label}</span>`;
     const sort = state.sort.key === column.key ? (state.sort.dir === 1 ? "ascending" : "descending") : "none";
-    return `<button type='button' class='${column.right ? "right" : ""}' data-sort='${column.key}' aria-sort='${sort}'>${column.label}</button>`;
+    return `<button type='button' class='${column.cls} ${column.right ? "right" : ""}' data-sort='${column.key}' aria-sort='${sort}'>${column.label}</button>`;
   }).join("");
+  els.gridHead.querySelector("[data-select-all]").indeterminate = selectedHere > 0 && !allSelected;
 }
 
-function rowHtml(row, position) {
-  const selected = state.selected.has(row.person_id);
+function rowCells(row) {
   const sub = row.title || row.company
     ? `${escapeHtml(row.title)}${row.title && row.company ? "<span class='sep'>·</span>" : ""}${escapeHtml(row.company)}`
     : escapeHtml(row.location);
   const avatar = row.has_avatar ? `<img src='${API}avatar?id=${encodeURIComponent(row.person_id)}' alt='' loading='lazy' referrerpolicy='no-referrer'>` : "";
-  return `<div class='row' role='row' data-id='${row.person_id}' data-index='${position}' aria-selected='${selected}' data-focus='${position === state.focus}' data-pending='${row.pending ? "true" : "false"}'>
-    <label class='check'><input type='checkbox' data-select aria-label='Select ${escapeHtml(row.name)}' ${selected ? "checked" : ""}></label>
-    <div class='person'><span class='avatar'>${avatar}<span>${escapeHtml(initials(row.name))}</span></span>
+  return `<label class='check c-check'><input type='checkbox' data-select aria-label='Select ${escapeHtml(row.name)}'></label>
+    <div class='person c-person'><span class='avatar'>${avatar}<span>${escapeHtml(initials(row.name))}</span></span>
       <span class='who'><b>${escapeHtml(row.name)}</b><small>${sub}</small></span></div>
-    <div class='sources'>${row.channels.map(channelIcon).join("")}</div>
-    <div class='why ${row.share_source === "human" ? "human" : ""}'>${escapeHtml(label("reason", row.reason))}</div>
-    <div class='rel'>${escapeHtml(humanize(row.relationship_kind))}</div>
-    <div class='worth' data-worth='${row.worth}'><i class='dot'></i>${escapeHtml(row.worth || "unjudged")} <span class='src ${row.worth_source}'>${row.worth_source === "human" ? "you" : ""}</span></div>
+    <div class='sources c-sources'>${row.channels.map(channelIcon).join("")}</div>
+    <div class='why c-why ${row.share_source === "human" ? "human" : ""}'>${escapeHtml(label("reason", row.reason))}</div>
+    <div class='rel c-rel'>${escapeHtml(sentence(row.relationship_kind))}</div>
+    <div class='worth c-worth' data-worth='${row.worth}'><i class='dot'></i>${escapeHtml(label("worth", row.worth || "unjudged"))} <span class='src ${row.worth_source}'>${row.worth_source === "human" ? "You" : ""}</span></div>
     ${warmthCell(row.warmth)}
-    <div class='cell-num right ${row.last_interaction ? "" : "dim"}'>${row.last_interaction ? formatDate(row.last_interaction) : "—"}</div>
-    <div class='cell-num right ${row.interactions ? "" : "dim"}'>${row.interactions ? row.interactions.toLocaleString() : "—"}</div>
-  </div>`;
+    <div class='cell-num c-last right ${row.last_interaction ? "" : "dim"}'>${row.last_interaction ? formatDate(row.last_interaction) : "—"}</div>
+    <div class='cell-num c-msgs right ${row.interactions ? "" : "dim"}'>${row.interactions ? row.interactions.toLocaleString() : "—"}</div>`;
+}
+
+const rowNodes = new Map();
+function buildRow(row) {
+  const node = document.createElement("div");
+  node.className = "row";
+  node.setAttribute("role", "row");
+  node.dataset.id = row.person_id;
+  node.innerHTML = rowCells(row);
+  return node;
+}
+function syncRow(node, row, position) {
+  const selected = state.selected.has(row.person_id);
+  setAttr(node, "data-index", position);
+  setAttr(node, "aria-selected", selected);
+  setAttr(node, "data-focus", position === state.focus);
+  setAttr(node, "data-open", row.person_id === state.drawerId);
+  setAttr(node, "data-pending", Boolean(row.pending));
+  const box = node.querySelector("[data-select]");
+  if (box.checked !== selected) box.checked = selected;
+}
+function refreshRow(id) {
+  const node = rowNodes.get(id);
+  if (node) node.innerHTML = rowCells(state.byId.get(id));
 }
 
 let renderQueued = false;
+let enterRows = false;
 function renderRows() {
   renderQueued = false;
   const total = state.matching.length;
@@ -347,15 +461,38 @@ function renderRows() {
   const start = Math.max(0, Math.floor(top / ROW_H) - OVERSCAN);
   const end = Math.min(total, Math.ceil((top + height) / ROW_H) + OVERSCAN);
   els.rows.style.transform = `translateY(${start * ROW_H}px)`;
-  let html = "";
-  for (let position = start; position < end; position += 1) html += rowHtml(state.matching[position], position);
-  els.rows.innerHTML = html;
-  els.empty.hidden = total > 0;
-  if (!total) {
-    els.empty.innerHTML = state.rows.length
-      ? (state.tab === "confirm" && !state.filters.size && !state.text ? "No one left to confirm." : "No one matches here.")
-      : "No share list yet. Run <code>bin/deep-context share</code> first, then reload.";
+  let cursor = els.rows.firstElementChild;
+  let entered = 0;
+  for (let position = start; position < end; position += 1) {
+    const row = state.matching[position];
+    let node = rowNodes.get(row.person_id);
+    if (!node) {
+      node = buildRow(row);
+      rowNodes.set(row.person_id, node);
+      if (enterRows && entered < ENTER_ROWS) {
+        node.classList.add("row-enter");
+        node.style.animationDelay = `${entered * ENTER_STAGGER_MS}ms`;
+        entered += 1;
+      }
+    }
+    syncRow(node, row, position);
+    if (node === cursor) cursor = cursor.nextElementSibling;
+    else els.rows.insertBefore(node, cursor);
   }
+  while (cursor) {
+    const stale = cursor;
+    cursor = cursor.nextElementSibling;
+    if (rowNodes.get(stale.dataset.id) === stale) rowNodes.delete(stale.dataset.id);
+    stale.remove();
+  }
+  enterRows = false;
+  els.empty.hidden = total > 0;
+  if (!total) els.empty.innerHTML = emptyText();
+}
+function emptyText() {
+  if (!state.rows.length) return "No people to review yet. Run <code>bin/deep-context share</code>, then reload.";
+  if (state.filters.size || state.text) return "No people match these filters. <button type='button' class='btn btn-ghost' data-clear-filters>Clear filters</button>";
+  return { confirm: "No one needs confirmation.", yes: "No people marked for sharing.", no: "No people marked as not sharing." }[state.tab];
 }
 function scheduleRows() {
   if (renderQueued) return;
@@ -367,17 +504,17 @@ function scheduleRows() {
 
 function renderBulkbar() {
   const count = state.selected.size;
-  els.bulkbar.hidden = count === 0 && !state.undo;
-  if (els.bulkbar.hidden) return;
-  const disabled = state.saving || count === 0 ? "disabled" : "";
+  els.bulkbar.dataset.open = String(count > 0);
+  els.bulkbar.inert = count === 0;
+  if (!count) return;
+  const disabled = state.saving ? "disabled" : "";
   els.bulkbar.innerHTML = `
     <b>${count.toLocaleString()} selected</b>
-    <button type='button' class='btn btn-ok' data-action='share' ${disabled}>Share <span class='kbd'>s</span></button>
-    <button type='button' class='btn btn-bad' data-action='private' ${disabled}>Keep private <span class='kbd'>p</span></button>
-    <button type='button' class='btn' data-action='worth' ${disabled}>Use worth <span class='kbd'>w</span></button>
+    <button type='button' class='btn btn-ok' data-action='share' ${disabled}>Share <span class='kbd'>S</span></button>
+    <button type='button' class='btn' data-action='private' ${disabled}>Keep private <span class='kbd'>P</span></button>
+    <button type='button' class='btn btn-ghost' data-action='worth' ${disabled} title='Removes your choice; worth and flags decide'>Use worth <span class='kbd'>W</span></button>
     <span class='sep'></span>
-    ${state.undo ? `<button type='button' class='btn btn-ghost' data-action='undo' ${state.saving ? "disabled" : ""}>Undo <span class='kbd'>z</span></button>` : ""}
-    <button type='button' class='btn btn-ghost' data-action='clear' title='Clear selection'>Clear <span class='kbd'>esc</span></button>`;
+    <button type='button' class='btn btn-ghost' data-action='clear'>Clear selection <span class='kbd'>Esc</span></button>`;
 }
 
 function renderAll({ rows = true } = {}) {
@@ -398,6 +535,7 @@ function resetView() {
   state.selected.clear();
   state.focus = -1;
   els.viewport.scrollTop = 0;
+  enterRows = true;
   renderAll();
 }
 function toggleFilter(key, value) {
@@ -436,11 +574,12 @@ async function writeTags(people, { undo }) {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ people }),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Could not save");
+    if (!response.ok) throw new Error(payload.error || "Try again.");
     for (const patch of payload.rows) {
       const row = state.byId.get(patch.person_id);
       if (!row) continue;
       Object.assign(row, { share: patch.share, reason: patch.reason, share_source: patch.share_source, tags: patch.tags });
+      refreshRow(patch.person_id);
     }
     state.undo = undo;
     state.selected.clear();
@@ -459,10 +598,13 @@ async function applyAction(action, ids = [...state.selected]) {
   const previous = ids.map((id) => ({ person_id: id, tags: [...state.byId.get(id).tags] }));
   try {
     const count = await writeTags(people, { undo: previous });
-    const verb = { share: "Sharing", private: "Keeping private", worth: "Back to worth for" }[action];
-    announce(`${verb} ${count.toLocaleString()} ${count === 1 ? "person" : "people"} · z to undo`);
+    announce({
+      share: `Marked ${plural(count, "person")} for sharing.`,
+      private: `Marked ${plural(count, "person")} private.`,
+      worth: `Removed your sharing choice for ${plural(count, "person")}.`,
+    }[action], { undo: true });
   } catch (error) {
-    announce(error.message, true);
+    announce(`Couldn't save changes. ${error.message}`, { error: true });
   }
 }
 
@@ -471,9 +613,9 @@ async function undoLast() {
   const previous = state.undo;
   try {
     await writeTags(previous, { undo: null });
-    announce(`Undid the last change for ${previous.length.toLocaleString()} ${previous.length === 1 ? "person" : "people"}`);
+    announce(`Undid changes for ${plural(previous.length, "person")}.`);
   } catch (error) {
-    announce(error.message, true);
+    announce(`Couldn't undo. ${error.message}`, { error: true });
   }
 }
 
@@ -493,6 +635,13 @@ function toggleSelected(id) {
   scheduleRows();
 }
 
+function clearSelection() {
+  state.selected.clear();
+  renderGridHead();
+  renderBulkbar();
+  scheduleRows();
+}
+
 function moveFocus(step) {
   if (!state.matching.length) return;
   state.focus = Math.min(state.matching.length - 1, Math.max(0, state.focus + step));
@@ -504,77 +653,135 @@ function moveFocus(step) {
 
 // ---------- drawer ----------
 
+let detailRequest = null;
+let swapStartedAt = 0;
+
 function closeDrawer() {
+  detailRequest?.abort();
   state.drawerId = null;
-  els.drawer.hidden = true;
-  els.drawer.innerHTML = "";
+  root.dataset.drawerOpen = "false";
+  els.drawer.setAttribute("aria-hidden", "true");
+  els.drawer.inert = true;
+  scheduleRows();
+}
+function toggleDrawer(id) {
+  if (state.drawerId === id) closeDrawer(); else void openDrawer(id);
 }
 
+// The row renders at once; the detail (labels, facts, dossier, contact points) follows.
 async function openDrawer(id, { refresh = false } = {}) {
   const row = state.byId.get(id);
   if (!row) return;
+  const swapping = Boolean(state.drawerId) && state.drawerId !== id;
   state.drawerId = id;
-  els.drawer.hidden = false;
-  if (!refresh) els.drawer.innerHTML = "<div class='drawer-inner'><div class='skeleton' style='height:48px'></div><div class='skeleton' style='height:120px'></div><div class='skeleton' style='height:200px'></div></div>";
-  let detail = {};
+  root.dataset.drawerOpen = "true";
+  els.drawer.inert = false;
+  els.drawer.removeAttribute("aria-hidden");
+  scheduleRows();
+  detailRequest?.abort();
+  detailRequest = new AbortController();
+  if (swapping) swapStartedAt = performance.now();
+  if (!refresh) {
+    renderDrawer(row, null);
+    els.drawer.scrollTop = 0;
+  }
+  let detail;
   try {
-    const response = await fetch(`${API}person?id=${encodeURIComponent(id)}`);
-    if (response.ok) detail = await response.json();
-  } catch { /* the row alone still renders */ }
+    const response = await fetch(`${API}person?id=${encodeURIComponent(id)}`, { signal: detailRequest.signal });
+    detail = response.ok ? await response.json() : {};
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    detail = { failed: true };
+  }
   if (state.drawerId !== id) return;
+  const scroll = els.drawer.scrollTop;
+  renderDrawer(row, detail);
+  els.drawer.scrollTop = scroll;
+}
+
+const CHOICES = ["relationship_kind", "mode", "hierarchy", "intro_source", "seniority", "function"];
+const dt = (key, value) => (value ? `<dt>${escapeHtml(key)}</dt><dd>${value}</dd>` : "");
+const lines = (values) => values.map(escapeHtml).join("<br>");
+
+// A person switch fades the new content in; a re-render inside that fade continues it.
+function swapStyle() {
+  const elapsed = performance.now() - swapStartedAt;
+  return elapsed < 200 ? ` class='drawer-inner swap' style='animation-delay:-${Math.round(elapsed)}ms'` : " class='drawer-inner'";
+}
+
+function renderDrawer(row, detail) {
   const badge = row.share === "yes" ? "badge-ok" : row.share === "confirm" ? "badge-warn" : "badge-muted";
-  const probabilities = Object.entries(detail.probabilities || {}).sort((a, b) => b[1] - a[1]);
-  const choices = ["relationship_kind", "mode", "hierarchy", "intro_source", "seniority", "function"];
-  const avatar = detail.avatar_url ? `<img src='${escapeHtml(detail.avatar_url)}' alt='' referrerpolicy='no-referrer'>` : "";
-  const contact = [...(detail.emails || []), ...(detail.phones || [])];
-  els.drawer.innerHTML = `<div class='drawer-inner'>
+  const avatar = detail?.avatar_url ? `<img src='${escapeHtml(detail.avatar_url)}' alt='' referrerpolicy='no-referrer'>`
+    : row.has_avatar ? `<img src='${API}avatar?id=${encodeURIComponent(row.person_id)}' alt='' referrerpolicy='no-referrer'>` : "";
+  const headline = detail?.headline || [row.title, row.company].filter(Boolean).join(" · ");
+  const shares = row.tags.includes("share");
+  const keepsPrivate = row.tags.includes("private");
+  const worthLine = `Worth: ${escapeHtml(label("worth", row.worth || "unjudged").toLowerCase())}`
+    + (row.worth_source ? ` · Decided by ${escapeHtml(label("source", row.worth_source).toLowerCase() === "ai" ? "AI" : "you")}` : "");
+  const head = `
     <div class='drawer-top'>
       <span class='avatar'>${avatar}<span>${escapeHtml(initials(row.name))}</span></span>
       <div class='who'><h2>${escapeHtml(row.name)}</h2>
-        <div class='sub'>${escapeHtml(detail.headline || [row.title, row.company].filter(Boolean).join(" · "))}${row.location ? ` · ${escapeHtml(row.location)}` : ""}</div>
-        ${detail.linkedin_url ? `<div class='sub'><a href='${escapeHtml(detail.linkedin_url)}' target='_blank' rel='noreferrer'>${escapeHtml(detail.linkedin_url.replace("https://www.", ""))}</a></div>` : ""}
-        <div class='sub sources'>${row.channels.map(channelIcon).join("")}</div>
+        ${headline ? `<div class='sub'>${escapeHtml(headline)}</div>` : ""}
+        ${row.location ? `<div class='sub'>${escapeHtml(row.location)}</div>` : ""}
+        <div class='sub sources'>${row.channels.map(channelIcon).join("")}${detail?.linkedin_url ? `<a href='${escapeHtml(detail.linkedin_url)}' target='_blank' rel='noreferrer'>View LinkedIn profile</a>` : ""}</div>
       </div>
-      <button type='button' class='drawer-close' data-drawer-close aria-label='Close'>×</button>
+      <button type='button' class='drawer-close' data-drawer-close aria-label='Close details'>×</button>
     </div>
-    <div class='drawer-actions'>
-      <button type='button' class='btn btn-ok' data-one='share' aria-pressed='${row.tags.includes("share")}'>Share</button>
-      <button type='button' class='btn btn-bad' data-one='private' aria-pressed='${row.tags.includes("private")}'>Keep private</button>
-      <button type='button' class='btn' data-one='worth' aria-pressed='${!row.tags.includes("share") && !row.tags.includes("private")}'>Use worth</button>
+    <div class='drawer-actions' ${state.saving ? "data-saving" : ""}>
+      <button type='button' class='btn ${shares ? "btn-ok" : ""}' data-one='share' aria-pressed='${shares}' ${state.saving ? "disabled" : ""}>${shares ? "✓ " : ""}Share</button>
+      <button type='button' class='btn' data-one='private' aria-pressed='${keepsPrivate}' ${state.saving ? "disabled" : ""}>${keepsPrivate ? "✓ " : ""}Keep private</button>
+    </div>
+    <div class='drawer-worth'>
+      <button type='button' class='btn btn-ghost' data-one='worth' aria-pressed='${!shares && !keepsPrivate}' ${state.saving || (!shares && !keepsPrivate) ? "disabled" : ""}>Use worth</button>
+      <span>${state.saving ? "Saving…" : "Removes your choice; worth and flags decide."}</span>
     </div>
     <div class='dsec'><h3>Decision</h3>
-      <p><span class='badge ${badge}'>${label("share", row.share)}</span> &nbsp;${escapeHtml(label("reason", row.reason))}${row.share_source === "human" ? " · your call" : ""}</p>
-      <p class='dim'>Worth ${escapeHtml(row.worth || "unjudged")}${row.worth_source ? ` (${row.worth_source === "human" ? "you" : "model"})` : ""}${detail.worth_reason ? `: ${escapeHtml(detail.worth_reason)}` : ""}</p>
-      ${detail.worth_note ? `<p class='note'>${escapeHtml(detail.worth_note)}</p>` : ""}
-      ${row.tags.length ? `<div class='tagline'>${row.tags.map((tag) => `<span class='badge badge-info'>${escapeHtml(humanize(tag))}</span>`).join("")}</div>` : ""}
-      ${detail.note ? `<p class='note'>${escapeHtml(detail.note)}</p>` : ""}
-    </div>
-    <div class='dsec'><h3>Contact</h3>
-      <dl class='kv'>
-        <dt>Messages</dt><dd><span class='num'>${row.interactions.toLocaleString()}</span>${row.last_interaction ? ` <small>last ${escapeHtml(formatDate(row.last_interaction))}</small>` : ""}</dd>
-        ${row.cadence ? `<dt>Cadence</dt><dd>${escapeHtml(row.cadence)}${row.direction ? ` <small>${escapeHtml(humanize(row.direction))}</small>` : ""}</dd>` : ""}
-        ${contact.length ? `<dt>Identifiers</dt><dd style='text-transform:none'>${contact.map(escapeHtml).join("<br>")}</dd>` : ""}
-      </dl>
-    </div>
-    ${probabilities.length ? `<div class='dsec'><h3>Labels</h3>
-      <dl class='kv'>${choices.filter((key) => row[key]).map((key) => `<dt>${escapeHtml(humanize(key))}</dt><dd>${escapeHtml(humanize(row[key]))} <small>${Math.round(((detail.choice_p || {})[key] || 0) * 100)}%</small></dd>`).join("")}
-        ${row.warmth !== null && row.warmth !== undefined ? `<dt>Warmth</dt><dd>${Number(row.warmth).toFixed(1)} / 4 <small>${escapeHtml(row.warmthBucket)}</small></dd>` : ""}</dl>
-      <div class='bars'>${probabilities.map(([name, p]) => `<div class='barrow ${p >= .6 ? "active" : ""}'><span class='name'>${escapeHtml(humanize(name))}</span><span class='track'><span class='fill' style='transform:scaleX(${p.toFixed(3)})'></span></span><span class='p'>${Math.round(p * 100)}%</span></div>`).join("")}</div>
-    </div>` : `<div class='dsec'><h3>Labels</h3><p class='dim'>No JEV labels: this person has no synthesized context, so only worth decides.</p></div>`}
-    ${detail.relationship_to_owner || (detail.topics || []).length || (detail.employers || []).length ? `<div class='dsec'><h3>Facts</h3>
+      <p><span class='badge ${badge}'>${label("share", row.share)}</span> &nbsp;${escapeHtml(label("reason", row.reason))}</p>
+      <p class='dim'>${worthLine}${detail?.worth_reason ? `: ${escapeHtml(detail.worth_reason)}` : ""}</p>
+      ${detail?.worth_note ? `<p class='note'>${escapeHtml(detail.worth_note)}</p>` : ""}
+      ${detail?.note ? `<p class='note'>${escapeHtml(detail.note)}</p>` : ""}
+    </div>`;
+  if (detail === null) {
+    els.drawer.innerHTML = `<div${swapStyle()}>${head}<div class='dsec' aria-busy='true'><h3>Details</h3><p class='dim'>Loading details…</p><div class='skeleton' style='height:12px;width:70%'></div><div class='skeleton' style='height:12px;width:50%'></div></div></div>`;
+    return;
+  }
+  if (detail.failed) {
+    els.drawer.innerHTML = `<div${swapStyle()}>${head}<div class='dsec'><h3>Details</h3><p class='dim'>Couldn't load details. <button type='button' class='btn btn-ghost' data-drawer-retry>Retry</button></p></div></div>`;
+    return;
+  }
+  const probabilities = Object.entries(detail.probabilities || {}).sort((a, b) => b[1] - a[1]);
+  const contact = [...(detail.emails || []), ...(detail.phones || [])];
+  const relationship = probabilities.length ? `<div class='dsec'><h3>Relationship</h3>
+      <dl class='kv'>${CHOICES.filter((key) => row[key]).map((key) => dt(FACET_BY_KEY.get(key).label,
+        `${escapeHtml(facetText(FACET_BY_KEY.get(key), row[key]))} <small>${Math.round(((detail.choice_p || {})[key] || 0) * 100)}%</small>`)).join("")}
+        ${row.warmth !== null && row.warmth !== undefined ? dt("Warmth", `${Number(row.warmth).toFixed(1)} of 4 <small>${escapeHtml(row.warmthBucket)}</small>`) : ""}</dl>
+    </div>` : "<div class='dsec'><h3>Relationship</h3><p class='dim'>No relationship labels available.</p></div>";
+  const facts = detail.relationship_to_owner || (detail.topics || []).length || (detail.employers || []).length ? `<div class='dsec'><h3>Facts</h3>
       ${detail.relationship_to_owner ? `<p>${escapeHtml(detail.relationship_to_owner)}</p>` : ""}
-      <dl class='kv'>${(detail.employers || []).length ? `<dt>Employers</dt><dd style='text-transform:none'>${detail.employers.map(escapeHtml).join("<br>")}</dd>` : ""}
-        ${detail.school ? `<dt>School</dt><dd style='text-transform:none'>${escapeHtml(detail.school)}</dd>` : ""}
-        ${(detail.topics || []).length ? `<dt>Topics</dt><dd style='text-transform:none'>${detail.topics.map(escapeHtml).join(", ")}</dd>` : ""}</dl>
-    </div>` : ""}
-    ${detail.dossier_html ? `<div class='dsec'><h3>Dossier</h3><div class='dossier'>${detail.dossier_html}</div></div>` : ""}
-  </div>`;
+      <dl class='kv'>${dt("Employers", (detail.employers || []).length ? lines(detail.employers) : "")}
+        ${dt("School", detail.school ? escapeHtml(detail.school) : "")}
+        ${dt("Topics", (detail.topics || []).length ? escapeHtml(detail.topics.join(", ")) : "")}</dl>
+    </div>` : "";
+  const dossier = detail.dossier_html ? `<div class='dsec'><h3>Dossier</h3><div class='dossier'>${detail.dossier_html}</div></div>` : "";
+  const contactSection = `<div class='dsec'><h3>Contact</h3>
+      <dl class='kv'>
+        ${dt("Interactions", `<span class='num'>${row.interactions.toLocaleString()}</span>`)}
+        ${dt("Last contact", row.last_interaction ? escapeHtml(formatDate(row.last_interaction)) : "")}
+        ${dt("Contact frequency", row.cadence ? `${escapeHtml(label("cadence", row.cadence))}${row.direction ? ` <small>writes: ${escapeHtml(label("direction", row.direction).toLowerCase())}</small>` : ""}` : "")}
+        ${dt("Email and phone", contact.length ? lines(contact) : "")}
+      </dl>
+    </div>`;
+  const confidence = probabilities.length ? `<details class='dsec'><summary><h3>Label confidence</h3></summary>
+      <div class='bars'>${probabilities.map(([name, p]) => `<div class='barrow ${p >= .6 ? "active" : ""}'><span class='name'>${escapeHtml(label("labels", name))}</span><span class='track'><span class='fill' style='transform:scaleX(${p.toFixed(3)})'></span></span><span class='p'>${Math.round(p * 100)}%</span></div>`).join("")}</div>
+    </details>` : "";
+  els.drawer.innerHTML = `<div${swapStyle()}>${head}${relationship}${facts}${dossier}${contactSection}${confidence}</div>`;
 }
 
 // ---------- events ----------
 
 els.viewport.addEventListener("scroll", scheduleRows, { passive: true });
-window.addEventListener("resize", scheduleRows);
+window.addEventListener("resize", () => { scheduleRows(); moveInk(); });
 // The viewport takes its final height after the first paint; re-render when it does.
 new ResizeObserver(scheduleRows).observe(els.viewport);
 
@@ -587,8 +794,11 @@ root.addEventListener("click", async (event) => {
   const facetToggle = target.closest("[data-facet-toggle]");
   if (facetToggle) {
     const key = facetToggle.dataset.facetToggle;
-    if (state.collapsed.has(key)) state.collapsed.delete(key); else state.collapsed.add(key);
-    renderRail();
+    const open = state.collapsed.has(key);
+    if (open) state.collapsed.delete(key); else state.collapsed.add(key);
+    // Toggle in place so the body can animate shut or open.
+    facetToggle.closest(".facet").dataset.open = String(open);
+    facetToggle.setAttribute("aria-expanded", String(open));
     return;
   }
   const expand = target.closest("[data-facet-expand]");
@@ -609,16 +819,21 @@ root.addEventListener("click", async (event) => {
   if (sort) {
     const key = sort.dataset.sort;
     state.sort = { key, dir: state.sort.key === key ? -state.sort.dir : 1 };
+    enterRows = true;
     renderAll();
     return;
   }
   if (target.matches("[data-select-all]")) { selectAllMatching(); return; }
-  const selectBox = target.closest("[data-select]");
-  if (selectBox) { toggleSelected(selectBox.closest(".row").dataset.id); return; }
+  // The checkbox label swallows its own clicks; the input's click is the one that counts.
+  const check = target.closest(".check");
+  if (check) {
+    if (target.matches("[data-select]")) toggleSelected(check.closest(".row").dataset.id);
+    return;
+  }
   const action = target.closest("[data-action]");
   if (action) {
     const name = action.dataset.action;
-    if (name === "clear") { state.selected.clear(); renderGridHead(); renderBulkbar(); scheduleRows(); }
+    if (name === "clear") clearSelection();
     else if (name === "undo") await undoLast();
     else await applyAction(name);
     return;
@@ -626,13 +841,17 @@ root.addEventListener("click", async (event) => {
   const one = target.closest("[data-one]");
   if (one && state.drawerId) { await applyAction(one.dataset.one, [state.drawerId]); return; }
   if (target.closest("[data-drawer-close]")) { closeDrawer(); return; }
+  if (target.closest("[data-drawer-retry]") && state.drawerId) { void openDrawer(state.drawerId, { refresh: true }); return; }
   const row = target.closest(".row");
   if (row) {
     state.focus = Number(row.dataset.index);
-    scheduleRows();
-    openDrawer(row.dataset.id);
+    toggleDrawer(row.dataset.id);
   }
 });
+
+root.addEventListener("toggle", (event) => {
+  if (event.target.matches("[data-hint]")) state.hintOpen = event.target.open;
+}, true);
 
 root.addEventListener("input", (event) => {
   if (event.target === els.search) {
@@ -654,23 +873,25 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") event.target.blur();
     return;
   }
-  if (event.repeat && ["s", "p", "w", "z", "x", "Enter"].includes(event.key)) return;
+  // A focused button, link or summary keeps its native Enter and Space.
+  if ((event.key === "Enter" || event.key === " ") && event.target.matches("button, a, summary, label")) return;
+  if (event.repeat && ["s", "p", "w", "z", "x", " ", "Enter"].includes(event.key)) return;
   switch (event.key) {
     case "/": event.preventDefault(); els.search.focus(); els.search.select(); break;
     case "f": event.preventDefault(); els.rail.querySelector(".facet-value")?.focus(); break;
     case "1": case "2": case "3": setTab(DECISIONS[Number(event.key) - 1]); break;
     case "j": case "ArrowDown": event.preventDefault(); moveFocus(1); break;
     case "k": case "ArrowUp": event.preventDefault(); moveFocus(-1); break;
-    case "x": if (state.focus >= 0) toggleSelected(state.matching[state.focus].person_id); break;
+    case "x": case " ": if (state.focus >= 0) { event.preventDefault(); toggleSelected(state.matching[state.focus].person_id); } break;
     case "A": if (event.shiftKey) { event.preventDefault(); selectAllMatching(); } break;
     case "s": if (state.selected.size) void applyAction("share"); break;
     case "p": if (state.selected.size) void applyAction("private"); break;
     case "w": if (state.selected.size) void applyAction("worth"); break;
     case "z": void undoLast(); break;
-    case "Enter": if (state.focus >= 0) openDrawer(state.matching[state.focus].person_id); break;
+    case "Enter": if (state.focus >= 0) toggleDrawer(state.matching[state.focus].person_id); break;
     case "Escape":
       if (state.drawerId) closeDrawer();
-      else if (state.selected.size) { state.selected.clear(); renderGridHead(); renderBulkbar(); scheduleRows(); }
+      else if (state.selected.size) clearSelection();
       break;
     default: break;
   }
@@ -679,7 +900,7 @@ document.addEventListener("keydown", (event) => {
 // ---------- boot ----------
 
 (async () => {
-  els.rows.innerHTML = "<div class='grid-loading'>" + "<div class='skeleton'></div>".repeat(12) + "</div>";
+  els.rows.innerHTML = "<div class='grid-loading' aria-busy='true'><span class='sr-only'>Loading people…</span>" + "<div class='skeleton'></div>".repeat(8) + "</div>";
   try {
     await load();
   } catch (error) {
@@ -688,7 +909,9 @@ document.addEventListener("keydown", (event) => {
     els.rows.innerHTML = "";
     return;
   }
+  els.rows.innerHTML = "";
   restoreFilters();
   els.search.value = state.text;
+  enterRows = true;
   renderAll();
 })();

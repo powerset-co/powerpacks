@@ -6,6 +6,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+from http.server import ThreadingHTTPServer
 import unittest
 import urllib.error
 import urllib.request
@@ -23,7 +24,6 @@ from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.store import TagStore
 from packs.ingestion.primitives.share.web.model import PEOPLE_COLUMNS, SharePeople, people_payload
 from packs.ingestion.primitives.share.web.server import (
-    ThreadingHTTPServer,
     decide_tags,
     make_handler,
     parse_tag_request,
@@ -285,7 +285,7 @@ class BrowserTests(ShareWebFixture):
             page.goto(self.base + "/people")
             # Opens on the Confirm tab: Casey alone; the tabs carry the totals.
             expect(page.locator(".row")).to_have_count(1)
-            expect(page.locator("[data-count]")).to_have_text("1 of 1 confirm")
+            expect(page.locator("[data-count]")).to_have_text("1 person")
             expect(page.locator("[data-tab='yes'] b")).to_have_text("2")
             expect(page.locator(".row .source")).to_have_attribute("title", "iMessage")
             expect(page.locator(".row .warmth-cell")).to_have_text("4.0")
@@ -299,18 +299,26 @@ class BrowserTests(ShareWebFixture):
             page.locator("[data-tab='confirm']").click()
             page.locator("[data-select-all]").check()
             expect(page.locator("[data-bulkbar] b")).to_have_text("1 selected")
-            page.get_by_role("button", name="Share s").click()
-            expect(page.locator(".toast")).to_contain_text("Sharing 1 person")
-            expect(page.locator("[data-empty]")).to_have_text("No one left to confirm.")
+            page.get_by_role("button", name="Share S").click()
+            expect(page.locator(".toast")).to_contain_text("Marked 1 person for sharing.")
+            expect(page.locator("[data-empty]")).to_have_text("No one needs confirmation.")
             expect(page.locator("[data-tab='yes'] b")).to_have_text("3")
             self.assertEqual(_decisions(self.db)["person-b"][:2], ("yes", "human_share"))
-            page.get_by_role("button", name="Undo z").click()
+            page.locator(".toast").get_by_role("button", name="Undo Z").click()
             expect(page.locator(".row")).to_have_count(1)
             expect(page.locator("[data-tab='yes'] b")).to_have_text("2")
             self.assertEqual(_decisions(self.db)["person-b"][:2], ("confirm", "family"))
+            # A click opens the drawer on the same row node; the next click closes it.
+            page.evaluate("document.querySelector('.row').__kept = true")
             page.locator(".row").click()
             expect(page.locator("[data-drawer] h2")).to_have_text("Casey Delta")
             expect(page.locator("[data-drawer] .barrow.active")).to_have_count(2)
+            expect(page.locator("[data-people]")).to_have_attribute("data-drawer-open", "true")
+            expect(page.locator(".row")).to_have_attribute("data-open", "true")
+            self.assertTrue(page.evaluate("document.querySelector('.row').__kept === true"))
+            page.locator(".row").click()
+            expect(page.locator("[data-people]")).to_have_attribute("data-drawer-open", "false")
+            expect(page.locator(".row")).to_have_attribute("data-open", "false")
             browser.close()
 
 

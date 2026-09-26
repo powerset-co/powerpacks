@@ -19,7 +19,7 @@
   /* ink */
   --foreground: #f0eae2;
   --muted: #9c8e84;
-  --faint: #6f645c;
+  --faint: #857a70;
   /* brand */
   --primary: #dd3d17;
   --primary-action: #d33916;
@@ -43,10 +43,12 @@
   --radius-l: 14px;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, .3);
   --shadow-2: 0 12px 40px -12px rgba(0, 0, 0, .65);
-  /* motion: transform and opacity only, short, ease-out */
+  /* motion: short; ease-out in, ease-in out; transform, opacity and color only */
   --ease-out: cubic-bezier(.2, 0, 0, 1);
+  --ease-in: cubic-bezier(.4, 0, 1, 1);
   --t-fast: 120ms;
   --t-med: 200ms;
+  --t-exit: 160ms;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-synthesis: none;
 }
@@ -272,6 +274,7 @@ select.field { appearance: none; padding-right: 26px; background-image: linear-g
 @keyframes rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes bar-in { from { transform: translate(-50%, 16px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 .toast {
   position: fixed;
@@ -321,10 +324,7 @@ main { width: min(100% - 40px, 1240px); margin: 0 auto; padding: 24px 0 96px; }
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
 }
-.catalog-search { flex: 1 1 240px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--card); color: var(--foreground); font-size: 12.5px; outline: none; }
-.catalog-search::placeholder { color: var(--faint); }
-.catalog-search:focus { border-color: var(--primary); }
-.catalog-select { height: 32px; padding: 0 28px 0 10px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--card); color: var(--foreground); font-size: 12px; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) 13px, calc(100% - 9px) 13px; background-size: 5px 5px; background-repeat: no-repeat; }
+.catalog-search { flex: 1 1 240px; }
 .catalog-count { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .catalog-head, .catalog-row {
@@ -359,9 +359,8 @@ main { width: min(100% - 40px, 1240px); margin: 0 auto; padding: 24px 0 96px; }
 .catalog-row[hidden] { display: none; }
 .catalog-company { color: var(--primary); font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .catalog-title { min-width: 0; display: grid; gap: 2px; }
-.catalog-title strong { font-size: 14px; font-weight: 650; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.catalog-title small { color: var(--faint); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.catalog-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; font-weight: 600; text-transform: capitalize; }
+.catalog-title strong { font-size: 13px; font-weight: 600; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
 .catalog-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
 .catalog-status[data-status="completed"]::before { background: var(--ok); }
 .catalog-status[data-status="awaiting_diagnosis"]::before { background: var(--warn); }
@@ -702,5 +701,5 @@ button.pond-row:hover { border-color: var(--line-strong); background: rgba(255, 
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-delay: 0ms !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }

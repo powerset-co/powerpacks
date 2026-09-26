@@ -12,9 +12,14 @@ import base64
 import hashlib
 import json
 import re
+import shutil
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from dataclasses import replace
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -40,6 +45,7 @@ from packs.ingestion.primitives.deep_context.db.identity_views import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.review import cli as review_cli
 from packs.ingestion.primitives.deep_context.review import server as review_server
 from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentApproval,
@@ -912,6 +918,47 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "state_token",
         ):
             self.assertIn(key, payload)
+
+
+class SearchesOnlyServerTests(unittest.TestCase):
+    """Before a deep-context store exists the same server serves the searches alone."""
+
+    def setUp(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), review_cli.searches_only_handler(root))
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def _get(self, path: str) -> tuple[int, str, bytes]:
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(self.base + path, timeout=5) as response:
+                return response.status, response.headers.get("Location", ""), response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers.get("Location", ""), error.read()
+
+    def test_searches_answer_and_people_says_what_to_run(self) -> None:
+        status, location, _ = self._get("/")
+        self.assertEqual((status, location), (302, "/searches"))
+        status, _, body = self._get("/searches")
+        self.assertEqual(status, 200)
+        self.assertIn(b"No completed searches", body)
+        status, _, body = self._get("/people")
+        self.assertEqual(status, 200)
+        self.assertIn(b"No people yet", body)
+        self.assertIn(b"bin/deep-context", body)
+        status, _, _ = self._get("/healthz")
+        self.assertEqual(status, 200)
+        self.assertEqual(review_cli._url("127.0.0.1", 8765, "searches", "acme-role"),
+                         "http://127.0.0.1:8765/searches/run?run_id=acme-role")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return None
 
 
 if __name__ == "__main__":

@@ -581,7 +581,7 @@ def render_search_body(search: SearchResult, *, readonly: bool = False) -> str:
             f"</section>")
 
 
-def _shell(body: str, *, base: str, current: str = "searches") -> str:
+def _shell(body: str, *, base: str, current: str = "searches", title: str = "Search results") -> str:
     """The page template with its nav: Searches alone when the viewer serves
     itself, Searches and People when the review server mounts it under a base."""
     links = [("Searches", f"{base}/" if base else "/", "searches")]
@@ -591,8 +591,12 @@ def _shell(body: str, *, base: str, current: str = "searches") -> str:
                   for label, href, key in links)
     template = RESULTS_HTML.read_text(encoding="utf-8")
     ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)
-    return (template.replace("{{BASE}}", _e(base)).replace("{{NAV}}", nav)
+    return (template.replace("{{BASE}}", _e(base)).replace("{{NAV}}", nav).replace("{{TITLE}}", _e(title))
             .replace("{{CONTENT}}", body).replace("{{HUMAN_RATINGS}}", ratings))
+
+
+def _status_text(status: str) -> str:
+    return status.replace("_", " ").capitalize()
 
 
 def _catalog_row(card: SearchCard, base: str) -> str:
@@ -603,8 +607,8 @@ def _catalog_row(card: SearchCard, base: str) -> str:
        data-run-id='{_e(card.run_id)}' data-version='{_e(version)}' data-company='{_e(card.company)}'
        data-status='{_e(card.status)}' data-search='{_e(" ".join((card.title, card.company, card.run_id)).lower())}'>
       <span class='catalog-company'>{_e(card.company) or '—'}</span>
-      <span class='catalog-title'><strong>{_e(card.title)}</strong><small>{_e(card.run_id)}</small></span>
-      <span class='catalog-status' data-status='{_e(card.status)}'>{_e(card.status.replace('_', ' '))}</span>
+      <span class='catalog-title'><strong>{_e(card.title)}</strong></span>
+      <span class='catalog-status' data-status='{_e(card.status)}'>{_e(_status_text(card.status))}</span>
       <span class='catalog-num'>{card.candidates:,}</span>
       <span class='catalog-num'>{card.ponds_run}</span>
       <span class='catalog-num'>{cost}</span>
@@ -621,15 +625,15 @@ def render_catalog(cards: Sequence[SearchCard], *, base: str = "") -> str:
     chips = "".join(
         f"<button type='button' class='chip' data-filter='version' data-value='{_e(value)}' aria-pressed='false'>{_e(value)}</button>"
         for value in [*versions, *(["unversioned"] if any(not card.search_version for card in cards) else [])])
-    options = lambda values: "".join(f"<option value='{_e(value)}'>{_e(value)}</option>" for value in values)
+    options = lambda values, text=str: "".join(f"<option value='{_e(value)}'>{_e(text(value))}</option>" for value in values)
     rows = "".join(_catalog_row(card, base) for card in cards)
     body = f"""
     <section class='catalog' data-catalog data-newest-version='{_e(versions[0] if versions else "")}'>
       <div class='catalog-bar'>
-        <input type='search' class='catalog-search' data-filter-text placeholder='Search title, company, run' aria-label='Search runs'>
+        <input type='search' class='field catalog-search' data-filter-text placeholder='Search title, company, run' aria-label='Search runs'>
         <span class='chip-row' role='group' aria-label='Search version'>{chips}</span>
-        <select class='catalog-select' data-filter='company' aria-label='Company'><option value=''>All companies</option>{options(companies)}</select>
-        <select class='catalog-select' data-filter='status' aria-label='Status'><option value=''>All statuses</option>{options(statuses)}</select>
+        <select class='field catalog-select' data-filter='company' aria-label='Company'><option value=''>All companies</option>{options(companies)}</select>
+        <select class='field catalog-select' data-filter='status' aria-label='Status'><option value=''>All statuses</option>{options(statuses, _status_text)}</select>
         <span class='catalog-count' data-catalog-count aria-live='polite'></span>
       </div>
       <div class='catalog-head' role='row'>
@@ -641,7 +645,7 @@ def render_catalog(cards: Sequence[SearchCard], *, base: str = "") -> str:
     </section>""" if cards else (
         "<section class='empty-state'><h2>No completed searches</h2>"
         "<p>No manifest.json with a title was found under this root.</p></section>")
-    return _shell(body, base=base)
+    return _shell(body, base=base, title="Searches")
 
 
 def render_page(searches: Iterable[SearchResult], *, readonly: bool = False,

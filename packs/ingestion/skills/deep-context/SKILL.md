@@ -483,8 +483,9 @@ until the user answers. The answer is a tag, recorded on the People page:
 bin/deep-context review people   # your people, one tab per decision
 ```
 
-The page has three tabs — Confirm, Share, Not sharing — with every person's
-why, sources, relationship, worth, warmth, last contact and message count; the
+The page has three tabs — Needs confirmation, Sharing, Not sharing — with every
+person's reason, sources, relationship, worth, warmth, last contact and
+interaction count; the
 left rail filters by those cells and by the JEV labels, the quick filters open
 the usual slices (family, sensitive context, service providers, recruiters,
 strangers, dormant), and the bulk bar tags a whole selection **Share** or
