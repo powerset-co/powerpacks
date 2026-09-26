@@ -552,8 +552,10 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
 
 def _team_table(search: SearchResult) -> str:
     """Reporting's name/title/location/tenure table, using saved data and ten-row pages."""
+    status = (f"<p class='team-source'>Team similarity unavailable: {_e(search.team_status)}</p>"
+              if search.team_status else "")
     if not search.team:
-        return ""
+        return status
     rows = []
     for index, member in enumerate(search.team):
         name = _e(member.name) or "Name unavailable"
@@ -572,7 +574,7 @@ def _team_table(search: SearchResult) -> str:
         f"<span data-team-range aria-live='polite'>1–{min(10, len(rows))} of {len(rows)}</span>"
         "<span><button type='button' data-team-page='-1' aria-label='Previous team page' disabled>Prev</button>"
         f"<button type='button' data-team-page='1' aria-label='Next team page'{' disabled' if len(rows) <= 10 else ''}>"
-        "Next</button></span></div></details>")
+        "Next</button></span></div></details>" + status)
 
 
 def _search(search: SearchResult, *, readonly: bool = False, feedback_enabled: bool = False) -> str:

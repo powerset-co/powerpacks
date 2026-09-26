@@ -16,19 +16,38 @@ from .model import TeamMember
 PAGE_SIZE = 500
 
 
-def fetch_employees(company_id: str, env_file: Path) -> list[dict]:
+def _fetch_pages(company_id: str, env_file: Path, *, domain: str = "",
+                 embed: bool = False) -> tuple[list[dict], dict]:
     headers = {"Authorization": "Bearer " + bearer_token(env_file)}
     employees = []
+    metadata = {}
     while True:
+        company = ({"company_id": company_id} if company_id else {"domain": domain})
         response = requests.post(api_base(env_file) + "/v2/company/history/employees",
-            headers=headers, json={"company_id_source": "coresignal_company",
-                "company_id": company_id, "current": True, "is_staff": True,
-                "limit": PAGE_SIZE, "offset": len(employees)}, timeout=30)
+            headers=headers, json={"company_id_source": "coresignal_company", **company,
+                "current": True, "is_staff": True, "embed": embed,
+                "limit": PAGE_SIZE, "offset": len(employees)}, timeout=120 if embed else 30)
         response.raise_for_status()
-        page = response.json()["employees"]
+        payload = response.json()
+        company_id = payload.get("company_id") or company_id
+        metadata = {"company_id_source": payload.get("company_id_source") or "coresignal_company",
+                    "company_id": company_id, "embedding_model": payload.get("embedding_model"),
+                    "embedding_usage_tokens": metadata.get("embedding_usage_tokens", 0)
+                    + int(payload.get("embedding_usage_tokens") or 0),
+                    "embedding_cache_misses": metadata.get("embedding_cache_misses", 0)
+                    + int(payload.get("embedding_cache_misses") or 0)}
+        page = payload["employees"]
         employees.extend(page)
         if len(page) < PAGE_SIZE:
-            return employees
+            return employees, metadata
+
+
+def fetch_employees(company_id: str, env_file: Path) -> list[dict]:
+    return _fetch_pages(company_id, env_file)[0]
+
+
+def fetch_embedded_employees(domain: str, env_file: Path) -> tuple[list[dict], dict]:
+    return _fetch_pages("", env_file, domain=domain, embed=True)
 
 
 def team_members(employees: list[dict]) -> tuple[TeamMember, ...]:

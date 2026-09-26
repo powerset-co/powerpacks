@@ -300,6 +300,7 @@ class SearchResult:
     candidates: tuple[Candidate, ...]
     team: tuple[TeamMember, ...] = ()
     team_fetched_at: str = ""
+    team_status: str = ""
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -610,8 +611,11 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     attribution = payload.get('person_attribution') or {}
     team_path = root / run_id / "team.json"
     team = json.loads(team_path.read_text()) if team_path.is_file() else {}
+    status_path = root / run_id / "team-status.json"
+    status = json.loads(status_path.read_text()) if status_path.is_file() else {}
     similarity_path = root / run_id / "team-similarity.json"
-    similarities = json.loads(similarity_path.read_text()) if similarity_path.is_file() else {}
+    similarities = (json.loads(similarity_path.read_text())
+                    if similarity_path.is_file() and status.get("status", "ready") == "ready" else {})
     candidates = {key: _candidate(row, raw_runs, attribution.get(key), similarities.get(key))
                   for key, row in raw_candidates.items()}
     groups = tuple(CandidateGroup(
@@ -633,6 +637,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         candidates=tuple(candidates.values()),
         team=tuple(TeamMember(**row) for row in team.get("members", [])),
         team_fetched_at=team.get("fetched_at", ""),
+        team_status=(str(status.get("reason") or status.get("status") or "")
+                     if status.get("status") != "ready" else ""),
     )
 
 

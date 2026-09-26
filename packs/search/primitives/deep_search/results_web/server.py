@@ -250,7 +250,8 @@ def main(argv: list[str] | None = None) -> int:
     def _stamp() -> tuple[tuple[str, float], ...]:
         scope = run_dir.name if run_dir else "*"
         return tuple(sorted((str(path), path.stat().st_mtime)
-                            for name in ("results.json", FIT_LABELS_FILE)
+                            for name in ("results.json", FIT_LABELS_FILE, "team.json",
+                                         "team-similarity.json", "team-status.json")
                             for path in root.glob(f"{scope}/{name}")))
 
     def load() -> tuple[SearchResult, ...]:

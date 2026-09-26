@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,7 +74,7 @@ from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_request, parse_candidate_judge,
 )
 from packs.search.primitives.deep_search.person_attribution import HydratePersonAttribution
-from packs.search.primitives.deep_search import pin_confidence
+from packs.search.primitives.deep_search import pin_confidence, team_similarity
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
@@ -604,9 +605,10 @@ def _ensure_hiring_company_context(results: dict[str, Any]) -> None:
     hiring_company = dict(results.get("hiring_company") or {})
     results["hiring_company"] = hiring_company
     results["company"] = str(hiring_company.get("name") or results.get("company") or "")
-    contexts, stats = resolve_company_contexts([
-        resolve_hiring_company_ref(hiring_company, results.get("url"))
-    ])
+    ref = results.get("hiring_company_ref") or resolve_hiring_company_ref(
+        hiring_company, results.get("url"))
+    results["hiring_company_ref"] = ref
+    contexts, stats = resolve_company_contexts([ref])
     context = contexts[0]
     if context:
         context["pull_note"] = pull_note(context)
@@ -1324,6 +1326,53 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
     return {pond: round(cost, 6) for pond, cost in costs.items()}
 
 
+def _team_candidates(results: Mapping[str, Any]) -> list[dict[str, Any]]:
+    shown = {_candidate_key(row): str(row["person"])
+             for row in ((results.get("summary") or {}).get("groups") or {}).get("") or []}
+    candidates = {}
+    for iteration in results.get("iterations") or []:
+        profiles = _profiles(((iteration.get("arm") or {}).get("artifacts") or {}).get("profiles_path"))
+        for row in iteration.get("shortlist_grades") or []:
+            if (row.get("cross_encoder_score_type") != QUALIFICATION_SCORE_TYPE
+                    or row.get("cross_encoder_status") != "ok"
+                    or row.get("cross_encoder_passed") is not True):
+                continue
+            person_id = shown.get(_candidate_key(row))
+            profile = profiles.get(str(row.get("person") or "")) or {}
+            if person_id and profile.get("positions"):
+                candidates[person_id] = {
+                    "person_id": person_id, "linkedin_url": row.get("linkedin_url") or "",
+                    "positions": profile["positions"]}
+    return list(candidates.values())
+
+
+def _finish_team(run_dir: Path, results: dict[str, Any], future) -> None:
+    try:
+        team = future.result()
+        employees = [row for row in team["employees"] if row.get("embedding_status") == "ready"]
+        people = _team_candidates(results)
+        if not employees:
+            team_similarity.save_status(run_dir, "no_team_history", "No stored staff work histories",
+                                        team_count=len(team["employees"]))
+            return
+        if not people:
+            team_similarity.save_status(run_dir, "no_ce_pass", "No Jev-pass candidates with work history",
+                                        team_count=len(team["employees"]))
+            return
+        pond_n = int(results["iterations"][-1]["pond_n"])
+        os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.team_similarity"
+        vectors = team_similarity.embed_candidates(people, run_dir)
+        scores = team_similarity.rank(people, employees, vectors)
+        _write_json(run_dir / "team-similarity.json", scores)
+        team_similarity.save_status(run_dir, "ready", team_count=len(team["employees"]),
+                                    team_history_count=len(employees), candidate_count=len(scores))
+        _price_usage_log(run_dir / "usage.jsonl")
+        results["iterations"][-1]["cost_usd"] = _pond_costs(run_dir).get(pond_n, 0.0)
+        _save(results, run_dir)
+    except Exception as exc:
+        team_similarity.save_status(run_dir, "unavailable", f"{type(exc).__name__}: {exc}")
+
+
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
              capability_judge: str = "jev",
@@ -1363,6 +1412,24 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         command += ["--query", str(pending["query"]), "--payload-json", str(pending["payload_json"])]
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
+    team_future = None
+    team_executor = None
+    if backend == "powerset" and capability_judge == "jev":
+        try:
+            ref = results.get("hiring_company_ref") or resolve_hiring_company_ref(
+                results.get("hiring_company") or {}, results.get("url"))
+            results["hiring_company_ref"] = ref
+            domain = str(ref.get("verified_domain") or "")
+            if domain:
+                team_executor = ThreadPoolExecutor(max_workers=1)
+                team_future = team_executor.submit(
+                    team_similarity.prepare_team, domain, Path(env_file), run_dir)
+            else:
+                team_similarity.save_status(run_dir, "unavailable", "Hiring company domain unavailable")
+        except Exception as exc:
+            team_similarity.save_status(run_dir, "unavailable", f"Company lookup: {type(exc).__name__}: {exc}")
+    elif backend == "local":
+        team_similarity.save_status(run_dir, "unavailable", "Local-only search")
     result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
                           stage=f"search_harness.pond_{pond_n:02d}.run")
     _price_usage_log(run_dir / "usage.jsonl")
@@ -1431,6 +1498,9 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     else:
         results["status"] = "awaiting_diagnosis"
     _save(results, run_dir)
+    if team_future is not None:
+        _finish_team(run_dir, results, team_future)
+        team_executor.shutdown(wait=True)
     attribution = HydratePersonAttribution(run_dir, env_file=Path(env_file)).run()
     if attribution["status"] == "failed":
         print(f"[person-attribution] {attribution['error']}", file=sys.stderr)

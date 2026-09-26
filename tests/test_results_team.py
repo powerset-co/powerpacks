@@ -56,6 +56,22 @@ class TeamTest(unittest.TestCase):
         self.assertEqual([call.kwargs["json"]["offset"] for call in post.call_args_list], [0, 500])
         self.assertTrue(all(call.args[0].endswith("/v2/company/history/employees") for call in post.call_args_list))
 
+    def test_unavailable_team_status_is_visible_in_local_and_shared_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = ResultsWebTest()._fixture(directory, cross_encoder=True)
+            run = root / "jordan-role"
+            (run / "team-status.json").write_text(json.dumps({
+                "status": "unavailable", "reason": "Stored company roster unavailable"}))
+            (run / "team-similarity.json").write_text(json.dumps({ResultsWebTest.PERSON: {
+                "rank": 1, "candidate_count": 1, "score": .9, "method": "old",
+                "closest_names": ["Teammate"]}}))
+            search = load_searches(root, run.name)[0]
+            self.assertIn("Team similarity unavailable: Stored company roster unavailable",
+                          render_page([search]))
+            self.assertNotIn("Team Similarity Rank #1", render_search_body(search))
+            self.assertIn("Team similarity unavailable: Stored company roster unavailable",
+                          render_snapshot(export_snapshot(run), asset_base_url="https://example.com/assets"))
+
 
 if __name__ == "__main__":
     unittest.main()
