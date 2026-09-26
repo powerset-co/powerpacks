@@ -1,4 +1,4 @@
-"""The share UI: the row model, the one atomic decision write, and the routes."""
+"""The People page: the row model, the one atomic decision write, and the routes."""
 
 from __future__ import annotations
 
@@ -219,7 +219,7 @@ class RoutesTests(ShareWebFixture):
             return json.loads(response.read())
 
     def _post(self, body: dict) -> tuple[int, dict]:
-        request = urllib.request.Request(self.base + "/api/share/tags", data=json.dumps(body).encode(),
+        request = urllib.request.Request(self.base + "/api/people/tags", data=json.dumps(body).encode(),
                                          headers={"Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(request) as response:
@@ -228,13 +228,12 @@ class RoutesTests(ShareWebFixture):
             return exc.code, json.loads(exc.read())
 
     def test_people_payload_detail_and_health_are_served(self) -> None:
-        payload = self._get("/api/share/people")
+        payload = self._get("/api/people/rows")
         self.assertEqual(payload["counts"]["total"], 4)
-        self.assertIn("upload_powerset.py", payload["upload_command"])
-        self.assertEqual(self._get("/api/share/person?id=person-a")["linkedin_url"],
+        self.assertEqual(self._get("/api/people/person?id=person-a")["linkedin_url"],
                          "https://www.linkedin.com/in/jordan-bravo")
         self.assertEqual(self._get("/healthz")["people"], 4)
-        with urllib.request.urlopen(self.base + "/share/assets/results.css") as response:
+        with urllib.request.urlopen(self.base + "/people/assets/results.css") as response:
             self.assertEqual(response.headers["Content-Type"], "text/css; charset=utf-8")
 
     def test_tags_post_writes_and_the_next_payload_reflects_it(self) -> None:
@@ -242,7 +241,7 @@ class RoutesTests(ShareWebFixture):
         self.assertEqual(status, 200)
         self.assertEqual(body["rows"], [{"person_id": "person-b", "share": "yes", "reason": "human_share",
                                          "share_source": "human", "tags": ["share"]}])
-        self.assertEqual(self._get("/api/share/people")["counts"], {"total": 4, "upload": 3, "confirm": 0, "private": 1})
+        self.assertEqual(self._get("/api/people/rows")["counts"], {"total": 4, "upload": 3, "confirm": 0, "private": 1})
 
     def test_bad_requests_write_nothing(self) -> None:
         status, payload = self._post({"people": [{"person_id": "ghost", "tags": ["share"]}]})
@@ -255,7 +254,7 @@ class RoutesTests(ShareWebFixture):
                 return None
 
         try:
-            urllib.request.build_opener(NoRedirect).open(self.base + "/api/share/avatar?id=person-a")
+            urllib.request.build_opener(NoRedirect).open(self.base + "/api/people/avatar?id=person-a")
         except urllib.error.HTTPError as exc:
             self.assertEqual((exc.code, exc.headers["Location"]), (302, "https://img.example.com/jordan.jpg"))
         else:
@@ -277,32 +276,37 @@ class BrowserTests(ShareWebFixture):
         self.addCleanup(self.server.shutdown)
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
 
-    def test_facets_select_all_matching_share_and_undo(self) -> None:
+    def test_tabs_facets_select_all_matching_share_and_undo(self) -> None:
         from playwright.sync_api import expect, sync_playwright
 
         with sync_playwright() as p:
             browser = p.chromium.launch(channel="chrome", headless=True)
             page = browser.new_page(viewport={"width": 1400, "height": 900})
-            page.goto(self.base + "/share")
-            # Starts on Needs confirm: Casey alone.
+            page.goto(self.base + "/people")
+            # Opens on the Confirm tab: Casey alone; the tabs carry the totals.
             expect(page.locator(".row")).to_have_count(1)
-            expect(page.locator("[data-count]")).to_have_text("1 of 4")
-            expect(page.locator(".stat-share b")).to_have_text("2")
+            expect(page.locator("[data-count]")).to_have_text("1 of 1 confirm")
+            expect(page.locator("[data-tab='yes'] b")).to_have_text("2")
+            expect(page.locator(".row .source")).to_have_attribute("title", "iMessage")
+            expect(page.locator(".row .warmth-cell")).to_have_text("4.0")
+            page.locator("[data-tab='yes']").click()
+            expect(page.locator(".row")).to_have_count(2)
+            page.locator("[data-facet-key='relationship_kind'][data-facet-value='colleague']").click()
+            expect(page.locator(".row")).to_have_count(1)
+            expect(page.locator(".row .who b")).to_have_text("Jordan Bravo")
             page.get_by_role("button", name="Clear").click()
-            expect(page.locator(".row")).to_have_count(4)
-            page.locator("[data-facet-key='relationship_kind'][data-facet-value='family']").click()
-            expect(page.locator(".row")).to_have_count(1)
-            expect(page.locator(".row .who b")).to_contain_text("Casey Delta")
+            expect(page.locator(".row")).to_have_count(2)
+            page.locator("[data-tab='confirm']").click()
             page.locator("[data-select-all]").check()
             expect(page.locator("[data-bulkbar] b")).to_have_text("1 selected")
             page.get_by_role("button", name="Share s").click()
             expect(page.locator(".toast")).to_contain_text("Sharing 1 person")
-            expect(page.locator(".row .badge")).to_have_text("Share")
-            expect(page.locator(".stat-share b")).to_have_text("3")
+            expect(page.locator("[data-empty]")).to_have_text("No one left to confirm.")
+            expect(page.locator("[data-tab='yes'] b")).to_have_text("3")
             self.assertEqual(_decisions(self.db)["person-b"][:2], ("yes", "human_share"))
             page.get_by_role("button", name="Undo z").click()
-            expect(page.locator(".row .badge")).to_have_text("Confirm")
-            expect(page.locator(".stat-share b")).to_have_text("2")
+            expect(page.locator(".row")).to_have_count(1)
+            expect(page.locator("[data-tab='yes'] b")).to_have_text("2")
             self.assertEqual(_decisions(self.db)["person-b"][:2], ("confirm", "family"))
             page.locator(".row").click()
             expect(page.locator("[data-drawer] h2")).to_have_text("Casey Delta")

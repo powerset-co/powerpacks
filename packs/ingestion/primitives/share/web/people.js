@@ -1,13 +1,14 @@
-// Share page: every person once, filtered client-side; bulk tags in one write.
+// People page: every person once, filtered client-side; bulk share / private tags in one write.
 // Vocabulary: person, worth, share / confirm / not sharing, tag, label, flag.
 
-const API = "/api/share/";
+const API = "/api/people/";
 const ROW_H = 40;
 const OVERSCAN = 8;
-const FILTERS_KEY = "powerpacks:share-filters:v1";
+const FILTERS_KEY = "powerpacks:people-filters:v1";
 const YEAR = 365;
+const DECISIONS = ["confirm", "yes", "no"];
 
-const root = document.querySelector("[data-share]");
+const root = document.querySelector("[data-people]");
 const els = {
   rail: root.querySelector("[data-rail]"),
   head: root.querySelector("[data-head]"),
@@ -37,6 +38,27 @@ const TEXT = {
 const humanize = (value) => String(value ?? "").replace(/^is_/, "").replaceAll("_", " ");
 const label = (kind, value) => (TEXT[kind] && TEXT[kind][value]) || humanize(value);
 
+// One icon per source family, the same glyphs the search viewer uses.
+const CHANNEL = {
+  gmail: { title: "Email", path: "<rect width='20' height='16' x='2' y='4' rx='2'/><path d='m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7'/>" },
+  imessage: { title: "iMessage", path: "<path d='M7.9 20A9 9 0 1 0 4 16.1L2 22Z'/>" },
+  whatsapp: { title: "WhatsApp", path: "<path d='M7.9 20A9 9 0 1 0 4 16.1L2 22Z'/><path d='M9 10a3 3 0 0 0 6 4'/>" },
+  linkedin: { title: "LinkedIn", fill: true, path: "<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/>" },
+};
+function channelIcon(channel) {
+  const spec = CHANNEL[channel];
+  if (!spec) return "";
+  const attrs = spec.fill ? "fill='currentColor' stroke='none'" : "fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'";
+  return `<span class='source' data-c='${channel}' title='${spec.title}'><svg viewBox='0 0 24 24' ${attrs} aria-label='${spec.title}'>${spec.path}</svg></span>`;
+}
+
+function warmthCell(value) {
+  if (value === null || value === undefined) return "<div class='warmth-cell dim'>—</div>";
+  const on = Math.round(Number(value));
+  const bars = [1, 2, 3, 4].map((level) => `<i class='${level <= on ? "on" : ""}'></i>`).join("");
+  return `<div class='warmth-cell' title='Warmth ${Number(value).toFixed(1)} of 4'><span class='warmth-bar'>${bars}</span>${Number(value).toFixed(1)}</div>`;
+}
+
 function lastBucket(days) {
   if (days === null || days === undefined) return "never";
   if (days <= YEAR) return "<1y";
@@ -51,17 +73,17 @@ function warmthBucket(value) {
   return "3–4 inner circle";
 }
 
-// Facets: OR within one, AND across. `get` returns the row's values for the facet.
-// Default facets stay open; the rest collapse under "More filters".
+// Facets: OR within one, AND across, always within the selected decision tab.
+// `get` returns the row's values for the facet. Default facets stay open; the
+// rest collapse under "More filters".
 const FACETS = [
-  { key: "share", label: "Decision", get: (r) => [r.share], order: ["yes", "confirm", "no"], text: (v) => label("share", v) },
   { key: "flag", label: "Flag", get: (r) => (r.flag ? [r.flag] : []), text: (v) => label("reason", v) },
   { key: "worth", label: "Worth", get: (r) => [r.worth || "unjudged"], order: ["yes", "maybe", "no", "unjudged"] },
   { key: "relationship_kind", label: "Relationship", get: (r) => (r.relationship_kind ? [r.relationship_kind] : []) },
   { key: "last", label: "Last contact", get: (r) => [r.last], order: ["<1y", "1–2y", ">2y", "never"] },
-  { key: "channels", label: "Channels", get: (r) => r.channels, order: ["gmail", "imessage", "whatsapp", "linkedin"] },
+  { key: "channels", label: "Sources", get: (r) => r.channels, order: ["gmail", "imessage", "whatsapp", "linkedin"] },
   { key: "linkedin", label: "LinkedIn", get: (r) => [r.public_identifier ? "has LinkedIn" : "no LinkedIn"], order: ["has LinkedIn", "no LinkedIn"] },
-  { key: "reason", label: "Reason", get: (r) => [r.reason], text: (v) => label("reason", v), more: true },
+  { key: "reason", label: "Why", get: (r) => [r.reason], text: (v) => label("reason", v), more: true },
   { key: "worth_source", label: "Worth decided by", get: (r) => (r.worth_source ? [r.worth_source] : []), more: true },
   { key: "tags", label: "Your tags", get: (r) => r.tags, more: true },
   { key: "labels", label: "Labels ≥ 60%", get: (r) => r.labels, text: humanize, more: true, search: true },
@@ -80,9 +102,8 @@ const FACETS = [
 const FACET_BY_KEY = new Map(FACETS.map((facet) => [facet.key, facet]));
 const VISIBLE_VALUES = 8;
 
-// Quick filters: named facet selections with explicit predicates.
+// Quick filters: named facet selections with explicit predicates, counted within the tab.
 const QUICK = [
-  { name: "Needs confirm", set: { share: ["confirm"] } },
   { name: "Family", set: { flag: ["family"] } },
   { name: "Sensitive context", set: { flag: ["sensitive_context"] } },
   { name: "Service providers", set: { relationship_kind: ["service_provider"] } },
@@ -93,10 +114,10 @@ const QUICK = [
 ];
 
 const state = {
-  rows: [], byId: new Map(), uploadCommand: "",
-  filters: new Map(), text: "", sort: { key: "name", dir: 1 },
-  matching: [], counts: new Map(), selected: new Set(), focus: -1,
-  drawerId: null, undo: null, saving: false, expanded: new Set(), moreOpen: false, labelSearch: "",
+  rows: [], byId: new Map(),
+  tab: "confirm", filters: new Map(), text: "", sort: { key: "name", dir: 1 },
+  matching: [], counts: new Map(), quickCounts: [], selected: new Set(), focus: -1,
+  drawerId: null, undo: null, saving: false, expanded: new Set(), collapsed: new Set(), moreOpen: false, labelSearch: "",
 };
 
 // ---------- helpers ----------
@@ -124,24 +145,28 @@ function announce(message, isError = false) {
 }
 function saveFilters() {
   const filters = Object.fromEntries([...state.filters].map(([key, values]) => [key, [...values]]));
-  try { sessionStorage.setItem(FILTERS_KEY, JSON.stringify({ filters, text: state.text, sort: state.sort })); } catch { /* fine */ }
+  try { sessionStorage.setItem(FILTERS_KEY, JSON.stringify({ tab: state.tab, filters, text: state.text, sort: state.sort })); } catch { /* fine */ }
 }
-function restoreFilters(hasConfirm) {
+function restoreFilters() {
   let saved = null;
   try { saved = JSON.parse(sessionStorage.getItem(FILTERS_KEY) || "null"); } catch { /* fresh */ }
   if (saved && saved.filters) {
-    state.filters = new Map(Object.entries(saved.filters).map(([key, values]) => [key, new Set(values)]));
+    state.filters = new Map(Object.entries(saved.filters).filter(([key]) => FACET_BY_KEY.has(key))
+      .map(([key, values]) => [key, new Set(values)]));
     state.text = saved.text || "";
     state.sort = saved.sort || state.sort;
-    return;
+    if (DECISIONS.includes(saved.tab)) state.tab = saved.tab;
   }
-  if (hasConfirm) state.filters.set("share", new Set(["confirm"]));
+  // Start where the human is needed; fall back to what is shared, then to the rest.
+  if (!state.rows.some((row) => row.share === state.tab)) {
+    state.tab = DECISIONS.find((decision) => state.rows.some((row) => row.share === decision)) || "confirm";
+  }
 }
 
 // ---------- data ----------
 
 async function load() {
-  const response = await fetch(`${API}people`);
+  const response = await fetch(`${API}rows`);
   if (!response.ok) throw new Error((await response.text()) || "Could not load people");
   const payload = await response.json();
   const { columns } = payload;
@@ -155,7 +180,6 @@ async function load() {
     return row;
   });
   state.byId = new Map(state.rows.map((row) => [row.person_id, row]));
-  state.uploadCommand = payload.upload_command || "";
 }
 
 function filterRows() {
@@ -165,6 +189,12 @@ function filterRows() {
   const quickCounts = QUICK.map(() => 0);
   const matching = [];
   for (const row of state.rows) {
+    if (row.share !== state.tab) continue;
+    QUICK.forEach((quick, position) => {
+      if (Object.entries(quick.set).every(([key, values]) => FACET_BY_KEY.get(key).get(row).some((value) => values.includes(value)))) {
+        quickCounts[position] += 1;
+      }
+    });
     if (needle && !row.search.includes(needle)) continue;
     let failed = 0;
     let failedKey = "";
@@ -185,17 +215,13 @@ function filterRows() {
       for (const value of facet.get(row)) bucket.set(value, (bucket.get(value) || 0) + 1);
     }
   }
-  QUICK.forEach((quick, position) => {
-    const entries = Object.entries(quick.set);
-    quickCounts[position] = state.rows.filter((row) =>
-      entries.every(([key, values]) => FACET_BY_KEY.get(key).get(row).some((value) => values.includes(value)))).length;
-  });
   const { key, dir } = state.sort;
   const sorters = {
     name: (a, b) => a.name.localeCompare(b.name),
-    decision: (a, b) => ["confirm", "yes", "no"].indexOf(a.share) - ["confirm", "yes", "no"].indexOf(b.share) || a.name.localeCompare(b.name),
+    reason: (a, b) => a.reason.localeCompare(b.reason) || a.name.localeCompare(b.name),
     relationship: (a, b) => (a.relationship_kind || "~").localeCompare(b.relationship_kind || "~"),
     worth: (a, b) => ["yes", "maybe", "no", ""].indexOf(a.worth) - ["yes", "maybe", "no", ""].indexOf(b.worth),
+    warmth: (a, b) => (b.warmth ?? -1) - (a.warmth ?? -1),
     last: (a, b) => (a.recency_days ?? 1e9) - (b.recency_days ?? 1e9),
     messages: (a, b) => b.interactions - a.interactions,
   };
@@ -209,20 +235,11 @@ function filterRows() {
 // ---------- rendering ----------
 
 function renderHead() {
-  const rows = state.rows;
-  const share = rows.filter((row) => row.share === "yes");
-  const confirm = rows.filter((row) => row.share === "confirm").length;
-  const priv = rows.filter((row) => row.share === "no").length;
-  const withLinkedin = share.filter((row) => row.public_identifier).length;
-  els.head.innerHTML = `
-    <div class='stat stat-share'><b>${share.length.toLocaleString()}</b><span>share</span></div>
-    <div class='stat stat-confirm'><b>${confirm.toLocaleString()}</b><span>confirm</span></div>
-    <div class='stat stat-private'><b>${priv.toLocaleString()}</b><span>not sharing</span></div>
-    <div class='stat-note'>Upload needs a LinkedIn: <b>${withLinkedin.toLocaleString()}</b> of the ${share.length.toLocaleString()} have one, <b>${(share.length - withLinkedin).toLocaleString()}</b> do not.</div>
-    <div class='upload-cmd' title='Runs in your terminal; plans first, uploads with --apply'>
-      <code>${escapeHtml(state.uploadCommand)}</code>
-      <button type='button' class='btn btn-ghost' data-copy-upload>Copy</button>
-    </div>`;
+  const totals = Object.fromEntries(DECISIONS.map((decision) => [decision, state.rows.filter((row) => row.share === decision).length]));
+  els.head.innerHTML = DECISIONS.map((decision) => `
+    <button type='button' class='stat stat-${decision}' data-tab='${decision}' aria-pressed='${state.tab === decision}'>
+      <b>${totals[decision].toLocaleString()}</b><span>${label("share", decision)}</span></button>`).join("")
+    + `<span class='head-note'>${state.rows.length.toLocaleString()} people</span>`;
 }
 
 function renderQuick() {
@@ -231,7 +248,7 @@ function renderQuick() {
       const held = state.filters.get(key);
       return held && held.size === values.length && values.every((value) => held.has(value));
     }) && [...state.filters].filter(([, values]) => values.size).length === Object.keys(quick.set).length;
-    return `<button type='button' class='chip' data-quick-index='${position}' aria-pressed='${active}'>${escapeHtml(quick.name)} <span class='count'>${state.quickCounts[position].toLocaleString()}</span></button>`;
+    return `<button type='button' class='chip' data-quick-index='${position}' aria-pressed='${active}' ${state.quickCounts[position] || active ? "" : "disabled"}>${escapeHtml(quick.name)} <span class='count'>${state.quickCounts[position].toLocaleString()}</span></button>`;
   }).join("");
 }
 
@@ -249,7 +266,7 @@ function renderRail() {
     const shown = expanded || values.length <= VISIBLE_VALUES + 1 ? values : values.slice(0, VISIBLE_VALUES);
     const hidden = values.length - shown.length;
     if (!values.length) return "";
-    return `<div class='facet' data-facet='${facet.key}' data-open='${!state.collapsed?.has(facet.key)}'>
+    return `<div class='facet' data-facet='${facet.key}' data-open='${!state.collapsed.has(facet.key)}'>
       <button type='button' class='facet-head' data-facet-toggle='${facet.key}'>${escapeHtml(facet.label)}${held.size ? " <i class='active-dot' aria-hidden='true'></i>" : ""}</button>
       <div class='facet-body'>
         ${facet.search ? `<input type='search' class='field facet-search' data-label-search value='${escapeHtml(state.labelSearch)}' placeholder='Find a label' aria-label='Find a label'>` : ""}
@@ -261,7 +278,7 @@ function renderRail() {
   els.rail.innerHTML = facets.map(block).join("")
     + `<button type='button' class='facet-head rail-divider' data-more-toggle aria-expanded='${state.moreOpen}'>More filters</button>`
     + (state.moreOpen ? more.map(block).join("") : "")
-    + `<p class='rail-hint'><span class='kbd'>/</span> search · <span class='kbd'>j</span><span class='kbd'>k</span> move · <span class='kbd'>x</span> select · <span class='kbd'>⇧A</span> select all matching · <span class='kbd'>s</span> share · <span class='kbd'>p</span> private · <span class='kbd'>w</span> use worth · <span class='kbd'>z</span> undo · <span class='kbd'>Enter</span> open</p>`;
+    + `<p class='rail-hint'><span class='kbd'>1</span><span class='kbd'>2</span><span class='kbd'>3</span> tab · <span class='kbd'>/</span> search · <span class='kbd'>j</span><span class='kbd'>k</span> move · <span class='kbd'>x</span> select · <span class='kbd'>⇧A</span> select all matching · <span class='kbd'>s</span> share · <span class='kbd'>p</span> private · <span class='kbd'>w</span> use worth · <span class='kbd'>z</span> undo · <span class='kbd'>Enter</span> open</p>`;
 }
 
 function renderChips() {
@@ -274,15 +291,18 @@ function renderChips() {
   }
   if (chips.length) chips.push("<button type='button' class='btn btn-ghost bar-clear' data-clear-filters>Clear</button>");
   els.chips.innerHTML = chips.join("");
-  els.count.textContent = `${state.matching.length.toLocaleString()} of ${state.rows.length.toLocaleString()}`;
+  const inTab = state.rows.filter((row) => row.share === state.tab).length;
+  els.count.textContent = `${state.matching.length.toLocaleString()} of ${inTab.toLocaleString()} ${label("share", state.tab).toLowerCase()}`;
 }
 
 const COLUMNS = [
   { key: "", label: "" },
   { key: "name", label: "Person" },
-  { key: "decision", label: "Decision" },
+  { key: "sources", label: "Sources", sortable: false },
+  { key: "reason", label: "Why" },
   { key: "relationship", label: "Relationship" },
   { key: "worth", label: "Worth" },
+  { key: "warmth", label: "Warmth" },
   { key: "last", label: "Last contact", right: true },
   { key: "messages", label: "Messages", right: true },
 ];
@@ -291,6 +311,7 @@ function renderGridHead() {
   const allSelected = state.matching.length > 0 && state.matching.every((row) => state.selected.has(row.person_id));
   els.gridHead.innerHTML = COLUMNS.map((column, position) => {
     if (position === 0) return `<label class='check'><input type='checkbox' data-select-all aria-label='Select all matching' ${allSelected ? "checked" : ""}></label>`;
+    if (column.sortable === false) return `<span>${column.label}</span>`;
     const sort = state.sort.key === column.key ? (state.sort.dir === 1 ? "ascending" : "descending") : "none";
     return `<button type='button' class='${column.right ? "right" : ""}' data-sort='${column.key}' aria-sort='${sort}'>${column.label}</button>`;
   }).join("");
@@ -298,18 +319,19 @@ function renderGridHead() {
 
 function rowHtml(row, position) {
   const selected = state.selected.has(row.person_id);
-  const badge = row.share === "yes" ? "badge-ok" : row.share === "confirm" ? "badge-warn" : "badge-muted";
-  const who = [row.title, row.company].filter(Boolean).join("<span class='sep'>·</span>") || (row.location ? escapeHtml(row.location) : "");
+  const sub = row.title || row.company
+    ? `${escapeHtml(row.title)}${row.title && row.company ? "<span class='sep'>·</span>" : ""}${escapeHtml(row.company)}`
+    : escapeHtml(row.location);
   const avatar = row.has_avatar ? `<img src='${API}avatar?id=${encodeURIComponent(row.person_id)}' alt='' loading='lazy' referrerpolicy='no-referrer'>` : "";
-  const li = row.public_identifier ? `<svg class='li' viewBox='0 0 24 24' aria-label='LinkedIn'><path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/></svg>` : "";
-  const channels = row.channels.map((channel) => `<i data-c='${channel}' title='${channel}'></i>`).join("");
   return `<div class='row' role='row' data-id='${row.person_id}' data-index='${position}' aria-selected='${selected}' data-focus='${position === state.focus}' data-pending='${row.pending ? "true" : "false"}'>
     <label class='check'><input type='checkbox' data-select aria-label='Select ${escapeHtml(row.name)}' ${selected ? "checked" : ""}></label>
     <div class='person'><span class='avatar'>${avatar}<span>${escapeHtml(initials(row.name))}</span></span>
-      <span class='who'><b>${escapeHtml(row.name)}${li}<span class='channels'>${channels}</span></b><small>${who ? (row.title || row.company ? `${escapeHtml(row.title)}${row.title && row.company ? "<span class='sep'>·</span>" : ""}${escapeHtml(row.company)}` : who) : ""}</small></span></div>
-    <div class='decision'><span class='badge ${badge}'>${label("share", row.share)}</span><small class='${row.share_source === "human" ? "human" : ""}'>${escapeHtml(label("reason", row.reason))}</small></div>
+      <span class='who'><b>${escapeHtml(row.name)}</b><small>${sub}</small></span></div>
+    <div class='sources'>${row.channels.map(channelIcon).join("")}</div>
+    <div class='why ${row.share_source === "human" ? "human" : ""}'>${escapeHtml(label("reason", row.reason))}</div>
     <div class='rel'>${escapeHtml(humanize(row.relationship_kind))}</div>
     <div class='worth' data-worth='${row.worth}'><i class='dot'></i>${escapeHtml(row.worth || "unjudged")} <span class='src ${row.worth_source}'>${row.worth_source === "human" ? "you" : ""}</span></div>
+    ${warmthCell(row.warmth)}
     <div class='cell-num right ${row.last_interaction ? "" : "dim"}'>${row.last_interaction ? formatDate(row.last_interaction) : "—"}</div>
     <div class='cell-num right ${row.interactions ? "" : "dim"}'>${row.interactions ? row.interactions.toLocaleString() : "—"}</div>
   </div>`;
@@ -331,7 +353,7 @@ function renderRows() {
   els.empty.hidden = total > 0;
   if (!total) {
     els.empty.innerHTML = state.rows.length
-      ? "No one matches these filters."
+      ? (state.tab === "confirm" && !state.filters.size && !state.text ? "No one left to confirm." : "No one matches here.")
       : "No share list yet. Run <code>bin/deep-context share</code> first, then reload.";
   }
 }
@@ -360,6 +382,7 @@ function renderBulkbar() {
 
 function renderAll({ rows = true } = {}) {
   filterRows();
+  renderHead();
   renderQuick();
   renderRail();
   renderChips();
@@ -371,21 +394,26 @@ function renderAll({ rows = true } = {}) {
 
 // ---------- filters ----------
 
-function toggleFilter(key, value) {
-  const held = state.filters.get(key) || new Set();
-  if (held.has(value)) held.delete(value); else held.add(value);
-  if (held.size) state.filters.set(key, held); else state.filters.delete(key);
+function resetView() {
   state.selected.clear();
   state.focus = -1;
   els.viewport.scrollTop = 0;
   renderAll();
 }
+function toggleFilter(key, value) {
+  const held = state.filters.get(key) || new Set();
+  if (held.has(value)) held.delete(value); else held.add(value);
+  if (held.size) state.filters.set(key, held); else state.filters.delete(key);
+  resetView();
+}
 function setFilters(set) {
   state.filters = new Map(Object.entries(set).map(([key, values]) => [key, new Set(values)]));
-  state.selected.clear();
-  state.focus = -1;
-  els.viewport.scrollTop = 0;
-  renderAll();
+  resetView();
+}
+function setTab(decision) {
+  if (!DECISIONS.includes(decision) || decision === state.tab) return;
+  state.tab = decision;
+  resetView();
 }
 
 // ---------- selection and writes ----------
@@ -421,7 +449,6 @@ async function writeTags(people, { undo }) {
   } finally {
     people.forEach(({ person_id }) => { const row = state.byId.get(person_id); if (row) row.pending = false; });
     state.saving = false;
-    renderHead();
     renderAll();
   }
 }
@@ -506,6 +533,7 @@ async function openDrawer(id, { refresh = false } = {}) {
       <div class='who'><h2>${escapeHtml(row.name)}</h2>
         <div class='sub'>${escapeHtml(detail.headline || [row.title, row.company].filter(Boolean).join(" · "))}${row.location ? ` · ${escapeHtml(row.location)}` : ""}</div>
         ${detail.linkedin_url ? `<div class='sub'><a href='${escapeHtml(detail.linkedin_url)}' target='_blank' rel='noreferrer'>${escapeHtml(detail.linkedin_url.replace("https://www.", ""))}</a></div>` : ""}
+        <div class='sub sources'>${row.channels.map(channelIcon).join("")}</div>
       </div>
       <button type='button' class='drawer-close' data-drawer-close aria-label='Close'>×</button>
     </div>
@@ -523,7 +551,6 @@ async function openDrawer(id, { refresh = false } = {}) {
     </div>
     <div class='dsec'><h3>Contact</h3>
       <dl class='kv'>
-        <dt>Channels</dt><dd>${escapeHtml(row.channels.join(", ") || "—")}</dd>
         <dt>Messages</dt><dd><span class='num'>${row.interactions.toLocaleString()}</span>${row.last_interaction ? ` <small>last ${escapeHtml(formatDate(row.last_interaction))}</small>` : ""}</dd>
         ${row.cadence ? `<dt>Cadence</dt><dd>${escapeHtml(row.cadence)}${row.direction ? ` <small>${escapeHtml(humanize(row.direction))}</small>` : ""}</dd>` : ""}
         ${contact.length ? `<dt>Identifiers</dt><dd style='text-transform:none'>${contact.map(escapeHtml).join("<br>")}</dd>` : ""}
@@ -553,11 +580,12 @@ new ResizeObserver(scheduleRows).observe(els.viewport);
 
 root.addEventListener("click", async (event) => {
   const target = event.target;
+  const tab = target.closest("[data-tab]");
+  if (tab) { setTab(tab.dataset.tab); return; }
   const facetValue = target.closest("[data-facet-value]");
   if (facetValue) { toggleFilter(facetValue.dataset.facetKey, facetValue.dataset.facetValue); return; }
   const facetToggle = target.closest("[data-facet-toggle]");
   if (facetToggle) {
-    state.collapsed ||= new Set();
     const key = facetToggle.dataset.facetToggle;
     if (state.collapsed.has(key)) state.collapsed.delete(key); else state.collapsed.add(key);
     renderRail();
@@ -577,11 +605,6 @@ root.addEventListener("click", async (event) => {
   const chip = target.closest("[data-chip-key]");
   if (chip) { toggleFilter(chip.dataset.chipKey, chip.dataset.chipValue); return; }
   if (target.closest("[data-clear-filters]")) { setFilters({}); return; }
-  if (target.closest("[data-copy-upload]")) {
-    await navigator.clipboard.writeText(state.uploadCommand);
-    announce("Upload command copied");
-    return;
-  }
   const sort = target.closest("[data-sort]");
   if (sort) {
     const key = sort.dataset.sort;
@@ -614,10 +637,7 @@ root.addEventListener("click", async (event) => {
 root.addEventListener("input", (event) => {
   if (event.target === els.search) {
     state.text = els.search.value;
-    state.selected.clear();
-    state.focus = -1;
-    els.viewport.scrollTop = 0;
-    renderAll();
+    resetView();
   }
   if (event.target.matches("[data-label-search]")) {
     state.labelSearch = event.target.value.toLowerCase();
@@ -638,6 +658,7 @@ document.addEventListener("keydown", (event) => {
   switch (event.key) {
     case "/": event.preventDefault(); els.search.focus(); els.search.select(); break;
     case "f": event.preventDefault(); els.rail.querySelector(".facet-value")?.focus(); break;
+    case "1": case "2": case "3": setTab(DECISIONS[Number(event.key) - 1]); break;
     case "j": case "ArrowDown": event.preventDefault(); moveFocus(1); break;
     case "k": case "ArrowUp": event.preventDefault(); moveFocus(-1); break;
     case "x": if (state.focus >= 0) toggleSelected(state.matching[state.focus].person_id); break;
@@ -667,8 +688,7 @@ document.addEventListener("keydown", (event) => {
     els.rows.innerHTML = "";
     return;
   }
-  restoreFilters(state.rows.some((row) => row.share === "confirm"));
+  restoreFilters();
   els.search.value = state.text;
-  renderHead();
   renderAll();
 })();

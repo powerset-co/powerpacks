@@ -1,7 +1,7 @@
-/* Share page layout. Tokens and shared components come from results.css. */
+/* People page layout. Tokens and shared components come from results.css. */
 
-.share-shell { display: grid; grid-template-rows: var(--topbar-height) 1fr; height: 100dvh; overflow: hidden; }
-.share-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 0; }
+.people-shell { display: grid; grid-template-rows: var(--topbar-height) 1fr; height: 100dvh; overflow: hidden; }
+.people-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 0; }
 
 /* ---- left rail: facets with live counts ---- */
 .rail { min-height: 0; overflow-y: auto; padding: 12px 10px 120px; border-right: 1px solid var(--line); background: var(--background); scrollbar-width: thin; }
@@ -29,24 +29,26 @@
 .rail-hint .kbd { margin-right: 2px; }
 
 /* ---- main column ---- */
-.share-main { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); min-height: 0; }
+/* `main` in results.css is the centered reading column; this page's main is the whole pane. */
+.people-main { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); width: auto; min-height: 0; margin: 0; padding: 0; }
 
-.share-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; padding: 14px 20px 10px; }
-.stat { display: grid; gap: 1px; }
-.stat b { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; transition: color var(--t-med) var(--ease-out); }
-.stat span { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-.stat-share b { color: var(--ok); }
-.stat-confirm b { color: var(--warn); }
-.stat-private b { color: var(--muted); }
-.stat-note { color: var(--muted); font-size: 12px; }
-.stat-note b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
-.upload-cmd { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; max-width: 46%; }
-.upload-cmd code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--card); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+/* The three decision counts are the tabs: one is always selected. */
+.people-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; padding: 12px 20px 0; }
+.stat { display: grid; gap: 2px; padding: 8px 14px 10px; border: 0; border-bottom: 2px solid transparent; border-radius: var(--radius-s) var(--radius-s) 0 0; background: transparent; color: var(--muted); text-align: left; cursor: pointer; transition: background var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out); }
+.stat:hover { background: var(--secondary); }
+.stat[aria-pressed="true"] { background: var(--card); border-bottom-color: var(--primary); }
+.stat b { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; color: var(--foreground); opacity: .7; transition: opacity var(--t-fast) var(--ease-out); }
+.stat[aria-pressed="true"] b { opacity: 1; }
+.stat span { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.stat-yes[aria-pressed="true"] b { color: var(--ok); }
+.stat-confirm[aria-pressed="true"] b { color: var(--warn); }
+.head-note { margin-left: auto; padding-bottom: 12px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 
-.quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 20px 10px; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 20px; border-top: 1px solid var(--line); }
+.quick .chip:disabled { opacity: .4; cursor: default; }
 .quick .chip { min-height: 26px; }
 
-.bar { position: relative; z-index: 15; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--background) 92%, transparent); }
+.bar { position: relative; z-index: 15; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--background) 92%, transparent); }
 .bar-search { flex: 0 1 300px; }
 .bar-chips { flex: 1 1 auto; }
 .bar-chips .chip { min-height: 26px; padding-right: 6px; animation: rise-in var(--t-fast) var(--ease-out) both; }
@@ -60,7 +62,7 @@
 .grid { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 .grid-head, .row {
   display: grid;
-  grid-template-columns: 36px minmax(240px, 1.6fr) 150px 128px 108px 92px 82px;
+  grid-template-columns: 36px minmax(220px, 1.6fr) 100px 150px 124px 96px 84px 92px 82px;
   align-items: center;
   gap: 10px;
   padding: 0 20px 0 12px;
@@ -91,9 +93,22 @@
 .person .who small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .person .who small .sep { margin: 0 4px; color: var(--faint); }
 .person .li { flex: 0 0 auto; width: 12px; height: 12px; color: #0a66c2; fill: currentColor; opacity: .8; }
-.decision { display: grid; gap: 2px; min-width: 0; justify-items: start; }
-.decision small { color: var(--muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.decision small.human { color: var(--info); }
+.why { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.why.human { color: var(--info); }
+/* The same pills the search viewer draws for a candidate's sources. */
+.sources { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.source { display: inline-flex; align-items: center; justify-content: center; height: 20px; padding: 0 7px; border: 1px solid; border-radius: 999px; }
+.source svg { width: 11px; height: 11px; }
+.source[data-c="gmail"] { background: #22c55e33; color: #4ade80; border-color: #22c55e4d; }
+.source[data-c="imessage"], .source[data-c="whatsapp"] { background: #10b98133; color: #34d399; border-color: #10b9814d; }
+.source[data-c="linkedin"] { background: #3b82f633; color: #60a5fa; border-color: #3b82f64d; }
+.source[data-c="linkedin"] svg { width: 13px; height: 13px; }
+.warmth-cell { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--foreground); }
+.warmth-cell.dim { color: var(--faint); }
+.warmth-bar { display: inline-flex; gap: 2px; }
+.warmth-bar i { width: 5px; height: 10px; border-radius: 1.5px; background: var(--secondary); }
+.warmth-bar i.on { background: var(--primary); }
+.drawer .sources { margin-top: 4px; }
 .rel { color: var(--foreground); font-size: 12px; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rel:empty::before, .cell-empty { content: "—"; color: var(--faint); }
 .worth { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; text-transform: capitalize; }
@@ -105,12 +120,6 @@
 .worth .src.human { color: var(--info); }
 .cell-num { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--foreground); }
 .cell-num.dim { color: var(--muted); }
-.channels { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
-.channels i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
-.channels i[data-c="gmail"] { background: #4ade80; }
-.channels i[data-c="imessage"] { background: #34d399; }
-.channels i[data-c="whatsapp"] { background: #22c55e; }
-.channels i[data-c="linkedin"] { background: #60a5fa; }
 .grid-empty { margin: 40px auto; max-width: 520px; color: var(--muted); text-align: center; line-height: 1.6; }
 .grid-empty code { padding: 2px 6px; border-radius: 4px; background: var(--secondary); color: var(--foreground); font-size: 12px; }
 .grid-loading { display: grid; gap: 1px; padding: 0 20px 0 12px; }
@@ -164,9 +173,8 @@
 .note { color: var(--muted); font-size: 12px; font-style: italic; }
 
 @media (max-width: 960px) {
-  .share-layout { grid-template-columns: 1fr; }
+  .people-layout { grid-template-columns: 1fr; }
   .rail { display: none; }
-  .grid-head, .row { grid-template-columns: 36px minmax(200px, 1fr) 140px 96px; }
+  .grid-head, .row { grid-template-columns: 36px minmax(200px, 1fr) 96px 140px; }
   .grid-head > :nth-child(n+5), .row > :nth-child(n+5) { display: none; }
-  .upload-cmd { display: none; }
 }

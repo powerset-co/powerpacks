@@ -28,7 +28,7 @@ _AGENT_ACTIONS = frozenset({"synthesize", "realize"})
 
 
 def _url(host: str, port: int, stage: str) -> str:
-    route = stage if stage in {"directory", "share"} else f"?stage={stage}"
+    route = stage if stage in {"directory", "people", "searches"} else f"?stage={stage}"
     return f"http://{host}:{port}/{route}"
 
 
@@ -112,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "directory", "share"))
+    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "directory", "people", "searches"))
     serve.add_argument("--open", action="store_true")
     status.add_argument("--wait", action="store_true")
     status.add_argument("--timeout", type=int, default=900)

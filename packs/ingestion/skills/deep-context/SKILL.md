@@ -477,21 +477,22 @@ the owner, to a human `private`, and to everyone worth said no or maybe to. The 
 labels decide nothing — they raise at most one flag (family, partner, minor,
 sensitive context, clinician/lawyer/banker, automated sender, stranger) on a
 worth-yes person, which makes that row `confirm`. Confirm rows upload nothing
-until the user answers. The answer is a tag, recorded on the share page:
+until the user answers. The answer is a tag, recorded on the People page:
 
 ```bash
-bin/deep-context review share   # the share page, on the review server
+bin/deep-context review people   # your people, one tab per decision
 ```
 
-The page lists every person with their decision, worth, relationship, flag,
-last contact and message count; the left rail filters by those cells and by the
-JEV labels, the quick filters open the usual slices (needs confirm, family,
-sensitive context, service providers, recruiters, strangers, dormant), and the
-bulk bar tags a whole selection **Share** or **Keep private** (`Use worth`
-clears the tag). Each write re-decides those people's `share` rows in the same
-transaction, so the table stays current; `z` undoes the last write. Tell the
-user the URL and the three counts; do not read the list aloud. Then the
-upload — without `--apply` it plans only, reads the cloud, writes one manifest:
+The page has three tabs — Confirm, Share, Not sharing — with every person's
+why, sources, relationship, worth, warmth, last contact and message count; the
+left rail filters by those cells and by the JEV labels, the quick filters open
+the usual slices (family, sensitive context, service providers, recruiters,
+strangers, dormant), and the bulk bar tags a whole selection **Share** or
+**Keep private** (`Use worth` clears the tag). Each write re-decides those
+people's `share` rows in the same transaction, so the table stays current; `z`
+undoes the last write. Tell the user the URL and the three counts; do not read
+the list aloud. Then the upload — without `--apply` it plans only, reads the
+cloud, writes one manifest:
 
 ```bash
 uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py

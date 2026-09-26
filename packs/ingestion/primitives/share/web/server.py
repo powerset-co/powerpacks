@@ -1,9 +1,9 @@
-"""The share UI's routes: the page, its assets, the people payload, one write.
+"""The People page's routes: the page, its assets, the people payload, one write.
 
-Flow: `ShareRoutes` mounts under `/share` and `/api/share/` in the review
-server (`bin/deep-context review share`); `main()` serves the same routes
-alone on a free port for tests and scale checks. GET `/api/share/people` ->
-`SharePeople.load()` as one columnar payload; POST `/api/share/tags` carries
+Flow: `ShareRoutes` mounts under `/people` and `/api/people/` in the review
+server (`bin/deep-context review people`); `main()` serves the same routes
+alone on a free port for tests and scale checks. GET `/api/people/rows` ->
+`SharePeople.load()` as one columnar payload; POST `/api/people/tags` carries
 the tags each selected person should hold (absolute sets, so undo re-posts
 the previous sets), writes the tag rows and re-decides those people's share
 rows through `labels.share_decision` from `person_labels`, in one transaction.
@@ -34,26 +34,24 @@ from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, 
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
-from packs.ingestion.primitives.share.web import SHARE_CSS, SHARE_HTML, SHARE_JS
+from packs.ingestion.primitives.share.web import PEOPLE_CSS, PEOPLE_HTML, PEOPLE_JS
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
 from packs.search.primitives.deep_search.results_web import RESULTS_CSS
 
-PAGE_PATH = "/share"
-API_PREFIX = "/api/share/"
-ASSET_PREFIX = "/share/assets/"
+PAGE_PATH = "/people"
+API_PREFIX = "/api/people/"
+ASSET_PREFIX = "/people/assets/"
 DEFAULT_PORT = 8767
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
-UPLOAD_COMMAND = ("uv run --env-file .env --project . python "
-                  "packs/indexing/primitives/upload_powerset/upload_powerset.py")
 
 # `results.css` is the one stylesheet both local UIs share (the hosted snapshot
 # renderer serves that same file by name, so tokens and components live there).
 ASSETS = {
     "results.css": (RESULTS_CSS, "text/css; charset=utf-8"),
-    "share.css": (SHARE_CSS, "text/css; charset=utf-8"),
-    "share.js": (SHARE_JS, "text/javascript; charset=utf-8"),
+    "people.css": (PEOPLE_CSS, "text/css; charset=utf-8"),
+    "people.js": (PEOPLE_JS, "text/javascript; charset=utf-8"),
 }
 
 TagChanges = dict[str, frozenset[str]]
@@ -110,7 +108,7 @@ def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> tuple[Share
 
 
 class ShareRoutes:
-    """The share page's GET and POST routes, mountable in any stdlib handler."""
+    """The People page's GET and POST routes, mountable in any stdlib handler."""
 
     def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple]) -> None:
         self.db = db
@@ -120,14 +118,12 @@ class ShareRoutes:
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
         if parsed.path == PAGE_PATH:
-            self._send(handler, SHARE_HTML.read_bytes())
+            self._send(handler, PEOPLE_HTML.read_bytes())
         elif parsed.path.startswith(ASSET_PREFIX) and parsed.path[len(ASSET_PREFIX):] in ASSETS:
             path, kind = ASSETS[parsed.path[len(ASSET_PREFIX):]]
             self._send(handler, path.read_bytes(), kind, cache="no-cache")
-        elif parsed.path == f"{API_PREFIX}people":
-            payload = people_payload(self.load())
-            payload["upload_command"] = UPLOAD_COMMAND
-            self._send_json(handler, payload)
+        elif parsed.path == f"{API_PREFIX}rows":
+            self._send_json(handler, people_payload(self.load()))
         elif parsed.path == f"{API_PREFIX}person":
             detail = self.people.detail((query.get("id") or [""])[0])
             if detail is None:
@@ -216,7 +212,7 @@ def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/healthz":
-                routes._send_json(self, {"primitive": "share_web", "ok": True, "people": len(routes.load())})
+                routes._send_json(self, {"primitive": "people_web", "ok": True, "people": len(routes.load())})
             elif parsed.path == "/":
                 self.send_response(HTTPStatus.FOUND)
                 self.send_header("Location", PAGE_PATH)
@@ -250,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     server = ThreadingHTTPServer((args.host, args.port), make_handler(routes))
     host, port = server.server_address
     url = f"http://{host}:{port}{PAGE_PATH}"
-    print(json.dumps({"primitive": "share_web", "status": "serving", "url": url,
+    print(json.dumps({"primitive": "people_web", "status": "serving", "url": url,
                       "db": str(args.db), "people": len(routes.load())}, indent=2))
     if args.open:
         webbrowser.open(url)

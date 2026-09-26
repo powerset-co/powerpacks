@@ -84,8 +84,8 @@ open_review_ui_when_healthy() {
   # goes down, print the URL but never auto-open a server we did not start.
   # The URL line always prints; a missing `open` (non-macOS) degrades to it.
   local port="$1" stage="$2" url _ stale=0
-  if [[ "$stage" == "share" ]]; then
-    url="http://127.0.0.1:$port/share"
+  if [[ "$stage" == "people" || "$stage" == "searches" ]]; then
+    url="http://127.0.0.1:$port/$stage"
   elif [[ -n "$stage" && "$stage" != "directory" ]]; then
     url="http://127.0.0.1:$port/?stage=$stage"
   else
@@ -145,7 +145,7 @@ usage: bin/deep-context <command> [args]
                is accepted for compat but is a
                no-op — restart is always unconditional.
                Add a stage word to land there directly
-               (review linkedin | worth | enrich | share; default: the read-only
+               (review linkedin | worth | enrich | people | searches; default: the read-only
                people directory, A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
   stop         stop the review UI server (free)
@@ -166,7 +166,7 @@ usage: bin/deep-context <command> [args]
   realize      fan-in merge of the per-source import people files (free, local)
   share        write the person_labels + share tables for every merged person
                from their worth and the JEV labels synthesize saved (free, local).
-               `review share` then opens the page where you tag people share
+               `review people` then opens the page where you tag people share
                or private in bulk and answer the confirmations
   lookup       fetch a person's dossier by name/phone/email
   probe        chat.db readability (Full Disk Access) check
@@ -286,8 +286,9 @@ case "$cmd" in
     #      the helper's stale-server guard refuses to open anything that was
     #      already answering at its first probe.
     # `review linkedin` / `review worth` / `review enrich` / `review directory`
-    # / `review share` is sugar for the server's --stage flag: open the UI at
-    # that stage (`share` is the who-gets-uploaded page).
+    # / `review people` / `review searches` is sugar for the server's --stage
+    # flag: open the UI at that page (`people` is your network with the share
+    # decision per person, `searches` the saved deep-search runs).
     review_args=()
     review_stage=""
     prev_arg=""
@@ -296,7 +297,7 @@ case "$cmd" in
         review_args+=("$arg"); review_stage="$arg"
       else
         case "$arg" in
-          worth|enrich|linkedin|directory|share) review_args+=(--stage "$arg"); review_stage="$arg" ;;
+          worth|enrich|linkedin|directory|people|searches) review_args+=(--stage "$arg"); review_stage="$arg" ;;
           --force-restart) ;;  # compat no-op: restart is always unconditional
           --stage=*) review_args+=("$arg"); review_stage="${arg#--stage=}" ;;
           *) review_args+=("$arg") ;;

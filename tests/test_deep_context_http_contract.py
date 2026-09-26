@@ -285,6 +285,19 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(content_type, "application/json; charset=utf-8")
         return status, json.loads(body)
 
+    def test_people_and_searches_pages_ride_the_review_server(self) -> None:
+        status, content_type, body, _ = self.request("GET", "/people")
+        self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
+        self.assertIn(b"data-people", body)
+        status, content_type, _, _ = self.request("GET", "/people/assets/people.css")
+        self.assertEqual((status, content_type), (200, "text/css; charset=utf-8"))
+        status, content_type, body, _ = self.request("GET", "/searches")
+        self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
+        self.assertTrue(b"data-catalog" in body or b"No completed searches" in body)
+        self.assertIn(b"href='/people'", body)
+        status, _, _, _ = self.request("GET", "/share")
+        self.assertEqual(status, 404)
+
     def test_get_route_inventory_and_content_types(self) -> None:
         html_routes: dict[str, bytes | None] = {
             "/": b"<!doctype html>",

@@ -1,4 +1,6 @@
 const toast = document.querySelector(".toast");
+// "" when the viewer serves itself, "/searches" when the review server mounts it.
+const BASE = document.body.dataset.base || "";
 const readOnly = document.documentElement.dataset.readonly === "true";
 const hostedFeedback = document.documentElement.dataset.hostedFeedback === "true";
 const hostedRequests = new Map();
@@ -41,7 +43,7 @@ function announce(message, isError = false) {
 
 async function post(path, values) {
   if (readOnly) throw new Error("This is a read-only snapshot");
-  const response = await fetch(path, {
+  const response = await fetch(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
@@ -582,9 +584,9 @@ async function loadSearchDetails(body) {
   }
   body.dataset.loading = "true";
   try {
-    const response = await fetch(`/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
+    const response = await fetch(`${BASE}/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
     if (!response.ok) throw new Error((await response.text()) || "Could not load results");
-    const tagsResponse = await fetch(`/tags?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
+    const tagsResponse = await fetch(`${BASE}/tags?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
     if (!tagsResponse.ok) throw new Error((await tagsResponse.text()) || "Could not load tags");
     const { tagged } = await tagsResponse.json();
     body.tagged = tagged ?? readTagged(body);

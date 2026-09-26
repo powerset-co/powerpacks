@@ -18,7 +18,7 @@ flowchart LR
 
 ```bash
 bin/deep-context share          # the tables
-bin/deep-context review share   # the page: tag people share / private in bulk
+bin/deep-context review people  # the People page: tag people share / private in bulk
 ```
 
 `share` is the stage's one node (`share_list.ShareList`, declared in
@@ -44,9 +44,9 @@ write is skipped).
 | `store.py` | `TagStore`: the human's tags | `person_tags` | `person_tags` |
 | `share_list.py` | The `share` node: labels + share list in one pass | evidence, `person_tags` | `person_labels`, `share`, manifest.json |
 | `share.py` | CLI | command arguments | command results |
-| `web/model.py` | `SharePeople`: one typed row per roster person for the page | people.csv, `share`, `person_labels`, `person_tags`, `parents`, `facts`, dossier artifacts | — |
-| `web/server.py` | `ShareRoutes` (mounted in the review server at `/share`, `/api/share/*`) and a standalone server for tests | the rows | `person_tags` + `share` in one transaction (`Db.decide_share`) |
-| `web/share.html`, `share.css`, `share.js` | the page: facets, quick filters, virtualized table, drawer, bulk bar | `/api/share/people`, `/api/share/person` | `POST /api/share/tags` |
+| `web/model.py` | `SharePeople`: one typed row per roster person for the People page | people.csv, `share`, `person_labels`, `person_tags`, `parents`, `facts`, dossier artifacts | — |
+| `web/server.py` | `ShareRoutes` (mounted in the review server at `/people`, `/api/people/*`, beside the searches list at `/searches`) and a standalone server for tests | the rows | `person_tags` + `share` in one transaction (`Db.decide_share`) |
+| `web/people.html`, `people.css`, `people.js` | the page: decision tabs, facets, quick filters, virtualized table, drawer, bulk bar | `/api/people/rows`, `/api/people/person` | `POST /api/people/tags` |
 
 ## Tables
 
@@ -58,7 +58,7 @@ One row per person in each; the node rewrites both in one transaction.
 - `share` — `person_id, public_identifier, share, reason, labels, source,
   updated_at`. `labels` is the active labels joined with `|`; `source` is `human`
   when a human's tag decided the row, `machine` otherwise.
-- `person_tags` — the human's table. No node writes it; the share page does
+- `person_tags` — the human's table. No node writes it; the People page does
   (`web/server.decide_tags`), one absolute tag set per selected person, and in
   the same transaction re-decides those people's `share` rows through
   `labels.share_decision` from `person_labels` (`labels.label_row_from_export`),

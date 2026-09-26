@@ -16,6 +16,7 @@ Changelog:
 from __future__ import annotations
 
 from dataclasses import asdict, astuple, dataclass, fields
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -142,12 +143,15 @@ def _facts_title(facts: dict[str, Any]) -> tuple[str, str]:
 
 class SharePeople:
     """The roster joined to the store. Construct once; `load()` re-reads the
-    store (it changes as the human tags), the roster is read once."""
+    store (it changes as the human tags), the roster is read on first use."""
 
     def __init__(self, db: Db, *, people_csv: Path = DEFAULT_PEOPLE_CSV) -> None:
         self.db = db
         self.people_csv = Path(people_csv)
-        self.roster = {row.person_id: row for row in read_imported_people(self.people_csv)}
+
+    @cached_property
+    def roster(self) -> dict[str, ImportedPerson]:
+        return {row.person_id: row for row in read_imported_people(self.people_csv)}
 
     def load(self) -> tuple[SharePerson, ...]:
         decisions = {row.person_id: row for row in share_views.share_decisions(self.db)}

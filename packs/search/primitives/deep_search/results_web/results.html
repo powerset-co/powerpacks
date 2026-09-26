@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='color-scheme' content='dark'><title>Search results · Powerpacks</title>
-<link rel='stylesheet' href='/assets/results.css'></head>
-<body><div class='app-shell'>
-  <header class='topbar'><a class='brand' href='/'>POWERPACKS</a><h1 class='topbar-title'>Search Results</h1>
-    <nav class='topbar-nav' aria-label='Local UI'><a href='/' aria-current='page'>Searches</a><a href='http://127.0.0.1:8765/share'>Share</a></nav></header>
+<link rel='stylesheet' href='{{BASE}}/assets/results.css'></head>
+<body data-base='{{BASE}}'><div class='app-shell'>
+  <header class='topbar'><a class='brand' href='{{BASE}}/'>POWERPACKS</a><h1 class='topbar-title'>Search Results</h1>
+    <nav class='topbar-nav' aria-label='Local UI'>{{NAV}}</nav></header>
   <main><section class='search-list'>{{CONTENT}}</section>
   </main>
   <div class='toast' role='status' aria-live='polite'></div>
 </div><script id='human-ratings' type='application/json'>{{HUMAN_RATINGS}}</script>
-<script src='/assets/results.js' defer></script></body></html>
+<script src='{{BASE}}/assets/results.js' defer></script></body></html>
