@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.1.0...powerpacks-v3.2.0) (2026-09-26)
+
+
+### Features
+
+* add independent team similarity to deep search ([#574](https://github.com/powerset-co/powerpacks/issues/574)) ([42d0ac3](https://github.com/powerset-co/powerpacks/commit/42d0ac30adb720fd19736dc37efcb2dc9afbe883))
+
 ## [3.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.0.0...powerpacks-v3.1.0) (2026-09-26)
 
 
