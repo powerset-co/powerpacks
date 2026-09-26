@@ -6,10 +6,13 @@ import argparse
 import json
 import sys
 import time
+import urllib.parse
 import urllib.request
 import webbrowser
 from dataclasses import asdict
-from http.server import ThreadingHTTPServer
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
@@ -18,6 +21,7 @@ from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_p
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.search.primitives.deep_search.results_web import server as results_web
 
 from .server import make_handler
 from .sqlite_adapter import SqliteReviewAdapter
@@ -26,10 +30,47 @@ from .sqlite_adapter import SqliteReviewAdapter
 # The actions the agent runs itself; every other action waits on the user.
 _AGENT_ACTIONS = frozenset({"synthesize", "realize"})
 
+_NO_PEOPLE_PAGE = (
+    "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'>"
+    "<title>People · Powerpacks</title><link rel='stylesheet' href='/searches/assets/results.css'></head>"
+    "<body><main><div class='empty-state'><h2>No people yet</h2>"
+    "<p>Run <code>bin/deep-context</code> to build your network, then <code>bin/deep-context review people</code>.</p>"
+    "</div></main></body></html>"
+)
 
-def _url(host: str, port: int, stage: str) -> str:
-    route = "directory" if stage == "directory" else f"?stage={stage}"
+
+def _url(host: str, port: int, stage: str, run_id: str = "") -> str:
+    if stage == "searches" and run_id:
+        return f"http://{host}:{port}/searches/run?run_id={urllib.parse.quote(run_id)}"
+    route = stage if stage in {"directory", "people", "searches"} else f"?stage={stage}"
     return f"http://{host}:{port}/{route}"
+
+
+def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> type[BaseHTTPRequestHandler]:
+    """The same server before a deep-context store exists: the saved searches
+    at their usual URLs, and People says what to run first."""
+    routes = results_web.search_routes(root, base="/searches")
+    viewer = results_web.make_handler(root, routes.load, catalog=routes.catalog, load_one=routes.load_one,
+                                      base="/searches")
+
+    class Handler(viewer):
+        def do_GET(self) -> None:  # noqa: N802
+            path = urllib.parse.urlparse(self.path).path
+            if path in {"/", "/directory"}:
+                self.send_response(HTTPStatus.FOUND)
+                self.send_header("Location", "/searches")
+                self.end_headers()
+            elif path == "/people":
+                body = _NO_PEOPLE_PAGE.encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                super().do_GET()
+
+    return Handler
 
 
 def _announce(status: str, url: str, **extra: object) -> None:
@@ -51,7 +92,6 @@ def workflow_status(**_: object) -> dict[str, object]:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    db = open_existing_db(CANONICAL_DB)
     try:
         with urllib.request.urlopen(
             f"http://{args.host}:{args.port}/api/status",
@@ -60,28 +100,31 @@ def cmd_serve(args: argparse.Namespace) -> None:
             live = json.loads(response.read())
     except (OSError, json.JSONDecodeError):
         live = {}
-    stage = args.stage or "directory"
-    url = _url(args.host, args.port, stage)
+    has_store = CANONICAL_DB.is_file()
+    stage = args.stage or ("directory" if has_store else "searches")
+    url = _url(args.host, args.port, stage, args.run)
     if live.get("primitive") == "reconcile_review_web":
         _announce("reused", url, stage=stage)
         if args.open:
             webbrowser.open(url)
         return
-    handler = make_handler(
-        confirm_threshold=args.confirm_threshold,
-        run_jobs=True,
-        db=db,
-    )
+    # One local server: the review stages, People and the searches when the
+    # deep-context store exists; the searches alone before it does.
+    if has_store:
+        db = open_existing_db(CANONICAL_DB)
+        handler = make_handler(
+            confirm_threshold=args.confirm_threshold,
+            run_jobs=True,
+            db=db,
+        )
+        extra = {"parents": len(linkedin_parents(db)), "progress": asdict(workflow_state(db).progress)}
+    else:
+        handler = searches_only_handler()
+        extra = {"note": "no deep-context store yet; serving the searches alone"}
     server = ThreadingHTTPServer((args.host, args.port), handler)
     host, port = server.server_address
-    url = _url(host, port, stage)
-    state = workflow_state(db)
-    _announce(
-        "serving",
-        url,
-        parents=len(linkedin_parents(db)),
-        progress=asdict(state.progress),
-    )
+    url = _url(host, port, stage, args.run)
+    _announce("serving", url, **extra)
     if args.open:
         webbrowser.open(url)
     try:
@@ -112,7 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "directory"))
+    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "directory", "people", "searches"))
+    serve.add_argument("--run", default="", help="with --stage searches: open this saved search")
     serve.add_argument("--open", action="store_true")
     status.add_argument("--wait", action="store_true")
     status.add_argument("--timeout", type=int, default=900)

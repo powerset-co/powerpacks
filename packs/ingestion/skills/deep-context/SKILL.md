@@ -476,9 +476,25 @@ Share follows worth: the `share` table says yes to the worth-yes people, no to
 the owner, to a human `private`, and to everyone worth said no or maybe to. The JEV
 labels decide nothing — they raise at most one flag (family, partner, minor,
 sensitive context, clinician/lawyer/banker, automated sender, stranger) on a
-worth-yes person, which makes that row `confirm`. Confirm rows are for the UI to
-put to the user; they upload nothing until the user answers with a tag. Then the
-upload — without `--apply` it plans only, reads the cloud, writes one manifest:
+worth-yes person, which makes that row `confirm`. Confirm rows upload nothing
+until the user answers. The answer is a tag, recorded on the People page:
+
+```bash
+bin/deep-context review people   # your people, one tab per decision
+```
+
+The page has three tabs — Needs confirmation, Sharing, Not sharing — one row
+per parent (the emails and phone numbers merged under one person share the row,
+its counts and its decision) with the reason, sources, relationship, worth,
+warmth, last contact and interaction count; the
+left rail filters by those cells and by the JEV labels, the quick filters open
+the usual slices (family, sensitive context, service providers, recruiters,
+strangers, dormant), and the bulk bar tags a whole selection **Share** or
+**Keep private** (`Use worth` clears the tag). Each write re-decides those
+people's `share` rows in the same transaction, so the table stays current; `z`
+undoes the last write. Tell the user the URL and the three counts; do not read
+the list aloud. Then the upload — without `--apply` it plans only, reads the
+cloud, writes one manifest:
 
 ```bash
 uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py

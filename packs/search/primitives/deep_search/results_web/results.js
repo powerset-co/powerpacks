@@ -1,4 +1,6 @@
 const toast = document.querySelector(".toast");
+// "" when the viewer serves itself, "/searches" when the review server mounts it.
+const BASE = document.body.dataset.base || "";
 const readOnly = document.documentElement.dataset.readonly === "true";
 const hostedFeedback = document.documentElement.dataset.hostedFeedback === "true";
 const hostedRequests = new Map();
@@ -41,7 +43,7 @@ function announce(message, isError = false) {
 
 async function post(path, values) {
   if (readOnly) throw new Error("This is a read-only snapshot");
-  const response = await fetch(path, {
+  const response = await fetch(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
@@ -582,9 +584,9 @@ async function loadSearchDetails(body) {
   }
   body.dataset.loading = "true";
   try {
-    const response = await fetch(`/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
+    const response = await fetch(`${BASE}/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
     if (!response.ok) throw new Error((await response.text()) || "Could not load results");
-    const tagsResponse = await fetch(`/tags?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
+    const tagsResponse = await fetch(`${BASE}/tags?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
     if (!tagsResponse.ok) throw new Error((await tagsResponse.text()) || "Could not load tags");
     const { tagged } = await tagsResponse.json();
     body.tagged = tagged ?? readTagged(body);
@@ -982,3 +984,68 @@ document.addEventListener("click", (event) => {
     setTimeout(() => { copy.textContent = prior; }, 900);
   });
 }, true);
+
+// Catalog page: filter rows by version, company, status and text; arrow keys move, Enter opens.
+const catalog = document.querySelector("[data-catalog]");
+if (catalog) {
+  const rows = [...catalog.querySelectorAll(".catalog-row")];
+  const versionChips = [...catalog.querySelectorAll("[data-filter='version']")];
+  const selects = [...catalog.querySelectorAll("select[data-filter]")];
+  const text = catalog.querySelector("[data-filter-text]");
+  const count = catalog.querySelector("[data-catalog-count]");
+  const empty = catalog.querySelector("[data-catalog-empty]");
+  const CATALOG_KEY = "powerpacks:catalog-filters:v1";
+  const state = { version: new Set(), company: "", status: "", text: "" };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CATALOG_KEY) || "null");
+    if (saved) Object.assign(state, saved, { version: new Set(saved.version || []) });
+  } catch { /* fresh */ }
+  if (!state.version.size && catalog.dataset.newestVersion && !sessionStorage.getItem(CATALOG_KEY)) {
+    state.version.add(catalog.dataset.newestVersion);
+  }
+  selects.forEach((select) => { select.value = state[select.dataset.filter] || ""; });
+  text.value = state.text;
+
+  function apply() {
+    const needle = state.text.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach((row) => {
+      const matches = (!state.version.size || state.version.has(row.dataset.version))
+        && (!state.company || row.dataset.company === state.company)
+        && (!state.status || row.dataset.status === state.status)
+        && (!needle || row.dataset.search.includes(needle));
+      row.hidden = !matches;
+      if (matches) shown += 1;
+    });
+    versionChips.forEach((chip) => chip.setAttribute("aria-pressed", String(state.version.has(chip.dataset.value))));
+    count.textContent = `${shown} of ${rows.length} searches`;
+    empty.hidden = shown > 0;
+    sessionStorage.setItem(CATALOG_KEY, JSON.stringify({ ...state, version: [...state.version] }));
+  }
+
+  versionChips.forEach((chip) => chip.addEventListener("click", () => {
+    if (state.version.has(chip.dataset.value)) state.version.delete(chip.dataset.value);
+    else state.version.add(chip.dataset.value);
+    apply();
+  }));
+  selects.forEach((select) => select.addEventListener("change", () => {
+    state[select.dataset.filter] = select.value;
+    apply();
+  }));
+  text.addEventListener("input", () => { state.text = text.value; apply(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.target.matches("input, select, textarea")) {
+      if (event.key === "Escape") event.target.blur();
+      return;
+    }
+    if (event.key === "/") { event.preventDefault(); text.focus(); return; }
+    if (!["ArrowDown", "ArrowUp", "j", "k"].includes(event.key)) return;
+    event.preventDefault();
+    const visible = rows.filter((row) => !row.hidden);
+    const index = visible.indexOf(document.activeElement);
+    const step = event.key === "ArrowDown" || event.key === "j" ? 1 : -1;
+    const next = visible[Math.min(visible.length - 1, Math.max(0, index + step))];
+    next?.focus();
+  });
+  apply();
+}

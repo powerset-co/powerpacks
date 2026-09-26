@@ -13,6 +13,7 @@ import unittest
 import urllib.parse
 import urllib.request
 from dataclasses import replace
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,11 +21,7 @@ from packs.search.primitives.deep_search.results_web import RESULTS_JS
 from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request, record_fit_label
 from packs.search.primitives.deep_search.results_web.model import CandidateJudgment, load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
-from packs.search.primitives.deep_search.results_web.server import (
-    ThreadingHTTPServer,
-    build_parser,
-    make_handler,
-)
+from packs.search.primitives.deep_search.results_web.server import make_handler
 
 
 class ResultsWebTest(unittest.TestCase):
@@ -1232,12 +1229,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("<strong>0</strong> results <span>·</span> 50 retrieved", empty)
         self.assertIn("nothing cleared the review threshold", empty)
 
-    def test_explicit_scope_arguments_and_run_dir_query(self):
-        run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])
-        root_args = build_parser().parse_args(["--root", "/tmp/deep-search"])
-        self.assertEqual(run_args.run_dir, "/tmp/jordan-role")
-        self.assertEqual(root_args.root, "/tmp/deep-search")
-
+    def test_run_dir_query_scopes_the_page_to_one_run(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory)
             search = load_searches(root)[0]
@@ -1262,7 +1254,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(scoped.count("class='search-card'"), 1)
         self.assertNotIn("search-chevron", scoped)
         self.assertIn("data-search-body='jordan-role'", scoped)
-        self.assertIn("Search Results", scoped)
+        self.assertIn("Search results", scoped)
         self.assertNotIn("Saved results", scoped)
         self.assertNotIn("Deep search", scoped)
 
@@ -1375,7 +1367,7 @@ class ResultsWebTest(unittest.TestCase):
             try:
                 base = f"http://127.0.0.1:{server.server_address[1]}"
                 with urllib.request.urlopen(base + "/", timeout=5) as response:
-                    self.assertIn("Search Results", response.read().decode("utf-8"))
+                    self.assertIn("Search results", response.read().decode("utf-8"))
                 with urllib.request.urlopen(
                         base + "/api/search?run_id=jordan-role", timeout=5) as response:
                     self.assertIn("Jordan Bravo", response.read().decode("utf-8"))

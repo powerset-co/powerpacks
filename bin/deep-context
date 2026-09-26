@@ -83,8 +83,12 @@ open_review_ui_when_healthy() {
   # for the port to go down and come back rather than opening it; if it never
   # goes down, print the URL but never auto-open a server we did not start.
   # The URL line always prints; a missing `open` (non-macOS) degrades to it.
-  local port="$1" stage="$2" url _ stale=0
-  if [[ -n "$stage" && "$stage" != "directory" ]]; then
+  local port="$1" stage="$2" run="${3:-}" url _ stale=0
+  if [[ "$stage" == "searches" && -n "$run" ]]; then
+    url="http://127.0.0.1:$port/searches/run?run_id=$run"
+  elif [[ "$stage" == "people" || "$stage" == "searches" ]]; then
+    url="http://127.0.0.1:$port/$stage"
+  elif [[ -n "$stage" && "$stage" != "directory" ]]; then
     url="http://127.0.0.1:$port/?stage=$stage"
   else
     url="http://127.0.0.1:$port/directory"
@@ -143,7 +147,7 @@ usage: bin/deep-context <command> [args]
                is accepted for compat but is a
                no-op — restart is always unconditional.
                Add a stage word to land there directly
-               (review linkedin | worth | enrich; default: the read-only
+               (review linkedin | worth | enrich | people | searches; default: the read-only
                people directory, A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
   stop         stop the review UI server (free)
@@ -164,8 +168,8 @@ usage: bin/deep-context <command> [args]
   realize      fan-in merge of the per-source import people files (free, local)
   share        write the person_labels + share tables for every merged person
                from their worth and the JEV labels synthesize saved (free, local).
-               `tag` is gone: the UI records your tags and the confirmations
-               the share table asks for
+               `review people` then opens the page where you tag people share
+               or private in bulk and answer the confirmations
   lookup       fetch a person's dossier by name/phone/email
   probe        chat.db readability (Full Disk Access) check
   purge-raw    delete the ephemeral raw bundles
@@ -284,18 +288,27 @@ case "$cmd" in
     #      the helper's stale-server guard refuses to open anything that was
     #      already answering at its first probe.
     # `review linkedin` / `review worth` / `review enrich` / `review directory`
-    # is sugar for the server's --stage flag: open the UI at that stage.
+    # / `review people` / `review searches` is sugar for the server's --stage
+    # flag: open the UI at that page (`people` is your network with the share
+    # decision per person, `searches` the saved deep-search runs; `review
+    # searches --run <slug>` opens one run). This is the ONE local server: the
+    # search skill opens its runs here too, and before a deep-context store
+    # exists it serves the searches alone.
     review_args=()
     review_stage=""
+    review_run=""
     prev_arg=""
     for arg in "$@"; do
       if [[ "$prev_arg" == "--stage" ]]; then
         review_args+=("$arg"); review_stage="$arg"
+      elif [[ "$prev_arg" == "--run" ]]; then
+        review_args+=("$arg"); review_run="$arg"
       else
         case "$arg" in
-          worth|enrich|linkedin|directory) review_args+=(--stage "$arg"); review_stage="$arg" ;;
+          worth|enrich|linkedin|directory|people|searches) review_args+=(--stage "$arg"); review_stage="$arg" ;;
           --force-restart) ;;  # compat no-op: restart is always unconditional
           --stage=*) review_args+=("$arg"); review_stage="${arg#--stage=}" ;;
+          --run=*) review_args+=("$arg"); review_run="${arg#--run=}" ;;
           *) review_args+=("$arg") ;;
         esac
       fi
@@ -309,7 +322,7 @@ case "$cmd" in
       fi
       echo "review: restarting the review server on port ${review_port}..." >&2
       stop_review_server "$review_port"
-      open_review_ui_when_healthy "$review_port" "$review_stage" &
+      open_review_ui_when_healthy "$review_port" "$review_stage" "$review_run" &
     fi
     "${PY[@]}" "$PKG.review.reconcile_review_web" serve "${review_args[@]}"
     ;;

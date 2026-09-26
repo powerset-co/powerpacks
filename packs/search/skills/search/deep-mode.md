@@ -169,12 +169,18 @@ missing company matches stay unknown. The summary keeps the pond chain,
 deduplicated candidates, finding runs, rerank scores, and total recorded cost.
 
 Start the viewer right after the FIRST pond completes, and keep it for the
-whole run:
+whole run. It is the local review server (the one local UI, shared with the
+People page), opened at this run; run it in the background because it serves
+in the foreground, and it restarts any review server already on the port
+(state is in SQLite; nothing is lost):
 
 ```bash
-uv run --project . python -m packs.search.primitives.deep_search.results_web \
-  --run-dir <run> --open
+bin/deep-context review searches --run "$(basename <run>)"
 ```
+
+It prints `review UI: http://127.0.0.1:8765/searches/run?run_id=<slug>`; that
+page is the viewer. Before a deep-context store exists the same server serves
+the searches alone.
 
 The capability screen is Jev by default (`--capability-judge jev`) and needs
 `TYPESAFE_API_KEY` in the environment. Jev reads every hydrated row; no Luna filter
@@ -195,8 +201,12 @@ Never print candidate tables, names, or per-candidate labels in the chat — the
 viewer is the only candidate-review surface. After each pond, say only: the
 pond's query, the result count, and the viewer URL
 (tell the user to refresh after later ponds). When the loop stops, mark task 5
-complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
-summarized history.
+complete and present `<run>/shortlist.csv`. `/searches` lists every run from
+its `manifest.json` alone (title, company, status, people, cost,
+`search_version`) and opens one run per page at `/searches/run?run_id=<slug>`;
+the list's version chips default to the newest `search_version`, and runs saved
+before the stamp existed show as `unversioned`. The People page is `/people`
+on the same server.
 
 ### Hosted results
 

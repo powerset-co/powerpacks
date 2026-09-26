@@ -12,6 +12,9 @@ person for a human to confirm.
 Every threshold is a module constant here; nothing downstream re-derives one.
 
 Changelog:
+  2026-09-26: `label_row_from_export` rebuilds the decision inputs from
+    `person_labels`, so the share UI re-decides a tagged person without the
+    roster or the bundles.
   2026-09-24: share follows worth; the private rules became confirm flags.
   2026-09-24: used the shared share reasons and the decision row.
   2026-09-24: created.
@@ -22,7 +25,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Callable
 
-from packs.ingestion.primitives.deep_context.db.models import MachineWorth, ShareDecisionRow
+from packs.ingestion.primitives.common.jsonio import parse_json_object
+from packs.ingestion.primitives.deep_context.db.models import MachineWorth, PersonLabelRow, ShareDecisionRow
 from packs.ingestion.primitives.share.models import (
     GROUP_CHANNELS,
     DeterministicLabels,
@@ -187,6 +191,24 @@ def active_labels(row: LabelRow) -> tuple[str, ...]:
     """The labels the share row carries: every noul at or above ACTIVE_P, then the flag."""
     active = tuple(name for name in NOUL_LABELS if row.probabilities.get(name, 0.0) >= ACTIVE_P)
     return active + ((row.flag,) if row.flag else ())
+
+
+def label_row_from_export(row: PersonLabelRow) -> LabelRow:
+    """The decision inputs, read back from the label export the node wrote.
+
+    `labels_json` carries `is_owner` and every noul probability (absent for a
+    LinkedIn-only person, who was never sent to Jev); `worth` and `flag` are
+    columns. The same `share_decision` then yields the same row the node wrote.
+    """
+    cells = parse_json_object(row.labels_json)
+    return LabelRow(
+        person_id=row.person_id,
+        public_identifier=row.public_identifier,
+        is_owner=bool(cells.get("is_owner")),
+        worth=str(row.worth or MachineWorth.MAYBE.value),
+        flag=row.flag,
+        probabilities={name: float(cells[name]) for name in NOUL_LABELS if name in cells},
+    )
 
 
 def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) -> ShareDecisionRow:
