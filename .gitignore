@@ -52,3 +52,7 @@ app/coverage/
 
 # Content-policy eval output (generated per run; baselines live in the md).
 packs/ingestion/evals/content_policy/out/
+
+# visual regression output (baselines are committed; actual/diff are not)
+tests/visual/**/*.actual.png
+tests/visual/**/*.diff.png
