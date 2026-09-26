@@ -62,13 +62,14 @@ from packs.ingestion.primitives.deep_context.shared.readiness_models import (
     source_counts,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store
 
 ENSURE_PARENTS_COMMAND = "bin/deep-context ensure-parents"
 SEED_COMMAND = "bin/deep-context seed"
 OWNER_COMMAND = "bin/deep-context owner --linkedin-url <url> --email <email>"
 
 # Paired positionally with the `check_statuses` tuple built in run() — same
-# order (imessage, msgvault, openai key, typesafe key, owner.json), not matched
+# order (imessage, msgvault, openai key, typesafe key), not matched
 # by name.
 # Reordering one without the other silently attaches the wrong advice line.
 ADVICE_RULES: tuple[tuple[str, str], ...] = (
@@ -79,17 +80,16 @@ ADVICE_RULES: tuple[tuple[str, str], ...] = (
     ("missing", "No msgvault.db — run $import-email/$msgvault to sync Gmail, or proceed with messages only."),
     ("missing", "OPENAI_API_KEY missing from environment/.env — synthesis cannot run."),
     ("missing", "TYPESAFE_API_KEY missing from environment/.env — worth labels and the merge judge cannot run."),
-    ("absent", f"No owner profile — synthesis requires one: run {OWNER_COMMAND}."),
 )
 
 
-def _next_command(*, has_people: bool, seed_required: bool, has_owner: bool) -> str | None:
+def _next_command(*, has_people: bool, seed_required: bool, has_owner: bool, owner_command: str) -> str | None:
     if not has_people:
         return ENSURE_PARENTS_COMMAND
     if seed_required:
         return SEED_COMMAND
     if not has_owner:
-        return OWNER_COMMAND
+        return owner_command
     return None
 
 
@@ -184,6 +184,7 @@ class CheckReadiness:
         self.wacli_db = Path(wacli_db)
 
     def run(self) -> ReadinessReport:
+        scrub_august_deep_context_store(self.db_path)
         load_env()
         chat: ChatDbProbe = context_sources.probe_chat_db(self.chat_db)
         database_exists = self.db is not None or self.db_path.is_file()
@@ -199,6 +200,7 @@ class CheckReadiness:
         imported_counts = _import_counts(imported, db)
         # Before the store exists, owner.json has not been imported yet: read the file.
         owner_json = self.db_path.parent / OWNER_JSON.name
+        owner_command = "bin/deep-context owner" if owner_json.is_file() else OWNER_COMMAND
         projected = (
             sqlite_counts(db)
             if db is not None
@@ -275,13 +277,14 @@ class CheckReadiness:
             checks.msgvault_gmail.status,
             checks.openai_api_key.status,
             checks.typesafe_api_key.status,
-            checks.owner_json.status,
         )
         advice = [
             text
             for status, (prefix, text) in zip(check_statuses, ADVICE_RULES, strict=True)
             if status.startswith(prefix)
         ]
+        if not projected.has_owner:
+            advice.append(f"No owner profile — synthesis requires one: run {owner_command}.")
         if seed_required:
             advice.append(f"Legacy Deep Context artifacts are not carried over yet: run {SEED_COMMAND}.")
         elif not database_exists:
@@ -299,6 +302,7 @@ class CheckReadiness:
             updated_at=now_iso(),
             next_command=_next_command(
                 has_people=has_people, seed_required=seed_required, has_owner=projected.has_owner,
+                owner_command=owner_command,
             ),
         )
 

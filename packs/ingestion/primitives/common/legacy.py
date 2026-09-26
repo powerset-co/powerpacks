@@ -12,6 +12,7 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-09-26: check and ensure-parents set aside the recognized August SQLite store.
   2026-09-25: `message_linkedin_aliases` went with the legacy importer, its only caller.
   2026-08-09: deep-context — `scrub_retired_message_linkedin_facts` runs at
     synthesis entry, so the retired-prefix facts files delete themselves on
@@ -39,11 +40,49 @@ Changelog:
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import closing
+from datetime import datetime, timezone
 import csv
 import hashlib
 import json
+import sqlite3
+import sys
 from typing import Any
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
+from packs.ingestion.primitives.deep_context.db.store import EXPECTED_SCHEMA_SIGNATURE
+
+
+def scrub_august_deep_context_store(db_path: Path) -> None:
+    """Preserve the recognized August store before rebuilding it.
+
+    Delete once no install predates powerpacks v3.1.0.
+    """
+    if not db_path.is_file():
+        return
+    august_signature = tuple(
+        row for row in EXPECTED_SCHEMA_SIGNATURE
+        if row[2] not in {"person_labels", "person_tags", "share"}
+    )
+    try:
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+            signature = tuple(conn.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+            ))
+            if signature != august_signature:
+                return
+            meta = dict(conn.execute(
+                "SELECT key, value FROM meta WHERE key IN ('schema_version', 'legacy_imported_at')"
+            ))
+            if meta.get("schema_version") != "1" or "legacy_imported_at" not in meta:
+                return
+    except sqlite3.Error:
+        # Db retains its existing error contract for unrecognized stores.
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = db_path.with_name(f"{db_path.name}.bkup-schema-{stamp}")
+    db_path.rename(backup)
+    print(f"[deep-context] August store set aside: {backup}", file=sys.stderr)
 
 
 # Pre-contract research files can prove only their stable parent handle, not

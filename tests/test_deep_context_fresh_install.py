@@ -11,16 +11,17 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
+from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.ensure_parents import ensure_parents
 from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
 from packs.ingestion.primitives.deep_context.shared.readiness_models import ReadinessReport
@@ -158,6 +159,86 @@ class FreshInstallTests(unittest.TestCase):
         self.assertEqual(result.next_command, OWNER_COMMAND)
         self.assertFalse(result.ready)
         self.assertTrue(any(OWNER_COMMAND in line for line in result.advice))
+
+    def test_check_projects_existing_owner_file_with_bare_owner_advice(self) -> None:
+        self.ensure_parents()
+        (self.deep_context / "owner.json").write_text('{"name": "Jordan Bravo"}', encoding="utf-8")
+
+        result = self.readiness()
+
+        self.assertEqual(result.checks.owner_json.status, "absent")
+        self.assertEqual(result.next_command, "bin/deep-context owner")
+        self.assertIn("No owner profile — synthesis requires one: run bin/deep-context owner.", result.advice)
+        self.assertFalse(any("--linkedin-url" in line for line in result.advice))
+
+    def _make_august_store(self) -> bytes:
+        Db(self.db_path)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("INSERT INTO meta VALUES ('legacy_imported_at', '2026-08-19T00:00:00Z')")
+            for table in ("person_labels", "person_tags", "share"):
+                conn.execute(f"DROP TABLE {table}")
+        return self.db_path.read_bytes()
+
+    def test_check_sets_aside_august_store_without_changing_its_bytes(self) -> None:
+        before = self._make_august_store()
+        err = StringIO()
+        with redirect_stderr(err):
+            result = self.readiness()
+
+        self.assertEqual(result.checks.canonical_sqlite.status, "missing")
+        self.assertEqual(result.next_command, ENSURE_PARENTS_COMMAND)
+        self.assertFalse(self.db_path.exists())
+        backups = list(self.deep_context.glob("deep-context.sqlite.bkup-schema-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), before)
+        self.assertEqual(len(err.getvalue().splitlines()), 1)
+        self.assertIn(str(backups[0]), err.getvalue())
+
+    def test_ensure_parents_sets_aside_august_store_before_opening_db(self) -> None:
+        before = self._make_august_store()
+        with redirect_stderr(StringIO()):
+            code, payload = self.ensure_parents()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["people_projected"], 2)
+        backups = list(self.deep_context.glob("deep-context.sqlite.bkup-schema-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), before)
+        self.assertEqual(self.readiness().checks.canonical_sqlite.status, "ok")
+
+    def test_check_leaves_current_store_untouched(self) -> None:
+        self.ensure_parents()
+        before = self.db_path.read_bytes()
+        err = StringIO()
+        with redirect_stderr(err):
+            self.readiness()
+
+        self.assertEqual(self.db_path.read_bytes(), before)
+        self.assertEqual(list(self.deep_context.glob("*.bkup-schema-*")), [])
+        self.assertEqual(err.getvalue(), "")
+
+    def test_unknown_layouts_still_raise_without_backup(self) -> None:
+        self._make_august_store()
+        # Even the three missing tables plus legacy metadata do not authorize
+        # setting aside a store with an additional, unknown layout failure.
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DROP TABLE guidance")
+        before = self.db_path.read_bytes()
+        for run in (self.readiness, self.ensure_parents):
+            with self.subTest(stage=run.__name__):
+                with self.assertRaisesRegex(SchemaVersionError, "layout does not match schema version 1"):
+                    run()
+                self.assertEqual(self.db_path.read_bytes(), before)
+                self.assertEqual(list(self.deep_context.glob("*.bkup-schema-*")), [])
+
+    def test_missing_legacy_metadata_still_raises_without_backup(self) -> None:
+        self._make_august_store()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM meta WHERE key='legacy_imported_at'")
+        with self.assertRaises(SchemaVersionError):
+            self.readiness()
+        self.assertTrue(self.db_path.exists())
+        self.assertEqual(list(self.deep_context.glob("*.bkup-schema-*")), [])
 
     def test_owner_required_errors_name_the_owner_command(self) -> None:
         db = Db(self.db_path)
