@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PAYLOAD } from "@/lib/people/fixture";
+import { PAYLOAD } from "@/testing/people-fixture";
 
 import { PeoplePage } from "./PeoplePage";
 

@@ -1,8 +1,7 @@
 import { Avatar, SourcePills } from "@/components/shared";
 import { avatarUrl } from "@/lib/api/people";
+import { toChannels } from "@/lib/channels";
 import type { Person, PersonDetail } from "@/types/people";
-
-import { toChannels } from "../channels";
 
 interface DrawerHeaderProps {
   row: Person;

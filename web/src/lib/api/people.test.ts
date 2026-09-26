@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PAYLOAD } from "@/lib/people/fixture";
+import { BASE, PAYLOAD } from "@/testing/people-fixture";
+import { PERSON_COLUMNS } from "@/types/people";
 
 import { avatarUrl, decodePeople, fetchPersonDetail, writeTags } from "./people";
 
@@ -13,6 +14,15 @@ describe("decodePeople", () => {
       parent_id: "p1", name: "Jordan Bravo", channels: ["gmail", "linkedin"], share: "confirm",
       last: "< 1 year", warmthBucket: "Close (2–3)", search: "jordan bravo engineer acme ",
     });
+  });
+
+  it("lists every Person column the page decodes", () => {
+    expect([...PERSON_COLUMNS].sort()).toEqual(Object.keys(BASE).sort());
+  });
+
+  it("rejects a payload missing a column", () => {
+    const columns = PAYLOAD.columns.filter((column) => column !== "share" && column !== "tags");
+    expect(() => decodePeople({ ...PAYLOAD, columns })).toThrow("People payload is missing columns: share, tags");
   });
 });
 

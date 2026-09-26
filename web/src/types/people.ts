@@ -11,10 +11,6 @@ export type Worth = "yes" | "maybe" | "no" | "";
 /** Who made a call (`worth_source`, `share_source`); "" when no one did. */
 export type DecidedBy = "human" | "machine" | "";
 
-/** The source families that have an icon. `Person.channels` stays `string[]`: the server
- *  passes an unmapped channel name through unchanged (model.py `_families`). */
-export type Channel = "gmail" | "imessage" | "whatsapp" | "linkedin";
-
 /** One list row per parent (`SharePerson`), plus the fields the page derives on load. */
 export interface Person {
   parent_id: string;
@@ -57,8 +53,21 @@ export interface Person {
   search: string;
 }
 
+/** A person's identity everywhere on the page: selection, pending writes, virtual row keys. */
+export const personKey = (row: Person): string => row.parent_id;
+
 /** The server's columns: every `Person` field but the derived ones. */
 export type PersonColumn = Exclude<keyof Person, "last" | "warmthBucket" | "search">;
+
+/** The client's copy of model.py `PEOPLE_COLUMNS`, in its order. tests/test_share_web.py pins
+ *  the two lists equal, so a server field rename fails a test instead of blanking a column. */
+export const PERSON_COLUMNS = [
+  "parent_id", "public_identifier", "name", "has_avatar", "title", "company", "location", "channels",
+  "interactions", "last_interaction", "recency_days", "cadence", "direction", "worth", "worth_source",
+  "relationship_kind", "mode", "hierarchy", "intro_source", "seniority", "function", "warmth", "labels",
+  "flag", "share", "reason", "share_source", "tags", "is_owner", "linkedin_only", "group_chat_only",
+  "shared_employer", "shared_school", "confidence",
+] as const satisfies readonly PersonColumn[];
 
 export type PersonCell = Person[PersonColumn];
 
@@ -72,7 +81,7 @@ export interface ShareCounts {
 /** GET /api/people/rows: the column names once, one array per person. */
 export interface PeoplePayload {
   counts: ShareCounts;
-  columns: PersonColumn[];
+  columns: string[];
   rows: PersonCell[][];
 }
 

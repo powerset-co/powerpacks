@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { DetailState } from "@/hooks/usePersonDetail";
 import type { TagAction } from "@/lib/people/facets";
 import { toggled } from "@/lib/sets";
 import type { Person } from "@/types/people";
 
+import type { DetailState } from "../hooks/usePersonDetail";
 import "../styles/drawer.css";
 import "../styles/overlays.css";
 import { DecisionSection } from "./DecisionSection";

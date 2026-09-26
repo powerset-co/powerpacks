@@ -1,7 +1,9 @@
 // The People page's four routes on the Python review server (share/web/server.py).
 
 import { lastBucket, warmthBucket } from "@/lib/people/facets";
-import type { PeoplePayload, Person, PersonDetail, TagChange, TagResult } from "@/types/people";
+import {
+  PERSON_COLUMNS, type PeoplePayload, type Person, type PersonDetail, type TagChange, type TagResult,
+} from "@/types/people";
 
 const API = "/api/people/";
 
@@ -19,8 +21,11 @@ async function failure(response: Response, fallback: string): Promise<Error> {
   return new Error(text || fallback);
 }
 
-/** One `Person` per columnar row, decoded by column name, with the derived fields. */
+/** One `Person` per columnar row, decoded by column name, with the derived fields. Throws
+ *  when the server stopped sending a column the page reads. */
 export function decodePeople(payload: PeoplePayload): Person[] {
+  const missing = PERSON_COLUMNS.filter((column) => !payload.columns.includes(column));
+  if (missing.length) throw new Error(`People payload is missing columns: ${missing.join(", ")}`);
   return payload.rows.map((values) => {
     const cells = Object.fromEntries(payload.columns.map((column, position) => [column, values[position]]));
     const row = cells as Omit<Person, "last" | "warmthBucket" | "search">;

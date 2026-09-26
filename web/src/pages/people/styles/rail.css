@@ -9,6 +9,16 @@
 .rail-divider { display: flex; align-items: center; gap: 6px; width: calc(100% - 16px); margin: 10px 8px 6px; padding: 8px 8px 6px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--faint); font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; text-align: left; cursor: pointer; transition: color var(--t-fast) var(--ease-out); }
 .rail-divider:hover { color: var(--foreground); }
 .rail-divider::after { content: ""; box-sizing: content-box; margin-left: auto; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); opacity: .7; }
+/* The facets it reveals rise in, the first eight 14ms apart. The wrapper adds no box. */
+.rail-more { display: contents; }
+.rail-more > :nth-child(-n + 8) { animation: rise-in var(--t-fast) var(--ease-out) both; }
+.rail-more > :nth-child(2) { animation-delay: 14ms; }
+.rail-more > :nth-child(3) { animation-delay: 28ms; }
+.rail-more > :nth-child(4) { animation-delay: 42ms; }
+.rail-more > :nth-child(5) { animation-delay: 56ms; }
+.rail-more > :nth-child(6) { animation-delay: 70ms; }
+.rail-more > :nth-child(7) { animation-delay: 84ms; }
+.rail-more > :nth-child(8) { animation-delay: 98ms; }
 
 .rail-hint { margin: 14px 8px 0; color: var(--faint); font-size: 11px; line-height: 1.5; }
 .rail-hint summary { display: list-item; color: var(--muted); font-weight: 700; letter-spacing: .04em; cursor: pointer; list-style: none; }

@@ -45,7 +45,7 @@ export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
       <button type="button" className="rail-divider" data-more-toggle aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}>
         More filters
       </button>
-      {moreOpen ? MORE_FACETS.map(facet) : null}
+      {moreOpen ? <div className="rail-more">{MORE_FACETS.map(facet)}</div> : null}
       <ShortcutsHint />
     </>
   );

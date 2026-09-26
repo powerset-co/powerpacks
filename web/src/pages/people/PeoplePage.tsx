@@ -1,6 +1,6 @@
 import { EmptyState } from "@/components/shared";
-import { usePeopleQuery } from "@/hooks/usePeopleQuery";
 
+import { usePeopleQuery } from "./hooks/usePeopleQuery";
 import { PeopleLoading } from "./PeopleLoading";
 import { PeopleShell } from "./PeopleShell";
 import { PeopleWorkspace } from "./PeopleWorkspace";

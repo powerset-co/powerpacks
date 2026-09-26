@@ -45,7 +45,9 @@
     --radius-l: 14px;
     --shadow-1: 0 1px 2px rgba(0, 0, 0, .3);
     --shadow-2: 0 12px 40px -12px rgba(0, 0, 0, .65);
-    /* motion: short; ease-out in, ease-in out; transform, opacity and color only */
+    /* motion: short; ease-out in, ease-in out; transform, opacity and color only. The one
+       layout exception is the facet fold (FacetShell), which animates grid-template-rows
+       because a variable-height list cannot fold with a transform. */
     --ease-out: cubic-bezier(.2, 0, 0, 1);
     --ease-in: cubic-bezier(.4, 0, 1, 1);
     --t-fast: 120ms;
@@ -86,12 +88,16 @@
   }
 }
 
-/* Shared keyframes (results.css) and the reduced-motion rule from .astra/polish-final.md B.
-   JS animations check hooks/useReducedMotion separately. */
+/* Shared keyframes (results.css), and reduced motion: every CSS animation and transition
+   stops. JS animations (row entrance, count roll) check hooks/useReducedMotion themselves. */
 @layer base {
   @keyframes shimmer { to { transform: translateX(100%); } }
   @keyframes rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+  /* <details> cannot transition its height, so an opening disclosure fades its content in.
+     Global, not in DetailsSection.module.css: CSS modules would rename the keyframe. */
+  details[open] > *:not(summary) { animation: fade-in var(--t-fast) var(--ease-out) both; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {

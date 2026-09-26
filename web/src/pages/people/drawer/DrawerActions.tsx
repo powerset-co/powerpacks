@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { USE_WORTH_HELP } from "@/lib/people/copy";
 import type { TagAction } from "@/lib/people/facets";
 import type { Person } from "@/types/people";
 
@@ -31,7 +32,7 @@ export function DrawerActions({ row, saving, disabled, onAction }: DrawerActions
         <Button variant="ghost" className="min-h-7 px-2" data-one="worth" aria-pressed={!chosen} disabled={disabled || !chosen} onClick={() => onAction("worth")}>
           Use worth
         </Button>
-        <span>{saving ? "Saving…" : "Removes your choice; worth and flags decide."}</span>
+        <span>{saving ? "Saving…" : `${USE_WORTH_HELP}.`}</span>
       </div>
     </>
   );

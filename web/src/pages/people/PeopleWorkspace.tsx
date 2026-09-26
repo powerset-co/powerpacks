@@ -1,23 +1,23 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { Toast } from "@/components/shared";
-import { useDecisions } from "@/hooks/useDecisions";
-import { useDrawer } from "@/hooks/useDrawer";
-import { useFilters } from "@/hooks/useFilters";
 import { useSelection } from "@/hooks/useSelection";
 import { filterRows } from "@/lib/people/filter";
-import { ORDER, type Decision, type Person } from "@/types/people";
+import { ORDER, personKey, type Decision, type Person } from "@/types/people";
 
 import { BulkBar } from "./BulkBar";
 import { PersonDrawer } from "./drawer/PersonDrawer";
 import { FilterBar } from "./filters/FilterBar";
 import { QuickFilters } from "./filters/QuickFilters";
 import { DecisionTabs } from "./head/DecisionTabs";
+import { useDecisions } from "./hooks/useDecisions";
+import { useDrawer } from "./hooks/useDrawer";
+import { useFilters } from "./hooks/useFilters";
+import { usePeopleShortcuts } from "./hooks/usePeopleShortcuts";
 import { PeopleShell } from "./PeopleShell";
 import { FacetRail } from "./rail/FacetRail";
 import { EmptyText } from "./table/EmptyText";
 import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable";
-import { usePeopleShortcuts } from "./usePeopleShortcuts";
 
 // The loaded page: every person once, filtered client-side, with one write for share / private tags.
 export function PeopleWorkspace({ rows }: { rows: Person[] }) {
@@ -29,7 +29,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
     () => Object.fromEntries(ORDER.map((d) => [d, rows.filter((row) => row.share === d).length])) as Record<Decision, number>,
     [rows],
   );
-  const selection = useSelection(matching);
+  const selection = useSelection(matching, personKey);
   const drawer = useDrawer();
   const [focusAt, setFocus] = useState(-1);
   const focus = Math.min(focusAt, matching.length - 1);

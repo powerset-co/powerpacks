@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { decodePeople } from "@/lib/api/people";
+import { PAYLOAD } from "@/testing/people-fixture";
 
 import { LAST, lastBucket, nextTags, QUICK, sortRows } from "./facets";
-import { PAYLOAD } from "./fixture";
 import { filterRows } from "./filter";
 
 const rows = decodePeople(PAYLOAD);

@@ -12,7 +12,10 @@
 .grid-head button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; transition: color var(--t-fast) var(--ease-out); }
 .grid-head button:hover { color: var(--foreground); }
 .grid-head [aria-sort]:not([aria-sort="none"]) button { color: var(--foreground); }
-.grid-head [aria-sort="ascending"] button::after { content: "↑"; }
+/* The sort arrow fades in and out. Unsorted it is a zero-width glyph whose negative margin
+   cancels the button's gap, so the label sits exactly where it would without an arrow. */
+.grid-head [aria-sort] button::after { content: "↑"; width: 0; margin-left: -4px; opacity: 0; transition: opacity var(--t-fast) var(--ease-out); }
+.grid-head [aria-sort]:not([aria-sort="none"]) button::after { width: auto; margin-left: 0; opacity: 1; }
 .grid-head [aria-sort="descending"] button::after { content: "↓"; }
 .grid-head .right, .row .right { text-align: right; justify-self: end; }
 .grid-viewport { position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; outline: none; scrollbar-width: thin; }

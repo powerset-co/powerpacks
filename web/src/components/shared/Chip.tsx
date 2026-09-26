@@ -8,7 +8,8 @@ interface ChipProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-
   children: ReactNode;
 }
 
-// results.css .chip: a filter pill with an optional count. No press scaling (polish B).
+// results.css .chip: a filter pill with an optional count. Pressing only changes colour;
+// press movement belongs to Button alone (its 1px drop), never a scale.
 export function Chip({ pressed, count, children, className, ...props }: ChipProps) {
   return (
     <button

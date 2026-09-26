@@ -1,13 +1,12 @@
 // The page's words for machine values, ported 1:1 from the legacy people.js.
 
-import type { Channel } from "@/types/people";
+import { CHANNELS } from "@/lib/channels";
 
-export const CHANNEL_TITLE: Readonly<Record<Channel, string>> = {
-  gmail: "Gmail", imessage: "iMessage", whatsapp: "WhatsApp", linkedin: "LinkedIn",
+// Brand casing, keyed lowercase: the channel titles plus JEV.
+const BRANDS: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(Object.entries(CHANNELS).map(([channel, { title }]) => [channel, title])),
+  jev: "JEV",
 };
-
-// Brand casing, keyed lowercase: the channels plus JEV.
-const BRANDS: Readonly<Record<string, string>> = { ...CHANNEL_TITLE, jev: "JEV" };
 
 export type TextKind =
   | "share" | "reason" | "worth" | "source" | "mode" | "hierarchy" | "intro_source"
@@ -40,6 +39,9 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
     notable: "Publicly notable",
   },
 };
+
+/** What "Use worth" does; the bulk bar's tooltip and the drawer's note (people.js words both). */
+export const USE_WORTH_HELP = "Removes your choice; worth and flags decide";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

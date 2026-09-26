@@ -1,17 +1,13 @@
 import type { CSSProperties, ReactNode } from "react";
 
-import { TopBar, type NavTab } from "@/components/shared";
+import { TopBar } from "@/components/shared";
 
 import { ROW_H } from "./table/columns";
 import "./styles/shell.css";
 import "./styles/rail.css";
 
+// The table's row height is a People concern: table/columns.ts ROW_H drives --row-h here.
 const ROW_HEIGHT = { "--row-h": `${ROW_H}px` } as CSSProperties;
-
-const NAV: readonly NavTab[] = [
-  { label: "Searches", href: "/searches", current: false },
-  { label: "People", href: "/people", current: true },
-];
 
 interface PeopleShellProps {
   drawerOpen: boolean;
@@ -24,7 +20,7 @@ interface PeopleShellProps {
 export function PeopleShell({ drawerOpen, rail, main, overlays }: PeopleShellProps) {
   return (
     <div className="app-shell people-shell" data-people data-drawer-open={String(drawerOpen)} style={ROW_HEIGHT}>
-      <TopBar brandHref="/people" tabs={NAV} />
+      <TopBar current="people" />
       <div className="people-layout">
         <aside className="rail" data-rail aria-label="Filters">{rail}</aside>
         <main className="people-main">{main}</main>

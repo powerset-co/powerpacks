@@ -1,10 +1,11 @@
 // Synthetic people for tests: a columnar payload as GET /api/people/rows returns it.
 
-import type { PeoplePayload, PersonCell, PersonColumn } from "@/types/people";
+import { PERSON_COLUMNS, type PeoplePayload, type PersonCell, type PersonColumn } from "@/types/people";
 
 type Cells = Record<PersonColumn, PersonCell>;
 
-const BASE: Cells = {
+// Typed as every non-derived `Person` field, so its keys are what PERSON_COLUMNS must list.
+export const BASE: Cells = {
   parent_id: "", public_identifier: "", name: "", has_avatar: false, title: "", company: "", location: "",
   channels: [], interactions: 0, last_interaction: "", recency_days: null, cadence: "", direction: "",
   worth: "", worth_source: "", relationship_kind: "", mode: "", hierarchy: "", intro_source: "",
@@ -27,7 +28,7 @@ const PEOPLE: Partial<Cells>[] = [
 ];
 
 // Columns in reverse to prove decoding is by name, not position.
-const COLUMNS = (Object.keys(BASE) as PersonColumn[]).reverse();
+const COLUMNS = [...PERSON_COLUMNS].reverse();
 
 export const PAYLOAD: PeoplePayload = {
   counts: { total: 4, upload: 1, confirm: 3, private: 0 },

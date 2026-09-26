@@ -1,10 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 
 import { EMPTY, toggled } from "@/lib/sets";
-import type { Person } from "@/types/people";
 
-/** Selected parent ids; select-all works on every matching person, not just the mounted rows. */
-export function useSelection(matching: readonly Person[]) {
+/**
+ * Selected ids; select-all works on every matching item, not just the mounted rows.
+ * `keyOf` must be stable (module scope): `toggleAll` changes whenever it does.
+ */
+export function useSelection<T>(matching: readonly T[], keyOf: (item: T) => string) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(EMPTY);
 
   const toggle = useCallback((id: string) => {
@@ -14,20 +16,20 @@ export function useSelection(matching: readonly Person[]) {
   const clear = useCallback(() => setSelected(EMPTY), []);
 
   const selectedHere = useMemo(
-    () => matching.filter((row) => selected.has(row.parent_id)).length,
-    [matching, selected],
+    () => matching.filter((item) => selected.has(keyOf(item))).length,
+    [matching, selected, keyOf],
   );
   const allSelected = matching.length > 0 && selectedHere === matching.length;
 
-  // All matching selected already: clear; otherwise add every matching person.
+  // All matching selected already: clear; otherwise add every matching item.
   const toggleAll = useCallback(() => {
     setSelected((current) => {
-      if (matching.every((row) => current.has(row.parent_id))) return EMPTY;
+      if (matching.every((item) => current.has(keyOf(item)))) return EMPTY;
       const next = new Set(current);
-      for (const row of matching) next.add(row.parent_id);
+      for (const item of matching) next.add(keyOf(item));
       return next;
     });
-  }, [matching]);
+  }, [matching, keyOf]);
 
   return { selected, toggle, toggleAll, clear, allSelected, someSelected: selectedHere > 0 && !allSelected };
 }

@@ -102,6 +102,10 @@ const SORTERS: Readonly<Record<SortKey, (a: Person, b: Person) => number>> = {
   messages: (a, b) => b.interactions - a.interactions,
 };
 
+export function isSortKey(value: unknown): value is SortKey {
+  return typeof value === "string" && Object.hasOwn(SORTERS, value);
+}
+
 export function sortRows(rows: readonly Person[], { key, dir }: Sort): Person[] {
   return [...rows].sort((a, b) => dir * SORTERS[key](a, b));
 }

@@ -8,7 +8,7 @@ export { FacetValue } from "./FacetValue";
 export { CHANNEL_ICON, GmailIcon, IMessageIcon, LinkedInIcon, WhatsAppIcon } from "./icons/channels";
 export { initials } from "./initials";
 export { Kbd } from "./Kbd";
-export { NavTabs, type NavTab } from "./NavTabs";
+export { NavTabs } from "./NavTabs";
 export { SearchField } from "./SearchField";
 export { SourcePill } from "./SourcePill";
 export { SourcePills } from "./SourcePills";

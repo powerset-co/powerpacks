@@ -1,8 +1,8 @@
 import type { HTMLAttributes } from "react";
 
+import type { Channel } from "@/lib/channels";
 import { cn } from "@/lib/utils";
 
-import type { Channel } from "@/types/people";
 import { SourcePill } from "./SourcePill";
 
 interface SourcePillsProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {

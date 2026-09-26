@@ -2,10 +2,10 @@ import { memo, type MouseEvent } from "react";
 
 import { Avatar, SourcePills } from "@/components/shared";
 import { avatarUrl } from "@/lib/api/people";
+import { toChannels } from "@/lib/channels";
 import { formatDate, label, sentence } from "@/lib/people/copy";
 import type { Person } from "@/types/people";
 
-import { toChannels } from "../channels";
 import { NumberCell, WarmthCell, WorthCell } from "./cells";
 
 interface PersonRowProps {

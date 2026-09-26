@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-import type { Channel } from "@/types/people";
+import type { Channel } from "@/lib/channels";
 
 // The CHANNEL glyphs from the legacy people.js, one per source family.
 

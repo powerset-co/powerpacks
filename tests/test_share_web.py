@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import tempfile
 import threading
@@ -37,6 +38,7 @@ PEOPLE_HEADER = [
     "superseded_person_ids",
 ]
 SUPERSEDED = "candidate:email:casey@example.com"
+PEOPLE_TYPES = Path(__file__).resolve().parents[1] / "web" / "src" / "types" / "people.ts"
 
 
 def _saved_labels(**cells: object) -> dict:
@@ -132,6 +134,14 @@ class RowModelTests(ShareWebFixture):
         self.assertEqual(payload["counts"], {"total": 4, "upload": 2, "confirm": 1, "private": 1})
         self.assertEqual(payload["columns"], list(PEOPLE_COLUMNS))
         self.assertEqual(len(payload["rows"][0]), len(PEOPLE_COLUMNS))
+
+    def test_client_columns_match_the_server(self) -> None:
+        # web/src/types/people.ts PERSON_COLUMNS is what decodePeople requires; a rename on
+        # either side must fail here, not blank a column in the page.
+        source = PEOPLE_TYPES.read_text(encoding="utf-8")
+        block = re.search(r"PERSON_COLUMNS = \[(.*?)\] as const", source, re.S)
+        self.assertIsNotNone(block)
+        self.assertEqual(tuple(re.findall(r'"([a-z_]+)"', block.group(1))), PEOPLE_COLUMNS)
 
     def test_detail_carries_the_drawer_only_cells(self) -> None:
         detail = self.people.detail("parent-bbbb")

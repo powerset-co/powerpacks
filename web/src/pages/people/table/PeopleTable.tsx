@@ -1,17 +1,15 @@
 import { forwardRef, useImperativeHandle, useRef, type ReactNode } from "react";
 
 import { EmptyState, VirtualRows, type VirtualRowsHandle } from "@/components/shared";
-import { useRowEntrance } from "@/hooks/useRowEntrance";
 import type { Sort, SortKey } from "@/lib/people/facets";
-import type { SavedView } from "@/lib/storage";
-import type { Person } from "@/types/people";
+import type { PeopleView } from "@/lib/people/view";
+import { personKey, type Person } from "@/types/people";
 
+import { useRowEntrance } from "../hooks/useRowEntrance";
 import { ROW_H } from "./columns";
 import { GridHead } from "./GridHead";
 import { PersonRow } from "./PersonRow";
 import "../styles/table.css";
-
-const personKey = (row: Person) => row.parent_id;
 
 interface PeopleTableProps {
   matching: readonly Person[];
@@ -23,7 +21,7 @@ interface PeopleTableProps {
   openId: string | null;
   pending: ReadonlySet<string>;
   // Changes identity exactly when the view (tab, filters, search, sort) changes.
-  view: SavedView;
+  view: PeopleView;
   empty: ReactNode;
   onSort: (key: SortKey) => void;
   onSelectAll: () => void;

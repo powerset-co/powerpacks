@@ -1,8 +1,9 @@
 import { useRef, useState, type TransitionEvent } from "react";
 
-import type { DetailState } from "@/hooks/usePersonDetail";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import type { Person } from "@/types/people";
+
+import type { DetailState } from "../hooks/usePersonDetail";
 
 interface Shown {
   id: string | null;
@@ -11,10 +12,10 @@ interface Shown {
 }
 
 /**
- * What the drawer renders while it switches person (polish-final D): the outgoing person
- * stays, `leaving`, for a 60ms fade to zero; on its transitionend the new person replaces
- * them together and fades in (`swapping`). A first open slides the panel instead, and
- * reduced motion replaces at once.
+ * What the drawer renders while it switches person. Two readable people never show at
+ * once: the outgoing person stays, `leaving`, for a 60ms fade to zero; on its transitionend
+ * the new person replaces them and fades in (`swapping`). A first open slides the panel
+ * instead, and reduced motion replaces at once.
  */
 export function useDrawerSwap(row: Person | null, detail: DetailState, open: boolean) {
   const reduced = useReducedMotion();

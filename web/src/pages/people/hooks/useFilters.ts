@@ -1,34 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { Sort, SortKey } from "@/lib/people/facets";
+import type { SortKey } from "@/lib/people/facets";
+import { DEFAULT_VIEW, readView, writeView, type PeopleView } from "@/lib/people/view";
 import { EMPTY, toggled } from "@/lib/sets";
-import { readSession, writeSession, type SavedView } from "@/lib/storage";
 import { ORDER, type Decision, type Person } from "@/types/people";
-
-export type PeopleView = SavedView;
-
-const DEFAULT_SORT: Sort = { key: "name", dir: 1 };
 
 // Start where the human is needed: the saved tab if it has people, else the first decision that does.
 function startView(rows: readonly Person[]): PeopleView {
-  const saved = readSession();
-  const view: PeopleView = {
-    tab: saved?.tab ?? "confirm",
-    filters: saved?.filters ?? new Map(),
-    text: saved?.text ?? "",
-    sort: saved?.sort ?? DEFAULT_SORT,
-  };
-  if (!rows.some((row) => row.share === view.tab)) {
-    view.tab = ORDER.find((decision) => rows.some((row) => row.share === decision)) ?? "confirm";
-  }
-  return view;
+  const view = readView() ?? DEFAULT_VIEW;
+  if (rows.some((row) => row.share === view.tab)) return view;
+  const tab = ORDER.find((decision) => rows.some((row) => row.share === decision)) ?? DEFAULT_VIEW.tab;
+  return { ...view, tab };
 }
 
 /** Tab, facet selections, search text and sort; saved to sessionStorage on every change. */
 export function useFilters(rows: readonly Person[]) {
   const [view, setView] = useState<PeopleView>(() => startView(rows));
 
-  useEffect(() => writeSession(view), [view]);
+  useEffect(() => writeView(view), [view]);
 
   const setTab = useCallback((tab: Decision) => {
     setView((current) => (current.tab === tab ? current : { ...current, tab }));
