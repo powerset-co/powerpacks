@@ -1,5 +1,39 @@
 # Changelog
 
+## [3.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.0.0...powerpacks-v3.1.0) (2026-09-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deep-context:** bin/deep-context migrate-sqlite is gone; legacy installs run ensure-parents then seed.
+* **deep-context:** bin/deep-context check no longer returns migrate-sqlite as a next command; legacy installs run ensure-parents then seed.
+
+### Features
+
+* **deep-context:** notable LinkedIn titles are worth yes ([#564](https://github.com/powerset-co/powerpacks/issues/564)) ([9c250f8](https://github.com/powerset-co/powerpacks/commit/9c250f822f86f8184e052595b2485a1d02e259ba))
+* **deep-context:** seed legacy decisions onto cold parents ([#563](https://github.com/powerset-co/powerpacks/issues/563)) ([71c479f](https://github.com/powerset-co/powerpacks/commit/71c479f0227fcc871743cdf47ca1fca42686f8c5))
+* Preserve and append deep context facts ([#573](https://github.com/powerset-co/powerpacks/issues/573)) ([cf99532](https://github.com/powerset-co/powerpacks/commit/cf995329d9c2cd6b1b91c956e46f764458b142a2))
+
+
+### Bug Fixes
+
+* **deep-context:** set aside the August store instead of crashing check ([#571](https://github.com/powerset-co/powerpacks/issues/571)) ([a192832](https://github.com/powerset-co/powerpacks/commit/a19283235c8748715f4433c564211ed4385710cf))
+
+
+### Performance Improvements
+
+* **deep-context:** keep store reads bounded on large installs ([#567](https://github.com/powerset-co/powerpacks/issues/567)) ([960d1c6](https://github.com/powerset-co/powerpacks/commit/960d1c6ae126d8f2881fbbdcfdab6d4780c611be))
+
+
+### Documentation
+
+* **deep-context:** note that the seed upgrade path ships in 3.1.0 ([#569](https://github.com/powerset-co/powerpacks/issues/569)) ([f453f65](https://github.com/powerset-co/powerpacks/commit/f453f654d0536e972336c6b2799dc7af0eb097ba))
+
+
+### Code Refactoring
+
+* **deep-context:** delete the whole-graph legacy migration ([#566](https://github.com/powerset-co/powerpacks/issues/566)) ([acc003a](https://github.com/powerset-co/powerpacks/commit/acc003a01e36e5f7b15cc617ffe32557423a3985))
+
 ## [3.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.14.0...powerpacks-v3.0.0) (2026-09-25)
 
 
