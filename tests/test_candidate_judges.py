@@ -29,6 +29,20 @@ class CandidateJudgeTests(unittest.TestCase):
                 self.assertIn('Avoid "unusually", "particularly", and generic fit statements', prompt)
                 self.assertNotIn("the fit is particularly direct and convincing", prompt)
 
+    def test_all_judge_routes_use_plain_evidence_to_job_explanations(self):
+        for dimension, review in (("domain", False), ("opportunity", False), ("opportunity", True)):
+            with self.subTest(dimension=dimension, review=review):
+                request = judges.candidate_judge_request(
+                    dimension=dimension, opportunity_review=review, jd="Synthetic JD",
+                    candidate={}, hiring_company={}, pond_query="Engineers")
+                prompt = request["messages"][0]["content"]
+                self.assertIn("Write why in plain English", prompt)
+                self.assertIn("Mention a concern only when it materially affects", prompt)
+                self.assertIn("Style examples only; use the actual candidate's evidence", prompt)
+                self.assertNotIn("Why this rating rather than the adjacent rating", prompt)
+                self.assertNotIn("Why this cap rather than the adjacent cap", prompt)
+                self.assertNotIn("Explain the decisive distinction from the adjacent rating", prompt)
+
     def test_mixed_requests_preserve_original_terra_and_guide_only_luna(self):
         inputs = dict(jd="Synthetic JD", candidate={"headline": "Jordan Bravo"},
                       hiring_company={}, pond_query="Engineers", as_of="2026-09-16")
