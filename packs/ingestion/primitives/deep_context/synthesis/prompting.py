@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
 
 SYNTHESIS_CONTRACT_VERSION = "relationship-category-v6"
+SEED_FINGERPRINT_PREFIX = "seed:"
 DEFAULT_TARGET_CONFIDENCE = 0.85
 SYSTEM_PROMPT = load_prompt("person_synthesis_system")
 OWNER_PROMPT_SUFFIX = f"\n\n{load_prompt('owner_context_suffix')}\n\n"
@@ -159,6 +160,20 @@ def render_batch(
         )
     parts.append(render_chunk(person, batch))
     return "\n\n".join(parts)
+
+
+def seed_evidence_fingerprint(person: CollectionBundle) -> str:
+    """Hash carried evidence independently of the current synthesis contract."""
+    payload = {
+        "messages": sorted(message.content_order_key() for message in person.messages),
+        "groups": sorted(person.groups),
+        "thread_participants": sorted(
+            (thread.subject, sorted(thread.participants)) for thread in person.thread_participants
+        ),
+    }
+    return SEED_FINGERPRINT_PREFIX + hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
 
 
 def input_evidence_fingerprint(

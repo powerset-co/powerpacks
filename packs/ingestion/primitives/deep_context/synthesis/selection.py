@@ -1,6 +1,8 @@
 """Select projected source bundles and skip unchanged paid synthesis work.
 
 Changelog:
+- 2026-09-25: seeded facts reuse their carried evidence until it changes;
+  only --force overrides that reuse, not a prompt or model change.
 - 2026-08-08: two skip-decision fixes.
   (1) The legacy-child-facts shortcut used to fabricate its cache entry by
   hashing the CURRENT bundle and comparing it to itself a few lines later —
@@ -99,7 +101,8 @@ def pending_target_bundles(
 ) -> list[CollectionBundle]:
     """Decide, per parent, whether to skip (cache hit) or spend on synthesis.
 
-    Three independent checks must all hold for a skip: prompting.SYNTHESIS_VERSION
+    Seeded facts reuse unchanged carried evidence unless forced. Synthesized
+    facts require three checks for a skip: prompting.SYNTHESIS_VERSION
     (catches prompt/schema/contract edits), input_evidence_fingerprint (catches
     evidence changes), and ``model_changed`` being False (catches a --model or
     --reasoning-effort switch since the stage's last completed run — see
@@ -138,11 +141,17 @@ def pending_target_bundles(
     for pid, bundle in sorted(effective_bundles.items()):
         if pid in owner_only_parents:
             continue
+        fingerprint, version = cached.get(pid, ("", ""))
+        if (
+            not force
+            and fingerprint.startswith(prompting.SEED_FINGERPRINT_PREFIX)
+            and fingerprint == prompting.seed_evidence_fingerprint(bundle)
+        ):
+            continue
         # Force and a model/effort change are explicit paid overrides; normal
         # runs resume only when the prompt contract, the exact bounded
         # evidence, AND the answering model/effort all still match.
         if not force and not model_changed:
-            fingerprint, version = cached.get(pid, ("", ""))
             # The version catches prompt/schema edits, while the evidence hash
             # catches message or owner-context changes. Either mismatch must
             # re-run synthesis or the facts would describe stale model input.

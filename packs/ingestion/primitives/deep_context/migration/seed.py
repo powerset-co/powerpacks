@@ -34,6 +34,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import urllib.parse
 from collections import defaultdict
@@ -89,6 +90,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     RAW_DIR,
     emit,
 )
+from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
 from packs.ingestion.schemas.people_schema import extract_public_identifier, row_public_identifier
 from packs.shared.csv_io import CsvIO
@@ -595,9 +597,21 @@ class Seed(Node):
                 tally.duplicate_dropped += 1
             chosen[parent_id] = (updated_at, path)
         self.facts_dir.mkdir(parents=True, exist_ok=True)
+        bundles = selection.effective_parent_bundles(self.db)
         for parent_id, (_, path) in chosen.items():
             target = self.facts_dir / f"{parent_id}.jsonl"
-            target.write_bytes(path.read_bytes())
+            bundle = bundles.get(parent_id)
+            data = path.read_bytes()
+            lines = [line for line in data.decode("utf-8").splitlines() if line.strip()]
+            if bundle is not None and lines:
+                record = json.loads(lines[-1])
+                record["input_evidence_fingerprint"] = prompting.seed_evidence_fingerprint(bundle)
+                lines[-1] = json.dumps(record, ensure_ascii=False)
+                data = ("\n".join(lines) + "\n").encode("utf-8")
+                backup = target.with_suffix(".jsonl.bkup")
+                if target.exists() and not backup.exists():
+                    shutil.copy2(target, backup)
+            target.write_bytes(data)
             project_parent_fact(self.db, target, parent_id)
         tally.carried = len(chosen)
         return tally
