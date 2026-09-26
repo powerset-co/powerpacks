@@ -56,3 +56,6 @@ packs/ingestion/evals/content_policy/out/
 # visual regression output (baselines are committed; actual/diff are not)
 tests/visual/**/*.actual.png
 tests/visual/**/*.diff.png
+
+# the local UI build is committed: the Python server serves it and installs have no node
+!web/dist/
