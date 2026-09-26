@@ -13,9 +13,8 @@ Changelog:
   notable-title rule; a notable LinkedIn headline is worth yes.
 - 2026-09-25: the default model is gpt-6-luna (DEFAULT_SYNTHESIS_MODEL); the
   shared DEFAULT_MODEL stays gpt-5.2 for the pair judge and enrichment.
-- 2026-08-08: a --model/--reasoning-effort switch since the last completed
-  run now forces a full re-plan instead of silently reusing facts a
-  different model produced. See _model_or_effort_changed.
+- 2026-09-25: successful extraction records own model/effort and message coverage;
+  stage receipts do not control retries.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
-from packs.ingestion.primitives.common.jsonio import now_iso, read_json
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.legacy import scrub_retired_message_linkedin_facts
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
@@ -48,6 +47,7 @@ from packs.ingestion.primitives.deep_context.manifests.synthesize_person_context
 from packs.ingestion.primitives.deep_context.synthesis import normalization, prompting, runner, selection
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     SynthesisConfig,
+    JevUsage,
     SynthesisPlan,
     WorthSyncResult,
 )
@@ -55,11 +55,11 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesConfig,
     estimate_cost_usd,
 )
-from packs.ingestion.primitives.pipeline.contract import Artifact, Node
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, STATUS_COMPLETED, STATUS_FAILED
 
 DEFAULT_CHUNK_CHARS = 9000
 DEFAULT_MAX_BATCHES = 20
-DEFAULT_MAX_RETRIES = 6
+DEFAULT_MAX_RETRIES = 3
 
 
 class SynthesizePersonContext(Node):
@@ -123,27 +123,9 @@ class SynthesizePersonContext(Node):
             chunk_chars=self.config.chunk_chars,
             max_batches=self.config.max_batches,
             force=self.config.force,
-            model_changed=self._model_or_effort_changed(),
+            model=self.config.responses.model,
+            reasoning_effort=self.config.responses.effort,
         )
-
-    def _model_or_effort_changed(self) -> bool:
-        """True when this run's model/effort differ from the last completed run's.
-
-        Read back from this stage's own manifest.json (facts_dir/manifest.json,
-        the same durable receipt every Deep Context stage already writes — not a
-        new store) rather than any per-parent record, because no per-parent
-        artifact stores which model produced it. A missing manifest (first run)
-        or one written before these fields existed reads as unchanged, so a
-        fresh install never looks "changed" against nothing.
-        """
-        previous = read_json(self.config.facts_dir / "manifest.json", default=None)
-        if not isinstance(previous, dict):
-            return False
-        prior_model = str(previous.get("model") or "")
-        prior_effort = str(previous.get("reasoning_effort") or "")
-        if not prior_model and not prior_effort:
-            return False
-        return prior_model != self.config.responses.model or prior_effort != self.config.responses.effort
 
     def _migrate_parent_cache(self) -> SynthesisPlan:
         """Normalize paid caches only after the caller enters the run path."""
@@ -180,7 +162,7 @@ class SynthesizePersonContext(Node):
         tally = runner.run_paid(self.db, self.config, plan)
         # JEV labels the saved facts after every GPT checkpoint is durable, and
         # re-projects each tagged record so SQLite carries its worth and labels.
-        jev_usage = runner.tag_saved_facts(self.db, self.config, plan)
+        jev_usage = JevUsage() if tally.errors else runner.tag_saved_facts(self.db, self.config, plan)
         fact_count, without_worth = parent_fact_counts(self.db)
         worth_sync = WorthSyncResult(
             path=str(self.db.db_path),
@@ -192,13 +174,14 @@ class SynthesizePersonContext(Node):
         # OpenAI bills reasoning tokens at the output rate, so combine before costing.
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
-            status="completed",
+            status=STATUS_FAILED if tally.errors else STATUS_COMPLETED,
             people=len(plan.bundles),
             people_done=tally.people_done,
             batches_run=tally.batches,
             avg_batches_per_person=round(tally.batches / max(1, tally.people_done), 2),
             stop_reasons=tally.stop_reasons,
             errors=tally.errors,
+            failures=tuple(tally.failures),
             total_failures=tally.total_failures,
             model=self.config.responses.model,
             synthesis_version=prompting.SYNTHESIS_VERSION,
@@ -270,8 +253,9 @@ def main(argv: list[str] | None = None) -> int:
     # The only path that spends: Node.run() wraps execute() (the billed
     # OpenAI calls) with the typed-manifest template. No needs_approval gate
     # sits in front of it — reaching this line always bills.
-    emit(node.run().to_payload())
-    return 0
+    payload = node.run()
+    emit(payload.to_payload())
+    return int(payload.status != STATUS_COMPLETED)
 
 
 if __name__ == "__main__":

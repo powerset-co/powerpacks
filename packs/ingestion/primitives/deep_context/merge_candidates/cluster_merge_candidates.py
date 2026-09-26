@@ -112,7 +112,7 @@ class ClusterMergeCandidates(Node):
             estimate_request(
                 judge_request(pair.first, pair.second, owner_name=owner_name, reference_date=reference_date),
                 output_dir=self.output_dir,
-            )["input_tokens"]
+            ).input_tokens
             for pair in survey.to_judge
         )
         return {

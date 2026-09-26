@@ -10,25 +10,28 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
 import shutil
 import sys
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import tiktoken
+from openai import APIStatusError
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.jev_worth import runner as jev_worth
 from packs.ingestion.primitives.deep_context.jev_worth.questions import build_request
+from packs.ingestion.primitives.deep_context.jev_worth.models import WorthFacts, WorthResult
 from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller,
     estimate_cost_usd,
 )
-from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.db.models import ArtifactKind
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageObservation
+from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, OwnerProfile
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as stored_facts, people as person_rows
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -38,12 +41,15 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
 )
 from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.deep_context.synthesis.facts import collapse_fact_records
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
+from packs.ingestion.primitives.deep_context.db.context_queries import parent_histories
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     JevUsage,
     SynthesizedFacts,
     SynthesisCallResult,
     SynthesisConfig,
+    SynthesisFailure,
     SynthesisPlan,
     SynthesisRecord,
     SynthesisResult,
@@ -52,7 +58,6 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     TOKEN_KEYS,
 )
 from packs.search.primitives.llm_rerank_candidates.jev.client import (
-    INPUT_PRICE_PER_MILLION,
     MAX_CONCURRENCY,
 )
 
@@ -101,22 +106,22 @@ async def call_one(
         facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(
             response.payload
         )
-        if facts:
-            facts = replace(
-                facts,
-                relationship_category=coerce_relationship_category(
-                    facts.relationship_category
-                ),
-            )
+        if facts is None:
+            raise ValueError("empty synthesis facts")
+        facts = replace(
+            facts,
+            relationship_category=coerce_relationship_category(facts.relationship_category),
+        )
         return SynthesisCallResult(
             facts,
             SynthesisUsage.from_payload(response.usage.as_dict()),
-            False,
         )
-    except Exception:  # noqa: BLE001 - SDK retries before this paid-boundary result
-        # Zero usage: a failed call adds nothing to the run's token tally, but it
-        # still consumes a batch slot toward total_failure below.
-        return SynthesisCallResult(None, SynthesisUsage(), True)
+    except Exception as exc:  # noqa: BLE001 - the SDK owns retries
+        # Provider messages may contain contact content; retain only type/status.
+        error = type(exc).__name__
+        if isinstance(exc, APIStatusError):
+            error += f" HTTP {exc.status_code}"
+        return SynthesisCallResult(None, SynthesisUsage(), error)
 
 
 async def synthesize_person(
@@ -147,20 +152,21 @@ async def synthesize_person(
     usage_total = dict.fromkeys(TOKEN_KEYS, 0)
     messages_used = errors = 0
     chunks: list[FactRecord] = []
-    for batch, call in zip(person_batches, calls):
+    failures: list[SynthesisFailure] = []
+    for index, (batch, call) in enumerate(zip(person_batches, calls), start=1):
         for key, value in call.usage.as_dict().items():
             usage_total[key] += value
         messages_used += len(batch)
         errors += int(call.failed)
+        if call.failed:
+            failures.append(SynthesisFailure(person.person_id, index, call.error))
         if call.facts:
             chunks.append(FactRecord(call.facts))
 
     batches_used = len(person_batches)
-    # Every batch called, none usable: persisting this as a completed record
-    # would let selection.pending_target_bundles match its fingerprint and
-    # skip the person forever. run_paid must not write/project this result.
+    # A partial answer must never claim the entire input fingerprint.
     total_failure = bool(person_batches) and not chunks
-    if total_failure:
+    if errors:
         profile, stop_reason, fingerprint = None, "failed", ""
     else:
         # One batch means no merge at all (the single result IS the profile);
@@ -192,13 +198,20 @@ async def synthesize_person(
         # into control flow here: that reintroduces the loop this change removed.
         final_confidence=round(profile.confidence if profile else 0.0, 2),
         stop_reason=stop_reason,
+        messages=tuple(MessageObservation.of(message) for batch in person_batches for message in batch) if not errors else (),
+        groups=person.groups,
+        source_channels=person.source_channels,
+        model=config.responses.model,
+        reasoning_effort=config.responses.effort,
+        system_prompt_hash=hashlib.sha256(system_prompt.encode()).hexdigest(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
     )
-    return SynthesisResult(person.person_id, record, errors, total_failure=total_failure)
+    return SynthesisResult(person.person_id, record, errors, total_failure=total_failure, failures=tuple(failures))
 
 
 def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
     encoder = tiktoken.get_encoding("o200k_base")
-    owner = asdict(plan.owner) if plan.owner else {}
+    owner = plan.owner
     bundles = selection.effective_parent_bundles(db)
     total_tokens = total_batches = people = 0
     jev_cost = 0.0
@@ -211,12 +224,12 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
         # The JEV request needs facts that don't exist yet, so a placeholder
         # profile of the expected output size stands in for the token count only.
         request = build_request(
-            facts={"summary": "x " * 750},
-            bundle=bundle.to_payload(),
+            facts=WorthFacts.from_payload({"summary": "x " * 750}),
+            bundle=bundle,
             owner=owner,
             reference_date=now_iso()[:10],
         )
-        jev_cost += jev_worth.estimate(request)["cost_usd"]
+        jev_cost += jev_worth.estimate(request).cost_usd
         jev_people += 1
         person_batches = prompting.batches(
             bundle.messages,
@@ -236,14 +249,15 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
     for parent_id, path in _tagging_paths(db, config, bundles, owner, headlines=headlines):
         if parent_id in synthesized_ids:
             continue
-        record, bundle_payload, timestamp = _tagging_inputs(bundles, parent_id, path)
+        facts, bundle, timestamp, history = _tagging_inputs(bundles, parent_id, path)
         request = build_request(
-            facts=record["facts"],
-            bundle=bundle_payload,
+            facts=facts,
+            bundle=bundle,
             owner=owner,
             reference_date=timestamp[:10],
+            history=history,
         )
-        jev_cost += jev_worth.estimate(request, output_dir=config.facts_dir.parent)["cost_usd"]
+        jev_cost += jev_worth.estimate(request, output_dir=config.facts_dir.parent).cost_usd
         jev_people += 1
     # Still called floor/ceiling for output-shape stability: the two numbers
     # are now the same value because both scenarios ARE the same scenario.
@@ -283,21 +297,25 @@ def run_paid(
     if not plan.bundles:
         return tally
     total = len(plan.bundles)
+    histories = parent_histories(db)
 
     def on_result(result: SynthesisResult) -> None:
         tally.record(result)
-        if result.total_failure:
-            # Every batch errored or came back empty: skip the write+project so
-            # selection.pending_target_bundles retries this person next run
-            # instead of matching a fingerprint on a false "done".
-            print(f"[synthesize] total failure, retrying next run: {result.person_id}", file=sys.stderr, flush=True)
+        if result.errors:
+            # Keep any prior completed facts; changed input remains pending.
+            for failure in result.failures:
+                print(f"[synthesize] {failure.person_id} batch {failure.batch}: {failure.error}",
+                      file=sys.stderr, flush=True)
             return
         parent_id = result.person_id
         path = config.facts_dir / f"{parent_id}.jsonl"
-        # One line, full overwrite despite the .jsonl name — not an append log.
-        # project_parent_fact reads records[-1] defensively for older multi-line files.
+        history = histories.get(parent_id, FactHistory())
+        record = result.record.as_dict()
+        records = (*(item.payload() for item in history.records), record)
+        if path.exists():
+            shutil.copy2(path, path.with_suffix(path.suffix + ".bkup"))
         path.write_text(
-            json.dumps(result.record.as_dict(), ensure_ascii=False) + "\n",
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in records),
             encoding="utf-8",
         )
         projection = project_parent_fact(db, path, parent_id)
@@ -343,43 +361,29 @@ def run_paid(
 TAG_CHUNK_PEOPLE = 200
 
 
-def _load_facts_record(path: Path) -> dict[str, Any]:
-    try:
-        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    except json.JSONDecodeError:
-        return {}
-    return records[-1] if records else {}
-
-
-def _backup_facts(path: Path) -> None:
-    backup = path.with_suffix(path.suffix + ".bkup")
-    if path.exists() and not backup.exists():
-        shutil.copy2(path, backup)
-
-
-def _chunked(seq: list[Any], size: int) -> Any:
-    for index in range(0, len(seq), max(1, size)):
-        yield seq[index:index + size]
-
-
-def _bundle_payload(bundles: dict[str, CollectionBundle], parent_id: str) -> dict[str, Any]:
-    bundle = bundles.get(parent_id)
-    return bundle.to_payload() if bundle else {}
-
-
 def _tagging_inputs(
-    bundles: dict[str, CollectionBundle],
-    parent_id: str,
-    path: Path,
-) -> tuple[dict[str, Any], dict[str, Any], str]:
-    record = _load_facts_record(path)
-    bundle = _bundle_payload(bundles, parent_id)
-    # A tagged record carries its own updated_at; an untagged one uses the file's mtime.
-    timestamp = str(
-        record.get("updated_at")
-        or datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
-    )
-    return record, bundle, timestamp
+    bundles: dict[str, CollectionBundle], parent_id: str, path: Path,
+) -> tuple[WorthFacts, CollectionBundle | None, str, FactHistory]:
+    # Keep historical envelope fields and fact order at the file boundary.
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    history = FactHistory.from_records(records)
+    record = history.payload()
+    timestamp = str(record.get("updated_at") or datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat())
+    return WorthFacts.from_payload(record["facts"]), bundles.get(parent_id), timestamp, history
+
+
+def _write_worth(path: Path, result: WorthResult, timestamp: str) -> None:
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    record = json.loads(lines[-1])
+    record["facts"]["network_worth"] = result.worth.to_payload()
+    record["facts"]["labels"] = result.labels
+    record["updated_at"] = timestamp
+    record["jev_usage"] = result.usage_payload()
+    lines[-1] = json.dumps(record, ensure_ascii=False)
+    backup = path.with_suffix(path.suffix + ".bkup")
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def parent_headlines(db: Db, people_csv: Path) -> dict[str, str]:
@@ -405,23 +409,23 @@ def parent_headlines(db: Db, people_csv: Path) -> dict[str, str]:
 
 
 def _needs_tagging(
-    config: SynthesisConfig, facts: dict[str, Any], request: dict[str, Any], *, headline: str,
+    config: SynthesisConfig, facts: SynthesizedFacts, request: dict[str, Any], *, headline: str,
 ) -> bool:
-    if not facts.get("labels"):
+    if not facts.labels:
         return True
-    decision = str((facts.get("network_worth") or {}).get("decision") or "")
+    decision = facts.network_worth.decision if facts.network_worth else ""
     # A notable title decides worth in code; a saved non-yes verdict is redone
     # from the cached JEV answer, so the re-tag costs nothing.
     if jev_worth.notable_title(headline) and decision != "yes":
         return True
-    return not jev_worth.estimate(request, output_dir=config.facts_dir.parent)["cached"]
+    return not jev_worth.estimate(request, output_dir=config.facts_dir.parent).cached
 
 
 def _tagging_paths(
     db: Db,
     config: SynthesisConfig,
     bundles: dict[str, CollectionBundle],
-    owner: dict[str, Any],
+    owner: OwnerProfile | None,
     *,
     headlines: dict[str, str],
 ) -> list[tuple[str, Path]]:
@@ -437,24 +441,13 @@ def _tagging_paths(
         path = Path(artifact.path)
         if not path.is_file():
             continue
-        record, bundle, timestamp = _tagging_inputs(bundles, fact.parent_id, path)
-        facts = record.get("facts") or {}
-        if not facts:
+        facts, bundle, timestamp, history = _tagging_inputs(bundles, fact.parent_id, path)
+        if not facts.facts.present:
             continue
-        request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=timestamp[:10])
-        if _needs_tagging(config, facts, request, headline=headlines.get(fact.parent_id, "")):
+        request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=timestamp[:10], history=history)
+        if _needs_tagging(config, facts.facts, request, headline=headlines.get(fact.parent_id, "")):
             paths.append((fact.parent_id, path))
     return paths
-
-
-def _tally_jev(total: dict[str, Any], usage: dict[str, Any]) -> None:
-    total["people"] += 1
-    total["cached"] += int(usage["cached"])
-    if usage["cached"]:
-        return
-    total["input_tokens"] += usage["input_tokens"]
-    total["output_tokens"] += usage["output_tokens"]
-    total["cost_usd"] += usage["input_tokens"] * INPUT_PRICE_PER_MILLION / 1_000_000
 
 
 def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> JevUsage:
@@ -464,43 +457,37 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
     repeats extraction. Each tagged record is re-projected so SQLite's facts_json
     and machine_worth carry the new worth and labels.
     """
-    owner = asdict(plan.owner) if plan.owner else {}
+    owner = plan.owner
     bundles = selection.effective_parent_bundles(db)
     headlines = parent_headlines(db, config.people_csv)
     paths = _tagging_paths(db, config, bundles, owner, headlines=headlines)
     if not paths:
         return JevUsage()
     load_env()
-    usage: dict[str, Any] = {"people": 0, "cached": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    usage = JevUsage()
 
     async def tag_all() -> None:
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
         async def tag(parent_id: str, path: Path) -> None:
+            nonlocal usage
             async with semaphore:
-                record, bundle, timestamp = _tagging_inputs(bundles, parent_id, path)
+                facts, bundle, timestamp, history = _tagging_inputs(bundles, parent_id, path)
                 result = await jev_worth.classify(
-                    facts=record.get("facts") or {},
+                    facts=facts,
                     bundle=bundle,
                     owner=owner,
                     reference_date=timestamp[:10],
                     output_dir=config.facts_dir.parent,
                     headline=headlines.get(parent_id, ""),
+                    history=history,
                 )
-                facts = record.setdefault("facts", {})
-                facts["network_worth"] = result["network_worth"]
-                facts["labels"] = result["labels"]
-                record["updated_at"] = timestamp
-                record["jev_usage"] = result["usage"]
-                lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-                lines[-1] = json.dumps(record, ensure_ascii=False)
-                _backup_facts(path)
-                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                _write_worth(path, result, timestamp)
                 project_parent_fact(db, path, parent_id)
-                _tally_jev(usage, result["usage"])
+                usage = usage + result.usage
 
-        for chunk in _chunked(paths, TAG_CHUNK_PEOPLE):
-            await asyncio.gather(*(tag(parent_id, path) for parent_id, path in chunk))
+        for start in range(0, len(paths), TAG_CHUNK_PEOPLE):
+            await asyncio.gather(*(tag(parent_id, path) for parent_id, path in paths[start:start + TAG_CHUNK_PEOPLE]))
 
     asyncio.run(tag_all())
-    return JevUsage(**usage)
+    return usage

@@ -28,7 +28,8 @@ from packs.ingestion.primitives.deep_context.synthesis import (
     runner,
     selection,
 )
-from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisConfig
+from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisConfig, JevUsage, NetworkWorthFact
+from packs.ingestion.primitives.deep_context.jev_worth.models import WorthResult
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from deep_context_sqlite_test_helpers import message_payload
 
@@ -634,12 +635,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
 
             self.assertEqual(bundles, [])
 
-    def test_model_changed_forces_full_replan(self) -> None:
-        """A --model/--reasoning-effort switch must not silently keep serving
-        facts a different model produced — model_changed is the gate
-        SynthesizePersonContext computes from the stage's own manifest.json
-        (see _model_or_effort_changed) and threads into selection.
-        """
+    def test_model_change_uses_successful_record(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             raw_dir, facts_dir = root / "raw", root / "facts"
@@ -653,6 +649,10 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 "input_evidence_fingerprint": self.fingerprint(bundle),
                 "facts": {"network_worth": {"decision": "yes", "reason": "pinned"}},
             }
+            from packs.ingestion.primitives.deep_context.collection.models import MessageObservation
+            record['messages'] = [MessageObservation.of(CollectionBundle.from_payload(bundle).messages[0]).to_payload()]
+            record['model'] = 'old-model'
+            record['reasoning_effort'] = 'medium'
             database.project_rows(
                 (
                     ParentRow(parent_id, parent_id),
@@ -692,46 +692,13 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
-                model_changed=True,
+                model="new-model",
+                reasoning_effort="medium",
             )
 
             self.assertEqual(unchanged, [])
             self.assertEqual([bundle.person_id for bundle in after_model_swap], [parent_id])
 
-    def test_model_or_effort_changed_reads_the_stage_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw_dir, facts_dir = root / "raw", root / "facts"
-            raw_dir.mkdir()
-            facts_dir.mkdir()
-            database = Db(root / "deep-context.sqlite")
-            node = SynthesizePersonContext(
-                db=database,
-                raw_dir=raw_dir,
-                out_dir=facts_dir,
-                model="gpt-5.2",
-                reasoning_effort="medium",
-            )
-            # No manifest yet (first run): nothing to compare against.
-            self.assertFalse(node._model_or_effort_changed())
-
-            (facts_dir / "manifest.json").write_text(
-                json.dumps({"model": "gpt-5.2", "reasoning_effort": "medium"}),
-                encoding="utf-8",
-            )
-            self.assertFalse(node._model_or_effort_changed())
-
-            (facts_dir / "manifest.json").write_text(
-                json.dumps({"model": "gpt-5.1", "reasoning_effort": "medium"}),
-                encoding="utf-8",
-            )
-            self.assertTrue(node._model_or_effort_changed())
-
-            (facts_dir / "manifest.json").write_text(
-                json.dumps({"model": "gpt-5.2", "reasoning_effort": "high"}),
-                encoding="utf-8",
-            )
-            self.assertTrue(node._model_or_effort_changed())
 
     def test_selection_skips_owner_only_parent_bundles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1266,7 +1233,9 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     return_value=_FakeClient(response),
                 ),
                 mock.patch.object(
-                    runner.jev_worth, "classify", mock.AsyncMock(return_value=jev_answer)
+                    runner.jev_worth, "classify", mock.AsyncMock(return_value=WorthResult(
+                        NetworkWorthFact(**jev_answer["network_worth"]), jev_answer["labels"],
+                        JevUsage(people=1, input_tokens=200, output_tokens=40, cost_usd=0.0000084), 200, 40))
                 ),
             ):
                 payload = node.run()
@@ -1296,6 +1265,12 @@ class DeepContextSynthesisTests(unittest.TestCase):
             written = json.loads((facts_dir / "parent-1.jsonl").read_text(encoding="utf-8"))
             self.assertIn("updated_at", written)
             written.pop("updated_at")
+            self.assertEqual(written.pop("model"), node.config.responses.model)
+            self.assertEqual(written.pop("reasoning_effort"), node.config.responses.effort)
+            self.assertEqual(len(written.pop("messages")), 1)
+            self.assertEqual(len(written.pop("system_prompt_hash")), 64)
+            written.pop("groups")
+            written.pop("source_channels")
             self.assertEqual(written, record)
             self.assertEqual(payload.people_done, 1)
             self.assertEqual(payload.tokens, usage)

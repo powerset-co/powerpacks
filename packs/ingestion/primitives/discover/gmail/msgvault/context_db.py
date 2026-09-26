@@ -112,7 +112,7 @@ def _recent_content_key(row: sqlite3.Row) -> tuple[str, str, str, str, str]:
 def fetch_recent_rows(
     con: sqlite3.Connection,
     email: str,
-    fetch_limit: int,
+    fetch_limit: int | None,
 ) -> list[sqlite3.Row]:
     ids = [
         row["id"]
@@ -122,8 +122,8 @@ def fetch_recent_rows(
         return []
     rows: list[sqlite3.Row] = []
     for pid in ids:
-        rows.extend(con.execute(_RECENT_FROM_SENDER_SQL, (pid, fetch_limit)).fetchall())
-        rows.extend(con.execute(_RECENT_TO_RECIPIENT_SQL, (pid, fetch_limit)).fetchall())
+        rows.extend(con.execute(_RECENT_FROM_SENDER_SQL, (pid, -1 if fetch_limit is None else fetch_limit)).fetchall())
+        rows.extend(con.execute(_RECENT_TO_RECIPIENT_SQL, (pid, -1 if fetch_limit is None else fetch_limit)).fetchall())
     # Content, unlike rowid, remains stable when msgvault is rebuilt or vacuumed.
     rows.sort(key=_recent_content_key, reverse=True)
     return rows[:fetch_limit]

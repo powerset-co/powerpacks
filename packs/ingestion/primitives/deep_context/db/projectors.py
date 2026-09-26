@@ -23,6 +23,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.synthesis.facts import NETWORK_WORTH_VALUES
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisRecord
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 
 
 class ProjectionError(StoreError):
@@ -73,7 +74,7 @@ def project_parent_fact(db: Db, path: Path, parent_id: str) -> ParentFactProject
     records = [
         json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
     ]
-    record = records[-1] if records else {}
+    record = FactHistory.from_records(records).payload()
     parsed: SynthesisRecord | None = SynthesisRecord.from_payload(record)
     facts = parsed.facts if parsed and parsed.facts else SynthesizedFacts()
     worth = facts.network_worth

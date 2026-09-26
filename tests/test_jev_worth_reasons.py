@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import patch
 from packs.ingestion.primitives.deep_context.jev_worth import model, runner
+from packs.ingestion.primitives.deep_context.jev_worth.models import WorthAnswer
 
 
 class JevWorthReasonTests(unittest.TestCase):
@@ -13,11 +14,13 @@ class JevWorthReasonTests(unittest.TestCase):
                   'features':['worth:work_signal','worth:real_relationship','worth:transactional_only'],
                   'mean':[.5,.5,.5], 'scale':[1,1,1], 'intercept':[0,0,-10],
                   'coefficients':[[-5,-1,3],[0,0,0],[0,0,0]]}
-        with patch.dict(model.MODEL,fitted,clear=True):
-            self.assertEqual(model.predict(answers),'no')
-            ranked = model.supporting_features(answers,decision='no')
-            self.assertEqual([x[0] for x in ranked],['work_signal','transactional_only'])
-            reason = runner._reason(answers,decision='no')
+        fitted_model = model.WorthModel.from_payload(fitted)
+        typed = WorthAnswer.parse_all(answers)
+        self.assertEqual(model.predict(typed, model=fitted_model), 'no')
+        ranked = model.supporting_features(typed, decision='no', model=fitted_model)
+        self.assertEqual([x[0] for x in ranked], ['work_signal', 'transactional_only'])
+        with patch.object(runner, 'supporting_features', return_value=ranked):
+            reason = runner._reason(typed, decision='no')
         self.assertIn('little evidence of work-related context',reason)
         self.assertIn('mainly transactional',reason)
         self.assertNotIn('direct correspondence',reason)
@@ -28,8 +31,10 @@ class JevWorthReasonTests(unittest.TestCase):
                 'features':['tag:relationship_kind=friend','tag:relationship_kind=stranger'],
                 'mean':[.9,.1], 'scale':[1,1], 'intercept':[0,0,-10],
                 'coefficients':[[0,10],[0,0],[0,0]]}
-        with patch.dict(model.MODEL,fitted,clear=True):
-            reason=runner._reason(answers,decision='no')
+        typed = WorthAnswer.parse_all(answers)
+        ranked = model.supporting_features(typed, decision='no', model=model.WorthModel.from_payload(fitted))
+        with patch.object(runner, 'supporting_features', return_value=ranked):
+            reason = runner._reason(typed, decision='no')
         self.assertNotIn('friend',reason)
         self.assertIn('little evidence of unsolicited contact',reason)
 
@@ -38,8 +43,10 @@ class JevWorthReasonTests(unittest.TestCase):
         fitted={'classes':['no','yes','maybe'],'features':['worth:worth=no','worth:worth=yes'],
                 'mean':[0,0],'scale':[1,1],'intercept':[0,0,-10],
                 'coefficients':[[10,0],[0,0],[0,0]]}
-        with patch.dict(model.MODEL,fitted,clear=True):
-            reason=runner._reason(answers,decision='no')
+        typed = WorthAnswer.parse_all(answers)
+        ranked = model.supporting_features(typed, decision='no', model=model.WorthModel.from_payload(fitted))
+        with patch.object(runner, 'supporting_features', return_value=ranked):
+            reason = runner._reason(typed, decision='no')
         self.assertIn('no clear explanation',reason)
         self.assertNotIn('worth answer',reason)
 

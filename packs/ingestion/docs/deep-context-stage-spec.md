@@ -39,18 +39,35 @@ Decision: which existing parent a new child joins (shared identifier), else mint
 Never: re-derive an id from membership; batch rebuilds; LLM.
 
 ## 2. collect
-Purpose: one raw message bundle per parent from all its identifiers, capped.
+Purpose: one bounded raw message bundle per parent from all its identifiers.
+  After successful synthesis, exclude recorded message-content hashes before caps.
+  Timestamp ties and late imports remain eligible; uncaptured backlog is never
+  marked complete. Cold-start sampling remains bounded; later runs drain unseen
+  history in bounded slices. No new messages retains the last bundle for force.
 Reads: chat.db / wacli.db / msgvault.db (read-only), SQLite parents.
 Writes: raw/<parent_id>.json (ephemeral, gitignored) + receipt.
 Decision: none — mechanical crawl under the privacy policy.
+Failure: retry transient reads three times, then fail with a receipt; preserve
+  the failed person's prior bundle. Corrupt or inaccessible stores fail directly.
 Never: decisions from files; group bodies beyond the standing policy; network.
 
 ## 3. synthesize
-Purpose: facts + a worth verdict per parent, only when evidence changed.
+Purpose: accumulate facts + a worth verdict per parent from unseen evidence.
+  Append extraction records to the fixed facts JSONL; project their exact unions
+  without historical list caps. Scalar display uses the newest message evidence;
+  original scalar observations remain in extraction records. Employer status is
+  observed, not inferred from a new role. JEV sees all accumulated facts and
+  body-free message metadata. Successful records own model/effort provenance.
 Reads: raw bundles, SQLite fingerprint cache.
 Writes: facts (SQLite via projection), facts/<parent_id>.jsonl, receipt.
-Decision: skip-or-spend per parent (fingerprint + SYNTHESIS_VERSION);
-  adaptive stop (confidence 0.85 / saturation 2 / max 20 batches).
+Decision: skip consumed messages; changed model/prompt or --force re-extracts
+  the current bounded bundle and preserves history. Record only actually submitted
+  messages after all batches succeed; uncaptured max_batches overflow stays pending.
+  Legacy records without message metadata keep their existing fingerprint skip;
+  their first changed bundle establishes coverage without deleting prior facts.
+  Seed records use their carried raw messages as the known baseline.
+  run every selected batch, capped by max_batches. Any failed batch leaves
+  prior facts intact and records a failed receipt after the SDK's three retries.
 Never: estimate mutating anything; per-child fragment synthesis; re-billing
   unchanged evidence.
 
@@ -125,4 +142,7 @@ Purpose: after ensure-parents, carry a pre-SQLite install's merges, raw
 Reads: legacy files (index.json, review.csv, facts, raw, merge verdicts, research).
 Writes: SQLite.    Detection: check-readiness routes to ensure-parents, then seed
   while the legacy files are present and the store has not carried them over.
+Reuse: carried facts retain a digest of their carried messages/groups. Unchanged
+  evidence skips synthesis; changed evidence uses full synthesis, not append.
+  No carried raw bundle means no digest. Force/model changes override reuse.
 Removal condition: delete seed.py once no supported install predates the store.

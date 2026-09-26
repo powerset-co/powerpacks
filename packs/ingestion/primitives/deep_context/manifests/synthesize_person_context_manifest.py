@@ -4,7 +4,7 @@ from pydantic import Field
 
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.deep_context.synthesis import prompting
-from packs.ingestion.primitives.deep_context.synthesis.models import JevUsage, WorthSyncResult
+from packs.ingestion.primitives.deep_context.synthesis.models import JevUsage, SynthesisFailure, WorthSyncResult
 from packs.ingestion.primitives.pipeline.contract import StageManifest
 
 DEFAULT_MAX_BATCHES = 20
@@ -18,6 +18,7 @@ class SynthesizePersonContextManifest(StageManifest):
     avg_batches_per_person: float = 0.0
     stop_reasons: dict[str, int] = Field(default_factory=dict)
     errors: int = 0
+    failures: tuple[SynthesisFailure, ...] = ()
     # People whose every batch errored or came back empty; not persisted to
     # facts_dir, so they retry on the next run instead of caching as "done".
     total_failures: int = 0

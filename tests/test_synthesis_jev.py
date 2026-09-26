@@ -12,10 +12,13 @@ from packs.ingestion.primitives.deep_context.collection.models import Collection
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     OwnerContextRow,
+    OwnerProfile,
     ParentRow,
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
+from packs.ingestion.primitives.deep_context.jev_worth.models import WorthResult, WorthEstimate
+from packs.ingestion.primitives.deep_context.synthesis.models import JevUsage, NetworkWorthFact
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.synthesis import (
@@ -59,11 +62,11 @@ class SynthesisJevTests(unittest.TestCase):
             root = Path(directory)
             node, database = self._node(root)
             path = self._write_facts(root, facts={"canonical_name": "Jordan Bravo"})
-            owner = {"name": "Mailbox Owner"}
+            owner = OwnerProfile("Mailbox Owner")
             bundles = selection.effective_parent_bundles(database)
 
             with patch.object(
-                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+                runner.jev_worth, "estimate", return_value=WorthEstimate(cached=True)
             ):
                 # Untagged facts are always a tagging target, even when the
                 # request is already cached.
@@ -74,7 +77,7 @@ class SynthesisJevTests(unittest.TestCase):
                 # Saved labels + a cached request: nothing to redo.
                 self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [])
             with patch.object(
-                runner.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}
+                runner.jev_worth, "estimate", return_value=WorthEstimate(cost_usd=0.01)
             ):
                 # Saved labels but a changed request (cache miss) relabels anyway.
                 self.assertEqual(runner._tagging_paths(database, node.config, bundles, owner, headlines={}), [("p1", path.resolve())])
@@ -90,11 +93,11 @@ class SynthesisJevTests(unittest.TestCase):
             bundles = selection.effective_parent_bundles(database)
 
             with patch.object(
-                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+                runner.jev_worth, "estimate", return_value=WorthEstimate(cached=True)
             ):
                 # The path comes from the projected artifact, not from the parent id.
                 self.assertEqual(
-                    runner._tagging_paths(database, node.config, bundles, {"name": "Mailbox Owner"}, headlines={}),
+                    runner._tagging_paths(database, node.config, bundles, OwnerProfile("Mailbox Owner"), headlines={}),
                     [("p1", path.resolve())],
                 )
 
@@ -115,14 +118,14 @@ class SynthesisJevTests(unittest.TestCase):
             with patch.object(
                 runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
             ) as classify, patch.object(
-                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+                runner.jev_worth, "estimate", return_value=WorthEstimate(cached=True)
             ):
                 self.assertEqual(node.estimate()["jev_people"], 1)
                 result = node.execute()
 
             classify.assert_awaited_once()
             self.assertEqual(result.jev.people, 1)
-            self.assertEqual(classify.await_args.kwargs["facts"]["canonical_name"], "Jordan Bravo")
+            self.assertEqual(classify.await_args.kwargs["facts"].facts.canonical_name, "Jordan Bravo")
             self.assertTrue(stale.exists())
             self.assertFalse(missing.exists())
             self.assertEqual(json.loads(current.read_text())["facts"]["labels"], {"is_professional": 0.9})
@@ -139,7 +142,7 @@ class SynthesisJevTests(unittest.TestCase):
             ), patch.object(
                 runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
             ) as classify, patch.object(
-                runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}
+                runner.jev_worth, "estimate", return_value=WorthEstimate(cached=True)
             ):
                 result = node.execute()
                 node.execute()
@@ -187,7 +190,7 @@ class SynthesisJevTests(unittest.TestCase):
             self._mark_facts_cached(root, node)
 
             with patch.object(
-                runner.jev_worth, "estimate", return_value={"cost_usd": 0.01, "cached": False}
+                runner.jev_worth, "estimate", return_value=WorthEstimate(cost_usd=0.01)
             ):
                 estimate = node.estimate()
             self.assertEqual(estimate["people"], 0)
@@ -206,7 +209,7 @@ class SynthesisJevTests(unittest.TestCase):
             self._mark_facts_cached(root, node)
 
             with patch.object(
-                runner.jev_worth, "estimate", return_value={"cached": False, "cost_usd": 0.01}
+                runner.jev_worth, "estimate", return_value=WorthEstimate(cost_usd=0.01)
             ), patch.object(
                 runner.jev_worth, "classify", AsyncMock(return_value=self._answer())
             ) as classify:
@@ -217,14 +220,30 @@ class SynthesisJevTests(unittest.TestCase):
                 {"is_professional": 0.9},
             )
 
+    def test_tagging_preserves_historical_envelope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, db = self._node(root, bundle=None)
+            path = self._write_facts(root, facts={"title": "Engineer", "canonical_name": "Jordan Bravo"})
+            record = json.loads(path.read_text())
+            record.update(input_evidence_fingerprint="seed:historical", updated_at="2026-01-01T00:00:00Z",
+                          historical_note={"keep": True}, jev_usage={"input_tokens": 1})
+            path.write_text(json.dumps(record) + "\n")
+            project_parent_fact(db, path, "p1")
+            with patch.object(runner.jev_worth, "classify", AsyncMock(return_value=self._answer())):
+                node.execute()
+            saved = json.loads(path.read_text())
+            for key in ("synthesis_version", "input_evidence_fingerprint", "updated_at", "historical_note"):
+                self.assertEqual(saved[key], record[key])
+            self.assertEqual(list(saved), list(record))
+            self.assertEqual(list(saved["facts"])[:2], ["title", "canonical_name"])
+            self.assertEqual(saved["jev_usage"], self._answer().usage_payload())
+
     # --- fixtures ---------------------------------------------------------
 
-    def _answer(self) -> dict:
-        return {
-            "network_worth": {"decision": "yes", "reason": "professional context"},
-            "labels": {"is_professional": 0.9},
-            "usage": {"input_tokens": 200, "output_tokens": 50, "cached": False},
-        }
+    def _answer(self) -> WorthResult:
+        return WorthResult(NetworkWorthFact("yes", "professional context"), {"is_professional": 0.9},
+                           JevUsage(people=1, input_tokens=200, output_tokens=50, cost_usd=0.0000084), 200, 50)
 
     def test_notable_roster_headline_retags_a_non_yes_record(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -241,12 +260,12 @@ class SynthesisJevTests(unittest.TestCase):
                 "network_worth": {"decision": "maybe", "reason": "thin"},
             })
             self._mark_facts_cached(root, node)
-            owner = {"name": "Mailbox Owner"}
+            owner = OwnerProfile("Mailbox Owner")
             bundles = selection.effective_parent_bundles(database)
             headlines = runner.parent_headlines(database, people_csv)
             self.assertEqual(headlines, {"p1": "CEO @ Example Labs"})
 
-            with patch.object(runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}):
+            with patch.object(runner.jev_worth, "estimate", return_value=WorthEstimate(cached=True)):
                 # Tagged, cached, but a notable title and a non-yes verdict: re-tag at $0.
                 self.assertEqual(
                     runner._tagging_paths(database, node.config, bundles, owner, headlines=headlines),
@@ -277,7 +296,7 @@ class SynthesisJevTests(unittest.TestCase):
 
             with patch.object(
                 openai_responses, "AsyncOpenAI", side_effect=AssertionError("must reuse GPT facts")
-            ), patch.object(runner.jev_worth, "estimate", return_value={"cached": True, "cost_usd": 0}), \
+            ), patch.object(runner.jev_worth, "estimate", return_value=WorthEstimate(cached=True)), \
                     patch.object(runner.jev_worth, "answer_requests", cached_answers), \
                     patch.object(runner.jev_worth, "predict", return_value="maybe"):
                 result = node.execute()

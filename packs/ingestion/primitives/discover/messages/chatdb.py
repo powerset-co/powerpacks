@@ -367,7 +367,7 @@ def query_small_group_messages(
     handle_ids: Iterable[int],
     *,
     max_group_size: int,
-    limit: int,
+    limit: int | None,
 ) -> list[sqlite3.Row]:
     """Fetch recent bodies from size-capped groups shared with resolved handles.
 

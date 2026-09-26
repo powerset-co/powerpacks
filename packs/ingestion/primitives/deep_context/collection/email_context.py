@@ -10,6 +10,8 @@ from typing import Protocol
 from packs.ingestion.primitives.deep_context.collection.models import (
     EmailMessage,
     EmailRankedMessage,
+    MessageChannel,
+    MessageEntry,
 )
 from packs.ingestion.primitives.deep_context.shared.text_similarity import (
     jaccard,
@@ -129,6 +131,8 @@ class EmailContext:
         email: str,
         per_person: int,
         accounts: set[str],
+        *,
+        processed: frozenset[str] = frozenset(),
     ) -> tuple[list[EmailMessage], int]:
         """Select contact/owner mail breadth-first, then depth, with near-dup removal.
 
@@ -167,7 +171,6 @@ class EmailContext:
             body = self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
             text = body or self.clean_text(row["snippet"], self.snippet_chars)
             at = str(row["at"] or "").strip()
-            rank = (self.signal_score(text), 1 if from_role == "contact" else 0, at)
             message = EmailMessage(
                 at=at,
                 sender=sender,
@@ -175,6 +178,12 @@ class EmailContext:
                 subject=self.clean_text(row["subject"]),
                 snippet=text,
             )
+            if processed and MessageEntry.of(
+                MessageChannel.GMAIL, at, from_me=from_role == "me",
+                text=text.strip(), subject=message.subject,
+            ).fingerprint() in processed:
+                continue
+            rank = (self.signal_score(text), 1 if from_role == "contact" else 0, at)
             conversation_id = row["conversation_id"]
             # A thread-less message becomes its own single-message bucket, so the
             # breadth-first leaders pass below treats it as a distinct thread instead of
@@ -213,15 +222,18 @@ class EmailContext:
         email: str,
         per_person: int,
         accounts: set[str],
+        *,
+        processed: frozenset[str] = frozenset(),
     ) -> tuple[list[EmailMessage], int]:
         """Fetch one contact through the shared store, then apply the selector."""
         rows = self.store.fetch_recent_rows(
             email,
-            per_person * self.CANDIDATE_ROWS_PER_OUTPUT,
+            None if processed else per_person * self.CANDIDATE_ROWS_PER_OUTPUT,
         )
         return self.select_emails_from_rows(
             rows,
             email,
             per_person,
             accounts,
+            processed=processed,
         )
