@@ -58,6 +58,7 @@ LOCAL_PROFILE_HYDRATE_COLUMNS = [
     "source_channels",
     "source_artifacts",
     "total_interactions",
+    "last_interaction",
     "twitter_handle",
     "x_twitter_handle",
     "x_twitter_followers",
@@ -562,6 +563,7 @@ def build_local_person_rows(
             total_interactions = profile.get("total_interactions")
         if total_interactions is None:
             total_interactions = profile_context.get("total_interactions")
+        last_interaction = profile.get("last_interaction") or profile_context.get("last_interaction") or None
 
         context = {
             "person_id": pid,
@@ -576,6 +578,7 @@ def build_local_person_rows(
             "tech_skills": summary.get("tech_skills") or profile_context.get("tech_skills") or [],
             "years_of_experience": years,
             "total_interactions": total_interactions,
+            "last_interaction": last_interaction,
         }
         rows.append({
             "id": pid,
@@ -596,6 +599,7 @@ def build_local_person_rows(
             "ig_followers": profile.get("ig_followers") or first_present(position_source, "ig_followers"),
             "inferred_birth_year": profile.get("inferred_birth_year") or first_present(position_source, "inferred_birth_year"),
             "total_interactions": total_interactions,
+            "last_interaction": last_interaction,
         })
     return rows
 

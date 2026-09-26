@@ -1272,6 +1272,18 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertNotIn("vector", position)
         self.assertNotIn("word_tokens", position)
 
+    def test_local_hydration_preserves_last_interaction(self) -> None:
+        rows = hydrate_people.fetch_local_person_rows(
+            ["person-founder", "person-engineer"], db_path=self.db_path, workers=1, batch_size=1,
+        )
+        expected = {"person-founder": "2026-01-01T00:00:00+00:00", "person-engineer": None}
+        for row in rows:
+            with self.subTest(person_id=row["id"]):
+                self.assertEqual(row["last_interaction"], expected[row["id"]])
+                self.assertEqual(row["hydrated_context"]["last_interaction"], expected[row["id"]])
+                profile = hydrate_people.normalize_hydrated_context(row)
+                self.assertEqual(profile["last_interaction"], expected[row["id"]])
+
     def test_local_hydration_exposes_inferred_birth_year_and_age(self) -> None:
         rows = hydrate_people.fetch_local_person_rows(["person-founder"], db_path=self.db_path, workers=1, batch_size=1)
         profile = hydrate_people.normalize_hydrated_context(rows[0])
@@ -1649,6 +1661,7 @@ class LocalDuckDBHydrationInteractionCountsTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertIsNone(rows[0]["total_interactions"])
             self.assertIsNone(rows[0]["hydrated_context"]["total_interactions"])
+            self.assertIsNone(hydrate_people.normalize_hydrated_context(rows[0])["last_interaction"])
 
 
 class LocalPersonProfilePrefilterTest(unittest.TestCase):
