@@ -73,6 +73,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     worth_pending_entries,
     worth_search_html,
 )
+from packs.ingestion.primitives.share.web.server import share_routes
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     STAGES,
     GuidanceViewRow,
@@ -159,6 +160,8 @@ def make_handler(
     if api.snapshot().progress.total == 0:
         raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
     retargets_enabled = bool(run_jobs or guided_retargets)
+    # The share page (`review share`) rides this server: same store, same launcher.
+    share = share_routes(db)
 
     if guided_retargets is None and run_jobs:
         guided_retargets = GuidedRetargetWorker(db, on_change=notify)
@@ -459,12 +462,16 @@ def make_handler(
                 if not avatar:
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
+            if share.get(self, parsed):
+                return None
             if parsed.path != "/":
                 return self.send_bytes(b"not found", "text/plain", 404)
             return self.send_bytes(full_page(params))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if share.post(self, parsed):
+                return None
             routes = {"/decide", "/worth", "/complete", "/approve-enrichment", "/retarget", "/feedback", "/auth/login"}
             if parsed.path not in routes:
                 return self.send_bytes(b"not found", "text/plain", 404)

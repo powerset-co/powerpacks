@@ -56,6 +56,7 @@ EXPECTED_DB_OPERATIONS = {
     "queries.typed_rows",
     "snapshots.canonical_snapshot",
     "store.Db.decide_identity",
+    "store.Db.decide_share",
     "store.Db.decide_worth",
     "store.Db.merge_parents",
     "store.Db.project_rows",

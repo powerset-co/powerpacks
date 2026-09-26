@@ -8,6 +8,8 @@ which the worth stage reads back through this same boundary for its
 notable-title rule (the store keeps no LinkedIn title).
 
 Changelog:
+  2026-09-26: the profile cells a person list renders (LinkedIn URL, avatar,
+      title, company, location) ride the row; the share UI reads them.
   2026-09-25: `headline` (the imported LinkedIn headline) rides the row; the
       worth stage's notable-title rule reads it.
 """
@@ -44,6 +46,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import load_assignment
 from packs.ingestion.schemas.people_schema import (
+    normalize_linkedin_url,
     parse_interaction_counts,
     parse_jsonish,
     row_public_identifier,
@@ -70,6 +73,11 @@ class ImportedPerson:
     interaction_counts: dict[str, int] = field(default_factory=dict)
     last_interaction: str = ""
     headline: str = ""
+    linkedin_url: str = ""
+    avatar_url: str = ""
+    title: str = ""
+    company: str = ""
+    location: str = ""
 
 
 def _text(value: object) -> str:
@@ -87,6 +95,11 @@ def _superseded(value: object) -> tuple[str, ...]:
 def _public_identifier(raw: dict[str, str]) -> str:
     """The row's LinkedIn slug, normalized by the same rules every reader uses."""
     return row_public_identifier(raw).lower()
+
+
+def _location(raw: dict[str, str]) -> str:
+    parts = [part for part in (_text(raw.get("city")), _text(raw.get("state")), _text(raw.get("country"))) if part]
+    return ", ".join(dict.fromkeys(parts)) or _text(raw.get("location_raw"))
 
 
 def _channels(value: object) -> tuple[str, ...]:
@@ -118,6 +131,11 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             interaction_counts=parse_interaction_counts(raw.get("interaction_counts")),
             last_interaction=_text(raw.get("last_interaction")),
             headline=_text(raw.get("headline")),
+            linkedin_url=normalize_linkedin_url(_text(raw.get("linkedin_url"))),
+            avatar_url=_text(raw.get("profile_picture_url")),
+            title=_text(raw.get("current_title")),
+            company=_text(raw.get("current_company")),
+            location=_location(raw),
         )
         prior: ImportedPerson | None = combined.get(person_id)
         if prior is None:
@@ -136,6 +154,11 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             interaction_counts={**prior.interaction_counts, **incoming.interaction_counts},
             last_interaction=max(prior.last_interaction, incoming.last_interaction),
             headline=incoming.headline or prior.headline,
+            linkedin_url=incoming.linkedin_url or prior.linkedin_url,
+            avatar_url=incoming.avatar_url or prior.avatar_url,
+            title=incoming.title or prior.title,
+            company=incoming.company or prior.company,
+            location=incoming.location or prior.location,
         )
     return tuple(combined[key] for key in sorted(combined))
 
