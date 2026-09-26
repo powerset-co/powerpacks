@@ -1,4 +1,12 @@
-"""Serve saved deep-search results and persist human feedback."""
+"""Serve saved deep-search results and persist human feedback.
+
+Flow: `/` lists the catalog (manifests only, no results body opened);
+`/run?run_id=` renders one search, loaded on first open and cached until its
+results or labels change; `/api/search`, `/tags` and `/feedback` work per run.
+
+Changelog:
+  2026-09-26: the list page reads the catalog; runs load one at a time.
+"""
 
 from __future__ import annotations
 
@@ -17,10 +25,13 @@ from packs.powerset.primitives.send_feedback.send_feedback import FeedbackReques
 
 from . import RESULTS_CSS, RESULTS_JS
 from .feedback import ENV_FILE, build_feedback_request, record_fit_label, submit_results_feedback
-from .model import FIT_LABELS_FILE, SearchResult, load_searches
-from .rendering import render_page, render_search_body
+from ..search_harness import backfill_manifests
+from .model import FIT_LABELS_FILE, SearchCard, SearchResult, load_catalog, load_search, load_searches
+from .rendering import render_catalog, render_page, render_search_body
 
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
+Catalog = Callable[[], tuple[SearchCard, ...]]
+LoadSearch = Callable[[str], SearchResult | None]
 MAX_TAGS_REQUEST_BYTES = 1024 * 1024
 
 
@@ -58,7 +69,15 @@ def _login() -> int:
 
 
 def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]],
-                 feedback_sender: FeedbackSender = submit_results_feedback):
+                 feedback_sender: FeedbackSender = submit_results_feedback, *,
+                 catalog: Catalog | None = None, load_one: LoadSearch | None = None):
+    """`load` returns every search in scope; `catalog` and `load_one`, when given,
+    let the list page skip the bodies and a run page open just its own run."""
+
+    def one(run_id: str) -> SearchResult | None:
+        if load_one is not None:
+            return load_one(run_id)
+        return next((search for search in load() if search.run_id == run_id), None)
 
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, body: bytes, content_type: str = "text/html; charset=utf-8",
@@ -76,13 +95,11 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
                             "application/json; charset=utf-8", status=status)
 
         def do_GET(self) -> None:  # noqa: N802
-            searches = load()
-            by_run = {search.run_id: search for search in searches}
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             if path == "/healthz":
-                self.send_json({"primitive": "deep_search_results_web", "ok": True,
-                                "searches": len(searches)})
+                count = len(catalog()) if catalog is not None else len(load())
+                self.send_json({"primitive": "deep_search_results_web", "ok": True, "searches": count})
                 return
             if path == "/assets/results.css":
                 self.send_bytes(RESULTS_CSS.read_bytes(), "text/css; charset=utf-8",
@@ -94,7 +111,7 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
                 return
             if path == "/tags":
                 run_id = (urllib.parse.parse_qs(parsed.query).get("run_id") or [""])[0]
-                if run_id not in by_run:
+                if one(run_id) is None:
                     self.send_bytes(b"search not found", "text/plain", status=404)
                     return
                 try:
@@ -106,24 +123,28 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
                 return
             if path == "/api/search":
                 run_id = (urllib.parse.parse_qs(parsed.query).get("run_id") or [""])[0]
-                search = by_run.get(run_id)
+                search = one(run_id)
                 if search is None:
                     self.send_bytes(b"search not found", "text/plain", status=404)
                     return
                 self.send_bytes(render_search_body(search).encode("utf-8"))
                 return
-            if path != "/":
+            if path not in {"/", "/run"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
-            run_dir = (urllib.parse.parse_qs(parsed.query).get("run_dir") or [""])[0]
-            if run_dir:
-                search = by_run.get(Path(run_dir).name)
+            query = urllib.parse.parse_qs(parsed.query)
+            run_id = (query.get("run_id") or [""])[0] or Path((query.get("run_dir") or [""])[0]).name
+            if run_id:
+                search = one(run_id)
                 if search is None:
                     self.send_bytes(b"search not found", "text/plain", status=404)
                     return
                 self.send_bytes(render_page((search,)).encode("utf-8"))
                 return
-            self.send_bytes(render_page(searches).encode("utf-8"))
+            if catalog is not None:
+                self.send_bytes(render_catalog(catalog()).encode("utf-8"))
+                return
+            self.send_bytes(render_page(load()).encode("utf-8"))
 
         def do_POST(self) -> None:  # noqa: N802
             path = urllib.parse.urlparse(self.path).path
@@ -168,7 +189,7 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, status=400)
                     return
-                search = next((search for search in load() if search.run_id == run_id), None)
+                search = one(run_id)
                 if search is None:
                     self.send_bytes(b"search not found", "text/plain", status=404)
                     return
@@ -185,7 +206,6 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
                     return
                 self.send_json({"ok": True})
                 return
-            by_run = {search.run_id: search for search in load()}
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             comment = (form.get("comment") or [""])[0].strip()
@@ -195,7 +215,7 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
             if len(comment) > 4000 or (not comment and not raw_judgment):
                 self.send_bytes(b"comment or fit review required", "text/plain", status=400)
                 return
-            search = by_run.get(run_id)
+            search = one(run_id)
             if search is None:
                 self.send_bytes(b"search not found", "text/plain", status=404)
                 return
@@ -240,33 +260,51 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_loader(root: Path) -> LoadSearch:
+    """One search per run, re-read only when its results or labels change."""
+    cache: dict[str, tuple[tuple[float, ...], SearchResult | None]] = {}
+
+    def stamp(run_id: str) -> tuple[float, ...]:
+        return tuple(path.stat().st_mtime if path.exists() else 0.0
+                     for path in (root / run_id / "results.json", root / run_id / FIT_LABELS_FILE))
+
+    def load_one(run_id: str) -> SearchResult | None:
+        if "/" in run_id or "\\" in run_id or run_id in {"", ".", ".."}:
+            return None
+        current = stamp(run_id)
+        cached = cache.get(run_id)
+        if cached is None or cached[0] != current:
+            cached = (current, load_search(root, run_id))
+            cache[run_id] = cached
+        return cached[1]
+
+    return load_one
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     run_dir = Path(args.run_dir).resolve() if args.run_dir else None
     root = run_dir.parent if run_dir else Path(args.root).resolve()
-    cache: dict[str, object] = {}
+    for run_id in backfill_manifests(root):
+        print(f"[results-web] manifest display cells written: {run_id}", file=sys.stderr)
+    load_one = _run_loader(root)
 
-    def _stamp() -> tuple[tuple[str, float], ...]:
-        scope = run_dir.name if run_dir else "*"
-        return tuple(sorted((str(path), path.stat().st_mtime)
-                            for name in ("results.json", FIT_LABELS_FILE)
-                            for path in root.glob(f"{scope}/{name}")))
+    def catalog() -> tuple[SearchCard, ...]:
+        cards = load_catalog(root)
+        return tuple(card for card in cards if card.run_id == run_dir.name) if run_dir else cards
 
     def load() -> tuple[SearchResult, ...]:
-        stamp = _stamp()
-        if cache.get("stamp") != stamp:
-            cache["searches"] = load_searches(root, run_dir.name if run_dir else None)
-            cache["stamp"] = stamp
-        return cache["searches"]
+        return tuple(search for card in catalog() if (search := load_one(card.run_id)) is not None)
 
-    if run_dir and not load():
+    if run_dir and load_one(run_dir.name) is None:
         parser.error(f"no summarized results found in {run_dir}")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(root, load))
+    server = ThreadingHTTPServer((args.host, args.port),
+                                 make_handler(root, load, catalog=catalog, load_one=load_one))
     host, port = server.server_address
-    url = f"http://{host}:{port}/"
+    url = f"http://{host}:{port}/" + (f"run?run_id={urllib.parse.quote(run_dir.name)}" if run_dir else "")
     payload = {"primitive": "deep_search_results_web", "status": "serving",
-               "url": url, "results_root": str(root), "searches": len(load())}
+               "url": url, "results_root": str(root), "searches": len(catalog())}
     if run_dir:
         payload["run_dir"] = str(run_dir)
     print(json.dumps(payload, indent=2))

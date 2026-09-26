@@ -15,7 +15,7 @@ from packs.search.primitives.shared.human_ratings import (
     RUBRIC,
 )
 from .model import (
-    Candidate, Education, PersonAttribution, Pond, PondCandidate, Position, SearchResult,
+    Candidate, Education, PersonAttribution, Pond, PondCandidate, Position, SearchCard, SearchResult,
     TraitScore,
 )
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
@@ -579,6 +579,57 @@ def render_search_body(search: SearchResult, *, readonly: bool = False) -> str:
             f"<section class='groups-section'>"
             f"{fit_table or ''.join(panels)}"
             f"</section>")
+
+
+def _catalog_row(card: SearchCard) -> str:
+    version = card.search_version or "unversioned"
+    cost = f"${card.cost_usd:,.2f}" if card.cost_usd else "—"
+    return f"""
+    <a class='catalog-row' href='/run?run_id={_e(card.run_id)}' role='row'
+       data-run-id='{_e(card.run_id)}' data-version='{_e(version)}' data-company='{_e(card.company)}'
+       data-status='{_e(card.status)}' data-search='{_e(" ".join((card.title, card.company, card.run_id)).lower())}'>
+      <span class='catalog-company'>{_e(card.company) or '—'}</span>
+      <span class='catalog-title'><strong>{_e(card.title)}</strong><small>{_e(card.run_id)}</small></span>
+      <span class='catalog-status' data-status='{_e(card.status)}'>{_e(card.status.replace('_', ' '))}</span>
+      <span class='catalog-num'>{card.candidates:,}</span>
+      <span class='catalog-num'>{card.ponds_run}</span>
+      <span class='catalog-num'>{cost}</span>
+      <span class='catalog-version'>{_e(version)}</span>
+      <span class='catalog-date'>{_e(_date(card.created_at))}</span>
+    </a>"""
+
+
+def render_catalog(cards: Sequence[SearchCard]) -> str:
+    """The list page: one row per manifest, filters over version, company, status, text."""
+    versions = sorted({card.search_version for card in cards if card.search_version}, reverse=True)
+    companies = sorted({card.company for card in cards if card.company}, key=str.casefold)
+    statuses = sorted({card.status for card in cards if card.status})
+    chips = "".join(
+        f"<button type='button' class='chip' data-filter='version' data-value='{_e(value)}' aria-pressed='false'>{_e(value)}</button>"
+        for value in [*versions, *(["unversioned"] if any(not card.search_version for card in cards) else [])])
+    options = lambda values: "".join(f"<option value='{_e(value)}'>{_e(value)}</option>" for value in values)
+    rows = "".join(_catalog_row(card) for card in cards)
+    body = f"""
+    <section class='catalog' data-catalog data-newest-version='{_e(versions[0] if versions else "")}'>
+      <div class='catalog-bar'>
+        <input type='search' class='catalog-search' data-filter-text placeholder='Search title, company, run' aria-label='Search runs'>
+        <span class='chip-row' role='group' aria-label='Search version'>{chips}</span>
+        <select class='catalog-select' data-filter='company' aria-label='Company'><option value=''>All companies</option>{options(companies)}</select>
+        <select class='catalog-select' data-filter='status' aria-label='Status'><option value=''>All statuses</option>{options(statuses)}</select>
+        <span class='catalog-count' data-catalog-count aria-live='polite'></span>
+      </div>
+      <div class='catalog-head' role='row'>
+        <span>Company</span><span>Search</span><span>Status</span><span class='catalog-num'>People</span>
+        <span class='catalog-num'>Ponds</span><span class='catalog-num'>Cost</span><span>Version</span><span>Created</span>
+      </div>
+      <div class='catalog-rows' role='table' aria-label='Searches'>{rows}</div>
+      <p class='catalog-empty' data-catalog-empty hidden>No searches match.</p>
+    </section>""" if cards else (
+        "<section class='empty-state'><h2>No completed searches</h2>"
+        "<p>No manifest.json with a title was found under this root.</p></section>")
+    template = RESULTS_HTML.read_text(encoding="utf-8")
+    ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)
+    return template.replace("{{CONTENT}}", body).replace("{{HUMAN_RATINGS}}", ratings)
 
 
 def render_page(searches: Iterable[SearchResult], *, readonly: bool = False,

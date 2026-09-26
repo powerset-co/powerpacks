@@ -29,6 +29,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_cross_encoder_client \
   tests.test_cross_encoder_search \
   tests.test_cross_encoder_warmup \
+  tests.test_deep_search_catalog \
   tests.test_deep_search_results_web \
   tests.test_discover \
   tests.test_enrich_primitives \
@@ -122,6 +123,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_share_labels \
   tests.test_share_list \
   tests.test_share_tags \
+  tests.test_share_web \
   tests.test_synthesis_jev \
   tests.test_synthesis_failures \
   tests.test_upload_powerset -v

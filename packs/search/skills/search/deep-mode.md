@@ -195,8 +195,11 @@ Never print candidate tables, names, or per-candidate labels in the chat — the
 viewer is the only candidate-review surface. After each pond, say only: the
 pond's query, the result count, and the viewer URL
 (tell the user to refresh after later ponds). When the loop stops, mark task 5
-complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
-summarized history.
+complete and present `<run>/shortlist.csv`. `--root .powerpacks/deep-search`
+lists every run from its `manifest.json` alone (title, company, status, people,
+cost, `search_version`) and opens one run per page at `/run?run_id=<slug>`;
+the list's version chips default to the newest `search_version`, and runs saved
+before the stamp existed show as `unversioned`.
 
 ### Hosted results
 
