@@ -64,6 +64,7 @@ for shared_path in (SHARED_DIR, LIB_DIR):
     if str(shared_path) not in sys.path:
         sys.path.insert(0, str(shared_path))
 from openai_client import make_async_openai_client, make_openai_client  # noqa: E402
+from openai_client import append_usage_row  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
@@ -1346,10 +1347,29 @@ def _team_candidates(results: Mapping[str, Any]) -> list[dict[str, Any]]:
     return list(candidates.values())
 
 
+def _record_team_usage(run_dir: Path, pond_n: int, team: dict[str, Any]) -> None:
+    usage_path = run_dir / "usage.jsonl"
+    prior_usage = (usage_path.read_text().splitlines() if usage_path.is_file() else [])
+    recorded = any(str(json.loads(line).get("stage") or "").endswith(".team_similarity.employees")
+                   for line in prior_usage if line.strip())
+    if team.get("embedding_usage_tokens") and not recorded:
+        append_usage_row({
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "model": team_similarity.MODEL,
+            "stage": f"search_harness.pond_{pond_n:02d}.team_similarity.employees",
+            "prompt_tokens": team["embedding_usage_tokens"],
+            "cached_tokens": 0, "cache_write_tokens": 0,
+            "completion_tokens": 0, "reasoning_tokens": 0,
+        }, log_path=str(usage_path))
+
+
 def _finish_team(run_dir: Path, results: dict[str, Any], future) -> None:
     try:
         team = future.result()
+        pond_n = int(results["iterations"][-1]["pond_n"])
+        _record_team_usage(run_dir, pond_n, team)
         employees = [row for row in team["employees"] if row.get("embedding_status") == "ready"]
+        errors = sum(row.get("embedding_status") == "error" for row in team["employees"])
         people = _team_candidates(results)
         if not employees:
             team_similarity.save_status(run_dir, "no_team_history", "No stored staff work histories",
@@ -1364,13 +1384,16 @@ def _finish_team(run_dir: Path, results: dict[str, Any], future) -> None:
         vectors = team_similarity.embed_candidates(people, run_dir)
         scores = team_similarity.rank(people, employees, vectors)
         _write_json(run_dir / "team-similarity.json", scores)
-        team_similarity.save_status(run_dir, "ready", team_count=len(team["employees"]),
+        reason = f"Partial staff coverage: {errors} embedding errors" if errors else ""
+        team_similarity.save_status(run_dir, "ready", reason, team_count=len(team["employees"]),
                                     team_history_count=len(employees), candidate_count=len(scores))
-        _price_usage_log(run_dir / "usage.jsonl")
-        results["iterations"][-1]["cost_usd"] = _pond_costs(run_dir).get(pond_n, 0.0)
-        _save(results, run_dir)
     except Exception as exc:
         team_similarity.save_status(run_dir, "unavailable", f"{type(exc).__name__}: {exc}")
+    finally:
+        _price_usage_log(run_dir / "usage.jsonl")
+        pond_n = int(results["iterations"][-1]["pond_n"])
+        results["iterations"][-1]["cost_usd"] = _pond_costs(run_dir).get(pond_n, 0.0)
+        _save(results, run_dir)
 
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
@@ -1422,16 +1445,27 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
             domain = str(ref.get("verified_domain") or "")
             if domain:
                 team_executor = ThreadPoolExecutor(max_workers=1)
+                team_similarity.save_status(run_dir, "preparing", "Refreshing team similarity")
                 team_future = team_executor.submit(
                     team_similarity.prepare_team, domain, Path(env_file), run_dir)
+                team_executor.shutdown(wait=False)
             else:
                 team_similarity.save_status(run_dir, "unavailable", "Hiring company domain unavailable")
         except Exception as exc:
             team_similarity.save_status(run_dir, "unavailable", f"Company lookup: {type(exc).__name__}: {exc}")
     elif backend == "local":
         team_similarity.save_status(run_dir, "unavailable", "Local-only search")
-    result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
-                          stage=f"search_harness.pond_{pond_n:02d}.run")
+    try:
+        result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
+                              stage=f"search_harness.pond_{pond_n:02d}.run")
+    except BaseException:
+        if team_future is not None:
+            try:
+                _record_team_usage(run_dir, pond_n, team_future.result())
+                _price_usage_log(run_dir / "usage.jsonl")
+            except Exception as exc:
+                team_similarity.save_status(run_dir, "unavailable", f"{type(exc).__name__}: {exc}")
+        raise
     _price_usage_log(run_dir / "usage.jsonl")
     artifacts = {key: str(resolve_artifact_path(value))
                  for key, value in (result.get("artifacts") or {}).items()}
@@ -1500,7 +1534,6 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     _save(results, run_dir)
     if team_future is not None:
         _finish_team(run_dir, results, team_future)
-        team_executor.shutdown(wait=True)
     attribution = HydratePersonAttribution(run_dir, env_file=Path(env_file)).run()
     if attribution["status"] == "failed":
         print(f"[person-attribution] {attribution['error']}", file=sys.stderr)

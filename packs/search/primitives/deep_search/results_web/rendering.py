@@ -552,7 +552,7 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
 
 def _team_table(search: SearchResult) -> str:
     """Reporting's name/title/location/tenure table, using saved data and ten-row pages."""
-    status = (f"<p class='team-source'>Team similarity unavailable: {_e(search.team_status)}</p>"
+    status = (f"<p class='team-source'>Team similarity: {_e(search.team_status)}</p>"
               if search.team_status else "")
     if not search.team:
         return status

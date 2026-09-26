@@ -103,7 +103,9 @@ class TeamSimilarityTest(unittest.TestCase):
             self.assertEqual([row["person_id"] for row in people], ["p1"])
             team = {"employees": [{"provider_employee_id": "employee-1",
                 "full_name": "Teammate", "linkedin_url": "https://linkedin.com/in/teammate",
-                "embedding_status": "ready", "embedding": [1.0, 0.0]}]}
+                "embedding_status": "ready", "embedding": [1.0, 0.0]},
+                {"provider_employee_id": "employee-2", "full_name": "Unavailable",
+                 "embedding_status": "error", "embedding": None}]}
             digest, _ = embedding_input(people[0]["positions"])
             with mock.patch.object(team_similarity, "embed_candidates", return_value={digest: [1.0, 0.0]}), \
                  mock.patch.object(search_harness, "_save"):
@@ -112,6 +114,36 @@ class TeamSimilarityTest(unittest.TestCase):
             self.assertEqual(list(scores), ["p1"])
             self.assertEqual(scores["p1"]["rank"], 1)
             self.assertEqual(json.loads((run_dir / "team-status.json").read_text())["status"], "ready")
+            self.assertIn("1 embedding errors", (run_dir / "team-status.json").read_text())
+
+    def test_employee_snapshot_is_reused_without_provider_request(self):
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            metadata = {"company_id_source": "coresignal_company", "company_id": "core-123",
+                        "embedding_model": team_similarity.MODEL, "embedding_usage_tokens": 24,
+                        "embedding_cache_misses": 1}
+            employees = [{"full_name": "Teammate", "embedding_status": "ready",
+                          "embedding": [1.0, 0.0]}]
+            with mock.patch.object(team_similarity, "fetch_embedded_employees",
+                                   return_value=(employees, metadata)) as fetch:
+                first = team_similarity.prepare_team("example.test", Path("test.env"), run_dir)
+                second = team_similarity.prepare_team("example.test", Path("test.env"), run_dir)
+            fetch.assert_called_once()
+            self.assertEqual(first, second)
+
+    def test_employee_usage_is_logged_once_and_priced_after_future(self):
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            team = {"employees": [], "embedding_usage_tokens": 2400}
+            results = {"iterations": [{"pond_n": 2}]}
+            with mock.patch.object(search_harness, "_save"):
+                search_harness._finish_team(run_dir, results, SimpleNamespace(result=lambda: team))
+                search_harness._finish_team(run_dir, results, SimpleNamespace(result=lambda: team))
+            usage = [json.loads(line) for line in (run_dir / "usage.jsonl").read_text().splitlines()]
+            self.assertEqual(len(usage), 1)
+            self.assertEqual(usage[0]["prompt_tokens"], 2400)
+            self.assertEqual(usage[0]["stage"], "search_harness.pond_02.team_similarity.employees")
+            self.assertGreater(results["iterations"][-1]["cost_usd"], 0)
 
     def test_exact_candidate_embedding_cache_prevents_rebilling(self):
         with tempfile.TemporaryDirectory() as raw:

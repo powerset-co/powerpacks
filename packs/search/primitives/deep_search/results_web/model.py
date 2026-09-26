@@ -637,8 +637,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         candidates=tuple(candidates.values()),
         team=tuple(TeamMember(**row) for row in team.get("members", [])),
         team_fetched_at=team.get("fetched_at", ""),
-        team_status=(str(status.get("reason") or status.get("status") or "")
-                     if status.get("status") != "ready" else ""),
+        team_status=str(status.get("reason") or
+                        (status.get("status") if status.get("status") != "ready" else "") or ""),
     )
 
 

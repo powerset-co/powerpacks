@@ -29,7 +29,8 @@ ENCODING = tiktoken.get_encoding("cl100k_base")
 def prepare_team(domain: str, env_file: Path, run_dir: Path) -> dict:
     """Snapshot the stored roster and API-owned employee embeddings once per run."""
     path = run_dir / "team-embeddings.json"
-    if path.is_file():
+    fetched = not path.is_file()
+    if not fetched:
         snapshot = json.loads(path.read_text())
     else:
         employees, metadata = fetch_embedded_employees(domain, env_file)
@@ -47,9 +48,7 @@ def prepare_team(domain: str, env_file: Path, run_dir: Path) -> dict:
         team_path.write_text(json.dumps({
             "members": [asdict(member) for member in team_members(snapshot["employees"])],
             "fetched_at": snapshot["fetched_at"]}, indent=2) + "\n")
-    if any(row.get("embedding_status") == "error" for row in snapshot["employees"]):
-        raise RuntimeError("Employee embeddings unavailable")
-    if not path.is_file():
+    if fetched:
         path.write_text(json.dumps(snapshot) + "\n")
     return snapshot
 

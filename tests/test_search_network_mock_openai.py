@@ -205,7 +205,7 @@ def read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 class SearchNetworkMockOpenAITests(unittest.TestCase):
-    def test_search_harness_compile_accepts_hiring_company_domain(self) -> None:
+    def test_search_harness_compile_defers_hiring_company_lookup(self) -> None:
         server = ThreadingHTTPServer(("127.0.0.1", 0), MockOpenAIHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -262,7 +262,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
             server.server_close()
 
         self.assertEqual(saved["status"], "awaiting_payload_review")
-        self.assertIn(("website_domain", "Eq", "acme.example"), filters_seen)
+        self.assertEqual(filters_seen, [])
 
     def test_prepare_runs_parallel_expansion_against_mock_openai(self) -> None:
         MockOpenAIHandler.request_count = 0

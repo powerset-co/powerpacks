@@ -66,10 +66,10 @@ class TeamTest(unittest.TestCase):
                 "rank": 1, "candidate_count": 1, "score": .9, "method": "old",
                 "closest_names": ["Teammate"]}}))
             search = load_searches(root, run.name)[0]
-            self.assertIn("Team similarity unavailable: Stored company roster unavailable",
+            self.assertIn("Team similarity: Stored company roster unavailable",
                           render_page([search]))
             self.assertNotIn("Team Similarity Rank #1", render_search_body(search))
-            self.assertIn("Team similarity unavailable: Stored company roster unavailable",
+            self.assertIn("Team similarity: Stored company roster unavailable",
                           render_snapshot(export_snapshot(run), asset_base_url="https://example.com/assets"))
 
 
