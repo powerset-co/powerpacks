@@ -198,7 +198,8 @@ details.dsec summary:hover h3 { color: var(--foreground); }
 /* The relationship, most recent first: a dated line per notable event. */
 .timeline { position: relative; display: grid; gap: 10px; margin: 2px 0 0; padding: 0 0 0 14px; list-style: none; border-left: 1px solid var(--line-strong); }
 .timeline li { position: relative; display: grid; gap: 2px; font-size: 12.5px; line-height: 1.5; }
-.timeline li::before { content: ""; position: absolute; left: -18px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--card); border: 1.5px solid var(--muted); }
+/* The dot sits on the line: the line's centre is the border plus the padding left of the item. */
+.timeline li::before { content: ""; position: absolute; left: -14.5px; top: 6px; width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; background: var(--card); border: 1.5px solid var(--muted); transform: translateX(-50%); }
 .timeline li:first-child::before { background: var(--primary); border-color: var(--primary); }
 .timeline time { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .timeline span { color: var(--foreground); }
