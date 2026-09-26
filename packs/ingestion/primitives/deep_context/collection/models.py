@@ -18,6 +18,7 @@ Changelog:
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Iterable, Literal, Mapping, Protocol, Self, TypeVar
@@ -211,6 +212,11 @@ class MessageEntry:
             "text": self.text,
         }
 
+    def fingerprint(self) -> str:
+        """Content identity survives source-store rebuilds and tied timestamps."""
+        payload = json.dumps(self.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode()).hexdigest()
+
     def content_order_key(self) -> tuple[str, str, str, str, str]:
         """Order by the exact persisted content; identical keys serialize alike."""
         return (
@@ -220,6 +226,25 @@ class MessageEntry:
             self.subject,
             self.text,
         )
+
+
+@dataclass(frozen=True)
+class MessageObservation:
+    fingerprint: str
+    channel: MessageChannel
+    at: IsoTimestamp
+    direction: MessageDirection
+
+    @classmethod
+    def of(cls, message: MessageEntry) -> MessageObservation:
+        return cls(message.fingerprint(), message.channel, message.at, message.direction)
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, str]) -> MessageObservation:
+        return cls(payload['fingerprint'], MessageChannel(payload['channel']), payload['at'], MessageDirection(payload['direction']))
+
+    def to_payload(self) -> dict[str, str]:
+        return {'fingerprint': self.fingerprint, 'channel': self.channel, 'at': self.at, 'direction': self.direction}
 
 
 @dataclass(frozen=True)

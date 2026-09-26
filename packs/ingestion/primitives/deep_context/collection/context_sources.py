@@ -12,6 +12,9 @@ Changelog:
 
 from __future__ import annotations
 
+import errno
+import sys
+import time
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -40,6 +43,34 @@ CHAT_MESSAGE_CAP = 1600
 SAFETY_CHAR_CAP = 1_800_000
 DEFAULT_WACLI_DB = Path(".powerpacks/messages/wacli/wacli.db")
 QueryResult = TypeVar("QueryResult")
+_READ_RETRIES = 3
+_RETRY_DELAY_SECONDS = 0.25
+_SQLITE_PRIMARY_MASK = 0xFF
+_TRANSIENT_SQLITE = {chatdb.sqlite3.SQLITE_BUSY, chatdb.sqlite3.SQLITE_LOCKED, chatdb.sqlite3.SQLITE_IOERR}
+_TRANSIENT_IO = {errno.EAGAIN, errno.EBUSY, errno.EINTR, errno.EIO, errno.ETIMEDOUT}
+
+
+def _read_source(path: Path, read: Callable[[], QueryResult]) -> QueryResult:
+    """Retry transient reads; failed reads must never become empty evidence."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return read()
+        except (chatdb.DatabaseError, OSError, SystemExit) as exc:
+            # Msgvault wraps connection errors in SystemExit; retain its cause.
+            cause = exc.__cause__ if isinstance(exc, SystemExit) and exc.__cause__ else exc
+            code = getattr(cause, "sqlite_errorcode", 0)
+            transient = (
+                code & _SQLITE_PRIMARY_MASK in _TRANSIENT_SQLITE
+                or isinstance(cause, OSError) and cause.errno in _TRANSIENT_IO
+            )
+            if not transient or attempt > _READ_RETRIES:
+                raise RuntimeError(
+                    f"Cannot read {path} after {attempt} attempts: {type(cause).__name__}: {cause}"
+                ) from exc
+            print(f"[collect] retry {attempt}/{_READ_RETRIES} reading {path}: {cause}", file=sys.stderr, flush=True)
+            time.sleep(_RETRY_DELAY_SECONDS * attempt)
 
 
 def probe_chat_db(chat_db: Path) -> ChatDbProbe:
@@ -75,22 +106,25 @@ class ContextSources:
         self._readiness: ContextSourcesReadiness | None = None
         self.email_context = EmailContext(store)
 
-    def readiness(self) -> ContextSourcesReadiness:
+    def readiness(self, *, people: list[Person] | None = None) -> ContextSourcesReadiness:
         """Open and validate local stores once before any person is collected."""
         if self._readiness is not None:
             return self._readiness
         gmail_available = False
         accounts: set[str] = set()
-        if self._store.db_path.expanduser().exists():
-            try:
+        needs_gmail = people is None or any(person.emails for person in people)
+        if needs_gmail and self._store.db_path.expanduser().exists():
+            def read_accounts() -> set[str]:
                 self._store.connect()
                 self._store.require_schema()
-                accounts.update(self._store.account_emails())
+                return self._store.account_emails()
+
+            try:
+                accounts.update(_read_source(self._store.db_path, read_accounts))
                 gmail_available = True
-            except Exception:
-                # Unreadable/wrong-schema msgvault degrades to no email context rather
-                # than a crashed run; gmail_available=False is how callers see it.
+            except RuntimeError:
                 self._store.close()
+                raise
         self._accounts = accounts
         self._readiness = ContextSourcesReadiness(
             gmail_available=gmail_available,
@@ -113,12 +147,13 @@ class ContextSources:
         readiness = self._require_readiness()
         if not readiness.gmail_available or not person.emails:
             return ()
+        rows = _read_source(
+            self._store.db_path,
+            lambda: self._store.thread_participant_rosters(person.emails, max_threads),
+        )
         return tuple(
             thread
-            for payload in self._store.thread_participant_rosters(
-                person.emails,
-                max_threads,
-            )
+            for payload in rows
             if (thread := ThreadParticipants.from_payload(payload)) is not None
         )
 
@@ -132,19 +167,22 @@ class ContextSources:
             raise RuntimeError("ContextSources.readiness() must run before collection")
         return self._readiness
 
-    def _read_gmail(self, person: Person) -> list[MessageEntry]:
+    def _read_gmail(self, person: Person, *, processed: frozenset[str] = frozenset()) -> list[MessageEntry]:
         """Return recent signature-aware email bodies, preserving thread exchanges."""
         seen: set[tuple[str, str]] = set()
         out: list[MessageEntry] = []
         for email in person.emails:
-            try:
-                entries, _ = self.email_context.recent_emails_for(
+            if processed and len(out) >= self.deep_cap:
+                break
+            entries, _ = _read_source(
+                self._store.db_path,
+                lambda: self.email_context.recent_emails_for(
                     email,
-                    self.deep_cap,
+                    self.deep_cap - len(out) if processed else self.deep_cap,
                     self._accounts,
-                )
-            except gni.DatabaseError:
-                continue
+                    processed=processed | frozenset(message.fingerprint() for message in out) if processed else processed,
+                ),
+            )
             for entry in entries:
                 text = entry.snippet.strip()
                 if not text:
@@ -152,7 +190,7 @@ class ContextSources:
                 # The outer loop runs once per address this contact owns, so the same
                 # message can reach the pool once per address without this dedup.
                 key = (entry.subject.lower(), text[:80].lower())
-                if key in seen:
+                if not processed and key in seen:
                     continue
                 seen.add(key)
                 out.append(
@@ -170,10 +208,10 @@ class ContextSources:
         """Count the same uncapped Gmail universe used by ``_read_gmail``."""
         total = 0
         for email in person.emails:
-            try:
-                total += self._store.count_messages_for(email, self._accounts)
-            except gni.DatabaseError:
-                continue
+            total += _read_source(
+                self._store.db_path,
+                lambda: self._store.count_messages_for(email, self._accounts),
+            )
         return total
 
     def _chat_query(
@@ -189,24 +227,19 @@ class ContextSources:
         """
         if not person.phones or not self.chat_db.exists():
             return empty
-        try:
+
+        def read() -> QueryResult:
             # immutable=True: no lock, no WAL side files against Apple's live store.
             connection = chatdb.open_sqlite_readonly(self.chat_db, immutable=True)
-        except chatdb.DatabaseError:
-            return empty
-        try:
-            handles = chatdb.resolve_handle_ids(
-                connection,
-                person.phones,
-                cache_key=self.chat_db,
-            )
-            return query(connection, handles) if handles else empty
-        except chatdb.DatabaseError:
-            return empty
-        finally:
-            connection.close()
+            try:
+                handles = chatdb.resolve_handle_ids(connection, person.phones, cache_key=self.chat_db)
+                return query(connection, handles) if handles else empty
+            finally:
+                connection.close()
 
-    def _read_imessage(self, person: Person) -> list[MessageEntry]:
+        return _read_source(self.chat_db, read)
+
+    def _read_imessage(self, person: Person, *, processed: frozenset[str] = frozenset()) -> list[MessageEntry]:
         """DM bodies only — group bodies come from _read_imessage_group_messages."""
         rows = self._chat_query(
             person,
@@ -214,7 +247,7 @@ class ContextSources:
                 chatdb.query_direct_messages(
                     connection,
                     handles,
-                    limit=self.deep_cap,
+                    limit=None if processed else self.deep_cap,
                     newest_first=True,
                 )
             ),
@@ -233,6 +266,8 @@ class ContextSources:
                     text=text.strip(),
                 )
             )
+        if processed:
+            return [message for message in out if message.fingerprint() not in processed][:self.deep_cap]
         return out
 
     def _count_imessage_dms(self, person: Person) -> int:
@@ -266,7 +301,7 @@ class ContextSources:
                     names.append(name)
         return names[:cap]
 
-    def _read_imessage_group_messages(self, person: Person) -> list[MessageEntry]:
+    def _read_imessage_group_messages(self, person: Person, *, processed: frozenset[str] = frozenset()) -> list[MessageEntry]:
         """Bodies from the person's size-capped shared groups; imessage_groups returns names only.
 
         Each row's sender handle is compared against this person's own resolved
@@ -282,7 +317,7 @@ class ContextSources:
                         connection,
                         handles,
                         max_group_size=self.max_group_size,
-                        limit=self.deep_cap,
+                        limit=None if processed else self.deep_cap,
                     )
                 ),
                 frozenset(handles),
@@ -309,29 +344,30 @@ class ContextSources:
                     text=text.strip(),
                 )
             )
+        if processed:
+            return [message for message in out if message.fingerprint() not in processed][:self.deep_cap]
         return out
 
-    def _read_whatsapp(self, person: Person) -> list[MessageEntry]:
+    def _read_whatsapp(self, person: Person, *, processed: frozenset[str] = frozenset()) -> list[MessageEntry]:
         """Recent DM bodies from the schema-tolerant shared wacli reader."""
         if not person.phones or not self.wacli_db.exists():
             return []
-        try:
+
+        def read() -> list[chatdb.sqlite3.Row]:
             con = wacli_store.open_readonly_db(self.wacli_db)
-        except wacli_store.DatabaseError:
-            return []
-        try:
-            rows = list(
-                wacli_messages.query_whatsapp_messages(
-                    con,
-                    phones=person.phones,
-                    limit=self.deep_cap,
-                    newest_first=True,
+            try:
+                return list(
+                    wacli_messages.query_whatsapp_messages(
+                        con,
+                        phones=person.phones,
+                        limit=None if processed else self.deep_cap,
+                        newest_first=True,
+                    )
                 )
-            )
-        except wacli_store.DatabaseError:
-            return []
-        finally:
-            con.close()
+            finally:
+                con.close()
+
+        rows = _read_source(self.wacli_db, read)
         out: list[MessageEntry] = []
         for row in rows:
             text = wacli_messages.whatsapp_message_text(row, include_media=False)
@@ -345,18 +381,20 @@ class ContextSources:
                     text=text,
                 )
             )
+        if processed:
+            return [message for message in out if message.fingerprint() not in processed][:self.deep_cap]
         return out
 
-    def collect_person(self, person: Person) -> tuple[list[MessageEntry], int]:
+    def collect_person(self, person: Person, *, processed: frozenset[str] = frozenset()) -> tuple[list[MessageEntry], int]:
         """Return the bounded cross-source pool and its uncapped available count."""
         readiness = self._require_readiness()
         has_gmail = readiness.gmail_available and bool(person.emails)
-        gmail = self._read_gmail(person) if has_gmail else []
+        gmail = self._read_gmail(person, processed=processed) if has_gmail else []
         gmail_total = self._count_gmail(person) if has_gmail else 0
-        whatsapp = self._read_whatsapp(person) if person.phones else []
-        direct = self._read_imessage(person) + whatsapp if person.phones else []
+        whatsapp = self._read_whatsapp(person, processed=processed) if person.phones else []
+        direct = self._read_imessage(person, processed=processed) + whatsapp if person.phones else []
         chat_total = self._count_imessage_dms(person) + len(whatsapp) if person.phones else 0
-        group = self._read_imessage_group_messages(person) if person.phones else []
+        group = self._read_imessage_group_messages(person, processed=processed) if person.phones else []
 
         # Order here decides who wins the cap below (gmail first, since EmailContext
         # already ranked it by signal; direct/group are just newest-first) — a

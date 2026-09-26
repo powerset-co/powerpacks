@@ -14,6 +14,12 @@ from typing import Any
 
 import tiktoken
 
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
+
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
+from packs.ingestion.primitives.deep_context.synthesis.models import JevUsage, NetworkWorthFact
+from packs.ingestion.primitives.deep_context.jev_worth.models import AnswerKind, WorthAnswer, WorthFacts, WorthResult, WorthEstimate
 from packs.ingestion.primitives.deep_context.jev_worth.model import predict, supporting_features
 from packs.ingestion.primitives.deep_context.jev_worth.questions import REQUEST_VERSION, build_request
 from packs.search.primitives.llm_rerank_candidates.jev.client import (
@@ -111,13 +117,13 @@ def _phrase(name: str, option: str | None, probability: float) -> str:
     return 'uncertain evidence of ' + positive
 
 
-def estimate(request: dict, *, output_dir: Path | None = None) -> dict:
+def estimate(request: dict, *, output_dir: Path | None = None) -> WorthEstimate:
     cached = output_dir is not None and cache_path(output_dir, request_digest(request)).exists()
     tokens = 0 if cached else len(tiktoken.get_encoding('o200k_base').encode(json.dumps(request, ensure_ascii=False, sort_keys=True)))
-    return {'input_tokens': tokens, 'cost_usd': tokens * INPUT_PRICE_PER_MILLION / 1_000_000, 'cached': cached}
+    return WorthEstimate(tokens, tokens * INPUT_PRICE_PER_MILLION / 1_000_000, cached)
 
 
-def _labels(answers: dict[str, dict]) -> dict[str, str | float]:
+def _labels(answers: dict[str, WorthAnswer]) -> dict[str, str | float]:
     """noul -> p; choice -> argmax option + its p; score -> the expected level.
 
     A score keeps the whole distribution's information (2.7, not 3): JEV's own
@@ -125,11 +131,11 @@ def _labels(answers: dict[str, dict]) -> dict[str, str | float]:
     probabilities."""
     result: dict[str, str | float] = {}
     for name, answer in answers.items():
-        if answer['type'] == 'noul':
-            result[name] = float(answer['noul'])
+        if answer.kind == AnswerKind.NOUL:
+            result[name] = float(answer.noul)
             continue
-        probabilities = answer['probabilities']
-        if answer['type'] == 'score':
+        probabilities = answer.probabilities
+        if answer.kind == AnswerKind.SCORE:
             result[name] = round(sum(int(level) * p for level, p in probabilities.items()), 2)
             continue
         best = max(probabilities, key=probabilities.__getitem__)
@@ -138,7 +144,7 @@ def _labels(answers: dict[str, dict]) -> dict[str, str | float]:
     return result
 
 
-def _reason(answers: dict[str, dict], *, decision: str) -> str:
+def _reason(answers: dict[str, WorthAnswer], *, decision: str) -> str:
     phrases = []
     for name, option, probability in supporting_features(answers, decision=decision):
         phrase = _phrase(name, option, probability)
@@ -176,27 +182,30 @@ def notable_title(headline: str) -> bool:
 
 
 async def classify(
-    *, facts: dict[str, Any], bundle: dict[str, Any], owner: dict[str, Any],
+    *, facts: WorthFacts, bundle: CollectionBundle | None, owner: OwnerProfile | None,
     reference_date: str, output_dir: Path, api_key: str | None = None, client: Any | None = None,
     headline: str = '',
-) -> dict:
+    history: FactHistory | None = None,
+) -> WorthResult:
     """Answer the worth-plus-label request; `headline` is the person's imported
     LinkedIn headline and only feeds the notable-title rule, never the request."""
-    request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=reference_date)
+    request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=reference_date, history=history)
     digest = request_digest(request)
     answered = await answer_requests(
         {digest: request}, output_dir=output_dir, api_key=api_key, client=client,
         concurrency=1, request_version=REQUEST_VERSION, question_version=REQUEST_VERSION,
     )
     answer = answered[digest]
-    answers = answer.response['answers']
+    answers = WorthAnswer.parse_all(answer.response['answers'])
     decision = predict(answers)
     if decision != 'yes' and notable_title(headline):
-        worth = {'decision': 'yes', 'reason': NOTABLE_REASON_PREFIX + headline.strip()}
+        worth = NetworkWorthFact('yes', NOTABLE_REASON_PREFIX + headline.strip())
     else:
-        worth = {'decision': decision, 'reason': _reason(answers, decision=decision)}
-    return {
-        'network_worth': worth,
-        'labels': _labels(answers),
-        'usage': {**answer.response['usage'], 'cached': answer.cached},
-    }
+        worth = NetworkWorthFact(decision, _reason(answers, decision=decision))
+    input_tokens = int(answer.response['usage']['input_tokens'])
+    output_tokens = int(answer.response['usage']['output_tokens'])
+    usage = JevUsage(people=1, cached=int(answer.cached),
+                     input_tokens=0 if answer.cached else input_tokens,
+                     output_tokens=0 if answer.cached else output_tokens,
+                     cost_usd=0 if answer.cached else input_tokens * INPUT_PRICE_PER_MILLION / 1_000_000)
+    return WorthResult(worth, _labels(answers), usage, input_tokens, output_tokens)

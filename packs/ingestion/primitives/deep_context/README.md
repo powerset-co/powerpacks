@@ -153,11 +153,18 @@ flowchart LR
    exponential backoff, 6 attempts on retryable errors. A person whose every
    batch errors or comes back empty is not persisted, so it retries on the
    next run instead of caching as done.
-4. **Output:** one `facts/<parent_id>.jsonl` record — merged facts (employers,
+4. **Output:** appended extraction records in `facts/<parent_id>.jsonl` — merged facts (employers,
    title, school, topics, identifiers, relationship_category, `is_owner`),
    the `network_worth` verdict (yes/maybe/no + reason) that seeds the worth
    review, `final_confidence`, usage tokens, stop reason, and the fingerprint.
-   `db/projectors.project_parent_fact` projects it into parent-owned `facts` + `artifacts` rows;
+   Each successful extraction records body-free message hashes, dates, channels,
+   directions, and model/effort. Collection excludes consumed hashes before caps;
+   tied dates, backfill, and capped overflow stay eligible. The first collection
+   retains bounded cold sampling; later collections drain unseen old history too.
+   Failed extraction advances nothing. Force re-extracts only the current bounded
+   bundle while retaining every earlier extraction. Parent merges union records
+   and coverage. JEV judges accumulated facts and interaction metadata.
+   `db/projectors.project_parent_fact` projects exact uncapped unions into parent-owned `facts` + `artifacts` rows;
    downstream reads SQLite, not the JSONL.
 5. **Estimate** (`--dry-run`): tiktoken-counted cost in USD, no spend — every
    person's batches all run (no adaptive stop), so there's one real number,

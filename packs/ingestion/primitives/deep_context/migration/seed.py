@@ -34,6 +34,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import urllib.parse
 from collections import defaultdict
@@ -52,6 +53,7 @@ from packs.ingestion.primitives.common.legacy import (
     LEGACY_PARALLEL_HANDLE_RESULT,
     MESSAGE_LINKEDIN_PREFIX,
 )
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageObservation
 from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.models import (
     HUMAN_DECISION_SOURCES,
@@ -89,6 +91,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     RAW_DIR,
     emit,
 )
+from packs.ingestion.primitives.deep_context.synthesis.prompting import seed_evidence_fingerprint
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
 from packs.ingestion.schemas.people_schema import extract_public_identifier, row_public_identifier
 from packs.shared.csv_io import CsvIO
@@ -597,7 +600,22 @@ class Seed(Node):
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         for parent_id, (_, path) in chosen.items():
             target = self.facts_dir / f"{parent_id}.jsonl"
-            target.write_bytes(path.read_bytes())
+            data = path.read_bytes()
+            lines = [line for line in data.decode("utf-8").splitlines() if line.strip()]
+            bundle = CollectionBundle.from_payload(_json_object(self.raw_dir / f"{parent_id}.json"))
+            if bundle is not None and lines:
+                # Accept carried facts until messages change; retain their original version.
+                record = json.loads(lines[-1])
+                record["input_evidence_fingerprint"] = seed_evidence_fingerprint(bundle)
+                record["messages"] = [MessageObservation.of(message).to_payload() for message in bundle.messages]
+                record["groups"] = list(bundle.groups)
+                record["source_channels"] = list(bundle.source_channels)
+                lines[-1] = json.dumps(record, ensure_ascii=False)
+                data = ("\n".join(lines) + "\n").encode("utf-8")
+                backup = path.with_suffix(path.suffix + ".bkup")
+                if target.resolve() == path.resolve() and not backup.exists():
+                    shutil.copy2(path, backup)
+            target.write_bytes(data)
             project_parent_fact(self.db, target, parent_id)
         tally.carried = len(chosen)
         return tally

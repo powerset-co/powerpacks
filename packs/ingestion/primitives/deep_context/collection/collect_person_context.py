@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context.db.context_queries import (
     collection_bundle_group_message_count,
     collection_bundle_parent_ids,
     existing_parent_ids,
+    parent_histories,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
@@ -102,20 +103,13 @@ class CollectPersonContext(Node):
             # No-op on a clean install: works from cached artifact payloads only,
             # opens no message store, so it never re-bills.
             normalize_cached_bundles(db, self.out_dir)
+        histories = parent_histories(db)
         people = planning.source_parents(db)
         bundle_ids = set(collection_bundle_parent_ids(db))
 
-        readiness = self.sources.readiness()
+        readiness = self.sources.readiness(people=people)
         chat_probe = readiness.chat_db
         chat_probe_payload = chat_probe.to_payload()
-        if chat_probe.exists and not chat_probe.readable:
-            print(
-                f"[collect] WARNING: chat.db exists but is unreadable — iMessage will be EMPTY. "
-                f"Likely Full Disk Access. error={chat_probe.error}",
-                file=sys.stderr,
-                flush=True,
-            )
-
         if not self.dry_run:
             self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -130,7 +124,13 @@ class CollectPersonContext(Node):
         try:
             for person in people:
                 bundle_path = self.out_dir / f"{person.person_id}.json"
-                messages, available = self.sources.collect_person(person)
+                history = histories.get(person.person_id)
+                messages, available = self.sources.collect_person(
+                    person, processed=history.processed,
+                ) if history else self.sources.collect_person(person)
+                # Retain the last evidence for explicit force and stable worth inputs.
+                if not messages and history:
+                    continue
                 groups = self.sources.imessage_groups(person)
                 thread_participants = self.sources.thread_participants(person)
                 if not messages and not groups:

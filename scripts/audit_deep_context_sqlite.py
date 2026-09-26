@@ -75,17 +75,17 @@ WRITER_HASH_BOUNDARIES = {
 TYPED_ARTIFACT_READ_BOUNDARIES: set[tuple[str, str]] = set()
 # JEV is a frozen offline mapping plus a labelling phase that re-reads the
 # parent-owned facts record it is about to rewrite and re-project (see
-# synthesis/runner.py:tag_saved_facts); jev_worth/export_model.py is a local
+# synthesis/runner.py:_write_worth); jev_worth/export_model.py is a local
 # exporter over cached experiment files, never part of a stage. None of these
 # make SQLite non-canonical, so they read at a named boundary too.
 JEV_ARTIFACT_READ_BOUNDARIES: set[tuple[str, str]] = {
     (
         "packs/ingestion/primitives/deep_context/synthesis/runner.py",
-        "_load_facts_record",
+        "_tagging_inputs",
     ),
     (
         "packs/ingestion/primitives/deep_context/synthesis/runner.py",
-        "tag_saved_facts.tag_all.tag",
+        "_write_worth",
     ),
     (
         "packs/ingestion/primitives/deep_context/jev_worth/export_model.py",

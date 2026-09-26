@@ -1,25 +1,10 @@
-"""Select projected source bundles and skip unchanged paid synthesis work.
-
-Changelog:
-- 2026-08-08: two skip-decision fixes.
-  (1) The legacy-child-facts shortcut used to fabricate its cache entry by
-  hashing the CURRENT bundle and comparing it to itself a few lines later —
-  an unconditional match. On the owner's install this blanketed ~all 542
-  legacy parents: --dry-run reported people=0/cost=$0.00 even for parents
-  whose bundles had just been re-collected with new messages. It now reuses
-  only a real fingerprint recorded on a legacy child FACTS artifact, if one
-  exists; none exist on any current install (the field postdates every
-  legacy record), so every legacy parent is pending until real synthesis
-  writes a genuine parent-owned fingerprint for it.
-  (2) pending_target_bundles now also treats a model/reasoning-effort change
-  since the stage's last completed run as a full-plan cache miss — see
-  SynthesizePersonContext._model_or_effort_changed, which reads that value
-  back from the stage's own manifest.json (no new store).
-"""
+"""Select unseen message evidence; explicit config changes re-extract the bundle."""
 
 from __future__ import annotations
 
 import json
+import hashlib
+from dataclasses import replace
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
@@ -33,37 +18,27 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     people,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.context_queries import parent_histories
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisPlan
 
 
 def effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
-    """Preview the parent bundles cache normalization will project, without writes.
-
-    Mirrors what collection/normalization.py:normalize_cached_bundles would
-    write to durable SOURCE_BUNDLE rows, computed here read-only so selection
-    can fingerprint bundles before that migration runs. The CollectionBundle.union
-    branch below only fires for parents still on the legacy per-child bundle
-    layout (person_id is not None); a current install never takes it.
-    """
+    """Union every cached bundle under its current parent, including merged parents."""
     source_artifacts = artifacts(db, kind=ArtifactKind.SOURCE_BUNDLE.value, status="projected")
     bundles: dict[str, CollectionBundle] = {}
     children: dict[str, list[CollectionBundle]] = {}
     for row in source_artifacts:
         bundle = CollectionBundle.from_payload(parse_json_object(row.payload_json))
         if bundle is not None:
-            if row.person_id is None:
-                bundles[row.parent_id] = bundle
-            else:
-                children.setdefault(str(row.parent_id), []).append(bundle)
+            children.setdefault(str(row.parent_id), []).append(bundle)
     names = {str(row.parent_id): str(row.display_name or "") for row in parents(db)}
     for parent_id, child_bundles in children.items():
-        if parent_id not in bundles:
-            bundles[parent_id] = CollectionBundle.union(
-                parent_id,
-                names.get(parent_id, ""),
-                child_bundles,
-            )
+        bundles[parent_id] = (
+            replace(child_bundles[0], person_id=parent_id)
+            if len(child_bundles) == 1
+            else CollectionBundle.union(parent_id, names.get(parent_id, ""), child_bundles)
+        )
     return bundles
 
 
@@ -95,17 +70,10 @@ def pending_target_bundles(
     chunk_chars: int,
     max_batches: int,
     force: bool,
-    model_changed: bool = False,
+    model: str = "",
+    reasoning_effort: str = "",
 ) -> list[CollectionBundle]:
-    """Decide, per parent, whether to skip (cache hit) or spend on synthesis.
-
-    Three independent checks must all hold for a skip: prompting.SYNTHESIS_VERSION
-    (catches prompt/schema/contract edits), input_evidence_fingerprint (catches
-    evidence changes), and ``model_changed`` being False (catches a --model or
-    --reasoning-effort switch since the stage's last completed run — see
-    SynthesizePersonContext._model_or_effort_changed). See the inline comments
-    below for how each is compared.
-    """
+    """Use successful per-record coverage and config; retain old fingerprint caches."""
     cached = {
         str(row.parent_id): (
             str(row.input_fingerprint or ""),
@@ -113,6 +81,7 @@ def pending_target_bundles(
         )
         for row in artifacts(db, kind=ArtifactKind.FACTS.value, parent_owned=True)
     }
+    histories = parent_histories(db)
     effective_bundles = effective_parent_bundles(db)
     child_fact_parents = {str(row.parent_id) for row in facts(db, parent_owned=False)}
     # A parent with child-owned facts but no parent-owned FACTS artifact (legacy
@@ -138,11 +107,34 @@ def pending_target_bundles(
     for pid, bundle in sorted(effective_bundles.items()):
         if pid in owner_only_parents:
             continue
+        history = histories.get(pid)
+        if history and history.processed:
+            latest = history.records[-1].record
+            seeded = latest.input_evidence_fingerprint.startswith(prompting.SEED_FINGERPRINT_PREFIX)
+            changed = bool(latest.model and model and (
+                latest.model != model or latest.reasoning_effort != reasoning_effort
+            )) or (not seeded and (
+                bool(latest.synthesis_version and latest.synthesis_version != prompting.SYNTHESIS_VERSION)
+                or bool(latest.system_prompt_hash and latest.system_prompt_hash != hashlib.sha256(system_prompt.encode()).hexdigest())
+            ))
+            if not force and not changed:
+                unseen = tuple(message for message in bundle.messages if message.fingerprint() not in history.processed)
+                if not unseen:
+                    continue
+                bundles.append(replace(bundle, messages=unseen))
+                continue
+            bundles.append(bundle)
+            continue
         # Force and a model/effort change are explicit paid overrides; normal
         # runs resume only when the prompt contract, the exact bounded
         # evidence, AND the answering model/effort all still match.
-        if not force and not model_changed:
+        if not force:
             fingerprint, version = cached.get(pid, ("", ""))
+            if (
+                fingerprint.startswith(prompting.SEED_FINGERPRINT_PREFIX)
+                and fingerprint == prompting.seed_evidence_fingerprint(bundle)
+            ):
+                continue
             # The version catches prompt/schema edits, while the evidence hash
             # catches message or owner-context changes. Either mismatch must
             # re-run synthesis or the facts would describe stale model input.
@@ -174,7 +166,8 @@ def build_plan(
     chunk_chars: int,
     max_batches: int,
     force: bool,
-    model_changed: bool = False,
+    model: str = "",
+    reasoning_effort: str = "",
 ) -> SynthesisPlan:
     bundles = tuple(
         pending_target_bundles(
@@ -183,7 +176,8 @@ def build_plan(
             chunk_chars=chunk_chars,
             max_batches=max_batches,
             force=force,
-            model_changed=model_changed,
+            model=model,
+            reasoning_effort=reasoning_effort,
         )
     )
     return SynthesisPlan(system_prompt, bundles, owner_profile(db))

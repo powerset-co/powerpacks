@@ -1,16 +1,11 @@
-"""Collapse projected child facts into parent-owned synthesis cache records.
+"""Consolidate merged parents' extraction histories and legacy child fact caches."""
 
-Reuses already-paid per-child SYNTHESIS output so a parent that predates
-parent-owned fact caching gets migrated for free instead of re-billed. Once no
-child-owned FACTS rows remain, ``grouped`` is empty and this is a query and a
-return.
-"""
-
-# Legacy (2026-08-07): delete once no install still carries child-owned FACTS artifacts.
+# Legacy child normalization (2026-08-07): remove after child-owned FACTS artifacts retire.
 
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -31,6 +26,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.context_queries import parent_histories
 from packs.ingestion.primitives.deep_context.synthesis.facts import merge_disjoint_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
@@ -52,6 +48,20 @@ def normalize_parent_cache(
     normalize_cached_bundles(db, raw_dir)
     bundles = projected_bundles(db)
     artifact_rows = {row.artifact_key: row for row in artifacts(db, kind=ArtifactKind.FACTS.value)}
+    histories = parent_histories(db)
+    parent_artifacts: dict[str, list[ArtifactRow]] = {}
+    for artifact in artifact_rows.values():
+        if artifact.person_id is None:
+            parent_artifacts.setdefault(artifact.parent_id, []).append(artifact)
+    for parent_id, rows in parent_artifacts.items():
+        if len(rows) < 2:
+            continue
+        path = Path(facts_dir) / f"{parent_id}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            shutil.copy2(path, path.with_suffix(path.suffix + ".bkup"))
+        path.write_text("".join(item.serialized + "\n" for item in histories[parent_id].records), encoding="utf-8")
+        project_parent_fact(db, path, parent_id)
     fact_rows = facts(db)
     parent_facts = {row.parent_id for row in fact_rows if row.person_id is None}
     grouped: dict[str, list[FactRow]] = {}

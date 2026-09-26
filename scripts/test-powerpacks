@@ -45,6 +45,9 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_jev_client \
   tests.test_jev_model \
   tests.test_jev_pipeline \
+  tests.test_jev_worth \
+  tests.test_jev_worth_reasons \
+  tests.test_jev_typed \
   tests.test_job_location \
   tests.test_llm_rerank_candidates \
   tests.test_local_duckdb_backend \
@@ -67,7 +70,10 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_whatsapp_wacli \
   tests.test_clean_slate \
   tests.test_cluster_merge_candidates \
+  tests.test_deep_context_append \
+  tests.test_deep_context_append_sources \
   tests.test_deep_context_collection_sqlite \
+  tests.test_deep_context_collection_failures \
   tests.test_deep_context_db_parent_merge \
   tests.test_deep_context_db_projectors \
   tests.test_deep_context_db_schema \
@@ -86,6 +92,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_legacy_scrubs \
   tests.test_deep_context_lookup_sqlite \
   tests.test_deep_context_seed \
+  tests.test_deep_context_seed_reuse \
   tests.test_deep_context_owner_projection \
   tests.test_deep_context_parent_assignment \
   tests.test_deep_context_parent_projection \
@@ -115,4 +122,5 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_share_list \
   tests.test_share_tags \
   tests.test_synthesis_jev \
+  tests.test_synthesis_failures \
   tests.test_upload_powerset -v

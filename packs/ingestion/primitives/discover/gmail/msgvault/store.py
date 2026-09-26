@@ -130,7 +130,7 @@ class MsgvaultStore:
     ) -> list[dict[str, Any]]:
         return context_db.thread_participant_rosters(self.con, emails, max_threads)
 
-    def fetch_recent_rows(self, email: str, fetch_limit: int) -> list[sqlite3.Row]:
+    def fetch_recent_rows(self, email: str, fetch_limit: int | None) -> list[sqlite3.Row]:
         return context_db.fetch_recent_rows(self.con, email, fetch_limit)
 
     def create_candidate_pid_table(self, emails: Iterable[str]) -> int:

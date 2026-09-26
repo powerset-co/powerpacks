@@ -5,19 +5,22 @@ import copy
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from dataclasses import asdict
 
 from packs.ingestion.primitives.share.questions import build_questions as share_questions
 from packs.ingestion.primitives.share.questions import build_request as share_request
+
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageDirection
+from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
+from packs.ingestion.primitives.deep_context.jev_worth.models import WorthFacts
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 
 REQUEST_VERSION = 'deep-context-worth-labels-v1-20260924'
 _WORTH_QUESTIONS = json.loads(Path(__file__).with_name('worth_questions.json').read_text())
 WORTH_SIGNALS = tuple(name for name in _WORTH_QUESTIONS if name != 'worth')
 
 
-def _channel_policy(channels: dict[str, Any]) -> str:
-    sources = {source.strip().lower() for source in channels.get('source_channels', [])}
-    sources.update(channels.get('interaction_counts') or {})
+def _channel_policy(sources: frozenset[str]) -> str:
     email = bool(sources & {'gmail', 'gmail_msgvault', 'email'})
     phone = bool(sources & {'imessage', 'whatsapp', 'sms', 'phone'})
     if email and phone:
@@ -49,38 +52,45 @@ def _channel_policy(channels: dict[str, Any]) -> str:
     return '\n\nWORTH SOURCE POLICY:\n' + rule
 
 
-def build_questions(channels: dict[str, Any]) -> dict[str, dict]:
+def build_questions(sources: frozenset[str]) -> dict[str, dict]:
     worth = copy.deepcopy(_WORTH_QUESTIONS)
-    worth['worth']['instructions'] += _channel_policy(channels)
+    worth['worth']['instructions'] += _channel_policy(sources)
     return {**share_questions(), **worth}
 
 
 def build_request(
-    *, facts: dict[str, Any], bundle: dict[str, Any], owner: dict[str, Any], reference_date: str,
+    *, facts: WorthFacts, bundle: CollectionBundle | None, owner: OwnerProfile | None, reference_date: str,
+    history: FactHistory | None = None,
 ) -> dict:
-    """Use facts for content; read raw messages only for cadence metadata."""
-    facts = {key: value for key, value in facts.items() if key not in ('network_worth', 'labels', 'owned_identifiers')}
-    messages = bundle.get('messages') or []
-    timestamps = [message['at'] for message in messages if message.get('at')]
+    """Serialize the pinned request; policy consumes typed facts and messages."""
+    payload = {key: value for key, value in json.loads(facts.serialized).items()
+               if key not in ('network_worth', 'labels', 'owned_identifiers')}
+    messages = history.messages if history and history.messages else bundle.messages if bundle else ()
+    timestamps = [message.at for message in messages if message.at]
+    sources = sorted(history.source_channels) if history and history.messages else sorted(bundle.source_channels) if bundle else []
+    counts = dict(Counter(message.channel for message in messages)) if messages else None
     channels = {
-        'source_channels': sorted(bundle.get('source_channels') or []),
-        'interaction_counts': dict(Counter(message['channel'] for message in messages)) if messages else None,
+        'source_channels': sources,
+        'interaction_counts': counts,
         'first_message_at': min(timestamps, default=None),
         'last_message_at': max(timestamps, default=None),
         'last_interaction': max(timestamps, default=None),
-        'from_me': sum(message.get('direction') == 'from_me' for message in messages) if messages else None,
-        'from_them': sum(message.get('direction') == 'from_them' for message in messages) if messages else None,
-        'group_count': len(bundle.get('groups') or []) if messages else None,
+        'from_me': sum(message.direction == MessageDirection.FROM_ME for message in messages) if messages else None,
+        'from_them': sum(message.direction == MessageDirection.FROM_THEM for message in messages) if messages else None,
+        'group_count': len(history.groups if history and history.messages else bundle.groups) if messages else None,
     }
-    current = next((employer for employer in facts.get('employers') or [] if employer.get('status') == 'current'), {})
+    current = next((employer for employer in facts.facts.employers if employer.status == 'current'), None)
+    owner_payload = asdict(owner) if owner else {}
     request = share_request(
-        dossier='\n'.join(f'{key}: {json.dumps(value, ensure_ascii=False)}' for key, value in facts.items() if value),
-        facts=facts,
-        profile={'name': facts.get('canonical_name'), 'title': facts.get('title'),
-                 'company': current.get('name'), 'location': facts.get('location'), 'headline': None},
+        dossier='\n'.join(f'{key}: {json.dumps(value, ensure_ascii=False)}' for key, value in payload.items() if value),
+        facts=payload,
+        profile={'name': facts.facts.canonical_name if 'canonical_name' in payload else None,
+                 'title': facts.facts.title if 'title' in payload else None,
+                 'company': current.name if current else None,
+                 'location': facts.facts.location if 'location' in payload else None, 'headline': None},
         channels=channels,
-        owner={key: owner.get(key) for key in ('name', 'work', 'education', 'locations')},
+        owner={key: owner_payload.get(key) for key in ('name', 'work', 'education', 'locations')},
         reference_date=reference_date,
     )
-    request['questions'] = build_questions(channels)
+    request['questions'] = build_questions(frozenset(source.strip().lower() for source in sources) | frozenset(counts or ()))
     return request

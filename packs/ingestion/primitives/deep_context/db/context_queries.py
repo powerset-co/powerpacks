@@ -11,6 +11,8 @@ Changelog:
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -21,7 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonIdentifierRow,
     PersonRow,
 )
-from packs.ingestion.primitives.deep_context.db.queries import typed_rows
+from packs.ingestion.primitives.deep_context.db.queries import typed_rows, artifacts
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
@@ -202,3 +204,12 @@ WHERE a.kind=? AND a.status='projected' AND a.person_id IS NULL
         (ArtifactKind.SOURCE_BUNDLE.value,),
     )
     return int(rows[0]["n"]) if rows else 0
+
+
+def parent_histories(db: Db) -> dict[str, FactHistory]:
+    """All extraction records follow their current parent after a merge."""
+    grouped: dict[str, list] = {}
+    for row in artifacts(db, kind="facts", status="projected"):
+        history = FactHistory.from_payload(json.loads(row.payload_json or '{}'))
+        grouped.setdefault(row.parent_id, []).extend(item.payload() for item in history.records)
+    return {parent: FactHistory.from_records(records) for parent, records in grouped.items()}

@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
 
+from packs.ingestion.primitives.deep_context.collection.models import MessageObservation
+
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
@@ -344,7 +346,18 @@ class SynthesisUsage:
 class SynthesisCallResult:
     facts: SynthesizedFacts | None
     usage: SynthesisUsage
-    failed: bool
+    error: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.error)
+
+
+@dataclass(frozen=True)
+class SynthesisFailure:
+    person_id: str
+    batch: int
+    error: str
 
 
 @dataclass(frozen=True)
@@ -359,6 +372,13 @@ class SynthesisRecord:
     messages_available: int
     final_confidence: float
     stop_reason: str
+    messages: tuple[MessageObservation, ...] = ()
+    groups: tuple[str, ...] = ()
+    source_channels: tuple[str, ...] = ()
+    model: str = ""
+    reasoning_effort: str = ""
+    system_prompt_hash: str = ""
+    updated_at: str = ""
 
     @classmethod
     def from_payload(cls, payload: object) -> SynthesisRecord | None:
@@ -380,6 +400,13 @@ class SynthesisRecord:
             messages_available=int(payload.get("messages_available") or 0),
             final_confidence=float(payload.get("final_confidence") or 0),
             stop_reason=str(payload.get("stop_reason") or ""),
+            messages=tuple(MessageObservation.from_payload(row) for row in payload.get("messages", ())),
+            groups=tuple(payload.get("groups", ())),
+            source_channels=tuple(payload.get("source_channels", ())),
+            model=str(payload.get("model") or ""),
+            reasoning_effort=str(payload.get("reasoning_effort") or ""),
+            system_prompt_hash=str(payload.get("system_prompt_hash") or ""),
+            updated_at=str(payload.get("updated_at") or ""),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -402,6 +429,13 @@ class SynthesisRecord:
             "messages_available": self.messages_available,
             "final_confidence": self.final_confidence,
             "stop_reason": self.stop_reason,
+            "messages": [message.to_payload() for message in self.messages],
+            "groups": list(self.groups),
+            "source_channels": list(self.source_channels),
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "system_prompt_hash": self.system_prompt_hash,
+            "updated_at": self.updated_at,
         }
 
 
@@ -414,6 +448,7 @@ class SynthesisResult:
     # facts (record.facts is None with nothing to blame it on but bad luck).
     # run_paid must not persist that record — see SynthesisTally.total_failures.
     total_failure: bool = False
+    failures: tuple[SynthesisFailure, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -425,6 +460,11 @@ class JevUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+
+    def __add__(self, other: JevUsage) -> JevUsage:
+        return JevUsage(self.people + other.people, self.cached + other.cached,
+                        self.input_tokens + other.input_tokens, self.output_tokens + other.output_tokens,
+                        self.cost_usd + other.cost_usd)
 
 
 @dataclass(frozen=True)
@@ -452,6 +492,7 @@ class SynthesisTally:
     # facts_dir (run_paid skips the write+project for these), so they are
     # retried next run instead of reading as a cached "done" forever.
     total_failures: int = 0
+    failures: list[SynthesisFailure] = field(default_factory=list)
 
     def record(self, result: SynthesisResult) -> None:
         record = result.record
@@ -459,6 +500,7 @@ class SynthesisTally:
             self.tokens[key] += value
         self.people_done += 1
         self.errors += result.errors
+        self.failures.extend(result.failures)
         self.batches += record.batches_used
         reason = record.stop_reason
         self.stop_reasons[reason] = self.stop_reasons.get(reason, 0) + 1

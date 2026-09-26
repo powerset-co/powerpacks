@@ -147,9 +147,14 @@ family spans, re-owns each legacy raw bundle and facts record to its cold
 parent, replays the human worth and LinkedIn decisions from
 `overrides/review.csv`, and projects Parallel research results so enrichment
 reuses them. Machine review rows, dossiers and the profile cache are not
-carried. A seeded store refuses a second run. The next `collect` and
-`synthesize` refresh the carried bundles and facts from the live message
-stores; unchanged people re-synthesize once on the new model.
+carried. A seeded store refuses a second run. Carried facts with a message
+baseline skip synthesis while that evidence is unchanged. New or changed
+evidence, `--force`, or a model/effort change makes the person pending. Without
+a carried bundle there is no baseline to compare. Synthesis appends extraction
+records and preserves prior facts. Message-content hashes exclude already-used
+messages before source caps; capped overflow and late imports stay pending.
+The first bounded cold sample may leave older unseen messages for later runs.
+Seed uses only its carried raw messages as the known baseline.
 
 Do not run `seed` for a narrow `$deep-context check`; report its
 `next_command` and stop.
@@ -187,6 +192,10 @@ bin/deep-context collect --deep-cap 1600
 ```
 
 Collection is local/free. Preserve the exact approved flags through synthesis.
+Transient source reads retry three times. An unreadable source fails the stage;
+it is not an empty source. On failure, inspect
+`.powerpacks/deep-context/raw/manifest.json` and resolve the reported access or
+database error before continuing. Existing evidence for the failed read stays.
 
 ### 3. Dossiers
 
@@ -210,6 +219,18 @@ worth value and optional human override are read and written through the same
 SQLite row. Existing facts are reused without another GPT call; JEV resumes from
 its request cache; human decisions remain unchanged. Use `--force` explicitly to
 rebuild facts.
+
+Synthesis retries transient API failures three times through the SDK. If any
+batch remains failed, the person's prior facts stay and the stage reports
+failure in `.powerpacks/deep-context/facts/manifest.json`, including person,
+batch, and error details. Read that receipt before retrying; do not assume
+throttling or continue to compose. A retry processes the incomplete person
+again, including their successful batches, so preview its cost first.
+Successful extraction records carry model/effort, so a failed model switch
+remains pending on an ordinary rerun. `--force` re-extracts the current bounded
+bundle and preserves history; retry a failed forced run with `--force` again.
+Older unseeded facts without message metadata retain their fingerprint cache;
+the first changed bundle establishes coverage while retaining prior facts.
 
 Worth uses message context and contact identifiers only, never the LinkedIn
 profile, with one rule decided in code rather than by the model: a person whose
