@@ -262,7 +262,7 @@ class RoutesTests(ShareWebFixture):
         self.assertEqual(self._get("/api/people/person?id=parent-aaaa")["linkedin_url"],
                          "https://www.linkedin.com/in/jordan-bravo")
         self.assertEqual(self._get("/healthz")["people"], 4)
-        with urllib.request.urlopen(self.base + "/people/assets/results.css") as response:
+        with urllib.request.urlopen(self.base + "/people/assets/people.css") as response:
             self.assertEqual(response.headers["Content-Type"], "text/css; charset=utf-8")
 
     def test_tags_post_writes_and_the_next_payload_reflects_it(self) -> None:

@@ -1,0 +1,75 @@
+/* The virtualized people table; ported from share/web/people.css. */
+
+.people-grid { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.grid-head, .row {
+  display: grid;
+  grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 84px 92px 82px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px 0 12px;
+}
+.grid-head { height: 32px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.grid-head button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; transition: color var(--t-fast) var(--ease-out); }
+.grid-head button:hover { color: var(--foreground); }
+.grid-head [aria-sort]:not([aria-sort="none"]) button { color: var(--foreground); }
+.grid-head [aria-sort="ascending"] button::after { content: "↑"; }
+.grid-head [aria-sort="descending"] button::after { content: "↓"; }
+.grid-head .right, .row .right { text-align: right; justify-self: end; }
+.grid-viewport { position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; outline: none; scrollbar-width: thin; }
+.grid-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--primary); }
+
+/* --row-h comes from ROW_H in table/columns.ts, set on the shell. */
+.row { position: relative; height: var(--row-h); border-bottom: 1px solid var(--line); cursor: default; transition: background var(--t-fast) var(--ease-out), opacity var(--t-med) var(--ease-out); }
+.row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--primary); transform: scaleX(0); transform-origin: left; transition: transform var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out); }
+.row:hover { background: rgba(255, 255, 255, .025); }
+.row[aria-selected="true"] { background: var(--primary-soft); }
+.row[data-open="true"] { background: var(--surface-2); }
+.row[data-open="true"]::before { transform: scaleX(1); background: var(--line-strong); }
+.row[data-focus="true"] { background: rgba(255, 255, 255, .03); }
+.row[data-focus="true"]::before { transform: scaleX(1); background: var(--primary); }
+.row[data-focus="true"][aria-selected="true"] { background: color-mix(in srgb, var(--primary-soft) 80%, white 4%); }
+.row[data-pending="true"] { opacity: .7; }
+
+.check { display: grid; place-items: center; width: 24px; height: 24px; margin: 0; }
+.check input { width: 15px; height: 15px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+.person { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.person .who { display: block; min-width: 0; line-height: 1.25; }
+.person .who b { display: block; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.why { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.why.human { color: var(--info); }
+.rel { color: var(--foreground); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rel:empty::before { content: "—"; color: var(--faint); }
+.worth { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.worth .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.worth[data-worth="yes"] .dot { background: var(--ok); }
+.worth[data-worth="maybe"] .dot { background: var(--warn); }
+.worth[data-worth="no"] .dot { background: var(--bad); }
+.worth .src { color: var(--faint); font-size: 10px; }
+.worth .src.human { color: var(--info); }
+.warmth-cell { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--foreground); }
+.warmth-cell.dim { color: var(--faint); }
+.warmth-bar { display: inline-flex; gap: 2px; }
+.warmth-bar i { width: 5px; height: 10px; border-radius: 1.5px; background: var(--secondary); }
+.warmth-bar i.on { background: var(--primary); }
+.cell-num { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--foreground); }
+.cell-num.dim { color: var(--muted); }
+.grid-loading { display: grid; gap: 1px; padding: 0 20px 0 12px; }
+.grid-loading > * { height: calc(var(--row-h) - 1px); margin: 0 0 1px; border-radius: 0; }
+
+/* Columns leave in priority order as the pane narrows (window or drawer). */
+@container people (max-width: 1180px) {
+  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 84px 92px; }
+  .grid-head .c-msgs, .row .c-msgs { display: none; }
+}
+@container people (max-width: 1060px) {
+  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 92px; }
+  .grid-head .c-warmth, .row .c-warmth { display: none; }
+}
+@container people (max-width: 940px) {
+  .grid-head, .row { grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 96px 92px; }
+  .grid-head .c-rel, .row .c-rel { display: none; }
+}
+@container people (max-width: 800px) {
+  .grid-head, .row { grid-template-columns: 36px minmax(180px, 1fr) 150px 96px 92px; }
+  .grid-head .c-sources, .row .c-sources { display: none; }
+}

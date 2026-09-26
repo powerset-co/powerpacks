@@ -11,6 +11,7 @@ under those parents and re-decides their share rows through
 
 Changelog:
   2026-09-26: created.
+  2026-09-26: serves the React build from web/dist; legacy page and vendor/ removed.
 """
 
 from __future__ import annotations
@@ -33,9 +34,8 @@ from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
-from packs.ingestion.primitives.share.web import PEOPLE_CSS, PEOPLE_HTML, PEOPLE_JS, VIRTUAL_CORE_JS
+from packs.ingestion.primitives.share.web import PEOPLE_CSS, PEOPLE_HTML, PEOPLE_JS
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
-from packs.search.primitives.deep_search.results_web import RESULTS_CSS
 
 PAGE_PATH = "/people"
 API_PREFIX = "/api/people/"
@@ -44,14 +44,10 @@ LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
 
-# `results.css` is the one stylesheet both local UIs share (the hosted snapshot
-# renderer serves that same file by name, so tokens and components live there).
+# The page is the React build (`web/dist`); its people.css carries the tokens.
 ASSETS = {
-    "results.css": (RESULTS_CSS, "text/css; charset=utf-8"),
     "people.css": (PEOPLE_CSS, "text/css; charset=utf-8"),
     "people.js": (PEOPLE_JS, "text/javascript; charset=utf-8"),
-    "virtual-table.js": (Path(__file__).resolve().parents[4] / "shared/web/virtual-table.js", "text/javascript; charset=utf-8"),
-    "vendor/tanstack-virtual-core.js": (VIRTUAL_CORE_JS, "text/javascript; charset=utf-8"),
 }
 
 TagChanges = dict[str, frozenset[str]]

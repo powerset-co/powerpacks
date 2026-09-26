@@ -1,30 +1,5 @@
 <!doctype html>
 <html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='color-scheme' content='dark'><title>People · Powerpacks</title>
-<link rel='stylesheet' href='/people/assets/results.css'><link rel='stylesheet' href='/people/assets/people.css'></head>
-<body><div class='app-shell people-shell' data-people data-drawer-open='false'>
-  <header class='topbar'><a class='brand' href='/people'>POWERPACKS</a>
-    <nav class='topbar-nav' aria-label='Local UI'><a href='/searches'>Searches</a><a href='/people' aria-current='page'>People</a></nav></header>
-  <div class='people-layout'>
-    <aside class='rail' data-rail aria-label='Filters'></aside>
-    <main class='people-main'>
-      <section class='people-head' data-head></section>
-      <section class='quick' data-quick aria-label='Quick filters'></section>
-      <section class='bar' data-bar>
-        <input type='search' class='field bar-search' data-search placeholder='Search name, title, company, location' aria-label='Search people'>
-        <span class='chip-row bar-chips' data-chips></span>
-        <span class='bar-count num' data-count aria-live='polite'></span>
-      </section>
-      <section class='grid' data-grid>
-        <div class='grid-head' role='row' data-grid-head></div>
-        <div class='grid-viewport' data-viewport tabindex='0' role='table' aria-label='People'>
-          <div class='grid-spacer' data-spacer><div class='grid-rows' data-rows></div></div>
-        </div>
-        <p class='grid-empty' data-empty hidden></p>
-      </section>
-    </main>
-  </div>
-  <aside class='drawer' data-drawer aria-hidden='true' inert aria-label='Person'></aside>
-  <div class='bulkbar' data-bulkbar data-open='false' inert role='toolbar' aria-label='Selection'></div>
-  <div class='toast' role='status' aria-live='polite'></div>
-</div><script type='module' src='/people/assets/people.js'></script></body></html>
+<link rel='stylesheet' href='/people/assets/people.css'></head>
+<body><div id='root' data-people-root></div><script type='module' src='/people/assets/people.js'></script></body></html>

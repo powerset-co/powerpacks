@@ -1,0 +1,13 @@
+/* The bulk bar and the drawer shell; ported from share/web/people.css. */
+
+.bulkbar { position: fixed; z-index: 60; left: 50%; translate: -50% 0; bottom: 18px; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--card); box-shadow: var(--shadow-2); }
+.bulkbar b { margin-right: 4px; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bulkbar .sep { width: 1px; height: 18px; background: var(--line-strong); }
+
+/* A non-modal panel over the right edge; the table keeps its geometry. */
+.drawer { position: fixed; z-index: 70; top: var(--topbar-height); right: 0; bottom: 0; width: min(var(--drawer-w), 100vw); overflow-y: auto; border-left: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow-2); scrollbar-width: thin; transform: translateX(24px); opacity: 0; visibility: hidden; transition: transform var(--t-exit) var(--ease-in), opacity var(--t-exit) var(--ease-in), visibility 0s linear var(--t-exit); }
+.people-shell[data-drawer-open="true"] .drawer { transform: none; opacity: 1; visibility: visible; transition: transform var(--t-med) var(--ease-out), opacity var(--t-med) var(--ease-out), visibility 0s; }
+.drawer-inner { display: grid; gap: 20px; padding: 20px 20px 120px; }
+.drawer-inner.swap { animation: fade-in var(--t-fast) var(--ease-out) both; }
+/* Switching person: the outgoing one fades to zero in 60ms, then the new one fades in (.swap). */
+.drawer-inner[data-leaving] { opacity: 0; transition: opacity 60ms var(--ease-in); }

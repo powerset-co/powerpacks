@@ -1,0 +1,37 @@
+/* People page shell, head, quick filters and search bar; ported from share/web/people.css. */
+
+.people-shell { --drawer-w: 440px; display: grid; grid-template-rows: var(--topbar-height) 1fr; height: 100dvh; overflow: hidden; min-height: 100dvh; }
+.people-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 0; }
+
+/* The whole pane, and the container the table's columns respond to as the window narrows. */
+.people-main { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); container: people / inline-size; width: auto; min-height: 0; margin: 0; padding: 0; }
+
+/* The three decision counts are the tabs: one is always selected; the ink slides under it. */
+.people-head { position: relative; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; padding: 12px 20px 0; }
+.stat { position: relative; display: grid; gap: 2px; padding: 8px 14px 10px; border: 0; border-radius: var(--radius-s) var(--radius-s) 0 0; background: transparent; color: var(--muted); text-align: left; cursor: pointer; transition: background var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out); }
+.stat:hover { background: var(--secondary); }
+.stat[aria-pressed="true"] { background: var(--card); color: var(--foreground); }
+.stat b { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; color: var(--foreground); opacity: .6; transition: opacity var(--t-med) var(--ease-out), color var(--t-med) var(--ease-out); }
+.stat[aria-pressed="true"] b { opacity: 1; }
+.stat > span { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.stat-yes[aria-pressed="true"] b { color: var(--ok); }
+.stat-confirm[aria-pressed="true"] b { color: var(--warn); }
+.head-note { margin-left: auto; padding-bottom: 12px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 20px; border-top: 1px solid var(--line); }
+.quick .chip { min-height: 26px; }
+
+.bar { position: relative; z-index: 15; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--background) 92%, transparent); }
+.bar-search { flex: 0 1 300px; }
+.bar-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
+.bar-chips .chip { min-height: 26px; padding-right: 6px; }
+.bar-chips .chip .x { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; color: var(--muted); transition: background var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out); }
+.bar-chips .chip:hover .x { background: var(--secondary); color: var(--foreground); }
+.bar-chips .chip em { color: var(--faint); font-style: normal; font-weight: 600; }
+.bar-count { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+
+@media (max-width: 960px) {
+  .people-layout { grid-template-columns: 1fr; }
+  .rail { display: none; }
+}

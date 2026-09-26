@@ -46,7 +46,8 @@ write is skipped).
 | `share.py` | CLI | command arguments | command results |
 | `web/model.py` | `SharePeople`: one typed row per parent (the roster people merged under it) for the People page | people.csv, `share`, `person_labels`, `person_tags`, `parents`, `facts`, dossier artifacts | — |
 | `web/server.py` | `ShareRoutes` (mounted in the review server at `/people`, `/api/people/*`, beside the searches list at `/searches`) and a standalone server for tests | the rows | `person_tags` + `share` in one transaction (`Db.decide_share`) |
-| `web/people.html`, `people.css`, `people.js` | the page: decision tabs, facets, quick filters, virtualized table, drawer, bulk bar | `/api/people/rows`, `/api/people/person` | `POST /api/people/tags` |
+| `web/people.html` + the repo's `web/dist/people.js`, `people.css` | the page: a `#root` mount for the React build (source in `web/src/pages/people/`): decision tabs, facets, quick filters, virtualized table, drawer, bulk bar | `/api/people/rows`, `/api/people/person` | `POST /api/people/tags` |
+| `web/vendor/` | the vendored row virtualizer the Searches page imports | — | — |
 
 ## Tables
 

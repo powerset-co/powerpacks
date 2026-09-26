@@ -1,0 +1,19 @@
+/* The left rail: facets with live counts (FacetShell / FacetValue), then the hint. */
+
+.rail { min-height: 0; overflow-y: auto; padding: 12px 10px 120px; border-right: 1px solid var(--line); background: var(--background); scrollbar-width: thin; }
+.facet-more { padding: 4px 8px 2px; border: 0; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; text-align: left; }
+.facet-more:hover { color: var(--foreground); }
+.facet-search { width: calc(100% - 16px); margin: 2px 8px 6px; height: 28px; font-size: 12px; }
+
+/* "More filters": a facet head's look, set apart from the default facets. */
+.rail-divider { display: flex; align-items: center; gap: 6px; width: calc(100% - 16px); margin: 10px 8px 6px; padding: 8px 8px 6px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--faint); font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; text-align: left; cursor: pointer; transition: color var(--t-fast) var(--ease-out); }
+.rail-divider:hover { color: var(--foreground); }
+.rail-divider::after { content: ""; box-sizing: content-box; margin-left: auto; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); opacity: .7; }
+
+.rail-hint { margin: 14px 8px 0; color: var(--faint); font-size: 11px; line-height: 1.5; }
+.rail-hint summary { display: list-item; color: var(--muted); font-weight: 700; letter-spacing: .04em; cursor: pointer; list-style: none; }
+.rail-hint summary::-webkit-details-marker { display: none; }
+.rail-hint summary:hover { color: var(--foreground); }
+.rail-hint dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; align-items: center; margin: 8px 0 0; }
+.rail-hint dt { display: inline-flex; gap: 2px; }
+.rail-hint dd { margin: 0; color: var(--muted); }

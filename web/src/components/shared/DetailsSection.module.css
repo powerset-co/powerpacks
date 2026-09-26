@@ -1,0 +1,11 @@
+/* people.css details.dsec */
+.section { display: grid; gap: 8px; }
+.section:not([open]) { gap: 0; }
+.summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
+.summary::-webkit-details-marker { display: none; }
+.summary::after { content: ""; box-sizing: content-box; width: 5px; height: 5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform var(--t-fast) var(--ease-out); }
+.section[open] > .summary::after { transform: rotate(45deg); }
+.title { margin: 0; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.title small { margin-left: 4px; color: var(--faint); font-weight: 600; letter-spacing: 0; }
+.title + * { margin-left: 2px; }
+.summary:hover .title { color: var(--foreground); }
