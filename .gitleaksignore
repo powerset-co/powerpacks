@@ -1,0 +1,5 @@
+# gitleaks fingerprints (commit:file:rule:line) for confirmed false positives.
+# 2026-09-26: a test's `api` client variable next to `concurrency=jev.MAX_CONCURRENCY + 1`
+# read as a generic API key; the line was rewritten, these two commits stay in history.
+960d1c6ae126d8f2881fbbdcfdab6d4780c611be:tests/test_jev_client.py:generic-api-key:283
+c29f447c69cb9ca2661973e128f0123279dd5d43:tests/test_jev_client.py:generic-api-key:283

@@ -279,8 +279,9 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         await self._score(api, profiles=profiles)
         self.assertEqual(api.max_in_flight, jev.MAX_CONCURRENCY)
         self.assertEqual(jev.MAX_CONCURRENCY, 32)
+        too_many = jev.MAX_CONCURRENCY + 1
         with self.assertRaisesRegex(ValueError, f"between 1 and {jev.MAX_CONCURRENCY}"):
-            await self._score(api, concurrency=jev.MAX_CONCURRENCY + 1)
+            await self._score(api, concurrency=too_many)
 
     async def test_transient_errors_retry_but_invalid_results_never_reject(self) -> None:
         request = self._request()
