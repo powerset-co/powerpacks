@@ -1,6 +1,7 @@
 import type { RefObject } from "react"
 
 import type { useSelection } from "@/hooks/useSelection"
+import type { TagAction } from "@/lib/people/facets"
 import { ORDER, type Decision, type Person } from "@/types/people"
 
 import type { PeopleTableHandle } from "../table/PeopleTable"
@@ -18,6 +19,9 @@ interface ShortcutTargets {
   selection: ReturnType<typeof useSelection>
   drawer: ReturnType<typeof useDrawer>
   decisions: ReturnType<typeof useDecisions>
+  label: (action: TagAction, targets: readonly string[]) => Promise<void>
+  // The selection, else the open person (PeopleWorkspace).
+  targets: readonly string[]
 }
 
 // The People page's keys wired to its state; the Keyboard shortcuts list in the rail names them.
@@ -31,10 +35,12 @@ export function usePeopleShortcuts({
   selection,
   drawer,
   decisions,
+  label,
+  targets,
 }: ShortcutTargets) {
   const focused = matching[focus]
-  const act = (action: "share" | "private" | "worth") => {
-    if (selection.selected.size) void decisions.apply(action, [...selection.selected])
+  const act = (action: TagAction) => {
+    if (targets.length) void label(action, targets)
   }
 
   useKeyboard({
@@ -58,7 +64,6 @@ export function usePeopleShortcuts({
     selectAll: selection.toggleAll,
     share: () => act("share"),
     keepPrivate: () => act("private"),
-    useWorth: () => act("worth"),
     undo: () => void decisions.undo(),
     openFocused: () => {
       if (focused) drawer.toggle(focused.parent_id)

@@ -32,7 +32,7 @@ export function PersonDrawer(props: PersonDrawerProps) {
   const { open, saving, onAction, onClose, onRetry } = props
   const panel = useRef<HTMLElement>(null)
   const [sections, setSections] = useState<ReadonlySet<SectionKey>>(OPEN_BY_DEFAULT)
-  const { row, detail, leaving, swapping, onTransitionEnd } = useDrawerSwap(props.row, props.detail, open)
+  const { row, detail, leaving, onTransitionEnd } = useDrawerSwap(props.row, props.detail, open)
   const id = row?.parent_id ?? null
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export function PersonDrawer(props: PersonDrawerProps) {
       {row ? (
         <div
           key={row.parent_id}
-          className={swapping && !leaving ? "drawer-inner swap" : "drawer-inner"}
+          className="drawer-inner"
           data-leaving={leaving || undefined}
           onTransitionEnd={onTransitionEnd}
         >

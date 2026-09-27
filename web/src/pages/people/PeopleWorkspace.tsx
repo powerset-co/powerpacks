@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { Toast } from "@/components/shared"
 import { useSelection } from "@/hooks/useSelection"
-import type { FacetKey, FacetSet, QuickFilter } from "@/lib/people/facets"
+import { nextOpenIndex } from "@/lib/people/advance"
+import type { FacetKey, FacetSet, QuickFilter, TagAction } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { personKey, type Decision, type Person } from "@/types/people"
 
@@ -48,6 +49,46 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
     [clearSelection, openId, refresh],
   )
   const decisions = useDecisions(byId, onWritten)
+
+  // Quick labeling: a label on the open person moves the drawer to whoever is next
+  // (lib/people/advance.ts) once the list reflects the write; nothing cycles.
+  const advanceFrom = useRef<{ id: string; index: number } | null>(null)
+  const { open: openPerson, close: closeDrawer } = drawer
+  const { apply } = decisions
+  const label = useCallback(
+    async (action: TagAction, targets: readonly string[]) => {
+      if (openId && targets.includes(openId)) {
+        advanceFrom.current = { id: openId, index: matching.findIndex((row) => row.parent_id === openId) }
+      }
+      // The list re-renders after a successful write and the effect below consumes this;
+      // a skipped or failed write leaves the list alone, so drop it here.
+      if (!(await apply(action, targets))) advanceFrom.current = null
+    },
+    [apply, openId, matching],
+  )
+  useEffect(() => {
+    const from = advanceFrom.current
+    if (!from) return
+    advanceFrom.current = null
+    const next = nextOpenIndex(matching, from.id, from.index)
+    if (next === null) {
+      if (!matching.length) closeDrawer()
+      return
+    }
+    const person = matching[next]
+    if (!person) return
+    setFocus(next)
+    openPerson(person.parent_id)
+    table.current?.scrollToIndex(next, { align: "auto" })
+  }, [matching, openPerson, closeDrawer])
+
+  // The bar and the s / p keys act on the selection, else on the open person.
+  const targets = selection.selected.size ? [...selection.selected] : openId ? [openId] : []
+  const barLabel = selection.selected.size
+    ? `${selection.selected.size.toLocaleString()} selected`
+    : openId
+      ? (byId.get(openId)?.name ?? null)
+      : null
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
   // Each handler keeps one identity, so j/k and the drawer never re-render the rail or bars.
@@ -112,6 +153,8 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
     selection,
     drawer,
     decisions,
+    label,
+    targets,
   })
 
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
@@ -167,16 +210,17 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
             detail={drawer.detail}
             saving={decisions.saving}
             onAction={(action) => {
-              if (openId) void decisions.apply(action, [openId])
+              if (openId) void label(action, [openId])
             }}
             onClose={drawer.close}
             onRetry={refresh}
           />
           <BulkBar
-            count={selection.selected.size}
+            label={barLabel}
+            selection={selection.selected.size > 0}
             saving={decisions.saving}
-            onAction={(action) => void decisions.apply(action, [...selection.selected])}
-            onClear={clearSelection}
+            onAction={(action) => void label(action, targets)}
+            onClear={selection.selected.size ? clearSelection : closeDrawer}
           />
           <Toast
             toast={decisions.toast}

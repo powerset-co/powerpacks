@@ -9,14 +9,13 @@ export interface KeyboardActions {
   selectAll: () => void
   share: () => void
   keepPrivate: () => void
-  useWorth: () => void
   undo: () => void
   openFocused: () => void
   escape: () => void
 }
 
 // Keys whose action should not fire again while held down.
-const NO_REPEAT = new Set(["s", "p", "w", "z", "x", " ", "Enter"])
+const NO_REPEAT = new Set(["s", "p", "z", "x", " ", "Enter"])
 const TABS: Record<string, 0 | 1 | 2> = { "1": 0, "2": 1, "3": 2 }
 
 /** The page's shortcuts. Typing in a field only honours Escape (it leaves the field). */
@@ -68,9 +67,6 @@ export function useKeyboard(run: KeyboardActions) {
         break
       case "p":
         run.keepPrivate()
-        break
-      case "w":
-        run.useWorth()
         break
       case "z":
         run.undo()

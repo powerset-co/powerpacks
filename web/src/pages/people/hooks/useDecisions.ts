@@ -14,7 +14,6 @@ import { PEOPLE_QUERY_KEY } from "./usePeopleQuery"
 const DONE: Record<TagAction, (count: number) => string> = {
   share: (count) => `Marked ${plural(count, "person")} for sharing.`,
   private: (count) => `Marked ${plural(count, "person")} private.`,
-  worth: (count) => `Removed your sharing choice for ${plural(count, "person")}.`,
 }
 
 function patchRows(rows: Person[] | undefined, results: readonly TagResult[]): Person[] | undefined {
@@ -34,7 +33,7 @@ function patchRows(rows: Person[] | undefined, results: readonly TagResult[]): P
 }
 
 /**
- * Share / keep private / use worth for a set of people in one write. Rows are marked
+ * Share / keep private for a set of people in one write. Rows are marked
  * pending while it runs and patched from the server's answer; undo re-posts the tags
  * each person held before.
  */
@@ -75,10 +74,11 @@ export function useDecisions(byId: ReadonlyMap<string, Person>, onWritten: (ids:
     }
   }, [write])
 
+  /** Writes the action for `ids`; true when the server took it, false when skipped or failed. */
   const apply = useCallback(
-    async (action: TagAction, ids: readonly string[]) => {
+    async (action: TagAction, ids: readonly string[]): Promise<boolean> => {
       const rows = ids.map((id) => byId.get(id)).filter((row): row is Person => row !== undefined)
-      if (saving.current || !rows.length) return
+      if (saving.current || !rows.length) return false
       const changes = rows.map((row) => ({ parent_id: row.parent_id, tags: nextTags(row, action) }))
       const previous = rows.map((row) => ({ parent_id: row.parent_id, tags: [...row.tags] }))
       try {
@@ -87,8 +87,10 @@ export function useDecisions(byId: ReadonlyMap<string, Person>, onWritten: (ids:
           message: DONE[action](count),
           action: { label: "Undo", kbd: "Z", onClick: () => void undo() },
         })
+        return true
       } catch (error) {
         setToast({ message: `Couldn't save changes. ${errorText(error)}`, error: true })
+        return false
       }
     },
     [byId, write, undo],

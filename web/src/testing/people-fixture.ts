@@ -1,3 +1,4 @@
+import type { PersonDetail } from "@/types/people"
 // Synthetic people for tests: a columnar payload as GET /api/people/rows returns it.
 
 import { PERSON_COLUMNS, type PeoplePayload, type PersonCell, type PersonColumn } from "@/types/people"
@@ -105,4 +106,28 @@ export const PAYLOAD: PeoplePayload = {
     const cells: Cells = { ...BASE, ...person }
     return COLUMNS.map((column) => cells[column])
   }),
+}
+
+/** One drawer detail as GET /api/people/person returns it, for the fixture's first person. */
+export const DETAIL: PersonDetail = {
+  parent_id: "p1",
+  linkedin_url: "",
+  headline: "Engineer at Example",
+  avatar_url: "",
+  worth_reason: "",
+  note: "",
+  dossier_html: "",
+  probabilities: { is_family: 0.9 },
+  choice_p: {},
+  worth_note: "",
+  relationship_to_owner: "sibling",
+  events: [{ date: "2024-05", summary: "Moved cities" }],
+  shared_context: [],
+  topics: ["trips"],
+  employers: ["Example"],
+  school: "",
+  location: "Oakland",
+  aliases: [],
+  emails: [],
+  phones: [],
 }

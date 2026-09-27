@@ -10,7 +10,6 @@ const SHORTCUTS: readonly (readonly [readonly string[], string])[] = [
   [["⇧A"], "Select all matching"],
   [["S"], "Share"],
   [["P"], "Keep private"],
-  [["W"], "Use worth"],
   [["Z"], "Undo"],
   [["Enter"], "Open or close details"],
 ]

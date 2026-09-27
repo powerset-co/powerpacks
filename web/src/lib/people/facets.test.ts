@@ -72,6 +72,6 @@ describe("sortRows and nextTags", () => {
   it("swaps share and private", () => {
     const riley = rows.find((row) => row.name === "Riley Echo")
     expect(riley && nextTags(riley, "share")).toEqual(["share"])
-    expect(riley && nextTags(riley, "worth")).toEqual([])
+    expect(riley && nextTags(riley, "private")).toEqual(["private"])
   })
 })

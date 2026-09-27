@@ -55,15 +55,20 @@
     transform var(--t-slow) var(--ease-out),
     visibility 0s;
 }
+/* A person's content fades in from @starting-style (--t-med) and, when the drawer switches
+   person, fades out first (--t-fast, data-leaving); one transition, so its end always fires. */
 .drawer-inner {
   display: grid;
   gap: 20px;
   padding: 20px 20px 120px;
+  opacity: 1;
+  transition: opacity var(--t-med) var(--ease-out);
 }
-.drawer-inner.swap {
-  animation: fade-in var(--t-med) var(--ease-out) both;
+@starting-style {
+  .drawer-inner {
+    opacity: 0;
+  }
 }
-/* Switching person: the outgoing one fades to zero (--t-fast), then the new one fades in (.swap). */
 .drawer-inner[data-leaving] {
   opacity: 0;
   transition: opacity var(--t-fast) var(--ease-in);

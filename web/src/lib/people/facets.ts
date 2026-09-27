@@ -226,9 +226,9 @@ export function sortRows(rows: readonly Person[], { key, dir }: Sort): Person[] 
   return [...rows].sort((a, b) => dir * SORTERS[key](a, b))
 }
 
-export type TagAction = "share" | "private" | "worth"
+export type TagAction = "share" | "private"
 
-/** The tags a person holds after a share / keep-private / use-worth action. */
+/** The tags a person holds after a share / keep-private action. */
 export function nextTags(row: Person, action: TagAction): string[] {
   const tags = new Set(row.tags)
   if (action === "share") {
@@ -238,10 +238,6 @@ export function nextTags(row: Person, action: TagAction): string[] {
   if (action === "private") {
     tags.delete("share")
     tags.add("private")
-  }
-  if (action === "worth") {
-    tags.delete("share")
-    tags.delete("private")
   }
   return [...tags].sort()
 }

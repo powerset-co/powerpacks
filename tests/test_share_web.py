@@ -362,6 +362,28 @@ class BrowserTests(ShareWebFixture):
         self.addCleanup(self.server.shutdown)
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
 
+    def test_the_drawer_follows_repeated_clicks(self) -> None:
+        """Clicking a third person while the second is fading in must show the third, not a blank panel."""
+        from playwright.sync_api import expect, sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(self.base + "/people")
+            page.locator("[data-tab='yes']").click()
+            expect(page.locator(".row")).to_have_count(2)
+            names = page.locator(".row .who b").all_inner_texts()
+            # 500ms apart: each person's fade-in has finished before the next click.
+            for index in (0, 1, 0, 1):
+                page.locator(".row").nth(index).click()
+                page.wait_for_timeout(500)
+            expect(page.locator("[data-drawer] .drawer-inner[data-leaving]")).to_have_count(0)
+            expect(page.locator("[data-drawer] h2")).to_have_text(names[1])
+            page.wait_for_timeout(300)
+            opacity = page.evaluate("() => getComputedStyle(document.querySelector('.drawer-inner')).opacity")
+            self.assertEqual(opacity, "1")
+            browser.close()
+
     def test_tabs_facets_select_all_matching_share_and_undo(self) -> None:
         from playwright.sync_api import expect, sync_playwright
 

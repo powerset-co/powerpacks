@@ -1,7 +1,6 @@
 import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
-import { USE_WORTH_HELP } from "@/lib/people/copy"
 import type { TagAction } from "@/lib/people/facets"
 import type { Person } from "@/types/people"
 
@@ -20,11 +19,10 @@ function Check({ on, risen }: { on: boolean; risen: boolean }) {
   return on ? <span className={risen ? "rise-in" : undefined}>✓</span> : null
 }
 
-// Share and Keep private reflect the owner's own tags; Use worth removes that choice.
+// Share and Keep private reflect the owner's own tags; Undo (toast, z) takes a choice back.
 export function DrawerActions({ row, saving, disabled, onAction }: DrawerActionsProps) {
   const shares = row.tags.includes("share")
   const keepsPrivate = row.tags.includes("private")
-  const chosen = shares || keepsPrivate
   const [opened] = useState({ shares, keepsPrivate })
   return (
     <>
@@ -50,19 +48,6 @@ export function DrawerActions({ row, saving, disabled, onAction }: DrawerActions
           <Check on={keepsPrivate} risen={!opened.keepsPrivate} />
           Keep private
         </Button>
-      </div>
-      <div className="drawer-worth">
-        <Button
-          variant="ghost"
-          className="min-h-7 px-2"
-          data-one="worth"
-          aria-pressed={!chosen}
-          disabled={disabled || !chosen}
-          onClick={() => onAction("worth")}
-        >
-          Use worth
-        </Button>
-        <span>{saving ? "Saving…" : `${USE_WORTH_HELP}.`}</span>
       </div>
     </>
   )
