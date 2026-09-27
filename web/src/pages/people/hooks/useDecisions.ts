@@ -98,5 +98,5 @@ export function useDecisions(byId: ReadonlyMap<string, Person>, onWritten: (ids:
 
   const dismissToast = useCallback(() => setToast(null), [])
 
-  return { pending, saving: pending.size > 0, apply, undo, toast, dismissToast }
+  return { pending, saving: pending.size > 0, apply, undo, toast, showToast: setToast, dismissToast }
 }

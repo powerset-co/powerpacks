@@ -1,6 +1,9 @@
 // The page's words for machine values, ported 1:1 from the legacy people.js.
 
+import type { LastUpload, UploadPlan } from "@/lib/api/upload"
 import { CHANNELS } from "@/lib/channels"
+import { parseDate, plural } from "@/lib/copy"
+import type { CalmPhase, UploadPhase } from "@/lib/people/upload"
 
 // Brand casing, keyed lowercase: the channel titles plus JEV.
 const BRANDS: Readonly<Record<string, string>> = {
@@ -101,4 +104,89 @@ export function eventDate(value: string | null | undefined): string {
       return name ? `${name} ${year}` : year
     },
   )
+}
+
+// The share dialog and its trigger.
+export const UPLOAD = {
+  share: "Share network",
+  shareChanges: "Share changes",
+  view: "View upload",
+  neverShared: "Never shared",
+  check: "Check network",
+  checkAgain: "Check again",
+  confirm: "Confirm sharing",
+  resume: "Resume sharing",
+  close: "Close",
+  starting: "Starting…",
+  reconnecting: "Reconnecting…",
+  progress: "People uploaded",
+  uploaded: "Uploaded",
+  upToDate: "Already up to date",
+  titleUpToDate: "Your network is up to date",
+} as const
+
+export const UPLOAD_TITLE: Readonly<Record<UploadPhase, string>> = {
+  idle: "Share your network",
+  checking: "Checking your network",
+  ready: "Ready to share",
+  uploading: "Uploading your network",
+  completed: "Your network is shared",
+  "check-failed": "Check failed",
+  "upload-failed": "Upload failed",
+  interrupted: "Upload interrupted",
+  refused: "Upload not started",
+}
+
+// A failed phase shows the server's sentence instead.
+export const UPLOAD_SENTENCE: Readonly<Record<CalmPhase, string>> = {
+  idle: "Only people marked Share are uploaded.",
+  checking: "Counting who will upload. Nothing is shared yet.",
+  ready: "Only people marked Share with a LinkedIn profile upload.",
+  uploading: "Closing keeps the upload running.",
+  completed: "Only people marked Share are uploaded.",
+}
+
+// The check's plan, in order; a zero row is hidden except what will upload.
+export const PLAN_ROWS: readonly { key: keyof UploadPlan; label: string }[] = [
+  { key: "marked_share", label: "Marked Share" },
+  { key: "with_linkedin", label: "With LinkedIn, will upload" },
+  { key: "without_linkedin", label: "Without LinkedIn, stay local" },
+  { key: "new_to_cloud", label: "New to the cloud" },
+  { key: "changed", label: "Changed" },
+  { key: "already_shared", label: "Already shared" },
+  { key: "losing_access", label: "Losing access" },
+  { key: "companies_missing", label: "Companies missing" },
+]
+export const PLAN_ALWAYS: keyof UploadPlan = "with_linkedin"
+
+const LAST_UPLOAD: Readonly<Record<LastUpload["status"], (last: LastUpload) => string>> = {
+  completed: (last) => `Shared ${(last.uploaded + last.skipped).toLocaleString()}`,
+  failed: () => "Upload failed",
+  interrupted: () => "Upload interrupted",
+}
+
+/** "Sep 27"; an unparseable value as written. */
+export function dayMonth(value: string): string {
+  const date = parseDate(value)
+  return date ? date.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : value
+}
+
+/** "Finished Sep 27, 3:04 PM". */
+export function finishedAt(value: string): string {
+  const date = parseDate(value)
+  const when = date
+    ? date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : value
+  return `Finished ${when}`
+}
+
+/** The trigger's muted line: "Shared 128 · Sep 27", "Upload interrupted · Sep 27", "Never shared". */
+export function lastUploadLine(last: LastUpload | null): string {
+  if (!last) return UPLOAD.neverShared
+  return `${LAST_UPLOAD[last.status](last)} · ${dayMonth(last.finished_at)}`
+}
+
+/** The page toast when an upload finishes while the dialog is closed. */
+export function sharedToast(count: number): string {
+  return `Shared ${plural(count, "person")}.`
 }

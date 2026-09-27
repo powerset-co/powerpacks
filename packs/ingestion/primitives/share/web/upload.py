@@ -1,27 +1,41 @@
-"""One in-process upload for the People page, with progress read from its manifest."""
+"""Run one People upload and project its typed manifest to the status route.
+
+Changelog:
+  2026-09-27: bind confirm to checked decisions, expose the upload status contract.
+"""
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from packs.indexing.primitives.upload_powerset import upload_powerset
-from packs.indexing.primitives.upload_powerset.errors import log_error
+from packs.indexing.primitives.upload_powerset.errors import log_error, safe_error
+from packs.indexing.primitives.upload_powerset.manifest import (
+    CHANGED_CHECK, CHECK_FAILED, CHECK_FIRST, INTERRUPTED, RUN_ACTIVE, UPLOAD_FAILED, Stage,
+    UploadManifest, share_digest,
+)
 from packs.ingestion.primitives.deep_context.db.share_views import share_decisions
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
-from packs.ingestion.schemas.share_schema import SHARE_YES
 
-SAFE_ERRORS = frozenset({
-    "Upload requires the powerset_v2 PostgreSQL login",
-    "Upload requires a local search index; build the index first",
-    "Upload requires a TurboPuffer API key",
-    "Upload requires the shared TurboPuffer v3 namespaces",
-    "no users row for the current Powerset credentials; run `$powerset login`",
-})
+STAGE_MESSAGES = {
+    Stage.PLANNING: "Checking your shared people and saved uploads…",
+    Stage.CHECKING_ACCESS: "Connecting to your shared network…",
+    Stage.CHECKING_PEOPLE: "Comparing your people with the shared network…",
+    Stage.CHECKING_COMPANIES: "Checking companies already in the shared network…",
+    Stage.CHECKING_SCHOOLS: "Checking schools already in the shared network…",
+    Stage.CHECKING_CHANGES: "Checking which people have changed since your last upload…",
+    Stage.WRITING_PEOPLE: "Writing people and access to the shared network…",
+    Stage.PEOPLE: "Uploading people…",
+    Stage.SUMMARIES: "Uploading profiles…",
+    Stage.EDUCATION: "Uploading education…",
+    Stage.COMPANIES: "Uploading companies…",
+    Stage.SCHOOLS: "Uploading schools…",
+    Stage.COMMITTING: "Finishing your upload…",
+}
 
 
 class ShareUpload:
@@ -32,129 +46,120 @@ class ShareUpload:
         self.people_csv = people_csv
         self.index_db = index_db
         self.out_dir = out_dir
+        self.manifest_path = out_dir / "manifest.json"
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
-    def _saved(self) -> dict[str, Any]:
-        try:
-            return json.loads((self.out_dir / "manifest.json").read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+    def _saved(self) -> UploadManifest:
+        return UploadManifest.read(self.manifest_path)
+
+    def _current_share_digest(self) -> str:
+        return share_digest(share_decisions(open_existing_db(self.share_db)))
 
     def status(self) -> dict[str, Any]:
+        try:
+            return self._status()
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            try:
+                saved = self._saved()
+            except BaseException:
+                saved = UploadManifest()
+            failed = replace(saved, status="failed", error=CHECK_FAILED if saved.dry_run else UPLOAD_FAILED)
+            failed.write(self.manifest_path)
+            log_error(self.out_dir, saved.stage or Stage.PLANNING, exc, self._env_file())
+            return self._status()
+
+    def _status(self) -> dict[str, Any]:
         saved = self._saved()
         with self._lock:
             active = self._thread is not None and self._thread.is_alive()
-        state = saved.get("status", "idle")
-        if saved.get("dry_run") and state == "completed":
+        if saved.status == "running" and not active:
+            saved = self._saved()
+        if saved.status == "running" and not active:
+            saved = replace(saved, status="interrupted", error=INTERRUPTED,
+                            finished_at=upload_powerset.now_iso())
+            if not saved.dry_run:
+                saved = replace(saved, last_upload={"finished_at": saved.finished_at,
+                    "status": "interrupted", "uploaded": saved.progress["uploaded"],
+                    "skipped": saved.progress["skipped"]})
+            saved.write(self.manifest_path)
+        if saved.status == "running":
+            state = "checking" if saved.dry_run else "uploading"
+        elif saved.status == "completed" and saved.dry_run:
             state = "ready"
-        if active:
-            state = "running"
-        elif state == "running":
-            state = "interrupted"
-        if state not in {"idle", "running", "ready", "completed", "failed", "interrupted"}:
-            state = "failed"
-        progress = saved.get("progress") or {}
-        counts = {key: int(progress.get(key) or 0) for key in ("total", "uploaded", "skipped")}
-        namespaces = progress.get("namespaces")
-        if isinstance(namespaces, dict):
-            counts["namespaces"] = {
-                name: {key: int(values.get(key) or 0) for key in ("upserted", "patched")}
-                for name, values in namespaces.items() if name in {"people", "summaries", "education", "companies", "schools"}
-                and isinstance(values, dict)
-            }
-        payload: dict[str, Any] = {
-            "status": state,
-            "checking": state == "running" and bool(saved.get("dry_run")),
-            "progress": counts,
-        }
-        preview_count = (saved.get("plan") or {}).get("previously_uploaded")
-        hashes = saved.get("person_hashes") or {}
-        if saved.get("dry_run") and saved.get("status") == "completed" and isinstance(preview_count, int):
-            payload["previously_uploaded"] = preview_count
-        elif hashes:
-            shared = {row.person_id for row in share_decisions(open_existing_db(self.share_db))
-                      if row.share == SHARE_YES and row.public_identifier}
-            payload["previously_uploaded"] = len(shared & hashes.keys())
         else:
-            payload["previously_uploaded"] = 0
-        if state == "running" and isinstance(saved.get("stage"), str):
-            stage = saved["stage"]
-            payload["stage"] = stage
-            payload["message"] = {
-                "planning": "Checking your shared people and saved uploads…",
-                "checking_access": "Connecting to your shared network…",
-                "checking_people": "Comparing your people with the shared network…",
-                "checking_companies": "Checking companies already in the shared network…",
-                "checking_schools": "Checking schools already in the shared network…",
-                "checking_changes": "Checking which people have changed since your last upload…",
-                "people": "Uploading people…",
-                "summaries": "Uploading profiles…",
-                "education": "Uploading education…",
-                "companies": "Uploading companies…",
-                "schools": "Uploading schools…",
-                "committing": "Finishing your upload…",
-            }.get(stage, "Uploading your network…")
-        for key in ("skipped_no_linkedin", "companies_skipped_no_row"):
-            count = (saved.get("plan") or {}).get(key)
-            if isinstance(count, int):
-                payload[key] = count
-        if state == "failed":
-            error = saved.get("error")
-            safe = isinstance(error, str) and (error in SAFE_ERRORS or re.fullmatch(
-                r"Upload requires a current local index; \d+ (?:shared people lack profiles|(?:companies|schools) lack rows)", error))
-            payload["error"] = error if safe else "Upload failed; retry to resume"
-            stage = saved.get("stage")
-            if not safe and stage in {"people", "summaries", "education", "companies", "schools"}:
-                name = "profiles" if stage == "summaries" else stage
-                payload["error"] = f"Could not upload {name}. Retry to resume."
-        if state == "completed" and isinstance(saved.get("result"), dict):
-            payload["result"] = saved["result"]
-        return payload
+            state = saved.status
+        stage = saved.stage if state in {"checking", "uploading"} else None
+        progress = saved.progress
+        namespaces = {name: {"upserted": value["upserted"], "patched": value["patched"]}
+                      for name, value in progress["namespaces"].items()
+                      if name in {"people", "summaries", "education", "companies", "schools"}}
+        plan = saved.plan
+        plan_counts = None if plan is None else {key: plan.get(key, 0) for key in (
+            "marked_share", "with_linkedin", "without_linkedin", "new_to_cloud", "changed",
+            "already_shared", "losing_access", "companies_missing")}
+        error = None
+        if state == "interrupted":
+            error = INTERRUPTED
+        elif state == "failed":
+            error = safe_error(RuntimeError(saved.error or ""), CHECK_FAILED if saved.dry_run else UPLOAD_FAILED)
+        return {
+            "status": state,
+            "stage": stage,
+            "message": STAGE_MESSAGES.get(stage) if stage else None,
+            "progress": {"total": progress["total"], "uploaded": progress["uploaded"],
+                         "skipped": progress["skipped"], "namespaces": namespaces},
+            "plan": plan_counts,
+            "last_upload": saved.last_upload,
+            "failed_action": ("check" if saved.dry_run else "upload") if state in {"failed", "interrupted"} else None,
+            "error": error,
+        }
 
-    def start(self, *, dry_run: bool) -> dict[str, Any] | None:
+    def start(self, *, dry_run: bool) -> dict[str, Any]:
         with self._lock:
-            if self._thread is None or not self._thread.is_alive():
-                manifest = self.out_dir / "manifest.json"
+            active = self._thread is not None and self._thread.is_alive()
+            if active and not dry_run:
+                raise ValueError(RUN_ACTIVE)
+            if not active:
                 previous = self._saved()
-                if not dry_run and (previous.get("status") != "completed" or not previous.get("dry_run")):
-                    return None
-                running = {key: previous[key] for key in
-                           ("target", "person_hashes", "owned_people", "pending_upserts") if key in previous}
-                running.update(status="running", stage="planning", dry_run=dry_run,
-                               progress={"total": 0, "uploaded": 0, "skipped": 0})
-                self.out_dir.mkdir(parents=True, exist_ok=True)
-                pending = manifest.with_suffix(".tmp")
-                pending.write_text(json.dumps(running) + "\n", encoding="utf-8")
-                pending.replace(manifest)
+                if not dry_run:
+                    if previous.status != "completed" or not previous.dry_run or previous.plan is None:
+                        raise ValueError(CHECK_FIRST)
+                    if previous.share_digest != self._current_share_digest():
+                        raise ValueError(CHANGED_CHECK)
+                running = replace(previous, status="running", stage=Stage.PLANNING,
+                                  dry_run=dry_run, progress=UploadManifest().progress,
+                                  error=None, error_type=None)
+                running.write(self.manifest_path)
                 self._thread = threading.Thread(target=self._run, args=(dry_run,), daemon=True)
                 self._thread.start()
-            elif not dry_run and self._saved().get("dry_run"):
-                return None
         return self.status()
+
+    @staticmethod
+    def _env_file() -> Path | None:
+        value = os.environ.get("POWERPACKS_UPLOAD_ENV_FILE")
+        return Path(value) if value else None
 
     def _run(self, dry_run: bool) -> None:
         try:
             upload_powerset.UploadPowerset(
                 db=self.index_db, share_db=self.share_db, people_csv=self.people_csv,
-                out_dir=self.out_dir, dry_run=dry_run,
-                env_file=Path(os.environ["POWERPACKS_UPLOAD_ENV_FILE"])
-                if os.environ.get("POWERPACKS_UPLOAD_ENV_FILE") else None,
+                out_dir=self.out_dir, dry_run=dry_run, require_checked=not dry_run,
+                env_file=self._env_file(),
             ).run()
-        except Exception as exc:
-            # Preserve the uploader's manifest and its recovery data, including on startup failure.
-            self.out_dir.mkdir(parents=True, exist_ok=True)
-            manifest = self.out_dir / "manifest.json"
-            try:
-                saved = json.loads(manifest.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError):
-                saved = {}
-            if saved.get("status") != "failed":
-                log_error(self.out_dir, saved.get("stage", "planning"), exc,
-                          Path(os.environ["POWERPACKS_UPLOAD_ENV_FILE"])
-                          if os.environ.get("POWERPACKS_UPLOAD_ENV_FILE") else None)
-                saved.update(status="failed", error="Upload failed; retry to resume")
-            saved.setdefault("progress", {"total": 0, "uploaded": 0, "skipped": 0})
-            replacement = manifest.with_suffix(".tmp")
-            replacement.write_text(json.dumps(saved) + "\n", encoding="utf-8")
-            replacement.replace(manifest)
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            saved = self._saved()
+            if saved.status != "failed":
+                log_error(self.out_dir, saved.stage or Stage.PLANNING, exc, self._env_file())
+                failed = replace(saved, status="failed", error=safe_error(
+                    exc, CHECK_FAILED if dry_run else UPLOAD_FAILED))
+                if not dry_run:
+                    failed = replace(failed, last_upload={
+                        "finished_at": upload_powerset.now_iso(), "status": "failed",
+                        "uploaded": failed.progress["uploaded"], "skipped": failed.progress["skipped"],
+                    })
+                failed.write(self.manifest_path)

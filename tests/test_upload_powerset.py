@@ -544,6 +544,45 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["namespaces"]["companies"]["upsert"], 1)
         self.assertEqual(manifest["plan"]["persons_upsert"], 1)
 
+    def test_real_run_rechecks_share_plan_and_target_before_any_write(self):
+        plan = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
+                        [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
+        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+                                              for ns in plan.namespaces))
+        first = (share_row(NEW_PERSON, "jordan-bravo"),)
+        changed_label = (share_row(NEW_PERSON, "jordan-bravo", labels="new-label"),)
+        changed_plan = replace(plan, sources_delete=(SourceRow(STALE_PERSON, "linkedin", "riley-echo"),))
+        changed_target = replace(plan, namespaces=(replace(plan.namespaces[0], namespace="aleph_people_other_v3"),
+                                                     *plan.namespaces[1:]))
+        for rows, plans in ((changed_label, (plan, plan)),
+                            (first, (plan, changed_plan)),
+                            (first, (plan, changed_target))):
+            with self.subTest(rows=rows, plan=plans[1]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    paths = self._fixture(Path(tmp))
+                    connection = mock.MagicMock()
+                    connection.__enter__.return_value = connection
+                    connection.cursor.return_value.__enter__.return_value = FakeCursor()
+                    fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
+                    with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
+                         mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
+                         mock.patch.object(postgres, "verify_v3_schema"), \
+                         mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
+                         mock.patch.object(upload_powerset.tp_backend, "namespace_name",
+                                           side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
+                         mock.patch.object(upload_powerset, "share_decisions", side_effect=[first, rows]), \
+                         mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=plans), \
+                         mock.patch.object(upload_powerset.UploadPowerset, "_apply") as apply, \
+                         mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
+                        upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
+                        with self.assertRaisesRegex(RuntimeError, "network changed since the check"):
+                            upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False,
+                                                           require_checked=True, **paths).run()
+                    apply.assert_not_called()
+                    saved = json.loads((paths["out_dir"] / "manifest.json").read_text())
+                    self.assertEqual((saved["status"], saved["error"]),
+                                     ("failed", "Your network changed since the check. Check again."))
+
     def test_same_network_second_apply_makes_no_cloud_writes(self):
         first = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
                          [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
@@ -575,16 +614,20 @@ class DryRunTests(unittest.TestCase):
                  mock.patch.object(postgres, "fetch_operator_ids_by_person", side_effect=lambda cur, ids: {person_id: (OPERATOR,) for person_id in ids}), \
                  mock.patch.object(postgres, "put_tags", return_value=0), \
                  mock.patch.object(postgres, "delete_tags", return_value=0), \
-                 mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=[first, second]):
+                 mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=[first, second, first]):
                 one = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
                 before = sum(len(ns.writes) for ns in namespaces.values())
                 two = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
+                unchanged_writes = sum(len(ns.writes) for ns in namespaces.values())
+                restored = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
         self.assertEqual(one["progress"]["uploaded"], 1)
         self.assertEqual(two["progress"]["uploaded"], 0)
         self.assertEqual(two["plan"]["previously_uploaded"], 1)
         self.assertEqual(two["progress"]["skipped"], 1)
-        self.assertEqual(sum(len(ns.writes) for ns in namespaces.values()), before)
-        self.assertEqual(writes, [("persons", 1), ("sources", 1), ("persons", 0), ("sources", 0)])
+        self.assertEqual(unchanged_writes, before)
+        self.assertEqual(restored["progress"]["uploaded"], 1)
+        self.assertEqual(writes, [("persons", 1), ("sources", 1), ("persons", 0), ("sources", 0),
+                                  ("persons", 1), ("sources", 1)])
 
     def test_failure_after_first_namespace_resumes_then_skips(self):
         initial = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
@@ -658,9 +701,9 @@ class DryRunTests(unittest.TestCase):
                 out_dir=out, dry_run=True)
 
             def other_target(payload, previous):
-                payload.update(status="completed", plan={"persons_upsert": 0})
-                uploader._manifest(payload)
-                return payload
+                replacement = replace(payload, status="completed", plan={"persons_upsert": 0})
+                replacement.write(uploader.manifest_path)
+                return replacement
 
             with mock.patch.object(uploader, "_run", side_effect=other_target):
                 uploader.run()
@@ -688,7 +731,7 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(failed["status"], "failed")
         self.assertEqual(failed["pending_upserts"], pending)
         self.assertEqual(failed["person_hashes"], {NEW_PERSON: "old"})
-        self.assertEqual(failed["error"], "Upload failed; retry to resume")
+        self.assertEqual(failed["error"], "Upload failed. Check again to resume.")
 
 
 class ApplyTests(unittest.TestCase):
@@ -711,13 +754,14 @@ class ApplyTests(unittest.TestCase):
             con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
             uploader = upload_powerset.UploadPowerset(
                 db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
-                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
+                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR, out_dir=Path(tmp) / "out")
             uploader._tp_client = mock.Mock(namespace=mock.Mock(return_value=namespace))
             uploader._namespace_names = {logical: logical for logical in NAMESPACE_NAMES}
             with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace):
-                uploader._apply(con, FakeCursor(), plan)
+                result = uploader._apply(con, FakeCursor(), plan)
             con.close()
         self.assertFalse(any("upsert_rows" in call for call in namespace.writes))
+        self.assertEqual(result.people_uploaded, 1)
 
     def test_existing_cloud_person_with_no_namespace_docs_is_repaired(self):
         plan = plan_for(
@@ -738,7 +782,7 @@ class ApplyTests(unittest.TestCase):
             con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
             uploader = upload_powerset.UploadPowerset(
                 db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
-                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
+                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR, out_dir=Path(tmp) / "out")
             uploader._tp_client = mock.Mock(namespace=mock.Mock(return_value=namespace))
             uploader._namespace_names = {logical: logical for logical in NAMESPACE_NAMES}
             with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace):
@@ -755,7 +799,7 @@ class ApplyTests(unittest.TestCase):
             [local_person(NEW_PERSON, "jordan-bravo"), local_person(CLOUD_PERSON, "casey-lane")],
             cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON, private_person: private_person}),
         )
-        cursor = FakeCursor(rowcounts=[1, 0, 1, 0, 0, 1])
+        cursor = FakeCursor(rowcounts=[1, 0, 1, 0, 1, 0])
         namespace = FakeNamespace(rows=[mock.Mock(id="existing-doc", base_id=CLOUD_PERSON,
                                                   person_id=CLOUD_PERSON, allowed_operator_ids=[])])
 
@@ -772,7 +816,7 @@ class ApplyTests(unittest.TestCase):
             con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
             uploader = upload_powerset.UploadPowerset(
                 db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
-                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
+                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR, out_dir=Path(tmp) / "out")
             uploader._tp_client = mock.Mock(namespace=mock.Mock(return_value=namespace))
             uploader._namespace_names = {logical: logical for logical in NAMESPACE_NAMES}
             with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace), \

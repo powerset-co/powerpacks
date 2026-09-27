@@ -20,6 +20,7 @@ import { PeopleShell } from "./PeopleShell"
 import { FacetRail } from "./rail/FacetRail"
 import { EmptyText } from "./table/EmptyText"
 import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable"
+import { ShareUpload } from "./upload/ShareUpload"
 
 // The loaded page: every person once, filtered client-side, with one write for share / private tags.
 export function PeopleWorkspace({ rows }: { rows: Person[] }) {
@@ -163,7 +164,13 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
       rail={<FacetRail filters={view.filters} counts={counts} onValue={toggleFilter} />}
       main={
         <>
-          <DecisionTabs tab={view.tab} totals={totals} total={rows.length} onTab={setTab} />
+          <DecisionTabs
+            tab={view.tab}
+            totals={totals}
+            total={rows.length}
+            onTab={setTab}
+            action={<ShareUpload onToast={(message) => decisions.showToast({ message })} />}
+          />
           <QuickFilters filters={view.filters} counts={quickCounts} onPick={pickQuick} />
           <FilterBar
             ref={search}

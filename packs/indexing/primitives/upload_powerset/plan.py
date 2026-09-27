@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure reconcile: local share list + cloud state -> UploadPlan.
 
-Flow: the `yes` share rows with a LinkedIn slug become the persons upsert (the
+Flow: the `yes` share rows with a LinkedIn slug become persons candidates (the
 rest are skipped_no_linkedin, a cloud NOT NULL constraint, not a bug; `confirm`
 rows wait for a human and leave the laptop no more than a `no` does) -> desired
 operator_person_sources rows are one per (person, cloud channel) -> the

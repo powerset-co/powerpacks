@@ -47,6 +47,7 @@ def entity_ids_by_person(con: Any, logical: str, person_ids: list[str]) -> dict[
     else:
         sql = """
             SELECT e.base_id, e.canonical_education_id FROM local_people_education e
+            JOIN local_education s ON s.id = e.canonical_education_id
             WHERE e.base_id = ANY(?) AND e.canonical_education_id IS NOT NULL
         """
     by_person: dict[str, set[str]] = {}
@@ -61,6 +62,15 @@ def count_missing_companies(con: Any, person_ids: tuple[str, ...]) -> int:
         FROM local_people_positions p
         LEFT JOIN local_companies c ON c.id = p.company_id
         WHERE p.base_id = ANY(?) AND p.company_id IS NOT NULL AND c.id IS NULL
+    """, [list(person_ids)]).fetchone()[0])
+
+
+def count_missing_schools(con: Any, person_ids: tuple[str, ...]) -> int:
+    return int(con.execute("""
+        SELECT COUNT(DISTINCT e.canonical_education_id)
+        FROM local_people_education e
+        LEFT JOIN local_education s ON s.id = e.canonical_education_id
+        WHERE e.base_id = ANY(?) AND e.canonical_education_id IS NOT NULL AND s.id IS NULL
     """, [list(person_ids)]).fetchone()[0])
 
 

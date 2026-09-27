@@ -89,6 +89,17 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+/* The share button after the count: the last upload in the note's muted line, then the button. */
+.head-share {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 12px;
+  padding-bottom: 8px;
+}
+.head-share .head-note {
+  padding-bottom: 0;
+}
 
 .quick {
   display: flex;

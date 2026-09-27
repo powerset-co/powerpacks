@@ -259,13 +259,28 @@ CLAUDE.md routing line, `packs/indexing/README.md` row.
 ## Local People upload (2026-09-27)
 
 The People page's **Share network** button runs `UploadPowerset` in the review
-server and polls `/api/people/upload`. Row-level Share/Keep private still edit
-review decisions; Share network reconciles the whole current share list.
-The modal reports records written as each namespace finishes, then committed
-people uploaded/skipped. Closing the modal does not stop the server's upload.
-Checking shows an activity spinner and the current people/company/school check.
-Missing local company records are skipped and counted; people and positions
-still upload.
+server and polls `GET /api/people/upload`. Row-level Share/Keep private edit
+review decisions; Share network reconciles the whole current share list. The
+`POST /api/people/upload/check` checks the plan without writing. Confirm posts
+to `/api/people/upload` only if
+that completed check still matches the share table, target, and freshly
+computed plan counts. A changed share decision or target requires **Check again**;
+the upload stops before writing. A second tab cannot start a run while one is
+active. Both POST routes reject a mismatched `Origin` with 403; requests without
+`Origin` remain available to non-browser clients.
+
+The status endpoint reports `idle`, `checking`, `ready`, `uploading`, `completed`,
+`failed`, or `interrupted`, with a plan, progress, last real upload, and a safe
+error sentence where applicable. An interrupted run says **This upload was
+interrupted. Check again to resume.** Check again computes a fresh plan before
+another Confirm. Closing the modal does not stop the server's upload. Stages
+are `planning`, `checking_access`, `checking_people`, `checking_companies`,
+`checking_schools`, `checking_changes`, then `writing_people` for the Postgres
+persons/sources/tags writes, `people`, `summaries`, `education`, `companies`,
+`schools`, `committing`, and `completed`.
+Namespace progress counts records written; the completed count reports people
+whose documents or sources were written. Missing local company and school rows
+are counted and skipped while the available records upload.
 
 Uploads require the v3 namespace family and the `powerset_v2` PostgreSQL schema.
 Set `POWERPACKS_UPLOAD_ENV_FILE` when starting the review server to an env file
@@ -280,10 +295,17 @@ The existing upload manifest retains content hashes and unfinished writes for
 retries. Stable document IDs make replay safe; existing cloud position IDs and
 cloud-enriched profiles are preserved. Unchanged source rows, access lists and
 private tags do not get rewritten. TurboPuffer's SDK retries transient requests
-up to four times. After an exhausted retry or server restart, Retry upload
-reconciles the current share decisions again.
+up to four times. After an exhausted retry or server restart, **Check again**
+recomputes the plan; Confirm resumes the upload.
 
 Failures append to `.powerpacks/upload-powerset/errors.log` with the stage,
 traceback, provider response, HTTP status and request ID. Credentials are
 redacted, the file is owner-readable only, and retries retain previous entries.
-The browser receives only the short error message.
+The browser receives only a safe, one-sentence error and whether the check or
+upload failed.
+
+Open items: company and school gap-fill still writes local entity IDs into the
+shared namespaces, which can differ from cloud IDs for the same entity. Postgres
+writes share one transaction, but TurboPuffer writes happen before it commits;
+a failure can leave TurboPuffer changes visible while Postgres rolls back until
+the next confirmed upload reconciles them.

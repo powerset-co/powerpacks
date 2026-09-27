@@ -4,12 +4,14 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 import httpx
 import turbopuffer
 
 from packs.indexing.primitives.upload_powerset.upload_powerset import UploadPowerset
+from packs.indexing.primitives.upload_powerset.manifest import Stage
 
 
 class UploadErrorTests(unittest.TestCase):
@@ -27,7 +29,7 @@ class UploadErrorTests(unittest.TestCase):
                        body={'error': 'attribute person_id is not filterable', 'token': 'synthetic-private-key'})
 
             def fail(payload, previous):
-                payload['stage'] = 'education'
+                replace(payload, stage=Stage.EDUCATION).write(uploader.manifest_path)
                 raise error
 
             with patch.object(uploader, '_run', side_effect=fail):

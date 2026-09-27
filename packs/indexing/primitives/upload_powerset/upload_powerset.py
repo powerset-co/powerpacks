@@ -9,13 +9,16 @@ company/school docs already exist) -> plan.build_plan reconciles the two ->
 --dry-run emits the plan and stops; --apply upserts persons, reconciles
 operator_person_sources, re-reads the authoritative allowed_operator_ids, writes
 or patches the five TurboPuffer namespaces, then puts/deletes contact_tags.
-Either way one manifest lands in .powerpacks/upload-powerset/.
+The People route requires an unchanged completed check before applying. The CLI
+keeps its explicit --apply path. Either way one manifest lands in
+.powerpacks/upload-powerset/.
 
 Reconcile, not append: the cloud state for THIS operator is made equal to the
 share list. An un-share removes the operator from allowed_operator_ids and
 deletes its source rows; documents are never deleted.
 
 Changelog:
+  2026-09-27: bind real runs to checked decisions and target; report typed stages.
   2026-09-24: read the share list from SQLite, not share.csv.
   2026-09-24: shared = the three-way share value `yes`; `confirm` rows stay home.
   2026-09-24: created; delegated local reads and centralized namespace contracts.
@@ -60,8 +63,11 @@ from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
     UploadResult,
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
-from packs.indexing.primitives.upload_powerset.errors import log_error  # noqa: E402
-from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES  # noqa: E402
+from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS, log_error, safe_error  # noqa: E402
+from packs.indexing.primitives.upload_powerset.manifest import (  # noqa: E402
+    CHANGED_CHECK, CHECK_FAILED, UPLOAD_FAILED, Stage, UploadManifest, share_digest,
+)
+from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES, NAMESPACE_BY_LOGICAL  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
@@ -84,6 +90,7 @@ class UploadPowerset:
         out_dir: Path = DEFAULT_OUT_DIR,
         operator_id: str | None = None,
         dry_run: bool = True,
+        require_checked: bool = False,
         env_file: Path | None = None,
     ) -> None:
         self.db = db
@@ -92,6 +99,7 @@ class UploadPowerset:
         self.out_dir = out_dir
         self.operator_id = operator_id
         self.dry_run = dry_run
+        self.require_checked = require_checked
         self.env_file = env_file
         self.manifest_path = out_dir / "manifest.json"
         self._database_url = ""
@@ -103,34 +111,32 @@ class UploadPowerset:
 
     def run(self) -> dict[str, Any]:
         started_at = now_iso()
-        previous = json.loads(self.manifest_path.read_text()) if self.manifest_path.exists() else {}
-        payload: dict[str, Any] = {
-            "status": "running", "stage": "planning", "dry_run": self.dry_run, "started_at": started_at,
-            "progress": {"total": 0, "uploaded": 0, "skipped": 0, "namespaces": {}},
-        }
-        for key in ("target", "person_hashes", "owned_people", "pending_upserts"):
-            if key in previous:
-                payload[key] = previous[key]
-        self._manifest(payload)
+        previous = UploadManifest.read(self.manifest_path)
+        current = replace(previous, status="running", stage=Stage.PLANNING,
+                          dry_run=self.dry_run, started_at=started_at, finished_at=None,
+                          error=None, error_type=None, progress=UploadManifest().progress,
+                          plan=previous.plan)
+        current.write(self.manifest_path)
         try:
-            return self._run(payload, previous)
-        except Exception as exc:
-            message = str(exc) if isinstance(exc, RuntimeError) and str(exc).startswith(
-                ("Upload requires", "no users row")) else "Upload failed; retry to resume"
-            payload.update(status="failed", error=message, error_type=type(exc).__name__, finished_at=now_iso())
+            return self._run(current, previous)
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            current = UploadManifest.read(self.manifest_path)
+            message = safe_error(exc, CHECK_FAILED if self.dry_run else UPLOAD_FAILED)
+            current = replace(current, status="failed", error=message,
+                              error_type=type(exc).__name__, finished_at=now_iso())
             if isinstance(exc, turbopuffer.APIStatusError):
-                payload["http_status"] = exc.status_code
-            self._manifest(payload)
-            log_error(self.out_dir, payload["stage"], exc, self.env_file)
+                current = replace(current, http_status=exc.status_code)
+            if not self.dry_run:
+                current = replace(current, last_upload={"finished_at": current.finished_at,
+                    "status": "failed", "uploaded": current.progress["uploaded"],
+                    "skipped": current.progress["skipped"]})
+            current.write(self.manifest_path)
+            log_error(self.out_dir, current.stage or Stage.PLANNING, exc, self.env_file)
             raise
 
-    def _manifest(self, payload: dict[str, Any]) -> None:
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        pending = self.manifest_path.with_suffix(".tmp")
-        pending.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        pending.replace(self.manifest_path)
-
-    def _run(self, payload: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    def _run(self, current: UploadManifest, previous: UploadManifest) -> dict[str, Any]:
         config = dict(os.environ)
         if self.env_file:
             config.update({key: value for key, value in dotenv_values(self.env_file).items() if value is not None})
@@ -138,19 +144,24 @@ class UploadPowerset:
         self._namespace_names = {
             ns.logical: tp_backend.namespace_name(ns.logical, config=config) for ns in NAMESPACES
         }
-        if any(not name.endswith(("_v3", "_v3_share_test")) for name in self._namespace_names.values()):
-            raise RuntimeError("Upload requires the shared TurboPuffer v3 namespaces")
+        suffixes = {"_v3_share_test" if name.endswith("_v3_share_test") else
+                    "_v3" if name.endswith("_v3") else "invalid"
+                    for name in self._namespace_names.values()}
+        if len(suffixes) != 1 or "invalid" in suffixes:
+            raise RuntimeError(SAFE_ERRORS["namespace"])
         if not config.get("TURBOPUFFER_API_KEY"):
-            raise RuntimeError("Upload requires a TurboPuffer API key")
+            raise RuntimeError(SAFE_ERRORS["api_key"])
         self._tp_client = turbopuffer.Turbopuffer(
             api_key=config["TURBOPUFFER_API_KEY"],
             region=config.get("TURBOPUFFER_REGION", tp_backend.DEFAULT_REGION))
         if not self.db.exists():
-            raise RuntimeError("Upload requires a local search index; build the index first")
+            raise RuntimeError(SAFE_ERRORS["local_index"])
         share_rows = share_decisions(open_existing_db(self.share_db))
-        payload["progress"]["total"] = sum(row.share == SHARE_YES and bool(row.public_identifier) for row in share_rows)
-        payload["stage"] = "checking_access"
-        self._manifest(payload)
+        digest = share_digest(share_rows)
+        current = current.at(Stage.CHECKING_ACCESS, share_digest=digest, progress={
+            **current.progress, "total": sum(row.share == SHARE_YES and bool(row.public_identifier)
+                                                for row in share_rows)})
+        current.write(self.manifest_path)
         people = {person.person_id: person
                   for person in (LocalPerson.from_csv_row(row) for row in CsvIO.read_dict_rows(self.people_csv))}
         con = duckdb.connect(str(self.db), read_only=True)
@@ -161,7 +172,7 @@ class UploadPowerset:
                     postgres.verify_v3_schema(cur)
                     operator_id = self.operator_id or postgres.resolve_operator_id(
                         cur, postgres_client.credentials_subject())
-                    plan = self._plan(con, cur, operator_id, share_rows, people, payload)
+                    plan = self._plan(con, cur, operator_id, share_rows, people)
                     target = {"postgres_host": urlparse(self._database_url).hostname,
                               "postgres_database": urlparse(self._database_url).path,
                               "postgres_user": urlparse(self._database_url).username,
@@ -170,28 +181,21 @@ class UploadPowerset:
                     indexed = {profile.id for profile in local_index.person_profiles(con, plan.persons_upsert)}
                     if missing := set(plan.persons_upsert) - indexed:
                         raise RuntimeError(f"Upload requires a current local index; {len(missing)} shared people lack profiles")
-                    for ns in plan.namespaces:
-                        if ns.logical != "schools" or not ns.upsert_ids:
-                            continue
-                        found = {row[0] for row in con.execute(
-                            "SELECT id FROM local_education WHERE id = ANY(?)", [list(ns.upsert_ids)]).fetchall()}
-                        if missing := set(ns.upsert_ids) - found:
-                            raise RuntimeError(f"Upload requires a current local index; {len(missing)} {ns.logical} lack rows")
-                    payload["stage"] = "checking_changes"
-                    self._manifest(payload)
+                    current = current.at(Stage.CHECKING_CHANGES)
+                    current.write(self.manifest_path)
                     hashes = local_index.person_hashes(con, plan.persons_upsert)
-                    same_target = previous.get("target") == target
-                    old_hashes = previous.get("person_hashes", {}) if same_target else {}
-                    owned_people = set(previous.get("owned_people", ())) if same_target else set()
+                    same_target = previous.target == target
+                    old_hashes = previous.person_hashes if same_target else {}
+                    owned_people = set(previous.owned_people) if same_target else set()
                     newly_owned = set(next(ns.upsert_ids for ns in plan.namespaces if ns.logical == "people"))
                     changed = tuple(person_id for person_id in plan.persons_upsert
-                                    if old_hashes.get(person_id) != hashes[person_id]
+                                    if (old_hashes.get(person_id) != hashes[person_id] or person_id in newly_owned)
                                     and (person_id in owned_people or person_id in newly_owned))
-                    retry_upserts = previous.get("pending_upserts", {}) if previous.get("target") == target else {}
+                    retry_upserts = previous.pending_upserts if same_target else {}
                     shared_ids = set(plan.persons_upsert)
                     namespaces = []
                     for ns in plan.namespaces:
-                        if ns.logical in {"people", "summaries", "education"}:
+                        if NAMESPACE_BY_LOGICAL[ns.logical].person_grain:
                             extra = (set(retry_upserts.get(ns.logical, ())) & shared_ids) | (set(changed) & owned_people)
                             namespaces.append(replace(ns, upsert_ids=tuple(sorted(set(ns.upsert_ids) | extra)),
                                                       patch_person_ids=tuple(sorted(set(ns.patch_person_ids) - extra))))
@@ -202,37 +206,52 @@ class UploadPowerset:
                     preview["previously_uploaded"] = len(shared_ids & old_hashes.keys())
                     preview["companies_skipped_no_row"] = local_index.count_missing_companies(
                         con, plan.persons_upsert)
-                    payload.update(operator_id=operator_id, plan=preview)
+                    preview["schools_skipped_no_row"] = local_index.count_missing_schools(
+                        con, plan.persons_upsert)
+                    preview.update(marked_share=sum(row.share == SHARE_YES for row in share_rows),
+                                   with_linkedin=len(plan.persons_upsert),
+                                   without_linkedin=len(plan.skipped_no_linkedin),
+                                   new_to_cloud=len(newly_owned), changed=len(changed),
+                                   already_shared=len(shared_ids & old_hashes.keys()) - len(set(changed) & old_hashes.keys()),
+                                   losing_access=len({row.person_id for row in plan.sources_delete} -
+                                                     set(plan.cloud_id_by_person.values())),
+                                   companies_missing=preview["companies_skipped_no_row"])
+                    if self.require_checked and not self.dry_run and (previous.plan is None or previous.checked_target != target
+                                             or previous.plan != preview or previous.share_digest != digest):
+                        raise RuntimeError(CHANGED_CHECK)
+                    current = replace(current, operator_id=operator_id, plan=preview,
+                                      checked_target=target if self.dry_run else previous.checked_target)
                     if not self.dry_run:
-                        payload["target"] = target
-                        payload["person_hashes"] = old_hashes
-                        payload["owned_people"] = sorted(owned_people | newly_owned)
-                        payload["pending_upserts"] = {ns.logical: ns.upsert_ids for ns in plan.namespaces}
-                    payload["progress"] = {"total": len(plan.persons_upsert), "uploaded": 0,
-                                           "skipped": len(plan.persons_upsert) - len(changed), "namespaces": {}}
-                    self._manifest(payload)
-                    result = UploadResult() if self.dry_run else self._apply(con, cur, plan, changed, payload)
+                        current = replace(current, target=target, person_hashes=old_hashes,
+                            owned_people=tuple(sorted(owned_people | newly_owned)),
+                            pending_upserts={ns.logical: ns.upsert_ids for ns in plan.namespaces})
+                    total = len(plan.persons_upsert) + preview["losing_access"]
+                    current = replace(current, progress={"total": total, "uploaded": 0,
+                                            "skipped": total - len(changed), "namespaces": {}})
+                    current.write(self.manifest_path)
+                    result = UploadResult() if self.dry_run else self._apply(con, cur, plan, changed)
                     if not self.dry_run:
-                        payload["stage"] = "committing"
-                        self._manifest(payload)
+                        current = UploadManifest.read(self.manifest_path).at(Stage.COMMITTING)
+                        current.write(self.manifest_path)
                 if self.dry_run:
                     conn.rollback()
         finally:
             con.close()
 
-        payload.update(status="completed", stage="completed", result=asdict(result), finished_at=now_iso())
+        current = UploadManifest.read(self.manifest_path).at(Stage.COMPLETED, status="completed",
+                                                               result=asdict(result), finished_at=now_iso())
         if not self.dry_run:
-            payload["person_hashes"] = hashes
-            payload.pop("pending_upserts", None)
-            payload["progress"]["uploaded"] = result.people_uploaded
-            payload["progress"]["skipped"] = max(0, len(plan.persons_upsert) - result.people_uploaded)
-        self._manifest(payload)
-        return payload | {"manifest": str(self.manifest_path)}
+            progress = {**current.progress, "uploaded": result.people_uploaded,
+                        "skipped": max(0, current.progress["total"] - result.people_uploaded)}
+            current = replace(current, person_hashes=hashes, pending_upserts={}, progress=progress,
+                last_upload={"finished_at": current.finished_at, "status": "completed",
+                             "uploaded": progress["uploaded"], "skipped": progress["skipped"]})
+        current.write(self.manifest_path)
+        return asdict(current) | {"manifest": str(self.manifest_path)}
 
     def _plan(self, con: Any, cur: Any, operator_id: str, share_rows: tuple[ShareDecisionRow, ...],
-              people: dict[str, LocalPerson], payload: dict[str, Any]) -> UploadPlan:
-        payload["stage"] = "checking_people"
-        self._manifest(payload)
+              people: dict[str, LocalPerson]) -> UploadPlan:
+        UploadManifest.read(self.manifest_path).at(Stage.CHECKING_PEOPLE).write(self.manifest_path)
         with_slug = [row for row in share_rows if row.public_identifier]
         shared_ids = sorted(row.person_id for row in with_slug if row.share == SHARE_YES)
         # Every slug, shared or not: a private person the cloud already has is
@@ -246,8 +265,8 @@ class UploadPowerset:
         namespace_names = self._namespace_names
         present_entity_ids = {}
         for logical, by_person in (("companies", company_ids_by_person), ("schools", school_ids_by_person)):
-            payload["stage"] = f"checking_{logical}"
-            self._manifest(payload)
+            stage = Stage.CHECKING_COMPANIES if logical == "companies" else Stage.CHECKING_SCHOOLS
+            UploadManifest.read(self.manifest_path).at(stage).write(self.manifest_path)
             present_entity_ids[logical] = turbopuffer_writer.fetch_present_ids(
                 self._namespace(logical),
                 sorted({entity_id for ids in by_person.values() for entity_id in ids}),
@@ -272,12 +291,16 @@ class UploadPowerset:
         )
 
     def _apply(self, con: Any, cur: Any, plan: UploadPlan,
-               changed: tuple[str, ...] | None = None, payload: dict[str, Any] | None = None) -> UploadResult:
+               changed: tuple[str, ...] | None = None) -> UploadResult:
         changed = plan.persons_upsert if changed is None else changed
-        profiles = local_index.person_profiles(con, changed)
+        newly_owned = set(next(ns.upsert_ids for ns in plan.namespaces if ns.logical == "people"))
+        UploadManifest.read(self.manifest_path).at(Stage.WRITING_PEOPLE).write(self.manifest_path)
+        profiles = local_index.person_profiles(con, tuple(sorted(set(changed) | newly_owned)))
         persons_upserted = postgres.upsert_persons(cur, profiles)
         sources_inserted = postgres.upsert_sources(cur, plan.operator_id, plan.sources_insert)
         sources_deleted = postgres.delete_sources(cur, plan.operator_id, plan.sources_delete)
+        tags_put = postgres.put_tags(cur, plan.operator_id, plan.tags_put)
+        tags_deleted = postgres.delete_tags(cur, plan.operator_id, plan.tags_delete)
 
         # The plan's allowed map is keyed by cloud id; re-read those after the writes.
         touched = sorted(plan.allowed_operator_ids)
@@ -286,42 +309,40 @@ class UploadPowerset:
         local_allowed = {local_id: allowed.get(cloud_id, ())
                          for local_id, cloud_id in plan.cloud_id_by_person.items()}
         local_by_cloud = {cloud_id: local_id for local_id, cloud_id in plan.cloud_id_by_person.items()}
-        uploaded_people = set(changed)
-        uploaded_people.update(local_by_cloud[row.person_id] for row in plan.sources_insert
-                               if row.person_id in local_by_cloud)
+        uploaded_people = ({local_by_cloud[row.person_id] for row in plan.sources_insert
+                            if row.person_id in local_by_cloud} if sources_inserted else set())
+        if sources_deleted:
+            uploaded_people.update(local_by_cloud.get(row.person_id, row.person_id)
+                                   for row in plan.sources_delete)
 
         docs_upserted: dict[str, int] = {}
         docs_patched: dict[str, int] = {}
         for namespace_plan in plan.namespaces:
-            if payload is not None:
-                payload["stage"] = namespace_plan.logical
-                self._manifest(payload)
+            UploadManifest.read(self.manifest_path).at(Stage(namespace_plan.logical)).write(self.manifest_path)
             ns = self._namespace(namespace_plan.logical)
             rows = local_index.namespace_rows(con, namespace_plan.logical, namespace_plan.upsert_ids,
                                               local_allowed, plan.operator_id,
                                               turbopuffer_writer.live_attributes(ns))
-            if namespace_plan.logical in {"people", "summaries", "education"}:
+            namespace = NAMESPACE_BY_LOGICAL[namespace_plan.logical]
+            if namespace.person_grain:
                 for row in rows:
-                    if namespace_plan.logical == "people":
-                        row["base_id"] = plan.cloud_id_by_person.get(str(row["base_id"]), str(row["base_id"]))
-                    elif namespace_plan.logical == "summaries":
-                        row["id"] = plan.cloud_id_by_person.get(str(row["id"]), str(row["id"]))
-                    else:
-                        row["person_id"] = plan.cloud_id_by_person.get(str(row["person_id"]), str(row["person_id"]))
+                    key = namespace.doc_key
+                    row[key] = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
             docs_upserted[namespace_plan.logical] = turbopuffer_writer.upsert_docs(
                 ns, namespace_plan.logical, rows)
-            if namespace_plan.logical in {"people", "summaries", "education"} and rows:
-                uploaded_people.update(namespace_plan.upsert_ids)
+            if namespace.person_grain:
+                uploaded_people.update(local_by_cloud.get(str(row[namespace.doc_key]), str(row[namespace.doc_key]))
+                                       for row in rows)
             if namespace_plan.patch_person_ids:
                 doc_ids = turbopuffer_writer.fetch_person_doc_ids(
                     ns, namespace_plan.logical, namespace_plan.patch_person_ids)
-                if namespace_plan.logical in {"people", "summaries", "education"}:
+                if namespace.person_grain:
                     local_rows = local_index.namespace_rows(
                         con, namespace_plan.logical,
                         tuple(local_by_cloud.get(person_id, person_id) for person_id in namespace_plan.patch_person_ids),
                         local_allowed,
                         plan.operator_id, turbopuffer_writer.live_attributes(ns))
-                    key = {"people": "base_id", "summaries": "id", "education": "person_id"}[namespace_plan.logical]
+                    key = namespace.doc_key
                     by_person: dict[str, list[dict[str, Any]]] = {}
                     for row in local_rows:
                         cloud_id = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
@@ -350,15 +371,13 @@ class UploadPowerset:
                     uploaded_people.update(local_by_cloud[person_id] for person_id, ids in doc_ids.items()
                                            if person_id in local_by_cloud and any(
                                                current_acl.get(doc_id) != desired_acl[doc_id] for doc_id in ids))
-            if payload is not None:
-                payload["progress"]["namespaces"] = {
+            current = UploadManifest.read(self.manifest_path)
+            current = replace(current, progress={**current.progress, "namespaces": {
                     logical: {"upserted": docs_upserted.get(logical, 0), "patched": docs_patched.get(logical, 0)}
                     for logical in docs_upserted
-                }
-                self._manifest(payload)
+                }})
+            current.write(self.manifest_path)
 
-        tags_put = postgres.put_tags(cur, plan.operator_id, plan.tags_put)
-        tags_deleted = postgres.delete_tags(cur, plan.operator_id, plan.tags_delete)
         return UploadResult(
             people_uploaded=len(uploaded_people),
             persons_upserted=persons_upserted,

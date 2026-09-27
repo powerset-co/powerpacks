@@ -1,4 +1,4 @@
-import { ShareUpload } from "../ShareUpload"
+import type { ReactNode } from "react"
 
 import { CountRoll, TabInk } from "@/components/shared"
 import { plural } from "@/lib/copy"
@@ -10,10 +10,12 @@ interface DecisionTabsProps {
   totals: Readonly<Record<Decision, number>>
   total: number
   onTab: (tab: Decision) => void
+  /** The share button, at the right edge after the person count. */
+  action: ReactNode
 }
 
 // The three decision counts are the tabs: counts roll, the ink slides under the selected one.
-export function DecisionTabs({ tab, totals, total, onTab }: DecisionTabsProps) {
+export function DecisionTabs({ tab, totals, total, onTab, action }: DecisionTabsProps) {
   return (
     <section className="people-head" data-head>
       {ORDER.map((decision) => (
@@ -33,7 +35,7 @@ export function DecisionTabs({ tab, totals, total, onTab }: DecisionTabsProps) {
       ))}
       <TabInk active={`[data-tab='${tab}']`} />
       <span className="head-note">{plural(total, "person")}</span>
-      <ShareUpload />
+      {action}
     </section>
   )
 }

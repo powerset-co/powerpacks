@@ -13,9 +13,27 @@ import turbopuffer
 from dotenv import dotenv_values
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.indexing.primitives.upload_powerset.manifest import CHANGED_CHECK
+
+SAFE_ERRORS = {
+    "postgres_login": "Upload requires the powerset_v2 PostgreSQL login",
+    "local_index": "Upload requires a local search index; build the index first",
+    "api_key": "Upload requires a TurboPuffer API key",
+    "namespace": "Upload requires the shared TurboPuffer v3 namespaces",
+    "operator": "no users row for the current Powerset credentials; run `$powerset login`",
+}
 
 
-def log_error(out_dir: Path, stage: str, error: Exception, env_file: Path | None) -> None:
+def safe_error(error: BaseException, fallback: str) -> str:
+    message = str(error)
+    if message in SAFE_ERRORS.values() or message == CHANGED_CHECK:
+        return message
+    if re.fullmatch(r"Upload requires a current local index; \d+ shared people lack profiles", message):
+        return message
+    return fallback
+
+
+def log_error(out_dir: Path, stage: str, error: BaseException, env_file: Path | None) -> None:
     details = [f"{now_iso()} stage={stage}", ''.join(traceback.format_exception(error))]
     if isinstance(error, turbopuffer.APIStatusError):
         response = error.response

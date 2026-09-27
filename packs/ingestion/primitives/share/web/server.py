@@ -39,10 +39,10 @@ from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
 from packs.ingestion.primitives.share.web.upload import ShareUpload
+from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 from packs.shared.web.app import AppRoutes
 
 API_PREFIX = "/api/people/"
-LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
 
@@ -142,14 +142,15 @@ class ShareRoutes:
         if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
-        if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in LOCAL_HOSTS:
+        scheme = "https" if getattr(handler.connection, "cipher", None) else "http"
+        if origin and origin != f"{scheme}://{handler.headers['Host']}":
             self._send(handler, b"cross-origin request rejected", "text/plain", status=HTTPStatus.FORBIDDEN)
             return True
         if parsed.path in {f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
-            status = self.upload.start(dry_run=parsed.path.endswith("/check"))
-            if status is None:
-                self._send_json(handler, {"error": "Check your network before uploading"},
-                                status=HTTPStatus.CONFLICT)
+            try:
+                status = self.upload.start(dry_run=parsed.path.endswith("/check"))
+            except ValueError as exc:
+                self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
             else:
                 self._send_json(handler, status)
             return True
@@ -205,8 +206,6 @@ def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV, *,
             cache["rows"] = people.load()
             cache["stamp"] = stamp
         return cache["rows"]
-
-    from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 
     upload = ShareUpload(db.db_path, people_csv, index_db=upload_db or DEFAULT_DB,
                          out_dir=upload_dir or DEFAULT_OUT_DIR)

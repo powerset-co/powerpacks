@@ -31,6 +31,7 @@ from packs.indexing.primitives.upload_powerset.models import (
     SourceRow,
     TagRow,
 )
+from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS
 
 # operator_person_sources.operator_id is VARCHAR; contact_tags.operator_id is uuid.
 
@@ -114,7 +115,7 @@ def resolve_operator_id(cur: Any, subject: str) -> str:
     cur.execute("SELECT id::text FROM users WHERE user_id = %s", (subject,))
     row = cur.fetchone()
     if not row:
-        raise RuntimeError("no users row for the current Powerset credentials; run `$powerset login`")
+        raise RuntimeError(SAFE_ERRORS["operator"])
     return str(row[0])
 
 
@@ -122,7 +123,7 @@ def verify_v3_schema(cur: Any) -> None:
     cur.execute("SELECT current_schema(), current_setting('search_path')")
     schema, search_path = cur.fetchone()
     if schema != "powerset_v2" or search_path != "powerset_v2, pg_catalog":
-        raise RuntimeError("Upload requires the powerset_v2 PostgreSQL login")
+        raise RuntimeError(SAFE_ERRORS["postgres_login"])
 
 
 def fetch_cloud_ids_by_slug(cur: Any, slugs: Sequence[str]) -> dict[str, str]:

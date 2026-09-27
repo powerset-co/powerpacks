@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { must } from "@/lib/must"
 import { DETAIL, PAYLOAD } from "@/testing/people-fixture"
+import { uploadResponse, uploadStatus } from "@/testing/upload-fixture"
 
 import { PeoplePage } from "./PeoplePage"
 
@@ -38,10 +39,11 @@ function stubLayout() {
   )
 }
 
-/** The People routes: the payload, one person's detail, and a tags write that echoes the post. */
+/** The People routes: the payload, one person's detail, a tags write that echoes the post, the upload status. */
 function serve(url: string, init?: RequestInit): Promise<Response> {
   if (url.endsWith("/tags")) return Promise.resolve(tagsResponse(init))
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
+  if (url.endsWith("/upload")) return Promise.resolve(uploadResponse(uploadStatus()))
   return Promise.resolve(respond(PAYLOAD))
 }
 
@@ -109,6 +111,15 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     expect(container.querySelector("[data-tab='confirm']")?.getAttribute("aria-pressed")).toBe("true")
     expect(screen.getByText("3 people", { selector: "[data-count]" })).toBeTruthy()
+  })
+
+  it("puts the share button and the last upload at the right edge of the head", async () => {
+    vi.stubGlobal("fetch", vi.fn(serve))
+    const { container } = renderPage()
+    await waitFor(() => expect(screen.getByText("Never shared")).toBeTruthy())
+    const share = must(container.querySelector<HTMLElement>("[data-head] > .head-share"))
+    expect(within(share).getByRole("button", { name: "Share network" })).toBeTruthy()
+    expect(share.previousElementSibling?.textContent).toBe("4 people")
   })
 
   it("selects every matching person and writes share for them, then offers undo", async () => {

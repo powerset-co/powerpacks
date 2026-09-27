@@ -144,6 +144,12 @@
       opacity: 0;
     }
   }
+  /* A spinner's turn (the share button while a check or upload runs). */
+  @keyframes turn {
+    to {
+      transform: rotate(1turn);
+    }
+  }
   /* Dialog content (components/ui/dialog.tsx): the .rise overlays' 8px travel, as keyframes
      because Radix keeps a closing dialog mounted until its exit animation ends. */
   @keyframes dialog-in {
