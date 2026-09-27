@@ -187,6 +187,16 @@ class StatefulNamespace(FakeNamespace):
 
 
 class PlanBucketTests(unittest.TestCase):
+    def test_missing_local_company_row_is_not_planned_for_upload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+            con.execute("CREATE TABLE local_people_positions (base_id VARCHAR, company_id VARCHAR)")
+            con.execute("CREATE TABLE local_companies (id VARCHAR)")
+            con.execute("INSERT INTO local_people_positions VALUES (?, 'company-missing')", [NEW_PERSON])
+            by_person = upload_powerset.local_index.entity_ids_by_person(con, "companies", [NEW_PERSON])
+            con.close()
+        self.assertEqual(by_person, {})
+
     def test_other_discovery_source_key_is_not_upserted(self):
         key = (CLOUD_PERSON, "linkedin", "casey-lane")
         plan = plan_for([share_row(CLOUD_PERSON, "casey-lane")],

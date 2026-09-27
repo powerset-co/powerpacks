@@ -27,13 +27,16 @@ export function ShareUpload() {
   const query = useQuery({
     queryKey: UPLOAD_KEY,
     queryFn: () => uploadStatus(),
-    enabled: open && !starting && !startError,
+    enabled: !starting && !startError,
     refetchInterval: (query) => (query.state.data?.status === "running" ? 1000 : false),
     retry: 3,
     staleTime: Infinity,
   })
   const status = query.data
   const running = starting || status?.status === "running"
+  const checking =
+    starting ||
+    (running && (!status?.stage || status.stage.startsWith("checking") || status.stage === "planning"))
 
   async function start() {
     setOpen(true)
@@ -42,6 +45,7 @@ export function ShareUpload() {
     setStarting(true)
     setStartError("")
     try {
+      await client.cancelQueries({ queryKey: UPLOAD_KEY })
       client.setQueryData(UPLOAD_KEY, await uploadStatus(true))
     } catch (error) {
       setStartError(errorText(error))
@@ -53,20 +57,29 @@ export function ShareUpload() {
 
   const error =
     startError || (query.error ? "Connection interrupted. Reconnecting to your upload…" : status?.error)
-  const failed = Boolean(startError) || status?.status === "failed" || status?.status === "interrupted"
+  const failed =
+    !starting && (Boolean(startError) || status?.status === "failed" || status?.status === "interrupted")
   const completed = !starting && status?.status === "completed"
   const unchanged = completed && status.progress.uploaded === 0 && status.progress.skipped > 0
   const title = failed
-    ? "Upload needs attention"
+    ? "Upload failed"
     : completed
       ? unchanged
         ? "Your network is up to date"
         : "Your network is shared"
-      : "Uploading your network"
+      : checking
+        ? "Checking your network"
+        : "Uploading your network"
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <Button ref={trigger} className="mb-2 ml-2 min-h-9" variant="primary" onClick={() => void start()}>
+        {running && (
+          <span
+            aria-hidden="true"
+            className="size-3 animate-spin rounded-full border-2 border-current border-r-transparent motion-reduce:animate-none"
+          />
+        )}
         {running ? "View upload" : "Share network"}
       </Button>
       <DialogContent
@@ -78,17 +91,52 @@ export function ShareUpload() {
         }}
       >
         <DialogHeader>
-          <p className="m-0 mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-            Powerset network
-          </p>
+          <div className="mb-2 flex items-center gap-3">
+            <div
+              className={`grid size-11 place-items-center rounded-full border ${failed ? "border-bad-soft bg-bad-soft text-bad" : completed ? "border-ok-soft bg-ok-soft text-ok" : "border-primary-soft bg-primary-soft text-primary"}`}
+            >
+              {running ? (
+                <span
+                  role="status"
+                  aria-label="Upload in progress"
+                  className="size-5 animate-spin rounded-full border-2 border-current border-r-transparent motion-reduce:animate-none"
+                />
+              ) : (
+                <span aria-hidden="true" className="text-xl">
+                  {completed ? "✓" : "!"}
+                </span>
+              )}
+            </div>
+            <span className="text-xs font-medium text-muted-foreground">
+              {failed ? "Failed" : completed ? "Complete" : "In progress"}
+            </span>
+          </div>
           <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
           <DialogDescription className="text-[13px]">
-            People marked Share are uploaded. Unchanged people are skipped.
+            {running ? "Continues in the background." : "Only people marked Share are uploaded."}
           </DialogDescription>
         </DialogHeader>
-        <UploadProgress status={starting ? undefined : status} completed={completed} />
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          {["Check network", "Upload changes", "Finish"].map((label, index) => {
+            const step = checking ? 0 : status?.stage === "committing" || completed ? 2 : 1
+            return (
+              <div
+                key={label}
+                className={`border-t-2 pt-2 ${completed || index < step ? "border-ok text-ok" : index === step ? "border-primary text-foreground" : "border-border text-muted-foreground"}`}
+              >
+                {label}
+              </div>
+            )
+          })}
+        </div>
+        <UploadProgress
+          status={starting ? undefined : status}
+          completed={completed}
+          running={running}
+          checking={checking}
+        />
         <div className="min-h-10 text-[13px] leading-relaxed" aria-live="polite">
-          {error ? (
+          {error && !starting ? (
             <p role="alert" className="m-0 text-bad">
               {error}
             </p>
@@ -99,13 +147,13 @@ export function ShareUpload() {
                 : (status?.message ??
                   (completed
                     ? "Sharing decisions are saved. You can check for changes any time."
-                    : "You can close this window. Your upload will continue."))}
+                    : "Checking your shared people and saved uploads…"))}
             </p>
           )}
         </div>
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="ghost">{completed ? "Done" : "Close window"}</Button>
+            <Button variant="ghost">Close</Button>
           </DialogClose>
           {failed && (
             <Button variant="primary" onClick={() => void start()}>
@@ -118,7 +166,17 @@ export function ShareUpload() {
   )
 }
 
-function UploadProgress({ status, completed }: { status: UploadStatus | undefined; completed: boolean }) {
+function UploadProgress({
+  status,
+  completed,
+  running,
+  checking,
+}: {
+  status: UploadStatus | undefined
+  completed: boolean
+  running: boolean
+  checking: boolean
+}) {
   const { total = 0, uploaded = 0, skipped = 0 } = status?.progress ?? {}
   const processed = uploaded + skipped
   const written = Object.values(status?.progress.namespaces ?? {})
@@ -134,7 +192,15 @@ function UploadProgress({ status, completed }: { status: UploadStatus | undefine
               ? `${records.toLocaleString()} records written`
               : "Preparing your upload"}
         </span>
-        <span className="text-muted-foreground">{total || completed ? `${percent}%` : ""}</span>
+        <span className="text-muted-foreground">
+          {written.length || completed
+            ? `${percent}%`
+            : running
+              ? checking
+                ? "Checking…"
+                : "Uploading…"
+              : ""}
+        </span>
       </div>
       <div
         role="progressbar"
@@ -145,24 +211,38 @@ function UploadProgress({ status, completed }: { status: UploadStatus | undefine
         className="h-1.5 overflow-hidden rounded-full bg-secondary"
       >
         <div
-          className="h-full origin-left rounded-full bg-ok transition-transform duration-300 motion-reduce:transition-none"
-          style={{ transform: `scaleX(${percent / 100})` }}
+          className={`h-full origin-left rounded-full transition-transform duration-300 motion-reduce:transition-none ${running && !written.length ? "w-full animate-pulse bg-primary-soft motion-reduce:animate-none" : "bg-ok"}`}
+          style={{ transform: `scaleX(${running && !written.length ? 1 : percent / 100})` }}
         />
       </div>
       <dl className="m-0 grid grid-cols-2 gap-4 border-b border-border pb-5">
         <div>
-          <dt className="text-xs text-muted-foreground">Uploaded</dt>
-          <dd className="m-0 mt-1 text-2xl font-semibold tabular-nums">{uploaded.toLocaleString()}</dd>
+          <dt className="text-xs text-muted-foreground">{completed ? "Uploaded" : "People to share"}</dt>
+          <dd className="m-0 mt-1 text-2xl font-semibold tabular-nums">
+            {completed ? uploaded.toLocaleString() : total ? total.toLocaleString() : "—"}
+          </dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">Already up to date</dt>
-          <dd className="m-0 mt-1 text-2xl font-semibold tabular-nums">{skipped.toLocaleString()}</dd>
+          <dt className="text-xs text-muted-foreground">
+            {completed ? "Already up to date" : "Records written"}
+          </dt>
+          <dd className="m-0 mt-1 text-2xl font-semibold tabular-nums">
+            {completed ? skipped.toLocaleString() : records.toLocaleString()}
+          </dd>
         </div>
       </dl>
-      {Boolean(status?.skipped_no_linkedin) && (
-        <p className="m-0 text-xs text-muted-foreground">
-          {status?.skipped_no_linkedin} people need a LinkedIn profile before they can be uploaded.
-        </p>
+      {(Boolean(status?.skipped_no_linkedin) || Boolean(status?.companies_skipped_no_row)) && (
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">Skipped items</summary>
+          <div className="mt-2 grid gap-1">
+            {Boolean(status?.skipped_no_linkedin) && (
+              <p className="m-0">{status?.skipped_no_linkedin} people without LinkedIn</p>
+            )}
+            {Boolean(status?.companies_skipped_no_row) && (
+              <p className="m-0">{status?.companies_skipped_no_row} missing company record</p>
+            )}
+          </div>
+        </details>
       )}
     </div>
   )

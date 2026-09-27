@@ -50,7 +50,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow  # noqa: E402
 from packs.ingestion.primitives.deep_context.db.share_views import share_decisions  # noqa: E402
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db  # noqa: E402
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB  # noqa: E402
+from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, load_env  # noqa: E402
 from packs.ingestion.schemas.share_schema import SHARE_YES  # noqa: E402
 from packs.indexing.primitives.upload_powerset import local_index, postgres, turbopuffer_writer  # noqa: E402
 from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
@@ -116,7 +116,9 @@ class UploadPowerset:
         except Exception as exc:
             message = str(exc) if isinstance(exc, RuntimeError) and str(exc).startswith(
                 ("Upload requires", "no users row")) else "Upload failed; retry to resume"
-            payload.update(status="failed", error=message, finished_at=now_iso())
+            payload.update(status="failed", error=message, error_type=type(exc).__name__, finished_at=now_iso())
+            if isinstance(exc, turbopuffer.APIStatusError):
+                payload["http_status"] = exc.status_code
             self._manifest(payload)
             raise
 
@@ -127,8 +129,7 @@ class UploadPowerset:
         pending.replace(self.manifest_path)
 
     def _run(self, payload: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
-        config = {key: value for key, value in dotenv_values(REPO / ".env").items() if value is not None}
-        config.update(os.environ)
+        config = dict(os.environ)
         if self.env_file:
             config.update({key: value for key, value in dotenv_values(self.env_file).items() if value is not None})
         self._database_url = config.get("DATABASE_URL") or postgres_client.database_url()
@@ -145,6 +146,9 @@ class UploadPowerset:
         if not self.db.exists():
             raise RuntimeError("Upload requires a local search index; build the index first")
         share_rows = share_decisions(open_existing_db(self.share_db))
+        payload["progress"]["total"] = sum(row.share == SHARE_YES and bool(row.public_identifier) for row in share_rows)
+        payload["stage"] = "checking_access"
+        self._manifest(payload)
         people = {person.person_id: person
                   for person in (LocalPerson.from_csv_row(row) for row in CsvIO.read_dict_rows(self.people_csv))}
         con = duckdb.connect(str(self.db), read_only=True)
@@ -155,7 +159,7 @@ class UploadPowerset:
                     postgres.verify_v3_schema(cur)
                     operator_id = self.operator_id or postgres.resolve_operator_id(
                         cur, postgres_client.credentials_subject())
-                    plan = self._plan(con, cur, operator_id, share_rows, people)
+                    plan = self._plan(con, cur, operator_id, share_rows, people, payload)
                     target = {"postgres_host": urlparse(self._database_url).hostname,
                               "postgres_database": urlparse(self._database_url).path,
                               "postgres_user": urlparse(self._database_url).username,
@@ -165,13 +169,14 @@ class UploadPowerset:
                     if missing := set(plan.persons_upsert) - indexed:
                         raise RuntimeError(f"Upload requires a current local index; {len(missing)} shared people lack profiles")
                     for ns in plan.namespaces:
-                        if ns.logical not in {"companies", "schools"} or not ns.upsert_ids:
+                        if ns.logical != "schools" or not ns.upsert_ids:
                             continue
-                        table = "local_companies" if ns.logical == "companies" else "local_education"
                         found = {row[0] for row in con.execute(
-                            f"SELECT id FROM {table} WHERE id = ANY(?)", [list(ns.upsert_ids)]).fetchall()}
+                            "SELECT id FROM local_education WHERE id = ANY(?)", [list(ns.upsert_ids)]).fetchall()}
                         if missing := set(ns.upsert_ids) - found:
                             raise RuntimeError(f"Upload requires a current local index; {len(missing)} {ns.logical} lack rows")
+                    payload["stage"] = "checking_changes"
+                    self._manifest(payload)
                     hashes = local_index.person_hashes(con, plan.persons_upsert)
                     same_target = previous.get("target") == target
                     old_hashes = previous.get("person_hashes", {}) if same_target else {}
@@ -191,7 +196,10 @@ class UploadPowerset:
                         else:
                             namespaces.append(ns)
                     plan = replace(plan, namespaces=tuple(namespaces))
-                    payload.update(operator_id=operator_id, plan=plan_preview(plan))
+                    preview = plan_preview(plan)
+                    preview["companies_skipped_no_row"] = local_index.count_missing_companies(
+                        con, plan.persons_upsert)
+                    payload.update(operator_id=operator_id, plan=preview)
                     if not self.dry_run:
                         payload["target"] = target
                         payload["person_hashes"] = old_hashes
@@ -219,7 +227,9 @@ class UploadPowerset:
         return payload | {"manifest": str(self.manifest_path)}
 
     def _plan(self, con: Any, cur: Any, operator_id: str, share_rows: tuple[ShareDecisionRow, ...],
-              people: dict[str, LocalPerson]) -> UploadPlan:
+              people: dict[str, LocalPerson], payload: dict[str, Any]) -> UploadPlan:
+        payload["stage"] = "checking_people"
+        self._manifest(payload)
         with_slug = [row for row in share_rows if row.public_identifier]
         shared_ids = sorted(row.person_id for row in with_slug if row.share == SHARE_YES)
         # Every slug, shared or not: a private person the cloud already has is
@@ -231,14 +241,14 @@ class UploadPowerset:
         company_ids_by_person = local_index.entity_ids_by_person(con, "companies", shared_ids)
         school_ids_by_person = local_index.entity_ids_by_person(con, "schools", shared_ids)
         namespace_names = self._namespace_names
-        present_entity_ids = {
-            logical: turbopuffer_writer.fetch_present_ids(
+        present_entity_ids = {}
+        for logical, by_person in (("companies", company_ids_by_person), ("schools", school_ids_by_person)):
+            payload["stage"] = f"checking_{logical}"
+            self._manifest(payload)
+            present_entity_ids[logical] = turbopuffer_writer.fetch_present_ids(
                 self._namespace(logical),
                 sorted({entity_id for ids in by_person.values() for entity_id in ids}),
             )
-            for logical, by_person in
-            (("companies", company_ids_by_person), ("schools", school_ids_by_person))
-        }
         cloud = CloudState(
             cloud_id_by_person=cloud_id_by_person,
             operator_sources=postgres.fetch_operator_sources(cur, operator_id),
@@ -377,6 +387,7 @@ def plan_preview(plan: UploadPlan) -> dict[str, Any]:
 
 
 def main() -> int:
+    load_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--share-db", default=str(DEFAULT_SHARE_DB),

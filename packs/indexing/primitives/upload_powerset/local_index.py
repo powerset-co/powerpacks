@@ -41,7 +41,8 @@ def entity_ids_by_person(con: Any, logical: str, person_ids: list[str]) -> dict[
     if logical == "companies":
         sql = """
             SELECT p.base_id, p.company_id FROM local_people_positions p
-            WHERE p.base_id = ANY(?) AND p.company_id IS NOT NULL
+            JOIN local_companies c ON c.id = p.company_id
+            WHERE p.base_id = ANY(?)
         """
     else:
         sql = """
@@ -52,6 +53,15 @@ def entity_ids_by_person(con: Any, logical: str, person_ids: list[str]) -> dict[
     for person_id, entity_id in con.execute(sql, [person_ids]).fetchall():
         by_person.setdefault(str(person_id), set()).add(str(entity_id))
     return {person_id: tuple(sorted(ids)) for person_id, ids in by_person.items()}
+
+
+def count_missing_companies(con: Any, person_ids: tuple[str, ...]) -> int:
+    return int(con.execute("""
+        SELECT COUNT(DISTINCT p.company_id)
+        FROM local_people_positions p
+        LEFT JOIN local_companies c ON c.id = p.company_id
+        WHERE p.base_id = ANY(?) AND p.company_id IS NOT NULL AND c.id IS NULL
+    """, [list(person_ids)]).fetchone()[0])
 
 
 def person_profiles(con: Any, person_ids: tuple[str, ...]) -> list[PersonProfile]:

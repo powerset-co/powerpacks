@@ -12,6 +12,7 @@ export interface UploadStatus {
   message?: string
   error?: string
   skipped_no_linkedin?: number
+  companies_skipped_no_row?: number
 }
 
 export async function uploadStatus(start = false): Promise<UploadStatus> {

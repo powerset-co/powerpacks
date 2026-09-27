@@ -66,6 +66,11 @@ class ShareUpload:
             payload["stage"] = stage
             payload["message"] = {
                 "planning": "Checking your shared people and saved uploads…",
+                "checking_access": "Connecting to your shared network…",
+                "checking_people": "Comparing your people with the shared network…",
+                "checking_companies": "Checking companies already in the shared network…",
+                "checking_schools": "Checking schools already in the shared network…",
+                "checking_changes": "Checking which people have changed since your last upload…",
                 "people": "Uploading people…",
                 "summaries": "Uploading profiles…",
                 "education": "Uploading education…",
@@ -73,14 +78,19 @@ class ShareUpload:
                 "schools": "Uploading schools…",
                 "committing": "Finishing your upload…",
             }.get(stage, "Uploading your network…")
-        skipped_no_linkedin = (saved.get("plan") or {}).get("skipped_no_linkedin")
-        if isinstance(skipped_no_linkedin, int):
-            payload["skipped_no_linkedin"] = skipped_no_linkedin
+        for key in ("skipped_no_linkedin", "companies_skipped_no_row"):
+            count = (saved.get("plan") or {}).get(key)
+            if isinstance(count, int):
+                payload[key] = count
         if state == "failed":
             error = saved.get("error")
             safe = isinstance(error, str) and (error in SAFE_ERRORS or re.fullmatch(
                 r"Upload requires a current local index; \d+ (?:shared people lack profiles|(?:companies|schools) lack rows)", error))
             payload["error"] = error if safe else "Upload failed; retry to resume"
+            stage = saved.get("stage")
+            if not safe and stage in {"people", "summaries", "education", "companies", "schools"}:
+                name = "profiles" if stage == "summaries" else stage
+                payload["error"] = f"Could not upload {name}. Retry to resume."
         if state == "completed" and isinstance(saved.get("result"), dict):
             payload["result"] = saved["result"]
         return payload

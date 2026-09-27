@@ -8,6 +8,7 @@ function respond(status: string, uploaded = 0, skipped = 0) {
   return new Response(
     JSON.stringify({
       status,
+      stage: "people",
       progress: { total: 10, uploaded, skipped, namespaces: { people: { upserted: 3, patched: 2 } } },
     }),
     {
@@ -30,6 +31,47 @@ afterEach(() => {
 })
 
 describe("ShareUpload", () => {
+  it("finds an active upload after reloading and opens it without another POST", async () => {
+    const fetch = vi.fn(() => Promise.resolve(respond("running")))
+    vi.stubGlobal("fetch", fetch)
+    show()
+    fireEvent.click(await screen.findByRole("button", { name: "View upload" }))
+    await screen.findByRole("dialog")
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows activity immediately and explains checking without a false percentage", async () => {
+    let finish!: (response: Response) => void
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            finish = resolve
+          }),
+      ),
+    )
+    show()
+    fireEvent.click(screen.getByRole("button", { name: "Share network" }))
+    expect(screen.getByRole("status", { name: "Upload in progress" })).toBeTruthy()
+    expect(screen.getByText("Connecting to your network…")).toBeTruthy()
+    await waitFor(() => expect(finish).toBeDefined())
+    finish(
+      new Response(
+        JSON.stringify({
+          status: "running",
+          stage: "planning",
+          message: "Checking companies…",
+          progress: { total: 308, uploaded: 0, skipped: 0 },
+        }),
+      ),
+    )
+    await screen.findByText("Checking companies…")
+    expect(screen.getByRole("heading", { name: "Checking your network" })).toBeTruthy()
+    expect(screen.getByRole("progressbar").hasAttribute("aria-valuenow")).toBe(false)
+    expect(screen.queryByText("0%")).toBeNull()
+  })
+
   it("starts once, shows confirmed counts, and reopens a running upload without posting again", async () => {
     const fetch = vi.fn((_url: string, init?: RequestInit) =>
       Promise.resolve(respond(init?.method === "POST" ? "running" : "idle", 3, 2)),
@@ -39,7 +81,7 @@ describe("ShareUpload", () => {
     fireEvent.click(screen.getByRole("button", { name: "Share network" }))
     await screen.findByText("Uploading your network")
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("17")
-    fireEvent.click(screen.getByRole("button", { name: "Close" }))
+    fireEvent.click(screen.getByText("Close", { selector: "button" }))
     fireEvent.click(screen.getByRole("button", { name: "View upload" }))
     await screen.findByRole("dialog")
     expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1)
@@ -52,14 +94,15 @@ describe("ShareUpload", () => {
     fireEvent.click(screen.getByRole("button", { name: "Share network" }))
     await screen.findByText("Your network is up to date")
     expect(screen.getByText("Already up to date")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Done" }))
+    fireEvent.click(screen.getByText("Close", { selector: "button" }))
     fireEvent.click(screen.getByRole("button", { name: "Share network" }))
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
   })
 
   it("keeps a failed start recoverable with a retry button", async () => {
     const fetch = vi
       .fn()
+      .mockResolvedValueOnce(respond("idle"))
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockResolvedValueOnce(respond("completed", 10))
     vi.stubGlobal("fetch", fetch)

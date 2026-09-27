@@ -125,7 +125,7 @@ describe("PeoplePage", () => {
     fireEvent.click(within(bar).getByRole("button", { name: "Share S" }))
     await waitFor(() => expect(screen.getByText("Marked 3 people for sharing.")).toBeTruthy())
     expect(screen.getByText("No one needs confirmation.")).toBeTruthy()
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch.mock.calls.filter(([url]) => !url.endsWith("/upload"))).toHaveLength(2)
   })
 
   it("opens the drawer on a row click and closes it on the next", async () => {

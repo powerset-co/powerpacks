@@ -263,11 +263,17 @@ server and polls `/api/people/upload`. Row-level Share/Keep private still edit
 review decisions; Share network reconciles the whole current share list.
 The modal reports records written as each namespace finishes, then committed
 people uploaded/skipped. Closing the modal does not stop the server's upload.
+Checking shows an activity spinner and the current people/company/school check.
+Missing local company records are skipped and counted; people and positions
+still upload.
 
 Uploads require the v3 namespace family and the `powerset_v2` PostgreSQL schema.
 Set `POWERPACKS_UPLOAD_ENV_FILE` when starting the review server to an env file
 containing its dedicated `DATABASE_URL` and `ALEPH_INDEX_VERSION=v3`; credentials
 are resolved for the uploader without changing the search server's environment.
+The server loads its normal `.env` once at startup with the shared python-dotenv
+loader; the uploader reads that environment. The standalone upload CLI does the
+same at startup.
 The local index is `.powerpacks/search-index/local-search.duckdb`.
 
 The existing upload manifest retains content hashes and unfinished writes for

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
+    load_env,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_parents
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
@@ -101,6 +102,7 @@ def workflow_status(**_: object) -> dict[str, object]:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
+    load_env()
     try:
         with urllib.request.urlopen(
             f"http://{args.host}:{args.port}/api/status",

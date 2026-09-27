@@ -157,11 +157,12 @@ class UploadRoutesTests(ShareWebFixture):
     def test_progress_includes_human_stage_and_unmatched_count(self) -> None:
         self.upload_dir.mkdir()
         (self.upload_dir / "manifest.json").write_text(json.dumps({
-            "status": "running", "stage": "people", "plan": {"skipped_no_linkedin": 2},
+            "status": "running", "stage": "people", "plan": {"skipped_no_linkedin": 2, "companies_skipped_no_row": 1},
         }))
         status = self._get()
         self.assertEqual(status["status"], "interrupted")
         self.assertEqual(status["skipped_no_linkedin"], 2)
+        self.assertEqual(status["companies_skipped_no_row"], 1)
 
     def test_progress_forwards_only_numeric_document_counts(self) -> None:
         self.upload_dir.mkdir()
