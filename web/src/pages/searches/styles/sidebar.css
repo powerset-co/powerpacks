@@ -10,8 +10,7 @@
 .rail-top {
   display: grid;
   gap: 8px;
-  padding: 12px 10px 8px;
-  border-bottom: 1px solid var(--line);
+  padding: 12px 10px 4px;
 }
 
 .run-list {
