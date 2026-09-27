@@ -1,7 +1,8 @@
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 
+import { DetailsSection } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
-import { plural } from "@/lib/people/copy"
+import { plural } from "@/lib/copy"
 import { isComplete, money, runDate, statusText } from "@/lib/searches/copy"
 import type { SearchResult } from "@/types/searches"
 
@@ -13,8 +14,10 @@ interface RunHeaderProps {
   actions: ReactNode
 }
 
-// The run's name and facts on one compact block; the actions slot sits at its right.
+// The run's name and facts on one compact block, the job description folded under them
+// (rendering.py _search); the actions slot sits at its right.
 export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
+  const [jdOpen, setJdOpen] = useState(false)
   return (
     <header className="run-head" data-run-head>
       <div className="run-head-id">
@@ -34,6 +37,17 @@ export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
           <span data-people-count>{plural(people, "person")}</span>
           {search.total_cost_usd ? <span>{money(search.total_cost_usd)}</span> : null}
         </p>
+        {search.jd_text ? (
+          <DetailsSection
+            sectionKey="jd"
+            className="run-jd"
+            title="Job description"
+            open={jdOpen}
+            onToggle={setJdOpen}
+          >
+            <p className="run-jd-text">{search.jd_text}</p>
+          </DetailsSection>
+        ) : null}
       </div>
       {actions ? <div className="run-head-actions">{actions}</div> : null}
     </header>

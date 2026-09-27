@@ -33,13 +33,15 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  outline: none;
   scrollbar-width: thin;
-  box-shadow: inset 0 0 0 2px transparent;
-  transition: box-shadow var(--t-fast) var(--ease-out);
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: outline-color var(--t-fast) var(--ease-out);
 }
+/* Beats index.css's [tabindex]:focus-visible ring: the viewport's ring sits inside it. */
 .grid-viewport:focus-visible {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 70%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  outline-offset: -2px;
 }
 
 /* --row-h comes from ROW_H in table/columns.ts, set on the shell. */
@@ -51,20 +53,6 @@
   transition:
     background var(--t-fast) var(--ease-out),
     opacity var(--t-med) var(--ease-out);
-}
-.row::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--primary);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition:
-    transform var(--t-fast) var(--ease-out),
-    background var(--t-fast) var(--ease-out);
 }
 .row:hover {
   background: rgba(255, 255, 255, 0.025);
@@ -79,12 +67,12 @@
   transform: scaleX(1);
   background: var(--line-strong);
 }
+/* The keyboard's row keeps the primary bar over an open row's grey one. */
+.row[data-focus="true"]::before {
+  background: var(--primary);
+}
 .row[data-focus="true"] {
   background: rgba(255, 255, 255, 0.03);
-}
-.row[data-focus="true"]::before {
-  transform: scaleX(1);
-  background: var(--primary);
 }
 .row[data-focus="true"][aria-selected="true"] {
   background: color-mix(in srgb, var(--primary-soft) 80%, white 4%);

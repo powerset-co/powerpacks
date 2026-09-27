@@ -3,10 +3,11 @@ import { useCallback, useRef, useState } from "react"
 
 import type { ToastMessage } from "@/components/shared"
 import { writeTags } from "@/lib/api/people"
-import { plural } from "@/lib/people/copy"
+import { plural } from "@/lib/copy"
 import { nextTags, type TagAction } from "@/lib/people/facets"
 import { EMPTY } from "@/lib/sets"
 import type { Person, TagChange, TagResult } from "@/types/people"
+import { errorText } from "@/lib/api/http"
 
 import { PEOPLE_QUERY_KEY } from "./usePeopleQuery"
 
@@ -30,10 +31,6 @@ function patchRows(rows: Person[] | undefined, results: readonly TagResult[]): P
       tags: patch.tags,
     }
   })
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /**

@@ -1,5 +1,6 @@
-import { useEffect, useRef, type ReactNode } from "react"
+import { useRef, type ReactNode } from "react"
 
+import { useInert } from "@/hooks/useInert"
 import { usePresence } from "@/hooks/usePresence"
 import { cn } from "@/lib/utils"
 
@@ -15,9 +16,7 @@ export function Appear({ show, children, className }: AppearProps) {
   const { mounted, open, onTransitionEnd } = usePresence(show ? true : null)
   const node = useRef<HTMLSpanElement>(null)
 
-  useEffect(() => {
-    if (node.current) node.current.inert = !open
-  }, [open, mounted])
+  useInert(node, !open)
 
   if (!mounted) return null
   return (

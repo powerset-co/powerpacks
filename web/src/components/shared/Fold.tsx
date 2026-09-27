@@ -1,5 +1,6 @@
-import { useEffect, useRef, type ReactNode } from "react"
+import { useRef, type ReactNode } from "react"
 
+import { useInert } from "@/hooks/useInert"
 import { cn } from "@/lib/utils"
 
 import styles from "./Fold.module.css"
@@ -17,9 +18,7 @@ interface FoldProps {
  */
 export function Fold({ open, className, children }: FoldProps) {
   const box = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (box.current) box.current.inert = !open
-  }, [open])
+  useInert(box, !open)
   return (
     <div ref={box} className={cn(styles.fold, className)} data-open={open}>
       <div className={styles.inner}>{children}</div>

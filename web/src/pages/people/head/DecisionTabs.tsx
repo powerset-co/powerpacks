@@ -1,5 +1,6 @@
 import { CountRoll, TabInk } from "@/components/shared"
-import { label, plural } from "@/lib/people/copy"
+import { plural } from "@/lib/copy"
+import { label } from "@/lib/people/copy"
 import { ORDER, type Decision } from "@/types/people"
 
 interface DecisionTabsProps {

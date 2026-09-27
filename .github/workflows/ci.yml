@@ -24,3 +24,25 @@ jobs:
         run: scripts/lint-powerpacks
       - name: Offline unit tests
         run: scripts/test-powerpacks
+
+  web:
+    name: Web app check, build and committed dist
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck, lint, format and unit tests
+        run: pnpm check
+      - name: Committed dist is the build of the source
+        run: pnpm build && git diff --exit-code -- dist

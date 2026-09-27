@@ -1,6 +1,8 @@
 // A search's tags (results.js normalizeTag, existingTag, toggleTag, removeTag): pure
 // functions over Tagged, each returning a new value. The server keeps them (/searches/tags).
 
+import { readStored } from "@/lib/storage"
+import { isRecord } from "@/lib/utils"
 import type { Tagged } from "@/types/searches"
 
 export const TAG_NAME_MAX = 40
@@ -61,4 +63,35 @@ export function untagPeople(tagged: Tagged, personIds: readonly string[]): Tagge
 /** The tags `personIds` hold, first-seen order: the CSV filename's prefix. */
 export function heldTags(tagged: Tagged, personIds: readonly string[]): string[] {
   return [...new Set(personIds.flatMap((personId) => tagged.assignments[personId] ?? []))]
+}
+
+// results.js kept a run's tags in this browser before the server did, and pins before tags.
+const BROWSER_TAGS = "powerset_tagged_"
+const BROWSER_PINS = "powerset_pinned_"
+
+const isStrings = (raw: unknown): raw is string[] =>
+  Array.isArray(raw) && raw.every((value) => typeof value === "string")
+
+function parseTagged(raw: unknown): Tagged | null {
+  if (!isRecord(raw) || !isStrings(raw.tags) || !isRecord(raw.assignments)) return null
+  const assignments = Object.entries(raw.assignments).filter((entry): entry is [string, string[]] =>
+    isStrings(entry[1]),
+  )
+  return { tags: raw.tags, assignments: Object.fromEntries(assignments) }
+}
+
+function parsePins(raw: unknown): Tagged | null {
+  if (!Array.isArray(raw)) return null
+  const ids = raw.filter((id): id is string => typeof id === "string")
+  if (!ids.length) return null
+  return { tags: [PIN_TAG], assignments: Object.fromEntries(ids.map((id) => [id, [PIN_TAG]])) }
+}
+
+/** results.js readTagged: the run's tags kept in this browser, else its old pins, else none. */
+export function browserTags(runId: string): Tagged {
+  return (
+    readStored("local", `${BROWSER_TAGS}${runId}`, parseTagged) ??
+    readStored("local", `${BROWSER_PINS}${runId}`, parsePins) ??
+    NO_TAGS
+  )
 }

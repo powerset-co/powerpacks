@@ -21,11 +21,6 @@
   line-height: 16px;
 }
 
-/* A control added after its group appeared rises in on its own (index.css rise-in). */
-.rise-in {
-  animation: rise-in var(--t-med) var(--ease-out) backwards;
-}
-
 /* A .rise chip already there when its row or group mounted arrives with it: no entrance
    (scrolling mounts rows), the same exit. */
 @starting-style {

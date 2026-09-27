@@ -125,11 +125,6 @@
 .bar-chips .chip {
   min-height: 26px;
 }
-.bar-chips .chip em {
-  color: var(--faint);
-  font-style: normal;
-  font-weight: 600;
-}
 .bar-count {
   margin-left: auto;
   color: var(--muted);

@@ -2,8 +2,8 @@ import type { ReactElement, SVGProps } from "react"
 
 import type { Channel } from "@/lib/channels"
 
-// One glyph per source family. Gmail, iMessage and LinkedIn are the search page's glyphs
-// (results_web/rendering.py _SOURCE_ICONS); tests/test_icons.py pins them equal.
+// One glyph per source family. Gmail, iMessage, LinkedIn, X and contacts export are the search
+// page's glyphs (results_web/rendering.py _SOURCE_ICONS); tests/test_icons.py pins them equal.
 
 type IconProps = SVGProps<SVGSVGElement>
 
@@ -52,9 +52,27 @@ export function LinkedInIcon(props: IconProps) {
   )
 }
 
+export function XIcon(props: IconProps) {
+  return (
+    <svg {...FILLED} {...props}>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  )
+}
+
+export function ContactsExportIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7ZM14 2v4a2 2 0 0 0 2 2h4M8 13h2M14 13h2M8 17h2M14 17h2" />
+    </svg>
+  )
+}
+
 export const CHANNEL_ICON: Record<Channel, (props: IconProps) => ReactElement> = {
   gmail: GmailIcon,
   imessage: IMessageIcon,
   whatsapp: WhatsAppIcon,
   linkedin: LinkedInIcon,
+  x: XIcon,
+  csv_import: ContactsExportIcon,
 }

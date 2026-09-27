@@ -1,3 +1,4 @@
+import { PinIcon } from "@/components/shared"
 import { cn } from "@/lib/utils"
 
 interface PinButtonProps {
@@ -25,21 +26,12 @@ export function PinButton({ name, pinned, disabled, onToggle }: PinButtonProps) 
       )}
       onClick={onToggle}
     >
-      {/* rendering.py PIN_SVG */}
-      <svg
-        viewBox="0 0 24 24"
+      <PinIcon
         className={cn(
           "size-3.5 transition-[fill] duration-fast ease-out",
           pinned ? "fill-current" : "fill-none",
         )}
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M16 9V4l1-1V2H7v1l1 1v5l-3 3v2h14v-2zM12 14v8" />
-      </svg>
+      />
     </button>
   )
 }

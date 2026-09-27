@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { isTyping, useKeys } from "@/hooks/useKeys"
 
 export interface ResultKeyActions {
   move: (step: 1 | -1) => void
@@ -16,35 +16,24 @@ const STEPS: Readonly<Record<string, 1 | -1>> = { j: 1, k: -1 }
  * editor, s its score dialog. Typing in a field, a modifier, or an open dialog or tag panel
  * leaves the keys alone; a focused button or link keeps its own Enter.
  */
-export function useResultKeys(actions: ResultKeyActions) {
-  const latest = useRef(actions)
-  useEffect(() => {
-    latest.current = actions
-  })
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return
-      const target = event.target instanceof Element ? event.target : document.body
-      if (target.matches("input, select, textarea") || target.closest("[role=dialog]")) return
-      const run = latest.current
-      const step = STEPS[event.key]
-      if (step !== undefined) {
-        event.preventDefault()
-        run.move(step)
-        return
-      }
-      const act =
-        event.key === "Enter" && !target.matches("button, a, summary")
-          ? run.toggle
-          : event.key === "t"
-            ? run.tag
-            : event.key === "s"
-              ? run.score
-              : null
-      if (act?.()) event.preventDefault()
+export function useResultKeys(run: ResultKeyActions) {
+  useKeys((event, target) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return
+    if (isTyping(target) || target.closest("[role=dialog]")) return
+    const step = STEPS[event.key]
+    if (step !== undefined) {
+      event.preventDefault()
+      run.move(step)
+      return
     }
-    document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
-  }, [])
+    const act =
+      event.key === "Enter" && !target.matches("button, a")
+        ? run.toggle
+        : event.key === "t"
+          ? run.tag
+          : event.key === "s"
+            ? run.score
+            : null
+    if (act?.()) event.preventDefault()
+  })
 }

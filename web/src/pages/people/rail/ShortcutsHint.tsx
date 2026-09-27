@@ -1,4 +1,6 @@
-import { Kbd } from "@/components/shared"
+import { useState } from "react"
+
+import { Fold, Kbd } from "@/components/shared"
 
 const SHORTCUTS: readonly (readonly [readonly string[], string])[] = [
   [["1", "2", "3"], "Switch tab"],
@@ -13,22 +15,28 @@ const SHORTCUTS: readonly (readonly [readonly string[], string])[] = [
   [["Enter"], "Open or close details"],
 ]
 
+// The page's keys under a toggle; the list folds open and shut.
 export function ShortcutsHint() {
+  const [open, setOpen] = useState(false)
   return (
-    <details className="rail-hint" data-hint>
-      <summary>Keyboard shortcuts</summary>
-      <dl>
-        {SHORTCUTS.map(([keys, action]) => (
-          <div key={action} className="contents">
-            <dt>
-              {keys.map((key) => (
-                <Kbd key={key}>{key}</Kbd>
-              ))}
-            </dt>
-            <dd>{action}</dd>
-          </div>
-        ))}
-      </dl>
-    </details>
+    <div className="rail-hint" data-hint>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
+        Keyboard shortcuts
+      </button>
+      <Fold open={open}>
+        <dl>
+          {SHORTCUTS.map(([keys, action]) => (
+            <div key={action} className="contents">
+              <dt>
+                {keys.map((key) => (
+                  <Kbd key={key}>{key}</Kbd>
+                ))}
+              </dt>
+              <dd>{action}</dd>
+            </div>
+          ))}
+        </dl>
+      </Fold>
+    </div>
   )
 }

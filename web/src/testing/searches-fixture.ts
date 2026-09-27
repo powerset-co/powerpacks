@@ -229,7 +229,7 @@ export const RUN: SearchRunPayload = {
       pond(2, [AVERY, QUINN, CASEY_AGAIN]),
     ],
     groups: [],
-    jd_text: "",
+    jd_text: "Build the payments platform with a small backend team.",
     candidates: [
       candidate(JORDAN, {
         linkedin_url: "https://www.linkedin.com/in/jordan-bravo",
@@ -271,7 +271,18 @@ export const RUN: SearchRunPayload = {
           total_interactions: 42,
         },
       }),
-      candidate(CASEY),
+      // Sources the People page has no row for: X and a contacts export.
+      candidate(CASEY, {
+        network_attribution: {
+          person_id: CASEY.person_id,
+          sources: [
+            { channel: "twitter", total_interactions: 0, operator_count: 1 },
+            { channel: "csv_import", total_interactions: 0, operator_count: 1 },
+          ],
+          operators: [],
+          total_interactions: 0,
+        },
+      }),
       candidate(MORGAN),
       candidate(RILEY, { candidate_judgment: judgment(4, "Ran payments infrastructure.") }),
       candidate(AVERY),

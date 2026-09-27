@@ -1,5 +1,5 @@
 import { DetailsSection } from "@/components/shared"
-import { FACET_BY_KEY, facetText } from "@/lib/people/facets"
+import { facetOf, facetText } from "@/lib/people/facets"
 import type { Person, PersonDetail } from "@/types/people"
 
 import { Pair } from "./Pair"
@@ -20,8 +20,7 @@ export function RelationshipSection({ row, detail, ...section }: RelationshipSec
       {labelled ? (
         <dl className="kv">
           {CHOICES.filter((key) => row[key]).map((key) => {
-            const facet = FACET_BY_KEY.get(key)
-            if (!facet) return null
+            const facet = facetOf(key)
             const percent = Math.round((detail.choice_p[key] ?? 0) * 100)
             return (
               <Pair key={key} term={facet.label}>

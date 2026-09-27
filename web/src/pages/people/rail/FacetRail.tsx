@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 
 import { useReducedMotion } from "@/hooks/useReducedMotion"
 
 import { Fold } from "@/components/shared"
-import { FACETS, type FacetDef } from "@/lib/people/facets"
+import { FACETS, type FacetDef, type FacetFilters, type FacetKey } from "@/lib/people/facets"
 import { EMPTY, toggled } from "@/lib/sets"
 
 import { RailFacet } from "./RailFacet"
@@ -14,13 +14,13 @@ const MORE_FACETS = FACETS.filter((facet) => facet.more)
 const NO_COUNTS: ReadonlyMap<string, number> = new Map()
 
 interface FacetRailProps {
-  filters: ReadonlyMap<string, ReadonlySet<string>>
-  counts: ReadonlyMap<string, ReadonlyMap<string, number>>
-  onValue: (key: string, value: string) => void
+  filters: FacetFilters
+  counts: ReadonlyMap<FacetKey, ReadonlyMap<string, number>>
+  onValue: (key: FacetKey, value: string) => void
 }
 
 // The default facets, "More filters" for the rest, and the keyboard shortcuts.
-export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
+export const FacetRail = memo(function FacetRail({ filters, counts, onValue }: FacetRailProps) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(EMPTY)
   const [moreOpen, setMoreOpen] = useState(false)
@@ -56,7 +56,7 @@ export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
       <button
         ref={moreToggle}
         type="button"
-        className="rail-divider"
+        className="rail-divider chevron"
         data-more-toggle
         aria-expanded={moreOpen}
         onClick={() => setMoreOpen(!moreOpen)}
@@ -69,4 +69,4 @@ export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
       <ShortcutsHint />
     </>
   )
-}
+})

@@ -55,8 +55,22 @@ describe("usePresenceList", () => {
     ])
     const leaving = container.querySelector("[data-key='a']")
     if (!leaving) throw new Error("no leaving entry")
-    fireEvent.transitionEnd(leaving)
+    fireEvent.transitionEnd(leaving, { propertyName: "opacity" })
     expect(keys(container)).toEqual([["b", "true"]])
+  })
+
+  it("keeps a leaving item until its opacity ends, not another property's transition", () => {
+    stubMotion(false)
+    const { container, rerender } = render(<Chips items={held("a", "b")} />)
+    rerender(<Chips items={held("b")} />)
+    const leaving = container.querySelector("[data-key='a']")
+    if (!leaving) throw new Error("no leaving entry")
+    // A press's translate ends as the item starts to leave.
+    fireEvent.transitionEnd(leaving, { propertyName: "transform" })
+    expect(keys(container)).toEqual([
+      ["a", "false"],
+      ["b", "true"],
+    ])
   })
 
   it("reads items fresh by key without re-rendering forever", () => {

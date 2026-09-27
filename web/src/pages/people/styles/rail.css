@@ -50,20 +50,10 @@
 .rail-divider:hover {
   color: var(--foreground);
 }
+/* index.css .chevron, pushed to the end. */
 .rail-divider::after {
-  content: "";
-  box-sizing: content-box;
   margin-left: auto;
-  width: 5px;
-  height: 5px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg);
   opacity: 0.7;
-  transition: transform var(--t-med) var(--ease-out);
-}
-.rail-divider[aria-expanded="true"]::after {
-  transform: rotate(45deg);
 }
 /* The facets it reveals fold open under it (Fold). */
 .rail-more {
@@ -76,18 +66,17 @@
   font-size: 11px;
   line-height: 1.5;
 }
-.rail-hint summary {
-  display: list-item;
+.rail-hint > button {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-weight: 700;
   letter-spacing: 0.04em;
   cursor: pointer;
-  list-style: none;
+  transition: color var(--t-fast) var(--ease-out);
 }
-.rail-hint summary::-webkit-details-marker {
-  display: none;
-}
-.rail-hint summary:hover {
+.rail-hint > button:hover {
   color: var(--foreground);
 }
 .rail-hint dl {

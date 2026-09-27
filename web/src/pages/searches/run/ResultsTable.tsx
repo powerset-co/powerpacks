@@ -7,6 +7,7 @@ import { EMPTY, toggled } from "@/lib/sets"
 
 import { useResultKeys } from "../hooks/useResultKeys"
 import { ResultRow } from "./ResultRow"
+import type { RowContext } from "./RowActions"
 import { ROW_H } from "./columns"
 
 export type ResultItem =
@@ -17,7 +18,7 @@ interface ResultsTableProps {
   ranked: boolean
   labels: boolean
   empty: ReactNode
-  rowActions: ((result: Result) => ReactNode) | undefined
+  rowContext: RowContext
 }
 
 const itemKey = (item: ResultItem) => item.key
@@ -25,7 +26,7 @@ const itemKey = (item: ResultItem) => item.key
 // The virtualized people table. Rows are measured, so an expanded row grows in place; each
 // row opens and closes on its own, so opening one never moves another out of view. The keys
 // (hooks/useResultKeys) drive a focused row; t and s press that row's tag and score buttons.
-export function ResultsTable({ items, ranked, labels, empty, rowActions }: ResultsTableProps) {
+export function ResultsTable({ items, ranked, labels, empty, rowContext }: ResultsTableProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(EMPTY)
   const [focus, setFocus] = useState<string | null>(null)
   const rows = useRef<VirtualRowsHandle>(null)
@@ -100,7 +101,7 @@ export function ResultsTable({ items, ranked, labels, empty, rowActions }: Resul
               labels={labels}
               expanded={expanded.has(item.key)}
               focused={item.key === focus}
-              actions={rowActions?.(item.result)}
+              context={rowContext}
               onToggle={toggle}
             />
           )

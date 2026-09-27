@@ -1,5 +1,5 @@
 import { CountRoll } from "@/components/shared"
-import { countText } from "@/lib/searches/filters"
+import { countOf } from "@/lib/copy"
 
 interface ResultCountProps {
   shown: number
@@ -17,7 +17,7 @@ export function ResultCount({ shown, total }: ResultCountProps) {
       data-result-count
     >
       <span className="sr-only" role="status">
-        {countText(shown, total)}
+        {countOf(shown, total, "result")}
       </span>
       <span aria-hidden="true">
         <CountRoll key={filtered ? "filtered" : "all"} value={shown} />

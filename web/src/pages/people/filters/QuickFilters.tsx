@@ -1,16 +1,16 @@
-import { Chip } from "@/components/shared"
-import { QUICK, type QuickFilter } from "@/lib/people/facets"
+import { memo } from "react"
 
-import { quickActive } from "./quickActive"
+import { Chip } from "@/components/shared"
+import { QUICK, quickActive, type FacetFilters, type QuickFilter } from "@/lib/people/facets"
 
 interface QuickFiltersProps {
-  filters: ReadonlyMap<string, ReadonlySet<string>>
+  filters: FacetFilters
   counts: readonly number[]
   onPick: (quick: QuickFilter | null) => void
 }
 
 // Named facet selections counted within the tab; pressing the active one clears it.
-export function QuickFilters({ filters, counts, onPick }: QuickFiltersProps) {
+export const QuickFilters = memo(function QuickFilters({ filters, counts, onPick }: QuickFiltersProps) {
   return (
     <section className="quick" data-quick aria-label="Quick filters">
       {QUICK.map((quick, position) => {
@@ -32,4 +32,4 @@ export function QuickFilters({ filters, counts, onPick }: QuickFiltersProps) {
       })}
     </section>
   )
-}
+})

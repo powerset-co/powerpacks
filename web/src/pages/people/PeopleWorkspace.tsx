@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react"
 
 import { Toast } from "@/components/shared"
 import { useSelection } from "@/hooks/useSelection"
+import type { FacetKey, FacetSet, QuickFilter } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { personKey, type Decision, type Person } from "@/types/people"
 
@@ -49,23 +50,48 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
   const decisions = useDecisions(byId, onWritten)
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
-  const reset =
-    <A extends unknown[]>(change: (...args: A) => void) =>
-    (...args: A) => {
-      change(...args)
-      clearSelection()
-      setFocus(-1)
-      table.current?.scrollToOffset(0)
-    }
+  // Each handler keeps one identity, so j/k and the drawer never re-render the rail or bars.
+  const { setTab: pickTab, toggleFilter: pickFilter, setFilters: pickFilters, setText: pickText } = filters
+  const startOver = useCallback(() => {
+    clearSelection()
+    setFocus(-1)
+    table.current?.scrollToOffset(0)
+  }, [clearSelection])
   // The tab already shown keeps its selection, focus and scroll.
-  const changeTab = reset(filters.setTab)
-  const setTab = (tab: Decision) => {
-    if (tab !== view.tab) changeTab(tab)
-  }
-  const toggleFilter = reset(filters.toggleFilter)
-  const setFilters = reset(filters.setFilters)
-  const setText = reset(filters.setText)
-  const clearFilters = () => setFilters({})
+  const setTab = useCallback(
+    (tab: Decision) => {
+      if (tab === view.tab) return
+      pickTab(tab)
+      startOver()
+    },
+    [view.tab, pickTab, startOver],
+  )
+  const toggleFilter = useCallback(
+    (key: FacetKey, value: string) => {
+      pickFilter(key, value)
+      startOver()
+    },
+    [pickFilter, startOver],
+  )
+  const setFilters = useCallback(
+    (set: FacetSet) => {
+      pickFilters(set)
+      startOver()
+    },
+    [pickFilters, startOver],
+  )
+  const setText = useCallback(
+    (text: string) => {
+      pickText(text)
+      startOver()
+    },
+    [pickText, startOver],
+  )
+  const clearFilters = useCallback(() => setFilters({}), [setFilters])
+  const pickQuick = useCallback(
+    (quick: QuickFilter | null) => setFilters(quick ? quick.set : {}),
+    [setFilters],
+  )
 
   const { toggle: toggleDrawer } = drawer
   const onOpen = useCallback(
@@ -96,11 +122,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
       main={
         <>
           <DecisionTabs tab={view.tab} totals={totals} total={rows.length} onTab={setTab} />
-          <QuickFilters
-            filters={view.filters}
-            counts={quickCounts}
-            onPick={(quick) => setFilters(quick ? quick.set : {})}
-          />
+          <QuickFilters filters={view.filters} counts={quickCounts} onPick={pickQuick} />
           <FilterBar
             ref={search}
             text={view.text}

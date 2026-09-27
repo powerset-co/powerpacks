@@ -1,9 +1,8 @@
-import { CountRoll, type ToastMessage } from "@/components/shared"
-import { Chip } from "@/components/shared"
+import { Appear, Chip, CountRoll, type ToastMessage } from "@/components/shared"
 import { Button } from "@/components/ui/button"
+import { plural } from "@/lib/copy"
 import { copyRows, csvFilename, downloadCsv } from "@/lib/searches/exports"
 import {
-  countText,
   filterRows,
   liveFilters,
   operatorOptions,
@@ -16,8 +15,8 @@ import type { ResultRow } from "@/lib/searches/ranking"
 import { heldTags } from "@/lib/searches/tags"
 import { cn } from "@/lib/utils"
 import type { Tagged } from "@/types/searches"
+import { errorText } from "@/lib/api/http"
 
-import { Appear } from "./Appear"
 import { ClearTags } from "./ClearTags"
 import { OperatorPicker } from "./OperatorPicker"
 import { ResultCount } from "./ResultCount"
@@ -43,10 +42,6 @@ export interface ResultsToolbarProps {
   onAnnounce: (toast: ToastMessage) => void
   // Placement from the page.
   className?: string
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 // rendering.py _results_toolbar: Tagged (n), Labels, Overall score, Operators, tag filter,
@@ -75,11 +70,11 @@ export function ResultsToolbar({
   const exportCsv = () => {
     const ids = exported.map((row) => row.row.person_id)
     downloadCsv(exported, exportScore, csvFilename(title, heldTags(tagged, ids)))
-    onAnnounce({ message: `Exported ${countText(exported.length, exported.length)}.` })
+    onAnnounce({ message: `Exported ${plural(exported.length, "result")}.` })
   }
   const copy = () => {
     copyRows(exported, exportScore).then(
-      () => onAnnounce({ message: `Copied ${countText(exported.length, exported.length)}.` }),
+      () => onAnnounce({ message: `Copied ${plural(exported.length, "result")}.` }),
       (error: unknown) => onAnnounce({ message: `Couldn't copy. ${errorText(error)}`, error: true }),
     )
   }

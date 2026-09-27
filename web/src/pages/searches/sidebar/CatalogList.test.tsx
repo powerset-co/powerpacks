@@ -40,6 +40,12 @@ describe("CatalogList", () => {
     expect(runIds()).toEqual([RUN_ID, "casey-role", "morgan-role", "riley-role"])
   })
 
+  it("says who is pinned and how many scored 5, 4 and 3 on the people count", () => {
+    render(<CatalogList cards={CARDS} selectedId={null} onOpen={vi.fn()} />)
+    const row = document.querySelector(`[data-run-id='${RUN_ID}'] [data-people-counts]`)
+    expect(row?.getAttribute("title")).toBe("Pinned 0 · Overall 5/5: 1, 4/5: 1, 3/5: 0")
+  })
+
   it("filters as you type and says when nothing matches", () => {
     render(<CatalogList cards={CARDS} selectedId={null} onOpen={vi.fn()} />)
     const search = screen.getByRole("searchbox", { name: "Search saved searches" })

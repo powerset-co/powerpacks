@@ -57,46 +57,49 @@ server; everything else reads typed values.
 | `src/hooks/`                                                | Page-agnostic hooks (table below)                                                                                                                       | —                                 |
 | `src/lib/api/`                                              | `http.ts` (`failure`, `body`: W1), `people.ts`, `searches.ts` (catalog, run, tags), `feedback.ts` (`POST /searches/feedback`)                           | The review server                 |
 | `src/lib/people/`                                           | Page copy and labels, facets and quick filters, the filter/count pass, the saved view and its parser                                                    | Typed rows, `sessionStorage`      |
-| `src/lib/channels.ts`                                       | The source-family vocabulary: `Channel`, titles and pill colours, `toChannels`                                                                          | —                                 |
+| `src/lib/channels.ts`                                       | The source-family vocabulary: `Channel`, titles and pill colours, `toChannel(s)` (the search server's `twitter` is X, `phone` iMessage)                 | —                                 |
+| `src/lib/copy.ts`                                           | Words both pages use: `plural`, `countOf` ("N of M people"), `monthYear`                                                                                | —                                 |
 | `src/lib/nav.ts`                                            | The top bar's pages in order (`PAGES`), `HOME`, and `pageAt(pathname)` (unknown paths are `HOME`)                                                       | —                                 |
-| `src/lib/storage.ts`, `src/lib/sets.ts`, `src/lib/utils.ts` | Generic `readSession`/`writeSession`, immutable set helpers, `cn()`                                                                                     | `sessionStorage`                  |
+| `src/lib/storage.ts`, `src/lib/sets.ts`, `src/lib/utils.ts` | `readStored`/`writeStored` (session or local, blocked storage tolerated); immutable set helpers; `cn()`, `isRecord`                                     | `sessionStorage`, `localStorage`  |
 | `src/lib/motion.ts`, `src/lib/must.ts`                      | Motion tokens read back for Web Animations; `must()`, the one non-null assertion                                                                        | —                                 |
 | `src/types/`                                                | API shapes, `PERSON_COLUMNS` (pinned to model.py by `tests/test_share_web.py`) and closed vocabularies (`Decision`, `Worth`, `DecidedBy`)               | —                                 |
 | `src/testing/`                                              | Synthetic fixtures for the vitest suites: `people-fixture.ts` (columnar), `searches-fixture.ts` (rows, operators, ratings, `MemoryStorage`)             | —                                 |
-| `src/styles/index.css`                                      | Tokens and base rules copied from `results_web/results.css`, shared keyframes, `.rise` overlay motion                                                   | —                                 |
+| `src/styles/index.css`                                      | Tokens and base rules copied from `results_web/results.css`, shared keyframes, `.rise` / `.rise-in` motion, `.chevron`, `.focus-bar`, `.section-title`  | —                                 |
 | `tailwind.config.ts`                                        | Maps shadcn color names, radii, shadows and durations to those tokens                                                                                   | —                                 |
 
 ### Shared components (`src/components/shared/`)
 
-| Component                          | Role                                                                                     |
-| ---------------------------------- | ---------------------------------------------------------------------------------------- |
-| `TopBar`, `NavTabs`, `TabInk`      | Brand cell and page tabs (`lib/nav.ts` `PAGES`); the one sliding underline               |
-| `Avatar`, `initials`               | Initials with the picture fading in over them                                            |
-| `Chip`, `Kbd`, `EmptyState`        | Filter pill with optional count; key cap; centred muted line that rises in               |
-| `SourcePill`, `SourcePills`, icons | Channel pill (sm/md) and a person's pills; `icons/channels.tsx` (pinned by `test_icons`) |
-| `SearchField`, `SortHeader`        | The one text box style; a sortable column header                                         |
-| `FacetShell`, `FacetValue`, `Fold` | A facet (head + folded values), one value, the height fold                               |
-| `DetailsSection`                   | A drawer section: a `<details>` head with count and badge, controlled by `open`          |
-| `CountRoll`, `Toast`               | A count that rolls; the page toast (rises in, keeps its last message as it leaves)       |
-| `VirtualRows`                      | The virtualized list (fixed row height, or `measure` for rows that open in place)        |
+| Component                          | Role                                                                                                                                                            |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TopBar`, `NavTabs`, `TabInk`      | Brand cell and page tabs (`lib/nav.ts` `PAGES`); the one sliding underline                                                                                      |
+| `Avatar`, `initials`               | Initials with the picture fading in over them                                                                                                                   |
+| `Chip`, `Kbd`, `EmptyState`        | Filter pill with optional count; key cap; centred muted line that rises in                                                                                      |
+| `SourcePill`, `SourcePills`, icons | Channel pill (sm/md, optional count) and a person's pills; `icons/channels.tsx` and `icons/actions.tsx` (plus, pin, flag, `CLOSE_MARK`), pinned by `test_icons` |
+| `SearchField`, `SortHeader`        | The one text box style; a sortable column header                                                                                                                |
+| `FacetShell`, `FacetValue`, `Fold` | A facet (head + folded values), one value, the height fold (inert while shut)                                                                                   |
+| `DetailsSection`                   | A titled section (heading toggle, count, badge) whose body folds both ways; drawer, team, job description                                                       |
+| `Appear`                           | Rises in when shown and drops out before unmounting (inert while leaving)                                                                                       |
+| `CountRoll`, `Toast`               | A count that rolls; the page toast (rises in, keeps its last message as it leaves)                                                                              |
+| `VirtualRows`                      | The virtualized list (fixed row height, or `measure` for rows that open in place)                                                                               |
 
 `src/components/ui/`: shadcn/ui `button`, `badge`, `dialog`, `skeleton`.
 
 ### Hooks
 
-| Hook                                            | Where                   | Role                                                                  |
-| ----------------------------------------------- | ----------------------- | --------------------------------------------------------------------- |
-| `useSelection`                                  | `hooks/`                | Selected ids; select-all takes every matching item                    |
-| `usePresence`, `usePresenceList`                | `hooks/`                | Keep an overlay / removed items mounted through their exit transition |
-| `useReducedMotion`, `useListEntrance`           | `hooks/`                | The OS motion setting; rows fading in after the list changes          |
-| `useFilters`, `usePeopleQuery`                  | `pages/people/hooks/`   | View state (saved to `sessionStorage`); every person once             |
-| `useDrawer`, `usePersonDetail`                  | `pages/people/hooks/`   | Which person the drawer shows; their detail                           |
-| `useDecisions`                                  | `pages/people/hooks/`   | Share / keep private / use worth in one write, with undo              |
-| `useKeyboard`, `usePeopleShortcuts`             | `pages/people/hooks/`   | The page's keys and their wiring                                      |
-| `useCatalog`, `useSearchRun`                    | `pages/searches/hooks/` | The saved searches; one run                                           |
-| `useRunSwap`                                    | `pages/searches/hooks/` | The crossfade between runs                                            |
-| `useSearchTags`, `useFeedback`                  | `pages/searches/hooks/` | A run's tags (saved in order); the feedback queue                     |
-| `useSidebarKeys`, `useResultKeys`, `useDismiss` | `pages/searches/hooks/` | Sidebar keys; result keys; Escape / outside press closes a panel      |
+| Hook                                  | Where                   | Role                                                                                                                                |
+| ------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `useSelection`                        | `hooks/`                | Selected ids; select-all takes every matching item                                                                                  |
+| `usePresence`, `usePresenceList`      | `hooks/`                | Keep an overlay / removed items mounted until their exit's opacity ends                                                             |
+| `useKeys`, `useInert`, `useDismiss`   | `hooks/`                | The page's keydown listener and `isTyping`; inert while shut; Escape / outside press closes a panel                                 |
+| `useReducedMotion`, `useListEntrance` | `hooks/`                | The OS motion setting; rows fading in after the list changes                                                                        |
+| `useFilters`, `usePeopleQuery`        | `pages/people/hooks/`   | View state (saved to `sessionStorage`); every person once                                                                           |
+| `useDrawer`, `usePersonDetail`        | `pages/people/hooks/`   | Which person the drawer shows; their detail                                                                                         |
+| `useDecisions`                        | `pages/people/hooks/`   | Share / keep private / use worth in one write, with undo                                                                            |
+| `useKeyboard`, `usePeopleShortcuts`   | `pages/people/hooks/`   | The page's keys and their wiring                                                                                                    |
+| `useCatalog`, `useSearchRun`          | `pages/searches/hooks/` | The saved searches; one run                                                                                                         |
+| `useRunSwap`                          | `pages/searches/hooks/` | The crossfade between runs                                                                                                          |
+| `useSearchTags`, `useFeedback`        | `pages/searches/hooks/` | A run's tags (saved in order; browser-kept tags moved to the server); the open run's feedback queue, its failure, Retry and sign-in |
+| `useSidebarKeys`, `useResultKeys`     | `pages/searches/hooks/` | Sidebar keys; result keys (both on `useKeys`)                                                                                       |
 
 Styling has three layers: the tokens in `index.css`, Tailwind utilities on shared and ui
 components, and the page CSS in `pages/people/styles/`. Motion is CSS transitions and
@@ -110,26 +113,27 @@ open. Picking a run pushes the URL, so back, forward and reload land on it. Sear
 in `src/lib/searches/` (as People's does in `lib/people/`); `src/pages/searches/` holds the
 components and hooks.
 
-| Path (`src/pages/searches/`)            | Role                                                                                                   |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `SearchesPage.tsx`, `SearchesShell.tsx` | Reads `run_id`, loads the catalog; owns the feedback queue (`useFeedback`) and the page's one `Toast`  |
-| `sidebar/`                              | Search box, company and status selects, version chips, recency groups; filters kept for the tab        |
-| `run/RunPane.tsx`                       | Empty state (with the keys), loading, error; crossfades between runs (`hooks/useRunSwap`)              |
-| `run/RunView.tsx`                       | One run's wiring: its tags (`useSearchTags`), the filters, the rows they keep, each person's own score |
-| `run/SearchRun.tsx`                     | Header, pond chain, toolbar, the virtualized results table, the team fold                              |
-| `run/ResultsTable.tsx`, `ResultRow.tsx` | Rows in place, focus and keys (`hooks/useResultKeys`); the actions column is reserved in the head      |
-| `run/RowActions.tsx`, `PinButton.tsx`   | Tag editor, pin (the `Pinned` tag) and score badge at a candidate's row end                            |
-| `toolbar/`                              | Tagged, Labels, Overall score, Operators, tag filter, count, Copy/CSV, Untag and Clear all             |
-| `dialogs/`                              | Score dialog (five-point rubric) and search feedback dialog; both hand records to `useFeedback`        |
-| `styles/`                               | Page CSS: shell, sidebar, run, results, toolbar (panels, `.rise-in`, `.rise-settled`)                  |
+| Path (`src/pages/searches/`)            | Role                                                                                                                                                                  |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SearchesPage.tsx`, `SearchesShell.tsx` | Reads `run_id`, loads the catalog; owns the feedback queue (`useFeedback`) and the page's one `Toast`                                                                 |
+| `sidebar/`                              | Search box, company and status selects, version chips, recency groups; filters kept for the tab                                                                       |
+| `run/RunPane.tsx`                       | Empty state (with the keys), loading, error; crossfades between runs (`hooks/useRunSwap`)                                                                             |
+| `run/RunView.tsx`                       | One run's wiring: its tags (`useSearchTags`), the filters, the rows they keep, each person's own score                                                                |
+| `run/SearchRun.tsx`                     | Header, pond chain, toolbar, the virtualized results table, the team fold                                                                                             |
+| `run/ResultsTable.tsx`, `ResultRow.tsx` | Rows in place, focus and keys (`hooks/useResultKeys`); the actions column is reserved in the head                                                                     |
+| `run/RowActions.tsx`, `PinButton.tsx`   | Tag editor, pin (the `Pinned` tag) and score badge at a candidate's row end                                                                                           |
+| `toolbar/`                              | Tagged, Labels, Overall score, Operators, tag filter, count, Copy/CSV, Untag and Clear all                                                                            |
+| `dialogs/`                              | Score dialog (five-point rubric) and search feedback dialog, both handing records to `useFeedback`; `FeedbackStatus`, the stopped queue's count with Retry or sign-in |
+| `styles/`                               | Page CSS: shell, sidebar, run, results, toolbar (panels, `.rise-in`, `.rise-settled`)                                                                                 |
 
-| Path (`src/lib/searches/`) | Role                                                                                        |
-| -------------------------- | ------------------------------------------------------------------------------------------- |
-| `ranking.ts`               | `rendering.py` ordering: Jev and rating scales never mixed, missing never zero; the panel   |
-| `filters.ts`               | The toolbar's filter (`keptRows` for the table, `filterRows` one per person), labels toggle |
-| `tags.ts`, `exports.ts`    | Pure tag edits; CSV and clipboard of the filtered rows                                      |
-| `feedback.ts`, `rubric.ts` | Feedback records and their queue, the person's own score; the rubric as choices             |
-| `catalog.ts`, `copy.ts`    | The sidebar filter (and its saved form) and groups; status, date and money words            |
+| Path (`src/lib/searches/`) | Role                                                                                           |
+| -------------------------- | ---------------------------------------------------------------------------------------------- |
+| `ranking.ts`               | `rendering.py` ordering: Jev and rating scales never mixed, missing never zero; the panel      |
+| `filters.ts`               | The toolbar's filter (`keptRows` for the table, `filterRows` one per person), labels toggle    |
+| `tags.ts`, `exports.ts`    | Pure tag edits; CSV and clipboard of the filtered rows                                         |
+| `feedback.ts`, `rubric.ts` | Feedback records and their queue, the person's own score; the rubric as choices                |
+| `catalog.ts`, `copy.ts`    | The sidebar filter (and its saved form) and groups; status, date, money and people-count words |
+| `sources.ts`               | A candidate's source pills (busiest first, email and message counts) and operator lines        |
 
 The filtered rows are computed once, in `RunView`: the table shows them and the toolbar counts
 them, so the count never disagrees with the table. Export and copy take every filtered person,
@@ -140,6 +144,8 @@ run, `j`/`k` move the focused person, Enter opens or closes them, `t` opens thei
 `s` their score dialog.
 
 ## Change log
+
+- 2026-09-26: Review fixes: result rows show every source family with counts, the location and who each source came through; the job description and the team fold with `DetailsSection` (now a heading toggle over a `Fold`, animated both ways); the feedback queue sends only the open run's records and shows a stopped queue with Retry or a Powerset sign-in; browser-kept tags move to the server; the catalog's people count says pinned and 5/4/3; one `useKeys`, `useInert`, `errorText`, `isRecord`, storage helper, count copy, chevron, focus bar and glyph set; facet keys are a closed `FacetKey`; presence unmounts on the exit's opacity; the People skeleton matches the loaded layout.
 
 - 2026-09-26: Shared components and hooks tables, waivers pointer; `tests/test_visual.py` covers People and Searches.
 - 2026-09-26: Searches run view wired: toolbar filters the table, tags and pin, score and search feedback dialogs, one page toast, result keys; Searches logic in `lib/searches/`, feedback types in `types/searches.ts`, sidebar filters kept for the tab.

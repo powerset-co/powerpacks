@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 
-import type { SortKey } from "@/lib/people/facets"
+import { setEntries, type FacetKey, type FacetSet, type SortKey } from "@/lib/people/facets"
 import { DEFAULT_VIEW, readView, writeView, type PeopleView } from "@/lib/people/view"
 import { EMPTY, toggled } from "@/lib/sets"
 import { ORDER, type Decision, type Person } from "@/types/people"
@@ -23,7 +23,7 @@ export function useFilters(rows: readonly Person[]) {
     setView((current) => (current.tab === tab ? current : { ...current, tab }))
   }, [])
 
-  const toggleFilter = useCallback((key: string, value: string) => {
+  const toggleFilter = useCallback((key: FacetKey, value: string) => {
     setView((current) => {
       const filters = new Map(current.filters)
       const held = toggled(filters.get(key) ?? EMPTY, value)
@@ -33,8 +33,8 @@ export function useFilters(rows: readonly Person[]) {
     })
   }, [])
 
-  const setFilters = useCallback((set: Readonly<Record<string, readonly string[]>>) => {
-    const filters = new Map(Object.entries(set).map(([key, values]) => [key, new Set(values)]))
+  const setFilters = useCallback((set: FacetSet) => {
+    const filters = new Map(setEntries(set).map(([key, values]) => [key, new Set(values)]))
     setView((current) => ({ ...current, filters }))
   }, [])
 

@@ -94,11 +94,6 @@ export function label(kind: TextKind, value: string): string {
   return TEXT[kind][value] ?? sentence(value)
 }
 
-export function plural(count: number, noun: string): string {
-  const word = count === 1 ? noun : noun === "person" ? "people" : `${noun}s`
-  return `${count.toLocaleString()} ${word}`
-}
-
 /** ISO prefixes in a fact date to words: "2012-02 to 2012-03" -> "Feb 2012 to Mar 2012". */
 export function eventDate(value: string | null | undefined): string {
   return (value ?? "").replace(
@@ -109,11 +104,4 @@ export function eventDate(value: string | null | undefined): string {
       return name ? `${name} ${year}` : year
     },
   )
-}
-
-export function formatDate(value: string): string {
-  if (!value) return ""
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value.slice(0, 10)
-  return date.toLocaleDateString(undefined, { month: "short", year: "numeric" })
 }

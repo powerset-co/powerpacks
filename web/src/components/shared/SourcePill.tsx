@@ -11,14 +11,17 @@ export type SourcePillSize = NonNullable<VariantProps<typeof sourcePillVariants>
 interface SourcePillProps {
   channel: Channel
   size?: SourcePillSize
+  // How many emails or messages, already worded ("42", "~2k"); none draws the glyph alone.
+  count?: string
 }
 
-export function SourcePill({ channel, size }: SourcePillProps) {
+export function SourcePill({ channel, size, count }: SourcePillProps) {
   const Icon = CHANNEL_ICON[channel]
   const { title, colors } = CHANNELS[channel]
   return (
     <span data-c={channel} title={title} className={cn(sourcePillVariants({ size }), colors)}>
       <Icon role="img" aria-label={title} />
+      {count}
     </span>
   )
 }

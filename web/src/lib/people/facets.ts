@@ -23,9 +23,31 @@ export function warmthBucket(value: number | null): WarmthBucket | "" {
   return must(WARMTH[Math.min(3, Math.floor(value))], "warmth band")
 }
 
+export type FacetKey =
+  | "reason"
+  | "worth"
+  | "relationship_kind"
+  | "last"
+  | "channels"
+  | "linkedin"
+  | "worth_source"
+  | "tags"
+  | "labels"
+  | "function"
+  | "seniority"
+  | "mode"
+  | "warmth"
+  | "direction"
+  | "hierarchy"
+  | "intro_source"
+  | "evidence"
+
+/** The values held per facet: the view's filters. */
+export type FacetFilters = ReadonlyMap<FacetKey, ReadonlySet<string>>
+
 /** `get` returns the row's values for the facet; `words` names the TEXT map that words its values. */
 export interface FacetDef {
-  key: string
+  key: FacetKey
   label: string
   get: (row: Person) => string[]
   order?: readonly string[]
@@ -108,16 +130,36 @@ export const FACETS: readonly FacetDef[] = [
   },
 ]
 
-export const FACET_BY_KEY: ReadonlyMap<string, FacetDef> = new Map(FACETS.map((facet) => [facet.key, facet]))
+const FACET_BY_KEY: ReadonlyMap<string, FacetDef> = new Map(FACETS.map((facet) => [facet.key, facet]))
+
+export function isFacetKey(value: string): value is FacetKey {
+  return FACET_BY_KEY.has(value)
+}
+
+/** The facet's definition: every FacetKey has one in FACETS. */
+export function facetOf(key: FacetKey): FacetDef {
+  return must(FACET_BY_KEY.get(key), `facet ${key}`)
+}
 
 export function facetText(facet: FacetDef, value: string): string {
   return facet.words ? label(facet.words, value) : sentence(value)
 }
 
+/** Held values by facet, as a quick filter names them and a view is set from them. */
+export type FacetSet = Readonly<Partial<Record<FacetKey, readonly string[]>>>
+
+/** A set's facets and values, in FACETS order. */
+export function setEntries(set: FacetSet): [FacetKey, readonly string[]][] {
+  return FACETS.flatMap(({ key }) => {
+    const values = set[key]
+    return values ? [[key, values]] : []
+  })
+}
+
 /** Quick filters: named facet selections, counted within the tab. */
 export interface QuickFilter {
   name: string
-  set: Readonly<Record<string, readonly string[]>>
+  set: FacetSet
 }
 
 export const QUICK: readonly QuickFilter[] = [
@@ -152,6 +194,32 @@ const SORTERS: Readonly<Record<SortKey, (a: Person, b: Person) => number>> = {
 
 export function isSortKey(value: unknown): value is SortKey {
   return typeof value === "string" && Object.hasOwn(SORTERS, value)
+}
+
+/** A quick filter is on when the held facets are exactly its set, nothing more. */
+export function quickActive(quick: QuickFilter, filters: FacetFilters): boolean {
+  const entries = setEntries(quick.set)
+  const heldKeys = [...filters].filter(([, values]) => values.size).length
+  return (
+    heldKeys === entries.length &&
+    entries.every(([key, values]) => {
+      const held = filters.get(key)
+      return held?.size === values.length && values.every((value) => held.has(value))
+    })
+  )
+}
+
+/** A facet's values for the rail: its fixed order when it has one, else most people first; held
+ *  values stay listed at zero. */
+export function orderedValues(
+  facet: FacetDef,
+  counts: ReadonlyMap<string, number>,
+  held: ReadonlySet<string>,
+): string[] {
+  const values = [...new Set([...counts.keys(), ...held])]
+  const { order } = facet
+  if (order) return values.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99))
+  return values.sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || a.localeCompare(b))
 }
 
 export function sortRows(rows: readonly Person[], { key, dir }: Sort): Person[] {

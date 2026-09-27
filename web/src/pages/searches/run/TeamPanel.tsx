@@ -1,27 +1,31 @@
 import { useState } from "react"
 
-import { initials } from "@/components/shared"
-import { usePresence } from "@/hooks/usePresence"
-import { monthYear, runDate } from "@/lib/searches/copy"
+import { DetailsSection } from "@/components/shared"
+import { monthYear } from "@/lib/copy"
+import { runDate } from "@/lib/searches/copy"
 import type { SearchResult } from "@/types/searches"
 
+import { OperatorInitials } from "./Operators"
+
 // rendering.py _team_table: the company's current employees as saved, under the results.
-// The header folds the list open; the list fades in and out.
+// The bar folds the list open and shut.
 export function TeamPanel({ search }: { search: SearchResult }) {
   const [open, setOpen] = useState(false)
-  const body = usePresence(open ? search.team : null)
   const status = search.team_status ? (
     <p className="team-status">Team similarity: {search.team_status}</p>
   ) : null
   if (!search.team.length) return status
   return (
-    <section className="team" data-team data-open={open}>
-      <button type="button" className="team-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        Team <span>{search.team.length.toLocaleString()}</span>
-        <small>Current employees · Saved {runDate(search.team_fetched_at)}</small>
-      </button>
-      {body.mounted ? (
-        <div className="team-body" data-open={body.open} onTransitionEnd={body.onTransitionEnd}>
+    <div className="team" data-team>
+      <DetailsSection
+        sectionKey="team"
+        title="Team"
+        count={search.team.length}
+        badge={<small>Current employees · Saved {runDate(search.team_fetched_at)}</small>}
+        open={open}
+        onToggle={setOpen}
+      >
+        <div className="team-body">
           <table>
             <thead>
               <tr>
@@ -36,9 +40,7 @@ export function TeamPanel({ search }: { search: SearchResult }) {
                 <tr key={`${member.linkedin_url || member.name}:${index}`} data-team-row>
                   <td>
                     <span className="team-name">
-                      <span className="operator-initials" aria-hidden="true">
-                        {initials(member.name)}
-                      </span>
+                      <OperatorInitials name={member.name} />
                       {member.linkedin_url ? (
                         <a href={member.linkedin_url} target="_blank" rel="noreferrer">
                           {member.name || "Name unavailable"}
@@ -56,8 +58,8 @@ export function TeamPanel({ search }: { search: SearchResult }) {
             </tbody>
           </table>
         </div>
-      ) : null}
+      </DetailsSection>
       {status}
-    </section>
+    </div>
   )
 }

@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 from deep_context_sqlite_test_helpers import seed_identity
-from packs.ingestion.primitives.deep_context.db.models import PersonTagRow, ShareDecisionRow
+from packs.ingestion.primitives.deep_context.db.models import HumanWorth, MachineWorth, PersonTagRow, ShareDecisionRow
 from packs.ingestion.primitives.deep_context.db.share_views import person_labels, person_tags, share_decisions
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
@@ -27,17 +27,21 @@ from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.store import TagStore
 from packs.ingestion.primitives.share.web.model import (
     PEOPLE_COLUMNS,
+    WORTH_HUMAN,
+    WORTH_MACHINE,
     FactEvent,
     PersonDetail,
     SharePeople,
     people_payload,
 )
+from packs.ingestion.primitives.share.web import server as share_server
 from packs.ingestion.primitives.share.web.server import (
     decide_tags,
     make_handler,
     parse_tag_request,
     share_routes,
 )
+from packs.ingestion.schemas.share_schema import SHARE_VALUES
 from packs.shared.csv_io import CsvIO
 
 PEOPLE_HEADER = [
@@ -55,6 +59,14 @@ def ts_fields(interface: str) -> tuple[str, ...]:
     body = re.search(rf"^export interface {interface} \{{\n(.*?)^\}}", source, re.S | re.M)
     assert body is not None, interface
     return tuple(re.findall(r"^  (\w+)\??:", body.group(1), re.M))
+
+
+def ts_union(name: str) -> set[str]:
+    """The string literals of `export type <name> = "a" | "b"` in types/people.ts."""
+    source = PEOPLE_TYPES.read_text(encoding="utf-8")
+    union = re.search(rf"^export type {name} =(.*?)$", source, re.M)
+    assert union is not None, name
+    return set(re.findall(r'"(\w*)"', union.group(1)))
 
 
 def _saved_labels(**cells: object) -> dict:
@@ -166,6 +178,16 @@ class RowModelTests(ShareWebFixture):
                 self.assertEqual(ts_fields(interface), tuple(field.name for field in dataclasses.fields(shape)))
         read = re.findall(r'entry(?:\.get\(|\[)"(\w+)"', inspect.getsource(parse_tag_request))
         self.assertEqual(set(ts_fields("TagChange")), set(read))
+
+    def test_client_vocabularies_and_payloads_match_the_server(self) -> None:
+        # The closed vocabularies the page switches on, and the two payloads it reads whole.
+        self.assertEqual(ts_union("Decision"), set(SHARE_VALUES))
+        self.assertEqual(ts_union("DecidedBy"), {WORTH_HUMAN, WORTH_MACHINE})
+        self.assertEqual(ts_union("Worth") - {""}, {worth.value for worth in (*MachineWorth, *HumanWorth)})
+        self.assertEqual(set(ts_fields("PeoplePayload")), set(people_payload(self.people.load())))
+        written = re.search(r'\{"rows": \[\s*\{(.*?)\}', inspect.getsource(share_server), re.S)
+        self.assertIsNotNone(written)
+        self.assertEqual(set(ts_fields("TagResult")), set(re.findall(r'"(\w+)":', written.group(1))))
 
     def test_detail_carries_the_drawer_only_cells(self) -> None:
         detail = self.people.detail("parent-bbbb")

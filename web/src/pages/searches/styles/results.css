@@ -1,7 +1,7 @@
 /* The run's people table: a fixed head, measured virtual rows, evidence that opens in place. */
 
 .results {
-  --result-cols: minmax(200px, 1.5fr) 118px minmax(120px, 1fr) 76px 72px 118px 14px;
+  --result-cols: minmax(200px, 1.5fr) 118px minmax(120px, 1fr) 112px 72px 118px 14px;
   /* Tag trigger, pin and score badge: reserved in the head and every row, so nothing shifts
      when the actions render or a score or tag changes. */
   --actions-w: 248px;
@@ -69,27 +69,13 @@
   height: 51px;
   padding: 0 20px 0 12px;
 }
-.result-line::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--primary);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform var(--t-fast) var(--ease-out);
-}
+/* An open row keeps the focus bar (index.css .focus-bar). */
 .result-row[data-expanded="true"] .result-line::before {
   transform: scaleX(1);
 }
-/* The keyboard's row (j/k): People's focus bar and tint. */
+/* The keyboard's row (j/k): People's tint. */
 .result-row[data-focus="true"] {
   background: rgba(255, 255, 255, 0.03);
-}
-.result-row[data-focus="true"] .result-line::before {
-  transform: scaleX(1);
 }
 .result-main {
   height: 100%;
@@ -171,18 +157,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* index.css .chevron in the row's last column. */
 .result-chevron {
+  display: flex;
   justify-self: end;
-  box-sizing: content-box;
-  width: 5px;
-  height: 5px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  transform: rotate(-45deg);
-  transition: transform var(--t-fast) var(--ease-out);
-}
-.result-row[data-expanded="true"] .result-chevron {
-  transform: rotate(45deg);
+  color: var(--muted);
 }
 .result-actions {
   display: inline-flex;
@@ -287,6 +266,35 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+/* rendering.py .network-operator: the disc, the name, their sources and counts, Gmail accounts. */
+.evidence-operators {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.evidence-operators li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+.evidence-operators span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.evidence-operators small {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.evidence-operators .evidence-account {
+  color: var(--faint);
 }
 .traits {
   display: grid;

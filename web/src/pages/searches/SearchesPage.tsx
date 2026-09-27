@@ -23,7 +23,7 @@ export function SearchesPage() {
   const runId = params.get("run_id")
   const navigate = useNavigate()
   const catalog = useCatalog()
-  const feedback = useFeedback()
+  const feedback = useFeedback(runId)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const dismiss = useCallback(() => setToast(null), [])
   // Starts the picked run's request while the old pane fades out.

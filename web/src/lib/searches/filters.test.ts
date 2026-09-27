@@ -5,7 +5,6 @@ import type { Tagged } from "@/types/searches"
 
 import { exportScoreOf } from "./feedback"
 import {
-  countText,
   filterRows,
   keptRows,
   liveFilters,
@@ -113,12 +112,6 @@ describe("toolbar values", () => {
     const rows = [resultRow("a", "Jordan Bravo"), resultRow("b", "Casey Delta")]
     const tagged: Tagged = { tags: ["Backend"], assignments: { a: ["Backend"], elsewhere: ["Backend"] } }
     expect(taggedCount(rows, tagged)).toBe(1)
-  })
-
-  it("says N results, or N of M while filtered", () => {
-    expect(countText(125, 125)).toBe("125 results")
-    expect(countText(50, 125)).toBe("50 of 125 results")
-    expect(countText(1, 1)).toBe("1 result")
   })
 
   it("lists each operator once, by name ignoring case", () => {

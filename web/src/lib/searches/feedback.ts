@@ -12,6 +12,9 @@ import type {
   SearchRunPayload,
 } from "@/types/searches"
 
+import { readStored, writeStored } from "@/lib/storage"
+import { isRecord } from "@/lib/utils"
+
 import type { ScoreOf } from "./filters"
 import type { ResultRow } from "./ranking"
 
@@ -26,8 +29,14 @@ export type FeedbackOutcome = "sent" | "queued"
 
 export const OUTCOME_MESSAGE: Record<FeedbackOutcome, string> = {
   sent: "Sent.",
-  queued: "Saved to send later.",
+  queued: "Saved on this device.",
 }
+
+/** Why the queue stopped: Powerset needs a sign-in, or anything else (network, server). */
+export type FeedbackFailure = "needs_auth" | "failed"
+
+// The sender's status when Powerset has no usable sign-in (results_web/server.py _save_feedback).
+const NEEDS_AUTH = "needs_auth"
 
 export function buildScoreFeedback(
   runId: string,
@@ -107,27 +116,39 @@ export function withScore(payload: SearchRunPayload, record: FeedbackRecord): Se
   return { ...payload, search: { ...payload.search, candidates } }
 }
 
+function failureOf(reply: FeedbackReply): FeedbackFailure | null {
+  if (reply.status === "submitted") return null
+  return reply.api.status === NEEDS_AUTH ? "needs_auth" : "failed"
+}
+
+export interface Flushed {
+  left: FeedbackRecord[]
+  failure: FeedbackFailure | null
+}
+
 /**
- * Posts `queue` in order and returns what is left: the first record the server did not submit and
- * everything after it, so a later score for a person never lands before an earlier one.
+ * Posts `runId`'s records in queue order, as results.js sent only the open run's, and returns what
+ * is left: every other run's records, and from the first record the server did not submit on, the
+ * run's rest, so a later score for a person never lands before an earlier one.
  */
 export async function flushFeedback(
   queue: readonly FeedbackRecord[],
+  runId: string,
   post: (record: FeedbackRecord) => Promise<FeedbackReply>,
-): Promise<FeedbackRecord[]> {
-  for (const [index, record] of queue.entries()) {
+): Promise<Flushed> {
+  const sent = new Set<FeedbackRecord>()
+  let failure: FeedbackFailure | null = null
+  for (const record of queue) {
+    if (record.run_id !== runId) continue
     try {
-      const reply = await post(record)
-      if (reply.status !== "submitted") return queue.slice(index)
+      failure = failureOf(await post(record))
     } catch {
-      return queue.slice(index)
+      failure = "failed"
     }
+    if (failure) break
+    sent.add(record)
   }
-  return []
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+  return { left: queue.filter((record) => !sent.has(record)), failure }
 }
 
 function parseJudgment(raw: unknown): HumanJudgment | null | undefined {
@@ -155,22 +176,13 @@ export function parseQueued(raw: unknown): FeedbackRecord | null {
   return { run_id, person_id, comment, human_judgment: judgment }
 }
 
-// Storage can be blocked (private mode, quota): a read is then empty, a write best effort.
-
+/** The stored queue, skipping entries neither page wrote; empty when storage is blocked. */
 export function readQueue(): FeedbackRecord[] {
-  try {
-    const raw: unknown = JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) ?? "[]")
-    if (!Array.isArray(raw)) return []
-    return raw.map(parseQueued).filter((record) => record !== null)
-  } catch {
-    return []
-  }
+  const parse = (raw: unknown) =>
+    Array.isArray(raw) ? raw.map(parseQueued).filter((record) => record !== null) : null
+  return readStored("local", FEEDBACK_STORAGE_KEY, parse) ?? []
 }
 
 export function writeQueue(queue: readonly FeedbackRecord[]): void {
-  try {
-    localStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(queue.map(formValues)))
-  } catch {
-    // Storage blocked: the queue just won't survive a reload.
-  }
+  writeStored("local", FEEDBACK_STORAGE_KEY, queue.map(formValues))
 }

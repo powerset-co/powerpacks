@@ -107,10 +107,7 @@ const ScoreBadge = forwardRef<HTMLButtonElement, ScoreBadgeProps>(
         )}
         {...props}
       >
-        <span
-          key={score ?? "none"}
-          className={cn("inline-block", changed && "animate-[rise-in_var(--t-med)_var(--ease-out)]")}
-        >
+        <span key={score ?? "none"} className={cn("inline-block", changed && "rise-in")}>
           {score === null ? "Score" : `Your score: ${score}/${SCORE_SCALE}`}
         </span>
       </button>
@@ -190,7 +187,7 @@ function ScoreForm({ choices, score: saved, note: savedNote, initial, onDone }: 
                 aria-label={`Score ${choice.score}: ${choice.meaning}`}
                 className="peer absolute size-px opacity-0"
               />
-              <span className="grid h-11 place-items-center rounded-[6px] border border-border bg-background text-sm font-semibold tabular-nums transition-[background-color,border-color,color,transform] duration-fast ease-out hover:bg-secondary active:scale-95 peer-checked:border-primary peer-checked:bg-primary peer-checked:text-white peer-focus-visible:outline peer-focus-visible:outline-[3px] peer-focus-visible:outline-offset-2 peer-focus-visible:outline-muted-foreground">
+              <span className="grid h-11 place-items-center rounded-[6px] border border-border bg-background text-sm font-semibold tabular-nums transition-[background-color,border-color,color,transform] duration-fast ease-out hover:bg-secondary active:translate-y-px peer-checked:border-primary peer-checked:bg-primary peer-checked:text-white peer-focus-visible:outline peer-focus-visible:outline-[3px] peer-focus-visible:outline-offset-2 peer-focus-visible:outline-muted-foreground">
                 {choice.score}
               </span>
             </label>

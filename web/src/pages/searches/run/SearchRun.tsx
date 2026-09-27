@@ -1,17 +1,18 @@
-import type { ReactNode } from "react"
+import { useMemo, type ReactNode } from "react"
 
-import type { ResultRow, ResultSection, Results } from "@/lib/searches/ranking"
+import type { ResultSection, Results } from "@/lib/searches/ranking"
 import type { SearchResult } from "@/types/searches"
 
 import { PondChain } from "./PondChain"
 import { ResultsTable, type ResultItem } from "./ResultsTable"
+import type { RowContext } from "./RowActions"
 import { RunHeader } from "./RunHeader"
 import { TeamPanel } from "./TeamPanel"
 
 export interface SearchRunProps {
   search: SearchResult
-  // The run's status from its catalog card.
-  status?: string
+  // The run's status from its catalog card; none until the catalog loads.
+  status: string | undefined
   mode: Results["mode"]
   // Without a screen the pond chain picks the table's pond.
   pondAt: number
@@ -23,9 +24,9 @@ export interface SearchRunProps {
   // Taste, Suggested pin and Team similarity labels on each row.
   labels: boolean
   // The run's controls (web/README.md "Searches").
-  toolbar?: ReactNode
-  headerActions?: ReactNode
-  rowActions?: (result: ResultRow) => ReactNode
+  toolbar: ReactNode
+  headerActions: ReactNode
+  rowContext: RowContext
 }
 
 function tableItems(sections: readonly ResultSection[]): ResultItem[] {
@@ -49,21 +50,21 @@ function emptyText(search: SearchResult, mode: Results["mode"], pondAt: number, 
 // One saved run: header, pond chain, the toolbar, the people the filters keep, the team.
 export function SearchRun(props: SearchRunProps) {
   const { search, mode, pondAt, sections, filtered } = props
+  // One identity per filtered list: the table's row keys and measurements follow it.
+  const items = useMemo(() => tableItems(sections), [sections])
   return (
     <div className="search-run" data-search-run>
       <RunHeader search={search} status={props.status} people={props.people} actions={props.headerActions} />
       <PondChain ponds={search.ponds} selected={mode === "ponds" ? pondAt : null} onSelect={props.onPond} />
-      {props.toolbar ? (
-        <div className="run-toolbar" data-run-toolbar>
-          {props.toolbar}
-        </div>
-      ) : null}
+      <div className="run-toolbar" data-run-toolbar>
+        {props.toolbar}
+      </div>
       <ResultsTable
-        items={tableItems(sections)}
+        items={items}
         ranked={mode === "ranked"}
         labels={props.labels}
         empty={emptyText(search, mode, pondAt, filtered)}
-        rowActions={props.rowActions}
+        rowContext={props.rowContext}
       />
       <TeamPanel search={search} />
     </div>

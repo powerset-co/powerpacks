@@ -48,6 +48,20 @@
 .run-head-status {
   animation: fade-in var(--t-fast) var(--ease-out) backwards;
 }
+/* The job description (DetailsSection) under the facts; long ones scroll. */
+.run-jd {
+  margin-top: 8px;
+}
+.run-jd-text {
+  max-height: min(240px, 30vh);
+  margin: 0;
+  overflow-y: auto;
+  color: var(--foreground);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+}
 .run-head-actions {
   display: flex;
   gap: 6px;
@@ -147,72 +161,24 @@ button.pond-card:hover {
   border-bottom: 1px solid var(--line);
 }
 
-/* The team: a bar under the table; its list folds open above the bar and fades. */
+/* The team: a bar under the table (DetailsSection); its list folds open under the bar. */
 .team {
   border-top: 1px solid var(--line);
   background: var(--background);
 }
-.team-toggle {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  width: 100%;
+.team button[aria-expanded] {
   padding: 10px 20px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  text-align: left;
-  cursor: pointer;
-  transition: color var(--t-fast) var(--ease-out);
 }
-.team-toggle:hover {
-  color: var(--foreground);
-}
-.team-toggle > span {
-  color: var(--faint);
-}
-.team-toggle small {
+.team button[aria-expanded] > small {
   margin-left: auto;
   color: var(--faint);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.team-toggle::after {
-  content: "";
-  box-sizing: content-box;
-  align-self: center;
-  width: 5px;
-  height: 5px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-135deg);
-  transition: transform var(--t-fast) var(--ease-out);
-}
-.team[data-open="true"] .team-toggle::after {
-  transform: rotate(45deg);
 }
 .team-body {
   max-height: min(320px, 38vh);
   overflow-y: auto;
   scrollbar-width: thin;
-  opacity: 0;
-  transition: opacity var(--t-exit) var(--ease-in);
-}
-.team-body[data-open="true"] {
-  opacity: 1;
-  transition-duration: var(--t-fast);
-  transition-timing-function: var(--ease-out);
-}
-@starting-style {
-  .team-body[data-open="true"] {
-    opacity: 0;
-  }
 }
 .team table {
   width: 100%;

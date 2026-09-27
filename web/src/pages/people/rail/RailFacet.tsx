@@ -1,5 +1,5 @@
-import { FacetShell, FacetValue, SearchField } from "@/components/shared"
-import { facetText, type FacetDef } from "@/lib/people/facets"
+import { FacetShell, FacetValue, Fold, SearchField } from "@/components/shared"
+import { facetText, orderedValues, type FacetDef } from "@/lib/people/facets"
 
 // A long facet shows this many values, unless only one more would be hidden.
 const VISIBLE_VALUES = 8
@@ -17,29 +17,31 @@ interface RailFacetProps {
   onValue: (value: string) => void
 }
 
-function orderedValues(
-  facet: FacetDef,
-  counts: ReadonlyMap<string, number>,
-  held: ReadonlySet<string>,
-): string[] {
-  const values = [...new Set([...counts.keys(), ...held])]
-  const { order } = facet
-  if (order) return values.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99))
-  return values.sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || a.localeCompare(b))
-}
-
-// One facet: its values with live counts, the label search, and "N more…" / "Show fewer".
+// One facet: its values with live counts, the label search, and "N more…" / "Show fewer",
+// which folds the rest open and shut.
 export function RailFacet(props: RailFacetProps) {
   const { facet, counts, held, open, expanded, labelSearch } = props
   let values = orderedValues(facet, counts, held)
   if (facet.search && labelSearch) {
-    values = values.filter((value) => facetText(facet, value).toLowerCase().includes(labelSearch))
+    const needle = labelSearch.toLowerCase()
+    values = values.filter((value) => facetText(facet, value).toLowerCase().includes(needle))
   }
   // Keep the shell, search box included, while a label search matches nothing.
   if (!values.length && !(facet.search && labelSearch)) return null
   const long = values.length > VISIBLE_VALUES + 1
-  const shown = expanded || !long ? values : values.slice(0, VISIBLE_VALUES)
-  const hidden = values.length - shown.length
+  const first = long ? values.slice(0, VISIBLE_VALUES) : values
+  const rest = long ? values.slice(VISIBLE_VALUES) : []
+  const value = (name: string) => (
+    <FacetValue
+      key={name}
+      label={facetText(facet, name)}
+      count={counts.get(name) ?? 0}
+      pressed={held.has(name)}
+      onToggle={() => props.onValue(name)}
+      data-facet-key={facet.key}
+      data-facet-value={name}
+    />
+  )
   return (
     <FacetShell
       facetKey={facet.key}
@@ -54,29 +56,22 @@ export function RailFacet(props: RailFacetProps) {
           value={labelSearch}
           placeholder="Find a label"
           aria-label="Find a label"
-          onChange={(event) => props.onLabelSearch(event.target.value.toLowerCase())}
+          onChange={(event) => props.onLabelSearch(event.target.value)}
         />
       ) : null}
-      {shown.map((value) => (
-        <FacetValue
-          key={value}
-          label={facetText(facet, value)}
-          count={counts.get(value) ?? 0}
-          pressed={held.has(value)}
-          onToggle={() => props.onValue(value)}
-          data-facet-key={facet.key}
-          data-facet-value={value}
-        />
-      ))}
-      {hidden > 0 ? (
-        <button type="button" className="facet-more" onClick={() => props.onExpand(true)}>
-          {hidden} more…
-        </button>
-      ) : null}
-      {expanded && long ? (
-        <button type="button" className="facet-more" onClick={() => props.onExpand(false)}>
-          Show fewer
-        </button>
+      {first.map(value)}
+      {long ? (
+        <>
+          <Fold open={expanded}>{rest.map(value)}</Fold>
+          <button
+            type="button"
+            className="facet-more"
+            aria-expanded={expanded}
+            onClick={() => props.onExpand(!expanded)}
+          >
+            {expanded ? "Show fewer" : `${rest.length.toLocaleString()} more…`}
+          </button>
+        </>
       ) : null}
     </FacetShell>
   )

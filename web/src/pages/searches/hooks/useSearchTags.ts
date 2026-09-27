@@ -1,17 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useCallback, useRef } from "react"
+import { useCallback, useMemo, useRef } from "react"
 
 import type { ToastMessage } from "@/components/shared"
 import { fetchTags, writeTags } from "@/lib/api/searches"
-import { NO_TAGS, removeTag, toggleTag, untagPeople } from "@/lib/searches/tags"
+import { browserTags, NO_TAGS, removeTag, toggleTag, untagPeople } from "@/lib/searches/tags"
 import type { Tagged } from "@/types/searches"
+import { errorText } from "@/lib/api/http"
 
 export function searchTagsKey(runId: string) {
   return ["searches", "tags", runId] as const
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -23,11 +20,18 @@ export function useSearchTags(runId: string, onToast: (toast: ToastMessage) => v
   const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: searchTagsKey(runId),
-    queryFn: async () => (await fetchTags(runId)).tagged ?? NO_TAGS,
+    queryFn: async () => {
+      const { tagged } = await fetchTags(runId)
+      if (tagged) return tagged
+      // results.js moved tags kept only in this browser to the server the first time it had none.
+      const kept = browserTags(runId)
+      if (kept.tags.length) await writeTags(runId, kept)
+      return kept
+    },
   })
-  const saves = useRef<Promise<unknown>>(Promise.resolve())
-  // Per run: the tags the server last accepted, the rollback target.
-  const saved = useRef(new Map<string, Tagged>())
+  const saves = useRef<Promise<void>>(Promise.resolve())
+  // The tags the server last accepted, the rollback target (the pane remounts per run).
+  const saved = useRef<Tagged | null>(null)
 
   const tagged = query.data ?? NO_TAGS
 
@@ -35,7 +39,7 @@ export function useSearchTags(runId: string, onToast: (toast: ToastMessage) => v
     (edit: (current: Tagged) => Tagged): void => {
       const key = searchTagsKey(runId)
       const current = queryClient.getQueryData<Tagged>(key) ?? NO_TAGS
-      if (!saved.current.has(runId)) saved.current.set(runId, current)
+      saved.current ??= current
       const next = edit(current)
       if (next === current) return
       // Structural sharing may store a copy: the stored value is what a newer edit replaces.
@@ -43,10 +47,9 @@ export function useSearchTags(runId: string, onToast: (toast: ToastMessage) => v
       saves.current = saves.current.then(async () => {
         try {
           await writeTags(runId, next)
-          saved.current.set(runId, next)
+          saved.current = next
         } catch (error) {
-          if (queryClient.getQueryData<Tagged>(key) === shown)
-            queryClient.setQueryData(key, saved.current.get(runId))
+          if (queryClient.getQueryData<Tagged>(key) === shown) queryClient.setQueryData(key, saved.current)
           onToast({ message: `Tags not saved: ${errorText(error)}`, error: true })
         }
       })
@@ -54,14 +57,19 @@ export function useSearchTags(runId: string, onToast: (toast: ToastMessage) => v
     [queryClient, runId, onToast],
   )
 
-  return {
-    tagged,
-    loading: query.isPending,
-    toggle: useCallback((personId: string, tag: string) => save((t) => toggleTag(t, personId, tag)), [save]),
-    remove: useCallback((tag: string) => save((t) => removeTag(t, tag)), [save]),
-    untag: useCallback((personIds: readonly string[]) => save((t) => untagPeople(t, personIds)), [save]),
-    clear: useCallback(() => save(() => NO_TAGS), [save]),
-  }
+  const loading = query.isPending
+  // One identity until the tags or the loading state change: every row's controls read it.
+  return useMemo(
+    () => ({
+      tagged,
+      loading,
+      toggle: (personId: string, tag: string) => save((t) => toggleTag(t, personId, tag)),
+      remove: (tag: string) => save((t) => removeTag(t, tag)),
+      untag: (personIds: readonly string[]) => save((t) => untagPeople(t, personIds)),
+      clear: () => save(() => NO_TAGS),
+    }),
+    [tagged, loading, save],
+  )
 }
 
 export type SearchTags = ReturnType<typeof useSearchTags>

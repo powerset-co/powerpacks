@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from "react"
 
 import { useReducedMotion } from "@/hooks/useReducedMotion"
-
-const TWEEN_MS = 320
+import { cssMs } from "@/lib/motion"
 
 interface CountRollProps {
   value: number
   className?: string
 }
 
-// A count that rolls to its new value (cubic ease-out) instead of jumping.
+// A count that rolls to its new value over --t-slow (cubic ease-out) instead of jumping.
 export function CountRoll({ value, className }: CountRollProps) {
   const reduced = useReducedMotion()
   const [shown, setShown] = useState(value)
@@ -25,10 +24,11 @@ export function CountRoll({ value, className }: CountRollProps) {
       show(value)
       return
     }
+    const duration = cssMs(getComputedStyle(document.documentElement).getPropertyValue("--t-slow"))
     const startedAt = performance.now()
     let frame = 0
     const step = (now: number) => {
-      const t = Math.min(1, (now - startedAt) / TWEEN_MS)
+      const t = Math.min(1, (now - startedAt) / duration)
       show(Math.round(from + (value - from) * (1 - (1 - t) ** 3)))
       if (t < 1) frame = window.requestAnimationFrame(step)
     }

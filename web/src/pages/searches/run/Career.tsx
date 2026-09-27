@@ -1,4 +1,4 @@
-import { monthYear } from "@/lib/searches/copy"
+import { monthYear } from "@/lib/copy"
 import type { Education, Position } from "@/types/searches"
 
 // rendering.py _company_note: size, stage and money raised.

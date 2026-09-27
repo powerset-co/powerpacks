@@ -3,7 +3,8 @@ import { memo, type MouseEvent } from "react"
 import { Avatar, SourcePills } from "@/components/shared"
 import { avatarUrl } from "@/lib/api/people"
 import { toChannels } from "@/lib/channels"
-import { formatDate, label, sentence } from "@/lib/people/copy"
+import { monthYear } from "@/lib/copy"
+import { label, sentence } from "@/lib/people/copy"
 import type { Person } from "@/types/people"
 
 import { NumberCell, WarmthCell, WorthCell } from "./cells"
@@ -36,7 +37,7 @@ export const PersonRow = memo(function PersonRow({
     // Focus and keys live on the viewport (useKeyboard: j/k move, Enter opens); a row is not a tab stop.
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/interactive-supports-focus -- W3
     <div
-      className="row"
+      className="row focus-bar"
       role="row"
       data-id={row.parent_id}
       data-index={index}
@@ -71,7 +72,7 @@ export const PersonRow = memo(function PersonRow({
       </div>
       <WorthCell row={row} />
       <WarmthCell value={row.warmth} />
-      <NumberCell className="c-last" value={row.last_interaction ? formatDate(row.last_interaction) : ""} />
+      <NumberCell className="c-last" value={row.last_interaction ? monthYear(row.last_interaction) : ""} />
       <NumberCell className="c-msgs" value={row.interactions ? row.interactions.toLocaleString() : ""} />
     </div>
   )

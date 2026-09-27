@@ -61,6 +61,8 @@ function tagServer(initial: Tagged | null) {
   return saves
 }
 
+const NOT_STOPPED: Pick<Feedback, "pending" | "failure"> = { pending: [], failure: null }
+
 // The run as RunPane reads it: from the query cache, so a saved score shows through it.
 function Harness({ feedback, onToast }: { feedback: Feedback; onToast: () => void }) {
   const run = useSearchRun(RUN_ID)
@@ -69,20 +71,24 @@ function Harness({ feedback, onToast }: { feedback: Feedback; onToast: () => voi
   ) : null
 }
 
-function renderRun(tags: Tagged | null = null) {
+function renderRun(tags: Tagged | null = null, stopped: Pick<Feedback, "pending" | "failure"> = NOT_STOPPED) {
   const saves = tagServer(tags)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   client.setQueryData(searchRunKey(RUN_ID), RUN)
   const submit = vi.fn((_record: FeedbackRecord) => Promise.resolve<FeedbackOutcome>("sent"))
-  const feedback: Feedback = { pending: [], submit, retry: () => Promise.resolve() }
+  const retry = vi.fn(() => Promise.resolve())
+  const feedback: Feedback = { ...stopped, submit, retry, signIn: () => Promise.resolve() }
   const onToast = vi.fn()
   render(
     <QueryClientProvider client={client}>
       <Harness feedback={feedback} onToast={onToast} />
     </QueryClientProvider>,
   )
-  return { saves, submit, onToast }
+  return { saves, submit, retry, onToast }
 }
+
+const tableHeadings = () =>
+  [...document.querySelectorAll<HTMLElement>(".results-heading")].map((heading) => heading.textContent)
 
 const rowNames = () =>
   [...document.querySelectorAll<HTMLElement>(".result-row .result-who b")].map((name) => name.textContent)
@@ -116,10 +122,7 @@ describe("RunView", () => {
     expect([...document.querySelectorAll("[data-pond] .pond-count")].map((pond) => pond.textContent)).toEqual(
       ["Kept 3 of 40", "Kept 3 of 80"],
     )
-    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual([
-      "Jev qualification scores",
-      "Rating-based scores",
-    ])
+    expect(tableHeadings()).toEqual(["Jev qualification scores", "Rating-based scores"])
     expect(rowNames()).toEqual(RANKED_NAMES.flat())
   })
 
@@ -142,6 +145,36 @@ describe("RunView", () => {
     ).toBe("false")
   })
 
+  it("shows every source family, email and message counts, and where the person is", () => {
+    renderRun()
+    const jordan = row("p-jordan")
+    expect(jordan.getByTitle("Gmail").textContent).toBe("42")
+    expect(jordan.getByText("Staff Engineer · Example Labs · Oakland, CA")).toBeTruthy()
+    expect(
+      row("p-casey")
+        .getAllByRole("img")
+        .map((icon) => icon.getAttribute("aria-label")),
+    ).toEqual(["X", "Contacts export"])
+  })
+
+  it("lists who a person came through, with their counts, in the evidence", () => {
+    renderRun()
+    fireEvent.click(main("p-jordan"))
+    const operators = within(document.querySelector<HTMLElement>("[data-operators]") ?? document.body)
+    expect(operators.getByText("Drew Kilo")).toBeTruthy()
+    expect(operators.getByText("Gmail · LinkedIn · 42 emails")).toBeTruthy()
+    expect(operators.getByText("LinkedIn")).toBeTruthy()
+  })
+
+  it("folds the job description open under the header", () => {
+    renderRun()
+    const toggle = screen.getByRole("button", { name: /Job description/ })
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(screen.getByText("Build the payments platform with a small backend team.")).toBeTruthy()
+  })
+
   it("expands a row in place to its evidence; each row on its own", () => {
     renderRun()
     const jordan = main("p-jordan")
@@ -160,9 +193,7 @@ describe("RunView", () => {
     renderRun()
     fireEvent.click(screen.getByRole("button", { name: "Overall score 5" }))
     expect(rowNames()).toEqual(["Jordan Bravo"])
-    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual([
-      "Rating-based scores",
-    ])
+    expect(tableHeadings()).toEqual(["Rating-based scores"])
     expect(screen.getByRole("status").textContent).toBe("1 of 6 results")
     fireEvent.click(screen.getByRole("button", { name: "Overall score 2" }))
     expect(rowNames()).toEqual(["Jordan Bravo", "Morgan Echo"])
@@ -215,6 +246,20 @@ describe("RunView", () => {
       expect(screen.getByRole("button", { name: "Score Morgan Echo" }).textContent).toBe("Your score: 4/5"),
     )
     await waitFor(() => expect(onToast).toHaveBeenCalledWith({ message: "Sent." }))
+  })
+
+  it("shows a stopped queue's waiting records with Retry", () => {
+    const waiting: FeedbackRecord = {
+      run_id: RUN_ID,
+      person_id: "p-morgan",
+      comment: "",
+      human_judgment: { score: 4, scale: 5 },
+    }
+    const { retry } = renderRun(null, { pending: [waiting], failure: "failed" })
+    const header = within(screen.getByRole("banner"))
+    expect(header.getByText("Saved on this device. 1 waiting to send.")).toBeTruthy()
+    fireEvent.click(header.getByRole("button", { name: "Retry" }))
+    expect(retry).toHaveBeenCalledTimes(1)
   })
 
   it("moves with j/k, opens with Enter, and presses the row's tag and score with t and s", async () => {

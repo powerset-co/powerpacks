@@ -3,6 +3,8 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 
 import { cn } from "@/lib/utils"
 
+import { CLOSE_MARK } from "@/components/shared/icons/actions"
+
 // shadcn/ui Dialog on the app's tokens. The overlay fades and the content rises 8px in on
 // --t-med ease-out and leaves on --t-exit ease-in; the keyframes live in styles/index.css, whose
 // reduced-motion rule removes them (Radix then unmounts at once).
@@ -50,7 +52,7 @@ const DialogContent = React.forwardRef<
         aria-label="Close"
         className="absolute right-3 top-3 grid size-7 cursor-pointer place-items-center rounded-sm border-0 bg-transparent text-base leading-none text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
       >
-        ×
+        {CLOSE_MARK}
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
   </DialogPrimitive.Portal>

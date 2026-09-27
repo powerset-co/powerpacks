@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { EmptyState } from "@/components/shared"
 import { useListEntrance } from "@/hooks/useListEntrance"
 import { useReducedMotion } from "@/hooks/useReducedMotion"
+import { countOf } from "@/lib/copy"
 import {
   companiesOf,
   groupByRecency,
@@ -88,7 +89,7 @@ export function CatalogList({ cards, selectedId, onOpen }: CatalogListProps) {
           }}
         />
         <p className="list-count" data-catalog-count aria-live="polite">
-          {visible.length.toLocaleString()} of {cards.length.toLocaleString()} searches
+          {countOf(visible.length, cards.length, "search")}
         </p>
       </div>
       <div ref={list} className="run-list" data-run-list>

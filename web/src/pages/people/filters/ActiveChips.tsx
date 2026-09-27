@@ -1,17 +1,16 @@
-import { Chip } from "@/components/shared"
+import { Appear, Chip } from "@/components/shared"
 import { Button } from "@/components/ui/button"
-import { usePresence } from "@/hooks/usePresence"
 import { usePresenceList } from "@/hooks/usePresenceList"
-import { FACET_BY_KEY, facetText } from "@/lib/people/facets"
+import { facetOf, facetText, type FacetFilters, type FacetKey } from "@/lib/people/facets"
 
 interface ActiveChipsProps {
-  filters: ReadonlyMap<string, ReadonlySet<string>>
-  onRemove: (key: string, value: string) => void
+  filters: FacetFilters
+  onRemove: (key: FacetKey, value: string) => void
   onClear: () => void
 }
 
 interface Held {
-  key: string
+  key: FacetKey
   value: string
 }
 
@@ -21,40 +20,32 @@ const heldKey = ({ key, value }: Held) => `${key}:${value}`
 export function ActiveChips({ filters, onRemove, onClear }: ActiveChipsProps) {
   const held = [...filters].flatMap(([key, values]) => [...values].map((value) => ({ key, value })))
   const chips = usePresenceList(held, heldKey)
-  const clear = usePresence(held.length > 0 ? held.length : null)
   return (
     <span className="chip-row bar-chips" data-chips>
       {chips.map(({ key, item, open, onTransitionEnd }) => {
-        const facet = FACET_BY_KEY.get(item.key)
-        if (!facet) return null
+        const facet = facetOf(item.key)
         return (
           <Chip
             key={key}
             className="chip rise"
             data-open={open}
             pressed
+            label={facet.label}
             removable
             title="Remove"
             data-chip-key={item.key}
             onClick={() => onRemove(item.key, item.value)}
             onTransitionEnd={onTransitionEnd}
           >
-            <em>{facet.label}</em> {facetText(facet, item.value)}
+            {facetText(facet, item.value)}
           </Chip>
         )
       })}
-      {clear.mounted ? (
-        <Button
-          variant="ghost"
-          className="rise bar-clear"
-          data-open={clear.open}
-          data-clear-filters
-          onClick={onClear}
-          onTransitionEnd={clear.onTransitionEnd}
-        >
+      <Appear show={held.length > 0}>
+        <Button variant="ghost" data-clear-filters onClick={onClear}>
           Clear filters
         </Button>
-      ) : null}
+      </Appear>
     </span>
   )
 }

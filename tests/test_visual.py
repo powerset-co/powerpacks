@@ -12,6 +12,7 @@ The Searches sidebar groups runs by age, so its context runs on a fixed clock an
 
 Created: 2026-09-26.
 Changelog:
+  2026-09-26: drawer sections open through their heading toggles (DetailsSection folds, no <details>).
   2026-09-26: created for the TypeScript port (People).
   2026-09-26: renamed from test_people_visual.py; Searches states added; one handler for both.
 """
@@ -153,13 +154,13 @@ class VisualTests(ShareWebFixture):
         self._shot(page, "people/selection-bulk-bar")
         page.keyboard.press("Escape")
         page.locator(".row").first.click()
-        expect(page.locator("[data-drawer] details[data-section='decision'][open]")).to_have_count(1)
-        expect(page.locator("[data-drawer] details[data-section='relationship']")).to_have_count(1)
+        expect(page.locator("[data-drawer] [data-section='decision'][data-open='true']")).to_have_count(1)
+        expect(page.locator("[data-drawer] [data-section='relationship']")).to_have_count(1)
         self._shot(page, "people/drawer-open")
         for key in ("facts", "relationship", "topics", "contact", "confidence"):
-            summary = page.locator(f"[data-drawer] details[data-section='{key}'] summary")
-            if summary.count():
-                summary.click()
+            toggle = page.locator(f"[data-drawer] [data-section='{key}'] button[aria-expanded]")
+            if toggle.count():
+                toggle.click()
         self._shot(page, "people/drawer-sections-open")
         page.keyboard.press("Escape")
         page.locator("[data-tab='confirm']").click()

@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { MemoryStorage } from "@/testing/searches-fixture"
 import type { Tagged } from "@/types/searches"
 
 import {
+  browserTags,
   existingTag,
   heldTags,
   NO_TAGS,
@@ -68,5 +70,24 @@ describe("tags", () => {
     removeTag(tagged, "Backend")
     untagPeople(tagged, ["a"])
     expect(tagged).toEqual(before)
+  })
+})
+
+describe("browserTags", () => {
+  beforeEach(() => vi.stubGlobal("localStorage", new MemoryStorage()))
+
+  it("reads results.js's saved tags, else its old pins as the Pinned tag, else none", () => {
+    expect(browserTags("jordan-role")).toEqual(NO_TAGS)
+    localStorage.setItem("powerset_pinned_jordan-role", JSON.stringify(["p-casey", 7]))
+    expect(browserTags("jordan-role")).toEqual({ tags: ["Pinned"], assignments: { "p-casey": ["Pinned"] } })
+    const tagged = { tags: ["Backend"], assignments: { "p-jordan": ["Backend"] } }
+    localStorage.setItem("powerset_tagged_jordan-role", JSON.stringify(tagged))
+    expect(browserTags("jordan-role")).toEqual(tagged)
+  })
+
+  it("ignores what it cannot read", () => {
+    localStorage.setItem("powerset_tagged_jordan-role", "{")
+    localStorage.setItem("powerset_pinned_jordan-role", JSON.stringify({ not: "a list" }))
+    expect(browserTags("jordan-role")).toEqual(NO_TAGS)
   })
 })

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { useInert } from "@/hooks/useInert"
 import type { TagAction } from "@/lib/people/facets"
 import { toggled } from "@/lib/sets"
 import type { Person } from "@/types/people"
@@ -38,9 +39,7 @@ export function PersonDrawer(props: PersonDrawerProps) {
     if (panel.current) panel.current.scrollTop = 0
   }, [id])
 
-  useEffect(() => {
-    if (panel.current) panel.current.inert = !open
-  }, [open])
+  useInert(panel, !open)
 
   const section: SectionState = useCallback(
     (key) => ({

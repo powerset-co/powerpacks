@@ -1,5 +1,6 @@
 import { DetailsSection } from "@/components/shared"
-import { formatDate, label } from "@/lib/people/copy"
+import { monthYear } from "@/lib/copy"
+import { label } from "@/lib/people/copy"
 import type { Person, PersonDetail } from "@/types/people"
 
 import { Lines, Pair } from "./Pair"
@@ -32,7 +33,7 @@ export function ContactSection({
         <Pair term="Interactions">
           <span className="num">{row.interactions.toLocaleString()}</span>
         </Pair>
-        <Pair term="Last contact">{row.last_interaction ? formatDate(row.last_interaction) : null}</Pair>
+        <Pair term="Last contact">{row.last_interaction ? monthYear(row.last_interaction) : null}</Pair>
         <Pair term="Contact frequency">{row.cadence ? <Frequency row={row} /> : null}</Pair>
         <Pair term="Email and phone">{points.length ? <Lines values={points} /> : null}</Pair>
       </dl>

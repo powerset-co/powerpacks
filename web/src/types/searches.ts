@@ -251,8 +251,7 @@ export interface FeedbackRecord {
   human_judgment: HumanJudgment | null
 }
 
-/** The server's answer to a stored record: "submitted" reached Powerset, "saved_locally" did not. */
-export interface FeedbackReply {
-  ok: boolean
-  status: "submitted" | "saved_locally"
-}
+/** The server's answer to a stored record: "submitted" reached Powerset; "saved_locally" did
+ *  not, and `api` carries the sender's status ("needs_auth" when Powerset needs a sign-in). */
+export type FeedbackReply =
+  { ok: boolean; status: "submitted" } | { ok: boolean; status: "saved_locally"; api: { status: string } }

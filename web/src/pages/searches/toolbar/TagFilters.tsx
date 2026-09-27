@@ -1,12 +1,10 @@
 import { useState } from "react"
 
-import { Chip } from "@/components/shared"
+import { Appear, Chip } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { usePresenceList } from "@/hooks/usePresenceList"
 import { toggled } from "@/lib/sets"
 import { cn } from "@/lib/utils"
-
-import { Appear } from "./Appear"
 
 interface TagFiltersProps {
   tags: readonly string[]

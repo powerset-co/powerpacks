@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 export function DetailLoading() {
   return (
     <div className="dsec" aria-busy="true">
-      <h3>Details</h3>
+      <h3 className="section-title">Details</h3>
       <p className="dim">Loading details…</p>
       <Skeleton className="h-3 w-[70%]" />
       <Skeleton className="h-3 w-1/2" />
@@ -16,7 +16,7 @@ export function DetailLoading() {
 export function DetailFailed({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="dsec">
-      <h3>Details</h3>
+      <h3 className="section-title">Details</h3>
       <p className="dim">
         Couldn't load details.{" "}
         <Button variant="ghost" className="ml-1 min-h-[26px] px-2" data-drawer-retry onClick={onRetry}>

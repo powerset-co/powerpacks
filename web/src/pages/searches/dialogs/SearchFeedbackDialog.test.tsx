@@ -47,7 +47,7 @@ describe("SearchFeedbackDialog", () => {
       human_judgment: null,
     })
     expect(screen.queryByRole("dialog")).toBeNull()
-    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith({ message: "Saved to send later." }))
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith({ message: "Saved on this device." }))
     expect(document.activeElement).toBe(screen.getByRole("button", { name: TRIGGER }))
   })
 

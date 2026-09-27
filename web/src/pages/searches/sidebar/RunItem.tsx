@@ -1,7 +1,7 @@
 import { memo } from "react"
 
-import { plural } from "@/lib/people/copy"
-import { runDate, statusText } from "@/lib/searches/copy"
+import { plural } from "@/lib/copy"
+import { peopleCounts, runDate, statusText } from "@/lib/searches/copy"
 import type { SearchCard } from "@/types/searches"
 
 interface RunItemProps {
@@ -29,7 +29,9 @@ export const RunItem = memo(function RunItem({ card, selected, highlighted, onOp
         <span data-status={card.status}>{statusText(card.status)}</span>
       </span>
       <span className="run-item-foot">
-        <span>{plural(card.candidates, "person")}</span>
+        <span title={peopleCounts(card)} data-people-counts>
+          {plural(card.candidates, "person")}
+        </span>
         <span>{runDate(card.created_at)}</span>
       </span>
     </button>

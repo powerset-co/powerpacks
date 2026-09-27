@@ -1,17 +1,22 @@
 // The one place responses become values: the review server's error shape and its JSON bodies.
 
+import { isRecord } from "@/lib/utils"
+
 /** The server's message: a JSON `{error}` body, else the plain text, else the page's fallback copy. */
 export async function failure(response: Response, fallback: string): Promise<Error> {
   const text = await response.text()
   try {
     const body: unknown = JSON.parse(text)
-    if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
-      return new Error(body.error)
-    }
+    if (isRecord(body) && typeof body.error === "string") return new Error(body.error)
   } catch {
     // Not JSON: the text is the message.
   }
   return new Error(text || fallback)
+}
+
+/** A caught value's words: an Error's message, else the value as text. */
+export function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**

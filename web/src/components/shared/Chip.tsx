@@ -2,6 +2,8 @@ import type { ButtonHTMLAttributes, ReactNode } from "react"
 
 import { cn } from "@/lib/utils"
 
+import { CLOSE_MARK } from "./icons/actions"
+
 interface ChipProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-pressed"> {
   pressed: boolean
   // A faint leading name, as in "Worth yes".
@@ -41,7 +43,7 @@ export function Chip({ pressed, label, count, removable = false, children, class
           aria-hidden="true"
           className="inline-grid size-4 place-items-center rounded-full text-muted-foreground transition-colors duration-fast ease-out group-hover:bg-secondary group-hover:text-foreground"
         >
-          ×
+          {CLOSE_MARK}
         </span>
       ) : null}
     </button>

@@ -53,6 +53,8 @@
     --t-med: 200ms;
     --t-exit: 160ms;
     --t-slow: 280ms;
+    /* The loading shimmer's sweep: a loop, not a transition. */
+    --t-shimmer: 1.3s;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     font-synthesis: none;
   }
@@ -156,12 +158,6 @@
     }
   }
 
-  /* <details> cannot transition its height, so an opening disclosure fades its content in.
-     Global, not in DetailsSection.module.css: CSS modules would rename the keyframe. */
-  details[open] > *:not(summary) {
-    animation: fade-in var(--t-fast) var(--ease-out) both;
-  }
-
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -195,4 +191,59 @@
     opacity: 0;
     transform: translateY(8px);
   }
+}
+
+/* Something added after its group appeared (an empty state, a new chip, a changed score)
+   rises in on its own: 6px, --t-med. */
+.rise-in {
+  animation: rise-in var(--t-med) var(--ease-out) backwards;
+}
+
+/* The one disclosure chevron, drawn by ::after on the element carrying .chevron: a corner that
+   points right while shut and down while open (aria-expanded or data-open), turning on --t-fast. */
+.chevron::after {
+  content: "";
+  display: inline-block;
+  box-sizing: content-box;
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--t-fast) var(--ease-out);
+}
+.chevron[aria-expanded="true"]::after,
+.chevron[data-open="true"]::after {
+  transform: rotate(45deg);
+}
+
+/* The keyboard's row on both tables: a 2px bar on the left edge of a positioned element that
+   scales in while data-focus is true. */
+.focus-bar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--primary);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition:
+    transform var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.focus-bar[data-focus="true"]::before {
+  transform: scaleX(1);
+}
+
+/* A section's small uppercase title (drawer sections, the drawer's loading block, run folds). */
+.section-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }

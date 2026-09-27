@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react"
+import { useRef } from "react"
 
 import { Kbd } from "@/components/shared"
 import { Button } from "@/components/ui/button"
+import { useInert } from "@/hooks/useInert"
 import { usePresence } from "@/hooks/usePresence"
 import { USE_WORTH_HELP } from "@/lib/people/copy"
 import type { TagAction } from "@/lib/people/facets"
@@ -23,9 +24,7 @@ export function BulkBar({ count, saving, onAction, onClear }: BulkBarProps) {
   const { mounted, open, shown, onTransitionEnd } = usePresence(count > 0 ? count : null)
   const bar = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (bar.current) bar.current.inert = !open
-  }, [open, mounted])
+  useInert(bar, !open)
 
   if (!mounted || shown === null) return null
   return (

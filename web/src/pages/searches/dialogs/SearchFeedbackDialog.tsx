@@ -1,5 +1,6 @@
 import { useRef, useState, type RefObject } from "react"
 
+import { FlagIcon } from "@/components/shared"
 import {
   Dialog,
   DialogContent,
@@ -36,9 +37,9 @@ export function SearchFeedbackDialog({ runId, title, submit, onToast }: SearchFe
       <DialogTrigger
         aria-label={`Send feedback about ${title}`}
         title="Send feedback"
-        className="inline-grid min-h-8 min-w-8 cursor-pointer place-items-center rounded-full border border-border bg-secondary px-2 py-1.5 text-foreground transition-[background-color,transform] duration-fast ease-out hover:bg-line-strong active:scale-95"
+        className="inline-grid min-h-8 min-w-8 cursor-pointer place-items-center rounded-full border border-border bg-secondary px-2 py-1.5 text-foreground transition-[background-color,transform] duration-fast ease-out hover:bg-line-strong active:translate-y-px"
       >
-        <FlagIcon />
+        <FlagIcon className="size-[13px]" />
       </DialogTrigger>
       <DialogContent
         className="w-[min(448px,calc(100%-32px))] gap-5 p-6"
@@ -90,24 +91,5 @@ function SearchForm({ notes, onDone }: SearchFormProps) {
       />
       <FeedbackFooter action="Send" disabled={!ready} />
     </form>
-  )
-}
-
-// rendering.py FLAG_SVG.
-function FlagIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-      className="size-[13px]"
-    >
-      <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
-      <line x1="4" x2="4" y1="22" y2="15" />
-    </svg>
   )
 }

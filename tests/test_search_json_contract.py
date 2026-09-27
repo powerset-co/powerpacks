@@ -1,11 +1,13 @@
 """Pin the Searches JSON routes and their TypeScript dataclass fields.
 
 Changelog:
+  2026-09-26: pin nullability, the group and pin-decision vocabularies, and the payloads.
   2026-09-26: cover catalog-only reads, one run, errors, and client fields.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import socket
@@ -19,6 +21,7 @@ from unittest import mock
 
 from packs.search.primitives.deep_search.results_web import model
 from packs.search.primitives.deep_search.results_web.api import search_api
+from packs.search.primitives.deep_search.results_web import server as results_server
 from packs.search.primitives.deep_search.results_web.server import _send, search_routes
 from test_deep_search_catalog import _write_run
 
@@ -31,6 +34,21 @@ DATACLASSES = {
         "NetworkOperator", "GmailAccountDetail", "TeamMember", "TeamSimilarity",
     )
 }
+
+
+def _interfaces() -> dict[str, dict[str, str]]:
+    """Each `export interface` in types/searches.ts: field name -> its TypeScript type."""
+    source = TYPES.read_text(encoding="utf-8")
+    blocks = dict(re.findall(r"export interface (\w+) \{([^}]*)\}", source, re.S))
+    return {name: dict(re.findall(r"^  ([a-z_][a-z_0-9]*): (.*)$", body, re.M)) for name, body in blocks.items()}
+
+
+def _union(name: str) -> set[str]:
+    """The string literals of `export type <name> = "a" | "b"` in types/searches.ts."""
+    source = TYPES.read_text(encoding="utf-8")
+    union = re.search(rf"^export type {name} =(.*?)$", source, re.M)
+    assert union is not None, name
+    return set(re.findall(r'"(\w+)"', union.group(1)))
 
 
 class SearchJsonContractTest(unittest.TestCase):
@@ -91,13 +109,39 @@ class SearchJsonContractTest(unittest.TestCase):
         self.assertFalse(self.api.get(mock.Mock(), urllib.parse.urlparse("/other/api/catalog")))
 
     def test_client_interfaces_match_dataclasses(self) -> None:
-        source = TYPES.read_text(encoding="utf-8")
-        blocks = dict(re.findall(r"export interface (\w+) \{([^}]*)\}", source, re.S))
+        interfaces = _interfaces()
         for name, cls in DATACLASSES.items():
             with self.subTest(interface=name):
-                self.assertIn(name, blocks)
-                properties = set(re.findall(r"^  ([a-z_][a-z_0-9]*):", blocks[name], re.M))
-                self.assertEqual(properties, {field.name for field in fields(cls)})
+                self.assertIn(name, interfaces)
+                self.assertEqual(set(interfaces[name]), {field.name for field in fields(cls)})
+
+    def test_nullable_fields_match(self) -> None:
+        # A field the server can send as null is `| null` in the client, and only such a field.
+        interfaces = _interfaces()
+        for name, cls in DATACLASSES.items():
+            for field in fields(cls):
+                with self.subTest(field=f"{name}.{field.name}"):
+                    self.assertEqual("| null" in interfaces[name][field.name], "None" in str(field.type))
+
+    def test_closed_vocabularies_match(self) -> None:
+        self.assertEqual(_union("SearchGroupKey"), {key for key, _label in model.GROUPS})
+        decisions = re.search(r"not in \(None, (.*?)\):", inspect.getsource(model._pin_judgment))
+        self.assertIsNotNone(decisions)
+        self.assertEqual(_union("PinDecision"), set(re.findall(r'"(\w+)"', decisions.group(1))))
+        feedback = inspect.getsource(results_server.SearchRoutes._save_feedback)
+        self.assertEqual({"submitted", "saved_locally"} & set(re.findall(r'"(\w+)"', feedback)),
+                         {"submitted", "saved_locally"})
+
+    def test_payload_interfaces_match_the_routes(self) -> None:
+        interfaces = _interfaces()
+        _status, catalog = self.get("/searches/api/catalog")
+        self.assertEqual(set(interfaces["CatalogPayload"]), set(catalog))
+        _status, run = self.get("/searches/api/search.json?run_id=jordan-role")
+        self.assertEqual(set(interfaces["SearchRunPayload"]), set(run))
+        self.assertEqual(set(interfaces["Ratings"]), set(run["ratings"]))
+        tags = inspect.getsource(results_server.SearchRoutes.get)
+        self.assertIn('{"tagged": tagged}', tags)
+        self.assertEqual(set(interfaces["TagsPayload"]), {"tagged"})
 
 
 if __name__ == "__main__":

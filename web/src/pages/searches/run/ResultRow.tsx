@@ -1,15 +1,16 @@
-import { memo, type ReactNode } from "react"
+import { memo } from "react"
 
 import { Avatar, SourcePills } from "@/components/shared"
 import { usePresence } from "@/hooks/usePresence"
-import { toChannels } from "@/lib/channels"
-import { plural } from "@/lib/people/copy"
+import { plural } from "@/lib/copy"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
+import { sourceFamilies } from "@/lib/searches/sources"
 import type { PondCandidate } from "@/types/searches"
 
 import { Evidence } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { Operators } from "./Operators"
+import { RowActions, type RowContext } from "./RowActions"
 import { ScoreCell } from "./ScoreCell"
 
 interface ResultRowProps {
@@ -18,12 +19,12 @@ interface ResultRowProps {
   labels: boolean
   expanded: boolean
   focused: boolean
-  actions: ReactNode
+  context: RowContext
   onToggle: (key: string) => void
 }
 
 function headline(row: PondCandidate): string {
-  return [row.title, row.company].filter(Boolean).join(" · ") || "Current role unknown"
+  return [row.title, row.company, row.location].filter(Boolean).join(" · ") || "Current role unknown"
 }
 
 function roles(row: PondCandidate): string {
@@ -34,21 +35,21 @@ function roles(row: PondCandidate): string {
     : plural(row.positions.length, "role")
 }
 
-// One person: the button line toggles the evidence below it; the actions slot sits outside
-// the button so its own controls stay separate. `group/row` shows the tag trigger on hover.
+// One person: the button line toggles the evidence below it; the actions sit outside the
+// button so their controls stay separate. `group/row` shows the tag trigger on hover.
 export const ResultRow = memo(function ResultRow({
   result,
   ranked,
   labels,
   expanded,
   focused,
-  actions,
+  context,
   onToggle,
 }: ResultRowProps) {
   const { row, candidate } = result
   const evidence = usePresence(expanded ? result : null)
   const attribution = candidate?.network_attribution
-  const channels = toChannels([...new Set(attribution?.sources.map((source) => source.channel))])
+  const families = sourceFamilies(attribution ?? null)
   return (
     <div
       className="result-row group/row"
@@ -57,7 +58,7 @@ export const ResultRow = memo(function ResultRow({
       data-expanded={expanded}
       data-focus={focused}
     >
-      <div className="result-line">
+      <div className="result-line focus-bar" data-focus={focused}>
         <button
           type="button"
           className="result-main"
@@ -74,16 +75,23 @@ export const ResultRow = memo(function ResultRow({
           </span>
           <ScoreCell result={result} ranked={ranked} />
           <JudgeBadges candidate={candidate} shown={labels} />
-          {channels.length ? (
-            <SourcePills className="result-sources" size="sm" channels={channels} />
+          {families.length ? (
+            <SourcePills
+              className="result-sources"
+              size="sm"
+              channels={families.map((family) => family.channel)}
+              counts={Object.fromEntries(families.map((family) => [family.channel, family.count]))}
+            />
           ) : (
             <span className="result-sources result-none">—</span>
           )}
           <Operators operators={attribution?.operators ?? []} />
           <span className="result-roles">{roles(row)}</span>
-          <i className="result-chevron" aria-hidden="true" />
+          <i className="result-chevron chevron" data-open={expanded} aria-hidden="true" />
         </button>
-        <span className="result-actions">{actions}</span>
+        <span className="result-actions">
+          {candidate ? <RowActions result={result} candidate={candidate} context={context} /> : null}
+        </span>
       </div>
       {evidence.mounted ? (
         <Evidence

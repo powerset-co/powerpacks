@@ -1,7 +1,8 @@
 // The sidebar's filter over the catalog, kept for the tab (sessionStorage), and its recency
 // groups (results.js catalog block, network-search-app ConversationSidebar groups).
 
-import { readSession, writeSession } from "@/lib/storage"
+import { readStored, writeStored } from "@/lib/storage"
+import { isRecord } from "@/lib/utils"
 import type { SearchCard } from "@/types/searches"
 
 import { statusText } from "./copy"
@@ -37,9 +38,6 @@ export function initialFilter(cards: readonly SearchCard[]): CatalogFilter {
   return { text: "", version: versionsOf(cards)[0] ?? null, company: "", status: "" }
 }
 
-const isRecord = (raw: unknown): raw is Record<string, unknown> =>
-  typeof raw === "object" && raw !== null && !Array.isArray(raw)
-
 /** A saved filter, or null unless every field has its type. */
 export function parseCatalogFilter(raw: unknown): CatalogFilter | null {
   if (!isRecord(raw)) return null
@@ -51,11 +49,11 @@ export function parseCatalogFilter(raw: unknown): CatalogFilter | null {
 
 /** The filter this tab last used (a visit to People and back keeps it), else the default. */
 export function readCatalogFilter(cards: readonly SearchCard[]): CatalogFilter {
-  return readSession(FILTER_KEY, parseCatalogFilter) ?? initialFilter(cards)
+  return readStored("session", FILTER_KEY, parseCatalogFilter) ?? initialFilter(cards)
 }
 
 export function writeCatalogFilter(filter: CatalogFilter): void {
-  writeSession(FILTER_KEY, filter)
+  writeStored("session", FILTER_KEY, filter)
 }
 
 export function matches(card: SearchCard, filter: CatalogFilter): boolean {

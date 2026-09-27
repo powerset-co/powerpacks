@@ -1,4 +1,4 @@
-import { Avatar, SourcePills } from "@/components/shared"
+import { CLOSE_MARK, Avatar, SourcePills } from "@/components/shared"
 import { avatarUrl } from "@/lib/api/people"
 import { toChannels } from "@/lib/channels"
 import type { Person, PersonDetail } from "@/types/people"
@@ -39,7 +39,7 @@ export function DrawerHeader({ row, detail, onClose }: DrawerHeaderProps) {
         aria-label="Close details"
         onClick={onClose}
       >
-        ×
+        {CLOSE_MARK}
       </button>
     </div>
   )

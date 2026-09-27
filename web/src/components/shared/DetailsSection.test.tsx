@@ -2,8 +2,6 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { must } from "@/lib/must"
-
 import { DetailsSection } from "./DetailsSection"
 
 afterEach(cleanup)
@@ -27,22 +25,24 @@ function Harness({ onToggle }: { onToggle: (open: boolean) => void }) {
 }
 
 describe("DetailsSection", () => {
-  it("reports the new open state and follows it", () => {
+  it("reports the new open state and follows it; the shut body stays mounted, folded", () => {
     const onToggle = vi.fn()
     const { container } = render(<Harness onToggle={onToggle} />)
-    const details = must(container.querySelector<HTMLDetailsElement>("details[data-section='facts']"))
-    expect(details.open).toBe(false)
+    const toggle = screen.getByRole("button", { name: /Facts/ })
+    const section = container.querySelector("[data-section='facts']")
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
     expect(screen.getByText("3").tagName).toBe("SMALL")
+    expect(
+      screen.getByText("Jordan Bravo works at Example Co.").closest("[data-open='false']"),
+    ).not.toBeNull()
 
-    details.open = true
-    fireEvent(details, new Event("toggle"))
+    fireEvent.click(toggle)
     expect(onToggle).toHaveBeenLastCalledWith(true)
-    expect(details.open).toBe(true)
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(section?.getAttribute("data-open")).toBe("true")
 
-    details.open = false
-    fireEvent(details, new Event("toggle"))
+    fireEvent.click(toggle)
     expect(onToggle).toHaveBeenLastCalledWith(false)
-    expect(details.open).toBe(false)
     expect(onToggle).toHaveBeenCalledTimes(2)
   })
 })

@@ -25,7 +25,8 @@ const LEGACY = { "1": 1, "2": 2, "3": 2, "4": 2, "7": 3, "8": 4, "9": 5, "10": 5
 const CASEY: Pick<Candidate, "person_id"> = { person_id: "casey" }
 
 const SUBMITTED: FeedbackReply = { ok: true, status: "submitted" }
-const SAVED_LOCALLY: FeedbackReply = { ok: true, status: "saved_locally" }
+const SAVED_LOCALLY: FeedbackReply = { ok: true, status: "saved_locally", api: { status: "failed" } }
+const NEEDS_SIGN_IN: FeedbackReply = { ok: true, status: "saved_locally", api: { status: "needs_auth" } }
 
 function score(person: string, value: number, comment = ""): FeedbackRecord {
   return { run_id: "jordan-role", person_id: person, comment, human_judgment: { score: value, scale: 5 } }
@@ -140,27 +141,44 @@ describe("queue storage", () => {
 })
 
 describe("flushFeedback", () => {
-  it("posts every record in order and leaves nothing", async () => {
+  it("posts the run's records in order and leaves nothing of it", async () => {
     const post = vi.fn((_record: FeedbackRecord) => Promise.resolve(SUBMITTED))
     const queue = [score("casey", 2), score("casey", 5), buildSearchFeedback("jordan-role", "note")]
-    expect(await flushFeedback(queue, post)).toEqual([])
+    expect(await flushFeedback(queue, "jordan-role", post)).toEqual({ left: [], failure: null })
     expect(post.mock.calls.map(([record]) => record)).toEqual(queue)
   })
 
-  it("keeps the first failure and everything after it, unsent", async () => {
+  it("keeps the first failure and the run's records after it, unsent", async () => {
     const queue = [score("casey", 2), score("jordan", 4), score("casey", 5)]
     const post = vi.fn((record: FeedbackRecord) =>
       record.person_id === "jordan" ? Promise.reject(new Error("offline")) : Promise.resolve(SUBMITTED),
     )
-    expect(await flushFeedback(queue, post)).toEqual(queue.slice(1))
+    expect(await flushFeedback(queue, "jordan-role", post)).toEqual({
+      left: queue.slice(1),
+      failure: "failed",
+    })
     expect(post).toHaveBeenCalledTimes(2)
   })
 
-  it("keeps a record the server saved but could not send to Powerset", async () => {
+  it("keeps a record the server saved but could not send, and says when it needs a sign-in", async () => {
     const queue = [score("casey", 2), score("jordan", 4)]
     const post = vi.fn((_record: FeedbackRecord) => Promise.resolve(SAVED_LOCALLY))
-    expect(await flushFeedback(queue, post)).toEqual(queue)
+    expect(await flushFeedback(queue, "jordan-role", post)).toEqual({ left: queue, failure: "failed" })
     expect(post).toHaveBeenCalledTimes(1)
+    post.mockImplementation(() => Promise.resolve(NEEDS_SIGN_IN))
+    expect((await flushFeedback(queue, "jordan-role", post)).failure).toBe("needs_auth")
+  })
+
+  it("sends only the open run's records: another run's stuck record blocks nothing", async () => {
+    const dead: FeedbackRecord = { ...score("gone", 3), run_id: "deleted-role" }
+    const queue = [dead, score("casey", 2)]
+    const post = vi.fn((record: FeedbackRecord) =>
+      record.run_id === "deleted-role"
+        ? Promise.reject(new Error("search not found"))
+        : Promise.resolve(SUBMITTED),
+    )
+    expect(await flushFeedback(queue, "jordan-role", post)).toEqual({ left: [dead], failure: null })
+    expect(post.mock.calls.map(([record]) => record)).toEqual([score("casey", 2)])
   })
 })
 

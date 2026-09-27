@@ -125,6 +125,10 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_share_tags \
   tests.test_share_web \
   tests.test_visual \
+  tests.test_app_routes \
+  tests.test_icons \
+  tests.test_local_searches_browser \
+  tests.test_search_json_contract \
   tests.test_synthesis_jev \
   tests.test_synthesis_failures \
   tests.test_upload_powerset -v

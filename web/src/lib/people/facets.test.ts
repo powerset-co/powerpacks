@@ -3,16 +3,12 @@ import { describe, expect, it } from "vitest"
 import { decodePeople } from "@/lib/api/people"
 import { PAYLOAD } from "@/testing/people-fixture"
 
-import { LAST, lastBucket, nextTags, QUICK, sortRows } from "./facets"
+import { LAST, lastBucket, nextTags, QUICK, sortRows, type FacetKey } from "./facets"
 import { filterRows } from "./filter"
+import { DEFAULT_VIEW, type PeopleView } from "./view"
 
 const rows = decodePeople(PAYLOAD)
-const view = {
-  tab: "confirm" as const,
-  filters: new Map<string, Set<string>>(),
-  text: "",
-  sort: { key: "name" as const, dir: 1 as const },
-}
+const view: PeopleView = { ...DEFAULT_VIEW, tab: "confirm", sort: { key: "name", dir: 1 } }
 
 describe("lastBucket", () => {
   it("splits at a year and two years", () => {
@@ -31,7 +27,7 @@ describe("filterRows", () => {
   })
 
   it("counts a facet ignoring its own selection", () => {
-    const filters = new Map([
+    const filters = new Map<FacetKey, Set<string>>([
       ["relationship_kind", new Set(["family"])],
       ["last", new Set([LAST[0]])],
     ])
@@ -47,7 +43,7 @@ describe("filterRows", () => {
   })
 
   it("counts quick filters within the tab, before text and facets", () => {
-    const filters = new Map([["worth", new Set(["yes"])]])
+    const filters = new Map<FacetKey, Set<string>>([["worth", new Set(["yes"])]])
     const { quickCounts } = filterRows(rows, { ...view, filters, text: "jordan" })
     const byName = Object.fromEntries(QUICK.map((quick, position) => [quick.name, quickCounts[position]]))
     expect(byName).toMatchObject({

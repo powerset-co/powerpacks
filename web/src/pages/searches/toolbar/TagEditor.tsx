@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
 
+import { CLOSE_MARK, PlusIcon } from "@/components/shared"
+import { type DismissBy, useDismiss } from "@/hooks/useDismiss"
 import { usePresence } from "@/hooks/usePresence"
 import { usePresenceList } from "@/hooks/usePresenceList"
 import { existingTag, normalizeTag, TAG_NAME_MAX } from "@/lib/searches/tags"
 import { cn } from "@/lib/utils"
-
-import { type DismissBy, useDismiss } from "../hooks/useDismiss"
 
 const PANEL_WIDTH = 256
 const PANEL_GAP = 6
@@ -131,16 +131,7 @@ export function TagEditor({ personName, tags, applied, disabled, onToggle, onRem
             {chip.item}
           </span>
         ))}
-        <svg
-          viewBox="0 0 24 24"
-          className="size-3"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          aria-hidden="true"
-        >
-          <path d="M12 5v14M5 12h14" />
-        </svg>
+        <PlusIcon className="size-3" />
       </button>
       {presence.mounted && presence.shown
         ? createPortal(
@@ -206,7 +197,7 @@ export function TagEditor({ personName, tags, applied, disabled, onToggle, onRem
                       className="inline-grid size-6 cursor-pointer place-items-center rounded-full text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
                       onClick={() => onRemove(tag)}
                     >
-                      ×
+                      {CLOSE_MARK}
                     </button>
                   </span>
                 ))}

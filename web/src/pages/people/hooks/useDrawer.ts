@@ -11,10 +11,6 @@ export function useDrawer() {
   const [shownId, setShownId] = useState<string | null>(null)
   const { state: detail, refresh } = usePersonDetail(openId)
 
-  const open = useCallback((id: string) => {
-    setOpenId(id)
-    setShownId(id)
-  }, [])
   const close = useCallback(() => setOpenId(null), [])
   // The same person closes; anyone else opens (or switches to) them.
   const toggle = useCallback((id: string) => {
@@ -22,5 +18,5 @@ export function useDrawer() {
     setShownId(id)
   }, [])
 
-  return { openId, shownId, detail, open, close, toggle, refresh }
+  return { openId, shownId, detail, close, toggle, refresh }
 }

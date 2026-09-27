@@ -1,7 +1,7 @@
 // The results toolbar's filter over a table's rows (results.js filteredRows): tagged only
 // (and which tags), overall score, operators, plus the labels toggle and the count.
 
-import { readSession, writeSession } from "@/lib/storage"
+import { readStored, writeStored } from "@/lib/storage"
 import type { Tagged } from "@/types/searches"
 
 import type { ResultRow } from "./ranking"
@@ -104,14 +104,6 @@ export function filterRows<R extends ResultRow>(
   return [...kept.values()]
 }
 
-/** "12 results", or "12 of 125 results" while a filter hides some. */
-export function countText(shown: number, total: number): string {
-  const noun = total === 1 ? "result" : "results"
-  return shown === total
-    ? `${total.toLocaleString()} ${noun}`
-    : `${shown.toLocaleString()} of ${total.toLocaleString()} ${noun}`
-}
-
 /** Everyone connected to someone in `rows`, by name (rendering.py _results_toolbar). */
 export function operatorOptions(rows: readonly ResultRow[]): OperatorOption[] {
   const byId = new Map<string, string>()
@@ -125,9 +117,9 @@ export function operatorOptions(rows: readonly ResultRow[]): OperatorOption[] {
 
 /** Whether labels (Taste, Suggested pin, Team similarity) show; per tab, like results.js. */
 export function labelsShown(): boolean {
-  return readSession(LABELS_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? true
+  return readStored("session", LABELS_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? true
 }
 
 export function saveLabels(shown: boolean): void {
-  writeSession(LABELS_KEY, shown)
+  writeStored("session", LABELS_KEY, shown)
 }

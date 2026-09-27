@@ -4,6 +4,7 @@ import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { ToastMessage } from "@/components/shared"
+import { MemoryStorage } from "@/testing/searches-fixture"
 import type { Tagged } from "@/types/searches"
 
 import { useSearchTags } from "./useSearchTags"
@@ -62,6 +63,20 @@ describe("useSearchTags", () => {
     const { result } = renderTags()
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.tagged).toEqual({ tags: [], assignments: {} })
+  })
+
+  it("moves tags kept only in this browser (results.js) to the server when it has none", async () => {
+    vi.stubGlobal("localStorage", new MemoryStorage())
+    localStorage.setItem(
+      `powerset_tagged_${RUN_ID}`,
+      JSON.stringify({ tags: ["Backend"], assignments: { "p-jordan": ["Backend"] } }),
+    )
+    const api = server(null)
+    const { result } = renderTags()
+    await waitFor(() => expect(api.posts).toHaveLength(1))
+    expect(sent(api.posts[0])).toEqual({ tags: ["Backend"], assignments: { "p-jordan": ["Backend"] } })
+    api.answer(respond({ ok: true }))
+    await waitFor(() => expect(result.current.tagged.tags).toEqual(["Backend"]))
   })
 
   it("shows an edit at once and saves one request at a time, each carrying every edit so far", async () => {

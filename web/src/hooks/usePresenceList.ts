@@ -1,5 +1,6 @@
 import { useState, type TransitionEvent } from "react"
 
+import { ended } from "./usePresence"
 import { useReducedMotion } from "./useReducedMotion"
 
 export interface Presence<T> {
@@ -57,7 +58,7 @@ export function usePresenceList<T>(items: readonly T[], keyOf: (item: T) => stri
   return next.map((entry) => ({
     ...entry,
     onTransitionEnd: (event) => {
-      if (!entry.open && event.target === event.currentTarget) drop(entry.key)
+      if (!entry.open && ended(event)) drop(entry.key)
     },
   }))
 }

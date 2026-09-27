@@ -1,18 +1,19 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 
 import type { ToastMessage } from "@/components/shared"
-import { exportScoreOf, queuedScores, withScore, yourScore } from "@/lib/searches/feedback"
+import { exportScoreOf, queuedScores, withScore } from "@/lib/searches/feedback"
 import { filterRows, keptRows, labelsShown, NO_FILTERS, type ResultFilters } from "@/lib/searches/filters"
-import { panelSections, rankResults, type ResultRow } from "@/lib/searches/ranking"
+import { panelSections, rankResults } from "@/lib/searches/ranking"
 import type { FeedbackRecord, SearchRunPayload } from "@/types/searches"
 
+import { FeedbackStatus } from "../dialogs/FeedbackStatus"
 import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
 import type { Feedback } from "../hooks/useFeedback"
 import { searchRunKey } from "../hooks/useSearchRun"
 import { useSearchTags } from "../hooks/useSearchTags"
 import { ResultsToolbar } from "../toolbar/ResultsToolbar"
-import { RowActions } from "./RowActions"
+import type { RowContext } from "./RowActions"
 import { SearchRun } from "./SearchRun"
 
 interface RunViewProps {
@@ -54,25 +55,27 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
     [feedback.pending, runId, ratings.legacy],
   )
   // The row shows a saved score at once; the server returns it on the next read.
-  const saved = (record: FeedbackRecord) => {
-    queryClient.setQueryData<SearchRunPayload>(searchRunKey(runId), (current) =>
-      current ? withScore(current, record) : current,
-    )
-  }
+  const saved = useCallback(
+    (record: FeedbackRecord) => {
+      queryClient.setQueryData<SearchRunPayload>(searchRunKey(runId), (current) =>
+        current ? withScore(current, record) : current,
+      )
+    },
+    [queryClient, runId],
+  )
 
-  const rowActions = (result: ResultRow) =>
-    result.candidate ? (
-      <RowActions
-        runId={runId}
-        candidate={result.candidate}
-        rubric={ratings.rubric}
-        tags={tags}
-        score={yourScore(result, queued)}
-        submit={feedback.submit}
-        onSaved={saved}
-        onToast={onToast}
-      />
-    ) : null
+  const rowContext = useMemo<RowContext>(
+    () => ({
+      runId,
+      rubric: ratings.rubric,
+      tags,
+      queued,
+      submit: feedback.submit,
+      onSaved: saved,
+      onToast,
+    }),
+    [runId, ratings.rubric, tags, queued, feedback.submit, saved, onToast],
+  )
 
   return (
     <SearchRun
@@ -101,9 +104,17 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
         />
       }
       headerActions={
-        <SearchFeedbackDialog runId={runId} title={search.title} submit={feedback.submit} onToast={onToast} />
+        <>
+          <FeedbackStatus runId={runId} feedback={feedback} onToast={onToast} />
+          <SearchFeedbackDialog
+            runId={runId}
+            title={search.title}
+            submit={feedback.submit}
+            onToast={onToast}
+          />
+        </>
       }
-      rowActions={rowActions}
+      rowContext={rowContext}
     />
   )
 }

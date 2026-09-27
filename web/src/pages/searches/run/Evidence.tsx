@@ -2,8 +2,10 @@ import { useState, type TransitionEvent } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { scoreBand, type ResultRow } from "@/lib/searches/ranking"
+import { operatorDetail } from "@/lib/searches/sources"
 
 import { Positions, Schools } from "./Career"
+import { OperatorInitials } from "./Operators"
 
 const ABOUT_CLAMP = 200
 const TRAIT_VARIANT = { high: "ok", medium: "warn", low: "bad" } as const
@@ -16,7 +18,8 @@ interface EvidenceProps {
 }
 
 // rendering.py _person_details: why they match, trait scores with reasons, the pin judge,
-// location, about, roles (the matched ones marked) and schools. Fades in and out in place.
+// location, who they came through (the source popovers' counts and Gmail accounts), about,
+// roles (the matched ones marked) and schools. Fades in and out in place.
 export function Evidence({ result, ranked, open, onTransitionEnd }: EvidenceProps) {
   const { row, candidate } = result
   const [aboutOpen, setAboutOpen] = useState(false)
@@ -24,6 +27,7 @@ export function Evidence({ result, ranked, open, onTransitionEnd }: EvidenceProp
   const locationMatched = row.vertical_sources.includes("location")
   const clamp = row.summary.length > ABOUT_CLAMP
   const linkedin = row.linkedin_url || candidate?.linkedin_url
+  const operators = candidate?.network_attribution?.operators ?? []
   return (
     <div
       className="result-evidence"
@@ -87,6 +91,27 @@ export function Evidence({ result, ranked, open, onTransitionEnd }: EvidenceProp
           <section>
             <h4>Location</h4>
             <p>{row.profile_location}</p>
+          </section>
+        ) : null}
+        {operators.length ? (
+          <section>
+            <h4>Connected via</h4>
+            <ul className="evidence-operators" data-operators>
+              {operators.map((operator) => (
+                <li key={operator.operator_id}>
+                  <OperatorInitials name={operator.operator_name} />
+                  <span>
+                    <b>{operator.operator_name}</b>
+                    <small>{operatorDetail(operator)}</small>
+                    {operator.gmail_account_details.map((account) => (
+                      <small key={account.email} className="evidence-account">
+                        {account.email} · {account.interactions.toLocaleString("en-US")} emails
+                      </small>
+                    ))}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </section>
         ) : null}
         {row.summary ? (

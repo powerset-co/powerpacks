@@ -79,7 +79,7 @@ describe("TagEditor", () => {
     )
     const leaving = document.querySelector<HTMLElement>("[data-tag='Infra']")
     expect(leaving?.dataset.open).toBe("false")
-    fireEvent.transitionEnd(leaving ?? document.body)
+    fireEvent.transitionEnd(leaving ?? document.body, { propertyName: "opacity" })
     expect(document.querySelector("[data-tag='Infra']")).toBeNull()
     expect(document.querySelector("[data-tag='Backend']")?.getAttribute("data-open")).toBe("true")
   })

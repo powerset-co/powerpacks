@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { Appear, PlusIcon } from "@/components/shared"
 import { Button } from "@/components/ui/button"
+import { type DismissBy, useDismiss } from "@/hooks/useDismiss"
 import { usePresence } from "@/hooks/usePresence"
 import type { OperatorOption } from "@/lib/searches/filters"
 import { toggled } from "@/lib/sets"
-
-import { type DismissBy, useDismiss } from "../hooks/useDismiss"
 import { OperatorInitials } from "../run/Operators"
-import { Appear } from "./Appear"
 
 interface OperatorPickerProps {
   operators: readonly OperatorOption[]
@@ -62,9 +61,7 @@ export function OperatorPicker({ operators, selected, onChange }: OperatorPicker
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
+        <PlusIcon />
       </Button>
       {presence.mounted ? (
         <div
