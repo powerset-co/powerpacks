@@ -43,7 +43,8 @@ export function UploadDialog({ upload }: { upload: Upload }) {
       {last && <UploadDone last={last} />}
       <DialogFooter>
         <DialogClose asChild>
-          <Button variant="ghost">{UPLOAD.close}</Button>
+          {/* Nothing follows a finished upload, so Close is the one action and takes the colour. */}
+          <Button variant={view.phase === "completed" ? "primary" : "ghost"}>{UPLOAD.close}</Button>
         </DialogClose>
         <Actions upload={upload} />
       </DialogFooter>
@@ -74,7 +75,7 @@ function Actions({ upload }: { upload: Upload }) {
         </Button>
       )
     case "completed":
-      return <Button onClick={upload.check}>{UPLOAD.checkAgain}</Button>
+      return null
     case "check-failed":
     case "upload-failed":
     case "interrupted":

@@ -154,6 +154,9 @@ describe("ShareUpload dialog", () => {
     show()
     const dialog = await openDialog("Share changes")
     expect(within(dialog).getByRole("heading", { name: "Your network is up to date" })).toBeTruthy()
+    // Nothing follows a finished upload: Close alone, and it takes the colour.
+    expect(buttons(dialog)).toEqual(["Close"])
+    expect(within(dialog).getByText("Close", { selector: "button" }).className).toContain("primary")
   })
 
   it.each([
