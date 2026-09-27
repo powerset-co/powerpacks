@@ -119,7 +119,9 @@ def resolve_operator_id(cur: Any, subject: str) -> str:
     return str(row[0])
 
 
-def verify_v3_schema(cur: Any) -> None:
+def use_v3_schema(cur: Any) -> None:
+    """Point this session at the shared schema and prove it took: the standard login works."""
+    cur.execute("SET search_path TO powerset_v2, pg_catalog")
     cur.execute("SELECT current_schema(), current_setting('search_path')")
     schema, search_path = cur.fetchone()
     if schema != "powerset_v2" or search_path != "powerset_v2, pg_catalog":

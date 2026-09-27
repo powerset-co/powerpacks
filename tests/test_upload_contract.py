@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -34,7 +35,8 @@ class UploadContractTests(unittest.TestCase):
             root = Path(tmp)
             upload = ShareUpload(root / "share.sqlite", root / "people.csv", out_dir=root)
             plan = dict.fromkeys(("marked_share", "with_linkedin", "without_linkedin", "new_to_cloud",
-                                  "changed", "already_shared", "losing_access", "companies_missing"), 1)
+                                  "changed", "already_shared", "already_in_cloud", "losing_access",
+                                  "companies_missing"), 1)
             cases = (
                 (UploadManifest(), "idle", None, None),
                 (replace(UploadManifest(), status="running", dry_run=True, stage=Stage.CHECKING_ACCESS),
@@ -102,6 +104,18 @@ class UploadContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "shared TurboPuffer v3 namespaces"):
                     uploader.run()
             client.assert_not_called()
+
+    def test_upload_targets_the_v3_family_without_any_env_setting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploader = upload_powerset.UploadPowerset(db=root / "missing.duckdb",
+                share_db=root / "share.sqlite", people_csv=root / "people.csv", out_dir=root)
+            with mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}, clear=True), \
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"):
+                with self.assertRaisesRegex(RuntimeError, "local search index"):
+                    uploader.run()
+            self.assertEqual(set(uploader._namespace_names.values()),
+                             {f"aleph_{name}_v3" for name in ("people", "summaries", "people_education", "companies", "education")})
 
     def test_missing_school_is_counted_and_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:

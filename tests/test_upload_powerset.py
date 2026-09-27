@@ -510,7 +510,8 @@ class DryRunTests(unittest.TestCase):
     def test_dry_run_selects_only_and_writes_one_manifest(self):
         namespace = FakeNamespace()
         # persons-by-slug answers for the private person only; the other three reads are empty.
-        cursor = FakeCursor([[('powerset_v2', 'powerset_v2, pg_catalog')], [("casey-lane", CLOUD_PERSON)], [], [], []])
+        # The SET search_path answers nothing; the schema check reads the next row.
+        cursor = FakeCursor([[], [('powerset_v2', 'powerset_v2, pg_catalog')], [("casey-lane", CLOUD_PERSON)], [], [], []])
         connection = mock.MagicMock()
         connection.__enter__.return_value = connection
         connection.cursor.return_value.__enter__.return_value = cursor
@@ -534,7 +535,7 @@ class DryRunTests(unittest.TestCase):
             manifest = json.loads(Path(payload["manifest"]).read_text())
 
         self.assertEqual(namespace.writes, [])
-        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SELECT"] * 6)
+        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SET"] + ["SELECT"] * 6)
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["plan"]["previously_uploaded"], 0)
         self.assertEqual(manifest["person_hashes"], {NEW_PERSON: "previously-uploaded"})
@@ -567,7 +568,7 @@ class DryRunTests(unittest.TestCase):
                     fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
                     with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                          mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                         mock.patch.object(postgres, "verify_v3_schema"), \
+                         mock.patch.object(postgres, "use_v3_schema"), \
                          mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
                          mock.patch.object(upload_powerset.tp_backend, "namespace_name",
                                            side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
@@ -613,7 +614,7 @@ class DryRunTests(unittest.TestCase):
             paths = self._fixture(Path(tmp))
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                 mock.patch.object(postgres, "verify_v3_schema"), \
+                 mock.patch.object(postgres, "use_v3_schema"), \
                  mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_v3') == name)]))), \
                  mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
                  mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}), \
@@ -674,7 +675,7 @@ class DryRunTests(unittest.TestCase):
             local.close()
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                 mock.patch.object(postgres, "verify_v3_schema"), \
+                 mock.patch.object(postgres, "use_v3_schema"), \
                  mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_v3') == name)]))), \
                  mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
                  mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}), \

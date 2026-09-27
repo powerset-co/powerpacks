@@ -103,7 +103,7 @@ class ShareUpload:
         plan = None if state == "idle" else saved.plan
         plan_counts = None if plan is None else {key: plan.get(key, 0) for key in (
             "marked_share", "with_linkedin", "without_linkedin", "new_to_cloud", "changed",
-            "already_shared", "losing_access", "companies_missing")}
+            "already_shared", "already_in_cloud", "losing_access", "companies_missing")}
         error = None
         if state == "interrupted":
             error = INTERRUPTED

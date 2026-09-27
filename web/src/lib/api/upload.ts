@@ -12,6 +12,8 @@ export interface UploadPlan {
   new_to_cloud: number
   changed: number
   already_shared: number
+  // In the cloud through another operator; this upload adds you as a source.
+  already_in_cloud: number
   losing_access: number
   companies_missing: number
 }

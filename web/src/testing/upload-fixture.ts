@@ -9,6 +9,7 @@ export const PLAN: UploadPlan = {
   new_to_cloud: 3,
   changed: 0,
   already_shared: 125,
+  already_in_cloud: 0,
   losing_access: 0,
   companies_missing: 0,
 }

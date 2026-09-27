@@ -74,6 +74,8 @@ DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
 DEFAULT_SHARE_DB = REPO / CANONICAL_DB
 DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
+# The namespace family the shared cloud is served from; the upload never targets another.
+UPLOAD_INDEX_VERSION = "v3"
 
 PREVIEW_IDS = 10
 
@@ -146,8 +148,12 @@ class UploadPowerset:
         if self.env_file:
             config.update({key: value for key, value in dotenv_values(self.env_file).items() if value is not None})
         self._database_url = config.get("DATABASE_URL") or postgres_client.database_url()
+        # The shared cloud the upload writes is the v3 family, whatever version the search
+        # side reads; a per-namespace override still points a rehearsal at _v3_share_test.
         self._namespace_names = {
-            ns.logical: tp_backend.namespace_name(ns.logical, config=config) for ns in NAMESPACES
+            ns.logical: tp_backend.namespace_name(
+                ns.logical, config={**config, "ALEPH_INDEX_VERSION": UPLOAD_INDEX_VERSION})
+            for ns in NAMESPACES
         }
         suffixes = {"_v3_share_test" if name.endswith("_v3_share_test") else
                     "_v3" if name.endswith("_v3") else "invalid"
@@ -174,13 +180,12 @@ class UploadPowerset:
         try:
             with psycopg2.connect(self._database_url) as conn:
                 with conn.cursor() as cur:
-                    postgres.verify_v3_schema(cur)
+                    postgres.use_v3_schema(cur)
                     operator_id = self.operator_id or postgres.resolve_operator_id(
                         cur, postgres_client.credentials_subject())
                     plan = self._plan(con, cur, operator_id, share_rows, people)
                     target = {"postgres_host": urlparse(self._database_url).hostname,
                               "postgres_database": urlparse(self._database_url).path,
-                              "postgres_user": urlparse(self._database_url).username,
                               "postgres_schema": "powerset_v2", "operator_id": operator_id,
                               "namespaces": {ns.logical: ns.namespace for ns in plan.namespaces}}
                     indexed = {profile.id for profile in local_index.person_profiles(con, plan.persons_upsert)}
@@ -222,6 +227,9 @@ class UploadPowerset:
                                    losing_access=len({row.person_id for row in plan.sources_delete} -
                                                      set(plan.cloud_id_by_person.values())),
                                    companies_missing=preview["companies_skipped_no_row"])
+                    # In the cloud through another operator: this upload adds you as a source.
+                    preview["already_in_cloud"] = (len(shared_ids) - len(newly_owned) - len(changed)
+                                                   - preview["already_shared"])
                     if self.require_checked and not self.dry_run and (previous.plan is None or previous.checked_target != target
                                              or previous.plan != preview or previous.share_digest != digest):
                         raise CheckChanged(CHANGED_CHECK)

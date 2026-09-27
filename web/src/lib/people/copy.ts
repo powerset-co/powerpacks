@@ -154,6 +154,7 @@ export const PLAN_ROWS: readonly { key: keyof UploadPlan; label: string }[] = [
   { key: "new_to_cloud", label: "New to the cloud" },
   { key: "changed", label: "Changed" },
   { key: "already_shared", label: "Already shared" },
+  { key: "already_in_cloud", label: "In the cloud already, you join as a source" },
   { key: "losing_access", label: "Losing access" },
   { key: "companies_missing", label: "Companies missing" },
 ]

@@ -282,13 +282,18 @@ Namespace progress counts records written; the completed count reports people
 whose documents or sources were written. Missing local company and school rows
 are counted and skipped while the available records upload.
 
-Uploads require the v3 namespace family and the `powerset_v2` PostgreSQL schema.
-Set `POWERPACKS_UPLOAD_ENV_FILE` when starting the review server to an env file
-containing its dedicated `DATABASE_URL` and `ALEPH_INDEX_VERSION=v3`; credentials
-are resolved for the uploader without changing the search server's environment.
-The server loads its normal `.env` once at startup with the shared python-dotenv
-loader; the uploader reads that environment. The standalone upload CLI does the
-same at startup.
+Uploads write the v3 namespace family and the `powerset_v2` PostgreSQL schema.
+The uploader pins the v3 family itself (`UPLOAD_INDEX_VERSION`), whatever
+`ALEPH_INDEX_VERSION` the search side reads, and sets its own session's
+`search_path` to `powerset_v2` (`postgres.use_v3_schema`), so the standard
+`.env` that the install renders and `bin/update-powerpacks` preserves is
+enough: its `DATABASE_URL` login has the schema's privileges, and its
+`TURBOPUFFER_API_KEY` reaches the namespaces. The review server loads that `.env` once at
+startup with the shared python-dotenv loader; the uploader reads that
+environment, and the standalone upload CLI does the same. `POWERPACKS_UPLOAD_ENV_FILE`
+exists only for a rehearsal: an env file whose per-namespace
+`POWERPACKS_TURBOPUFFER_<NAME>_NAMESPACE` overrides all end in `_v3_share_test`
+and whose `DATABASE_URL` is a disposable copy.
 The local index is `.powerpacks/search-index/local-search.duckdb`.
 
 The existing upload manifest retains content hashes and unfinished writes for
