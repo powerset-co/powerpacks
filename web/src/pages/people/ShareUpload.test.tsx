@@ -31,6 +31,22 @@ afterEach(() => {
 })
 
 describe("ShareUpload", () => {
+  it("shows the saved upload after refresh without starting another upload", async () => {
+    const fetch = vi.fn(() => Promise.resolve(respond("completed", 2, 8)))
+    vi.stubGlobal("fetch", fetch)
+    const first = show()
+    await screen.findByText("Last upload: 10 people")
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeTruthy()
+    expect(screen.queryByRole("dialog")).toBeNull()
+    first.unmount()
+    show()
+    await screen.findByText("Last upload: 10 people")
+    expect(fetch).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }))
+    await screen.findByRole("dialog")
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
   it("finds an active upload after reloading and opens it without another POST", async () => {
     const fetch = vi.fn(() => Promise.resolve(respond("running")))
     vi.stubGlobal("fetch", fetch)
@@ -95,7 +111,7 @@ describe("ShareUpload", () => {
     await screen.findByText("Your network is up to date")
     expect(screen.getByText("Already up to date")).toBeTruthy()
     fireEvent.click(screen.getByText("Close", { selector: "button" }))
-    fireEvent.click(screen.getByRole("button", { name: "Share network" }))
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }))
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
   })
 

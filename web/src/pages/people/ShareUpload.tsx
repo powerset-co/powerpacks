@@ -73,15 +73,27 @@ export function ShareUpload() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button ref={trigger} className="mb-2 ml-2 min-h-9" variant="primary" onClick={() => void start()}>
-        {running && (
-          <span
-            aria-hidden="true"
-            className="size-3 animate-spin rounded-full border-2 border-current border-r-transparent motion-reduce:animate-none"
-          />
+      <div className="mb-2 ml-3 flex flex-wrap items-center justify-end gap-3">
+        {completed && (
+          <span className="text-xs text-muted-foreground">
+            Last upload: {status.progress.total.toLocaleString()} people
+          </span>
         )}
-        {running ? "View upload" : "Share network"}
-      </Button>
+        <Button
+          ref={trigger}
+          className="min-h-9"
+          variant={completed ? "default" : "primary"}
+          onClick={() => void start()}
+        >
+          {running && (
+            <span
+              aria-hidden="true"
+              className="size-3 animate-spin rounded-full border-2 border-current border-r-transparent motion-reduce:animate-none"
+            />
+          )}
+          {running ? "View upload" : completed ? "Check for updates" : "Share network"}
+        </Button>
+      </div>
       <DialogContent
         className="gap-6 rounded-[14px] p-6"
         onKeyDown={(event) => event.stopPropagation()}
