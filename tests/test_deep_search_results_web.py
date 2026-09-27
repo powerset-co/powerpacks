@@ -1095,7 +1095,16 @@ class ResultsWebTest(unittest.TestCase):
                         "Overall Score", "Reasoning"])
                     self.assertTrue(all(row["Name"].startswith('=HYPERLINK("https://linkedin.com/')
                                         for row in exported))
-                    page.get_by_role("button", name="Add tag to Person 3", exact=True).click()
+                    # The table mounts only rows near its scroll position; Person 3 (score 4)
+                    # sorts after the 25 fives, so scroll to it as a reader would.
+                    tag_person = page.get_by_role("button", name="Add tag to Person 3", exact=True)
+                    viewport = page.locator(".results-viewport")
+                    for _ in range(50):
+                        if tag_person.count():
+                            break
+                        viewport.evaluate("viewport => viewport.scrollBy(0, viewport.clientHeight / 2)")
+                        page.wait_for_timeout(50)
+                    tag_person.click()
                     page.get_by_role("textbox", name="Add tag", exact=True).fill("Pinned")
                     page.get_by_role("textbox", name="Add tag", exact=True).press("Enter")
                     page.keyboard.press("Escape")

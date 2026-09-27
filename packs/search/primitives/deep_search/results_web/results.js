@@ -5,6 +5,9 @@ const readOnly = document.documentElement.dataset.readonly === "true";
 const hostedFeedback = document.documentElement.dataset.hostedFeedback === "true";
 const hostedRequests = new Map();
 const LABELS_KEY = "powerpacks:search-labels";
+// The hosted snapshot's sandboxed iframe (no allow-same-origin) throws on any Storage access.
+const sessionStore = (() => { try { return window.sessionStorage; } catch { return null; } })();
+let showLabels = sessionStore?.getItem(LABELS_KEY) !== "hidden";
 const virtualTableModule = readOnly ? Promise.resolve(null) : import(`${BASE}/assets/virtual-table.js`);
 
 function candidateRows(root) {
@@ -424,7 +427,6 @@ function updateTags(body) {
   });
   body.querySelectorAll("[data-results-toolbar]").forEach((toolbar) => {
     const panel = toolbar.closest("[data-pond-panel]");
-    const showLabels = sessionStorage.getItem(LABELS_KEY) !== "hidden";
     panel.dataset.showLabels = String(showLabels);
     const labels = toolbar.querySelector("[data-labels-toggle]");
     labels.classList.toggle("selected", showLabels);
@@ -872,8 +874,8 @@ document.addEventListener("click", (event) => {
   if (!body) return;
   const labels = event.target.closest("[data-labels-toggle]");
   if (labels) {
-    const show = labels.getAttribute("aria-pressed") !== "true";
-    sessionStorage.setItem(LABELS_KEY, show ? "shown" : "hidden");
+    showLabels = !showLabels;
+    sessionStore?.setItem(LABELS_KEY, showLabels ? "shown" : "hidden");
     updateTags(body);
     return;
   }
