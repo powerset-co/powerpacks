@@ -118,6 +118,13 @@ def resolve_operator_id(cur: Any, subject: str) -> str:
     return str(row[0])
 
 
+def verify_v3_schema(cur: Any) -> None:
+    cur.execute("SELECT current_schema(), current_setting('search_path')")
+    schema, search_path = cur.fetchone()
+    if schema != "powerset_v2" or search_path != "powerset_v2, pg_catalog":
+        raise RuntimeError("Upload requires the powerset_v2 PostgreSQL login")
+
+
 def fetch_cloud_ids_by_slug(cur: Any, slugs: Sequence[str]) -> dict[str, str]:
     """persons.id per public_identifier — the cloud's unique key, so a person the
     cloud minted under its own id is still found."""
@@ -139,6 +146,15 @@ def fetch_operator_sources(cur: Any, operator_id: str) -> tuple[SourceRow, ...]:
         SourceRow(str(row[0]), str(row[1]), str(row[2] or ""), int(row[3] or 0), str(row[4] or ""))
         for row in cur.fetchall()
     )
+
+
+def fetch_operator_source_keys(cur: Any, operator_id: str) -> frozenset[tuple[str, str, str]]:
+    cur.execute("""
+        SELECT person_id::text, source_channel, source_identifier
+        FROM operator_person_sources WHERE operator_id = %s
+    """, (operator_id,))
+    return frozenset((str(person_id), str(channel), str(identifier))
+                     for person_id, channel, identifier in cur.fetchall())
 
 
 def fetch_operator_ids_by_person(cur: Any, person_ids: Sequence[str]) -> dict[str, tuple[str, ...]]:

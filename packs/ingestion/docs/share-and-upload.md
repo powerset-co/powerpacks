@@ -237,9 +237,9 @@ CLAUDE.md routing line, `packs/indexing/README.md` row.
 3. A `private` tag written through `TagStore` → `share` → that row reads `no/human_private`.
 4. `upload_powerset.py` (no flag = plan only) → plan counts (persons upserts, OPS
    inserts/deletes, TP upserts/patches per namespace, skipped_no_linkedin).
-5. Real write ONLY after explicit go, first against `ALEPH_ENV=staging` (`_dev` namespaces);
-   Postgres rows are scoped to operator `274ac942…`. Then `$search powerset` on a query that
-   should hit a newly shared person.
+5. Real write ONLY after explicit go, first against isolated `_v3_share_test`
+   namespaces and a disposable PostgreSQL copy. Verify document IDs, access lists,
+   interrupted-upload recovery, and zero writes on the unchanged rerun before v3.
 
 ## Open for Arthur
 
@@ -255,3 +255,24 @@ CLAUDE.md routing line, `packs/indexing/README.md` row.
   stay local until the cloud grows a non-LinkedIn person key.
 - Dossier text goes to TypeSafe for labeling (synthesized facts, not bodies). Say if that
   provider boundary is not acceptable; the fallback is the same questions through OpenAI.
+
+## Local People upload (2026-09-27)
+
+The People page's **Share network** button runs `UploadPowerset` in the review
+server and polls `/api/people/upload`. Row-level Share/Keep private still edit
+review decisions; Share network reconciles the whole current share list.
+The modal reports records written as each namespace finishes, then committed
+people uploaded/skipped. Closing the modal does not stop the server's upload.
+
+Uploads require the v3 namespace family and the `powerset_v2` PostgreSQL schema.
+Set `POWERPACKS_UPLOAD_ENV_FILE` when starting the review server to an env file
+containing its dedicated `DATABASE_URL` and `ALEPH_INDEX_VERSION=v3`; credentials
+are resolved for the uploader without changing the search server's environment.
+The local index is `.powerpacks/search-index/local-search.duckdb`.
+
+The existing upload manifest retains content hashes and unfinished writes for
+retries. Stable document IDs make replay safe; existing cloud position IDs and
+cloud-enriched profiles are preserved. Unchanged source rows, access lists and
+private tags do not get rewritten. TurboPuffer's SDK retries transient requests
+up to four times. After an exhausted retry or server restart, Retry upload
+reconciles the current share decisions again.

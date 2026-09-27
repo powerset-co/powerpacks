@@ -142,13 +142,16 @@ def fetch_person_doc_ids(ns: Any, logical: str, person_ids: Sequence[str]) -> di
         while True:
             base = (key, "In", list(chunk))
             filters = base if last_id is None else ("And", [base, ("id", "Gt", last_id)])
-            response = ns.query(
-                rank_by=["id", "asc"],
-                filters=filters,
-                top_k=QUERY_PAGE_SIZE,
-                include_attributes=sorted({"id", key}),
-                consistency=STRONG_CONSISTENCY,
-            )
+            try:
+                response = ns.query(
+                    rank_by=["id", "asc"],
+                    filters=filters,
+                    top_k=QUERY_PAGE_SIZE,
+                    include_attributes=sorted({"id", key}),
+                    consistency=STRONG_CONSISTENCY,
+                )
+            except turbopuffer.NotFoundError:
+                return {}
             rows = list(response.rows or [])
             for row in rows:
                 by_person.setdefault(str(getattr(row, key)), []).append(str(row.id))
@@ -161,15 +164,29 @@ def fetch_person_doc_ids(ns: Any, logical: str, person_ids: Sequence[str]) -> di
 def fetch_present_ids(ns: Any, ids: Sequence[str]) -> frozenset[str]:
     present: set[str] = set()
     for chunk in _chunks(list(ids), BATCH_SIZE):
-        response = ns.query(
-            rank_by=["id", "asc"],
-            filters=("id", "In", list(chunk)),
-            top_k=len(chunk),
-            include_attributes=["id"],
-            consistency=STRONG_CONSISTENCY,
-        )
+        try:
+            response = ns.query(
+                rank_by=["id", "asc"],
+                filters=("id", "In", list(chunk)),
+                top_k=len(chunk),
+                include_attributes=["id"],
+                consistency=STRONG_CONSISTENCY,
+            )
+        except turbopuffer.NotFoundError:
+            return frozenset()
         present.update(str(row.id) for row in (response.rows or []))
     return frozenset(present)
+
+
+def fetch_allowed_operator_ids(ns: Any, ids: Sequence[str]) -> dict[str, tuple[str, ...]]:
+    allowed: dict[str, tuple[str, ...]] = {}
+    for chunk in _chunks(list(ids), BATCH_SIZE):
+        response = ns.query(rank_by=["id", "asc"], filters=("id", "In", list(chunk)),
+                            top_k=len(chunk), include_attributes=["id", "allowed_operator_ids"],
+                            consistency=STRONG_CONSISTENCY)
+        allowed.update({str(row.id): tuple(sorted(getattr(row, "allowed_operator_ids", ()) or ()))
+                        for row in (response.rows or [])})
+    return allowed
 
 
 def upsert_docs(ns: Any, logical: str, rows: Sequence[dict[str, Any]]) -> int:

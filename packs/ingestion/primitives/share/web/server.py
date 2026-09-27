@@ -1,4 +1,4 @@
-"""The People page's data routes: the people payload, detail, avatar, one write.
+"""The People page's data routes: people, tags, and upload progress.
 
 Flow: `ShareRoutes` mounts under `/api/people/` in the review server
 (`bin/deep-context review people`), after `AppRoutes` (the page and its
@@ -8,6 +8,7 @@ assets); `make_handler` serves the two alone for tests. GET `/api/people/rows` -
 sets, so undo re-posts the previous sets), writes the tag rows for every person
 under those parents and re-decides their share rows through
 `labels.share_decision` from `person_labels`, in one transaction.
+GET/POST `/api/people/upload` reads progress and starts one shared upload.
 
 Changelog:
   2026-09-26: created.
@@ -36,6 +37,7 @@ from packs.ingestion.primitives.share.labels import label_row_from_export, share
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
+from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.shared.web.app import AppRoutes
 
 API_PREFIX = "/api/people/"
@@ -104,15 +106,18 @@ def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> dict[str, t
 class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
-    def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple]) -> None:
+    def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple], upload: ShareUpload) -> None:
         self.db = db
         self.people = people
         self.load = load
+        self.upload = upload
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
         if parsed.path == f"{API_PREFIX}rows":
             self._send_json(handler, people_payload(self.load()))
+        elif parsed.path == f"{API_PREFIX}upload":
+            self._send_json(handler, self.upload.status())
         elif parsed.path == f"{API_PREFIX}person":
             detail = self.people.detail((query.get("id") or [""])[0])
             if detail is None:
@@ -133,11 +138,14 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path != f"{API_PREFIX}tags":
+        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in LOCAL_HOSTS:
             self._send(handler, b"cross-origin request rejected", "text/plain", status=HTTPStatus.FORBIDDEN)
+            return True
+        if parsed.path == f"{API_PREFIX}upload":
+            self._send_json(handler, self.upload.start())
             return True
         length = int(handler.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_TAGS_REQUEST_BYTES:
@@ -179,7 +187,8 @@ class ShareRoutes:
                    "application/json; charset=utf-8", status=status)
 
 
-def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV) -> ShareRoutes:
+def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV, *,
+                 upload_db: Path | None = None, upload_dir: Path | None = None) -> ShareRoutes:
     """The routes over one store, rows re-read whenever the store file changes."""
     people = SharePeople(db, people_csv=people_csv)
     cache: dict[str, Any] = {}
@@ -191,7 +200,11 @@ def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV) -> ShareRoutes:
             cache["stamp"] = stamp
         return cache["rows"]
 
-    return ShareRoutes(db, people, load)
+    from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
+
+    upload = ShareUpload(db.db_path, people_csv, index_db=upload_db or DEFAULT_DB,
+                         out_dir=upload_dir or DEFAULT_OUT_DIR)
+    return ShareRoutes(db, people, load, upload)
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
@@ -218,4 +231,3 @@ def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
 
     return Handler
-

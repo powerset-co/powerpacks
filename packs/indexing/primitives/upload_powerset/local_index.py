@@ -9,6 +9,8 @@ Changelog:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract, vector_metadata
@@ -16,18 +18,35 @@ from packs.indexing.primitives.upload_powerset.models import Namespace, PersonPr
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACE_BY_LOGICAL
 
 
+def person_hashes(con: Any, person_ids: tuple[str, ...]) -> dict[str, str]:
+    """Local indexed content for each shared person; successful manifests cache it."""
+    content: dict[str, list[Any]] = {person_id: [] for person_id in person_ids}
+    for table, key in (("local_person_profiles", "person_id"),
+                       ("local_people_positions", "base_id"),
+                       ("local_summaries", "base_id"),
+                       ("local_people_education", "base_id")):
+        rows = con.execute(f'SELECT * FROM {table} WHERE "{key}" = ANY(?)',
+                           [list(person_ids)])
+        columns = [column[0] for column in rows.description]
+        for values in rows.fetchall():
+            row = dict(zip(columns, values))
+            content[str(row[key])].append((table, row))
+    for rows in content.values():
+        rows.sort(key=lambda item: json.dumps(item, sort_keys=True, default=str))
+    return {person_id: hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
+            for person_id, rows in content.items()}
+
+
 def entity_ids_by_person(con: Any, logical: str, person_ids: list[str]) -> dict[str, tuple[str, ...]]:
     if logical == "companies":
         sql = """
             SELECT p.base_id, p.company_id FROM local_people_positions p
-            JOIN local_companies c ON c.id = p.company_id
-            WHERE p.base_id = ANY(?)
+            WHERE p.base_id = ANY(?) AND p.company_id IS NOT NULL
         """
     else:
         sql = """
             SELECT e.base_id, e.canonical_education_id FROM local_people_education e
-            JOIN local_education s ON s.id = e.canonical_education_id
-            WHERE e.base_id = ANY(?)
+            WHERE e.base_id = ANY(?) AND e.canonical_education_id IS NOT NULL
         """
     by_person: dict[str, set[str]] = {}
     for person_id, entity_id in con.execute(sql, [person_ids]).fetchall():
@@ -67,6 +86,10 @@ def namespace_rows(con: Any, logical: str, ids: tuple[str, ...],
         # TurboPuffer writes only present values; NULL would erase a live attribute.
         doc = {name: value for name, value in doc.items() if value is not None}
         if namespace.person_grain:
+            if logical == "summaries":
+                doc["id"] = person_id
+            if logical == "education" and "person_id" in doc:
+                doc["person_id"] = person_id
             doc["allowed_operator_ids"] = list(allowed.get(person_id, ()))
         elif logical == "companies":
             # Companies have allowed_operator_ids in WRITE_SCHEMA; schools do not.
@@ -83,5 +106,5 @@ def doc_columns(con: Any, namespace: Namespace, live: frozenset[str]) -> list[st
         names.append("vector")
     columns = {row[0] for row in con.execute(
         "SELECT column_name FROM information_schema.columns WHERE table_name = ?", [namespace.table]).fetchall()}
-    allowed = columns if not live else columns & (live | {"id"})
+    allowed = columns if not live else columns & (live | {"id", "vector"})
     return [name for name in names if name in allowed]

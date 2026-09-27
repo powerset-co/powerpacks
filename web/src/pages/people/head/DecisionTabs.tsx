@@ -1,3 +1,5 @@
+import { ShareUpload } from "../ShareUpload"
+
 import { CountRoll, TabInk } from "@/components/shared"
 import { plural } from "@/lib/copy"
 import { label } from "@/lib/people/copy"
@@ -31,6 +33,7 @@ export function DecisionTabs({ tab, totals, total, onTab }: DecisionTabsProps) {
       ))}
       <TabInk active={`[data-tab='${tab}']`} />
       <span className="head-note">{plural(total, "person")}</span>
+      <ShareUpload />
     </section>
   )
 }

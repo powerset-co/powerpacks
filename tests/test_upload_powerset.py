@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -103,6 +104,7 @@ def cloud_state(**kwargs) -> CloudState:
         operator_sources=kwargs.pop("operator_sources", ()),
         operator_ids_by_person=kwargs.pop("operator_ids_by_person", {}),
         private_tag_keys=kwargs.pop("private_tag_keys", frozenset()),
+        operator_source_keys=kwargs.pop("operator_source_keys", frozenset()),
         present_entity_ids=kwargs.pop("present_entity_ids", {}),
     )
 
@@ -160,7 +162,48 @@ class FakeNamespace:
         return mock.Mock(rows=self._rows)
 
 
+class StatefulNamespace(FakeNamespace):
+    def __init__(self):
+        super().__init__()
+        self.docs = {}
+
+    def schema(self):
+        return {key: {} for key in ("id", "base_id", "person_id", "position_title",
+                                   "company_name", "summary", "allowed_operator_ids")}
+
+    def write(self, **kwargs):
+        super().write(**kwargs)
+        for row in kwargs.get("upsert_rows", ()):
+            self.docs[str(row["id"])] = dict(row)
+        for row in kwargs.get("patch_rows", ()):
+            self.docs[str(row["id"])].update(row)
+
+    def query(self, **kwargs):
+        self.queries.append(kwargs)
+        key, _, wanted = kwargs["filters"]
+        rows = [mock.Mock(**row) for row in self.docs.values()
+                if str(row.get(key)) in wanted]
+        return mock.Mock(rows=rows)
+
+
 class PlanBucketTests(unittest.TestCase):
+    def test_other_discovery_source_key_is_not_upserted(self):
+        key = (CLOUD_PERSON, "linkedin", "casey-lane")
+        plan = plan_for([share_row(CLOUD_PERSON, "casey-lane")],
+                        [local_person(CLOUD_PERSON, "casey-lane")],
+                        cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON},
+                                    operator_source_keys=frozenset({key})))
+        self.assertEqual(plan.sources_insert, ())
+
+    def test_unchanged_source_is_not_upserted_again(self):
+        source = SourceRow(CLOUD_PERSON, "linkedin", "casey-lane", 0, "")
+        plan = plan_for(
+            [share_row(CLOUD_PERSON, "casey-lane")],
+            [local_person(CLOUD_PERSON, "casey-lane")],
+            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}, operator_sources=(source,)),
+        )
+        self.assertEqual(plan.sources_insert, ())
+
     def test_new_person_upserts_and_cloud_person_patches(self):
         plan = plan_for(
             [share_row(NEW_PERSON, "jordan-bravo"), share_row(CLOUD_PERSON, "casey-lane")],
@@ -218,7 +261,7 @@ class PlanBucketTests(unittest.TestCase):
                 private_tag_keys=frozenset({"casey-lane", "jordan-bravo", "someone-cloud-only"}),
             ),
         )
-        self.assertEqual([row.group_key for row in plan.tags_put], ["casey-lane"])
+        self.assertEqual(plan.tags_put, ())
         # jordan-bravo's local decision is a machine one, so the cloud tag (a
         # human's word in the Powerset UI) stays; someone-cloud-only is not ours at all.
         self.assertEqual(plan.tags_delete, ())
@@ -274,6 +317,14 @@ class PlanBucketTests(unittest.TestCase):
 
 
 class SourceRowTests(unittest.TestCase):
+    def test_equivalent_timestamp_formats_skip_source_update(self):
+        local = local_person(CLOUD_PERSON, "casey-lane", last_interaction="2026-09-01T00:00:00Z")
+        existing = SourceRow(CLOUD_PERSON, "linkedin", "casey-lane", 0, "2026-09-01 00:00:00+00")
+        plan = plan_for([share_row(CLOUD_PERSON, "casey-lane")], [local],
+                        cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON},
+                                    operator_sources=(existing,)))
+        self.assertEqual(plan.sources_insert, ())
+
     def test_channel_labels_map_to_cloud_names_and_identifiers(self):
         person = LocalPerson.from_csv_row({
             "id": NEW_PERSON,
@@ -339,6 +390,32 @@ class PostgresSqlTests(unittest.TestCase):
 
 
 class TurbopufferWriterTests(unittest.TestCase):
+    def test_missing_namespace_has_no_present_entities_or_person_docs(self):
+        missing = turbopuffer.NotFoundError(
+            "missing", response=mock.Mock(status_code=404, headers={}), body=None)
+        ns = mock.Mock(query=mock.Mock(side_effect=missing))
+        self.assertEqual(turbopuffer_writer.fetch_present_ids(ns, ["company-a"]), frozenset())
+        self.assertEqual(turbopuffer_writer.fetch_person_doc_ids(ns, "people", [CLOUD_PERSON]), {})
+
+    def test_summary_document_uses_person_id_in_cloud(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+            con.execute("CREATE TABLE local_summaries (id VARCHAR, base_id VARCHAR, summary VARCHAR)")
+            con.execute("INSERT INTO local_summaries VALUES ('local-summary', ?, 'Engineer')", [CLOUD_PERSON])
+            rows = upload_powerset.local_index.namespace_rows(
+                con, "summaries", (CLOUD_PERSON,), {CLOUD_PERSON: (OPERATOR,)}, OPERATOR, frozenset())
+            con.close()
+        self.assertEqual(rows[0]["id"], CLOUD_PERSON)
+
+    def test_identical_allowed_operator_ids_need_no_patch(self):
+        ns = FakeNamespace(rows=[mock.Mock(id="doc-1", allowed_operator_ids=[OPERATOR])])
+        current = turbopuffer_writer.fetch_allowed_operator_ids(ns, ["doc-1"])
+        self.assertEqual(current, {"doc-1": (OPERATOR,)})
+        self.assertEqual(turbopuffer_writer.patch_allowed_operator_ids(
+            ns, {doc_id: operators for doc_id, operators in {"doc-1": (OPERATOR,)}.items()
+                 if current.get(doc_id) != operators}), 0)
+        self.assertEqual(ns.writes, [])
+
     def test_upsert_batches_at_500(self):
         ns = FakeNamespace()
         rows = [{"id": str(index)} for index in range(1001)]
@@ -422,7 +499,7 @@ class DryRunTests(unittest.TestCase):
     def test_dry_run_selects_only_and_writes_one_manifest(self):
         namespace = FakeNamespace()
         # persons-by-slug answers for the private person only; the other three reads are empty.
-        cursor = FakeCursor([[("casey-lane", CLOUD_PERSON)], [], [], []])
+        cursor = FakeCursor([[('powerset_v2', 'powerset_v2, pg_catalog')], [("casey-lane", CLOUD_PERSON)], [], [], []])
         connection = mock.MagicMock()
         connection.__enter__.return_value = connection
         connection.cursor.return_value.__enter__.return_value = cursor
@@ -433,14 +510,15 @@ class DryRunTests(unittest.TestCase):
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://x"), \
                  mock.patch.object(upload_powerset.postgres_client, "load_env_file"), \
-                 mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace), \
-                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=NAMESPACE_NAMES.get):
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(return_value=namespace))), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
+                 mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
                 payload = upload_powerset.UploadPowerset(
                     operator_id=OPERATOR, dry_run=True, **paths).run()
             manifest = json.loads(Path(payload["manifest"]).read_text())
 
         self.assertEqual(namespace.writes, [])
-        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SELECT"] * 4)
+        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SELECT"] * 6)
         self.assertTrue(payload["dry_run"])
         # The `yes` row only: the human's `private` and the machine's `confirm` stay home.
         self.assertEqual(payload["plan"]["persons_upsert_ids"], [NEW_PERSON])
@@ -449,8 +527,207 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["namespaces"]["companies"]["upsert"], 1)
         self.assertEqual(manifest["plan"]["persons_upsert"], 1)
 
+    def test_same_network_second_apply_makes_no_cloud_writes(self):
+        first = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
+                         [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
+        source = SourceRow(NEW_PERSON, "linkedin", "jordan-bravo")
+        second = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
+                          [local_person(NEW_PERSON, "jordan-bravo")],
+                          cloud_state(cloud_id_by_person={NEW_PERSON: NEW_PERSON},
+                                      operator_sources=(source,)))
+        first = replace(first, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+                                                for ns in first.namespaces))
+        second = replace(second, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+                                                  for ns in second.namespaces))
+        namespaces = {logical: StatefulNamespace() for logical in NAMESPACE_NAMES}
+        connection = mock.MagicMock()
+        connection.__enter__.return_value = connection
+        fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
+        writes = []
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._fixture(Path(tmp))
+            with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
+                 mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
+                 mock.patch.object(postgres, "verify_v3_schema"), \
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_v3') == name)]))), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
+                 mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}), \
+                 mock.patch.object(postgres, "upsert_persons", side_effect=lambda cur, rows: writes.append(("persons", len(rows))) or len(rows)), \
+                 mock.patch.object(postgres, "upsert_sources", side_effect=lambda cur, op, rows: writes.append(("sources", len(rows))) or len(rows)), \
+                 mock.patch.object(postgres, "delete_sources", return_value=0), \
+                 mock.patch.object(postgres, "fetch_operator_ids_by_person", side_effect=lambda cur, ids: {person_id: (OPERATOR,) for person_id in ids}), \
+                 mock.patch.object(postgres, "put_tags", return_value=0), \
+                 mock.patch.object(postgres, "delete_tags", return_value=0), \
+                 mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=[first, second]):
+                one = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
+                before = sum(len(ns.writes) for ns in namespaces.values())
+                two = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
+        self.assertEqual(one["progress"]["uploaded"], 1)
+        self.assertEqual(two["progress"]["uploaded"], 0)
+        self.assertEqual(two["progress"]["skipped"], 1)
+        self.assertEqual(sum(len(ns.writes) for ns in namespaces.values()), before)
+        self.assertEqual(writes, [("persons", 1), ("sources", 1), ("persons", 0), ("sources", 0)])
+
+    def test_failure_after_first_namespace_resumes_then_skips(self):
+        initial = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
+                           [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
+        source = SourceRow(NEW_PERSON, "linkedin", "jordan-bravo")
+        settled = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
+                           [local_person(NEW_PERSON, "jordan-bravo")],
+                           cloud_state(cloud_id_by_person={NEW_PERSON: NEW_PERSON},
+                                       operator_sources=(source,)))
+        def v3(plan):
+            return replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+                                                   for ns in plan.namespaces))
+
+        namespaces = {logical: StatefulNamespace() for logical in NAMESPACE_NAMES}
+        summaries = namespaces["summaries"]
+        original_write = summaries.write
+        failure = [True]
+
+        def fail_once(**kwargs):
+            if failure[0]:
+                failure[0] = False
+                raise ConnectionError("temporary network failure")
+            return original_write(**kwargs)
+
+        summaries.write = fail_once
+        connection = mock.MagicMock()
+        connection.__enter__.return_value = connection
+        cursor = FakeCursor()
+        connection.cursor.return_value.__enter__.return_value = cursor
+        fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._fixture(Path(tmp))
+            local = duckdb.connect(str(paths["db"]))
+            local.execute("INSERT INTO local_summaries VALUES (?, ?, 'Engineer')", [NEW_PERSON, NEW_PERSON])
+            local.close()
+            with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
+                 mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
+                 mock.patch.object(postgres, "verify_v3_schema"), \
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_v3') == name)]))), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
+                 mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}), \
+                 mock.patch.object(postgres, "upsert_persons", side_effect=lambda cur, rows: len(rows)), \
+                 mock.patch.object(postgres, "upsert_sources", side_effect=lambda cur, op, rows: len(rows)), \
+                 mock.patch.object(postgres, "delete_sources", return_value=0), \
+                 mock.patch.object(postgres, "fetch_operator_ids_by_person", side_effect=lambda cur, ids: {person_id: (OPERATOR,) for person_id in ids}), \
+                 mock.patch.object(postgres, "put_tags", return_value=0), \
+                 mock.patch.object(postgres, "delete_tags", return_value=0), \
+                 mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=[v3(initial), v3(initial), v3(settled)]):
+                with self.assertRaises(ConnectionError):
+                    upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
+                failed = json.loads((paths["out_dir"] / "manifest.json").read_text())
+                self.assertEqual(failed["status"], "failed")
+                self.assertEqual(failed["pending_upserts"]["people"], [NEW_PERSON])
+                ids_after_failure = set(namespaces["people"].docs)
+                resumed = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
+                writes_before_third = sum(len(ns.writes) for ns in namespaces.values())
+                final = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
+        self.assertEqual(set(namespaces["people"].docs), ids_after_failure)
+        self.assertEqual(resumed["status"], "completed")
+        self.assertEqual(final["progress"]["uploaded"], 0)
+        self.assertEqual(sum(len(ns.writes) for ns in namespaces.values()), writes_before_third)
+
+    def test_dry_run_other_target_keeps_previous_upload_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            original = {"status": "completed", "target": {"postgres_host": "original"},
+                        "person_hashes": {NEW_PERSON: "digest"}, "owned_people": [NEW_PERSON]}
+            (out / "manifest.json").write_text(json.dumps(original))
+            uploader = upload_powerset.UploadPowerset(
+                db=out / "db", share_db=out / "share", people_csv=out / "people",
+                out_dir=out, dry_run=True)
+
+            def other_target(payload, previous):
+                payload.update(status="completed", plan={"persons_upsert": 0})
+                uploader._manifest(payload)
+                return payload
+
+            with mock.patch.object(uploader, "_run", side_effect=other_target):
+                uploader.run()
+            manifest = json.loads((out / "manifest.json").read_text())
+        self.assertEqual(manifest["target"], original["target"])
+        self.assertEqual(manifest["person_hashes"], original["person_hashes"])
+        self.assertEqual(manifest["owned_people"], original["owned_people"])
+
+    def test_failed_upload_retains_pending_docs_for_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            uploader = upload_powerset.UploadPowerset(
+                db=out / "db", share_db=out / "share", people_csv=out / "people",
+                out_dir=out, dry_run=False)
+            pending = {"people": [NEW_PERSON], "summaries": [NEW_PERSON]}
+            (out / "manifest.json").write_text(json.dumps({
+                "status": "running", "target": {"postgres_host": "host"},
+                "pending_upserts": pending, "owned_people": [NEW_PERSON],
+                "person_hashes": {NEW_PERSON: "old"},
+            }))
+            with mock.patch.object(uploader, "_run", side_effect=ConnectionError("temporary network failure")):
+                with self.assertRaises(ConnectionError):
+                    uploader.run()
+            failed = json.loads((out / "manifest.json").read_text())
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["pending_upserts"], pending)
+        self.assertEqual(failed["person_hashes"], {NEW_PERSON: "old"})
+        self.assertEqual(failed["error"], "Upload failed; retry to resume")
+
 
 class ApplyTests(unittest.TestCase):
+    def test_unshared_person_never_repairs_missing_documents(self):
+        stale = SourceRow(STALE_PERSON, "linkedin", "riley-echo", 0, "")
+        plan = plan_for(
+            [share_row(STALE_PERSON, "riley-echo", share=SHARE_NO, reason=WORTH_NO)],
+            [local_person(STALE_PERSON, "riley-echo")],
+            cloud_state(operator_sources=(stale,)),
+        )
+        namespace = FakeNamespace()
+        with tempfile.TemporaryDirectory() as tmp:
+            con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+            con.execute("CREATE TABLE local_person_profiles (person_id VARCHAR, public_identifier VARCHAR)")
+            con.execute("CREATE TABLE local_people_positions (id VARCHAR, base_id VARCHAR, position_title VARCHAR)")
+            con.execute("INSERT INTO local_people_positions VALUES ('private-position', ?, 'Engineer')", [STALE_PERSON])
+            con.execute("CREATE TABLE local_summaries (id VARCHAR, base_id VARCHAR, summary VARCHAR)")
+            con.execute("CREATE TABLE local_people_education (id VARCHAR, base_id VARCHAR, person_id VARCHAR)")
+            con.execute("CREATE TABLE local_companies (id VARCHAR, company_name VARCHAR)")
+            con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
+            uploader = upload_powerset.UploadPowerset(
+                db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
+                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
+            uploader._tp_client = mock.Mock(namespace=mock.Mock(return_value=namespace))
+            uploader._namespace_names = {logical: logical for logical in NAMESPACE_NAMES}
+            with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace):
+                uploader._apply(con, FakeCursor(), plan)
+            con.close()
+        self.assertFalse(any("upsert_rows" in call for call in namespace.writes))
+
+    def test_existing_cloud_person_with_no_namespace_docs_is_repaired(self):
+        plan = plan_for(
+            [share_row(CLOUD_PERSON, "casey-lane")],
+            [local_person(CLOUD_PERSON, "casey-lane")],
+            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}),
+        )
+        namespace = FakeNamespace()
+        with tempfile.TemporaryDirectory() as tmp:
+            con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+            con.execute("CREATE TABLE local_person_profiles (person_id VARCHAR, public_identifier VARCHAR)")
+            con.execute("INSERT INTO local_person_profiles VALUES (?, 'casey-lane')", [CLOUD_PERSON])
+            con.execute("CREATE TABLE local_people_positions (id VARCHAR, base_id VARCHAR, position_title VARCHAR)")
+            con.execute("INSERT INTO local_people_positions VALUES ('local-position', ?, 'Engineer')", [CLOUD_PERSON])
+            con.execute("CREATE TABLE local_summaries (id VARCHAR, base_id VARCHAR, summary VARCHAR)")
+            con.execute("CREATE TABLE local_people_education (id VARCHAR, base_id VARCHAR, person_id VARCHAR)")
+            con.execute("CREATE TABLE local_companies (id VARCHAR, company_name VARCHAR)")
+            con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
+            uploader = upload_powerset.UploadPowerset(
+                db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
+                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
+            uploader._tp_client = mock.Mock(namespace=mock.Mock(return_value=namespace))
+            uploader._namespace_names = {logical: logical for logical in NAMESPACE_NAMES}
+            with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace):
+                result = uploader._apply(con, FakeCursor(), plan)
+            con.close()
+        self.assertEqual(result.docs_upserted["people"], 1)
+
     def test_apply_counts_written_rows_and_upserts_new_docs_but_patches_existing_docs(self):
         private_person = "55555555-5555-5555-8555-555555555555"
         plan = plan_for(
@@ -462,7 +739,7 @@ class ApplyTests(unittest.TestCase):
         )
         cursor = FakeCursor(rowcounts=[1, 0, 1, 0, 0, 1])
         namespace = FakeNamespace(rows=[mock.Mock(id="existing-doc", base_id=CLOUD_PERSON,
-                                                  person_id=CLOUD_PERSON)])
+                                                  person_id=CLOUD_PERSON, allowed_operator_ids=[])])
 
         with tempfile.TemporaryDirectory() as tmp:
             con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
@@ -478,7 +755,10 @@ class ApplyTests(unittest.TestCase):
             uploader = upload_powerset.UploadPowerset(
                 db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
                 people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR)
-            with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace):
+            uploader._tp_client = mock.Mock(namespace=mock.Mock(return_value=namespace))
+            uploader._namespace_names = {logical: logical for logical in NAMESPACE_NAMES}
+            with mock.patch.object(upload_powerset.tp_backend, "namespace", return_value=namespace), \
+                 mock.patch.object(turbopuffer_writer, "fetch_allowed_operator_ids", return_value={}):
                 result = uploader._apply(con, cursor, plan)
             con.close()
 
