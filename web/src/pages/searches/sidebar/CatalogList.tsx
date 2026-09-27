@@ -3,21 +3,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { EmptyState } from "@/components/shared"
 import { useListEntrance } from "@/hooks/useListEntrance"
 import { useReducedMotion } from "@/hooks/useReducedMotion"
-import { countOf } from "@/lib/copy"
 import {
-  companiesOf,
   groupByRecency,
   matches,
   readCatalogFilter,
-  statusesOf,
-  versionsOf,
   writeCatalogFilter,
   type CatalogFilter,
 } from "@/lib/searches/catalog"
 import type { SearchCard } from "@/types/searches"
 
 import { useSidebarKeys } from "../hooks/useSidebarKeys"
-import { CatalogFilters } from "./CatalogFilters"
+import { CatalogSearch } from "./CatalogSearch"
 import { RunItem } from "./RunItem"
 
 interface CatalogListProps {
@@ -26,18 +22,14 @@ interface CatalogListProps {
   onOpen: (runId: string) => void
 }
 
-// The loaded catalog: filters, the count, and the runs grouped by recency.
+// The loaded catalog: the search box and the runs grouped by recency.
 export function CatalogList({ cards, selectedId, onOpen }: CatalogListProps) {
-  const [filter, setFilter] = useState<CatalogFilter>(() => readCatalogFilter(cards))
+  const [filter, setFilter] = useState<CatalogFilter>(readCatalogFilter)
   const [highlight, setHighlight] = useState<string | null>(null)
   const search = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const reduced = useReducedMotion()
 
-  const options = useMemo(
-    () => ({ versions: versionsOf(cards), companies: companiesOf(cards), statuses: statusesOf(cards) }),
-    [cards],
-  )
   const visible = useMemo(() => cards.filter((card) => matches(card, filter)), [cards, filter])
   const groups = useMemo(() => groupByRecency(visible, new Date()), [visible])
   useListEntrance(() => list.current, visible, visible.length, ".run-group-title, .run-item")
@@ -78,19 +70,15 @@ export function CatalogList({ cards, selectedId, onOpen }: CatalogListProps) {
   return (
     <>
       <div className="rail-top">
-        <CatalogFilters
+        <CatalogSearch
           ref={search}
           filter={filter}
-          {...options}
           onChange={(next) => {
             setFilter(next)
             writeCatalogFilter(next)
             setHighlight(null)
           }}
         />
-        <p className="list-count" data-catalog-count aria-live="polite">
-          {countOf(visible.length, cards.length, "search")}
-        </p>
       </div>
       <div ref={list} className="run-list" data-run-list>
         {groups.map((group) => (

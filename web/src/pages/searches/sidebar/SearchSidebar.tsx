@@ -2,7 +2,7 @@ import { EmptyState, SearchField } from "@/components/shared"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { SearchCard } from "@/types/searches"
 
-import { SEARCH_PLACEHOLDER } from "./CatalogFilters"
+import { SEARCH_PLACEHOLDER } from "./CatalogSearch"
 import { CatalogList } from "./CatalogList"
 
 const SKELETON_ROWS = 6
@@ -14,7 +14,7 @@ interface SearchSidebarProps {
   onOpen: (runId: string) => void
 }
 
-// The left column: every saved search, filtered and grouped (ConversationSidebar's list).
+// The left column: every saved search, searched and grouped (ConversationSidebar's list).
 export function SearchSidebar({ cards, error, selectedId, onOpen }: SearchSidebarProps) {
   if (cards?.length) return <CatalogList cards={cards} selectedId={selectedId} onOpen={onOpen} />
   if (cards) {

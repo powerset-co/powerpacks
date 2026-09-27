@@ -116,7 +116,7 @@ components and hooks.
 | Path (`src/pages/searches/`)            | Role                                                                                                                                                                  |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SearchesPage.tsx`, `SearchesShell.tsx` | Reads `run_id`, loads the catalog; owns the feedback queue (`useFeedback`) and the page's one `Toast`                                                                 |
-| `sidebar/`                              | Search box, company and status selects, version chips, recency groups; filters kept for the tab                                                                       |
+| `sidebar/`                              | Search box and recency groups; the search kept for the tab                                                                                                            |
 | `run/RunPane.tsx`                       | Empty state (with the keys), loading, error; crossfades between runs (`hooks/useRunSwap`)                                                                             |
 | `run/RunView.tsx`                       | One run's wiring: its tags (`useSearchTags`), the filters, the rows they keep, each person's own score                                                                |
 | `run/SearchRun.tsx`                     | Header, pond chain, toolbar, the virtualized results table, the team fold                                                                                             |

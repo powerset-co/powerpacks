@@ -187,7 +187,7 @@ class VisualTests(ShareWebFixture):
         page.clock.set_fixed_time(SEARCHES_NOW)
         page.on("pageerror", lambda error: self.errors.append(str(error)))
         page.goto(self.base + "/searches")
-        expect(page.locator("[data-search-list] [data-run-id]")).to_have_count(2)
+        expect(page.locator("[data-search-list] [data-run-id]")).to_have_count(3)
         expect(page.locator("[data-run-empty]")).to_be_visible()
         self._shot(page, "searches/list")
 

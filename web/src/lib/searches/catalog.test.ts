@@ -2,52 +2,32 @@ import { describe, expect, it } from "vitest"
 
 import { CARDS } from "@/testing/searches-fixture"
 
-import {
-  groupByRecency,
-  initialFilter,
-  matches,
-  parseCatalogFilter,
-  recencyTitle,
-  statusesOf,
-  versionsOf,
-  type CatalogFilter,
-} from "./catalog"
+import { groupByRecency, matches, parseCatalogFilter, recencyTitle, type CatalogFilter } from "./catalog"
 import { statusText } from "./copy"
 
 // A Saturday, so Sunday the 20th starts "This week".
 const NOW = new Date(2026, 8, 26, 12)
 
 describe("catalog filter", () => {
-  it("lists stamped versions newest first, never an unversioned one, and preselects the newest", () => {
-    expect(versionsOf(CARDS)).toEqual(["2026-09-26", "2026-09-01"])
-    expect(initialFilter(CARDS)).toEqual({ text: "", version: "2026-09-26", company: "", status: "" })
-  })
-
-  it("matches text over title, company and run id, and the selects by value", () => {
-    const all: CatalogFilter = { text: "", version: null, company: "", status: "" }
+  it("matches text over title, company and run id", () => {
     const shown = (filter: CatalogFilter) =>
       CARDS.filter((card) => matches(card, filter)).map((card) => card.run_id)
-    expect(shown(all)).toHaveLength(4)
-    expect(shown({ ...all, text: "sample" })).toEqual(["casey-role", "riley-role"])
-    expect(shown({ ...all, text: "MORGAN-ROLE" })).toEqual(["morgan-role"])
-    expect(shown({ ...all, status: "Running" })).toEqual(["casey-role"])
-    expect(shown({ ...all, version: "2026-09-01" })).toEqual(["morgan-role"])
+    expect(shown({ text: "" })).toHaveLength(4)
+    expect(shown({ text: "sample" })).toEqual(["casey-role", "riley-role"])
+    expect(shown({ text: "MORGAN-ROLE" })).toEqual(["morgan-role"])
   })
 
-  it("says statuses in plain words, one option per wording", () => {
+  it("says statuses in plain words", () => {
     expect(statusText("awaiting_diagnosis")).toBe("Search complete")
     expect(statusText("completed")).toBe("Search complete")
     expect(statusText("needs_REVIEW")).toBe("Needs review")
-    expect(statusesOf(CARDS)).toEqual(["Running", "Search complete"])
   })
 })
 
 describe("saved catalog filter", () => {
-  it("reads back a whole filter and rejects any other shape", () => {
-    const saved: CatalogFilter = { text: "design", version: null, company: "Sample Co", status: "" }
-    expect(parseCatalogFilter(saved)).toEqual(saved)
-    expect(parseCatalogFilter({ ...saved, version: 3 })).toBeNull()
-    expect(parseCatalogFilter({ text: "design" })).toBeNull()
+  it("reads back the search text and rejects any other shape", () => {
+    expect(parseCatalogFilter({ text: "design" })).toEqual({ text: "design" })
+    expect(parseCatalogFilter({ text: 3 })).toBeNull()
     expect(parseCatalogFilter([])).toBeNull()
   })
 })

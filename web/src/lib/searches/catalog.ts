@@ -1,69 +1,37 @@
-// The sidebar's filter over the catalog, kept for the tab (sessionStorage), and its recency
-// groups (results.js catalog block, network-search-app ConversationSidebar groups).
+// The sidebar's search over the catalog, kept for the tab (sessionStorage), and its recency
+// groups (network-search-app ConversationSidebar groups).
 
 import { readStored, writeStored } from "@/lib/storage"
 import { isRecord } from "@/lib/utils"
 import type { SearchCard } from "@/types/searches"
 
-import { statusText } from "./copy"
-
 export interface CatalogFilter {
   text: string
-  // One version, or null for every run ("All").
-  version: string | null
-  company: string
-  // A status in plain words (statusText), or "" for every status.
-  status: string
 }
 
-const FILTER_KEY = "powerpacks:search-catalog-filter:v1"
+const FILTER_KEY = "powerpacks:search-catalog-filter:v2"
 
-const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" })
+export const NO_FILTER: CatalogFilter = { text: "" }
 
-/** The stamped versions, newest first; unversioned runs only show under "All". */
-export function versionsOf(cards: readonly SearchCard[]): string[] {
-  return [...new Set(cards.map((card) => card.search_version).filter(Boolean))].sort().reverse()
-}
-
-export function companiesOf(cards: readonly SearchCard[]): string[] {
-  return [...new Set(cards.map((card) => card.company).filter(Boolean))].sort(byName)
-}
-
-export function statusesOf(cards: readonly SearchCard[]): string[] {
-  return [...new Set(cards.map((card) => statusText(card.status)))].sort(byName)
-}
-
-/** The newest version preselected, as the legacy catalog did. */
-export function initialFilter(cards: readonly SearchCard[]): CatalogFilter {
-  return { text: "", version: versionsOf(cards)[0] ?? null, company: "", status: "" }
-}
-
-/** A saved filter, or null unless every field has its type. */
+/** A saved filter, or null unless it has the shape. */
 export function parseCatalogFilter(raw: unknown): CatalogFilter | null {
-  if (!isRecord(raw)) return null
-  const { text, version, company, status } = raw
-  if (typeof text !== "string" || typeof company !== "string" || typeof status !== "string") return null
-  if (version !== null && typeof version !== "string") return null
-  return { text, version, company, status }
+  if (!isRecord(raw) || typeof raw.text !== "string") return null
+  return { text: raw.text }
 }
 
-/** The filter this tab last used (a visit to People and back keeps it), else the default. */
-export function readCatalogFilter(cards: readonly SearchCard[]): CatalogFilter {
-  return readStored("session", FILTER_KEY, parseCatalogFilter) ?? initialFilter(cards)
+/** The search this tab last typed (a visit to People and back keeps it), else none. */
+export function readCatalogFilter(): CatalogFilter {
+  return readStored("session", FILTER_KEY, parseCatalogFilter) ?? NO_FILTER
 }
 
 export function writeCatalogFilter(filter: CatalogFilter): void {
   writeStored("session", FILTER_KEY, filter)
 }
 
+/** Title, company and run id, case-insensitively. */
 export function matches(card: SearchCard, filter: CatalogFilter): boolean {
   const needle = filter.text.trim().toLowerCase()
-  return (
-    (filter.version === null || card.search_version === filter.version) &&
-    (!filter.company || card.company === filter.company) &&
-    (!filter.status || statusText(card.status) === filter.status) &&
-    (!needle || `${card.title} ${card.company} ${card.run_id}`.toLowerCase().includes(needle))
-  )
+  return !needle || `${card.title} ${card.company} ${card.run_id}`.toLowerCase().includes(needle)
 }
 
 export interface RunGroup {

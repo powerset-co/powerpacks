@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { CARDS, RUN_ID } from "@/testing/searches-fixture"
@@ -25,19 +25,11 @@ afterEach(() => {
 const runIds = () => screen.getAllByRole("button", { name: /people|person/ }).map((row) => row.dataset.runId)
 
 describe("CatalogList", () => {
-  it("preselects the newest version, offers All but never an unversioned chip, and counts", () => {
+  it("lists every run, newest first, under its recency group", () => {
     render(<CatalogList cards={CARDS} selectedId={null} onOpen={vi.fn()} />)
-    const versions = within(screen.getByRole("group", { name: "Search version" }))
-    expect(versions.getAllByRole("button").map((chip) => chip.textContent)).toEqual([
-      "2026-09-26",
-      "2026-09-01",
-      "All",
-    ])
-    expect(versions.getByRole("button", { name: "2026-09-26" }).getAttribute("aria-pressed")).toBe("true")
-    expect(runIds()).toEqual([RUN_ID, "casey-role"])
-    expect(screen.getByText("2 of 4 searches")).toBeTruthy()
-    fireEvent.click(versions.getByRole("button", { name: "All" }))
     expect(runIds()).toEqual([RUN_ID, "casey-role", "morgan-role", "riley-role"])
+    expect(screen.queryByRole("group", { name: "Search version" })).toBeNull()
+    expect(screen.queryByText(/of 4 searches/)).toBeNull()
   })
 
   it("says who is pinned and how many scored 5, 4 and 3 on the people count", () => {
@@ -53,7 +45,6 @@ describe("CatalogList", () => {
     expect(runIds()).toEqual(["casey-role"])
     fireEvent.change(search, { target: { value: "nobody" } })
     expect(screen.getByText("No searches match")).toBeTruthy()
-    expect(screen.getByText("0 of 4 searches")).toBeTruthy()
   })
 
   it("marks the open run, and arrows then Enter open the next one", () => {
@@ -76,9 +67,8 @@ describe("CatalogList", () => {
     expect(onOpen).not.toHaveBeenCalled()
   })
 
-  it("keeps the filters for the tab: a return to Searches finds them as they were", () => {
+  it("keeps the search for the tab: a return to Searches finds it as it was", () => {
     const { unmount } = render(<CatalogList cards={CARDS} selectedId={null} onOpen={vi.fn()} />)
-    fireEvent.click(screen.getByRole("button", { name: "All" }))
     fireEvent.change(screen.getByRole("searchbox", { name: "Search saved searches" }), {
       target: { value: "sample" },
     })

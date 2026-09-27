@@ -8,7 +8,7 @@ interface PondChainProps {
   onSelect: (index: number) => void
 }
 
-// rendering.py _pond: the search chain, each pond's query, its pool and how many it kept.
+// rendering.py _pond: the search chain top to bottom, each pond's query and how many it kept.
 export function PondChain({ ponds, selected, onSelect }: PondChainProps) {
   if (!ponds.length) return null
   return (
@@ -18,11 +18,9 @@ export function PondChain({ ponds, selected, onSelect }: PondChainProps) {
           const body = (
             <>
               <span className="pond-n">{pond.pond_n}</span>
-              <span className="pond-copy">
-                <span className="pond-query">{pond.query}</span>
-                <span className="pond-count">
-                  Kept <b>{pondKept(pond).toLocaleString()}</b> of {pond.result_count.toLocaleString()}
-                </span>
+              <span className="pond-query">{pond.query}</span>
+              <span className="pond-count">
+                Kept <b>{pondKept(pond).toLocaleString()}</b> of {pond.result_count.toLocaleString()}
               </span>
             </>
           )

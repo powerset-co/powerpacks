@@ -164,16 +164,14 @@ class SearchesBrowserTests(unittest.TestCase):
             page.evaluate("window.__kept = true")
             kept = "window.__kept === true"
 
-            # The newest version is preselected: the older run waits under "All".
+            # Every run, newest first; the search box is the one filter.
             rows = page.locator("[data-search-list] [data-run-id]")
-            expect(rows).to_have_count(2)
-            self.assertEqual([row.get_attribute("data-run-id") for row in rows.all()], ["jordan-role", "casey-role"])
-            expect(page.locator(f"[data-version='{VERSION}']")).to_have_attribute("aria-pressed", "true")
-            expect(page.get_by_role("button", name="unversioned")).to_have_count(0)
-            expect(page.locator("[data-catalog-count]")).to_have_text("2 of 3 searches")
-            expect(page.locator("[data-run-empty]")).to_be_visible()
-            page.locator("[data-version='all']").click()
             expect(rows).to_have_count(3)
+            self.assertEqual([row.get_attribute("data-run-id") for row in rows.all()],
+                             ["jordan-role", "casey-role", "morgan-role"])
+            expect(page.locator("[data-version]")).to_have_count(0)
+            expect(page.locator("[data-catalog-count]")).to_have_count(0)
+            expect(page.locator("[data-run-empty]")).to_be_visible()
             page.locator("[data-filter-text]").fill("design")
             expect(rows).to_have_count(1)
             page.locator("[data-filter-text]").fill("")
@@ -211,15 +209,13 @@ class SearchesBrowserTests(unittest.TestCase):
             expect(page.locator("[data-run='casey-role']")).to_be_visible()
             self.assertTrue(page.evaluate(kept))
 
-            # The People tab and back keep the shell, the document and the sidebar's filters
-            # ("All" was picked above).
+            # The People tab and back keep the shell and the document.
             page.get_by_role("link", name="People").click()
             expect(page).to_have_url(self.base + "/people")
             expect(page.locator("[data-people]")).to_be_visible()
             page.get_by_role("link", name="Searches").click()
             expect(page).to_have_url(self.base + "/searches")
             expect(page.locator("[data-searches] [data-run-id]")).to_have_count(3)
-            expect(page.locator("[data-version='all']")).to_have_attribute("aria-pressed", "true")
             self.assertTrue(page.evaluate(kept))
 
             # A reload lands on the same run.

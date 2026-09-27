@@ -67,41 +67,25 @@
   gap: 6px;
 }
 
-/* The chain: small cards left to right, a rule between them; it scrolls sideways when long. */
+/* The chain: one row per pond, top to bottom; the number, the query, and what it kept. */
 .pond-chain {
   padding: 2px 20px 12px;
   border-bottom: 1px solid var(--line);
 }
 .pond-chain ol {
-  display: flex;
-  gap: 22px;
+  display: grid;
+  gap: 4px;
   margin: 0;
-  padding: 2px 2px 4px;
-  overflow-x: auto;
+  padding: 0;
   list-style: none;
-  scrollbar-width: thin;
-}
-.pond-chain li {
-  position: relative;
-  flex: 0 0 auto;
-}
-.pond-chain li + li::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: -18px;
-  width: 14px;
-  height: 1px;
-  background: var(--line-strong);
 }
 .pond-card {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-  width: 244px;
-  height: 58px;
-  padding: 8px 10px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-s);
   background: var(--card);
@@ -133,23 +117,16 @@ button.pond-card:hover {
   font-size: 10.5px;
   font-weight: 800;
 }
-.pond-copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
 .pond-query {
-  display: -webkit-box;
-  overflow: hidden;
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
-  line-height: 1.3;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
+  line-height: 1.35;
 }
 .pond-count {
   color: var(--muted);
   font-size: 11px;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .pond-count b {
