@@ -97,11 +97,11 @@ function row(personId: string) {
   return within(document.querySelector<HTMLElement>(`[data-person-id='${personId}']`) ?? document.body)
 }
 
-// The row's own toggle: the person's line, outside the actions.
+// The row's line: a click on it toggles the evidence; the actions inside keep their own clicks.
 function main(personId: string): HTMLElement {
-  const button = document.querySelector<HTMLElement>(`[data-person-id='${personId}'] .result-main`)
-  if (!button) throw new Error(`no row for ${personId}`)
-  return button
+  const line = document.querySelector<HTMLElement>(`[data-person-id='${personId}'] .result-line`)
+  if (!line) throw new Error(`no row for ${personId}`)
+  return line
 }
 
 async function tagsLoaded(name = "Jordan Bravo") {

@@ -48,19 +48,45 @@
 .run-head-status {
   animation: fade-in var(--t-fast) var(--ease-out) backwards;
 }
-/* The job description (DetailsSection) under the facts; long ones scroll. */
+/* The job description (DetailsSection) under the facts, in a raised box that scrolls; a
+   chevron over its foot shows while more sits below the fold and fades once it is read. */
 .run-jd {
   margin-top: 8px;
 }
+.run-jd-box {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
 .run-jd-text {
-  max-height: min(240px, 30vh);
+  max-height: min(280px, 32vh);
   margin: 0;
+  padding: 12px 14px 20px;
   overflow-y: auto;
   color: var(--foreground);
   font-size: 12.5px;
   line-height: 1.55;
   white-space: pre-wrap;
   scrollbar-width: thin;
+}
+.run-jd-more {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 6px;
+  border-radius: 0 0 var(--radius-m) var(--radius-m);
+  background: linear-gradient(to bottom, transparent, var(--surface-2) 60%);
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+.run-jd-box[data-more="true"] .run-jd-more {
+  opacity: 1;
 }
 .run-head-actions {
   display: flex;

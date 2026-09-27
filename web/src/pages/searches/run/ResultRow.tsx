@@ -1,6 +1,7 @@
-import { memo } from "react"
+import { memo, type MouseEvent } from "react"
 
 import { Avatar, SourcePills } from "@/components/shared"
+import { LinkedInIcon } from "@/components/shared/icons/channels"
 import { usePresence } from "@/hooks/usePresence"
 import { plural } from "@/lib/copy"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
@@ -35,8 +36,13 @@ function roles(row: PondCandidate): string {
     : plural(row.positions.length, "role")
 }
 
-// One person: the button line toggles the evidence below it; the actions sit outside the
-// button so their controls stay separate. `group/row` shows the tag trigger on hover.
+// A click born on a control inside the row (the LinkedIn link, the actions, a dialog) is theirs.
+function onControl(event: MouseEvent): boolean {
+  return event.target instanceof Element && event.target.closest("a, button, input, [role='dialog']") !== null
+}
+
+// One person: a click on the line toggles the evidence below it. `group/row` shows the tag
+// trigger on hover.
 export const ResultRow = memo(function ResultRow({
   result,
   ranked,
@@ -58,19 +64,37 @@ export const ResultRow = memo(function ResultRow({
       data-expanded={expanded}
       data-focus={focused}
     >
-      <div className="result-line focus-bar" data-focus={focused}>
-        <button
-          type="button"
-          className="result-main"
-          aria-expanded={expanded}
-          aria-controls={evidence.mounted ? `evidence-${result.key}` : undefined}
-          onClick={() => onToggle(result.key)}
-        >
+      {/* Keys live on the table (hooks/useResultKeys: j/k, Enter, t, s); a row is not a tab stop (W3). */}
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/interactive-supports-focus -- W3 */}
+      <div
+        className="result-line focus-bar"
+        role="row"
+        data-focus={focused}
+        aria-expanded={expanded}
+        aria-controls={evidence.mounted ? `evidence-${result.key}` : undefined}
+        onClick={(event) => {
+          if (!onControl(event)) onToggle(result.key)
+        }}
+      >
+        <div className="result-main">
           <span className="result-person">
             <Avatar name={row.name} size={26} src={row.avatar_url || undefined} />
             <span className="result-who">
               <b>{row.name}</b>
-              <small>{headline(row)}</small>
+              <small>
+                {row.linkedin_url ? (
+                  <a
+                    className="result-linkedin"
+                    href={row.linkedin_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={`${row.name} on LinkedIn`}
+                  >
+                    <LinkedInIcon />
+                  </a>
+                ) : null}
+                {headline(row)}
+              </small>
             </span>
           </span>
           <ScoreCell result={result} ranked={ranked} />
@@ -88,7 +112,7 @@ export const ResultRow = memo(function ResultRow({
           <Operators operators={attribution?.operators ?? []} />
           <span className="result-roles">{roles(row)}</span>
           <i className="result-chevron chevron" data-open={expanded} aria-hidden="true" />
-        </button>
+        </div>
         <span className="result-actions">
           {candidate ? <RowActions result={result} candidate={candidate} context={context} /> : null}
         </span>

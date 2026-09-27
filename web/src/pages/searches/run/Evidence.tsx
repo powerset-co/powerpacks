@@ -26,7 +26,6 @@ export function Evidence({ result, ranked, open, onTransitionEnd }: EvidenceProp
   const pin = candidate?.pin_judgment
   const locationMatched = row.vertical_sources.includes("location")
   const clamp = row.summary.length > ABOUT_CLAMP
-  const linkedin = row.linkedin_url || candidate?.linkedin_url
   const operators = candidate?.network_attribution?.operators ?? []
   return (
     <div
@@ -124,11 +123,6 @@ export function Evidence({ result, ranked, open, onTransitionEnd }: EvidenceProp
               </button>
             ) : null}
           </section>
-        ) : null}
-        {linkedin ? (
-          <a className="evidence-link" href={linkedin} target="_blank" rel="noreferrer">
-            Open on LinkedIn
-          </a>
         ) : null}
       </div>
       <div className="evidence-side">

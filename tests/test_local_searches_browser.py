@@ -37,6 +37,7 @@ def _person(person_id: str, name: str, *, ce: float, kind: str = RATING, passed:
             reasoning: str = "") -> dict:
     return {
         "person_id": person_id, "name": name, "current_titles": "Staff Engineer",
+        "linkedin_url": "https://linkedin.com/in/" + name.lower().replace(" ", "-"),
         "current_companies": "Example Labs", "location": "Oakland, CA", "final_score": 0.8,
         "trait_scores": {"Backend depth": {"score": 0.9, "confidence": 0.8, "reason": "Built the API layer."}},
         "overall_reasoning": reasoning, "vertical_sources": ["title"], "matched_position_indexes": [0],
@@ -192,7 +193,9 @@ class SearchesBrowserTests(unittest.TestCase):
             evidence = page.locator("[data-person-id='p-jordan'] [data-evidence]")
             expect(evidence).to_contain_text("Leads the current reliability platform.")
             expect(evidence).to_contain_text("Example University")
-            expect(page.locator("[data-person-id='p-jordan'] .result-main")).to_have_attribute("aria-expanded", "true")
+            expect(page.locator("[data-person-id='p-jordan'] .result-line")).to_have_attribute("aria-expanded", "true")
+            # The LinkedIn mark under the name opens the profile, not the row.
+            expect(page.locator("[data-person-id='p-jordan'] .result-linkedin")).to_have_attribute("href", "https://linkedin.com/in/jordan-bravo")
 
             # Another run: the mixed scales show as two tables.
             page.locator("[data-run-id='casey-role']").click()

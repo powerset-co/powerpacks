@@ -1,3 +1,6 @@
+import { useRef } from "react"
+
+import { useMoreBelow } from "@/hooks/useMoreBelow"
 import { useState, type ReactNode } from "react"
 
 import { DetailsSection } from "@/components/shared"
@@ -45,11 +48,25 @@ export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
             open={jdOpen}
             onToggle={setJdOpen}
           >
-            <p className="run-jd-text">{search.jd_text}</p>
+            <JobDescription text={search.jd_text} />
           </DetailsSection>
         ) : null}
       </div>
       {actions ? <div className="run-head-actions">{actions}</div> : null}
     </header>
+  )
+}
+
+// The description in its own box; a chevron at the foot says there is more below the fold.
+function JobDescription({ text }: { text: string }) {
+  const box = useRef<HTMLDivElement>(null)
+  const more = useMoreBelow(box)
+  return (
+    <div className="run-jd-box" data-more={more}>
+      <div ref={box} className="run-jd-text">
+        {text}
+      </div>
+      <i className="run-jd-more chevron" data-open="true" aria-hidden="true" />
+    </div>
   )
 }
