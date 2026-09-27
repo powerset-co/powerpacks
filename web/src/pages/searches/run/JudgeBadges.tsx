@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge"
+import { teamLikeness } from "@/lib/searches/copy"
 import type { Candidate } from "@/types/searches"
 
 interface JudgeBadgesProps {
@@ -30,10 +31,7 @@ export function JudgeBadges({ candidate, shown }: JudgeBadgesProps) {
         </Badge>
       ) : null}
       {similarity ? (
-        <Badge
-          variant="default"
-          title={`Rank ${similarity.rank} of ${similarity.candidate_count} by likeness to the current team (${similarity.method}). Closest: ${similarity.closest_names.join(", ")}. Likeness is not a fit score.`}
-        >
+        <Badge variant="default" title={teamLikeness(similarity)}>
           Team #{similarity.rank}
         </Badge>
       ) : null}

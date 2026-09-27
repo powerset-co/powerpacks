@@ -1,12 +1,6 @@
-import { useRef } from "react"
-
-import { Kbd } from "@/components/shared"
+import { ActionBar, ActionBarRule, Kbd } from "@/components/shared"
 import { Button } from "@/components/ui/button"
-import { useInert } from "@/hooks/useInert"
-import { usePresence } from "@/hooks/usePresence"
 import type { TagAction } from "@/lib/people/facets"
-
-import "./styles/overlays.css"
 
 const BAR_BUTTON = "min-h-[30px]"
 
@@ -20,27 +14,10 @@ interface BulkBarProps {
   onClear: () => void
 }
 
-// Share / Keep private for the selection or the open person; it rises in and drops out,
-// keeping its label as it leaves. Inert whenever it is not open, exit included.
+// Share / Keep private for the selection or the open person, on the shared action bar.
 export function BulkBar({ label, selection, saving, onAction, onClear }: BulkBarProps) {
-  const { mounted, open, shown, onTransitionEnd } = usePresence(label)
-  const bar = useRef<HTMLDivElement>(null)
-
-  useInert(bar, !open)
-
-  if (!mounted || shown === null) return null
   return (
-    <div
-      ref={bar}
-      className="bulkbar rise"
-      data-bulkbar
-      data-open={open}
-      role="toolbar"
-      aria-label={selection ? "Selection" : "Open person"}
-      aria-hidden={open ? undefined : true}
-      onTransitionEnd={onTransitionEnd}
-    >
-      <b>{shown}</b>
+    <ActionBar label={label} name={selection ? "Selection" : "Open person"}>
       <Button
         variant="ok"
         shape="pill"
@@ -53,10 +30,10 @@ export function BulkBar({ label, selection, saving, onAction, onClear }: BulkBar
       <Button shape="pill" className={BAR_BUTTON} disabled={saving} onClick={() => onAction("private")}>
         Keep private <Kbd className="ml-0.5">P</Kbd>
       </Button>
-      <span className="sep" />
+      <ActionBarRule />
       <Button variant="ghost" shape="pill" className={BAR_BUTTON} onClick={onClear}>
         {selection ? "Clear selection" : "Close"} <Kbd className="ml-0.5">Esc</Kbd>
       </Button>
-    </div>
+    </ActionBar>
   )
 }

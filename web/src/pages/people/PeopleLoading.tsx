@@ -18,7 +18,6 @@ const noop = () => undefined
 export function PeopleLoading() {
   return (
     <PeopleShell
-      drawerOpen={false}
       rail={RAIL_FACETS.map((facet) => (
         <FacetShell
           key={facet.key}

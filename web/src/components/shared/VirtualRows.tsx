@@ -20,10 +20,8 @@ export interface VirtualRowsHandle {
 
 export interface VirtualRowsProps<T> extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   items: readonly T[]
-  // The fixed row height, or with `measure` the estimate before a row is measured.
+  // Every row's height.
   rowHeight: number
-  // Rows of differing heights: each mounted row is measured and the rows below it move.
-  measure?: boolean
   overscan?: number
   getKey: (item: T, index: number) => string
   renderRow: (item: T, index: number) => ReactNode
@@ -40,7 +38,6 @@ export interface VirtualRowsProps<T> extends Omit<HTMLAttributes<HTMLDivElement>
 export function VirtualRows<T>({
   items,
   rowHeight,
-  measure = false,
   overscan = DEFAULT_OVERSCAN,
   getKey,
   renderRow,
@@ -79,27 +76,15 @@ export function VirtualRows<T>({
   return (
     <div ref={scrollRef} {...viewport}>
       <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((row) =>
-          measure ? (
-            <div
-              key={row.key}
-              ref={virtualizer.measureElement}
-              data-index={row.index}
-              className="absolute inset-x-0 top-0"
-              style={{ transform: `translateY(${row.start}px)` }}
-            >
-              {renderRow(must(items[row.index]), row.index)}
-            </div>
-          ) : (
-            <div
-              key={row.key}
-              className="absolute inset-x-0 top-0"
-              style={{ height: rowHeight, transform: `translateY(${row.start}px)` }}
-            >
-              {renderRow(must(items[row.index]), row.index)}
-            </div>
-          ),
-        )}
+        {virtualizer.getVirtualItems().map((row) => (
+          <div
+            key={row.key}
+            className="absolute inset-x-0 top-0"
+            style={{ height: rowHeight, transform: `translateY(${row.start}px)` }}
+          >
+            {renderRow(must(items[row.index]), row.index)}
+          </div>
+        ))}
       </div>
     </div>
   )

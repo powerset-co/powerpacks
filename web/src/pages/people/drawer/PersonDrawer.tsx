@@ -1,20 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 
-import { useInert } from "@/hooks/useInert"
+import { Drawer } from "@/components/shared"
+import { useDrawerSwap } from "@/hooks/useDrawerSwap"
 import type { TagAction } from "@/lib/people/facets"
 import { toggled } from "@/lib/sets"
 import type { Person } from "@/types/people"
 
 import type { DetailState } from "../hooks/usePersonDetail"
 import "../styles/drawer.css"
-import "../styles/overlays.css"
 import { DecisionSection } from "./DecisionSection"
 import { DetailSections } from "./DetailSections"
 import { DetailFailed, DetailLoading } from "./DetailStatus"
 import { DrawerActions } from "./DrawerActions"
 import { DrawerHeader } from "./DrawerHeader"
 import { OPEN_BY_DEFAULT, type SectionKey, type SectionState } from "./sections"
-import { useDrawerSwap } from "./useDrawerSwap"
 
 interface PersonDrawerProps {
   // The person shown; stays set while the drawer animates shut.
@@ -27,19 +26,13 @@ interface PersonDrawerProps {
   onRetry: () => void
 }
 
-// A fixed, non-modal panel over the right edge. Which sections are open carries across people.
+// The person in the shared drawer. Which sections are open carries across people.
 export function PersonDrawer(props: PersonDrawerProps) {
   const { open, saving, onAction, onClose, onRetry } = props
-  const panel = useRef<HTMLElement>(null)
   const [sections, setSections] = useState<ReadonlySet<SectionKey>>(OPEN_BY_DEFAULT)
-  const { row, detail, leaving, onTransitionEnd } = useDrawerSwap(props.row, props.detail, open)
-  const id = row?.parent_id ?? null
-
-  useEffect(() => {
-    if (panel.current) panel.current.scrollTop = 0
-  }, [id])
-
-  useInert(panel, !open)
+  const next = useMemo(() => ({ row: props.row, detail: props.detail }), [props.row, props.detail])
+  const swap = useDrawerSwap(props.row?.parent_id ?? null, next, open)
+  const { row, detail } = swap.content
 
   const section: SectionState = useCallback(
     (key) => ({
@@ -51,28 +44,23 @@ export function PersonDrawer(props: PersonDrawerProps) {
 
   const ready = detail.status === "ready" ? detail.detail : null
   return (
-    <aside
-      ref={panel}
-      className="drawer"
-      data-drawer
-      aria-hidden={open ? undefined : true}
-      aria-label="Person"
+    <Drawer
+      open={open}
+      label="Person"
+      contentKey={swap.shownId}
+      leaving={swap.leaving}
+      onTransitionEnd={swap.onTransitionEnd}
     >
       {row ? (
-        <div
-          key={row.parent_id}
-          className="drawer-inner"
-          data-leaving={leaving || undefined}
-          onTransitionEnd={onTransitionEnd}
-        >
+        <>
           <DrawerHeader row={row} detail={ready} onClose={onClose} />
-          <DrawerActions row={row} saving={saving} disabled={saving || leaving} onAction={onAction} />
+          <DrawerActions row={row} saving={saving} disabled={saving || swap.leaving} onAction={onAction} />
           <DecisionSection row={row} detail={ready} {...section("decision")} />
           {detail.status === "loading" ? <DetailLoading /> : null}
           {detail.status === "failed" ? <DetailFailed onRetry={onRetry} /> : null}
           {ready ? <DetailSections row={row} detail={ready} section={section} /> : null}
-        </div>
+        </>
       ) : null}
-    </aside>
+    </Drawer>
   )
 }

@@ -1,7 +1,7 @@
 // The Searches page's words for machine values, ported from rendering.py.
 
 import { parseDate } from "@/lib/copy"
-import type { SearchCard } from "@/types/searches"
+import type { SearchCard, TeamSimilarity } from "@/types/searches"
 
 // rendering.py _status_text: a finished run reads "Search complete".
 const COMPLETE = new Set(["awaiting_diagnosis", "completed"])
@@ -37,4 +37,9 @@ export function peopleCounts(card: SearchCard): string {
   ]
   const scores = counts.map(([score, count]) => `${score}/5: ${count.toLocaleString("en-US")}`)
   return [`Pinned ${card.pinned.toLocaleString("en-US")}`, `Overall ${scores.join(", ")}`].join(" · ")
+}
+
+/** The team-likeness rank in words: the Team badge's title and the drawer's Team similarity line. */
+export function teamLikeness(similarity: TeamSimilarity): string {
+  return `Rank ${similarity.rank} of ${similarity.candidate_count} by likeness to the current team (${similarity.method}). Closest: ${similarity.closest_names.join(", ")}. Likeness is not a fit score.`
 }

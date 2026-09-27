@@ -1,7 +1,8 @@
-/* The run's people table: a fixed head, measured virtual rows, evidence that opens in place. */
+/* The run's people table (a fixed head, fixed-height virtual rows) and the review drawer's
+   sections and bar. */
 
 .results {
-  --result-cols: minmax(200px, 1.5fr) 118px minmax(120px, 1fr) 112px 72px 118px 14px;
+  --result-cols: minmax(200px, 1.5fr) 118px minmax(120px, 1fr) 112px 72px 118px;
   /* Tag trigger, pin and score badge: reserved in the head and every row, so nothing shifts
      when the actions render or a score or tag changes. */
   --actions-w: 248px;
@@ -57,7 +58,8 @@
 .result-row:hover {
   background: rgba(255, 255, 255, 0.025);
 }
-.result-row[data-expanded="true"] {
+/* The drawer's row: People's open row, the grey bar under the focus bar. */
+.result-row[data-open="true"] {
   background: var(--surface-2);
 }
 .result-line {
@@ -70,9 +72,12 @@
   padding: 0 20px 0 12px;
   cursor: pointer;
 }
-/* An open row keeps the focus bar (index.css .focus-bar). */
-.result-row[data-expanded="true"] .result-line::before {
+.result-row[data-open="true"] .result-line::before {
   transform: scaleX(1);
+  background: var(--line-strong);
+}
+.result-row[data-focus="true"] .result-line::before {
+  background: var(--primary);
 }
 /* The keyboard's row (j/k): People's tint. */
 .result-row[data-focus="true"] {
@@ -148,12 +153,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* index.css .chevron in the row's last column. */
-.result-chevron {
-  display: flex;
-  justify-self: end;
-  color: var(--muted);
-}
 /* The LinkedIn mark before the headline: the pill's blue, brighter on hover. */
 .result-linkedin {
   display: inline-flex;
@@ -202,39 +201,29 @@
   line-height: 1;
 }
 
-/* Evidence: fades in on --t-fast (the DetailsSection fade), out on --t-exit; usePresence
-   unmounts it after the exit. The rows below move with it at once: sliding them would pass
-   them over the fading text, and would fight the virtualizer's scroll corrections. */
-.result-evidence {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  gap: 20px 28px;
-  padding: 4px 20px 18px 48px;
-  opacity: 0;
-  transition: opacity var(--t-exit) var(--ease-in);
+/* The drawer's sections (ResultDrawer): Evidence, Career, Connected via, Team similarity. */
+.review-scores {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
-.result-evidence[data-open="true"] {
-  opacity: 1;
-  transition-duration: var(--t-fast);
-  transition-timing-function: var(--ease-out);
+.review-role {
+  display: flex;
+  align-items: center;
 }
-@starting-style {
-  .result-evidence[data-open="true"] {
-    opacity: 0;
-  }
-}
-.evidence-main,
-.evidence-side {
+.review-sections {
   display: grid;
   align-content: start;
   gap: 14px;
   min-width: 0;
 }
-.result-evidence section {
+.review-sections section,
+section.review-sections {
   display: grid;
   gap: 6px;
 }
-.result-evidence h4 {
+.review-sections h4 {
   margin: 0;
   color: var(--muted);
   font-size: 10.5px;
@@ -242,10 +231,8 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.result-evidence p {
-  margin: 0;
+.drawer-inner .review-sections p {
   font-size: 12.5px;
-  line-height: 1.55;
 }
 .evidence-clamped {
   display: -webkit-box;
@@ -376,10 +363,21 @@
   inset: 32px 0 auto;
 }
 
+/* The review bar centres on the page left of the drawer; the choices keep only their digits
+   once the table is too narrow for their names. */
+.review-bar {
+  left: calc((100vw - min(var(--drawer-w), 100vw)) / 2);
+}
+@media (max-width: 1280px) {
+  .review-choice-name {
+    display: none;
+  }
+}
+
 /* Columns leave in priority order as the pane narrows. */
 @container run (max-width: 1100px) {
   .results {
-    --result-cols: minmax(200px, 1.5fr) 118px minmax(100px, 1fr) 76px 72px 14px;
+    --result-cols: minmax(200px, 1.5fr) 118px minmax(100px, 1fr) 76px 72px;
   }
   .result-roles,
   .result-head-main > :nth-child(6) {
@@ -388,7 +386,7 @@
 }
 @container run (max-width: 880px) {
   .results {
-    --result-cols: minmax(180px, 1.5fr) 110px minmax(90px, 1fr) 14px;
+    --result-cols: minmax(180px, 1.5fr) 110px minmax(90px, 1fr);
   }
   .result-main > .result-sources,
   .result-main > .operator-stack,
@@ -396,9 +394,5 @@
   .result-head-main > :nth-child(4),
   .result-head-main > :nth-child(5) {
     display: none;
-  }
-  .result-evidence {
-    grid-template-columns: minmax(0, 1fr);
-    padding-left: 20px;
   }
 }

@@ -1,5 +1,5 @@
 import { monthYear } from "@/lib/copy"
-import type { Education, Position } from "@/types/searches"
+import type { Education, PondCandidate, Position } from "@/types/searches"
 
 // rendering.py _company_note: size, stage and money raised.
 function companyNote(position: Position): string {
@@ -21,8 +21,29 @@ interface PositionsProps {
   matched: readonly number[]
 }
 
+// The drawer's work experience (the matched roles marked) and education.
+export function Career({ row }: { row: PondCandidate }) {
+  if (!row.positions.length && !row.education.length) return null
+  return (
+    <div className="review-sections" data-career>
+      {row.positions.length ? (
+        <section>
+          <h4>Work experience</h4>
+          <Positions positions={row.positions} matched={row.matched_positions} />
+        </section>
+      ) : null}
+      {row.education.length ? (
+        <section>
+          <h4>Education</h4>
+          <Schools education={row.education} />
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
 // rendering.py _position_item: the roles the search matched on are marked.
-export function Positions({ positions, matched }: PositionsProps) {
+function Positions({ positions, matched }: PositionsProps) {
   return (
     <ol className="career" data-positions>
       {positions.map((position, index) => {
@@ -60,7 +81,7 @@ export function Positions({ positions, matched }: PositionsProps) {
 }
 
 // rendering.py _education_item.
-export function Schools({ education }: { education: readonly Education[] }) {
+function Schools({ education }: { education: readonly Education[] }) {
   return (
     <ol className="career">
       {education.map((school, index) => {

@@ -1,4 +1,5 @@
 import { initials } from "@/components/shared"
+import { operatorDetail } from "@/lib/searches/sources"
 import type { NetworkOperator } from "@/types/searches"
 
 const SHOWN = 3
@@ -28,5 +29,32 @@ export function Operators({ operators }: { operators: readonly NetworkOperator[]
       ) : null}
       <span className="sr-only">Connected via {names}</span>
     </span>
+  )
+}
+
+// rendering.py .network-operator in the drawer: each person it came through, their sources and
+// counts, and the Gmail accounts.
+export function ConnectedVia({ operators }: { operators: readonly NetworkOperator[] }) {
+  if (!operators.length) return null
+  return (
+    <section className="review-sections">
+      <h4>Connected via</h4>
+      <ul className="evidence-operators" data-operators>
+        {operators.map((operator) => (
+          <li key={operator.operator_id}>
+            <OperatorInitials name={operator.operator_name} />
+            <span>
+              <b>{operator.operator_name}</b>
+              <small>{operatorDetail(operator)}</small>
+              {operator.gmail_account_details.map((account) => (
+                <small key={account.email} className="evidence-account">
+                  {account.email} · {account.interactions.toLocaleString("en-US")} emails
+                </small>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }

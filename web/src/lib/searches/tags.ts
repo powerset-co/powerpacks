@@ -20,6 +20,12 @@ export function existingTag(tags: readonly string[], tag: string): string | unde
   return tags.find((existing) => existing.toLowerCase() === lower)
 }
 
+/** Whether the person holds the pin tag, in whatever spelling the search keeps it. */
+export function isPinned(tagged: Tagged, personId: string): boolean {
+  const pin = existingTag(tagged.tags, PIN_TAG)
+  return pin !== undefined && (tagged.assignments[personId] ?? []).includes(pin)
+}
+
 function assign(assignments: Tagged["assignments"], personId: string, tags: string[]): Tagged["assignments"] {
   const others = Object.fromEntries(Object.entries(assignments).filter(([id]) => id !== personId))
   return tags.length ? { ...others, [personId]: tags } : others

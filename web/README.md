@@ -50,13 +50,14 @@ server; everything else reads typed values.
 | `src/pages/people/filters/`                                 | Quick filters, search box, active facet chips                                                                                                           | View filters and text             |
 | `src/pages/people/rail/`                                    | Facet rail, "More filters", label search, shortcuts hint                                                                                                | Facet counts; toggles filters     |
 | `src/pages/people/table/`                                   | Virtualized table: head, rows, cells, columns, `ROW_H`                                                                                                  | Matching people, selection, focus |
-| `src/pages/people/drawer/`                                  | Person drawer: header, actions, sections, person-switch fade                                                                                            | Person detail; writes share tags  |
-| `src/pages/people/styles/`                                  | Page CSS ported from `share/web/people.css`: shell, rail, table, drawer, overlays                                                                       | —                                 |
+| `src/pages/people/drawer/`                                  | Person drawer (in the shared `Drawer`): header, actions, sections                                                                                       | Person detail; writes share tags  |
+| `src/pages/people/styles/`                                  | Page CSS ported from `share/web/people.css`: shell, rail, table, drawer sections                                                                        | —                                 |
 | `src/components/shared/`                                    | One home each (table below); imported through `index.ts`                                                                                                | Props only                        |
 | `src/components/ui/`                                        | shadcn/ui primitives (button, badge, dialog, skeleton)                                                                                                  | Props only                        |
 | `src/hooks/`                                                | Page-agnostic hooks (table below)                                                                                                                       | —                                 |
 | `src/lib/api/`                                              | `http.ts` (`failure`, `body`: W1), `people.ts`, `searches.ts` (catalog, run, tags), `feedback.ts` (`POST /searches/feedback`)                           | The review server                 |
 | `src/lib/people/`                                           | Page copy and labels, facets and quick filters, the filter/count pass, the saved view and its parser                                                    | Typed rows, `sessionStorage`      |
+| `src/lib/advance.ts`                                        | `nextOpenIndex`: which row a drawer opens after its row was labeled (People) or scored (Searches)                                                       | —                                 |
 | `src/lib/channels.ts`                                       | The source-family vocabulary: `Channel`, titles and pill colours, `toChannel(s)` (the search server's `twitter` is X, `phone` iMessage)                 | —                                 |
 | `src/lib/copy.ts`                                           | Words both pages use: `plural`, `countOf` ("N of M people"), `monthYear`                                                                                | —                                 |
 | `src/lib/nav.ts`                                            | The top bar's pages in order (`PAGES`), `HOME`, and `pageAt(pathname)` (unknown paths are `HOME`)                                                       | —                                 |
@@ -80,7 +81,9 @@ server; everything else reads typed values.
 | `DetailsSection`                   | A titled section (heading toggle, count, badge) whose body folds both ways; drawer, team, job description                                                       |
 | `Appear`                           | Rises in when shown and drops out before unmounting (inert while leaving)                                                                                       |
 | `CountRoll`, `Toast`               | A count that rolls; the page toast (rises in, keeps its last message as it leaves)                                                                              |
-| `VirtualRows`                      | The virtualized list (fixed row height, or `measure` for rows that open in place)                                                                               |
+| `VirtualRows`                      | The virtualized list (fixed row height)                                                                                                                         |
+| `Drawer`, `DrawerClose`            | The right-hand panel both pages open a row in: slides in and out, its content keyed and crossfaded (`hooks/useDrawerSwap`), inert while shut                    |
+| `ActionBar`, `ActionBarRule`       | The floating bottom bar (label, then the page's buttons); rises in and drops out                                                                                |
 
 `src/components/ui/`: shadcn/ui `button`, `badge`, `dialog`, `skeleton`.
 
@@ -92,6 +95,7 @@ server; everything else reads typed values.
 | `usePresence`, `usePresenceList`      | `hooks/`                | Keep an overlay / removed items mounted until their exit's opacity ends                                                             |
 | `useKeys`, `useInert`, `useDismiss`   | `hooks/`                | The page's keydown listener and `isTyping`; inert while shut; Escape / outside press closes a panel                                 |
 | `useReducedMotion`, `useListEntrance` | `hooks/`                | The OS motion setting; rows fading in after the list changes                                                                        |
+| `useDrawerSwap`                       | `hooks/`                | What a drawer draws while it switches item: the old content fades out, then the new fades in                                        |
 | `useFilters`, `usePeopleQuery`        | `pages/people/hooks/`   | View state (saved to `sessionStorage`); every person once                                                                           |
 | `useDrawer`, `usePersonDetail`        | `pages/people/hooks/`   | Which person the drawer shows; their detail                                                                                         |
 | `useDecisions`                        | `pages/people/hooks/`   | Share / keep private / use worth in one write, with undo                                                                            |
@@ -99,7 +103,7 @@ server; everything else reads typed values.
 | `useCatalog`, `useSearchRun`          | `pages/searches/hooks/` | The saved searches; one run                                                                                                         |
 | `useRunSwap`                          | `pages/searches/hooks/` | The crossfade between runs                                                                                                          |
 | `useSearchTags`, `useFeedback`        | `pages/searches/hooks/` | A run's tags (saved in order; browser-kept tags moved to the server); the open run's feedback queue, its failure, Retry and sign-in |
-| `useSidebarKeys`, `useResultKeys`     | `pages/searches/hooks/` | Sidebar keys; result keys (both on `useKeys`)                                                                                       |
+| `useSidebarKeys`, `useResultKeys`     | `pages/searches/hooks/` | Sidebar keys; result and review keys (both on `useKeys`)                                                                            |
 
 Styling has three layers: the tokens in `index.css`, Tailwind utilities on shared and ui
 components, and the page CSS in `pages/people/styles/`. Motion is CSS transitions and
@@ -120,7 +124,8 @@ components and hooks.
 | `run/RunPane.tsx`                       | Empty state (with the keys), loading, error; crossfades between runs (`hooks/useRunSwap`)                                                                             |
 | `run/RunView.tsx`                       | One run's wiring: its tags (`useSearchTags`), the filters, the rows they keep, each person's own score                                                                |
 | `run/SearchRun.tsx`                     | Header, pond chain, toolbar, the virtualized results table, the team fold                                                                                             |
-| `run/ResultsTable.tsx`, `ResultRow.tsx` | Rows in place, focus and keys (`hooks/useResultKeys`); the actions column is reserved in the head                                                                     |
+| `run/ResultsTable.tsx`, `ResultRow.tsx` | Rows, focus, the open row, keys (`hooks/useResultKeys`) and the advance after a score; the actions column is reserved in the head                                     |
+| `run/ResultDrawer.tsx`, `ReviewBar.tsx` | The candidate in the shared drawer (identity, overall and labels, `Evidence`, `Career`, `ConnectedVia`, team likeness); the rubric, Tag, Pin and Close bar            |
 | `run/RowActions.tsx`, `PinButton.tsx`   | Tag editor, pin (the `Pinned` tag) and score badge at a candidate's row end                                                                                           |
 | `toolbar/`                              | Tagged, Labels, Overall score, Operators, tag filter, count, Copy/CSV, Untag and Clear all                                                                            |
 | `dialogs/`                              | Score dialog (five-point rubric) and search feedback dialog, both handing records to `useFeedback`; `FeedbackStatus`, the stopped queue's count with Retry or sign-in |
@@ -140,11 +145,15 @@ them, so the count never disagrees with the table. Export and copy take every fi
 never only the mounted rows, and write the person's own score when they gave one.
 
 Keys: the arrows move the sidebar, Enter opens the highlighted run, `/` searches the list. In a
-run, `j`/`k` move the focused person, Enter opens or closes them, `t` opens their tag editor and
-`s` their score dialog.
+run, `j`/`k` move the focused person (an open drawer follows), Enter opens or closes the drawer on
+them, Escape closes it, `t` opens their tag editor, `s` their score dialog and `p` toggles their
+pin. With the drawer open, a rubric digit (`1`–`5`) saves that score with no note and opens the
+next person (`lib/advance.ts`); a save in the score dialog does the same, and past the last
+person the drawer closes. No key acts while typing in a field or inside a dialog.
 
 ## Change log
 
+- 2026-09-26: Searches opens a candidate in a right-hand drawer (the People drawer, moved to `components/shared/Drawer` with `hooks/useDrawerSwap`) with a review bar (`components/shared/ActionBar`, People's bulk bar generalized): rubric digits score and advance (`lib/advance.ts`, shared with People), `t`/`p`/Escape; the inline evidence, the row caret and `VirtualRows`' `measure` mode are gone.
 - 2026-09-26: Review fixes: result rows show every source family with counts, the location and who each source came through; the job description and the team fold with `DetailsSection` (now a heading toggle over a `Fold`, animated both ways); the feedback queue sends only the open run's records and shows a stopped queue with Retry or a Powerset sign-in; browser-kept tags move to the server; the catalog's people count says pinned and 5/4/3; one `useKeys`, `useInert`, `errorText`, `isRecord`, storage helper, count copy, chevron, focus bar and glyph set; facet keys are a closed `FacetKey`; presence unmounts on the exit's opacity; the People skeleton matches the loaded layout.
 
 - 2026-09-26: Shared components and hooks tables, waivers pointer; `tests/test_visual.py` covers People and Searches.

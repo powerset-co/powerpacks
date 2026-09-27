@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { Toast } from "@/components/shared"
 import { useSelection } from "@/hooks/useSelection"
-import { nextOpenIndex } from "@/lib/people/advance"
+import { nextOpenIndex } from "@/lib/advance"
 import type { FacetKey, FacetSet, QuickFilter, TagAction } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { personKey, type Decision, type Person } from "@/types/people"
@@ -51,7 +51,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
   const decisions = useDecisions(byId, onWritten)
 
   // Quick labeling: a label on the open person moves the drawer to whoever is next
-  // (lib/people/advance.ts) once the list reflects the write; nothing cycles.
+  // (lib/advance.ts) once the list reflects the write; nothing cycles.
   const advanceFrom = useRef<{ id: string; index: number } | null>(null)
   const { open: openPerson, close: closeDrawer } = drawer
   const { apply } = decisions
@@ -70,7 +70,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
     const from = advanceFrom.current
     if (!from) return
     advanceFrom.current = null
-    const next = nextOpenIndex(matching, from.id, from.index)
+    const next = nextOpenIndex(matching, personKey, from.id, from.index)
     if (next === null) {
       if (!matching.length) closeDrawer()
       return
@@ -160,7 +160,6 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
   return (
     <PeopleShell
-      drawerOpen={openId !== null}
       rail={<FacetRail filters={view.filters} counts={counts} onValue={toggleFilter} />}
       main={
         <>

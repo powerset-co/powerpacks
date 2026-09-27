@@ -188,14 +188,23 @@ class SearchesBrowserTests(unittest.TestCase):
             expect(page.locator("[data-person-id='p-jordan'] .source")).to_have_count(2)
             self.assertTrue(page.evaluate(kept))
 
-            # A row opens in place to its evidence.
+            # A row opens in the drawer; the table stays as it was.
             page.locator("[data-person-id='p-jordan'] .result-main").click()
-            evidence = page.locator("[data-person-id='p-jordan'] [data-evidence]")
-            expect(evidence).to_contain_text("Leads the current reliability platform.")
-            expect(evidence).to_contain_text("Example University")
-            expect(page.locator("[data-person-id='p-jordan'] .result-line")).to_have_attribute("aria-expanded", "true")
-            # The LinkedIn mark under the name opens the profile, not the row.
-            expect(page.locator("[data-person-id='p-jordan'] .result-linkedin")).to_have_attribute("href", "https://linkedin.com/in/jordan-bravo")
+            drawer = page.locator("[data-drawer]")
+            expect(drawer).to_have_attribute("data-open", "true")
+            expect(drawer.locator("h2")).to_have_text("Jordan Bravo")
+            expect(drawer.locator("[data-evidence]")).to_contain_text("Leads the current reliability platform.")
+            expect(drawer.locator("[data-career]")).to_contain_text("Example University")
+            expect(page.locator("[data-person-id='p-jordan']")).to_have_attribute("data-open", "true")
+            # The LinkedIn mark in the row and in the drawer opens the same profile.
+            href = "https://linkedin.com/in/jordan-bravo"
+            expect(page.locator("[data-person-id='p-jordan'] .result-linkedin")).to_have_attribute("href", href)
+            expect(drawer.locator(".result-linkedin")).to_have_attribute("href", href)
+            # A second row swaps the drawer to them; the same row again closes it.
+            page.locator("[data-person-id='p-morgan'] .result-main").click()
+            expect(drawer.locator("h2")).to_have_text("Morgan Echo")
+            page.locator("[data-person-id='p-morgan'] .result-main").click()
+            expect(drawer).to_have_attribute("data-open", "false")
 
             # Another run: the mixed scales show as two tables.
             page.locator("[data-run-id='casey-role']").click()
@@ -227,6 +236,45 @@ class SearchesBrowserTests(unittest.TestCase):
             self.assertEqual(errors, [])
             browser.close()
 
+
+    def test_the_drawer_follows_repeated_clicks_and_a_digit_scores_and_moves_on(self) -> None:
+        """Alternating rows 300 ms apart leave no content fading out; a digit saves and opens the next row."""
+        from playwright.sync_api import expect, sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.base + "/searches/run?run_id=jordan-role")
+            rows = page.locator(".result-row .result-main")
+            expect(rows).to_have_count(3)
+            drawer = page.locator("[data-drawer]")
+            for index in (0, 1) * 4:
+                rows.nth(index).click()
+                page.wait_for_timeout(300)
+            expect(drawer.locator(".drawer-inner[data-leaving]")).to_have_count(0)
+            expect(drawer.locator("h2")).to_have_text("Morgan Echo")
+
+            # 5 scores the open person (no note) and the drawer moves to the next row.
+            rows.nth(0).click()
+            expect(drawer.locator("h2")).to_have_text("Jordan Bravo")
+            bar = page.get_by_role("toolbar", name="Review")
+            expect(bar.locator("b")).to_have_text("Jordan Bravo")
+            page.keyboard.press("5")
+            expect(drawer.locator("h2")).to_have_text("Morgan Echo")
+            expect(bar.locator("b")).to_have_text("Morgan Echo")
+            expect(page.get_by_role("button", name="Score Jordan Bravo", exact=True)).to_have_text("Your score: 5/5")
+            page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+            self.assertEqual(self.feedback, [
+                # parse_qs drops the empty comment.
+                {"run_id": ["jordan-role"], "person_id": ["p-jordan"], "human_judgment": ['{"score":5,"scale":5}']},
+            ])
+            page.keyboard.press("Escape")
+            expect(drawer).to_have_attribute("data-open", "false")
+            expect(bar).to_have_count(0)
+            self.assertEqual(errors, [])
+            browser.close()
 
     def test_tag_filter_score_export_and_feedback(self) -> None:
         from playwright.sync_api import expect, sync_playwright

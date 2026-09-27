@@ -97,12 +97,18 @@ function row(personId: string) {
   return within(document.querySelector<HTMLElement>(`[data-person-id='${personId}']`) ?? document.body)
 }
 
-// The row's line: a click on it toggles the evidence; the actions inside keep their own clicks.
+// The row's line: a click on it toggles the drawer; the actions inside keep their own clicks.
 function main(personId: string): HTMLElement {
   const line = document.querySelector<HTMLElement>(`[data-person-id='${personId}'] .result-line`)
   if (!line) throw new Error(`no row for ${personId}`)
   return line
 }
+
+const key = (name: string) => act(() => void fireEvent.keyDown(document.body, { key: name }))
+const drawer = () => document.querySelector<HTMLElement>("[data-drawer]")
+const drawerName = () => drawer()?.querySelector("h2")?.textContent
+const drawerOpen = () => drawer()?.getAttribute("data-open")
+const bar = () => within(screen.getByRole("toolbar", { name: "Review" }))
 
 async function tagsLoaded(name = "Jordan Bravo") {
   await waitFor(() =>
@@ -157,7 +163,7 @@ describe("RunView", () => {
     ).toEqual(["X", "Contacts export"])
   })
 
-  it("lists who a person came through, with their counts, in the evidence", () => {
+  it("lists who a person came through, with their counts, in the drawer", () => {
     renderRun()
     fireEvent.click(main("p-jordan"))
     const operators = within(document.querySelector<HTMLElement>("[data-operators]") ?? document.body)
@@ -175,18 +181,96 @@ describe("RunView", () => {
     expect(screen.getByText("Build the payments platform with a small backend team.")).toBeTruthy()
   })
 
-  it("expands a row in place to its evidence; each row on its own", () => {
+  it("opens a row in the drawer, swaps to another row, and closes on the same row", () => {
     renderRun()
-    const jordan = main("p-jordan")
-    fireEvent.click(jordan)
-    expect(jordan.getAttribute("aria-expanded")).toBe("true")
-    const evidence = within(document.querySelector<HTMLElement>("[data-evidence]") ?? document.body)
-    expect(evidence.getByText("Built this exact system twice.")).toBeTruthy()
-    expect(evidence.getByText("Example University")).toBeTruthy()
+    fireEvent.click(main("p-jordan"))
+    expect(drawerOpen()).toBe("true")
+    expect(drawerName()).toBe("Jordan Bravo")
+    const panel = within(drawer() ?? document.body)
+    expect(panel.getByText("Built this exact system twice.")).toBeTruthy()
+    expect(panel.getByText("Example University")).toBeTruthy()
+    expect(panel.getByText(/^Rank 2 of 6 by likeness/)).toBeTruthy()
+    expect(document.querySelector("[data-person-id='p-jordan']")?.getAttribute("data-open")).toBe("true")
+    expect(document.querySelector(".result-chevron")).toBeNull()
     fireEvent.click(main("p-casey"))
-    expect(document.querySelectorAll("[data-evidence]")).toHaveLength(2)
-    fireEvent.click(jordan)
-    expect(document.querySelectorAll("[data-evidence]")).toHaveLength(1)
+    expect(drawerName()).toBe("Casey Delta")
+    fireEvent.click(main("p-casey"))
+    expect(drawerOpen()).toBe("false")
+    expect(screen.queryByRole("toolbar", { name: "Review" })).toBeNull()
+  })
+
+  it("follows j/k with the drawer open and closes on Escape", () => {
+    renderRun()
+    fireEvent.click(main("p-riley"))
+    key("j")
+    expect(drawerName()).toBe("Avery Golf")
+    expect(document.querySelector("[data-focus='true']")?.getAttribute("data-person-id")).toBe("p-avery")
+    key("k")
+    expect(drawerName()).toBe("Riley Foxtrot")
+    key("Escape")
+    expect(drawerOpen()).toBe("false")
+  })
+
+  it("scores the open candidate with a digit, then opens the next row; the last one closes", async () => {
+    const { submit } = renderRun()
+    fireEvent.click(main("p-morgan"))
+    expect(bar().getByRole("button", { name: "4 Yes" }).getAttribute("aria-pressed")).toBe("false")
+    key("4")
+    expect(submit).toHaveBeenCalledWith({
+      run_id: RUN_ID,
+      person_id: "p-morgan",
+      comment: "",
+      human_judgment: { score: 4, scale: 5 },
+    })
+    expect(drawerName()).toBe("Casey Delta")
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Score Morgan Echo" }).textContent).toBe("Your score: 4/5"),
+    )
+    fireEvent.click(bar().getByRole("button", { name: "2 Lean no" }))
+    expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({ person_id: "p-casey" }))
+    expect(drawerOpen()).toBe("false")
+  })
+
+  it("marks the saved score in the bar and ignores digits outside the rubric", async () => {
+    const { submit } = renderRun()
+    fireEvent.click(main("p-jordan"))
+    key("5")
+    key("k")
+    expect(drawerName()).toBe("Jordan Bravo")
+    await waitFor(() =>
+      expect(bar().getByRole("button", { name: "5 Strong yes" }).getAttribute("aria-pressed")).toBe("true"),
+    )
+    key("9")
+    expect(submit).toHaveBeenCalledTimes(1)
+    expect(drawerName()).toBe("Jordan Bravo")
+  })
+
+  it("advances after a score saved in the dialog", () => {
+    renderRun()
+    fireEvent.click(main("p-jordan"))
+    key("s")
+    fireEvent.click(screen.getByRole("radio", { name: /^Score 3:/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    expect(drawerName()).toBe("Morgan Echo")
+  })
+
+  it("opens the tag editor with t and toggles the pin with p for the open candidate", async () => {
+    const { saves } = renderRun()
+    await tagsLoaded()
+    fireEvent.click(main("p-jordan"))
+    key("p")
+    expect(
+      (await screen.findByRole("button", { name: "Unpin Jordan Bravo" })).getAttribute("aria-pressed"),
+    ).toBe("true")
+    expect(bar().getByRole("button", { name: "Unpin P" }).getAttribute("aria-pressed")).toBe("true")
+    await waitFor(() =>
+      expect(saves.at(-1)).toEqual({ tags: ["Pinned"], assignments: { "p-jordan": ["Pinned"] } }),
+    )
+    key("t")
+    expect(screen.getByRole("dialog", { name: "Tags for Jordan Bravo" })).toBeTruthy()
+    // Keys inside the tag panel are its own: a digit there scores nobody.
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Add tag" }), { key: "3" })
+    expect(drawerName()).toBe("Jordan Bravo")
   })
 
   it("filters the table through the toolbar; the count reads the same rows", () => {
@@ -262,16 +346,16 @@ describe("RunView", () => {
     expect(retry).toHaveBeenCalledTimes(1)
   })
 
-  it("moves with j/k, opens with Enter, and presses the row's tag and score with t and s", async () => {
+  it("moves with j/k, opens the drawer with Enter, and presses the row's tag and score with t and s", async () => {
     renderRun()
     await tagsLoaded()
-    const key = (name: string) => act(() => void fireEvent.keyDown(document.body, { key: name }))
     key("j")
     key("j")
     expect(document.querySelector("[data-focus='true']")?.getAttribute("data-person-id")).toBe("p-avery")
     key("k")
     key("Enter")
-    expect(main("p-riley").getAttribute("aria-expanded")).toBe("true")
+    expect(drawerName()).toBe("Riley Foxtrot")
+    expect(drawerOpen()).toBe("true")
     key("t")
     expect(screen.getByRole("dialog", { name: "Tags for Riley Foxtrot" })).toBeTruthy()
     fireEvent.keyDown(document, { key: "Escape" })

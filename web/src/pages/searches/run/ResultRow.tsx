@@ -1,15 +1,13 @@
 import { memo, type MouseEvent } from "react"
 
 import { Avatar, SourcePills } from "@/components/shared"
-import { LinkedInIcon } from "@/components/shared/icons/channels"
-import { usePresence } from "@/hooks/usePresence"
 import { plural } from "@/lib/copy"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
 import { sourceFamilies } from "@/lib/searches/sources"
 import type { PondCandidate } from "@/types/searches"
 
-import { Evidence } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
+import { LinkedInLink } from "./LinkedInLink"
 import { Operators } from "./Operators"
 import { RowActions, type RowContext } from "./RowActions"
 import { ScoreCell } from "./ScoreCell"
@@ -18,7 +16,8 @@ interface ResultRowProps {
   result: Result
   ranked: boolean
   labels: boolean
-  expanded: boolean
+  // The drawer shows this row.
+  open: boolean
   focused: boolean
   context: RowContext
   onToggle: (key: string) => void
@@ -41,19 +40,18 @@ function onControl(event: MouseEvent): boolean {
   return event.target instanceof Element && event.target.closest("a, button, input, [role='dialog']") !== null
 }
 
-// One person: a click on the line toggles the evidence below it. `group/row` shows the tag
-// trigger on hover.
+// One person: a click on the line opens them in the drawer, or closes it when they are open.
+// `group/row` shows the tag trigger on hover.
 export const ResultRow = memo(function ResultRow({
   result,
   ranked,
   labels,
-  expanded,
+  open,
   focused,
   context,
   onToggle,
 }: ResultRowProps) {
   const { row, candidate } = result
-  const evidence = usePresence(expanded ? result : null)
   const attribution = candidate?.network_attribution
   const families = sourceFamilies(attribution ?? null)
   return (
@@ -61,7 +59,7 @@ export const ResultRow = memo(function ResultRow({
       className="result-row group/row"
       data-person-id={row.person_id}
       data-result-key={result.key}
-      data-expanded={expanded}
+      data-open={open}
       data-focus={focused}
     >
       {/* Keys live on the table (hooks/useResultKeys: j/k, Enter, t, s); a row is not a tab stop (W3). */}
@@ -70,8 +68,6 @@ export const ResultRow = memo(function ResultRow({
         className="result-line focus-bar"
         role="row"
         data-focus={focused}
-        aria-expanded={expanded}
-        aria-controls={evidence.mounted ? `evidence-${result.key}` : undefined}
         onClick={(event) => {
           if (!onControl(event)) onToggle(result.key)
         }}
@@ -82,17 +78,7 @@ export const ResultRow = memo(function ResultRow({
             <span className="result-who">
               <b>{row.name}</b>
               <small>
-                {row.linkedin_url ? (
-                  <a
-                    className="result-linkedin"
-                    href={row.linkedin_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label={`${row.name} on LinkedIn`}
-                  >
-                    <LinkedInIcon />
-                  </a>
-                ) : null}
+                <LinkedInLink row={row} />
                 {headline(row)}
               </small>
             </span>
@@ -111,20 +97,11 @@ export const ResultRow = memo(function ResultRow({
           )}
           <Operators operators={attribution?.operators ?? []} />
           <span className="result-roles">{roles(row)}</span>
-          <i className="result-chevron chevron" data-open={expanded} aria-hidden="true" />
         </div>
         <span className="result-actions">
           {candidate ? <RowActions result={result} candidate={candidate} context={context} /> : null}
         </span>
       </div>
-      {evidence.mounted ? (
-        <Evidence
-          result={result}
-          ranked={ranked}
-          open={evidence.open}
-          onTransitionEnd={evidence.onTransitionEnd}
-        />
-      ) : null}
     </div>
   )
 })

@@ -1,62 +1,20 @@
-/* The drawer's header, actions and section bodies; ported from share/web/people.css. */
+/* The person drawer's sources line, actions and section bodies (the shell and header row are
+   components/shared/Drawer.css); ported from share/web/people.css. */
 
-.drawer-top {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-.drawer-top .who {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  flex: 1;
-}
-.drawer-top h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-.drawer-top .sub {
-  color: var(--muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
 .drawer-top .sub.sources {
   display: flex;
   align-items: center;
   gap: 4px;
   margin-top: 4px;
 }
-.drawer-top .sub a {
+.drawer-top .sub.sources a {
   margin-left: 6px;
   color: var(--info);
   font-weight: 600;
   text-decoration: none;
 }
-.drawer-top .sub a:hover {
+.drawer-top .sub.sources a:hover {
   text-decoration: underline;
-}
-.drawer-close {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: transparent;
-  color: var(--muted);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  transition:
-    background var(--t-fast) var(--ease-out),
-    color var(--t-fast) var(--ease-out);
-}
-.drawer-close:hover {
-  color: var(--foreground);
-  background: var(--secondary);
 }
 .drawer-actions {
   display: flex;

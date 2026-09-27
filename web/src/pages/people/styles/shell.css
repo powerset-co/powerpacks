@@ -2,7 +2,6 @@
 
 /* The app shell's page row (App.tsx owns the 100dvh grid and the top bar row). */
 .people-shell {
-  --drawer-w: 440px;
   display: grid;
   grid-template-rows: 1fr;
   min-height: 0;

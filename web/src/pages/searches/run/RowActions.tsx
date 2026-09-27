@@ -1,7 +1,7 @@
 import type { ToastMessage } from "@/components/shared"
 import { yourScore, type QueuedScore } from "@/lib/searches/feedback"
 import type { ResultRow } from "@/lib/searches/ranking"
-import { existingTag, PIN_TAG } from "@/lib/searches/tags"
+import { isPinned, PIN_TAG } from "@/lib/searches/tags"
 import type { Candidate, FeedbackRecord, Ratings } from "@/types/searches"
 
 import { ScoreDialog } from "../dialogs/ScoreDialog"
@@ -36,7 +36,6 @@ export function RowActions({ result, candidate, context }: RowActionsProps) {
   const { tags } = context
   const id = candidate.person_id
   const applied = tags.tagged.assignments[id] ?? NO_TAGS
-  const pin = existingTag(tags.tagged.tags, PIN_TAG) ?? PIN_TAG
   const score = yourScore(result, context.queued)
   return (
     <>
@@ -50,9 +49,9 @@ export function RowActions({ result, candidate, context }: RowActionsProps) {
       />
       <PinButton
         name={candidate.name}
-        pinned={applied.includes(pin)}
+        pinned={isPinned(tags.tagged, id)}
         disabled={tags.loading}
-        onToggle={() => tags.toggle(id, pin)}
+        onToggle={() => tags.toggle(id, PIN_TAG)}
       />
       <ScoreDialog
         runId={context.runId}

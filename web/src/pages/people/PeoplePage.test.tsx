@@ -120,7 +120,7 @@ describe("PeoplePage", () => {
     const { container } = renderPage()
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector("[data-select-all]")))
-    const bar = must(container.querySelector<HTMLElement>("[data-bulkbar]"))
+    const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(within(bar).getByText("3 selected")).toBeTruthy()
     fireEvent.click(within(bar).getByRole("button", { name: "Share S" }))
     await waitFor(() => expect(screen.getByText("Marked 3 people for sharing.")).toBeTruthy())
@@ -132,13 +132,13 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    const shell = must(container.querySelector("[data-people]"))
+    const drawer = must(container.querySelector("[data-drawer]"))
     const row = must(container.querySelector<HTMLElement>(".row"))
     fireEvent.click(row)
-    expect(shell.getAttribute("data-drawer-open")).toBe("true")
+    expect(drawer.getAttribute("data-open")).toBe("true")
     expect(container.querySelector("[data-drawer] h2")?.textContent).toBe("Casey Delta")
     fireEvent.click(row)
-    expect(shell.getAttribute("data-drawer-open")).toBe("false")
+    expect(drawer.getAttribute("data-open")).toBe("false")
   })
 
   it("shows the bar for an open person and moves on to the next one after a label", async () => {
@@ -147,7 +147,7 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const names = () => [...container.querySelectorAll(".row .who b")].map((el) => el.textContent)
     const heading = () => container.querySelector("[data-drawer] h2")?.textContent
-    const bar = () => must(container.querySelector<HTMLElement>("[data-bulkbar]"))
+    const bar = () => must(container.querySelector<HTMLElement>("[data-action-bar]"))
     const share = () => fireEvent.click(within(bar()).getByRole("button", { name: "Share S" }))
     const [first, second, third] = names()
     // Open the middle person: the bar names them, and Use worth is gone.
@@ -166,7 +166,7 @@ describe("PeoplePage", () => {
     share()
     await waitFor(() => expect(names()).toEqual([]))
     await waitFor(() =>
-      expect(must(container.querySelector("[data-people]")).getAttribute("data-drawer-open")).toBe("false"),
+      expect(must(container.querySelector("[data-drawer]")).getAttribute("data-open")).toBe("false"),
     )
   })
 })

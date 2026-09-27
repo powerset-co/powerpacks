@@ -1,0 +1,29 @@
+/* The floating action bar (components/shared/ActionBar.tsx); ported from share/web/people.css. */
+
+.action-bar {
+  position: fixed;
+  z-index: 60;
+  left: 50%;
+  translate: -50% 0;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--shadow-2);
+}
+.action-bar b {
+  margin-right: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.action-bar-rule {
+  width: 1px;
+  height: 18px;
+  background: var(--line-strong);
+}

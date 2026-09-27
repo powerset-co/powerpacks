@@ -7,6 +7,7 @@ import {
   browserTags,
   existingTag,
   heldTags,
+  isPinned,
   NO_TAGS,
   normalizeTag,
   removeTag,
@@ -19,6 +20,13 @@ describe("tags", () => {
   it("trims and caps a tag name", () => {
     expect(normalizeTag("  Backend | Infra  ")).toBe("Backend | Infra")
     expect(normalizeTag("x".repeat(50))).toHaveLength(TAG_NAME_MAX)
+  })
+
+  it("reads the pin in the search's spelling", () => {
+    const tagged: Tagged = { tags: ["pinned"], assignments: { a: ["pinned"] } }
+    expect(isPinned(tagged, "a")).toBe(true)
+    expect(isPinned(tagged, "b")).toBe(false)
+    expect(isPinned(NO_TAGS, "a")).toBe(false)
   })
 
   it("finds the search's spelling ignoring case", () => {

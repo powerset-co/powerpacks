@@ -15,17 +15,6 @@ function stubViewportSize(height: number) {
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 800 })
 }
 
-// A measured row wrapper (data-index) is one row tall at even indexes, two at odd ones.
-function measuredHeight(this: HTMLElement): number {
-  const index = this.dataset.index
-  if (index === undefined) return VIEWPORT
-  return Number(index) % 2 ? 2 * ROW : ROW
-}
-
-function stubMeasuredRows() {
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: measuredHeight })
-}
-
 function rowWrappers(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(".relative > div")]
 }
@@ -65,7 +54,7 @@ describe("VirtualRows", () => {
     expect(container.querySelectorAll("[data-row]").length).toBe(0)
   })
 
-  it("gives every fixed row the row height and no measuring hooks", () => {
+  it("gives every row the row height", () => {
     const { container } = render(
       <VirtualRows
         items={PEOPLE}
@@ -79,35 +68,6 @@ describe("VirtualRows", () => {
     expect(wrappers.map((row) => row.style.transform)).toEqual(
       Array.from({ length: VIEWPORT / ROW }, (_, index) => `translateY(${index * ROW}px)`),
     )
-    for (const row of wrappers) {
-      expect(row.style.height).toBe(`${ROW}px`)
-      expect(row.hasAttribute("data-index")).toBe(false)
-    }
-  })
-
-  it("measures rows and places each below the measured rows above it", () => {
-    stubMeasuredRows()
-    const { container } = render(
-      <VirtualRows
-        items={PEOPLE}
-        rowHeight={ROW}
-        measure
-        overscan={0}
-        getKey={(person) => person.id}
-        renderRow={(person) => <div data-row>{person.name}</div>}
-      />,
-    )
-    const wrappers = rowWrappers(container)
-    // 36 + 72 + 36 + 72 + 36 + 72 = 324 < 360, so seven rows reach the viewport's bottom.
-    expect(wrappers.map((row) => row.dataset.index)).toEqual(["0", "1", "2", "3", "4", "5", "6"])
-    expect(wrappers.map((row) => row.style.transform)).toEqual(
-      [0, 36, 108, 144, 216, 252, 324].map((start) => `translateY(${start}px)`),
-    )
-    for (const row of wrappers) expect(row.style.height).toBe("")
-    const spacer = must(container.querySelector<HTMLElement>(".relative"))
-    // The first render mounts a window.innerHeight's worth at the estimate; every one of those
-    // was measured, and each tall one adds a row to the estimated total.
-    const tall = Math.floor(Math.ceil(window.innerHeight / ROW) / 2)
-    expect(spacer.style.height).toBe(`${(PEOPLE.length + tall) * ROW}px`)
+    for (const row of wrappers) expect(row.style.height).toBe(`${ROW}px`)
   })
 })
