@@ -1,8 +1,8 @@
-"""The People page's routes: the page, its assets, the people payload, one write.
+"""The People page's data routes: the people payload, detail, avatar, one write.
 
-Flow: `ShareRoutes` mounts under `/people` and `/api/people/` in the review
-server (`bin/deep-context review people`); `make_handler` serves the same
-routes alone for tests. GET `/api/people/rows` ->
+Flow: `ShareRoutes` mounts under `/api/people/` in the review server
+(`bin/deep-context review people`), after `AppRoutes` (the page and its
+assets); `make_handler` serves the two alone for tests. GET `/api/people/rows` ->
 `SharePeople.load()` as one columnar payload, one row per parent; POST
 `/api/people/tags` carries the tags each selected parent should hold (absolute
 sets, so undo re-posts the previous sets), writes the tag rows for every person
@@ -12,6 +12,7 @@ under those parents and re-decides their share rows through
 Changelog:
   2026-09-26: created.
   2026-09-26: serves the React build from web/dist; legacy page and vendor/ removed.
+  2026-09-26: the page and its assets moved to packs/shared/web/app.py.
 """
 
 from __future__ import annotations
@@ -34,21 +35,13 @@ from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
-from packs.ingestion.primitives.share.web import PEOPLE_CSS, PEOPLE_HTML, PEOPLE_JS
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
+from packs.shared.web.app import AppRoutes
 
-PAGE_PATH = "/people"
 API_PREFIX = "/api/people/"
-ASSET_PREFIX = "/people/assets/"
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
-
-# The page is the React build (`web/dist`); its people.css carries the tokens.
-ASSETS = {
-    "people.css": (PEOPLE_CSS, "text/css; charset=utf-8"),
-    "people.js": (PEOPLE_JS, "text/javascript; charset=utf-8"),
-}
 
 TagChanges = dict[str, frozenset[str]]
 
@@ -109,7 +102,7 @@ def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> dict[str, t
 
 
 class ShareRoutes:
-    """The People page's GET and POST routes, mountable in any stdlib handler."""
+    """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
     def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple]) -> None:
         self.db = db
@@ -118,12 +111,7 @@ class ShareRoutes:
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == PAGE_PATH:
-            self._send(handler, PEOPLE_HTML.read_bytes())
-        elif parsed.path.startswith(ASSET_PREFIX) and parsed.path[len(ASSET_PREFIX):] in ASSETS:
-            path, kind = ASSETS[parsed.path[len(ASSET_PREFIX):]]
-            self._send(handler, path.read_bytes(), kind, cache="no-cache")
-        elif parsed.path == f"{API_PREFIX}rows":
+        if parsed.path == f"{API_PREFIX}rows":
             self._send_json(handler, people_payload(self.load()))
         elif parsed.path == f"{API_PREFIX}person":
             detail = self.people.detail((query.get("id") or [""])[0])
@@ -207,7 +195,8 @@ def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV) -> ShareRoutes:
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
-    """A handler that serves only the People routes (tests)."""
+    """A handler that serves only the People page and its routes (tests)."""
+    app = AppRoutes()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -216,9 +205,9 @@ def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
                 routes._send_json(self, {"primitive": "people_web", "ok": True, "people": len(routes.load())})
             elif parsed.path == "/":
                 self.send_response(HTTPStatus.FOUND)
-                self.send_header("Location", PAGE_PATH)
+                self.send_header("Location", "/people")
                 self.end_headers()
-            elif not routes.get(self, parsed):
+            elif not (app.get(self, parsed) or routes.get(self, parsed)):
                 routes._send(self, b"not found", "text/plain", status=HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:  # noqa: N802

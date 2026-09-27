@@ -1,44 +1,41 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react"
 
-import { usePresence } from "@/hooks/usePresence";
-import { cn } from "@/lib/utils";
+import { usePresence } from "@/hooks/usePresence"
+import { cn } from "@/lib/utils"
 
-import { Kbd } from "./Kbd";
+import { Kbd } from "./Kbd"
 
-const HIDE_AFTER_MS = 6000;
-const HIDE_ERROR_AFTER_MS = 8000;
+const HIDE_AFTER_MS = 6000
+const HIDE_ERROR_AFTER_MS = 8000
 
 export interface ToastAction {
-  label: string;
-  kbd: string;
-  onClick: () => void;
+  label: string
+  kbd: string
+  onClick: () => void
 }
 
 export interface ToastMessage {
-  message: string;
-  error?: boolean;
-  action?: ToastAction;
+  message: string
+  error?: boolean
+  action?: ToastAction
 }
 
 interface ToastProps {
   // A new object re-arms the timer, even for the same text.
-  toast: ToastMessage | null;
-  onDismiss: () => void;
-  className?: string;
+  toast: ToastMessage | null
+  onDismiss: () => void
+  className?: string
 }
 
 // It rises in and drops out (index.css .rise), keeping its last message as it leaves.
 export function Toast({ toast, onDismiss, className }: ToastProps) {
-  const { mounted, open, onTransitionEnd } = usePresence(toast !== null);
-  const last = useRef(toast);
-  if (toast) last.current = toast;
-  const shown = last.current;
+  const { mounted, open, shown, onTransitionEnd } = usePresence(toast)
 
   useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(onDismiss, toast.error ? HIDE_ERROR_AFTER_MS : HIDE_AFTER_MS);
-    return () => window.clearTimeout(timer);
-  }, [toast, onDismiss]);
+    if (!toast) return
+    const timer = window.setTimeout(onDismiss, toast.error ? HIDE_ERROR_AFTER_MS : HIDE_AFTER_MS)
+    return () => window.clearTimeout(timer)
+  }, [toast, onDismiss])
 
   return (
     <div role="status" aria-live="polite">
@@ -58,7 +55,7 @@ export function Toast({ toast, onDismiss, className }: ToastProps) {
         </div>
       ) : null}
     </div>
-  );
+  )
 }
 
 function ToastButton({ action }: { action: ToastAction }) {
@@ -70,5 +67,5 @@ function ToastButton({ action }: { action: ToastAction }) {
     >
       {action.label} <Kbd className="border-current bg-transparent text-inherit opacity-70">{action.kbd}</Kbd>
     </button>
-  );
+  )
 }

@@ -1,37 +1,44 @@
-import { useRef, useState, type TransitionEvent } from "react";
+import { useState, type TransitionEvent } from "react"
 
-import { useReducedMotion } from "@/hooks/useReducedMotion";
-import type { Person } from "@/types/people";
+import { useReducedMotion } from "@/hooks/useReducedMotion"
+import type { Person } from "@/types/people"
 
-import type { DetailState } from "../hooks/usePersonDetail";
+import type { DetailState } from "../hooks/usePersonDetail"
 
 interface Shown {
-  id: string | null;
-  open: boolean;
-  swapping: boolean;
+  id: string | null
+  open: boolean
+  swapping: boolean
+}
+
+interface Content {
+  row: Person | null
+  detail: DetailState
 }
 
 /**
  * What the drawer renders while it switches person. Two readable people never show at
- * once: the outgoing person stays, `leaving`, for a 60ms fade to zero; on its transitionend
- * the new person replaces them and fades in (`swapping`). A first open slides the panel
- * instead, and reduced motion replaces at once.
+ * once: the outgoing person stays, `leaving`, for a --t-fast fade to zero; on its
+ * transitionend the new person replaces them and fades in (`swapping`). A first open slides
+ * the panel instead, and reduced motion replaces at once.
  */
 export function useDrawerSwap(row: Person | null, detail: DetailState, open: boolean) {
-  const reduced = useReducedMotion();
-  const id = row?.parent_id ?? null;
-  const [shown, setShown] = useState<Shown>({ id, open, swapping: false });
-  const outgoing = useRef({ row, detail });
+  const reduced = useReducedMotion()
+  const id = row?.parent_id ?? null
+  const [shown, setShown] = useState<Shown>({ id, open, swapping: false })
+  // The last content rendered while not leaving: what stays on screen during the fade out.
+  const [last, setLast] = useState<Content>({ row, detail })
 
-  const leaving = !reduced && shown.open && open && shown.id !== null && id !== null && shown.id !== id;
+  const leaving = !reduced && shown.open && open && shown.id !== null && id !== null && shown.id !== id
   if (!leaving && (shown.id !== id || shown.open !== open)) {
-    setShown({ id, open, swapping: shown.id !== id ? shown.open && open : shown.swapping });
+    setShown({ id, open, swapping: shown.id !== id ? shown.open && open : shown.swapping })
   }
-  if (!leaving) outgoing.current = { row, detail };
+  if (!leaving && (last.row !== row || last.detail !== detail)) setLast({ row, detail })
 
   const onTransitionEnd = (event: TransitionEvent<HTMLElement>) => {
-    if (leaving && event.target === event.currentTarget) setShown({ id, open, swapping: true });
-  };
+    if (leaving && event.target === event.currentTarget) setShown({ id, open, swapping: true })
+  }
 
-  return { ...outgoing.current, leaving, swapping: shown.swapping, onTransitionEnd };
+  const content = leaving ? last : { row, detail }
+  return { ...content, leaving, swapping: shown.swapping, onTransitionEnd }
 }

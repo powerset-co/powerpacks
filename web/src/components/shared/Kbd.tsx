@@ -1,10 +1,10 @@
-import type { ReactNode } from "react";
+import type { ReactNode } from "react"
 
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
 
 interface KbdProps {
-  children: ReactNode;
-  className?: string;
+  children: ReactNode
+  className?: string
 }
 
 export function Kbd({ children, className }: KbdProps) {
@@ -17,5 +17,5 @@ export function Kbd({ children, className }: KbdProps) {
     >
       {children}
     </kbd>
-  );
+  )
 }

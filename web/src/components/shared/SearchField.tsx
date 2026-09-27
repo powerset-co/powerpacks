@@ -1,8 +1,8 @@
-import { forwardRef, type InputHTMLAttributes } from "react";
+import { forwardRef, type InputHTMLAttributes } from "react"
 
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
 
-type SearchFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type">;
+type SearchFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type">
 
 // results.css .field: the one text box style, here as a search input.
 export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(({ className, ...props }, ref) => (
@@ -15,5 +15,5 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(({ cla
     )}
     {...props}
   />
-));
-SearchField.displayName = "SearchField";
+))
+SearchField.displayName = "SearchField"

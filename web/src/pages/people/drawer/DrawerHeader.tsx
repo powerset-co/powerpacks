@@ -1,18 +1,21 @@
-import { Avatar, SourcePills } from "@/components/shared";
-import { avatarUrl } from "@/lib/api/people";
-import { toChannels } from "@/lib/channels";
-import type { Person, PersonDetail } from "@/types/people";
+import { Avatar, SourcePills } from "@/components/shared"
+import { avatarUrl } from "@/lib/api/people"
+import { toChannels } from "@/lib/channels"
+import type { Person, PersonDetail } from "@/types/people"
 
 interface DrawerHeaderProps {
-  row: Person;
-  detail: PersonDetail | null;
-  onClose: () => void;
+  row: Person
+  detail: PersonDetail | null
+  onClose: () => void
 }
+
+// The detail's strings are "" when it has none; then the row's stand in.
+const orNone = (value: string | undefined) => (value === "" ? undefined : value)
 
 // Who this is: the row draws it at once; the detail adds the headline, picture and LinkedIn link.
 export function DrawerHeader({ row, detail, onClose }: DrawerHeaderProps) {
-  const avatar = detail?.avatar_url || (row.has_avatar ? avatarUrl(row.parent_id) : undefined);
-  const headline = detail?.headline || [row.title, row.company].filter(Boolean).join(" · ");
+  const avatar = orNone(detail?.avatar_url) ?? (row.has_avatar ? avatarUrl(row.parent_id) : undefined)
+  const headline = orNone(detail?.headline) ?? [row.title, row.company].filter(Boolean).join(" · ")
   return (
     <div className="drawer-top">
       <Avatar name={row.name} size={40} src={avatar} />
@@ -23,11 +26,21 @@ export function DrawerHeader({ row, detail, onClose }: DrawerHeaderProps) {
         <div className="sub sources">
           <SourcePills channels={toChannels(row.channels)} />
           {detail?.linkedin_url ? (
-            <a href={detail.linkedin_url} target="_blank" rel="noreferrer">View LinkedIn profile</a>
+            <a href={detail.linkedin_url} target="_blank" rel="noreferrer">
+              View LinkedIn profile
+            </a>
           ) : null}
         </div>
       </div>
-      <button type="button" className="drawer-close" data-drawer-close aria-label="Close details" onClick={onClose}>×</button>
+      <button
+        type="button"
+        className="drawer-close"
+        data-drawer-close
+        aria-label="Close details"
+        onClick={onClose}
+      >
+        ×
+      </button>
     </div>
-  );
+  )
 }

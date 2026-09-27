@@ -4,15 +4,15 @@
 /** The stored value for `key`, or null when none is stored, it is not JSON, or `parse` rejects it. */
 export function readSession<T>(key: string, parse: (raw: unknown) => T | null): T | null {
   try {
-    return parse(JSON.parse(sessionStorage.getItem(key) ?? "null"));
+    return parse(JSON.parse(sessionStorage.getItem(key) ?? "null"))
   } catch {
-    return null;
+    return null
   }
 }
 
 export function writeSession(key: string, value: unknown): void {
   try {
-    sessionStorage.setItem(key, JSON.stringify(value));
+    sessionStorage.setItem(key, JSON.stringify(value))
   } catch {
     // Storage blocked: the value just won't survive a reload.
   }

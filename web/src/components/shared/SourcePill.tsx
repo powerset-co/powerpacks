@@ -1,25 +1,24 @@
-import { CHANNELS, type Channel } from "@/lib/channels";
-import { cn } from "@/lib/utils";
+import type { VariantProps } from "class-variance-authority"
 
-import { CHANNEL_ICON } from "./icons/channels";
+import { CHANNELS, type Channel } from "@/lib/channels"
+import { cn } from "@/lib/utils"
+
+import { CHANNEL_ICON } from "./icons/channels"
+import { sourcePillVariants } from "./source-pill-variants"
+
+export type SourcePillSize = NonNullable<VariantProps<typeof sourcePillVariants>["size"]>
 
 interface SourcePillProps {
-  channel: Channel;
+  channel: Channel
+  size?: SourcePillSize
 }
 
-export function SourcePill({ channel }: SourcePillProps) {
-  const Icon = CHANNEL_ICON[channel];
-  const { title, colors } = CHANNELS[channel];
+export function SourcePill({ channel, size }: SourcePillProps) {
+  const Icon = CHANNEL_ICON[channel]
+  const { title, colors } = CHANNELS[channel]
   return (
-    <span
-      data-c={channel}
-      title={title}
-      className={cn(
-        "source inline-flex h-5 items-center justify-center rounded-full border px-[7px] [&_svg]:size-[11px]",
-        colors,
-      )}
-    >
+    <span data-c={channel} title={title} className={cn(sourcePillVariants({ size }), colors)}>
       <Icon role="img" aria-label={title} />
     </span>
-  );
+  )
 }

@@ -1,4 +1,9 @@
-"""Command-line parsing and dispatch for the review UI."""
+"""Command-line parsing and dispatch for the review UI.
+
+Changelog:
+- 2026-09-26: the searches-only server serves the React shell at /people; its
+  rows request answers 404 with what to run first.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_T
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.search.primitives.deep_search.results_web import server as results_web
+from packs.shared.web.app import AppRoutes
 
 from .server import make_handler
 from .sqlite_adapter import SqliteReviewAdapter
@@ -30,13 +36,10 @@ from .sqlite_adapter import SqliteReviewAdapter
 # The actions the agent runs itself; every other action waits on the user.
 _AGENT_ACTIONS = frozenset({"synthesize", "realize"})
 
-_NO_PEOPLE_PAGE = (
-    "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'>"
-    "<title>People · Powerpacks</title><link rel='stylesheet' href='/searches/assets/results.css'></head>"
-    "<body><main><div class='empty-state'><h2>No people yet</h2>"
-    "<p>Run <code>bin/deep-context</code> to build your network, then <code>bin/deep-context review people</code>.</p>"
-    "</div></main></body></html>"
-)
+# The People page's rows request before a store exists: the page shows this message.
+_NO_PEOPLE = json.dumps({
+    "error": "No people yet. Run bin/deep-context to build your network, then bin/deep-context review people.",
+}).encode("utf-8")
 
 
 def _url(host: str, port: int, stage: str, run_id: str = "") -> str:
@@ -52,22 +55,22 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
     routes = results_web.search_routes(root, base="/searches")
     viewer = results_web.make_handler(root, routes.load, catalog=routes.catalog, load_one=routes.load_one,
                                       base="/searches")
+    app = AppRoutes()
 
     class Handler(viewer):
         def do_GET(self) -> None:  # noqa: N802
-            path = urllib.parse.urlparse(self.path).path
-            if path in {"/", "/directory"}:
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path in {"/", "/directory"}:
                 self.send_response(HTTPStatus.FOUND)
                 self.send_header("Location", "/searches")
                 self.end_headers()
-            elif path == "/people":
-                body = _NO_PEOPLE_PAGE.encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
+            elif parsed.path == "/api/people/rows":
+                self.send_response(HTTPStatus.NOT_FOUND)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(_NO_PEOPLE)))
                 self.end_headers()
-                self.wfile.write(body)
-            else:
+                self.wfile.write(_NO_PEOPLE)
+            elif not app.get(self, parsed):
                 super().do_GET()
 
     return Handler

@@ -1,4 +1,4 @@
-import type { Config } from "tailwindcss";
+import type { Config } from "tailwindcss"
 
 export default {
   darkMode: ["class"],
@@ -47,6 +47,7 @@ export default {
         fast: "var(--t-fast)",
         med: "var(--t-med)",
         exit: "var(--t-exit)",
+        slow: "var(--t-slow)",
       },
       transitionTimingFunction: {
         out: "var(--ease-out)",
@@ -63,4 +64,4 @@ export default {
     },
   },
   plugins: [],
-} satisfies Config;
+} satisfies Config

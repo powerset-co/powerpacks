@@ -1,8 +1,8 @@
-import path from "node:path";
-import react from "@vitejs/plugin-react-swc";
-import { defineConfig } from "vitest/config";
+import path from "node:path"
+import react from "@vitejs/plugin-react-swc"
+import { defineConfig } from "vitest/config"
 
-const PYTHON_SERVER = "http://127.0.0.1:8765";
+const PYTHON_SERVER = process.env.PYTHON_SERVER ?? "http://127.0.0.1:8765"
 
 export default defineConfig({
   base: "./",
@@ -13,7 +13,6 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": PYTHON_SERVER,
-      "/people/assets": PYTHON_SERVER,
     },
   },
   build: {
@@ -21,7 +20,7 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     rollupOptions: {
-      input: { people: "src/pages/people/main.tsx" },
+      input: { app: "src/main.tsx" },
       output: {
         entryFileNames: "[name].js",
         chunkFileNames: "[name].js",
@@ -32,4 +31,4 @@ export default defineConfig({
   test: {
     environment: "jsdom",
   },
-});
+})

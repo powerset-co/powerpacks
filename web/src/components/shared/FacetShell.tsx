@@ -1,14 +1,14 @@
-import type { ReactNode } from "react";
+import type { ReactNode } from "react"
 
-import styles from "./FacetShell.module.css";
+import styles from "./FacetShell.module.css"
 
 interface FacetShellProps {
-  facetKey: string;
-  label: string;
-  open: boolean;
-  active: boolean;
-  onToggle: () => void;
-  children: ReactNode;
+  facetKey: string
+  label: string
+  open: boolean
+  active: boolean
+  onToggle: () => void
+  children: ReactNode
 }
 
 export function FacetShell({ facetKey, label, open, active, onToggle, children }: FacetShellProps) {
@@ -22,5 +22,5 @@ export function FacetShell({ facetKey, label, open, active, onToggle, children }
         <div className={styles.list}>{children}</div>
       </div>
     </div>
-  );
+  )
 }

@@ -2,6 +2,7 @@
 
 Changelog:
 - 2026-09-25: a worth decision re-reads its one row instead of every worth row.
+- 2026-09-26: the React app's shell page and assets (AppRoutes) answer before People's data routes.
 """
 
 from __future__ import annotations
@@ -75,6 +76,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
 )
 from packs.ingestion.primitives.share.web.server import share_routes
 from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
+from packs.shared.web.app import AppRoutes
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     STAGES,
     GuidanceViewRow,
@@ -161,8 +163,9 @@ def make_handler(
     if api.snapshot().progress.total == 0:
         raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
     retargets_enabled = bool(run_jobs or guided_retargets)
-    # The People page (`review people`) and the searches list (`review searches`)
-    # ride this server: one origin, one launcher.
+    # The React app (People: `review people`), People's data and the searches list
+    # (`review searches`) ride this server: one origin, one launcher.
+    app = AppRoutes()
     share = share_routes(db)
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
 
@@ -465,7 +468,7 @@ def make_handler(
                 if not avatar:
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
-            if share.get(self, parsed) or searches.get(self, parsed):
+            if app.get(self, parsed) or share.get(self, parsed) or searches.get(self, parsed):
                 return None
             if parsed.path != "/":
                 return self.send_bytes(b"not found", "text/plain", 404)

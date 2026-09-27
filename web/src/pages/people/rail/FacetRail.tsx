@@ -1,27 +1,37 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react"
 
-import { FACETS, type FacetDef } from "@/lib/people/facets";
-import { EMPTY, toggled } from "@/lib/sets";
+import { useReducedMotion } from "@/hooks/useReducedMotion"
 
-import { RailFacet } from "./RailFacet";
-import { ShortcutsHint } from "./ShortcutsHint";
+import { FACETS, type FacetDef } from "@/lib/people/facets"
+import { EMPTY, toggled } from "@/lib/sets"
 
-const DEFAULT_FACETS = FACETS.filter((facet) => !facet.more);
-const MORE_FACETS = FACETS.filter((facet) => facet.more);
-const NO_COUNTS: ReadonlyMap<string, number> = new Map();
+import { RailFacet } from "./RailFacet"
+import { ShortcutsHint } from "./ShortcutsHint"
+
+const DEFAULT_FACETS = FACETS.filter((facet) => !facet.more)
+const MORE_FACETS = FACETS.filter((facet) => facet.more)
+const NO_COUNTS: ReadonlyMap<string, number> = new Map()
 
 interface FacetRailProps {
-  filters: ReadonlyMap<string, ReadonlySet<string>>;
-  counts: ReadonlyMap<string, ReadonlyMap<string, number>>;
-  onValue: (key: string, value: string) => void;
+  filters: ReadonlyMap<string, ReadonlySet<string>>
+  counts: ReadonlyMap<string, ReadonlyMap<string, number>>
+  onValue: (key: string, value: string) => void
 }
 
 // The default facets, "More filters" for the rest, and the keyboard shortcuts.
 export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY);
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(EMPTY);
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [labelSearch, setLabelSearch] = useState("");
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY)
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(EMPTY)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [labelSearch, setLabelSearch] = useState("")
+  const reduced = useReducedMotion()
+  const moreToggle = useRef<HTMLButtonElement>(null)
+
+  // The extra facets open below the rail's fold: bring the toggle to the top so they show.
+  useEffect(() => {
+    if (moreOpen)
+      moreToggle.current?.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" })
+  }, [moreOpen, reduced])
 
   const facet = (def: FacetDef) => (
     <RailFacet
@@ -37,16 +47,23 @@ export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
       onLabelSearch={setLabelSearch}
       onValue={(value) => onValue(def.key, value)}
     />
-  );
+  )
 
   return (
     <>
       {DEFAULT_FACETS.map(facet)}
-      <button type="button" className="rail-divider" data-more-toggle aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}>
+      <button
+        ref={moreToggle}
+        type="button"
+        className="rail-divider"
+        data-more-toggle
+        aria-expanded={moreOpen}
+        onClick={() => setMoreOpen(!moreOpen)}
+      >
         More filters
       </button>
       {moreOpen ? <div className="rail-more">{MORE_FACETS.map(facet)}</div> : null}
       <ShortcutsHint />
     </>
-  );
+  )
 }

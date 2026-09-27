@@ -1,4 +1,4 @@
-import { Kbd } from "@/components/shared";
+import { Kbd } from "@/components/shared"
 
 const SHORTCUTS: readonly (readonly [readonly string[], string])[] = [
   [["1", "2", "3"], "Switch tab"],
@@ -11,7 +11,7 @@ const SHORTCUTS: readonly (readonly [readonly string[], string])[] = [
   [["W"], "Use worth"],
   [["Z"], "Undo"],
   [["Enter"], "Open or close details"],
-];
+]
 
 export function ShortcutsHint() {
   return (
@@ -20,11 +20,15 @@ export function ShortcutsHint() {
       <dl>
         {SHORTCUTS.map(([keys, action]) => (
           <div key={action} className="contents">
-            <dt>{keys.map((key) => <Kbd key={key}>{key}</Kbd>)}</dt>
+            <dt>
+              {keys.map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
+            </dt>
             <dd>{action}</dd>
           </div>
         ))}
       </dl>
     </details>
-  );
+  )
 }

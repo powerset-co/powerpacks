@@ -1,20 +1,20 @@
-import { useState } from "react";
+import { useState } from "react"
 
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
 
-import { initials } from "./initials";
+import { initials } from "./initials"
 
-export type AvatarSize = 26 | 40;
+export type AvatarSize = 26 | 40
 
 const SIZE_CLASS: Record<AvatarSize, string> = {
   26: "size-[26px] basis-[26px] text-[10px]",
   40: "size-10 basis-10 text-xs",
-};
+}
 
 interface AvatarProps {
-  name: string;
-  src?: string;
-  size: AvatarSize;
+  name: string
+  src?: string
+  size: AvatarSize
 }
 
 export function Avatar({ name, src, size }: AvatarProps) {
@@ -28,12 +28,12 @@ export function Avatar({ name, src, size }: AvatarProps) {
       {src ? <AvatarImage key={src} src={src} /> : null}
       <span>{initials(name)}</span>
     </span>
-  );
+  )
 }
 
 // Keyed by src, so a new person's picture starts hidden and fades in over the initials.
 function AvatarImage({ src }: { src: string }) {
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(false)
   return (
     <img
       src={src}
@@ -47,5 +47,5 @@ function AvatarImage({ src }: { src: string }) {
         loaded && "opacity-100",
       )}
     />
-  );
+  )
 }

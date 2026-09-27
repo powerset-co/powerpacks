@@ -295,8 +295,11 @@ class DeepContextHttpContractTests(unittest.TestCase):
         status, content_type, body, _ = self.request("GET", "/people")
         self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
         self.assertIn(b"data-people", body)
-        status, content_type, _, _ = self.request("GET", "/people/assets/people.css")
+        self.assertIn(b"/app/assets/app.js", body)
+        status, content_type, _, _ = self.request("GET", "/app/assets/app.css")
         self.assertEqual((status, content_type), (200, "text/css; charset=utf-8"))
+        status, _, _, _ = self.request("GET", "/people/assets/people.js")
+        self.assertEqual(status, 404)
         status, content_type, body, _ = self.request("GET", "/searches")
         self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
         self.assertTrue(b"data-catalog" in body or b"No completed searches" in body)
@@ -940,7 +943,7 @@ class SearchesOnlyServerTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, error.headers.get("Location", ""), error.read()
 
-    def test_searches_answer_and_people_says_what_to_run(self) -> None:
+    def test_searches_answer_and_people_rows_say_what_to_run(self) -> None:
         status, location, _ = self._get("/")
         self.assertEqual((status, location), (302, "/searches"))
         status, _, body = self._get("/searches")
@@ -948,8 +951,13 @@ class SearchesOnlyServerTests(unittest.TestCase):
         self.assertIn(b"No completed searches", body)
         status, _, body = self._get("/people")
         self.assertEqual(status, 200)
-        self.assertIn(b"No people yet", body)
-        self.assertIn(b"bin/deep-context", body)
+        self.assertIn(b"/app/assets/app.js", body)
+        status, _, _ = self._get("/app/assets/app.js")
+        self.assertEqual(status, 200)
+        status, _, body = self._get("/api/people/rows")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["error"], "No people yet. Run bin/deep-context to build your network, "
+                                                    "then bin/deep-context review people.")
         status, _, _ = self._get("/healthz")
         self.assertEqual(status, 200)
         self.assertEqual(review_cli._url("127.0.0.1", 8765, "searches", "acme-role"),

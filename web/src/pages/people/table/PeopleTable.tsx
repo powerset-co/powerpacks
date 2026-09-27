@@ -1,47 +1,57 @@
-import { forwardRef, useImperativeHandle, useRef, type ReactNode } from "react";
+import { forwardRef, useImperativeHandle, useRef, type ReactNode } from "react"
 
-import { EmptyState, VirtualRows, type VirtualRowsHandle } from "@/components/shared";
-import type { Sort, SortKey } from "@/lib/people/facets";
-import type { PeopleView } from "@/lib/people/view";
-import { personKey, type Person } from "@/types/people";
+import { EmptyState, VirtualRows, type VirtualRowsHandle } from "@/components/shared"
+import type { Sort, SortKey } from "@/lib/people/facets"
+import type { PeopleView } from "@/lib/people/view"
+import { personKey, type Person } from "@/types/people"
 
-import { useRowEntrance } from "../hooks/useRowEntrance";
-import { ROW_H } from "./columns";
-import { GridHead } from "./GridHead";
-import { PersonRow } from "./PersonRow";
-import "../styles/table.css";
+import { useRowEntrance } from "../hooks/useRowEntrance"
+import { ROW_H } from "./columns"
+import { GridHead } from "./GridHead"
+import { PersonRow } from "./PersonRow"
+import "../styles/table.css"
 
 interface PeopleTableProps {
-  matching: readonly Person[];
-  sort: Sort;
-  selected: ReadonlySet<string>;
-  allSelected: boolean;
-  someSelected: boolean;
-  focus: number;
-  openId: string | null;
-  pending: ReadonlySet<string>;
+  matching: readonly Person[]
+  sort: Sort
+  selected: ReadonlySet<string>
+  allSelected: boolean
+  someSelected: boolean
+  focus: number
+  openId: string | null
+  pending: ReadonlySet<string>
   // Changes identity exactly when the view (tab, filters, search, sort) changes.
-  view: PeopleView;
-  empty: ReactNode;
-  onSort: (key: SortKey) => void;
-  onSelectAll: () => void;
-  onSelect: (id: string) => void;
-  onOpen: (id: string, index: number) => void;
+  view: PeopleView
+  empty: ReactNode
+  onSort: (key: SortKey) => void
+  onSelectAll: () => void
+  onSelect: (id: string) => void
+  onOpen: (id: string, index: number) => void
 }
 
-export type PeopleTableHandle = Pick<VirtualRowsHandle, "scrollToIndex" | "scrollToOffset">;
+export type PeopleTableHandle = Pick<VirtualRowsHandle, "scrollToIndex" | "scrollToOffset">
 
 export const PeopleTable = forwardRef<PeopleTableHandle, PeopleTableProps>((props, ref) => {
-  const { matching, selected, focus, openId, pending, onOpen, onSelect } = props;
-  const rows = useRef<VirtualRowsHandle>(null);
-  useImperativeHandle(ref, () => ({
-    scrollToIndex: (index, options) => rows.current?.scrollToIndex(index, options),
-    scrollToOffset: (offset, options) => rows.current?.scrollToOffset(offset, options),
-  }), []);
-  useRowEntrance(() => rows.current?.element ?? null, props.view, matching.length);
+  const { matching, selected, focus, openId, pending, onOpen, onSelect } = props
+  const rows = useRef<VirtualRowsHandle>(null)
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToIndex: (index, options) => rows.current?.scrollToIndex(index, options),
+      scrollToOffset: (offset, options) => rows.current?.scrollToOffset(offset, options),
+    }),
+    [],
+  )
+  useRowEntrance(() => rows.current?.element ?? null, props.view, matching.length)
 
   return (
-    <section className="people-grid" data-grid role="table" aria-label="People" aria-rowcount={matching.length + 1}>
+    <section
+      className="people-grid"
+      data-grid
+      role="table"
+      aria-label="People"
+      aria-rowcount={matching.length + 1}
+    >
       <GridHead
         sort={props.sort}
         matching={matching.length}
@@ -51,7 +61,7 @@ export const PeopleTable = forwardRef<PeopleTableHandle, PeopleTableProps>((prop
         onSelectAll={props.onSelectAll}
       />
       <VirtualRows
-        ref={rows}
+        handle={rows}
         className="grid-viewport"
         data-viewport
         tabIndex={0}
@@ -74,6 +84,6 @@ export const PeopleTable = forwardRef<PeopleTableHandle, PeopleTableProps>((prop
       />
       {matching.length ? null : <EmptyState data-empty>{props.empty}</EmptyState>}
     </section>
-  );
-});
-PeopleTable.displayName = "PeopleTable";
+  )
+})
+PeopleTable.displayName = "PeopleTable"
