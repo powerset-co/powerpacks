@@ -38,6 +38,34 @@ class ShareEvidenceLabelsTests(unittest.TestCase):
     def _load(self) -> list:
         return ShareEvidence(self.db, people_csv=_write_people(self.root, self._people)).load()
 
+    def test_unjudged_linkedin_imports_default_yes_other_sources_stay_maybe(self) -> None:
+        for channels, expected in (
+            ("linkedin_csv", "yes"),
+            ("linkedin_csv,imessage", "yes"),
+            ("whatsapp", "maybe"),
+            ("", "maybe"),
+        ):
+            with self.subTest(channels=channels):
+                self._people = [{"id": "person-a", "public_identifier": "jordan-bravo",
+                                 "full_name": "Jordan Bravo", "source_channels": channels}]
+                self.assertEqual(self._load()[0].network_worth, expected)
+
+    def test_linkedin_default_preserves_machine_and_human_judgments(self) -> None:
+        for machine, human, expected in (
+            ("no", None, "no"),
+            ("maybe", None, "maybe"),
+            ("yes", None, "yes"),
+            ("yes", "no", "no"),
+            ("no", "yes", "yes"),
+        ):
+            with self.subTest(machine=machine, human=human):
+                key = f"{machine}-{human}".lower()
+                self._people = [{"id": key, "full_name": "Jordan Bravo", "source_channels": "linkedin_csv"}]
+                seed_identity(self.db, parent_id=key, person_id=key, row_key=key,
+                              name="Jordan Bravo", machine_worth=machine, human_worth=human,
+                              labels={"relationship_kind": "colleague"})
+                self.assertEqual(self._load()[0].network_worth, expected)
+
     def test_a_persons_facts_and_labels_resolve_through_the_parent(self) -> None:
         self._people = [{"id": "person-a", "public_identifier": "jordan-bravo", "full_name": "Jordan Bravo"}]
         seed_identity(

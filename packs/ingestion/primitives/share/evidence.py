@@ -8,6 +8,7 @@ bodies and body-free message bundles). No CSV state is read or written here.
 Flow: `ShareEvidence(db).load()` -> `list[PersonEvidence]`.
 
 Changelog:
+  2026-09-26: unjudged LinkedIn imports default to worth yes.
   2026-09-24: read facts, worth, dossiers, and bundles from SQLite, not files.
   2026-09-24: created (split out of share.py).
 """
@@ -104,7 +105,7 @@ class ShareEvidence:
                     interaction_counts=imported.interaction_counts,
                     last_interaction=imported.last_interaction or None,
                     superseded_person_ids=imported.superseded_person_ids,
-                    network_worth=self._worth(parents.get(parent_id), facts),
+                    network_worth=self._worth(parents.get(parent_id), facts, imported.source_channels),
                     dossier=dossiers.get(parent_id) or None,
                     facts=facts,
                     shared_overlaps=_overlaps(facts),
@@ -124,13 +125,16 @@ class ShareEvidence:
             index[row.parent_id] = value
         return index
 
-    def _worth(self, parent: ParentSnapshotRow | None, facts: dict[str, Any] | None) -> str:
-        """Effective worth: the human's word, then the model's, then the fact's."""
+    def _worth(
+        self, parent: ParentSnapshotRow | None, facts: dict[str, Any] | None, source_channels: tuple[str, ...],
+    ) -> str:
+        """Saved judgments win; unjudged LinkedIn imports default yes, others maybe."""
         if parent is not None and parent.human_worth:
             return parent.human_worth
         if parent is not None and parent.machine_worth:
             return parent.machine_worth
-        return str((facts or {}).get("network_worth", {}).get("decision") or MachineWorth.MAYBE.value)
+        default = MachineWorth.YES if "linkedin_csv" in source_channels else MachineWorth.MAYBE
+        return str((facts or {}).get("network_worth", {}).get("decision") or default.value)
 
 
 def _facts_payload(row: FactRow | None) -> dict[str, Any] | None:

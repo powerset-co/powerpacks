@@ -329,13 +329,14 @@ class ShareNodeTests(unittest.TestCase):
         self.assertEqual(labels["person-a"].flag, "family")
         self.assertTrue(json.loads(labels["person-b"].labels_json)["linkedin_only"])
         share = {row.person_id: row for row in share_decisions(db)}
-        # Worth yes plus a flag asks the human; the unjudged LinkedIn-only row stays home.
+        # Worth yes plus a flag asks the human; an unjudged LinkedIn import defaults to yes.
         self.assertEqual((share["person-a"].share, share["person-a"].reason), ("confirm", "family"))
-        self.assertEqual((share["person-b"].share, share["person-b"].reason), ("no", "worth_maybe"))
+        self.assertEqual(labels["person-b"].worth, "yes")
+        self.assertEqual((share["person-b"].share, share["person-b"].reason), ("yes", "worth_yes"))
         manifest = json.loads((self.out / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["source"], "share")
-        self.assertEqual(manifest["by_reason"], {"family": 1, "worth_maybe": 1})
-        self.assertEqual((manifest["confirm"], manifest["share_no"], manifest["share_yes"]), (1, 1, 0))
+        self.assertEqual(manifest["by_reason"], {"family": 1, "worth_yes": 1})
+        self.assertEqual((manifest["confirm"], manifest["share_no"], manifest["share_yes"]), (1, 0, 1))
 
 
 class EvidenceJoinTests(unittest.TestCase):
