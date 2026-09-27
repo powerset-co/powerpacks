@@ -199,6 +199,7 @@ class UploadPowerset:
                             namespaces.append(ns)
                     plan = replace(plan, namespaces=tuple(namespaces))
                     preview = plan_preview(plan)
+                    preview["previously_uploaded"] = len(shared_ids & old_hashes.keys())
                     preview["companies_skipped_no_row"] = local_index.count_missing_companies(
                         con, plan.persons_upsert)
                     payload.update(operator_id=operator_id, plan=preview)

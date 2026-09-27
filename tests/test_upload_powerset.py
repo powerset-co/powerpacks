@@ -517,6 +517,11 @@ class DryRunTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._fixture(Path(tmp))
+            paths["out_dir"].mkdir()
+            (paths["out_dir"] / "manifest.json").write_text(json.dumps({
+                "status": "completed", "target": {"postgres_host": "another-index"},
+                "person_hashes": {NEW_PERSON: "previously-uploaded"},
+            }))
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://x"), \
                  mock.patch.object(upload_powerset.postgres_client, "load_env_file"), \
@@ -530,6 +535,8 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(namespace.writes, [])
         self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SELECT"] * 6)
         self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["plan"]["previously_uploaded"], 0)
+        self.assertEqual(manifest["person_hashes"], {NEW_PERSON: "previously-uploaded"})
         # The `yes` row only: the human's `private` and the machine's `confirm` stay home.
         self.assertEqual(payload["plan"]["persons_upsert_ids"], [NEW_PERSON])
         self.assertEqual(payload["plan"]["persons_upsert"], 1)
@@ -574,6 +581,7 @@ class DryRunTests(unittest.TestCase):
                 two = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
         self.assertEqual(one["progress"]["uploaded"], 1)
         self.assertEqual(two["progress"]["uploaded"], 0)
+        self.assertEqual(two["plan"]["previously_uploaded"], 1)
         self.assertEqual(two["progress"]["skipped"], 1)
         self.assertEqual(sum(len(ns.writes) for ns in namespaces.values()), before)
         self.assertEqual(writes, [("persons", 1), ("sources", 1), ("persons", 0), ("sources", 0)])

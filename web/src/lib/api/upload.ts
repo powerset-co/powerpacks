@@ -1,7 +1,9 @@
 import { body, failure } from "@/lib/api/http"
 
 export interface UploadStatus {
-  status: "idle" | "running" | "completed" | "failed" | "interrupted"
+  status: "idle" | "running" | "ready" | "completed" | "failed" | "interrupted"
+  checking?: boolean
+  previously_uploaded?: number
   progress: {
     total: number
     uploaded: number
@@ -15,10 +17,10 @@ export interface UploadStatus {
   companies_skipped_no_row?: number
 }
 
-export async function uploadStatus(start = false): Promise<UploadStatus> {
+export async function uploadStatus(action?: "check" | "confirm"): Promise<UploadStatus> {
   const response = await fetch(
-    "/api/people/upload",
-    start
+    action === "check" ? "/api/people/upload/check" : "/api/people/upload",
+    action
       ? {
           method: "POST",
           headers: { "Content-Type": "application/json" },

@@ -11,6 +11,9 @@ from typing import Any
 
 from packs.indexing.primitives.upload_powerset import upload_powerset
 from packs.indexing.primitives.upload_powerset.errors import log_error
+from packs.ingestion.primitives.deep_context.db.share_views import share_decisions
+from packs.ingestion.primitives.deep_context.db.store import open_existing_db
+from packs.ingestion.schemas.share_schema import SHARE_YES
 
 SAFE_ERRORS = frozenset({
     "Upload requires the powerset_v2 PostgreSQL login",
@@ -32,22 +35,24 @@ class ShareUpload:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
-    def status(self) -> dict[str, Any]:
-        manifest = self.out_dir / "manifest.json"
+    def _saved(self) -> dict[str, Any]:
         try:
-            saved = json.loads(manifest.read_text(encoding="utf-8"))
+            return json.loads((self.out_dir / "manifest.json").read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
-            saved = {}
+            return {}
+
+    def status(self) -> dict[str, Any]:
+        saved = self._saved()
         with self._lock:
             active = self._thread is not None and self._thread.is_alive()
         state = saved.get("status", "idle")
         if saved.get("dry_run") and state == "completed":
-            state = "idle"
+            state = "ready"
         if active:
             state = "running"
         elif state == "running":
             state = "interrupted"
-        if state not in {"idle", "running", "completed", "failed", "interrupted"}:
+        if state not in {"idle", "running", "ready", "completed", "failed", "interrupted"}:
             state = "failed"
         progress = saved.get("progress") or {}
         counts = {key: int(progress.get(key) or 0) for key in ("total", "uploaded", "skipped")}
@@ -60,8 +65,19 @@ class ShareUpload:
             }
         payload: dict[str, Any] = {
             "status": state,
+            "checking": state == "running" and bool(saved.get("dry_run")),
             "progress": counts,
         }
+        preview_count = (saved.get("plan") or {}).get("previously_uploaded")
+        hashes = saved.get("person_hashes") or {}
+        if saved.get("dry_run") and saved.get("status") == "completed" and isinstance(preview_count, int):
+            payload["previously_uploaded"] = preview_count
+        elif hashes:
+            shared = {row.person_id for row in share_decisions(open_existing_db(self.share_db))
+                      if row.share == SHARE_YES and row.public_identifier}
+            payload["previously_uploaded"] = len(shared & hashes.keys())
+        else:
+            payload["previously_uploaded"] = 0
         if state == "running" and isinstance(saved.get("stage"), str):
             stage = saved["stage"]
             payload["stage"] = stage
@@ -96,31 +112,32 @@ class ShareUpload:
             payload["result"] = saved["result"]
         return payload
 
-    def start(self) -> dict[str, Any]:
+    def start(self, *, dry_run: bool) -> dict[str, Any] | None:
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
                 manifest = self.out_dir / "manifest.json"
-                try:
-                    previous = json.loads(manifest.read_text(encoding="utf-8"))
-                except (FileNotFoundError, json.JSONDecodeError):
-                    previous = {}
+                previous = self._saved()
+                if not dry_run and (previous.get("status") != "completed" or not previous.get("dry_run")):
+                    return None
                 running = {key: previous[key] for key in
                            ("target", "person_hashes", "owned_people", "pending_upserts") if key in previous}
-                running.update(status="running", stage="planning", dry_run=False,
+                running.update(status="running", stage="planning", dry_run=dry_run,
                                progress={"total": 0, "uploaded": 0, "skipped": 0})
                 self.out_dir.mkdir(parents=True, exist_ok=True)
                 pending = manifest.with_suffix(".tmp")
                 pending.write_text(json.dumps(running) + "\n", encoding="utf-8")
                 pending.replace(manifest)
-                self._thread = threading.Thread(target=self._run, daemon=True)
+                self._thread = threading.Thread(target=self._run, args=(dry_run,), daemon=True)
                 self._thread.start()
+            elif not dry_run and self._saved().get("dry_run"):
+                return None
         return self.status()
 
-    def _run(self) -> None:
+    def _run(self, dry_run: bool) -> None:
         try:
             upload_powerset.UploadPowerset(
                 db=self.index_db, share_db=self.share_db, people_csv=self.people_csv,
-                out_dir=self.out_dir, dry_run=False,
+                out_dir=self.out_dir, dry_run=dry_run,
                 env_file=Path(os.environ["POWERPACKS_UPLOAD_ENV_FILE"])
                 if os.environ.get("POWERPACKS_UPLOAD_ENV_FILE") else None,
             ).run()

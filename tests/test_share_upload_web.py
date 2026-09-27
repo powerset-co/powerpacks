@@ -28,11 +28,11 @@ class UploadRoutesTests(ShareWebFixture):
         with urllib.request.urlopen(self.base + "/api/people/upload") as response:
             return json.load(response)
 
-    def _post(self, *, origin: str | None = None) -> tuple[int, dict | str]:
+    def _post(self, path: str = "/api/people/upload", *, origin: str | None = None) -> tuple[int, dict | str]:
         headers = {"Content-Type": "application/json"}
         if origin:
             headers["Origin"] = origin
-        request = urllib.request.Request(self.base + "/api/people/upload", data=b"{}",
+        request = urllib.request.Request(self.base + path, data=b"{}",
                                          headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request) as response:
@@ -64,12 +64,15 @@ class UploadRoutesTests(ShareWebFixture):
                 }))
 
         with patch("packs.indexing.primitives.upload_powerset.upload_powerset.UploadPowerset", FakeUploader):
+            self.upload_dir.mkdir()
+            (self.upload_dir / "manifest.json").write_text(json.dumps({"status": "completed", "dry_run": True}))
             self.assertEqual(self._post()[0], 200)
             self.assertTrue(started.wait(5))
             self.assertEqual(self._post()[0], 200)
-            self.assertEqual(self._get(), {"status": "running", "stage": "people",
-                                           "message": "Uploading people…", "progress": {
-                                               "total": 4, "uploaded": 1, "skipped": 2}})
+            status = self._get()
+            self.assertEqual((status["status"], status["stage"], status["message"]),
+                             ("running", "people", "Uploading people…"))
+            self.assertEqual(status["progress"], {"total": 4, "uploaded": 1, "skipped": 2})
             self.assertEqual(len(calls), 1)
             self.assertEqual(calls[0]["share_db"], self.db.db_path)
             self.assertEqual(calls[0]["people_csv"], self.people_csv)
@@ -79,8 +82,10 @@ class UploadRoutesTests(ShareWebFixture):
                 if self._get()["status"] == "completed":
                     break
                 threading.Event().wait(0.01)
-            self.assertEqual(self._get(), {"status": "completed", "progress": {
-                "total": 4, "uploaded": 2, "skipped": 2}, "result": {"docs_upserted": {"people": 2}}})
+            status = self._get()
+            self.assertEqual(status["status"], "completed")
+            self.assertEqual(status["progress"], {"total": 4, "uploaded": 2, "skipped": 2})
+            self.assertEqual(status["result"], {"docs_upserted": {"people": 2}})
 
     def test_stale_running_manifest_is_interrupted_and_errors_are_sanitized(self) -> None:
         self.upload_dir.mkdir()
@@ -95,12 +100,13 @@ class UploadRoutesTests(ShareWebFixture):
         (self.upload_dir / "manifest.json").write_text(json.dumps({
             "status": "completed", "dry_run": True, "progress": {"total": 3, "uploaded": 0, "skipped": 3},
         }))
-        self.assertEqual(self._get()["status"], "idle")
+        self.assertEqual(self._get()["status"], "ready")
 
     def test_new_upload_starts_at_zero_and_keeps_recovery_fields(self) -> None:
         self.upload_dir.mkdir()
         manifest = self.upload_dir / "manifest.json"
-        previous = {"status": "completed", "progress": {"total": 4, "uploaded": 4, "skipped": 0},
+        previous = {"status": "completed", "dry_run": True,
+                    "progress": {"total": 4, "uploaded": 4, "skipped": 0},
                     "target": {"namespaces": {"people": "aleph_people_v3"}},
                     "person_hashes": {"person-a": "hash-a"}, "owned_people": ["person-a"],
                     "pending_upserts": {"people": ["person-a"]}}
@@ -129,7 +135,8 @@ class UploadRoutesTests(ShareWebFixture):
     def test_failure_before_uploader_manifest_cannot_leave_old_success(self) -> None:
         self.upload_dir.mkdir()
         manifest = self.upload_dir / "manifest.json"
-        previous = {"status": "completed", "target": {"namespaces": {"people": "aleph_people_v3"}},
+        previous = {"status": "completed", "dry_run": True,
+                    "target": {"namespaces": {"people": "aleph_people_v3"}},
                     "person_hashes": {"person-a": "hash-a"}, "owned_people": ["person-a"],
                     "pending_upserts": {"people": ["person-a"]}}
         manifest.write_text(json.dumps(previous))
@@ -182,3 +189,82 @@ class UploadRoutesTests(ShareWebFixture):
     def test_upload_rejects_remote_origin(self) -> None:
         status, _ = self._post(origin="https://elsewhere.example")
         self.assertEqual(status, 403)
+
+    def test_check_runs_dry_run_and_only_confirm_applies(self) -> None:
+        calls = []
+        upload_dir = self.upload_dir
+
+        class FakeUploader:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+                self.dry_run = kwargs["dry_run"]
+
+            def run(self):
+                upload_dir.mkdir(exist_ok=True)
+                (upload_dir / "manifest.json").write_text(json.dumps({
+                    "status": "completed", "dry_run": self.dry_run,
+                    "progress": {"total": 3, "uploaded": 0, "skipped": 0},
+                }))
+
+        with patch("packs.indexing.primitives.upload_powerset.upload_powerset.UploadPowerset", FakeUploader):
+            self.assertEqual(self._post()[0], 409)
+            self.assertEqual(self._post("/api/people/upload/check")[0], 200)
+            for _ in range(100):
+                if self._get()["status"] == "ready":
+                    break
+                threading.Event().wait(0.01)
+            self.assertEqual(self._get()["status"], "ready")
+            self.assertEqual([call["dry_run"] for call in calls], [True])
+            self.assertEqual(self._post()[0], 200)
+            for _ in range(100):
+                if self._get()["status"] == "completed":
+                    break
+                threading.Event().wait(0.01)
+            self.assertEqual([call["dry_run"] for call in calls], [True, False])
+
+    def test_closing_after_check_does_not_apply_and_saved_uploads_count(self) -> None:
+        self.upload_dir.mkdir()
+        (self.upload_dir / "manifest.json").write_text(json.dumps({
+            "status": "completed", "dry_run": True,
+            "person_hashes": {"person-a": "hash-a", "person-c": "hash-c"},
+            "progress": {"total": 3, "uploaded": 0, "skipped": 0},
+        }))
+        status = self._get()
+        self.assertEqual(status["status"], "ready")
+        self.assertEqual(status["previously_uploaded"], 1)
+
+    def test_check_joins_active_apply(self) -> None:
+        self.upload_dir.mkdir()
+        (self.upload_dir / "manifest.json").write_text(json.dumps({"status": "completed", "dry_run": True}))
+        started = threading.Event()
+        finish = threading.Event()
+        calls = []
+
+        class FakeUploader:
+            def __init__(self, **kwargs):
+                calls.append(kwargs["dry_run"])
+
+            def run(self):
+                started.set()
+                finish.wait(5)
+
+        with patch("packs.indexing.primitives.upload_powerset.upload_powerset.UploadPowerset", FakeUploader):
+            try:
+                self.assertEqual(self._post()[0], 200)
+                self.assertTrue(started.wait(5))
+                code, status = self._post("/api/people/upload/check")
+                self.assertEqual(code, 200)
+                self.assertEqual(status["status"], "running")
+                self.assertFalse(status["checking"])
+                self.assertEqual(calls, [False])
+            finally:
+                finish.set()
+
+    def test_preview_count_prefers_target_aware_plan(self) -> None:
+        self.upload_dir.mkdir()
+        (self.upload_dir / "manifest.json").write_text(json.dumps({
+            "status": "completed", "dry_run": True,
+            "person_hashes": {"person-a": "old-target"},
+            "plan": {"previously_uploaded": 0},
+        }))
+        self.assertEqual(self._get()["previously_uploaded"], 0)

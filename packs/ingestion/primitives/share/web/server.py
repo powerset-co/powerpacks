@@ -8,7 +8,8 @@ assets); `make_handler` serves the two alone for tests. GET `/api/people/rows` -
 sets, so undo re-posts the previous sets), writes the tag rows for every person
 under those parents and re-decides their share rows through
 `labels.share_decision` from `person_labels`, in one transaction.
-GET/POST `/api/people/upload` reads progress and starts one shared upload.
+GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
+POST `/api/people/upload` confirms and starts one shared upload.
 
 Changelog:
   2026-09-26: created.
@@ -138,14 +139,19 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload"}:
+        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in LOCAL_HOSTS:
             self._send(handler, b"cross-origin request rejected", "text/plain", status=HTTPStatus.FORBIDDEN)
             return True
-        if parsed.path == f"{API_PREFIX}upload":
-            self._send_json(handler, self.upload.start())
+        if parsed.path in {f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
+            status = self.upload.start(dry_run=parsed.path.endswith("/check"))
+            if status is None:
+                self._send_json(handler, {"error": "Check your network before uploading"},
+                                status=HTTPStatus.CONFLICT)
+            else:
+                self._send_json(handler, status)
             return True
         length = int(handler.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_TAGS_REQUEST_BYTES:
