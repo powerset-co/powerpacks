@@ -28,12 +28,12 @@ from typing import Any, Iterable, Sequence
 
 import turbopuffer
 
+from packs.indexing.lib.contracts import load_search_contract, vector_metadata
 from packs.indexing.primitives.upload_powerset.models import Namespace
 
 BATCH_SIZE = 500
 QUERY_PAGE_SIZE = 1000
 STRONG_CONSISTENCY = {"level": "strong"}
-DISTANCE_METRIC = "cosine_distance"
 
 ALLOWED_OPERATOR_IDS_SCHEMA = {"allowed_operator_ids": {"type": "[]string"}}
 
@@ -190,9 +190,10 @@ def fetch_allowed_operator_ids(ns: Any, ids: Sequence[str]) -> dict[str, tuple[s
 
 
 def upsert_docs(ns: Any, logical: str, rows: Sequence[dict[str, Any]]) -> int:
+    vector = vector_metadata(load_search_contract(f"turbopuffer/{logical}.namespace.json"))
+    options = {"distance_metric": vector["distance_metric"]} if vector else {}
     for batch in _chunks(list(rows), BATCH_SIZE):
-        ns.write(upsert_rows=list(batch), schema=NAMESPACE_BY_LOGICAL[logical].write_schema,
-                 distance_metric=DISTANCE_METRIC)
+        ns.write(upsert_rows=list(batch), schema=NAMESPACE_BY_LOGICAL[logical].write_schema, **options)
     return len(rows)
 
 
