@@ -39,7 +39,8 @@ class UploadContractTests(unittest.TestCase):
                 (UploadManifest(), "idle", None, None),
                 (replace(UploadManifest(), status="running", dry_run=True, stage=Stage.CHECKING_ACCESS),
                  "checking", None, None),
-                (replace(UploadManifest(), status="completed", dry_run=True, plan=plan), "ready", None, None),
+                (replace(UploadManifest(), status="completed", dry_run=True, plan=plan, share_digest="d1"),
+                 "ready", None, None),
                 (replace(UploadManifest(), status="running", dry_run=False, stage=Stage.WRITING_PEOPLE,
                          plan=plan), "uploading", None, None),
                 (replace(UploadManifest(), status="completed", dry_run=False, plan=plan),
@@ -59,7 +60,7 @@ class UploadContractTests(unittest.TestCase):
                 self.assertEqual((status["status"], status["failed_action"], status["error"]),
                                  (state, action, error))
                 self.assertEqual(set(status), {"status", "stage", "message", "progress", "plan",
-                                               "last_upload", "failed_action", "error"})
+                                               "checked", "last_upload", "failed_action", "error"})
                 if state == "uploading":
                     self.assertEqual(status["stage"], "writing_people")
                 if state == "ready":

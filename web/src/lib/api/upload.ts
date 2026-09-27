@@ -34,6 +34,8 @@ export interface UploadStatus {
     namespaces: Record<string, { upserted: number; patched: number }>
   }
   plan: UploadPlan | null
+  // The completed check's digest while ready; the confirm sends it back.
+  checked: string | null
   last_upload: LastUpload | null
   failed_action: UploadAction | null
   error: string | null
@@ -55,13 +57,19 @@ export async function readUpload(): Promise<UploadStatus> {
   return answer(await fetch(STATUS_URL))
 }
 
-/** Starts the check (a dry run) or the real upload; a refusal (409, 403) throws the server's sentence. */
-export async function startUpload(action: UploadAction): Promise<UploadStatus> {
+/**
+ * Starts the check (a dry run), or the real upload of the check the dialog displayed (`checked`
+ * is that status's digest); a refusal (409, 403) throws the server's sentence.
+ */
+export async function startUpload(
+  action: UploadAction,
+  checked: string | null = null,
+): Promise<UploadStatus> {
   return answer(
     await fetch(START_URL[action], {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify(action === "upload" ? { checked } : {}),
     }),
   )
 }

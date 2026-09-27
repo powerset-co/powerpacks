@@ -65,7 +65,7 @@ from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
 from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
 from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS, log_error, safe_error  # noqa: E402
 from packs.indexing.primitives.upload_powerset.manifest import (  # noqa: E402
-    CHANGED_CHECK, CHECK_FAILED, UPLOAD_FAILED, Stage, UploadManifest, share_digest,
+    CHANGED_CHECK, CHECK_FAILED, UPLOAD_FAILED, CheckChanged, Stage, UploadManifest, share_digest,
 )
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES, NAMESPACE_BY_LOGICAL  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -123,6 +123,11 @@ class UploadPowerset:
             if isinstance(exc, KeyboardInterrupt):
                 raise
             current = UploadManifest.read(self.manifest_path)
+            if isinstance(exc, CheckChanged):
+                # Refused before any write: the last upload stands and there is nothing to log.
+                replace(current, status="failed", error=CHANGED_CHECK, error_type=type(exc).__name__,
+                        finished_at=now_iso()).write(self.manifest_path)
+                raise
             message = safe_error(exc, CHECK_FAILED if self.dry_run else UPLOAD_FAILED)
             current = replace(current, status="failed", error=message,
                               error_type=type(exc).__name__, finished_at=now_iso())
@@ -188,15 +193,16 @@ class UploadPowerset:
                     old_hashes = previous.person_hashes if same_target else {}
                     owned_people = set(previous.owned_people) if same_target else set()
                     newly_owned = set(next(ns.upsert_ids for ns in plan.namespaces if ns.logical == "people"))
+                    # Owned people whose content moved; new people are written too but counted as new.
                     changed = tuple(person_id for person_id in plan.persons_upsert
-                                    if (old_hashes.get(person_id) != hashes[person_id] or person_id in newly_owned)
-                                    and (person_id in owned_people or person_id in newly_owned))
+                                    if person_id in owned_people and old_hashes.get(person_id) != hashes[person_id])
+                    to_write = tuple(sorted(set(changed) | newly_owned))
                     retry_upserts = previous.pending_upserts if same_target else {}
                     shared_ids = set(plan.persons_upsert)
                     namespaces = []
                     for ns in plan.namespaces:
                         if NAMESPACE_BY_LOGICAL[ns.logical].person_grain:
-                            extra = (set(retry_upserts.get(ns.logical, ())) & shared_ids) | (set(changed) & owned_people)
+                            extra = (set(retry_upserts.get(ns.logical, ())) & shared_ids) | set(changed)
                             namespaces.append(replace(ns, upsert_ids=tuple(sorted(set(ns.upsert_ids) | extra)),
                                                       patch_person_ids=tuple(sorted(set(ns.patch_person_ids) - extra))))
                         else:
@@ -218,7 +224,7 @@ class UploadPowerset:
                                    companies_missing=preview["companies_skipped_no_row"])
                     if self.require_checked and not self.dry_run and (previous.plan is None or previous.checked_target != target
                                              or previous.plan != preview or previous.share_digest != digest):
-                        raise RuntimeError(CHANGED_CHECK)
+                        raise CheckChanged(CHANGED_CHECK)
                     current = replace(current, operator_id=operator_id, plan=preview,
                                       checked_target=target if self.dry_run else previous.checked_target)
                     if not self.dry_run:
@@ -227,9 +233,9 @@ class UploadPowerset:
                             pending_upserts={ns.logical: ns.upsert_ids for ns in plan.namespaces})
                     total = len(plan.persons_upsert) + preview["losing_access"]
                     current = replace(current, progress={"total": total, "uploaded": 0,
-                                            "skipped": total - len(changed), "namespaces": {}})
+                                            "skipped": total - len(to_write), "namespaces": {}})
                     current.write(self.manifest_path)
-                    result = UploadResult() if self.dry_run else self._apply(con, cur, plan, changed)
+                    result = UploadResult() if self.dry_run else self._apply(con, cur, plan, to_write)
                     if not self.dry_run:
                         current = UploadManifest.read(self.manifest_path).at(Stage.COMMITTING)
                         current.write(self.manifest_path)

@@ -43,6 +43,8 @@ from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB
 from packs.shared.web.app import AppRoutes
 
 API_PREFIX = "/api/people/"
+# The hosts this machine answers on: a same-origin request must name one of them.
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
 
@@ -142,13 +144,24 @@ class ShareRoutes:
         if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
+        host = (handler.headers.get("Host") or "").strip()
         scheme = "https" if getattr(handler.connection, "cipher", None) else "http"
-        if origin and origin != f"{scheme}://{handler.headers['Host']}":
+        hostname = (urllib.parse.urlsplit(f"//{host}").hostname or "").lower()
+        # The page's own origin only: same scheme, host and port, and that host is this machine.
+        if origin and (origin != f"{scheme}://{host}" or hostname not in LOCAL_HOSTS):
             self._send(handler, b"cross-origin request rejected", "text/plain", status=HTTPStatus.FORBIDDEN)
             return True
         if parsed.path in {f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
+            length = int(handler.headers.get("Content-Length") or 0)
             try:
-                status = self.upload.start(dry_run=parsed.path.endswith("/check"))
+                body = json.loads(handler.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                self._send_json(handler, {"error": "request body must be JSON"}, status=HTTPStatus.BAD_REQUEST)
+                return True
+            checked = body.get("checked") if isinstance(body, dict) else None
+            try:
+                status = self.upload.start(dry_run=parsed.path.endswith("/check"),
+                                           checked=checked if isinstance(checked, str) else None)
             except ValueError as exc:
                 self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
             else:

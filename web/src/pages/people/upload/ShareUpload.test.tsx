@@ -116,8 +116,8 @@ describe("ShareUpload dialog", () => {
     expect(posts(fetch)).toEqual(["/api/people/upload/check"])
   })
 
-  it("uploads only on confirm, counts people, then shows the result", async () => {
-    let state = uploadStatus({ status: "ready", plan: PLAN })
+  it("uploads only on confirm, sending the check it displayed, counts people, then shows the result", async () => {
+    let state = uploadStatus({ status: "ready", plan: PLAN, checked: "digest-1" })
     const fetch = serve({
       get: () => state,
       upload: () =>
@@ -142,6 +142,11 @@ describe("ShareUpload dialog", () => {
     expect(within(dialog).getByText("Already up to date").nextSibling?.textContent).toBe("125")
     expect(within(dialog).getByText(/^Finished Sep 27/)).toBeTruthy()
     expect(posts(fetch)).toEqual(["/api/people/upload"])
+    const confirm = fetch.mock.calls.find(
+      ([url, init]) => url === "/api/people/upload" && init?.method === "POST",
+    )
+    const sent = confirm?.[1]?.body
+    expect(typeof sent === "string" ? JSON.parse(sent) : sent).toEqual({ checked: "digest-1" })
   })
 
   it("says up to date when the run had nothing to write", async () => {

@@ -29,6 +29,7 @@ from packs.indexing.primitives.upload_powerset.plan import build_plan
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
 from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.indexing.primitives.upload_powerset.manifest import UploadManifest
 from packs.ingestion.schemas.share_schema import (
     FAMILY,
     HUMAN_PRIVATE,
@@ -574,7 +575,12 @@ class DryRunTests(unittest.TestCase):
                          mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=plans), \
                          mock.patch.object(upload_powerset.UploadPowerset, "_apply") as apply, \
                          mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
+                        last = {"finished_at": "2026-09-27T12:00:00Z", "status": "completed", "uploaded": 4, "skipped": 0}
+                        replace(UploadManifest(), last_upload=last).write(paths["out_dir"] / "manifest.json")
                         upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
+                        checked = json.loads((paths["out_dir"] / "manifest.json").read_text())["plan"]
+                        # A new person is new, not changed.
+                        self.assertEqual((checked["new_to_cloud"], checked["changed"]), (1, 0))
                         with self.assertRaisesRegex(RuntimeError, "network changed since the check"):
                             upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False,
                                                            require_checked=True, **paths).run()
@@ -582,6 +588,9 @@ class DryRunTests(unittest.TestCase):
                     saved = json.loads((paths["out_dir"] / "manifest.json").read_text())
                     self.assertEqual((saved["status"], saved["error"]),
                                      ("failed", "Your network changed since the check. Check again."))
+                    # Refused before any write: the last upload stands and nothing is logged.
+                    self.assertEqual(saved["last_upload"], last)
+                    self.assertFalse((paths["out_dir"] / "errors.log").exists())
 
     def test_same_network_second_apply_makes_no_cloud_writes(self):
         first = plan_for([share_row(NEW_PERSON, "jordan-bravo")],

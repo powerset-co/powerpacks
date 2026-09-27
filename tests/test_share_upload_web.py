@@ -8,16 +8,22 @@ import urllib.parse
 from dataclasses import replace
 from unittest import mock
 
-from packs.indexing.primitives.upload_powerset.manifest import CHANGED_CHECK, CHECK_FIRST, UploadManifest
+from packs.indexing.primitives.upload_powerset.manifest import (
+    CHANGED_CHECK, CHECK_FAILED, CHECK_FIRST, UploadManifest, share_digest,
+)
+from packs.ingestion.primitives.deep_context.db.share_views import share_decisions
+from packs.ingestion.primitives.deep_context.db.store import open_existing_db
+from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.ingestion.primitives.share.web.server import share_routes
 from test_share_web import ShareWebFixture
 
 
 class Handler:
-    def __init__(self, origin: str | None = None):
-        self.headers = {"Host": "127.0.0.1:8797"}
+    def __init__(self, origin: str | None = None, host: str = "127.0.0.1:8797", body: bytes = b"{}"):
+        self.headers = {"Host": host, "Content-Length": str(len(body))}
         if origin is not None:
             self.headers["Origin"] = origin
+        self.rfile = io.BytesIO(body)
         self.connection = object()
         self.wfile = io.BytesIO()
         self.response_status = None
@@ -39,8 +45,8 @@ class UploadRoutesTests(ShareWebFixture):
         self.routes = share_routes(self.db, self.people_csv,
                                    upload_db=self.root / "local-search.duckdb", upload_dir=self.upload_dir)
 
-    def _post(self, path="/api/people/upload", origin=None):
-        handler = Handler(origin)
+    def _post(self, path="/api/people/upload", origin=None, body=b"{}", host="127.0.0.1:8797"):
+        handler = Handler(origin, host, body)
         self.assertTrue(self.routes.post(handler, urllib.parse.urlparse(path)))
         return handler.response_status, json.loads(handler.wfile.getvalue()) if handler.wfile.getvalue().startswith(b"{") else None
 
@@ -54,7 +60,7 @@ class UploadRoutesTests(ShareWebFixture):
         self.assertEqual(self._get(), {
             "status": "idle", "stage": None, "message": None,
             "progress": {"total": 0, "uploaded": 0, "skipped": 0, "namespaces": {}},
-            "plan": None, "last_upload": None, "failed_action": None, "error": None,
+            "plan": None, "checked": None, "last_upload": None, "failed_action": None, "error": None,
         })
 
     def test_upload_requires_completed_check(self):
@@ -64,8 +70,38 @@ class UploadRoutesTests(ShareWebFixture):
     def test_confirm_rejects_changed_share_decisions(self):
         replace(UploadManifest(), status="completed", dry_run=True,
                 plan={"marked_share": 1}, share_digest="old").write(self.routes.upload.manifest_path)
-        code, body = self._post()
+        code, body = self._post(body=json.dumps({"checked": "old"}).encode())
         self.assertEqual((code, body), (409, {"error": CHANGED_CHECK}))
+
+    def _checked(self) -> str:
+        digest = share_digest(share_decisions(open_existing_db(self.db.db_path)))
+        replace(UploadManifest(), status="completed", dry_run=True,
+                plan={"marked_share": 1}, share_digest=digest).write(self.routes.upload.manifest_path)
+        return digest
+
+    def test_confirm_must_carry_the_check_it_displayed(self):
+        digest = self._checked()
+        self.assertEqual(self._get()["checked"], digest)
+        self.assertEqual(self._post(), (409, {"error": CHANGED_CHECK}))
+        self.assertEqual(self._post(body=json.dumps({"checked": "another-tab"}).encode()),
+                         (409, {"error": CHANGED_CHECK}))
+        with mock.patch.object(ShareUpload, "_run"):
+            code, _ = self._post(body=json.dumps({"checked": digest}).encode())
+        self.assertEqual(code, 200)
+
+    def test_unreadable_store_answers_the_check_failed_sentence(self):
+        digest = self._checked()
+        with mock.patch("packs.ingestion.primitives.share.web.upload.open_existing_db", side_effect=SystemExit(2)):
+            code, body = self._post(body=json.dumps({"checked": digest}).encode())
+        self.assertEqual((code, body), (409, {"error": CHECK_FAILED}))
+        self.assertTrue((self.upload_dir / "errors.log").exists())
+
+    def test_post_rejects_a_rebound_host_and_a_missing_host(self):
+        self.assertEqual(self._post(origin="http://attacker.example:8797", host="attacker.example:8797")[0], 403)
+        self.assertEqual(self._post(origin="http://127.0.0.1:8797", host="")[0], 403)
+        with mock.patch.object(self.routes.upload, "start", return_value={"status": "checking"}):
+            self.assertEqual(self._post("/api/people/upload/check", origin="http://[::1]:8797", host="[::1]:8797"),
+                             (200, {"status": "checking"}))
 
     def test_active_run_rejects_confirm_and_joins_check(self):
         self.routes.upload._thread = mock.Mock(is_alive=mock.Mock(return_value=True))

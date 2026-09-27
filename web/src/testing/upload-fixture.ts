@@ -20,6 +20,7 @@ export function uploadStatus(overrides: Partial<UploadStatus> = {}): UploadStatu
     message: null,
     progress: { total: 0, uploaded: 0, skipped: 0, namespaces: {} },
     plan: null,
+    checked: null,
     last_upload: null,
     failed_action: null,
     error: null,

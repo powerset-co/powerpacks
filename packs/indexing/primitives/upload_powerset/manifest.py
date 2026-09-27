@@ -37,6 +37,10 @@ UPLOAD_FAILED = "Upload failed. Check again to resume."
 CHECK_FAILED = "Could not check your network. Check again."
 
 
+class CheckChanged(RuntimeError):
+    """The share table, plan or target differ from the completed check; nothing was written."""
+
+
 @dataclass(frozen=True)
 class UploadManifest:
     status: str = "idle"

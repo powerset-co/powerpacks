@@ -36,12 +36,12 @@ export function useUpload(onToast: (message: string) => void) {
   })
   const status = query.data
 
-  async function start(action: UploadAction) {
+  async function start(action: UploadAction, checked: string | null = null) {
     setStarting(action)
     setRefused(null)
     try {
       await client.cancelQueries({ queryKey: UPLOAD_KEY })
-      client.setQueryData(UPLOAD_KEY, await startUpload(action))
+      client.setQueryData(UPLOAD_KEY, await startUpload(action, checked))
     } catch (error) {
       setRefused({ action, error: errorText(error) })
       // The run may have started anyway: read the status, which polls on if it did.
@@ -67,7 +67,8 @@ export function useUpload(onToast: (message: string) => void) {
     setOpen,
     onOpen,
     check: () => void start("check"),
-    confirm: () => void start("upload"),
+    // The confirm names the check it displayed, so a check from another tab cannot be confirmed here.
+    confirm: () => void start("upload", status?.checked ?? null),
   }
 }
 

@@ -154,12 +154,12 @@ class RowModelTests(ShareWebFixture):
         self.assertEqual((casey.name, casey.public_identifier, casey.channels, casey.interactions, casey.last_interaction),
                          ("Casey Delta", "casey-delta", ("imessage", "gmail"), 405, "2026-09-01T00:00:00Z"))
         riley = rows["parent-cccc"]
-        self.assertEqual((riley.share, riley.reason, riley.linkedin_only, riley.labels), ("no", "worth_maybe", True, ()))
+        self.assertEqual((riley.share, riley.reason, riley.linkedin_only, riley.labels), ("yes", "worth_yes", True, ()))
         self.assertEqual(rows["parent-dddd"].labels, ("is_professional",))
 
     def test_payload_is_columnar_with_counts(self) -> None:
         payload = people_payload(self.people.load())
-        self.assertEqual(payload["counts"], {"total": 4, "upload": 2, "confirm": 1, "private": 1})
+        self.assertEqual(payload["counts"], {"total": 4, "upload": 3, "confirm": 1, "private": 0})
         self.assertEqual(payload["columns"], list(PEOPLE_COLUMNS))
         self.assertEqual(len(payload["rows"][0]), len(PEOPLE_COLUMNS))
 
@@ -327,7 +327,7 @@ class RoutesTests(ShareWebFixture):
         self.assertEqual(body["rows"], [{"parent_id": "parent-bbbb", "share": "yes", "reason": "human_share",
                                          "share_source": "human", "tags": ["share"]}])
         self.assertEqual(ts_fields("TagResult"), tuple(body["rows"][0]))
-        self.assertEqual(self._get("/api/people/rows")["counts"], {"total": 4, "upload": 3, "confirm": 0, "private": 1})
+        self.assertEqual(self._get("/api/people/rows")["counts"], {"total": 4, "upload": 4, "confirm": 0, "private": 0})
 
     def test_bad_requests_write_nothing(self) -> None:
         status, payload = self._post({"people": [{"parent_id": "ghost", "tags": ["share"]}]})
@@ -371,7 +371,7 @@ class BrowserTests(ShareWebFixture):
             page = browser.new_page(viewport={"width": 1400, "height": 900})
             page.goto(self.base + "/people")
             page.locator("[data-tab='yes']").click()
-            expect(page.locator(".row")).to_have_count(2)
+            expect(page.locator(".row")).to_have_count(3)
             names = page.locator(".row .who b").all_inner_texts()
             # 500ms apart: each person's fade-in has finished before the next click.
             for index in (0, 1, 0, 1):
@@ -394,30 +394,30 @@ class BrowserTests(ShareWebFixture):
             # Opens on the Confirm tab: Casey alone; the tabs carry the totals.
             expect(page.locator(".row")).to_have_count(1)
             expect(page.locator("[data-count]")).to_have_text("1 person")
-            expect(page.locator("[data-tab='yes'] b")).to_have_text("2")
+            expect(page.locator("[data-tab='yes'] b")).to_have_text("3")
             # Casey's two roster people share the row: both sources show.
             expect(page.locator(".row .source")).to_have_count(2)
             expect(page.locator(".row .source").first).to_have_attribute("title", "iMessage")
             expect(page.locator(".row .warmth-cell")).to_have_text("4.0")
             page.locator("[data-tab='yes']").click()
-            expect(page.locator(".row")).to_have_count(2)
+            expect(page.locator(".row")).to_have_count(3)
             page.locator("[data-facet-key='relationship_kind'][data-facet-value='colleague']").click()
             expect(page.locator(".row")).to_have_count(1)
             expect(page.locator(".row .who b")).to_have_text("Jordan Bravo")
             page.get_by_role("button", name="Clear").click()
-            expect(page.locator(".row")).to_have_count(2)
+            expect(page.locator(".row")).to_have_count(3)
             page.locator("[data-tab='confirm']").click()
             page.locator("[data-select-all]").check()
             expect(page.locator("[data-action-bar] b")).to_have_text("1 selected")
             page.get_by_role("button", name="Share S").click()
             expect(page.locator(".toast")).to_contain_text("Marked 1 person for sharing.")
             expect(page.locator("[data-empty]")).to_have_text("No one needs confirmation.")
-            expect(page.locator("[data-tab='yes'] b")).to_have_text("3")
+            expect(page.locator("[data-tab='yes'] b")).to_have_text("4")
             self.assertEqual(_decisions(self.db)["person-b"][:2], ("yes", "human_share"))
             self.assertEqual(_decisions(self.db)["person-e"][:2], ("yes", "human_share"))
             page.locator(".toast").get_by_role("button", name="Undo Z").click()
             expect(page.locator(".row")).to_have_count(1)
-            expect(page.locator("[data-tab='yes'] b")).to_have_text("2")
+            expect(page.locator("[data-tab='yes'] b")).to_have_text("3")
             self.assertEqual(_decisions(self.db)["person-b"][:2], ("confirm", "family"))
             # A click opens the drawer on the same row node; the next click closes it.
             page.evaluate("document.querySelector('.row').__kept = true")

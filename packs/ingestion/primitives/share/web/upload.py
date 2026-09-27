@@ -65,7 +65,10 @@ class ShareUpload:
             try:
                 saved = self._saved()
             except BaseException:
+                # An unreadable manifest is set aside, never overwritten.
                 saved = UploadManifest()
+                if self.manifest_path.exists():
+                    self.manifest_path.replace(self.manifest_path.with_name("manifest.json.bkup"))
             failed = replace(saved, status="failed", error=CHECK_FAILED if saved.dry_run else UPLOAD_FAILED)
             failed.write(self.manifest_path)
             log_error(self.out_dir, saved.stage or Stage.PLANNING, exc, self._env_file())
@@ -88,7 +91,8 @@ class ShareUpload:
         if saved.status == "running":
             state = "checking" if saved.dry_run else "uploading"
         elif saved.status == "completed" and saved.dry_run:
-            state = "ready"
+            # A check from before the binding carries no digest: check again.
+            state = "ready" if saved.share_digest else "idle"
         else:
             state = saved.status
         stage = saved.stage if state in {"checking", "uploading"} else None
@@ -96,7 +100,7 @@ class ShareUpload:
         namespaces = {name: {"upserted": value["upserted"], "patched": value["patched"]}
                       for name, value in progress["namespaces"].items()
                       if name in {"people", "summaries", "education", "companies", "schools"}}
-        plan = saved.plan
+        plan = None if state == "idle" else saved.plan
         plan_counts = None if plan is None else {key: plan.get(key, 0) for key in (
             "marked_share", "with_linkedin", "without_linkedin", "new_to_cloud", "changed",
             "already_shared", "losing_access", "companies_missing")}
@@ -112,12 +116,14 @@ class ShareUpload:
             "progress": {"total": progress["total"], "uploaded": progress["uploaded"],
                          "skipped": progress["skipped"], "namespaces": namespaces},
             "plan": plan_counts,
-            "last_upload": saved.last_upload,
+            "checked": saved.share_digest if state == "ready" else None,
+            "last_upload": saved.last_upload if saved.checked_target in (None, saved.target) or saved.target is None else None,
             "failed_action": ("check" if saved.dry_run else "upload") if state in {"failed", "interrupted"} else None,
             "error": error,
         }
 
-    def start(self, *, dry_run: bool) -> dict[str, Any]:
+    def start(self, *, dry_run: bool, checked: str | None = None) -> dict[str, Any]:
+        """Start a check, or the real upload of the check whose digest the browser displayed."""
         with self._lock:
             active = self._thread is not None and self._thread.is_alive()
             if active and not dry_run:
@@ -125,9 +131,18 @@ class ShareUpload:
             if not active:
                 previous = self._saved()
                 if not dry_run:
-                    if previous.status != "completed" or not previous.dry_run or previous.plan is None:
+                    if previous.status != "completed" or not previous.dry_run or not previous.share_digest:
                         raise ValueError(CHECK_FIRST)
-                    if previous.share_digest != self._current_share_digest():
+                    if checked != previous.share_digest:
+                        raise ValueError(CHANGED_CHECK)
+                    try:
+                        current_digest = self._current_share_digest()
+                    except BaseException as exc:
+                        if isinstance(exc, KeyboardInterrupt):
+                            raise
+                        log_error(self.out_dir, Stage.PLANNING, exc, self._env_file())
+                        raise ValueError(CHECK_FAILED) from exc
+                    if previous.share_digest != current_digest:
                         raise ValueError(CHANGED_CHECK)
                 running = replace(previous, status="running", stage=Stage.PLANNING,
                                   dry_run=dry_run, progress=UploadManifest().progress,
