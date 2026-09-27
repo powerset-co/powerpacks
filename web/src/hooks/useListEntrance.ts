@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react"
 
-import { useReducedMotion } from "@/hooks/useReducedMotion"
 import { motionTokens } from "@/lib/motion"
-import type { PeopleView } from "@/lib/people/view"
+
+import { useReducedMotion } from "./useReducedMotion"
 
 const STAGGER_MS = 8
 const MAX_DELAY_MS = 96
@@ -14,16 +14,21 @@ function cancel(running: MutableRefObject<Animation[]>): void {
 }
 
 /**
- * Rows fade and rise in after the view changes (tab, filter, search, sort): every mounted
- * row, 8ms apart, none more than 96ms behind the first. Scrolling, selection and writes
- * never replay it. `view` changes identity exactly when the view does; the rows of the new
- * view are in the DOM in the same commit (VirtualRows mounts on first render). Timing is
- * index.css's --t-med and --ease-out. A new view, unmounting, or reduced motion switching
- * on stops the entrance.
+ * Rows fade and rise in after the list changes (a view, a filter, a run): every mounted
+ * `selector` row, 8ms apart, none more than 96ms behind the first. Scrolling, selection and
+ * writes never replay it. `identity` changes identity exactly when the list does; the rows of
+ * the new list are in the DOM in the same commit (VirtualRows mounts on first render). Timing
+ * is index.css's --t-med and --ease-out. A new list, unmounting, or reduced motion switching on
+ * stops the entrance.
  */
-export function useRowEntrance(viewport: () => HTMLElement | null, view: PeopleView, count: number) {
+export function useListEntrance(
+  viewport: () => HTMLElement | null,
+  identity: object,
+  count: number,
+  selector: string,
+) {
   const reduced = useReducedMotion()
-  const played = useRef<PeopleView | null>(null)
+  const played = useRef<object | null>(null)
   const running = useRef<Animation[]>([])
 
   useEffect(() => {
@@ -32,13 +37,13 @@ export function useRowEntrance(viewport: () => HTMLElement | null, view: PeopleV
   useEffect(() => () => cancel(running), [])
 
   useLayoutEffect(() => {
-    if (played.current === view) return
-    played.current = view
+    if (played.current === identity) return
+    played.current = identity
     cancel(running)
     const element = viewport()
     if (count === 0 || reduced || !element) return
     const { duration, easing } = motionTokens(element)
-    running.current = [...element.querySelectorAll<HTMLElement>(".row")].map((row, position) =>
+    running.current = [...element.querySelectorAll<HTMLElement>(selector)].map((row, position) =>
       row.animate(
         [
           { opacity: 0, translate: "0 6px" },

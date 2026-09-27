@@ -1,0 +1,262 @@
+/* One run: the compact header, the pond chain, the toolbar slot and the team fold. */
+
+.search-run {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  min-height: 0;
+}
+
+.run-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 20px 10px;
+}
+.run-head-id {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.run-head-id small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.run-head-id h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-head-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.run-head-status {
+  animation: fade-in var(--t-fast) var(--ease-out) backwards;
+}
+.run-head-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* The chain: small cards left to right, a rule between them; it scrolls sideways when long. */
+.pond-chain {
+  padding: 2px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.pond-chain ol {
+  display: flex;
+  gap: 22px;
+  margin: 0;
+  padding: 2px 2px 4px;
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+.pond-chain li {
+  position: relative;
+  flex: 0 0 auto;
+}
+.pond-chain li + li::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -18px;
+  width: 14px;
+  height: 1px;
+  background: var(--line-strong);
+}
+.pond-card {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  width: 244px;
+  height: 58px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--card);
+  color: var(--foreground);
+  text-align: left;
+  font: inherit;
+  transition:
+    background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+button.pond-card {
+  cursor: pointer;
+}
+button.pond-card:hover {
+  border-color: var(--line-strong);
+}
+.pond-card[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+.pond-n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--primary);
+  border-radius: 50%;
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.pond-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.pond-query {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+.pond-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.pond-count b {
+  color: var(--foreground);
+}
+
+.run-toolbar {
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* The team: a bar under the table; its list folds open above the bar and fades. */
+.team {
+  border-top: 1px solid var(--line);
+  background: var(--background);
+}
+.team-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 20px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+.team-toggle:hover {
+  color: var(--foreground);
+}
+.team-toggle > span {
+  color: var(--faint);
+}
+.team-toggle small {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.team-toggle::after {
+  content: "";
+  box-sizing: content-box;
+  align-self: center;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-135deg);
+  transition: transform var(--t-fast) var(--ease-out);
+}
+.team[data-open="true"] .team-toggle::after {
+  transform: rotate(45deg);
+}
+.team-body {
+  max-height: min(320px, 38vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  opacity: 0;
+  transition: opacity var(--t-exit) var(--ease-in);
+}
+.team-body[data-open="true"] {
+  opacity: 1;
+  transition-duration: var(--t-fast);
+  transition-timing-function: var(--ease-out);
+}
+@starting-style {
+  .team-body[data-open="true"] {
+    opacity: 0;
+  }
+}
+.team table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+.team th,
+.team td {
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+.team th {
+  position: sticky;
+  top: 0;
+  background: var(--background);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.team td:not(:first-child) {
+  color: var(--muted);
+}
+.team-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+  font-weight: 600;
+}
+.team-name a {
+  text-decoration: none;
+}
+.team-name a:hover {
+  text-decoration: underline;
+}
+.team-status {
+  margin: 0;
+  padding: 0 20px 10px;
+  color: var(--faint);
+  font-size: 11.5px;
+}

@@ -3,6 +3,8 @@
 Changelog:
 - 2026-09-26: the searches-only server serves the React shell at /people; its
   rows request answers 404 with what to run first.
+- 2026-09-26: it serves the shell first (now also /searches and /searches/run), then the
+  Searches JSON routes, then the legacy search routes.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_T
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.search.primitives.deep_search.results_web import server as results_web
+from packs.search.primitives.deep_search.results_web.api import search_api
 from packs.shared.web.app import AppRoutes
 
 from .server import make_handler
@@ -56,10 +59,13 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
     viewer = results_web.make_handler(root, routes.load, catalog=routes.catalog, load_one=routes.load_one,
                                       base="/searches")
     app = AppRoutes()
+    searches_json = search_api(routes)
 
     class Handler(viewer):
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if app.get(self, parsed) or searches_json.get(self, parsed):
+                return
             if parsed.path in {"/", "/directory"}:
                 self.send_response(HTTPStatus.FOUND)
                 self.send_header("Location", "/searches")
@@ -70,7 +76,7 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
                 self.send_header("Content-Length", str(len(_NO_PEOPLE)))
                 self.end_headers()
                 self.wfile.write(_NO_PEOPLE)
-            elif not app.get(self, parsed):
+            else:
                 super().do_GET()
 
     return Handler

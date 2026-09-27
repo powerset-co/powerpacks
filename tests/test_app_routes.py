@@ -42,12 +42,13 @@ class AppRoutesTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers), error.read()
 
-    def test_people_is_the_shell_with_absolute_asset_urls(self) -> None:
-        status, headers, body = self._get("/people")
-        self.assertEqual((status, headers["Content-Type"]), (HTTPStatus.OK, "text/html; charset=utf-8"))
-        self.assertIn(b"src='/app/assets/app.js'", body)
-        self.assertIn(b"href='/app/assets/app.css'", body)
-        self.assertIn(b"data-people-root", body)
+    def test_pages_are_the_shell_with_absolute_asset_urls(self) -> None:
+        for path in ("/people", "/searches", "/searches/run?run_id=jordan-role"):
+            status, headers, body = self._get(path)
+            self.assertEqual((status, headers["Content-Type"]), (HTTPStatus.OK, "text/html; charset=utf-8"), path)
+            self.assertIn(b"src='/app/assets/app.js'", body)
+            self.assertIn(b"href='/app/assets/app.css'", body)
+            self.assertIn(b"data-people-root", body)
 
     def test_the_two_assets_are_served_uncached_and_nothing_else(self) -> None:
         for name, kind in (("app.js", "text/javascript; charset=utf-8"), ("app.css", "text/css; charset=utf-8")):
@@ -58,7 +59,8 @@ class AppRoutesTests(unittest.TestCase):
         self.assertEqual(self._get("/app/assets/people.js")[0], HTTPStatus.NOT_FOUND)
 
     def test_other_paths_fall_through(self) -> None:
-        for path in ("/", "/people/", "/people/assets/people.js", "/searches", "/api/people/rows"):
+        for path in ("/", "/people/", "/people/assets/people.js", "/searches/", "/searches/api/catalog",
+                     "/searches/assets/results.js", "/api/people/rows"):
             self.assertEqual(self._get(path)[0], FELL_THROUGH, path)
 
 

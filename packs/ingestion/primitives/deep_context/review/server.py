@@ -3,6 +3,8 @@
 Changelog:
 - 2026-09-25: a worth decision re-reads its one row instead of every worth row.
 - 2026-09-26: the React app's shell page and assets (AppRoutes) answer before People's data routes.
+- 2026-09-26: AppRoutes answers first (the shell now owns /searches and /searches/run); the
+  Searches JSON routes (search_api) answer before the legacy search routes.
 """
 
 from __future__ import annotations
@@ -75,6 +77,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     worth_search_html,
 )
 from packs.ingestion.primitives.share.web.server import share_routes
+from packs.search.primitives.deep_search.results_web.api import search_api
 from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
 from packs.shared.web.app import AppRoutes
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
@@ -163,11 +166,13 @@ def make_handler(
     if api.snapshot().progress.total == 0:
         raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
     retargets_enabled = bool(run_jobs or guided_retargets)
-    # The React app (People: `review people`), People's data and the searches list
-    # (`review searches`) ride this server: one origin, one launcher.
+    # The React app (People and Searches: `review people`, `review searches`), their JSON
+    # routes and the legacy search routes (assets, tags, feedback) ride this server: one
+    # origin, one launcher. The app's pages shadow the legacy /searches and /searches/run.
     app = AppRoutes()
     share = share_routes(db)
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
+    searches_json = search_api(searches)
 
     if guided_retargets is None and run_jobs:
         guided_retargets = GuidedRetargetWorker(db, on_change=notify)
@@ -361,6 +366,8 @@ def make_handler(
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             params = urllib.parse.parse_qs(parsed.query)
+            if app.get(self, parsed):
+                return None
             if parsed.path == "/healthz":
                 return self.send_bytes(b"ok", "text/plain")
             if parsed.path == "/api/events":
@@ -468,7 +475,7 @@ def make_handler(
                 if not avatar:
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
-            if app.get(self, parsed) or share.get(self, parsed) or searches.get(self, parsed):
+            if searches_json.get(self, parsed) or share.get(self, parsed) or searches.get(self, parsed):
                 return None
             if parsed.path != "/":
                 return self.send_bytes(b"not found", "text/plain", 404)

@@ -1,11 +1,11 @@
 import { forwardRef, useImperativeHandle, useRef, type ReactNode } from "react"
 
 import { EmptyState, VirtualRows, type VirtualRowsHandle } from "@/components/shared"
+import { useListEntrance } from "@/hooks/useListEntrance"
 import type { Sort, SortKey } from "@/lib/people/facets"
 import type { PeopleView } from "@/lib/people/view"
 import { personKey, type Person } from "@/types/people"
 
-import { useRowEntrance } from "../hooks/useRowEntrance"
 import { ROW_H } from "./columns"
 import { GridHead } from "./GridHead"
 import { PersonRow } from "./PersonRow"
@@ -42,7 +42,7 @@ export const PeopleTable = forwardRef<PeopleTableHandle, PeopleTableProps>((prop
     }),
     [],
   )
-  useRowEntrance(() => rows.current?.element ?? null, props.view, matching.length)
+  useListEntrance(() => rows.current?.element ?? null, props.view, matching.length, ".row")
 
   return (
     <section
