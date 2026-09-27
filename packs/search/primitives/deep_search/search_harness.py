@@ -874,6 +874,9 @@ def _recent_roles(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
         role = {
             "title": str(row.get("title") or row.get("position_title") or "").strip(),
             "company": str(row.get("company_name") or row.get("company") or "").strip(),
+            "company_id": row.get("company_id"),
+            "company_domain": row.get("company_domain"),
+            "company_linkedin_url": row.get("company_linkedin_url"),
             "start_date": row.get("start_date"), "end_date": row.get("end_date"),
             "description": description,
             "company_description": " ".join(str(

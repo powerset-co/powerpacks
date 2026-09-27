@@ -238,6 +238,9 @@ class SearchHarnessTests(unittest.TestCase):
         profiles = {"p1": {
             "positions": [{
                 "position_title": "Staff Engineer", "company_name": "Acme",
+                "company_id": "urn:harmonic:company:123",
+                "company_domain": "acme.example",
+                "company_linkedin_url": "https://www.linkedin.com/company/acme/",
                 "start_date": "2024-01-01", "end_date": None,
                 "description": "Promoted twice and led the billing platform.",
                 "company_description": "Developer tools company.",
@@ -258,6 +261,9 @@ class SearchHarnessTests(unittest.TestCase):
 
         self.assertEqual(candidate["recent_roles"], [{
             "title": "Staff Engineer", "company": "Acme",
+            "company_id": "urn:harmonic:company:123",
+            "company_domain": "acme.example",
+            "company_linkedin_url": "https://www.linkedin.com/company/acme/",
             "start_date": "2024-01-01",
             "description": "Promoted twice and led the billing platform.",
             "company_description": "Developer tools company.",
