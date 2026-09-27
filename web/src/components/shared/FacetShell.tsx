@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 
 import styles from "./FacetShell.module.css"
+import { Fold } from "./Fold"
 
 interface FacetShellProps {
   facetKey: string
@@ -11,16 +12,15 @@ interface FacetShellProps {
   children: ReactNode
 }
 
+// A facet: its head with the chevron and the active dot, and its values in a Fold.
 export function FacetShell({ facetKey, label, open, active, onToggle, children }: FacetShellProps) {
   return (
     <div className={styles.facet} data-facet={facetKey} data-open={open}>
       <button type="button" className={styles.head} aria-expanded={open} onClick={onToggle}>
         {label}
-        {active ? <i className={styles.dot} aria-hidden="true" /> : null}
+        <i className={styles.dot} data-active={active} aria-hidden="true" />
       </button>
-      <div className={styles.body}>
-        <div className={styles.list}>{children}</div>
-      </div>
+      <Fold open={open}>{children}</Fold>
     </div>
   )
 }

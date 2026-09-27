@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 
 import { useReducedMotion } from "@/hooks/useReducedMotion"
 
+import { Fold } from "@/components/shared"
 import { FACETS, type FacetDef } from "@/lib/people/facets"
 import { EMPTY, toggled } from "@/lib/sets"
 
@@ -27,7 +28,7 @@ export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
   const reduced = useReducedMotion()
   const moreToggle = useRef<HTMLButtonElement>(null)
 
-  // The extra facets open below the rail's fold: bring the toggle to the top so they show.
+  // The extra facets unfold below the visible rail: bring the toggle to the top so they show.
   useEffect(() => {
     if (moreOpen)
       moreToggle.current?.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" })
@@ -62,7 +63,9 @@ export function FacetRail({ filters, counts, onValue }: FacetRailProps) {
       >
         More filters
       </button>
-      {moreOpen ? <div className="rail-more">{MORE_FACETS.map(facet)}</div> : null}
+      <Fold open={moreOpen} className="rail-more">
+        {MORE_FACETS.map(facet)}
+      </Fold>
       <ShortcutsHint />
     </>
   )

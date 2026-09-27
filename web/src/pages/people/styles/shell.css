@@ -125,7 +125,6 @@
 .bar-chips .chip {
   min-height: 26px;
   padding-right: 6px;
-  animation: rise-in var(--t-fast) var(--ease-out) both;
 }
 .bar-chips .chip .x {
   display: inline-grid;

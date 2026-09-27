@@ -35,9 +35,11 @@
   overscroll-behavior: contain;
   outline: none;
   scrollbar-width: thin;
+  box-shadow: inset 0 0 0 2px transparent;
+  transition: box-shadow var(--t-fast) var(--ease-out);
 }
 .grid-viewport:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--primary);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 70%, transparent);
 }
 
 /* --row-h comes from ROW_H in table/columns.ts, set on the shell. */

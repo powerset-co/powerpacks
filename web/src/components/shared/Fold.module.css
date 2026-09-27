@@ -1,0 +1,14 @@
+.fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--t-exit) var(--ease-out);
+}
+.fold[data-open="false"] {
+  grid-template-rows: 0fr;
+}
+.inner {
+  display: grid;
+  gap: 1px;
+  min-height: 0;
+  overflow: hidden;
+}

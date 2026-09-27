@@ -1,4 +1,4 @@
-/* people.css .facet: head with chevron and active dot; the body animates its one grid row shut. */
+/* people.css .facet: head with chevron and active dot; the values fold in a shared Fold. */
 .facet {
   margin-bottom: 4px;
 }
@@ -38,23 +38,19 @@
 .facet[data-open="false"] .head::after {
   transform: rotate(-45deg);
 }
+/* The active dot scales and fades in and out. */
 .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--primary);
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
 }
-.body {
-  display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows var(--t-exit) var(--ease-out);
-}
-.facet[data-open="false"] .body {
-  grid-template-rows: 0fr;
-}
-.list {
-  display: grid;
-  gap: 1px;
-  min-height: 0;
-  overflow: hidden;
+.dot[data-active="true"] {
+  opacity: 1;
+  transform: none;
 }

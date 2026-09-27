@@ -159,7 +159,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
           <Toast
             toast={decisions.toast}
             onDismiss={decisions.dismissToast}
-            className="toast left-[268px] right-auto leading-[1.45] max-[960px]:left-4"
+            className="toast leading-[1.45]"
           />
         </>
       }
