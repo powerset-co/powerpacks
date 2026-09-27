@@ -2,7 +2,7 @@ import { SearchField } from "@/components/shared"
 import { Skeleton } from "@/components/ui/skeleton"
 
 import { PeopleShell } from "./PeopleShell"
-import { SEARCH_LABEL, SEARCH_PLACEHOLDER } from "./filters/FilterBar"
+import { SEARCH_LABEL, SEARCH_PLACEHOLDER } from "@/lib/people/copy"
 import "./styles/table.css"
 
 const SKELETON_ROWS = 8

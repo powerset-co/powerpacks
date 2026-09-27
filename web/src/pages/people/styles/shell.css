@@ -124,22 +124,6 @@
 }
 .bar-chips .chip {
   min-height: 26px;
-  padding-right: 6px;
-}
-.bar-chips .chip .x {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  color: var(--muted);
-  transition:
-    background var(--t-fast) var(--ease-out),
-    color var(--t-fast) var(--ease-out);
-}
-.bar-chips .chip:hover .x {
-  background: var(--secondary);
-  color: var(--foreground);
 }
 .bar-chips .chip em {
   color: var(--faint);

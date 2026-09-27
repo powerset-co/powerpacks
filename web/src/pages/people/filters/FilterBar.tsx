@@ -1,12 +1,9 @@
 import { forwardRef } from "react"
 
 import { SearchField } from "@/components/shared"
-import { plural } from "@/lib/people/copy"
+import { plural, SEARCH_LABEL, SEARCH_PLACEHOLDER } from "@/lib/people/copy"
 
 import { ActiveChips } from "./ActiveChips"
-
-export const SEARCH_PLACEHOLDER = "Search name, title, company, location"
-export const SEARCH_LABEL = "Search people"
 
 interface FilterBarProps {
   text: string

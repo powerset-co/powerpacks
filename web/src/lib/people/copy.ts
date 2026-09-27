@@ -68,6 +68,9 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
   },
 }
 
+export const SEARCH_PLACEHOLDER = "Search name, title, company, location"
+export const SEARCH_LABEL = "Search people"
+
 /** What "Use worth" does; the bulk bar's tooltip and the drawer's note (people.js words both). */
 export const USE_WORTH_HELP = "Removes your choice; worth and flags decide"
 

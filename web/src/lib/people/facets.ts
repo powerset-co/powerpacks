@@ -1,25 +1,26 @@
 // Facets, quick filters, the filter/count pass, sorting and the tag toggle, ported 1:1 from people.js.
 // Facets: OR within one, AND across, always within the selected decision tab.
 
-import type { Person } from "@/types/people"
+import { must } from "@/lib/must"
+import { LAST, WARMTH, type LastBucket, type Person, type WarmthBucket } from "@/types/people"
 
 import { label, sentence, type TextKind } from "./copy"
 
 const YEAR = 365
 
-export const LAST = ["< 1 year", "1–2 years", "> 2 years", "Never"] as const
-export const WARMTH = ["Distant (0–1)", "Friendly (1–2)", "Close (2–3)", "Inner circle (3–4)"] as const
+export { LAST, WARMTH }
 
-export function lastBucket(days: number | null): string {
+export function lastBucket(days: number | null): LastBucket {
   if (days === null) return LAST[3]
   if (days < YEAR) return LAST[0]
   if (days <= 2 * YEAR) return LAST[1]
   return LAST[2]
 }
 
-export function warmthBucket(value: number | null): string {
+/** The warmth band, or "" when the person has no warmth score. */
+export function warmthBucket(value: number | null): WarmthBucket | "" {
   if (value === null) return ""
-  return WARMTH[Math.min(3, Math.floor(value))] ?? ""
+  return must(WARMTH[Math.min(3, Math.floor(value))], "warmth band")
 }
 
 /** `get` returns the row's values for the facet; `words` names the TEXT map that words its values. */

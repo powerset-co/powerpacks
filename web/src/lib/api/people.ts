@@ -1,5 +1,6 @@
 // The People page's four routes on the Python review server (share/web/server.py).
 
+import { body, failure } from "@/lib/api/http"
 import { lastBucket, warmthBucket } from "@/lib/people/facets"
 import {
   PERSON_COLUMNS,
@@ -11,30 +12,6 @@ import {
 } from "@/types/people"
 
 const API = "/api/people/"
-
-/** The server's message: a JSON `{error}` body, else the plain text, else the page's fallback copy. */
-async function failure(response: Response, fallback: string): Promise<Error> {
-  const text = await response.text()
-  try {
-    const body: unknown = JSON.parse(text)
-    if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
-      return new Error(body.error)
-    }
-  } catch {
-    // Not JSON: the text is the message.
-  }
-  return new Error(text || fallback)
-}
-
-/**
- * The JSON body as the shape the server documents for the route. The app's one type
- * assertion (LINT-WAIVERS.md W1): the Python dataclass on the same machine is the type, and
- * tests/test_share_web.py pins types/people.ts to it.
- */
-async function body<T>(response: Response): Promise<T> {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- W1
-  return (await response.json()) as T
-}
 
 type PersonCells = Omit<Person, "last" | "warmthBucket" | "search">
 

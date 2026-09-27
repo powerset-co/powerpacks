@@ -1,28 +1,9 @@
 // The Searches page's JSON routes and saved tags on the Python review server.
 
+import { body, failure } from "@/lib/api/http"
 import type { CatalogPayload, SearchRunPayload, Tagged, TagsPayload } from "@/types/searches"
 
 const API = "/searches"
-
-/** The server's JSON error, plain text, or fallback copy. */
-async function failure(response: Response, fallback: string): Promise<Error> {
-  const text = await response.text()
-  try {
-    const body: unknown = JSON.parse(text)
-    if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
-      return new Error(body.error)
-    }
-  } catch {
-    // Not JSON: the text is the message.
-  }
-  return new Error(text || fallback)
-}
-
-/** The Python dataclass JSON contract, pinned by tests/test_search_json_contract.py. */
-async function body<T>(response: Response): Promise<T> {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- W1
-  return (await response.json()) as T
-}
 
 export async function fetchCatalog(signal?: AbortSignal): Promise<CatalogPayload> {
   const response = await fetch(`${API}/api/catalog`, { signal })

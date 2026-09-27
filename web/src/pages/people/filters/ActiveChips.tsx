@@ -33,15 +33,13 @@ export function ActiveChips({ filters, onRemove, onClear }: ActiveChipsProps) {
             className="chip rise"
             data-open={open}
             pressed
+            removable
             title="Remove"
             data-chip-key={item.key}
             onClick={() => onRemove(item.key, item.value)}
             onTransitionEnd={onTransitionEnd}
           >
             <em>{facet.label}</em> {facetText(facet, item.value)}
-            <span className="x" aria-hidden="true">
-              ×
-            </span>
           </Chip>
         )
       })}
