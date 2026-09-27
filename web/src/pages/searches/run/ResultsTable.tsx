@@ -1,39 +1,72 @@
-import { useCallback, useRef, useState, type ReactNode } from "react"
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react"
 
 import { EmptyState, VirtualRows, type VirtualRowsHandle } from "@/components/shared"
 import { useListEntrance } from "@/hooks/useListEntrance"
+import type { ResultRow as Result } from "@/lib/searches/ranking"
 import { EMPTY, toggled } from "@/lib/sets"
-import type { PondCandidate, Tagged } from "@/types/searches"
 
-import type { ResultRow as Result } from "../lib/ranking"
-import { ROW_H } from "./columns"
+import { useResultKeys } from "../hooks/useResultKeys"
 import { ResultRow } from "./ResultRow"
+import { ROW_H } from "./columns"
 
 export type ResultItem =
   { kind: "heading"; key: string; text: string } | { kind: "row"; key: string; result: Result }
 
 interface ResultsTableProps {
-  // Changes identity exactly when the rows do (a run, a pond); rows then rise in.
   items: readonly ResultItem[]
   ranked: boolean
+  labels: boolean
   empty: ReactNode
-  tags: Tagged | null | undefined
-  rowActions: ((candidate: PondCandidate) => ReactNode) | undefined
+  rowActions: ((result: Result) => ReactNode) | undefined
 }
 
 const itemKey = (item: ResultItem) => item.key
 
 // The virtualized people table. Rows are measured, so an expanded row grows in place; each
-// row opens and closes on its own, so opening one never moves another out of view.
-export function ResultsTable({ items, ranked, empty, tags, rowActions }: ResultsTableProps) {
+// row opens and closes on its own, so opening one never moves another out of view. The keys
+// (hooks/useResultKeys) drive a focused row; t and s press that row's tag and score buttons.
+export function ResultsTable({ items, ranked, labels, empty, rowActions }: ResultsTableProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(EMPTY)
+  const [focus, setFocus] = useState<string | null>(null)
   const rows = useRef<VirtualRowsHandle>(null)
   const count = items.filter((item) => item.kind === "row").length
-  useListEntrance(() => rows.current?.element ?? null, items, count, ".results-heading, .result-row")
+  // Rows rise in when the list changes (a run, a pond, a filter), not when a row's tags or score do.
+  const signature = items.map(itemKey).join("\n")
+  const list = useMemo(() => ({ signature }), [signature])
+  useListEntrance(() => rows.current?.element ?? null, list, count, ".results-heading, .result-row")
 
   const toggle = useCallback((key: string) => {
     setExpanded((current) => toggled(current, key))
   }, [])
+
+  const focused = items.findIndex((item) => item.key === focus)
+  const press = (action: "tag" | "score") => {
+    const key = items[focused]?.key
+    if (key === undefined) return false
+    const row = [...(rows.current?.element?.querySelectorAll<HTMLElement>("[data-result-key]") ?? [])].find(
+      (element) => element.dataset.resultKey === key,
+    )
+    row?.querySelector<HTMLElement>(`[data-row-action="${action}"]`)?.click()
+    return true
+  }
+
+  useResultKeys({
+    move: (step) => {
+      const rowIndexes = items.flatMap((item, index) => (item.kind === "row" ? [index] : []))
+      const at = rowIndexes.indexOf(focused)
+      const next = rowIndexes[at < 0 ? 0 : Math.min(rowIndexes.length - 1, Math.max(0, at + step))]
+      if (next === undefined) return
+      setFocus(items[next]?.key ?? null)
+      rows.current?.scrollToIndex(next, { align: "auto" })
+    },
+    toggle: () => {
+      const key = items[focused]?.key
+      if (key !== undefined) toggle(key)
+      return key !== undefined
+    },
+    tag: () => press("tag"),
+    score: () => press("score"),
+  })
 
   return (
     <section className="results" data-results aria-label="People">
@@ -47,6 +80,7 @@ export function ResultsTable({ items, ranked, empty, tags, rowActions }: Results
           <span>Roles</span>
           <span />
         </span>
+        <span className="result-actions" />
       </div>
       <VirtualRows
         handle={rows}
@@ -63,9 +97,10 @@ export function ResultsTable({ items, ranked, empty, tags, rowActions }: Results
             <ResultRow
               result={item.result}
               ranked={ranked}
+              labels={labels}
               expanded={expanded.has(item.key)}
-              tags={tags?.assignments[item.result.row.person_id]}
-              actions={rowActions?.(item.result.row)}
+              focused={item.key === focus}
+              actions={rowActions?.(item.result)}
               onToggle={toggle}
             />
           )

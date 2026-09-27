@@ -1,8 +1,8 @@
 import { useState, type TransitionEvent } from "react"
 
 import { Badge } from "@/components/ui/badge"
+import { scoreBand, type ResultRow } from "@/lib/searches/ranking"
 
-import { scoreBand, type ResultRow } from "../lib/ranking"
 import { Positions, Schools } from "./Career"
 
 const ABOUT_CLAMP = 200

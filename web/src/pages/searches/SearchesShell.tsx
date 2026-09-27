@@ -4,6 +4,7 @@ import "./styles/shell.css"
 import "./styles/sidebar.css"
 import "./styles/run.css"
 import "./styles/results.css"
+import "./styles/toolbar.css"
 
 interface SearchesShellProps {
   sidebar: ReactNode

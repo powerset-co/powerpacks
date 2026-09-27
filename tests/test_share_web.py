@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 import json
 import re
 import sqlite3
@@ -23,7 +25,13 @@ from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.questions import build_questions
 from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.store import TagStore
-from packs.ingestion.primitives.share.web.model import PEOPLE_COLUMNS, SharePeople, people_payload
+from packs.ingestion.primitives.share.web.model import (
+    PEOPLE_COLUMNS,
+    FactEvent,
+    PersonDetail,
+    SharePeople,
+    people_payload,
+)
 from packs.ingestion.primitives.share.web.server import (
     decide_tags,
     make_handler,
@@ -39,6 +47,14 @@ PEOPLE_HEADER = [
 ]
 SUPERSEDED = "candidate:email:casey@example.com"
 PEOPLE_TYPES = Path(__file__).resolve().parents[1] / "web" / "src" / "types" / "people.ts"
+
+
+def ts_fields(interface: str) -> tuple[str, ...]:
+    """The field names of one `export interface` in types/people.ts, in order."""
+    source = PEOPLE_TYPES.read_text(encoding="utf-8")
+    body = re.search(rf"^export interface {interface} \{{\n(.*?)^\}}", source, re.S | re.M)
+    assert body is not None, interface
+    return tuple(re.findall(r"^  (\w+)\??:", body.group(1), re.M))
 
 
 def _saved_labels(**cells: object) -> dict:
@@ -142,6 +158,14 @@ class RowModelTests(ShareWebFixture):
         block = re.search(r"PERSON_COLUMNS = \[(.*?)\] as const", source, re.S)
         self.assertIsNotNone(block)
         self.assertEqual(tuple(re.findall(r'"([a-z_]+)"', block.group(1))), PEOPLE_COLUMNS)
+
+    def test_client_shapes_match_the_server(self) -> None:
+        # The drawer's payload and the tag write's request, pinned like the columns.
+        for interface, shape in (("PersonDetail", PersonDetail), ("FactEvent", FactEvent)):
+            with self.subTest(interface=interface):
+                self.assertEqual(ts_fields(interface), tuple(field.name for field in dataclasses.fields(shape)))
+        read = re.findall(r'entry(?:\.get\(|\[)"(\w+)"', inspect.getsource(parse_tag_request))
+        self.assertEqual(set(ts_fields("TagChange")), set(read))
 
     def test_detail_carries_the_drawer_only_cells(self) -> None:
         detail = self.people.detail("parent-bbbb")
@@ -280,6 +304,7 @@ class RoutesTests(ShareWebFixture):
         self.assertEqual(status, 200)
         self.assertEqual(body["rows"], [{"parent_id": "parent-bbbb", "share": "yes", "reason": "human_share",
                                          "share_source": "human", "tags": ["share"]}])
+        self.assertEqual(ts_fields("TagResult"), tuple(body["rows"][0]))
         self.assertEqual(self._get("/api/people/rows")["counts"], {"total": 4, "upload": 3, "confirm": 0, "private": 1})
 
     def test_bad_requests_write_nothing(self) -> None:

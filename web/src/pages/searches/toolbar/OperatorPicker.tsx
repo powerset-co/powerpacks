@@ -4,12 +4,10 @@ import { Button } from "@/components/ui/button"
 import { usePresence } from "@/hooks/usePresence"
 import type { OperatorOption } from "@/lib/searches/filters"
 import { toggled } from "@/lib/sets"
-import { cn } from "@/lib/utils"
 
+import { type DismissBy, useDismiss } from "../hooks/useDismiss"
+import { OperatorInitials } from "../run/Operators"
 import { Appear } from "./Appear"
-import { OperatorInitials } from "./OperatorInitials"
-import { GROUP_LABEL, PANEL } from "./styles"
-import { type DismissBy, useDismiss } from "./useDismiss"
 
 interface OperatorPickerProps {
   operators: readonly OperatorOption[]
@@ -36,7 +34,7 @@ export function OperatorPicker({ operators, selected, onChange }: OperatorPicker
   if (!operators.length) return null
   return (
     <span className="relative inline-flex items-center gap-1.5" role="group" aria-label="Operators">
-      <span className={GROUP_LABEL}>Operators</span>
+      <span className="toolbar-label">Operators</span>
       {operators.map((operator) => (
         <Appear key={operator.id} show={selected.has(operator.id)}>
           <button
@@ -75,7 +73,7 @@ export function OperatorPicker({ operators, selected, onChange }: OperatorPicker
           aria-label="Choose operators"
           data-open={presence.open}
           onTransitionEnd={presence.onTransitionEnd}
-          className={cn(PANEL, "rise absolute left-0 top-full mt-1.5 w-64")}
+          className={"float-panel rise absolute left-0 top-full mt-1.5 w-64"}
         >
           <strong className="text-xs">Filter by operator</strong>
           <small className="mb-1 text-[11px] text-muted-foreground">

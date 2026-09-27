@@ -16,18 +16,18 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { buildScoreFeedback, SCORE_SCALE, type FeedbackRecord } from "@/lib/searches/feedback"
+import { buildScoreFeedback, SCORE_SCALE } from "@/lib/searches/feedback"
+import { rubricChoices, type RubricChoice } from "@/lib/searches/rubric"
 import { cn } from "@/lib/utils"
-import type { Candidate, Ratings } from "@/types/searches"
+import type { Candidate, FeedbackRecord, Ratings } from "@/types/searches"
 
 import { FeedbackFooter } from "./FeedbackFooter"
 import { NotesField } from "./NotesField"
-import { rubricChoices, type RubricChoice } from "./rubric"
 import { send, type FeedbackSink } from "./send"
 
 export interface ScoreDialogProps extends FeedbackSink {
   runId: string
-  candidate: Candidate
+  candidate: Pick<Candidate, "person_id" | "name" | "title" | "company">
   rubric: Ratings["rubric"]
   /** The score and note shown on the badge and preselected: saved, or still queued. */
   score: number | null
@@ -100,8 +100,9 @@ const ScoreBadge = forwardRef<HTMLButtonElement, ScoreBadgeProps>(
         ref={ref}
         type="button"
         aria-label={`Score ${name}`}
+        data-row-action="score"
         className={cn(
-          "cursor-pointer rounded-full border border-border bg-secondary px-2 py-1 text-[11px] text-foreground transition-[border-color] duration-fast ease-out hover:border-muted-foreground",
+          "shrink-0 cursor-pointer whitespace-nowrap rounded-full border border-border bg-secondary px-2 py-1 text-[11px] text-foreground transition-[border-color] duration-fast ease-out hover:border-muted-foreground",
           className,
         )}
         {...props}

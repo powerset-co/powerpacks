@@ -10,6 +10,7 @@ function editor(props: Partial<TagEditorProps> = {}) {
       personName="Jordan Bravo"
       tags={["Backend", "Infra"]}
       applied={["Backend"]}
+      disabled={false}
       {...handlers}
       {...props}
     />,
@@ -22,14 +23,16 @@ function open() {
   return screen.getByRole("textbox", { name: "Add tag" })
 }
 
-beforeEach(() => {
+function stubMotion(reduced: boolean) {
   vi.stubGlobal("matchMedia", (media: string) => ({
-    matches: true,
+    matches: reduced,
     media,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }))
-})
+}
+
+beforeEach(() => stubMotion(true))
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -42,6 +45,54 @@ describe("TagEditor", () => {
     cleanup()
     editor({ applied: [] })
     expect(screen.getByRole("button", { name: "Add tag to Jordan Bravo" })).toBeDefined()
+  })
+
+  it("stays shut while the saved tags load", () => {
+    editor({ disabled: true })
+    const trigger = screen.getByRole("button", { name: "Edit tags for Jordan Bravo" })
+    expect(trigger).toHaveProperty("disabled", true)
+    fireEvent.click(trigger)
+    expect(screen.queryByRole("textbox", { name: "Add tag" })).toBeNull()
+  })
+
+  it("keeps a removed chip through its exit, then drops it", () => {
+    stubMotion(false)
+    const { rerender } = render(
+      <TagEditor
+        personName="Casey Delta"
+        tags={["Backend", "Infra"]}
+        applied={["Backend", "Infra"]}
+        disabled={false}
+        onToggle={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    )
+    rerender(
+      <TagEditor
+        personName="Casey Delta"
+        tags={["Backend", "Infra"]}
+        applied={["Backend"]}
+        disabled={false}
+        onToggle={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    )
+    const leaving = document.querySelector<HTMLElement>("[data-tag='Infra']")
+    expect(leaving?.dataset.open).toBe("false")
+    fireEvent.transitionEnd(leaving ?? document.body)
+    expect(document.querySelector("[data-tag='Infra']")).toBeNull()
+    expect(document.querySelector("[data-tag='Backend']")?.getAttribute("data-open")).toBe("true")
+  })
+
+  it("stays open through a scroll that leaves its row in place, and closes once the row moves", () => {
+    editor()
+    open()
+    fireEvent.scroll(window)
+    expect(screen.getByRole("textbox", { name: "Add tag" })).toBeDefined()
+    const trigger = screen.getByRole("button", { name: "Edit tags for Jordan Bravo" })
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(0, -40, 28, 28))
+    fireEvent.scroll(window)
+    expect(screen.queryByRole("textbox", { name: "Add tag" })).toBeNull()
   })
 
   it("opens with the field focused and each tag as a toggle", () => {

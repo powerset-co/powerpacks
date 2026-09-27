@@ -2,6 +2,9 @@
 
 .results {
   --result-cols: minmax(200px, 1.5fr) 118px minmax(120px, 1fr) 76px 72px 118px 14px;
+  /* Tag trigger, pin and score badge: reserved in the head and every row, so nothing shifts
+     when the actions render or a score or tag changes. */
+  --actions-w: 248px;
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -10,6 +13,8 @@
 .result-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   height: 32px;
   padding: 0 20px 0 12px;
   border-bottom: 1px solid var(--line);
@@ -59,6 +64,7 @@
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: center;
   height: 51px;
   padding: 0 20px 0 12px;
@@ -76,6 +82,13 @@
   transition: transform var(--t-fast) var(--ease-out);
 }
 .result-row[data-expanded="true"] .result-line::before {
+  transform: scaleX(1);
+}
+/* The keyboard's row (j/k): People's focus bar and tint. */
+.result-row[data-focus="true"] {
+  background: rgba(255, 255, 255, 0.03);
+}
+.result-row[data-focus="true"] .result-line::before {
   transform: scaleX(1);
 }
 .result-main {
@@ -137,8 +150,15 @@
 .result-badges > * {
   flex: 0 0 auto;
 }
-.result-tag {
-  animation: fade-in var(--t-fast) var(--ease-out) backwards;
+/* The Labels toggle fades the column out and back; the column keeps its width. */
+.result-badges {
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+.result-badges[data-labels="false"] {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-in);
 }
 .result-none {
   color: var(--faint);
@@ -166,10 +186,11 @@
 }
 .result-actions {
   display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
-}
-.result-actions:not(:empty) {
-  margin-left: 8px;
+  width: var(--actions-w);
+  min-width: 0;
 }
 
 .operator-stack {

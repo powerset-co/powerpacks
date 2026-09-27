@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { FeedbackOutcome, FeedbackRecord } from "@/lib/searches/feedback"
+import type { FeedbackOutcome } from "@/lib/searches/feedback"
+import { CASEY_CANDIDATE, RATINGS } from "@/testing/searches-fixture"
+import type { FeedbackRecord } from "@/types/searches"
 
-import { CASEY, RATINGS } from "./fixture"
 import { ScoreDialog } from "./ScoreDialog"
 
 afterEach(cleanup)
@@ -15,7 +16,7 @@ function setup(score: number | null = null, note = "") {
   render(
     <ScoreDialog
       runId="jordan-role"
-      candidate={CASEY}
+      candidate={CASEY_CANDIDATE}
       rubric={RATINGS.rubric}
       score={score}
       note={note}

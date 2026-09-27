@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useRef } from "react"
 
 import type { ToastMessage } from "@/components/shared"
 import { fetchTags, writeTags } from "@/lib/api/searches"
@@ -17,15 +17,14 @@ function errorText(error: unknown): string {
 /**
  * A search's tags: every edit shows at once and is saved whole, one save at a time, so a
  * later edit never lands before an earlier one (results.js writeTagged). A failed save
- * puts back the last saved tags when no newer edit followed it.
+ * puts back the last saved tags when no newer edit followed it, and says so on the page's toast.
  */
-export function useSearchTags(runId: string) {
+export function useSearchTags(runId: string, onToast: (toast: ToastMessage) => void) {
   const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: searchTagsKey(runId),
     queryFn: async () => (await fetchTags(runId)).tagged ?? NO_TAGS,
   })
-  const [toast, setToast] = useState<ToastMessage | null>(null)
   const saves = useRef<Promise<unknown>>(Promise.resolve())
   // Per run: the tags the server last accepted, the rollback target.
   const saved = useRef(new Map<string, Tagged>())
@@ -48,11 +47,11 @@ export function useSearchTags(runId: string) {
         } catch (error) {
           if (queryClient.getQueryData<Tagged>(key) === shown)
             queryClient.setQueryData(key, saved.current.get(runId))
-          setToast({ message: `Tags not saved: ${errorText(error)}`, error: true })
+          onToast({ message: `Tags not saved: ${errorText(error)}`, error: true })
         }
       })
     },
-    [queryClient, runId],
+    [queryClient, runId, onToast],
   )
 
   return {
@@ -62,8 +61,6 @@ export function useSearchTags(runId: string) {
     remove: useCallback((tag: string) => save((t) => removeTag(t, tag)), [save]),
     untag: useCallback((personIds: readonly string[]) => save((t) => untagPeople(t, personIds)), [save]),
     clear: useCallback(() => save(() => NO_TAGS), [save]),
-    toast,
-    dismissToast: useCallback(() => setToast(null), []),
   }
 }
 

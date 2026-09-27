@@ -1,13 +1,16 @@
-import { Link, useLocation } from "react-router-dom"
+import { Link } from "react-router-dom"
 
-import { pageAt } from "@/lib/nav"
+import type { Page } from "@/lib/nav"
 
 import { NavTabs } from "./NavTabs"
 
+interface TopBarProps {
+  page: Page
+}
+
 // results.css .topbar/.brand: the brand cell is the rail's width and its right
 // border continues the rail line; the tabs start at the main pane. The brand links to the current page.
-export function TopBar() {
-  const page = pageAt(useLocation().pathname)
+export function TopBar({ page }: TopBarProps) {
   return (
     <header className="sticky top-0 z-50 grid h-topbar grid-cols-[228px_minmax(0,1fr)] items-center border-b border-line bg-[color-mix(in_srgb,var(--background)_88%,transparent)] px-5 backdrop-blur-[10px] backdrop-saturate-[1.4] max-[680px]:grid-cols-[auto_minmax(0,1fr)] max-[680px]:px-3.5">
       <Link
@@ -16,7 +19,7 @@ export function TopBar() {
       >
         POWERPACKS
       </Link>
-      <NavTabs />
+      <NavTabs current={page} />
     </header>
   )
 }

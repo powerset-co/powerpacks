@@ -1,6 +1,7 @@
-// The sidebar's filter over the catalog and its recency groups (results.js catalog block,
-// network-search-app ConversationSidebar groups).
+// The sidebar's filter over the catalog, kept for the tab (sessionStorage), and its recency
+// groups (results.js catalog block, network-search-app ConversationSidebar groups).
 
+import { readSession, writeSession } from "@/lib/storage"
 import type { SearchCard } from "@/types/searches"
 
 import { statusText } from "./copy"
@@ -13,6 +14,8 @@ export interface CatalogFilter {
   // A status in plain words (statusText), or "" for every status.
   status: string
 }
+
+const FILTER_KEY = "powerpacks:search-catalog-filter:v1"
 
 const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" })
 
@@ -32,6 +35,27 @@ export function statusesOf(cards: readonly SearchCard[]): string[] {
 /** The newest version preselected, as the legacy catalog did. */
 export function initialFilter(cards: readonly SearchCard[]): CatalogFilter {
   return { text: "", version: versionsOf(cards)[0] ?? null, company: "", status: "" }
+}
+
+const isRecord = (raw: unknown): raw is Record<string, unknown> =>
+  typeof raw === "object" && raw !== null && !Array.isArray(raw)
+
+/** A saved filter, or null unless every field has its type. */
+export function parseCatalogFilter(raw: unknown): CatalogFilter | null {
+  if (!isRecord(raw)) return null
+  const { text, version, company, status } = raw
+  if (typeof text !== "string" || typeof company !== "string" || typeof status !== "string") return null
+  if (version !== null && typeof version !== "string") return null
+  return { text, version, company, status }
+}
+
+/** The filter this tab last used (a visit to People and back keeps it), else the default. */
+export function readCatalogFilter(cards: readonly SearchCard[]): CatalogFilter {
+  return readSession(FILTER_KEY, parseCatalogFilter) ?? initialFilter(cards)
+}
+
+export function writeCatalogFilter(filter: CatalogFilter): void {
+  writeSession(FILTER_KEY, filter)
 }
 
 export function matches(card: SearchCard, filter: CatalogFilter): boolean {

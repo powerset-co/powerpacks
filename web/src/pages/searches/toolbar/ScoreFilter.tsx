@@ -2,8 +2,6 @@ import { Chip } from "@/components/shared"
 import { SCORES, type Score } from "@/lib/searches/filters"
 import { toggled } from "@/lib/sets"
 
-import { GROUP_LABEL } from "./styles"
-
 interface ScoreFilterProps {
   scores: ReadonlySet<Score>
   onChange: (scores: ReadonlySet<Score>) => void
@@ -13,7 +11,7 @@ interface ScoreFilterProps {
 export function ScoreFilter({ scores, onChange }: ScoreFilterProps) {
   return (
     <span className="inline-flex items-center gap-1.5" role="group" aria-label="Overall score filter">
-      <span className={GROUP_LABEL}>Overall:</span>
+      <span className="toolbar-label">Overall:</span>
       <Chip pressed={!scores.size} onClick={() => onChange(new Set())}>
         All scores
       </Chip>

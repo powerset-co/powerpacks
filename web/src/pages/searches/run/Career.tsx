@@ -1,6 +1,5 @@
+import { monthYear } from "@/lib/searches/copy"
 import type { Education, Position } from "@/types/searches"
-
-import { monthYear } from "../lib/copy"
 
 // rendering.py _company_note: size, stage and money raised.
 function companyNote(position: Position): string {

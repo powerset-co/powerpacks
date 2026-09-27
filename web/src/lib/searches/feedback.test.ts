@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { Candidate } from "@/types/searches"
+import { MemoryStorage, resultRow, RUN } from "@/testing/searches-fixture"
+import type { Candidate, FeedbackRecord, FeedbackReply } from "@/types/searches"
 
 import {
   buildScoreFeedback,
   buildSearchFeedback,
+  exportScoreOf,
   FEEDBACK_STORAGE_KEY,
   fiveScore,
   flushFeedback,
@@ -12,11 +14,10 @@ import {
   parseQueued,
   queuedScores,
   readQueue,
+  withScore,
   writeQueue,
-  type FeedbackRecord,
-  type FeedbackReply,
+  yourScore,
 } from "./feedback"
-import { MemoryStorage } from "./memory-storage"
 
 // human_ratings.LEGACY_SCORES as the server sends it.
 const LEGACY = { "1": 1, "2": 2, "3": 2, "4": 2, "7": 3, "8": 4, "9": 5, "10": 5 }
@@ -160,5 +161,33 @@ describe("flushFeedback", () => {
     const post = vi.fn((_record: FeedbackRecord) => Promise.resolve(SAVED_LOCALLY))
     expect(await flushFeedback(queue, post)).toEqual(queue)
     expect(post).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("your score", () => {
+  const filed = resultRow("p-jordan", "Jordan Bravo", { overall: 4, human: 2 })
+  const unscored = resultRow("p-casey", "Casey Delta", { overall: 3 })
+  const queued = new Map([["p-casey", { score: 5, note: "Queued" }]])
+
+  it("reads a queued score first, then the one on file, else none", () => {
+    expect(yourScore(unscored, queued)).toEqual({ score: 5, note: "Queued" })
+    expect(yourScore(filed, queued)).toEqual({ score: 2, note: "" })
+    expect(yourScore(unscored, new Map())).toBeNull()
+  })
+
+  it("exports the person's own score over the overall", () => {
+    const scoreOf = exportScoreOf(queued)
+    expect([filed, unscored].map(scoreOf)).toEqual([2, 5])
+    expect(exportScoreOf(new Map())(unscored)).toBe(3)
+  })
+
+  it("puts a saved score on the run's candidate, on the five-point scale", () => {
+    const next = withScore(RUN, {
+      ...score("p-morgan", 8, "Old scale"),
+      human_judgment: { score: 8, scale: 10 },
+    })
+    const morgan = next.search.candidates.find((candidate) => candidate.person_id === "p-morgan")
+    expect([morgan?.human_score, morgan?.human_note]).toEqual([4, "Old scale"])
+    expect(withScore(RUN, buildSearchFeedback("jordan-role", "note"))).toBe(RUN)
   })
 })

@@ -19,6 +19,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  sessionStorage.clear()
 })
 
 const runIds = () => screen.getAllByRole("button", { name: /people|person/ }).map((row) => row.dataset.runId)
@@ -59,5 +60,25 @@ describe("CatalogList", () => {
     expect(onOpen).toHaveBeenCalledWith("casey-role")
     fireEvent.click(screen.getByRole("button", { name: /Backend Engineer/ }))
     expect(onOpen).toHaveBeenLastCalledWith(RUN_ID)
+  })
+
+  it("leaves j/k and Enter on the open run to the results", () => {
+    const onOpen = vi.fn()
+    render(<CatalogList cards={CARDS} selectedId={RUN_ID} onOpen={onOpen} />)
+    fireEvent.keyDown(document.body, { key: "j" })
+    fireEvent.keyDown(document.body, { key: "Enter" })
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it("keeps the filters for the tab: a return to Searches finds them as they were", () => {
+    const { unmount } = render(<CatalogList cards={CARDS} selectedId={null} onOpen={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "All" }))
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search saved searches" }), {
+      target: { value: "sample" },
+    })
+    unmount()
+    render(<CatalogList cards={CARDS} selectedId={null} onOpen={vi.fn()} />)
+    expect(screen.getByRole("searchbox", { name: "Search saved searches" })).toHaveProperty("value", "sample")
+    expect(runIds()).toEqual(["casey-role", "riley-role"])
   })
 })

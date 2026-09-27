@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { postFeedback } from "@/lib/api/feedback"
-import {
-  flushFeedback,
-  readQueue,
-  writeQueue,
-  type FeedbackOutcome,
-  type FeedbackRecord,
-} from "@/lib/searches/feedback"
+import { flushFeedback, readQueue, writeQueue, type FeedbackOutcome } from "@/lib/searches/feedback"
+import type { FeedbackRecord } from "@/types/searches"
 
 export interface Feedback {
   /** Records not yet submitted, oldest first; `pending.length` is the count to show. */

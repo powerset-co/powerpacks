@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { RATINGS } from "./fixture"
+import { RATINGS } from "@/testing/searches-fixture"
+
 import { rubricChoices } from "./rubric"
 
 describe("rubricChoices", () => {

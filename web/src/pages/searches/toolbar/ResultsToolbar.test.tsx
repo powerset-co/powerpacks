@@ -1,17 +1,18 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { NO_FILTERS, type ResultFilters } from "@/lib/searches/filters"
+import { exportScoreOf } from "@/lib/searches/feedback"
+import { filterRows, NO_FILTERS, type ResultFilters } from "@/lib/searches/filters"
 import { NO_TAGS } from "@/lib/searches/tags"
-import { operator, toolbarRow } from "@/testing/toolbar-rows"
+import { operator, resultRow } from "@/testing/searches-fixture"
 import type { Tagged } from "@/types/searches"
 
 import { ResultsToolbar, type ResultsToolbarProps } from "./ResultsToolbar"
 
 const ROWS = [
-  toolbarRow("p-jordan", "Jordan Bravo", { overall: 5, operators: [operator("op-1", "Drew Kilo")] }),
-  toolbarRow("p-casey", "Casey Delta", { overall: 4 }),
-  toolbarRow("p-morgan", "Morgan Echo", { overall: 2 }),
+  resultRow("p-jordan", "Jordan Bravo", { overall: 5, operators: [operator("op-1", "Drew Kilo")] }),
+  resultRow("p-casey", "Casey Delta", { overall: 4 }),
+  resultRow("p-morgan", "Morgan Echo", { overall: 2 }),
 ]
 const TAGGED: Tagged = { tags: ["Backend", "Infra"], assignments: { "p-jordan": ["Backend"] } }
 
@@ -22,13 +23,17 @@ function toolbar(props: Partial<ResultsToolbarProps> = {}) {
     onClearTags: vi.fn<() => void>(),
     onAnnounce: vi.fn(),
   }
+  const filters = props.filters ?? NO_FILTERS
+  const tagged = props.tagged ?? TAGGED
   render(
     <ResultsToolbar
       title="Backend Engineer"
       rows={ROWS}
+      shown={filterRows(ROWS, filters, tagged)}
       scored
-      tagged={TAGGED}
-      filters={NO_FILTERS}
+      tagged={tagged}
+      filters={filters}
+      exportScore={exportScoreOf(new Map())}
       {...handlers}
       {...props}
     />,

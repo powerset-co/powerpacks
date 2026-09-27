@@ -6,10 +6,13 @@ Searches JSON routes, then the legacy search routes. The bundle is web/dist, so 
 
 Changelog:
   2026-09-26: created with the React Searches page.
+  2026-09-26: the run's controls: tags (saved through /searches/tags), filters, score and
+    search feedback (the feedback route is stubbed in the handler), CSV of the filtered rows.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import tempfile
 import threading
@@ -100,8 +103,12 @@ def _results_root(root: Path) -> None:
         model.index_search(root, run_id, json.loads((root / run_id / "manifest.json").read_text()))
 
 
-def _handler(root: Path) -> type[BaseHTTPRequestHandler]:
-    """review/server.py's order: the shell, the Searches JSON routes, the legacy routes."""
+def _handler(root: Path, feedback: list[dict[str, list[str]]]) -> type[BaseHTTPRequestHandler]:
+    """review/server.py's order: the shell, the Searches JSON routes, the legacy routes.
+
+    POST /searches/feedback is answered here ("submitted") and its form kept in `feedback`,
+    so no test reaches Powerset; tags go to the real route and land in the run's tags.json.
+    """
     app = AppRoutes()
     searches = search_routes(root, base="/searches")
     searches_json = search_api(searches)
@@ -110,6 +117,15 @@ def _handler(root: Path) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if not (app.get(self, parsed) or searches_json.get(self, parsed) or searches.get(self, parsed)):
+                _send(self, b"not found", "text/plain", status=404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/searches/feedback":
+                length = int(self.headers.get("Content-Length", "0"))
+                feedback.append(urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8")))
+                _send(self, json.dumps({"ok": True, "status": "submitted"}).encode(), "application/json")
+            elif not searches.post(self, parsed):
                 _send(self, b"not found", "text/plain", status=404)
 
         def log_message(self, fmt: str, *args: object) -> None:
@@ -128,7 +144,9 @@ class SearchesBrowserTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
         _results_root(root)
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(root))
+        self.root = root
+        self.feedback: list[dict[str, list[str]]] = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(root, self.feedback))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
@@ -193,18 +211,111 @@ class SearchesBrowserTests(unittest.TestCase):
             expect(page.locator("[data-run='casey-role']")).to_be_visible()
             self.assertTrue(page.evaluate(kept))
 
-            # The People tab and back keep the shell and the document.
+            # The People tab and back keep the shell, the document and the sidebar's filters
+            # ("All" was picked above).
             page.get_by_role("link", name="People").click()
             expect(page).to_have_url(self.base + "/people")
             expect(page.locator("[data-people]")).to_be_visible()
             page.get_by_role("link", name="Searches").click()
             expect(page).to_have_url(self.base + "/searches")
-            expect(page.locator("[data-searches] [data-run-id]")).to_have_count(2)
+            expect(page.locator("[data-searches] [data-run-id]")).to_have_count(3)
+            expect(page.locator("[data-version='all']")).to_have_attribute("aria-pressed", "true")
             self.assertTrue(page.evaluate(kept))
 
             # A reload lands on the same run.
             page.goto(self.base + "/searches/run?run_id=casey-role")
             expect(page.locator("[data-run='casey-role'] h1")).to_have_text("Design Lead")
+            self.assertEqual(errors, [])
+            browser.close()
+
+
+    def test_tag_filter_score_export_and_feedback(self) -> None:
+        from playwright.sync_api import expect, sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900}, accept_downloads=True)
+            errors: list[str] = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.base + "/searches/run?run_id=jordan-role")
+            names = page.locator(".result-row .result-who b")
+            expect(names).to_have_text(["Jordan Bravo", "Morgan Echo", "Casey Delta"])
+            count = page.locator("[data-result-count] [role=status]")
+            expect(count).to_have_text("3 results")
+
+            # Tag a person: the chip shows at once and the tags are saved to the run.
+            add = page.get_by_role("button", name="Add tag to Casey Delta", exact=True)
+            expect(add).to_be_enabled()
+            add.click()
+            field = page.get_by_role("textbox", name="Add tag", exact=True)
+            field.fill("Backend | Infra")
+            with page.expect_response(lambda response: response.url.endswith("/searches/tags")
+                                      and response.request.method == "POST"):
+                field.press("Enter")
+            page.keyboard.press("Escape")
+            chip = page.locator("[data-person-id='p-casey'] [data-tag='Backend | Infra']")
+            expect(chip).to_be_visible()
+            saved = json.loads((self.root / "jordan-role" / "tags.json").read_text())
+            self.assertEqual(saved["assignments"], {"p-casey": ["Backend | Infra"]})
+
+            # A reload reads them back through GET /searches/tags.
+            page.reload()
+            expect(chip).to_be_visible()
+
+            # Tagged (1) keeps only the tagged person; the count reads the same rows.
+            page.get_by_role("button", name="Tagged (1)", exact=True).click()
+            expect(names).to_have_text(["Casey Delta"])
+            expect(count).to_have_text("1 of 3 results")
+
+            # CSV takes every filtered row, named for their tags.
+            with page.expect_download() as download:
+                page.get_by_role("button", name="CSV", exact=True).click()
+            with open(download.value.path(), newline="") as handle:
+                exported = list(csv.DictReader(handle))
+            self.assertEqual([row["Title"] for row in exported], ["Staff Engineer"])
+            self.assertIn("Casey Delta", exported[0]["Name"])
+            self.assertTrue(download.value.suggested_filename.startswith("backend-infra_"))
+            page.get_by_role("button", name="Tagged (1)", exact=True).click()
+            expect(names).to_have_count(3)
+
+            # The overall score filter (results.js data-score-filter).
+            page.get_by_role("button", name="Overall score 5", exact=True).click()
+            expect(names).to_have_text(["Jordan Bravo"])
+            with page.expect_download() as download:
+                page.get_by_role("button", name="CSV", exact=True).click()
+            with open(download.value.path(), newline="") as handle:
+                self.assertEqual([row["Overall Score"] for row in csv.DictReader(handle)], ["5"])
+            page.get_by_role("button", name="All scores", exact=True).click()
+            expect(names).to_have_count(3)
+
+            # Score a person: the badge shows it and the record is sent on the five-point scale.
+            page.get_by_role("button", name="Score Morgan Echo", exact=True).click()
+            page.get_by_role("radio", name="Score 3:").check()
+            page.get_by_role("dialog").get_by_role("textbox").fill("Worth a call")
+            page.get_by_role("button", name="Save", exact=True).click()
+            expect(page.get_by_role("button", name="Score Morgan Echo", exact=True)).to_have_text("Your score: 3/5")
+            page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+
+            # Search feedback from the header.
+            page.get_by_role("button", name="Send feedback about Backend Engineer", exact=True).click()
+            page.get_by_role("dialog").get_by_role("textbox").fill("Too senior overall")
+            page.get_by_role("button", name="Send", exact=True).click()
+            expect(page.get_by_text("Sent.", exact=True)).to_be_visible()
+            page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+            self.assertEqual(self.feedback, [
+                {"run_id": ["jordan-role"], "person_id": ["p-morgan"], "comment": ["Worth a call"],
+                 "human_judgment": ['{"score":3,"scale":5}']},
+                {"run_id": ["jordan-role"], "comment": ["Too senior overall"]},
+            ])
+
+            # Untag: the chip leaves and the saved tags follow.
+            page.get_by_role("button", name="Edit tags for Casey Delta", exact=True).click()
+            with page.expect_response(lambda response: response.url.endswith("/searches/tags")
+                                      and response.request.method == "POST"):
+                page.get_by_role("dialog", name="Tags for Casey Delta").get_by_role("button", name="Backend | Infra", exact=True).click()
+            page.keyboard.press("Escape")
+            expect(chip).to_have_count(0)
+            self.assertEqual(json.loads((self.root / "jordan-role" / "tags.json").read_text())["assignments"], {})
             self.assertEqual(errors, [])
             browser.close()
 

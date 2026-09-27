@@ -1,8 +1,8 @@
 import { useEffect } from "react"
-import { BrowserRouter, Outlet, Route, Routes, useLocation } from "react-router-dom"
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
 import { TopBar } from "@/components/shared"
-import { pageAt } from "@/lib/nav"
+import { HOME, pageAt } from "@/lib/nav"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
 
@@ -14,14 +14,15 @@ function Shell() {
   }, [page])
   return (
     <div className="grid h-dvh grid-rows-[var(--topbar-height)_1fr] overflow-hidden">
-      <TopBar />
+      <TopBar page={page} />
       <Outlet />
     </div>
   )
 }
 
 // The paths the server answers with this app (packs/shared/web/app.py PAGE_PATHS). /searches
-// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted.
+// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted. Any
+// other client-side path lands on HOME.
 export function App() {
   return (
     <BrowserRouter>
@@ -32,6 +33,7 @@ export function App() {
             <Route index element={null} />
             <Route path="run" element={null} />
           </Route>
+          <Route path="*" element={<Navigate to={HOME.href} replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

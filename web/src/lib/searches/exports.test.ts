@@ -1,17 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { toolbarRow } from "@/testing/toolbar-rows"
+import { resultRow } from "@/testing/searches-fixture"
 
 import { copyRows, csvFilename, escapeCsv, escapeHtml, toCsv, toHtmlTable, toPlainText } from "./exports"
-import { exportScore, filterRows, NO_FILTERS, type Score } from "./filters"
+import { exportScoreOf } from "./feedback"
+import { filterRows, NO_FILTERS, type Score } from "./filters"
 import { NO_TAGS } from "./tags"
 
+const OWN = exportScoreOf(new Map())
 const HEADERS = ["Name", "Title", "Company", "Location", "Network", "Overall Score", "Reasoning"]
 const TODAY = new Date("2026-09-26T12:00:00Z")
 
 // test_browser_overall_filters_export_all_matching_rows_and_tags: 125 people, overall 1–5 in turn.
 const SCORED = Array.from({ length: 125 }, (_, index) =>
-  toolbarRow(`score-person-${index}`, `Person ${index}`, {
+  resultRow(`score-person-${index}`, `Person ${index}`, {
     overall: (index % 5) + 1,
     reason: `Qualification ${index}`,
   }),
@@ -47,9 +49,9 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe("CSV export", () => {
   it("exports every filtered row, not only the mounted ones (125, then 50)", () => {
-    expect(parseCsv(toCsv(filterRows(SCORED, NO_FILTERS, NO_TAGS, exportScore)))).toHaveLength(125)
+    expect(parseCsv(toCsv(filterRows(SCORED, NO_FILTERS, NO_TAGS, OWN), OWN))).toHaveLength(125)
     const filters = { ...NO_FILTERS, scores: new Set<Score>([4, 5]) }
-    const exported = parseCsv(toCsv(filterRows(SCORED, filters, NO_TAGS, exportScore)))
+    const exported = parseCsv(toCsv(filterRows(SCORED, filters, NO_TAGS, OWN), OWN))
     expect(exported).toHaveLength(50)
     expect(new Set(exported.map((row) => row["Overall Score"]))).toEqual(new Set(["4", "5"]))
     expect(exported.map((row) => row.Reasoning)).toContain("Qualification 123")
@@ -58,16 +60,16 @@ describe("CSV export", () => {
   })
 
   it("writes the person's own score over the overall, and blank when neither exists", () => {
-    const rows = [toolbarRow("a", "Jordan Bravo", { overall: 4, human: 2 }), toolbarRow("b", "Casey Delta")]
-    expect(parseCsv(toCsv(rows)).map((row) => row["Overall Score"])).toEqual(["2", ""])
+    const rows = [resultRow("a", "Jordan Bravo", { overall: 4, human: 2 }), resultRow("b", "Casey Delta")]
+    expect(parseCsv(toCsv(rows, OWN)).map((row) => row["Overall Score"])).toEqual(["2", ""])
   })
 
   it("links the name, doubling quotes inside the formula; a name without a profile stays plain", () => {
     const rows = [
-      toolbarRow("a", 'Jordan "JB" Bravo', { linkedin: "https://linkedin.com/in/jordan" }),
-      toolbarRow("b", "Casey Delta", { linkedin: "" }),
+      resultRow("a", 'Jordan "JB" Bravo', { linkedin: "https://linkedin.com/in/jordan" }),
+      resultRow("b", "Casey Delta", { linkedin: "" }),
     ]
-    expect(parseCsv(toCsv(rows)).map((row) => row.Name)).toEqual([
+    expect(parseCsv(toCsv(rows, OWN)).map((row) => row.Name)).toEqual([
       '=HYPERLINK("https://linkedin.com/in/jordan","Jordan ""JB"" Bravo")',
       "Casey Delta",
     ])
@@ -104,8 +106,8 @@ describe("csvFilename", () => {
 
 describe("copy", () => {
   const rows = [
-    toolbarRow("a", "Jordan <B> Bravo", { overall: 5, linkedin: "https://linkedin.com/in/a?x=1&y=2" }),
-    toolbarRow("b", "Casey Delta", { linkedin: "" }),
+    resultRow("a", "Jordan <B> Bravo", { overall: 5, linkedin: "https://linkedin.com/in/a?x=1&y=2" }),
+    resultRow("b", "Casey Delta", { linkedin: "" }),
   ]
 
   it("escapes HTML", () => {
@@ -113,7 +115,7 @@ describe("copy", () => {
   })
 
   it("builds a table with linked names", () => {
-    const html = toHtmlTable(rows)
+    const html = toHtmlTable(rows, OWN)
     expect(html).toContain(
       `<thead><tr>${HEADERS.map((header) => `<th>${header}</th>`).join("")}</tr></thead>`,
     )
@@ -124,7 +126,7 @@ describe("copy", () => {
   })
 
   it("builds tab-separated text with bare names", () => {
-    expect(toPlainText(rows).split("\n")).toEqual([
+    expect(toPlainText(rows, OWN).split("\n")).toEqual([
       HEADERS.join("\t"),
       [
         "Jordan <B> Bravo",
@@ -156,7 +158,7 @@ describe("copy", () => {
         constructor(readonly items: Record<string, Blob>) {}
       },
     )
-    await copyRows(rows)
+    await copyRows(rows, OWN)
     const [item] = write.mock.calls[0]?.[0] ?? []
     expect(item).toMatchObject({ items: { "text/html": expect.any(Blob), "text/plain": expect.any(Blob) } })
   })

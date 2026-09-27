@@ -1,9 +1,8 @@
 import { memo } from "react"
 
 import { plural } from "@/lib/people/copy"
+import { runDate, statusText } from "@/lib/searches/copy"
 import type { SearchCard } from "@/types/searches"
-
-import { runDate, statusText } from "../lib/copy"
 
 interface RunItemProps {
   card: SearchCard

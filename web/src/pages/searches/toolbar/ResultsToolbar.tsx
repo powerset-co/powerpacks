@@ -4,15 +4,15 @@ import { Button } from "@/components/ui/button"
 import { copyRows, csvFilename, downloadCsv } from "@/lib/searches/exports"
 import {
   countText,
-  exportScore,
   filterRows,
   liveFilters,
   operatorOptions,
   saveLabels,
   taggedCount,
   type ResultFilters,
-  type ToolbarRow,
+  type ScoreOf,
 } from "@/lib/searches/filters"
+import type { ResultRow } from "@/lib/searches/ranking"
 import { heldTags } from "@/lib/searches/tags"
 import { cn } from "@/lib/utils"
 import type { Tagged } from "@/types/searches"
@@ -27,17 +27,21 @@ import { TagFilters } from "./TagFilters"
 export interface ResultsToolbarProps {
   // The search title: the CSV filename's words.
   title: string
-  // Every row of the panel, before filtering.
-  rows: readonly ToolbarRow[]
+  // Every row of the panel, before filtering, and the people the filters keep (one row each):
+  // the table shows exactly these, so the count never disagrees with it.
+  rows: readonly ResultRow[]
+  shown: readonly ResultRow[]
   // The overall table has 1–5 scores to filter on; a pond's trait table does not.
   scored: boolean
   tagged: Tagged
   filters: ResultFilters
+  // What export compares and writes: the person's own score, else the overall.
+  exportScore: ScoreOf
   onFiltersChange: (filters: ResultFilters) => void
   onUntag: (personIds: readonly string[]) => void
   onClearTags: () => void
   onAnnounce: (toast: ToastMessage) => void
-  // Placement from the page, e.g. sticky under the top bar as results.css has it.
+  // Placement from the page.
   className?: string
 }
 
@@ -51,9 +55,11 @@ function errorText(error: unknown): string {
 export function ResultsToolbar({
   title,
   rows,
+  shown,
   scored,
   tagged,
   filters,
+  exportScore,
   onFiltersChange,
   onUntag,
   onClearTags,
@@ -62,18 +68,17 @@ export function ResultsToolbar({
 }: ResultsToolbarProps) {
   const live = liveFilters(filters, rows, tagged)
   const count = taggedCount(rows, tagged)
-  const shown = filterRows(rows, filters, tagged)
   const exported = filterRows(rows, filters, tagged, exportScore)
   const total = new Set(rows.map((row) => row.row.person_id)).size
   const change = (patch: Partial<ResultFilters>) => onFiltersChange({ ...live, ...patch })
 
   const exportCsv = () => {
     const ids = exported.map((row) => row.row.person_id)
-    downloadCsv(exported, csvFilename(title, heldTags(tagged, ids)))
+    downloadCsv(exported, exportScore, csvFilename(title, heldTags(tagged, ids)))
     onAnnounce({ message: `Exported ${countText(exported.length, exported.length)}.` })
   }
   const copy = () => {
-    copyRows(exported).then(
+    copyRows(exported, exportScore).then(
       () => onAnnounce({ message: `Copied ${countText(exported.length, exported.length)}.` }),
       (error: unknown) => onAnnounce({ message: `Couldn't copy. ${errorText(error)}`, error: true }),
     )
@@ -81,10 +86,7 @@ export function ResultsToolbar({
 
   return (
     <div
-      className={cn(
-        "flex min-h-11 flex-wrap items-center gap-2.5 border-b border-line bg-[color-mix(in_srgb,var(--card)_92%,transparent)] py-2 backdrop-blur",
-        className,
-      )}
+      className={cn("flex min-h-11 flex-wrap items-center gap-2.5 py-2", className)}
       role="toolbar"
       aria-label="Results"
       data-results-toolbar

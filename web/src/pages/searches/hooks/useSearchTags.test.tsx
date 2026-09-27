@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { ToastMessage } from "@/components/shared"
 import type { Tagged } from "@/types/searches"
 
 import { useSearchTags } from "./useSearchTags"
@@ -39,16 +40,19 @@ function server(initial: Tagged | null): Server {
   return { fetch, posts, answer: (response) => waiting.shift()?.(response) }
 }
 
+const onToast = vi.fn<(toast: ToastMessage) => void>()
+
 function renderTags() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   )
-  return renderHook(() => useSearchTags(RUN_ID), { wrapper })
+  return renderHook(() => useSearchTags(RUN_ID, onToast), { wrapper })
 }
 
 afterEach(() => {
   cleanup()
+  onToast.mockReset()
   vi.unstubAllGlobals()
 })
 
@@ -95,7 +99,9 @@ describe("useSearchTags", () => {
       api.answer(respond({ error: "disk full" }, 500))
       await Promise.resolve()
     })
-    await waitFor(() => expect(result.current.toast?.message).toBe("Tags not saved: disk full"))
+    await waitFor(() =>
+      expect(onToast).toHaveBeenCalledWith({ message: "Tags not saved: disk full", error: true }),
+    )
     await waitFor(() =>
       expect(result.current.tagged).toEqual({ tags: ["Backend"], assignments: { "p-casey": ["Backend"] } }),
     )

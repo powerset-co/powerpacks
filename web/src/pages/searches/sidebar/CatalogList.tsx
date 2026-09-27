@@ -3,18 +3,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { EmptyState } from "@/components/shared"
 import { useListEntrance } from "@/hooks/useListEntrance"
 import { useReducedMotion } from "@/hooks/useReducedMotion"
-import type { SearchCard } from "@/types/searches"
-
-import { useSidebarKeys } from "../hooks/useSidebarKeys"
 import {
   companiesOf,
   groupByRecency,
-  initialFilter,
   matches,
+  readCatalogFilter,
   statusesOf,
   versionsOf,
+  writeCatalogFilter,
   type CatalogFilter,
-} from "../lib/catalog"
+} from "@/lib/searches/catalog"
+import type { SearchCard } from "@/types/searches"
+
+import { useSidebarKeys } from "../hooks/useSidebarKeys"
 import { CatalogFilters } from "./CatalogFilters"
 import { RunItem } from "./RunItem"
 
@@ -26,7 +27,7 @@ interface CatalogListProps {
 
 // The loaded catalog: filters, the count, and the runs grouped by recency.
 export function CatalogList({ cards, selectedId, onOpen }: CatalogListProps) {
-  const [filter, setFilter] = useState<CatalogFilter>(() => initialFilter(cards))
+  const [filter, setFilter] = useState<CatalogFilter>(() => readCatalogFilter(cards))
   const [highlight, setHighlight] = useState<string | null>(null)
   const search = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -58,9 +59,10 @@ export function CatalogList({ cards, selectedId, onOpen }: CatalogListProps) {
       const next = visible[Math.min(visible.length - 1, Math.max(0, at + step))]
       if (next) setHighlight(next.run_id)
     },
+    // Enter on the open run itself belongs to the results (hooks/useResultKeys).
     open: () => {
       const card = visible[at]
-      if (card) open(card.run_id)
+      if (card && card.run_id !== selectedId) open(card.run_id)
     },
   })
 
@@ -81,6 +83,7 @@ export function CatalogList({ cards, selectedId, onOpen }: CatalogListProps) {
           {...options}
           onChange={(next) => {
             setFilter(next)
+            writeCatalogFilter(next)
             setHighlight(null)
           }}
         />

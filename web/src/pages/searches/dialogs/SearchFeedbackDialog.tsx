@@ -8,7 +8,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { buildSearchFeedback, type FeedbackRecord } from "@/lib/searches/feedback"
+import { buildSearchFeedback } from "@/lib/searches/feedback"
+import type { FeedbackRecord } from "@/types/searches"
 
 import { FeedbackFooter } from "./FeedbackFooter"
 import { NotesField } from "./NotesField"

@@ -3,7 +3,17 @@
 // in localStorage under the key results.js uses, stored as the same form values, so either page
 // replays what the other queued.
 
-import type { Candidate, Ratings } from "@/types/searches"
+import type {
+  Candidate,
+  FeedbackRecord,
+  FeedbackReply,
+  HumanJudgment,
+  Ratings,
+  SearchRunPayload,
+} from "@/types/searches"
+
+import type { ScoreOf } from "./filters"
+import type { ResultRow } from "./ranking"
 
 export const FEEDBACK_STORAGE_KEY = "powerpacks:pending-feedback:v1"
 
@@ -11,25 +21,6 @@ export const SCORE_SCALE = 5
 
 // human_ratings.convert_rating: a judgment without a scale was saved on the old ten-point rubric.
 const LEGACY_SCALE = 10
-
-export interface HumanJudgment {
-  score: number
-  scale: typeof SCORE_SCALE | typeof LEGACY_SCALE
-}
-
-/** One feedback row. `person_id` is "" for feedback on the whole search; a judgment needs a person. */
-export interface FeedbackRecord {
-  run_id: string
-  person_id: string
-  comment: string
-  human_judgment: HumanJudgment | null
-}
-
-/** The server's answer to a stored record: "submitted" reached Powerset, "saved_locally" did not. */
-export interface FeedbackReply {
-  ok: boolean
-  status: "submitted" | "saved_locally"
-}
 
 export type FeedbackOutcome = "sent" | "queued"
 
@@ -86,6 +77,34 @@ export function queuedScores(
     if (score !== null) scores.set(record.person_id, { score, note: record.comment })
   }
   return scores
+}
+
+/** The person's own score: one still queued (the newest), else the one on file. */
+export function yourScore(
+  row: Pick<ResultRow, "row" | "candidate">,
+  queued: ReadonlyMap<string, QueuedScore>,
+): QueuedScore | null {
+  const waiting = queued.get(row.row.person_id)
+  if (waiting) return waiting
+  const filed = row.candidate?.human_score ?? null
+  return filed === null ? null : { score: filed, note: row.candidate?.human_note ?? "" }
+}
+
+/** What export and copy compare and write: the person's own score, else the overall. */
+export function exportScoreOf(queued: ReadonlyMap<string, QueuedScore>): ScoreOf {
+  return (row) => yourScore(row, queued)?.score ?? row.overall
+}
+
+/** The run as the server will return it once `record` (a score) is stored: the row shows it at once. */
+export function withScore(payload: SearchRunPayload, record: FeedbackRecord): SearchRunPayload {
+  const judgment = record.human_judgment
+  if (!judgment) return payload
+  const candidates = payload.search.candidates.map((candidate) =>
+    candidate.person_id === record.person_id
+      ? { ...candidate, human_score: fiveScore(judgment, payload.ratings.legacy), human_note: record.comment }
+      : candidate,
+  )
+  return { ...payload, search: { ...payload.search, candidates } }
 }
 
 /**

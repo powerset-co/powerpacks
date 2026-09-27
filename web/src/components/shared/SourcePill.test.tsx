@@ -10,7 +10,7 @@ describe("SourcePill", () => {
   it.each([
     ["gmail", "text-[#4ade80]", "Gmail"],
     ["imessage", "text-[#34d399]", "iMessage"],
-    ["whatsapp", "text-[#34d399]", "WhatsApp"],
+    ["whatsapp", "text-[#25d366]", "WhatsApp"],
     ["linkedin", "text-[#60a5fa]", "LinkedIn"],
   ] as const)("draws %s in its colour with a titled icon", (channel, colour, title) => {
     const { container } = render(<SourcePill channel={channel} />)
@@ -20,11 +20,10 @@ describe("SourcePill", () => {
     expect(pill?.querySelector("svg")?.getAttribute("aria-label")).toBe(title)
   })
 
-  it("fills only the LinkedIn glyph", () => {
-    const { container } = render(<SourcePills channels={["gmail", "linkedin"]} />)
-    const [gmail, linkedin] = container.querySelectorAll("svg")
-    expect(gmail?.getAttribute("fill")).toBe("none")
-    expect(linkedin?.getAttribute("fill")).toBe("currentColor")
+  it("fills the brand marks and strokes the outlines", () => {
+    const { container } = render(<SourcePills channels={["gmail", "imessage", "whatsapp", "linkedin"]} />)
+    const fills = [...container.querySelectorAll("svg")].map((svg) => svg.getAttribute("fill"))
+    expect(fills).toEqual(["none", "none", "currentColor", "currentColor"])
   })
 
   it.each([

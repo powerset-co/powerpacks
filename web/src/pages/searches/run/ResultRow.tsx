@@ -4,21 +4,20 @@ import { Avatar, SourcePills } from "@/components/shared"
 import { usePresence } from "@/hooks/usePresence"
 import { toChannels } from "@/lib/channels"
 import { plural } from "@/lib/people/copy"
+import type { ResultRow as Result } from "@/lib/searches/ranking"
 import type { PondCandidate } from "@/types/searches"
 
-import type { ResultRow as Result } from "../lib/ranking"
 import { Evidence } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { Operators } from "./Operators"
 import { ScoreCell } from "./ScoreCell"
 
-const NO_TAGS: readonly string[] = []
-
 interface ResultRowProps {
   result: Result
   ranked: boolean
+  labels: boolean
   expanded: boolean
-  tags: readonly string[] | undefined
+  focused: boolean
   actions: ReactNode
   onToggle: (key: string) => void
 }
@@ -36,12 +35,13 @@ function roles(row: PondCandidate): string {
 }
 
 // One person: the button line toggles the evidence below it; the actions slot sits outside
-// the button so its own controls stay separate.
+// the button so its own controls stay separate. `group/row` shows the tag trigger on hover.
 export const ResultRow = memo(function ResultRow({
   result,
   ranked,
+  labels,
   expanded,
-  tags,
+  focused,
   actions,
   onToggle,
 }: ResultRowProps) {
@@ -50,7 +50,13 @@ export const ResultRow = memo(function ResultRow({
   const attribution = candidate?.network_attribution
   const channels = toChannels([...new Set(attribution?.sources.map((source) => source.channel))])
   return (
-    <div className="result-row" data-person-id={row.person_id} data-expanded={expanded}>
+    <div
+      className="result-row group/row"
+      data-person-id={row.person_id}
+      data-result-key={result.key}
+      data-expanded={expanded}
+      data-focus={focused}
+    >
       <div className="result-line">
         <button
           type="button"
@@ -67,7 +73,7 @@ export const ResultRow = memo(function ResultRow({
             </span>
           </span>
           <ScoreCell result={result} ranked={ranked} />
-          <JudgeBadges candidate={candidate} tags={tags ?? NO_TAGS} />
+          <JudgeBadges candidate={candidate} shown={labels} />
           {channels.length ? (
             <SourcePills className="result-sources" size="sm" channels={channels} />
           ) : (

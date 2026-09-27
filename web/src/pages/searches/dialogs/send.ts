@@ -1,5 +1,6 @@
 import type { ToastMessage } from "@/components/shared"
-import { OUTCOME_MESSAGE, type FeedbackOutcome, type FeedbackRecord } from "@/lib/searches/feedback"
+import { OUTCOME_MESSAGE, type FeedbackOutcome } from "@/lib/searches/feedback"
+import type { FeedbackRecord } from "@/types/searches"
 
 /** Where a dialog hands its record: `useFeedback().submit`, and the page's toast. */
 export interface FeedbackSink {

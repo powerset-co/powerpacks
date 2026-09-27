@@ -161,3 +161,11 @@ export function pondRows(search: SearchResult, pond: Pond): ResultRow[] {
 export function pondKept(pond: Pond): number {
   return pond.reviewed_count || pond.candidates.length
 }
+
+/** The people one panel shows: the ranked sections, or the picked pond's table, or none. */
+export function panelSections(search: SearchResult, results: Results, pondAt: number): ResultSection[] {
+  if (results.mode === "ranked") return results.sections
+  const pond = search.ponds[pondAt]
+  if (results.mode === "unavailable" || !pond) return []
+  return [{ heading: null, rows: pondRows(search, pond) }]
+}

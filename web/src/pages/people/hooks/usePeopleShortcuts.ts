@@ -1,12 +1,12 @@
 import type { RefObject } from "react"
 
-import { useKeyboard } from "@/hooks/useKeyboard"
 import type { useSelection } from "@/hooks/useSelection"
 import { ORDER, type Decision, type Person } from "@/types/people"
 
 import type { PeopleTableHandle } from "../table/PeopleTable"
 import type { useDecisions } from "./useDecisions"
 import type { useDrawer } from "./useDrawer"
+import { useKeyboard } from "./useKeyboard"
 
 interface ShortcutTargets {
   search: RefObject<HTMLInputElement>

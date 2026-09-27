@@ -1,8 +1,7 @@
 import { forwardRef } from "react"
 
 import { Chip, SearchField } from "@/components/shared"
-
-import type { CatalogFilter } from "../lib/catalog"
+import type { CatalogFilter } from "@/lib/searches/catalog"
 
 export const SEARCH_PLACEHOLDER = "Search title, company, run"
 

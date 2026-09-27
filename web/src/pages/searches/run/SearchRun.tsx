@@ -1,26 +1,35 @@
-import { useMemo, useState, type ReactNode } from "react"
+import type { ReactNode } from "react"
 
-import type { PondCandidate, SearchRunPayload, Tagged } from "@/types/searches"
+import type { ResultRow, ResultSection, Results } from "@/lib/searches/ranking"
+import type { SearchResult } from "@/types/searches"
 
-import { pondRows, rankResults, type Results } from "../lib/ranking"
 import { PondChain } from "./PondChain"
 import { ResultsTable, type ResultItem } from "./ResultsTable"
 import { RunHeader } from "./RunHeader"
 import { TeamPanel } from "./TeamPanel"
 
 export interface SearchRunProps {
-  payload: SearchRunPayload
+  search: SearchResult
   // The run's status from its catalog card.
   status?: string
-  // Slots for the tags, feedback and export controls (web/README.md "Searches").
+  mode: Results["mode"]
+  // Without a screen the pond chain picks the table's pond.
+  pondAt: number
+  onPond: (index: number) => void
+  // The panel's people before filtering, and the sections the filters keep.
+  people: number
+  sections: readonly ResultSection[]
+  filtered: boolean
+  // Taste, Suggested pin and Team similarity labels on each row.
+  labels: boolean
+  // The run's controls (web/README.md "Searches").
   toolbar?: ReactNode
   headerActions?: ReactNode
-  rowActions?: (candidate: PondCandidate) => ReactNode
-  tags?: Tagged | null
+  rowActions?: (result: ResultRow) => ReactNode
 }
 
-function rankedItems(results: Extract<Results, { mode: "ranked" }>): ResultItem[] {
-  return results.sections.flatMap((section) => [
+function tableItems(sections: readonly ResultSection[]): ResultItem[] {
+  return sections.flatMap((section) => [
     ...(section.heading
       ? [{ kind: "heading" as const, key: `heading:${section.heading}`, text: section.heading }]
       : []),
@@ -28,47 +37,33 @@ function rankedItems(results: Extract<Results, { mode: "ranked" }>): ResultItem[
   ])
 }
 
-// One saved run: header, pond chain, the slots' toolbar, the people, the team.
-export function SearchRun({ payload, status, toolbar, headerActions, rowActions, tags }: SearchRunProps) {
-  const { search } = payload
-  const results = useMemo(() => rankResults(search), [search])
-  const [pondAt, setPond] = useState(0)
+function emptyText(search: SearchResult, mode: Results["mode"], pondAt: number, filtered: boolean): string {
+  if (filtered) return "No one here matches these filters."
+  if (mode === "unavailable") return "Screening scores are unavailable for this run."
   const pond = search.ponds[pondAt]
+  return pond
+    ? `0 of ${pond.result_count.toLocaleString()} people this pond found scored 0.7 or higher, so none were kept.`
+    : "This run has no ponds yet."
+}
 
-  const items = useMemo((): ResultItem[] => {
-    if (results.mode === "ranked") return rankedItems(results)
-    if (results.mode === "unavailable" || !pond) return []
-    return pondRows(search, pond).map((result) => ({ kind: "row", key: result.key, result }))
-  }, [results, search, pond])
-
-  const people = new Set(items.flatMap((item) => (item.kind === "row" ? [item.result.row.person_id] : [])))
-    .size
-  const empty =
-    results.mode === "unavailable"
-      ? "Screening scores are unavailable for this run."
-      : pond
-        ? `0 of ${pond.result_count.toLocaleString()} people this pond found scored 0.7 or higher, so none were kept.`
-        : "This run has no ponds yet."
-
+// One saved run: header, pond chain, the toolbar, the people the filters keep, the team.
+export function SearchRun(props: SearchRunProps) {
+  const { search, mode, pondAt, sections, filtered } = props
   return (
     <div className="search-run" data-search-run>
-      <RunHeader search={search} status={status} people={people} actions={headerActions} />
-      <PondChain
-        ponds={search.ponds}
-        selected={results.mode === "ponds" ? pondAt : null}
-        onSelect={setPond}
-      />
-      {toolbar ? (
+      <RunHeader search={search} status={props.status} people={props.people} actions={props.headerActions} />
+      <PondChain ponds={search.ponds} selected={mode === "ponds" ? pondAt : null} onSelect={props.onPond} />
+      {props.toolbar ? (
         <div className="run-toolbar" data-run-toolbar>
-          {toolbar}
+          {props.toolbar}
         </div>
       ) : null}
       <ResultsTable
-        items={items}
-        ranked={results.mode === "ranked"}
-        empty={empty}
-        tags={tags}
-        rowActions={rowActions}
+        items={tableItems(sections)}
+        ranked={mode === "ranked"}
+        labels={props.labels}
+        empty={emptyText(search, mode, pondAt, filtered)}
+        rowActions={props.rowActions}
       />
       <TeamPanel search={search} />
     </div>

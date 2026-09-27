@@ -2,12 +2,11 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { createPortal } from "react-dom"
 
 import { usePresence } from "@/hooks/usePresence"
+import { usePresenceList } from "@/hooks/usePresenceList"
 import { existingTag, normalizeTag, TAG_NAME_MAX } from "@/lib/searches/tags"
 import { cn } from "@/lib/utils"
 
-import { RISE_IN } from "./Appear"
-import { PANEL } from "./styles"
-import { type DismissBy, useDismiss } from "./useDismiss"
+import { type DismissBy, useDismiss } from "../hooks/useDismiss"
 
 const PANEL_WIDTH = 256
 const PANEL_GAP = 6
@@ -18,24 +17,33 @@ export interface TagEditorProps {
   // Every tag in the search, and the ones this person holds.
   tags: readonly string[]
   applied: readonly string[]
+  // While the saved tags load: an edit then would overwrite them.
+  disabled: boolean
   onToggle: (tag: string) => void
   onRemove: (tag: string) => void
 }
 
 // Below the trigger, kept inside the window. Fixed and portalled: a virtual row clips and
-// recycles its cells, so the panel lives on the body and closes when the page scrolls.
+// recycles its cells, so the panel lives on the body and closes once a scroll moves its row.
+function panelTop(anchor: HTMLElement): number {
+  return anchor.getBoundingClientRect().bottom + PANEL_GAP
+}
+
 function placeBelow(anchor: HTMLElement): CSSProperties {
   const box = anchor.getBoundingClientRect()
   return {
-    top: box.bottom + PANEL_GAP,
+    top: panelTop(anchor),
     left: Math.max(EDGE, Math.min(box.left, window.innerWidth - PANEL_WIDTH - EDGE)),
     width: PANEL_WIDTH,
   }
 }
 
+const sameTag = (tag: string) => tag
+
 // The row's "+ tag" button (its tags as chips) and the popover that edits them: tags as
 // toggles, a field that adds (Enter), × to delete a tag from the search. Escape closes.
-export function TagEditor({ personName, tags, applied, onToggle, onRemove }: TagEditorProps) {
+// A chip taken off leaves with the .rise exit; one added rises in.
+export function TagEditor({ personName, tags, applied, disabled, onToggle, onRemove }: TagEditorProps) {
   const [place, setPlace] = useState<CSSProperties | null>(null)
   const [text, setText] = useState("")
   const anchor = useRef<HTMLButtonElement>(null)
@@ -46,6 +54,7 @@ export function TagEditor({ personName, tags, applied, onToggle, onRemove }: Tag
   const [chipsAtMount] = useState(() => new Set(applied))
   const [tagsAtOpen, setTagsAtOpen] = useState<ReadonlySet<string>>(() => new Set(tags))
   const presence = usePresence(place)
+  const chips = usePresenceList(applied, sameTag)
   const open = place !== null
 
   const close = useCallback((by: DismissBy) => {
@@ -56,15 +65,17 @@ export function TagEditor({ personName, tags, applied, onToggle, onRemove }: Tag
   useDismiss(open, panel, anchor, close)
 
   useEffect(() => {
-    if (!open) return
+    if (!place) return
     input.current?.focus()
+    // A scroll that leaves the trigger where it was (a clamp, a re-measure) keeps it open.
     const onScroll = (event: Event) => {
       if (event.target instanceof Node && panel.current?.contains(event.target)) return
+      if (anchor.current && panelTop(anchor.current) === place.top) return
       close("outside")
     }
     window.addEventListener("scroll", onScroll, true)
     return () => window.removeEventListener("scroll", onScroll, true)
-  }, [open, close])
+  }, [place, close])
 
   const typed = normalizeTag(text)
   const matching = typed ? tags.filter((tag) => tag.toLowerCase().includes(typed.toLowerCase())) : tags
@@ -86,13 +97,15 @@ export function TagEditor({ personName, tags, applied, onToggle, onRemove }: Tag
       <button
         ref={anchor}
         type="button"
+        data-row-action="tag"
+        disabled={disabled}
         aria-label={`${applied.length ? "Edit tags for" : "Add tag to"} ${personName}`}
         title={applied.length ? "Edit tags" : "Add tag"}
         aria-expanded={open}
         className={cn(
           // results.css .tag-trigger: shown on the row's hover (the row carries `group/row`),
           // on focus, while open, or once the person holds a tag.
-          "inline-flex min-h-7 min-w-7 max-w-full cursor-pointer flex-wrap items-center justify-end gap-1 rounded-full px-[7px] py-[3px] text-muted-foreground opacity-0 transition-[color,background-color,opacity] duration-fast ease-out hover:bg-secondary hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100",
+          "inline-flex min-h-7 min-w-7 max-w-full cursor-pointer items-center justify-end gap-1 overflow-hidden rounded-full px-[7px] py-[3px] text-muted-foreground opacity-0 transition-[color,background-color,opacity] duration-fast ease-out hover:bg-secondary hover:text-foreground focus-visible:opacity-100 disabled:cursor-default group-hover/row:opacity-100",
           (applied.length > 0 || open) && "opacity-100",
         )}
         onClick={() => {
@@ -103,16 +116,19 @@ export function TagEditor({ personName, tags, applied, onToggle, onRemove }: Tag
           }
         }}
       >
-        {applied.map((tag) => (
+        {chips.map((chip) => (
           <span
-            key={tag}
-            title={tag}
+            key={chip.key}
+            title={chip.item}
+            data-tag={chip.item}
+            data-open={chip.open}
+            onTransitionEnd={chip.onTransitionEnd}
             className={cn(
-              "h-5 max-w-[100px] truncate rounded-full bg-secondary px-[7px] py-0.5 text-[10px] font-semibold leading-4 text-foreground",
-              !chipsAtMount.has(tag) && RISE_IN,
+              "rise h-5 min-w-0 max-w-[100px] truncate rounded-full bg-secondary px-[7px] py-0.5 text-[10px] font-semibold leading-4 text-foreground",
+              chipsAtMount.has(chip.key) && "rise-settled",
             )}
           >
-            {tag}
+            {chip.item}
           </span>
         ))}
         <svg
@@ -134,7 +150,7 @@ export function TagEditor({ personName, tags, applied, onToggle, onRemove }: Tag
               aria-label={`Tags for ${personName}`}
               data-open={presence.open}
               onTransitionEnd={presence.onTransitionEnd}
-              className={cn(PANEL, "rise fixed")}
+              className={"float-panel rise fixed"}
               style={presence.shown}
             >
               <input
@@ -162,7 +178,10 @@ export function TagEditor({ personName, tags, applied, onToggle, onRemove }: Tag
                   </p>
                 ) : null}
                 {matching.map((tag) => (
-                  <span key={tag} className={cn("flex items-center gap-1", !tagsAtOpen.has(tag) && RISE_IN)}>
+                  <span
+                    key={tag}
+                    className={cn("flex items-center gap-1", !tagsAtOpen.has(tag) && "rise-in")}
+                  >
                     <button
                       type="button"
                       aria-pressed={held.has(tag)}
@@ -197,7 +216,7 @@ export function TagEditor({ personName, tags, applied, onToggle, onRemove }: Tag
                     type="button"
                     className={cn(
                       "min-h-7 cursor-pointer rounded-sm px-1.5 text-left font-semibold text-primary transition-colors duration-fast ease-out hover:bg-secondary",
-                      RISE_IN,
+                      "rise-in",
                     )}
                     onClick={() => apply(typed)}
                   >

@@ -143,7 +143,7 @@ button.pond-card:hover {
 }
 
 .run-toolbar {
-  padding: 8px 20px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -222,7 +222,7 @@ button.pond-card:hover {
 }
 .team th,
 .team td {
-  padding: 8px 20px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: middle;

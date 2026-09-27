@@ -2,10 +2,11 @@ import { useState } from "react"
 
 import { Chip } from "@/components/shared"
 import { Button } from "@/components/ui/button"
+import { usePresenceList } from "@/hooks/usePresenceList"
 import { toggled } from "@/lib/sets"
+import { cn } from "@/lib/utils"
 
-import { Appear, RISE_IN } from "./Appear"
-import { GROUP_LABEL } from "./styles"
+import { Appear } from "./Appear"
 
 interface TagFiltersProps {
   tags: readonly string[]
@@ -13,21 +14,27 @@ interface TagFiltersProps {
   onChange: (selected: ReadonlySet<string>) => void
 }
 
+const sameTag = (tag: string) => tag
+
 // Within "Tagged": a chip per tag in the search (any selected tag matches), "Clear filter".
+// Chips present when the group appears arrive with it; a tag made later rises in alone, and a
+// tag deleted from the search leaves with the .rise exit.
 export function TagFilters({ tags, selected, onChange }: TagFiltersProps) {
-  // Chips present when the group appears arrive with it; a tag made later rises in alone.
   const [first] = useState(() => new Set(tags))
+  const chips = usePresenceList(tags, sameTag)
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5" role="group" aria-label="Tag filter">
-      <span className={GROUP_LABEL}>Filter:</span>
-      {tags.map((tag) => (
+      <span className="toolbar-label">Filter:</span>
+      {chips.map((chip) => (
         <Chip
-          key={tag}
-          pressed={selected.has(tag)}
-          className={first.has(tag) ? undefined : RISE_IN}
-          onClick={() => onChange(toggled(selected, tag))}
+          key={chip.key}
+          pressed={selected.has(chip.item)}
+          data-open={chip.open}
+          onTransitionEnd={chip.onTransitionEnd}
+          className={cn("rise", first.has(chip.key) && "rise-settled")}
+          onClick={() => onChange(toggled(selected, chip.item))}
         >
-          {tag}
+          {chip.item}
         </Chip>
       ))}
       <Appear show={selected.size > 0}>

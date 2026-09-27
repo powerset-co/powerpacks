@@ -14,8 +14,9 @@ export const ORDER: readonly Decision[] = ["confirm", "yes", "no"]
 /** The worth call; "" when no one judged it. */
 export type Worth = "yes" | "maybe" | "no" | ""
 
-/** Who made a call (`worth_source`, `share_source`); "" when no one did. */
-export type DecidedBy = "human" | "machine" | ""
+/** Who made a call. A share row always has one (labels.py `share_decision`); worth may have
+ *  none, so `worth_source` adds "" (model.py `_worth_source`). */
+export type DecidedBy = "human" | "machine"
 
 /** One list row per parent (`SharePerson`), plus the fields the page derives on load. */
 export interface Person {
@@ -33,7 +34,7 @@ export interface Person {
   cadence: string
   direction: string
   worth: Worth
-  worth_source: DecidedBy
+  worth_source: DecidedBy | ""
   relationship_kind: string
   mode: string
   hierarchy: string

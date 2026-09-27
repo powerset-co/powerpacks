@@ -2,8 +2,6 @@ import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
 
-import { RISE_IN } from "./Appear"
-
 interface ClearTagsProps {
   onClear: () => void
 }
@@ -20,7 +18,7 @@ export function ClearTags({ onClear }: ClearTagsProps) {
         variant="ghost"
         size="sm"
         shape="pill"
-        className={asked ? RISE_IN : undefined}
+        className={asked ? "rise-in" : undefined}
         onClick={() => {
           setAsked(true)
           setConfirming(true)
@@ -31,7 +29,7 @@ export function ClearTags({ onClear }: ClearTagsProps) {
     )
   }
   return (
-    <span key="confirm" className={`inline-flex items-center gap-1.5 text-xs font-semibold ${RISE_IN}`}>
+    <span key="confirm" className={"rise-in inline-flex items-center gap-1.5 text-xs font-semibold"}>
       Clear all?
       <Button
         variant="bad"

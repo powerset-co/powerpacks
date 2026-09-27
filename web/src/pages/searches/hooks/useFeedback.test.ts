@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { buildSearchFeedback, FEEDBACK_STORAGE_KEY, formValues } from "@/lib/searches/feedback"
-import { MemoryStorage } from "@/lib/searches/memory-storage"
+import { MemoryStorage } from "@/testing/searches-fixture"
 
 import { useFeedback } from "./useFeedback"
 

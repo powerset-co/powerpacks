@@ -1,15 +1,31 @@
-// Synthetic searches for tests: the catalog and one run as GET /searches/api/* return them.
+// Synthetic searches for tests: the catalog and one run as GET /searches/api/* return them,
+// single result rows for the filter and export suites, and a stand-in for localStorage.
 
+import type { ResultRow } from "@/lib/searches/ranking"
 import type {
   Candidate,
   CandidateJudgment,
+  NetworkOperator,
   Pond,
   PondCandidate,
+  Ratings,
   SearchCard,
   SearchRunPayload,
 } from "@/types/searches"
 
 export const RUN_ID = "jordan-role"
+
+// The rubric is human_ratings.RUBRIC and LEGACY_SCORES, as the server sends them.
+export const RATINGS: Ratings = {
+  rubric: {
+    "1": "Clear no — Wrong role or clearly lacks required experience",
+    "2": "Lean no — Some relevant experience, but I wouldn’t share them",
+    "3": "Borderline — Concerns around fit, but worth sharing",
+    "4": "Yes — Qualified and relevant",
+    "5": "Strong yes — Particularly compelling",
+  },
+  legacy: { "1": 1, "2": 2, "3": 2, "4": 2, "7": 3, "8": 4, "9": 5, "10": 5 },
+}
 export const QUERIES = ["Backend engineers in Oakland", "Platform engineers who shipped payments"] as const
 
 function card(fields: Partial<SearchCard> & Pick<SearchCard, "run_id" | "title">): SearchCard {
@@ -273,7 +289,7 @@ export const RUN: SearchRunPayload = {
     team_fetched_at: "2026-09-20T00:00:00Z",
     team_status: "",
   },
-  ratings: { rubric: { "5": "Strong yes" }, legacy: { "10": 5 } },
+  ratings: RATINGS,
 }
 
 // The documented order: Jev scores first, then ratings; overall, then the screen score.
@@ -281,3 +297,103 @@ export const RANKED_NAMES = [
   ["Riley Foxtrot", "Avery Golf", "Quinn Hotel"],
   ["Jordan Bravo", "Morgan Echo", "Casey Delta"],
 ] as const
+
+// One candidate on its own, as the score dialog shows it.
+export const CASEY_CANDIDATE: Candidate = {
+  person_id: "casey",
+  name: "Casey Delta",
+  linkedin_url: "https://www.linkedin.com/in/casey-delta",
+  title: "Staff engineer",
+  company: "Acme",
+  location: "",
+  avatar_url: "",
+  move_likelihood: null,
+  why: "",
+  found_run: RUN_ID,
+  found_pond: 1,
+  found_query: "",
+  queries: [],
+  ponds: [],
+  human_score: null,
+  human_note: "",
+  candidate_judgment: null,
+  network_attribution: null,
+  taste_score: null,
+  pin_confidence: null,
+  pin_judgment: null,
+  team_similarity: null,
+}
+
+export function operator(operator_id: string, operator_name: string): NetworkOperator {
+  return {
+    operator_id,
+    operator_name,
+    channels: ["gmail"],
+    gmail_interactions: 3,
+    message_interactions: null,
+    gmail_account_details: [],
+  }
+}
+
+interface RowFields {
+  overall?: number | null
+  human?: number | null
+  operators?: NetworkOperator[]
+  linkedin?: string
+  reason?: string
+  pond?: Partial<PondCandidate>
+}
+
+/** One ranked row for `person_id`, with its candidate record. */
+export function resultRow(person_id: string, name: string, fields: RowFields = {}): ResultRow {
+  const pondRow = rating(person_id, name, 3, {
+    linkedin_url: fields.linkedin ?? `https://linkedin.com/in/${person_id}`,
+    source_channel: "gmail",
+    source_operator: "Alex Operator",
+    ...fields.pond,
+  })
+  const operators = fields.operators ?? []
+  return {
+    key: `0:${person_id}`,
+    row: pondRow,
+    candidate: candidate(pondRow, {
+      linkedin_url: pondRow.linkedin_url,
+      human_score: fields.human ?? null,
+      network_attribution: operators.length
+        ? { person_id, sources: [], operators, total_interactions: 3 }
+        : null,
+    }),
+    overall: fields.overall ?? null,
+    reason: fields.reason ?? "Relevant work",
+  }
+}
+
+// Node 25 defines its own global localStorage, which shadows jsdom's and has no methods unless
+// node runs with --localstorage-file; the feedback suites stub this in-memory one instead.
+export class MemoryStorage implements Storage {
+  private items = new Map<string, string>()
+
+  get length(): number {
+    return this.items.size
+  }
+
+  clear(): void {
+    this.items.clear()
+  }
+
+  getItem(key: string): string | null {
+    return this.items.get(key) ?? null
+  }
+
+  key(index: number): string | null {
+    return [...this.items.keys()][index] ?? null
+  }
+
+  removeItem(key: string): void {
+    this.items.delete(key)
+  }
+
+  setItem(key: string, value: string): void {
+    this.items.set(key, value)
+  }
+}

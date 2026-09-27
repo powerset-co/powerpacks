@@ -45,8 +45,8 @@ write is skipped).
 | `share_list.py` | The `share` node: labels + share list in one pass | evidence, `person_tags` | `person_labels`, `share`, manifest.json |
 | `share.py` | CLI | command arguments | command results |
 | `web/model.py` | `SharePeople`: one typed row per parent (the roster people merged under it) for the People page | people.csv, `share`, `person_labels`, `person_tags`, `parents`, `facts`, dossier artifacts | — |
-| `web/server.py` | `ShareRoutes` (mounted in the review server at `/api/people/*`, after `packs/shared/web/app.py` serves the page at `/people`, beside the searches list at `/searches`) and a standalone server for tests | the rows | `person_tags` + `share` in one transaction (`Db.decide_share`) |
-| `web/vendor/` | the vendored row virtualizer the Searches page imports | — | — |
+| `web/server.py` | `ShareRoutes` (mounted in the review server at `/api/people/*`, after `packs/shared/web/app.py` serves the React app: People at `http://127.0.0.1:8765/people`, Searches at `/searches` and `/searches/run?run_id=<slug>`) and a standalone server for tests | the rows | `person_tags` + `share` in one transaction (`Db.decide_share`) |
+| `web/vendor/` | the vendored row virtualizer the legacy results page imports (`packs/shared/web/virtual-table.js`, served by `results_web/server.py` for the hosted snapshot) | — | — |
 
 ## Tables
 

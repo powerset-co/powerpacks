@@ -2,9 +2,8 @@ import type { ReactNode } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { plural } from "@/lib/people/copy"
+import { isComplete, money, runDate, statusText } from "@/lib/searches/copy"
 import type { SearchResult } from "@/types/searches"
-
-import { isComplete, money, runDate, statusText } from "../lib/copy"
 
 interface RunHeaderProps {
   search: SearchResult

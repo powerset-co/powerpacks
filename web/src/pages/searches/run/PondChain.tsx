@@ -1,6 +1,5 @@
+import { pondKept } from "@/lib/searches/ranking"
 import type { Pond } from "@/types/searches"
-
-import { pondKept } from "../lib/ranking"
 
 interface PondChainProps {
   ponds: readonly Pond[]

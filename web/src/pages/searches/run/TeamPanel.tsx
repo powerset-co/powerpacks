@@ -2,9 +2,8 @@ import { useState } from "react"
 
 import { initials } from "@/components/shared"
 import { usePresence } from "@/hooks/usePresence"
+import { monthYear, runDate } from "@/lib/searches/copy"
 import type { SearchResult } from "@/types/searches"
-
-import { monthYear, runDate } from "../lib/copy"
 
 // rendering.py _team_table: the company's current employees as saved, under the results.
 // The header folds the list open; the list fades in and out.

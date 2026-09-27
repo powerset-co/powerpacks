@@ -1,6 +1,5 @@
 import { Badge } from "@/components/ui/badge"
-
-import { scoreBand, type ResultRow, type ScoreBand } from "../lib/ranking"
+import { scoreBand, type ResultRow, type ScoreBand } from "@/lib/searches/ranking"
 
 const BAND_VARIANT = { high: "ok", medium: "warn", low: "bad" } as const satisfies Record<ScoreBand, string>
 

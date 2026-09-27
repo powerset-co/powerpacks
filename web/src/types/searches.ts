@@ -235,3 +235,24 @@ export interface Tagged {
 export interface TagsPayload {
   tagged: Tagged | null
 }
+
+// POST /searches/feedback (results_web/server.py _save_feedback). A judgment without a scale
+// was saved on the old ten-point rubric (human_ratings.convert_rating).
+export interface HumanJudgment {
+  score: number
+  scale: 5 | 10
+}
+
+/** One feedback row. `person_id` is "" for feedback on the whole search; a judgment needs a person. */
+export interface FeedbackRecord {
+  run_id: string
+  person_id: string
+  comment: string
+  human_judgment: HumanJudgment | null
+}
+
+/** The server's answer to a stored record: "submitted" reached Powerset, "saved_locally" did not. */
+export interface FeedbackReply {
+  ok: boolean
+  status: "submitted" | "saved_locally"
+}

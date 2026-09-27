@@ -2,16 +2,17 @@ import { describe, expect, it } from "vitest"
 
 import { CARDS } from "@/testing/searches-fixture"
 
-import { statusText } from "./copy"
 import {
   groupByRecency,
   initialFilter,
   matches,
+  parseCatalogFilter,
   recencyTitle,
   statusesOf,
   versionsOf,
   type CatalogFilter,
 } from "./catalog"
+import { statusText } from "./copy"
 
 // A Saturday, so Sunday the 20th starts "This week".
 const NOW = new Date(2026, 8, 26, 12)
@@ -38,6 +39,16 @@ describe("catalog filter", () => {
     expect(statusText("completed")).toBe("Search complete")
     expect(statusText("needs_REVIEW")).toBe("Needs review")
     expect(statusesOf(CARDS)).toEqual(["Running", "Search complete"])
+  })
+})
+
+describe("saved catalog filter", () => {
+  it("reads back a whole filter and rejects any other shape", () => {
+    const saved: CatalogFilter = { text: "design", version: null, company: "Sample Co", status: "" }
+    expect(parseCatalogFilter(saved)).toEqual(saved)
+    expect(parseCatalogFilter({ ...saved, version: 3 })).toBeNull()
+    expect(parseCatalogFilter({ text: "design" })).toBeNull()
+    expect(parseCatalogFilter([])).toBeNull()
   })
 })
 

@@ -3,15 +3,16 @@ import type { Candidate } from "@/types/searches"
 
 interface JudgeBadgesProps {
   candidate: Candidate | undefined
-  tags: readonly string[]
+  // The toolbar's Labels toggle; the column keeps its place while hidden.
+  shown: boolean
 }
 
 // rendering.py _judge_badges: taste, the pin judge's suggestion and team similarity, none of
-// which changes the score; then the run's saved tags for this person.
-export function JudgeBadges({ candidate, tags }: JudgeBadgesProps) {
+// which changes the score.
+export function JudgeBadges({ candidate, shown }: JudgeBadgesProps) {
   const similarity = candidate?.team_similarity
   return (
-    <span className="result-badges">
+    <span className="result-badges" data-labels={shown}>
       {candidate?.candidate_judgment ? (
         candidate.taste_score === null ? (
           <Badge variant="muted" title="No taste score on file">
@@ -36,11 +37,6 @@ export function JudgeBadges({ candidate, tags }: JudgeBadgesProps) {
           Team #{similarity.rank}
         </Badge>
       ) : null}
-      {tags.map((tag) => (
-        <Badge key={tag} variant="muted" className="result-tag" data-tag={tag}>
-          {tag}
-        </Badge>
-      ))}
     </span>
   )
 }
