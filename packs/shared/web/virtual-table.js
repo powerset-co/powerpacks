@@ -19,7 +19,10 @@ export class VirtualTable {
       const node = document.createElement(content.tagName === "TBODY" ? "tr" : "div");
       node.className = "virtual-spacer";
       node.setAttribute("aria-hidden", "true");
-      if (node.tagName === "TR") node.innerHTML = "<td colspan='2'></td>";
+      if (node.tagName === "TR") {
+        const cell = node.insertCell();
+        cell.colSpan = content.closest("table").tHead.rows[0].cells.length;
+      }
       return node;
     };
     this.before = spacer();

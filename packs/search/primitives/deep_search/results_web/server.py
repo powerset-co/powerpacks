@@ -28,8 +28,8 @@ from packs.powerset.primitives.send_feedback.send_feedback import FeedbackReques
 
 from . import RESULTS_CSS, RESULTS_JS
 from .feedback import ENV_FILE, build_feedback_request, record_fit_label, submit_results_feedback
-from ..search_harness import ROOT, backfill_manifests
-from .model import FIT_LABELS_FILE, SearchCard, SearchResult, load_catalog, load_search
+from ..search_harness import ROOT
+from .model import FIT_LABELS_FILE, SearchCard, SearchResult, load_catalog, load_search, update_catalog_pins
 from .rendering import render_catalog, render_page, render_search_body
 
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
@@ -131,6 +131,12 @@ class SearchRoutes:
             _send(handler, RESULTS_CSS.read_bytes(), "text/css; charset=utf-8", cache="no-cache")
         elif path == "/assets/results.js":
             _send(handler, RESULTS_JS.read_bytes(), "text/javascript; charset=utf-8", cache="no-cache")
+        elif path == "/assets/virtual-table.js":
+            _send(handler, (Path(__file__).resolve().parents[4] / "shared/web/virtual-table.js").read_bytes(),
+                  "text/javascript; charset=utf-8", cache="no-cache")
+        elif path == "/assets/vendor/tanstack-virtual-core.js":
+            from packs.ingestion.primitives.share.web import VIRTUAL_CORE_JS
+            _send(handler, VIRTUAL_CORE_JS.read_bytes(), "text/javascript; charset=utf-8", cache="no-cache")
         elif path == "/tags":
             if self.one(run_id) is None:
                 _send(handler, b"search not found", "text/plain", status=404)
@@ -221,6 +227,7 @@ class SearchRoutes:
         try:
             _read_tagged(tags_path)
             write_json(tags_path, tagged)
+            update_catalog_pins(self.results_root, run_id, tagged)
         except (OSError, ValueError) as exc:
             _send_json(handler, {"ok": False, "error": str(exc)}, status=500)
             return
@@ -290,12 +297,14 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
 
 
 def _run_loader(root: Path) -> LoadSearch:
-    """One search per run, re-read only when its results or labels change."""
+    """One search per run, re-read when saved results, labels or team change."""
     cache: dict[str, tuple[tuple[float, ...], SearchResult | None]] = {}
 
     def stamp(run_id: str) -> tuple[float, ...]:
         return tuple(path.stat().st_mtime if path.exists() else 0.0
-                     for path in (root / run_id / "results.json", root / run_id / FIT_LABELS_FILE))
+                     for name in ("results.json", FIT_LABELS_FILE, "team.json",
+                                  "team-similarity.json", "team-status.json")
+                     for path in (root / run_id / name,))
 
     def load_one(run_id: str) -> SearchResult | None:
         if "/" in run_id or "\\" in run_id or run_id in {"", ".", ".."}:
@@ -311,19 +320,11 @@ def _run_loader(root: Path) -> LoadSearch:
 
 
 def search_routes(root: Path, *, base: str = "", run_id: str | None = None) -> SearchRoutes:
-    """The routes over one results root. Older manifests get their display
-    cells on the first list request (kept as .bkup), so the review server can
-    mount the searches without touching the tree before anyone opens them."""
+    """The routes over the explicitly registered searches in one results root."""
     load_one = _run_loader(root)
-    backfilled = False
 
     def catalog() -> tuple[SearchCard, ...]:
-        nonlocal backfilled
-        if not backfilled:
-            for written in backfill_manifests(root):
-                print(f"[results-web] manifest display cells written: {written}", file=sys.stderr)
-            backfilled = True
-        cards = load_catalog(root)
+        cards = tuple(card for card in load_catalog(root) if card.ce_scored)
         return tuple(card for card in cards if card.run_id == run_id) if run_id else cards
 
     def load() -> tuple[SearchResult, ...]:

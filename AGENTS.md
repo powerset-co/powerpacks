@@ -122,6 +122,8 @@ re-run `bin/sync-agent-files.sh` from the repo root.
 
 ## Reference fidelity
 
+For web UI work, read `design.md` and reuse its shared tokens and table component.
+
 Do not be lazy when the user asks to copy, mirror, reference, or base work on an
 existing implementation. For frontend work, copy the referenced style, layout,
 component choices, spacing, colors, and code structure as close to 1:1 as

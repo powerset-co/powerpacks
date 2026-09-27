@@ -1081,7 +1081,8 @@ class ResultsWebTest(unittest.TestCase):
                         self.assertEqual(len(list(csv.DictReader(handle))), 125)
                     page.get_by_role("button", name="Overall score 4", exact=True).click()
                     page.get_by_role("button", name="Overall score 5", exact=True).click()
-                    expect(page.locator(".candidate-row:visible")).to_have_count(50)
+                    expect(page.locator("[data-result-count]")).to_have_text("50 results")
+                    self.assertLess(page.locator(".candidate-row").count(), 50)
                     with page.expect_download() as download:
                         export.click()
                     with open(download.value.path(), newline="") as handle:

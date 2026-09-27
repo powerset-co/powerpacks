@@ -1,14 +1,12 @@
 """Typed boundary for saved deep-search result and pond artifacts.
 
-Flow: `load_catalog(root)` lists runs from their manifests alone (the cells
-`search_harness._manifest` writes); `load_search(root, run_id)` parses one
-run's results plus the runs its summary references, which is what one page
-renders. `load_searches` keeps the whole-root parse for callers that want
+Flow: `load_catalog(root)` reads the compact catalog written when searches save.
+`load_search(root, run_id)` parses one run and the runs its summary references. `load_searches` keeps the whole-root parse for callers that want
 every run in memory.
 
 Changelog:
-  2026-09-26: catalog from manifests; one-run loads follow the summary's
-      referenced runs instead of dropping their pond rows.
+  2026-09-26: explicit catalog registration and cached counts; one-run loads
+      follow the summary's referenced runs instead of dropping their pond rows.
 """
 
 from __future__ import annotations
@@ -16,10 +14,11 @@ from __future__ import annotations
 import gzip
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from packs.indexing.lib.io import write_json
 from packs.search.primitives.shared.human_ratings import (
     QUALIFICATION_SCORE_TYPE,
     convert_rating,
@@ -27,7 +26,7 @@ from packs.search.primitives.shared.human_ratings import (
 )
 
 FIT_LABELS_FILE = "fit-labels.jsonl"
-MANIFEST_FILE = "manifest.json"
+CATALOG_FILE = "catalog.json"
 
 GROUPS = (
     ("send_worthy", "Matched"),
@@ -35,6 +34,24 @@ GROUPS = (
     ("wrong_timing_relationship", "Wrong timing / relationship"),
     ("passed", "Not a fit"),
 )
+
+
+@dataclass(frozen=True)
+class TeamMember:
+    name: str
+    title: str
+    linkedin_url: str
+    location: str
+    started_on: str
+
+
+@dataclass(frozen=True)
+class TeamSimilarity:
+    rank: int
+    candidate_count: int
+    score: float
+    method: str
+    closest_names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -262,6 +279,7 @@ class Candidate:
     taste_score: float | None = None
     pin_confidence: int | None = None
     pin_judgment: PinJudgment | None = None
+    team_similarity: TeamSimilarity | None = None
 
     @property
     def suggested_pin(self) -> bool:
@@ -291,6 +309,9 @@ class SearchResult:
     groups: tuple[CandidateGroup, ...]
     jd_text: str
     candidates: tuple[Candidate, ...]
+    team: tuple[TeamMember, ...] = ()
+    team_fetched_at: str = ""
+    team_status: str = ""
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -306,7 +327,7 @@ class SearchResult:
 
 @dataclass(frozen=True)
 class SearchCard:
-    """One list row, read from the run's manifest; no results body is opened."""
+    """One indexed list row; no results body is opened when listing searches."""
 
     run_id: str
     title: str
@@ -318,6 +339,11 @@ class SearchCard:
     candidates: int
     ponds_run: int
     cost_usd: float
+    pinned: int = 0
+    ce_scored: int = 0
+    score_5: int = 0
+    score_4: int = 0
+    score_3: int = 0
 
 
 @dataclass(frozen=True)
@@ -509,7 +535,8 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
 
 
 def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
-               attribution: dict[str, Any] | None = None) -> Candidate:
+               attribution: dict[str, Any] | None = None,
+               similarity: dict[str, Any] | None = None) -> Candidate:
     person_id = _text(raw.get("person"))
     found_by = raw.get("found_by") or []
     sources: list[CandidatePond] = []
@@ -555,6 +582,8 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
         taste_score=_taste_score(raw.get("taste_score")),
         pin_confidence=_pin_confidence(raw.get("pin_confidence")),
         pin_judgment=_pin_judgment(raw.get("pin_judgment")),
+        team_similarity=(TeamSimilarity(**{**similarity,
+            "closest_names": tuple(similarity["closest_names"])}) if similarity else None),
     )
 
 
@@ -612,7 +641,14 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         if raw is not None and score is not None:
             raw.update(human_score=score, human_note=label["human"]["note"])
     attribution = payload.get('person_attribution') or {}
-    candidates = {key: _candidate(row, raw_runs, attribution.get(key))
+    team_path = root / run_id / "team.json"
+    team = json.loads(team_path.read_text()) if team_path.is_file() else {}
+    status_path = root / run_id / "team-status.json"
+    status = json.loads(status_path.read_text()) if status_path.is_file() else {}
+    similarity_path = root / run_id / "team-similarity.json"
+    similarities = (json.loads(similarity_path.read_text())
+                    if similarity_path.is_file() and status.get("status", "ready") == "ready" else {})
+    candidates = {key: _candidate(row, raw_runs, attribution.get(key), similarities.get(key))
                   for key, row in raw_candidates.items()}
     groups = tuple(CandidateGroup(
         key=key,
@@ -631,6 +667,10 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         groups=groups,
         jd_text=jd_path.read_text(encoding="utf-8").strip() if jd_path.is_file() else "",
         candidates=tuple(candidates.values()),
+        team=tuple(TeamMember(**row) for row in team.get("members", [])),
+        team_fetched_at=team.get("fetched_at", ""),
+        team_status=str(status.get("reason") or
+                        (status.get("status") if status.get("status") != "ready" else "") or ""),
     )
 
 
@@ -684,22 +724,62 @@ def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, 
 
 
 def load_catalog(root: Path) -> tuple[SearchCard, ...]:
-    """Every run whose manifest carries the display cells, newest first. Manifests only."""
-    cards = []
-    for path in sorted(root.glob(f"*/{MANIFEST_FILE}")):
-        manifest = _payload(path)
-        if manifest is None or "title" not in manifest:
-            continue
-        cards.append(SearchCard(
-            run_id=path.parent.name,
-            title=_text(manifest.get("title")) or path.parent.name,
-            company=_text(manifest.get("company")),
-            status=_text(manifest.get("status")),
-            created_at=_text(manifest.get("created_at")),
-            updated_at=_text(manifest.get("updated_at")),
-            search_version=_text(manifest.get("search_version")),
-            candidates=int(manifest.get("candidates") or 0),
-            ponds_run=int(manifest.get("ponds_run") or 0),
-            cost_usd=_number(manifest.get("cost_usd")),
-        ))
+    """Registered searches, newest first, without opening any run artifacts."""
+    cards = (SearchCard(**row) for row in (_payload(root / CATALOG_FILE) or {}).values())
     return tuple(sorted(cards, key=lambda card: (card.created_at, card.run_id), reverse=True))
+
+
+def _pinned_count(tagged: dict[str, Any]) -> int:
+    return sum(any(tag.casefold() == "pinned" for tag in tags)
+               for tags in tagged.get("assignments", {}).values())
+
+
+def index_search(root: Path, run_id: str, manifest: dict[str, Any]) -> None:
+    """Cache CE table counts from saved result rows and judgments, without profiles."""
+    payload = _payload(root / run_id / "results.json")
+    if payload is None:
+        raise ValueError(f"Search has no saved results: {run_id}")
+    summary = payload.get("summary") or {}
+    candidates = {row["person"]: row for rows in (summary.get("groups") or {}).values() for row in rows}
+    runs = {run_id: payload}
+    artifacts = set()
+    for pond in summary.get("pond_chain") or []:
+        source_id = pond["run"]
+        if source_id not in runs:
+            runs[source_id] = _payload(root / source_id / "results.json") or {}
+        iterations = [row for row in runs[source_id].get("iterations") or []
+                      if row["pond_n"] == pond["pond_n"]]
+        if not iterations:
+            continue
+        artifact = ((iterations[-1].get("arm") or {}).get("artifacts") or {}).get("jsonl")
+        artifacts.add(_artifact_path(root, artifact))
+        grades = {row["person"]: row for iteration in iterations
+                  for row in iteration.get("shortlist_grades") or []}
+        for person_id, row in grades.items():
+            candidates.setdefault(person_id, row)
+    ce_people = {_text(row.get("person_id")) for path in artifacts for row in _jsonl_rows(path)
+                 if row.get("cross_encoder_score") is not None}
+    scores = [(candidates.get(person_id, {}).get("candidate_judgment") or {}).get("overall_score")
+              for person_id in ce_people]
+    card = SearchCard(
+        run_id=run_id, title=_text(manifest.get("title")) or run_id,
+        company=_text(manifest.get("company")), status=manifest["status"],
+        created_at=_text(manifest.get("created_at")), updated_at=_text(manifest.get("updated_at")),
+        search_version=_text(manifest.get("search_version")),
+        candidates=len(ce_people), ce_scored=len(ce_people), ponds_run=int(manifest.get("ponds_run") or 0),
+        cost_usd=_number(summary.get("total_cost_usd")),
+        pinned=_pinned_count(_payload(root / run_id / "tags.json") or {}),
+        score_5=scores.count(5), score_4=scores.count(4), score_3=scores.count(3),
+    )
+    catalog = _payload(root / CATALOG_FILE) or {}
+    catalog[run_id] = asdict(card)
+    write_json(root / CATALOG_FILE, catalog)
+
+
+def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None:
+    """Refresh persisted pin counts without loading candidate profiles."""
+    catalog = _payload(root / CATALOG_FILE) or {}
+    if run_id not in catalog:
+        return
+    catalog[run_id]["pinned"] = _pinned_count(tagged)
+    write_json(root / CATALOG_FILE, catalog)

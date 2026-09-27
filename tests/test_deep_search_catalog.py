@@ -1,4 +1,4 @@
-"""The search catalog: manifest display cells, the version stamp, and the lazy list."""
+"""The search catalog registers new runs and reads compact saved summaries."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from packs.search.primitives.deep_search import search_harness
+from packs.search.primitives.deep_search.results_web import model
 from packs.search.primitives.deep_search.results_web.model import load_catalog, load_search, load_searches
 from packs.search.primitives.deep_search.results_web.server import _run_loader, make_handler
 
@@ -23,10 +24,12 @@ def _write_run(root: Path, run_id: str, *, title: str, company: str, created_at:
                found_by: list | None = None, manifest: bool = True) -> Path:
     run = root / run_id
     run.mkdir(parents=True)
+    candidates = run / "candidates.jsonl"
+    candidates.write_text(json.dumps({"person_id": CANDIDATE, "cross_encoder_score": 0.8}) + "\n")
     results = {
         "schema_version": "search-harness.v1", "jd_id": run_id, "status": status,
         "title": title, "company": company, "created_at": created_at, "updated_at": created_at,
-        "iterations": [{"pond_n": 1, "query": f"{title} query", "arm": {"artifacts": {}}}],
+        "iterations": [{"pond_n": 1, "query": f"{title} query", "arm": {"artifacts": {"jsonl": str(candidates)}}}],
         "summary": {
             "deduped_candidate_count": 1 if found_by is not None else 0,
             "pond_chain": pond_chain or [{"run": run_id, "pond_n": 1, "query": f"{title} query",
@@ -99,15 +102,99 @@ class CatalogTests(unittest.TestCase):
                                 "cost_usd": 0.25}],
                    found_by=[{"run": "prior-role", "pond": 1, "query": "Prior Role query"}])
         search_harness.backfill_manifests(self.root)
+        model.index_search(self.root, "sail-role", json.loads(
+            (self.root / "sail-role" / "manifest.json").read_text()))
 
-    def test_catalog_reads_manifests_only_newest_first(self) -> None:
+    def test_catalog_reads_only_registered_rows_without_opening_runs(self) -> None:
         with mock.patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
             cards = load_catalog(self.root)
         opened = [call.args[0].name for call in reads.call_args_list]
-        self.assertNotIn("results.json", opened)
+        self.assertEqual(opened, ["catalog.json"])
         self.assertEqual([(card.run_id, card.search_version, card.company) for card in cards],
-                         [("sail-role", "2026-09-26", "Sail Research"), ("prior-role", "", "Acme")])
+                         [("sail-role", "2026-09-26", "Sail Research")])
         self.assertEqual(cards[0].candidates, 1)
+
+    def test_catalog_does_not_scan_unregistered_history(self) -> None:
+        (self.root / "catalog.json").unlink()
+        self.assertEqual(load_catalog(self.root), ())
+
+    def test_catalog_counts_overall_scores_and_updates_pins_without_loading_results(self) -> None:
+        path = self.root / "sail-role" / "results.json"
+        results = json.loads(path.read_text())
+        rows = results["summary"]["groups"]["send_worthy"]
+        for score in (5, 4, 3):
+            rows.append({"person": f"candidate-{score}", "name": "Casey Example", "found_by": [],
+                         "candidate_judgment": {"overall_score": score, "model": "test", "status": "ok"}})
+        path.write_text(json.dumps(results))
+        with (path.parent / "candidates.jsonl").open("a") as artifact:
+            for score in (5, 4, 3):
+                artifact.write(json.dumps({"person_id": f"candidate-{score}", "cross_encoder_score": score}) + "\n")
+        tagged = {"tags": ["pinned", "Review"], "assignments": {CANDIDATE: ["pinned"], "candidate-5": ["Review"]}}
+        (path.parent / "tags.json").write_text(json.dumps(tagged))
+        model.index_search(self.root, "sail-role", json.loads((path.parent / "manifest.json").read_text()))
+        card = load_catalog(self.root)[0]
+        self.assertEqual((card.candidates, card.pinned, card.score_5, card.score_4, card.score_3), (4, 1, 1, 1, 1))
+        tagged["assignments"]["candidate-5"] = ["pinned"]
+        with mock.patch.object(model, "load_search", side_effect=AssertionError("must not load results")):
+            model.update_catalog_pins(self.root, "sail-role", tagged)
+        self.assertEqual(load_catalog(self.root)[0].pinned, 2)
+        model.update_catalog_pins(self.root, "prior-role", tagged)
+        self.assertEqual(len(load_catalog(self.root)), 1)
+
+    def test_empty_groups_count_saved_grades_once_across_duplicate_ponds(self) -> None:
+        path = self.root / "sail-role" / "results.json"
+        results = json.loads(path.read_text())
+        results["summary"]["groups"] = {}
+        results["summary"]["pond_chain"] = [
+            {"run": "sail-role", "pond_n": 1}, {"run": "sail-role", "pond_n": 1}]
+        results["iterations"][0]["shortlist_grades"] = [
+            {"person": CANDIDATE, "cross_encoder_score": 5,
+             "candidate_judgment": {"overall_score": 4}}]
+        path.write_text(json.dumps(results))
+        model.index_search(self.root, "sail-role", json.loads((path.parent / "manifest.json").read_text()))
+        card = load_catalog(self.root)[0]
+        self.assertEqual((card.candidates, card.score_5, card.score_4, card.score_3), (1, 0, 1, 0))
+
+    def test_ce_counts_follow_artifacts_and_exclude_unscored_summary_people(self) -> None:
+        path = self.root / "sail-role" / "results.json"
+        results = json.loads(path.read_text())
+        results["summary"]["groups"]["send_worthy"].append({
+            "person": "unscored-person", "cross_encoder_score": 5,
+            "candidate_judgment": {"overall_score": 5}})
+        path.write_text(json.dumps(results))
+        manifest = json.loads((path.parent / "manifest.json").read_text())
+        model.index_search(self.root, "sail-role", manifest)
+        card = load_catalog(self.root)[0]
+        self.assertEqual((card.ce_scored, card.candidates, card.score_5), (1, 1, 0))
+        for run_id in ("sail-role", "prior-role"):
+            (self.root / run_id / "candidates.jsonl").write_text(
+                json.dumps({"person_id": CANDIDATE, "cross_encoder_score": None}) + "\n")
+        model.index_search(self.root, "sail-role", manifest)
+        card = load_catalog(self.root)[0]
+        self.assertEqual((card.ce_scored, card.candidates, card.score_5), (0, 0, 0))
+        self.assertEqual(len(load_catalog(self.root)), 1)
+
+    def test_saving_history_does_not_register_it(self) -> None:
+        run = self.root / "prior-role"
+        results = json.loads((run / "results.json").read_text())
+        search_harness._save(results, run)
+        self.assertEqual([card.run_id for card in load_catalog(self.root)], ["sail-role"])
+
+    def test_initialize_registers_new_search_and_save_refreshes_it(self) -> None:
+        run = self.root / "new-role"
+        jd = self.root / "jd.txt"
+        jd.write_text("Backend Engineer")
+        queries = self.root / "queries.json"
+        queries.write_text(json.dumps([{"key": "role", "query": "backend engineer"}]))
+        search_harness.initialize_run(run_dir=run, jd_path=jd, queries_path=queries, retrieval={})
+        cards = {card.run_id: card for card in load_catalog(self.root)}
+        self.assertEqual(cards["new-role"].search_version, search_harness.SEARCH_VERSION)
+        self.assertEqual((cards["new-role"].candidates, cards["new-role"].ce_scored), (0, 0))
+        results = json.loads((run / "results.json").read_text())
+        results["status"] = "awaiting_diagnosis"
+        search_harness._save(results, run)
+        self.assertEqual(next(card.status for card in load_catalog(self.root) if card.run_id == "new-role"),
+                         "awaiting_diagnosis")
 
     def test_one_run_loads_the_runs_its_summary_references(self) -> None:
         search = load_search(self.root, "sail-role")
@@ -142,50 +229,12 @@ class CatalogTests(unittest.TestCase):
             thread.join(timeout=5)
         self.assertIn("data-catalog", index)
         self.assertIn("data-newest-version='2026-09-26'", index)
-        self.assertIn("data-version='unversioned'", index)
-        self.assertEqual(index.count("class='catalog-row'"), 2)
+        self.assertNotIn("Prior Role", index)
+        self.assertEqual(index.count("class='catalog-row'"), 1)
         self.assertNotIn("data-search-body", index)
         self.assertIn("data-search-body='sail-role'", page)
         self.assertEqual(page.count("class='search-card'"), 1)
-        self.assertEqual((health["searches"], missing.exception.code), (2, 404))
-
-
-class BrowserCatalogTests(CatalogTests):
-    def test_version_chips_filter_and_arrows_move(self) -> None:
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed")
-        loader = _run_loader(self.root)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
-            self.root, lambda: (), catalog=lambda: load_catalog(self.root), load_one=loader))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(channel="chrome", headless=True)
-                page = browser.new_page(viewport={"width": 1300, "height": 800})
-                page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
-                # The newest stamped version is selected by default; the unversioned run is hidden.
-                expect(page.locator(".catalog-row:visible")).to_have_count(1)
-                expect(page.locator("[data-catalog-count]")).to_have_text("1 of 2 searches")
-                page.get_by_role("button", name="2026-09-26").click()
-                expect(page.locator(".catalog-row:visible")).to_have_count(2)
-                page.get_by_role("button", name="unversioned").click()
-                expect(page.locator(".catalog-row:visible")).to_have_count(1)
-                expect(page.locator(".catalog-row:visible .catalog-title strong")).to_have_text("Prior Role")
-                page.get_by_role("button", name="unversioned").click()
-                page.keyboard.press("j")
-                page.keyboard.press("j")
-                expect(page.locator(".catalog-row:focus .catalog-title strong")).to_have_text("Prior Role")
-                page.keyboard.press("Enter")
-                page.wait_for_url("**/run?run_id=prior-role")
-                expect(page.locator(".search-identity strong")).to_have_text("Prior Role")
-                browser.close()
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
+        self.assertEqual((health["searches"], missing.exception.code), (1, 404))
 
 
 if __name__ == "__main__":

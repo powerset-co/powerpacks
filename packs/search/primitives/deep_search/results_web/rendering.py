@@ -236,8 +236,16 @@ def _taste_badge(candidate: Candidate | None) -> str:
 
 
 def _judge_badges(candidate: Candidate | None) -> str:
-    """The row under the overall reasoning: taste, then the suggested pin."""
-    return _taste_badge(candidate) + _suggested_pin_chip(candidate)
+    """Independent signals under the overall reasoning; none alters the rating."""
+    similarity = candidate.team_similarity if candidate else None
+    badge = ""
+    if similarity:
+        detail = (f"#{similarity.rank} of {similarity.candidate_count} · {similarity.method}. "
+                  f"Mean cosine {similarity.score:.3f}. Closest: {', '.join(similarity.closest_names)}. "
+                  "Similarity is not a qualification score.")
+        badge = (f"<b class='trait-score-badge taste-badge' title='{_e(detail)}'>"
+                 f"Team Similarity Rank #{similarity.rank}</b>")
+    return _taste_badge(candidate) + _suggested_pin_chip(candidate) + badge
 
 
 def _overall_indicator(overall: int, reason: str, candidate: Candidate | None) -> str:
@@ -380,7 +388,8 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         else:
             reason = "Not judged"
         indicators = (_overall_indicator(overall, reason, graded) if overall is not None
-                      else f'<p class="no-traits">{_e(reason)}</p>')
+                      else f'<p class="no-traits">{_e(reason)}</p>'
+                           f'<div class="judge-badges">{_judge_badges(graded)}</div>')
     display_score = (pond_candidate.cross_encoder_score
                      if cross_encoder and _is_qualification_score(pond_candidate) else
                      pond_candidate.cross_encoder_score_1_to_5
@@ -485,6 +494,8 @@ def _results_toolbar(rows: Sequence[PondCandidate], search: SearchResult, *, sco
     return (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
                f"<button type='button' class='result-filter' data-result-filter='tagged' "
                f"aria-pressed='false' hidden>Tagged (<span data-tagged-count>0</span>)</button>"
+               f"<button type='button' class='result-filter selected' data-labels-toggle aria-pressed='true' "
+               f"title='Show or hide Taste, Suggested Pin and Team Similarity labels'>Labels</button>"
                f"{scores}{operator_filter}<span class='tag-filters' data-tag-filters hidden></span>"
                f"<span class='result-actions'>"
                f"<span data-result-count aria-live='polite'></span>"
@@ -541,6 +552,33 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
             + _results_table(body, heading="Overall score and reasoning") + "</div>")
 
 
+def _team_table(search: SearchResult) -> str:
+    """Saved employees, virtualized locally with ten-row pages in hosted snapshots."""
+    status = (f"<p class='team-source'>Team similarity: {_e(search.team_status)}</p>"
+              if search.team_status else "")
+    if not search.team:
+        return status
+    rows = []
+    for index, member in enumerate(search.team):
+        name = _e(member.name) or "Name unavailable"
+        if member.linkedin_url:
+            name = f"<a href='{_e(member.linkedin_url)}' target='_blank' rel='noreferrer'>{name}</a>"
+        tenure = f"{_month_year(member.started_on)} – Present" if member.started_on else "—"
+        rows.append(f"<tr data-team-row{' hidden' if index >= 10 else ''}>"
+            f"<td><span class='team-name'><span class='operator-initials' aria-hidden='true'>"
+            f"{_e(_initials(member.name))}</span>{name}</span></td>"
+            f"<td>{_e(member.title)}</td><td>{_e(member.location)}</td><td>{_e(tenure)}</td></tr>")
+    return (f"<details class='jd-details team-details' data-team-table><summary>Team · {len(rows)}</summary>"
+        f"<p class='team-source'>Current employees · Saved {_e(_date(search.team_fetched_at))}</p>"
+        "<div class='team-table-scroll'><table class='team-table' aria-label='Company employees'><thead><tr>"
+        "<th>Name</th><th>Title</th><th>Location</th><th>Tenure</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div><div class='team-pagination'>"
+        f"<span data-team-range aria-live='polite'>1–{min(10, len(rows))} of {len(rows)}</span>"
+        "<span><button class='btn' type='button' data-team-page='-1' aria-label='Previous team page' disabled>Prev</button>"
+        f"<button class='btn' type='button' data-team-page='1' aria-label='Next team page'{' disabled' if len(rows) <= 10 else ''}>"
+        "Next</button></span></div></details>" + status)
+
+
 def _search(search: SearchResult, *, readonly: bool = False, feedback_enabled: bool = False) -> str:
     jd = (f"<details class='jd-details'><summary>Job description</summary>"
           f"<div class='jd-content'>{_e(search.jd_text)}</div></details>"
@@ -553,9 +591,11 @@ def _search(search: SearchResult, *, readonly: bool = False, feedback_enabled: b
           <small>{_e(search.company) or 'Company unknown'}</small>
           <strong>{_e(search.title)}</strong>
           <span>{_e(_date(search.created_at))} · {_e(search.run_id)}</span>
+          {"<span class='search-complete'>Search Complete</span>" if search.ponds else ''}
         </span>
       </header>
       {jd}
+      {_team_table(search)}
       <div class='search-body' data-search-body='{_e(search.run_id)}' data-search-title='{_e(search.title)}'>{render_search_body(search, readonly=not feedback_enabled) if readonly else "<p class='loading-results'>Loading results…</p>"}</div>
     </article>"""
 
@@ -596,6 +636,8 @@ def _shell(body: str, *, base: str, current: str = "searches", title: str = "Sea
 
 
 def _status_text(status: str) -> str:
+    if status in {"awaiting_diagnosis", "completed"}:
+        return "Search Complete"
     return status.replace("_", " ").capitalize()
 
 
@@ -609,7 +651,12 @@ def _catalog_row(card: SearchCard, base: str) -> str:
       <span class='catalog-company'>{_e(card.company) or '—'}</span>
       <span class='catalog-title'><strong>{_e(card.title)}</strong></span>
       <span class='catalog-status' data-status='{_e(card.status)}'>{_e(_status_text(card.status))}</span>
-      <span class='catalog-num'>{card.candidates:,}</span>
+      <span class='catalog-num catalog-people' tabindex='0' aria-describedby='counts-{_e(card.run_id)}'>
+        {card.candidates:,}<span class='people-counts' role='tooltip' id='counts-{_e(card.run_id)}'>
+          <strong>People</strong><span>Pinned <b>{card.pinned:,}</b></span>
+          <small>Overall score</small><span>5 / 5 <b>{card.score_5:,}</b></span>
+          <span>4 / 5 <b>{card.score_4:,}</b></span><span>3 / 5 <b>{card.score_3:,}</b></span>
+        </span></span>
       <span class='catalog-num'>{card.ponds_run}</span>
       <span class='catalog-num'>{cost}</span>
       <span class='catalog-version'>{_e(version)}</span>
@@ -644,7 +691,7 @@ def render_catalog(cards: Sequence[SearchCard], *, base: str = "") -> str:
       <p class='catalog-empty' data-catalog-empty hidden>No searches match.</p>
     </section>""" if cards else (
         "<section class='empty-state'><h2>No completed searches</h2>"
-        "<p>No manifest.json with a title was found under this root.</p></section>")
+        "<p>New searches will appear here when they have CE scores.</p></section>")
     return _shell(body, base=base, title="Searches")
 
 
