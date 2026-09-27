@@ -60,6 +60,7 @@ from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
     UploadResult,
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
+from packs.indexing.primitives.upload_powerset.errors import log_error  # noqa: E402
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -120,6 +121,7 @@ class UploadPowerset:
             if isinstance(exc, turbopuffer.APIStatusError):
                 payload["http_status"] = exc.status_code
             self._manifest(payload)
+            log_error(self.out_dir, payload["stage"], exc, self.env_file)
             raise
 
     def _manifest(self, payload: dict[str, Any]) -> None:

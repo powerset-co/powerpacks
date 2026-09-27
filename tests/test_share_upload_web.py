@@ -143,6 +143,9 @@ class UploadRoutesTests(ShareWebFixture):
         status = self._get()
         self.assertEqual(status["status"], "failed")
         self.assertNotIn("secret", json.dumps(status))
+        error_log = (self.upload_dir / "errors.log").read_text()
+        self.assertIn("RuntimeError", error_log)
+        self.assertIn("stage=planning", error_log)
         saved = json.loads(manifest.read_text())
         for key in ("target", "person_hashes", "owned_people", "pending_upserts"):
             self.assertEqual(saved[key], previous[key])

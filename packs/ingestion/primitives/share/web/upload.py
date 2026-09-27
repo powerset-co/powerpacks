@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.indexing.primitives.upload_powerset import upload_powerset
+from packs.indexing.primitives.upload_powerset.errors import log_error
 
 SAFE_ERRORS = frozenset({
     "Upload requires the powerset_v2 PostgreSQL login",
@@ -123,7 +124,7 @@ class ShareUpload:
                 env_file=Path(os.environ["POWERPACKS_UPLOAD_ENV_FILE"])
                 if os.environ.get("POWERPACKS_UPLOAD_ENV_FILE") else None,
             ).run()
-        except Exception:
+        except Exception as exc:
             # Preserve the uploader's manifest and its recovery data, including on startup failure.
             self.out_dir.mkdir(parents=True, exist_ok=True)
             manifest = self.out_dir / "manifest.json"
@@ -132,6 +133,9 @@ class ShareUpload:
             except (FileNotFoundError, json.JSONDecodeError):
                 saved = {}
             if saved.get("status") != "failed":
+                log_error(self.out_dir, saved.get("stage", "planning"), exc,
+                          Path(os.environ["POWERPACKS_UPLOAD_ENV_FILE"])
+                          if os.environ.get("POWERPACKS_UPLOAD_ENV_FILE") else None)
                 saved.update(status="failed", error="Upload failed; retry to resume")
             saved.setdefault("progress", {"total": 0, "uploaded": 0, "skipped": 0})
             replacement = manifest.with_suffix(".tmp")

@@ -282,3 +282,8 @@ cloud-enriched profiles are preserved. Unchanged source rows, access lists and
 private tags do not get rewritten. TurboPuffer's SDK retries transient requests
 up to four times. After an exhausted retry or server restart, Retry upload
 reconciles the current share decisions again.
+
+Failures append to `.powerpacks/upload-powerset/errors.log` with the stage,
+traceback, provider response, HTTP status and request ID. Credentials are
+redacted, the file is owner-readable only, and retries retain previous entries.
+The browser receives only the short error message.
