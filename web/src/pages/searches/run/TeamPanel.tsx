@@ -7,8 +7,8 @@ import type { SearchResult } from "@/types/searches"
 
 import { OperatorInitials } from "./Operators"
 
-// rendering.py _team_table: the company's current employees as saved, under the results.
-// The bar folds the list open and shut.
+// rendering.py _team_table: the company's current employees as saved, folded under the job
+// description in the run's header.
 export function TeamPanel({ search }: { search: SearchResult }) {
   const [open, setOpen] = useState(false)
   const status = search.team_status ? (
@@ -21,7 +21,6 @@ export function TeamPanel({ search }: { search: SearchResult }) {
         sectionKey="team"
         title="Team"
         count={search.team.length}
-        badge={<small>Current employees · Saved {runDate(search.team_fetched_at)}</small>}
         open={open}
         onToggle={setOpen}
       >
@@ -57,6 +56,7 @@ export function TeamPanel({ search }: { search: SearchResult }) {
               ))}
             </tbody>
           </table>
+          <p className="team-saved">Current employees · Saved {runDate(search.team_fetched_at)}</p>
         </div>
       </DetailsSection>
       {status}

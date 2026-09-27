@@ -2,9 +2,26 @@ import { useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { scoreBand, type ResultRow } from "@/lib/searches/ranking"
+import type { TraitScore } from "@/types/searches"
 
 const ABOUT_CLAMP = 200
 const TRAIT_VARIANT = { high: "ok", medium: "warn", low: "bad" } as const
+
+// rendering.py _trait_indicator: each trait's share as a badge, then its name and reason.
+export function TraitList({ traits }: { traits: readonly TraitScore[] }) {
+  return (
+    <ul className="traits" data-traits>
+      {traits.map((trait) => (
+        <li key={trait.name}>
+          <Badge variant={TRAIT_VARIANT[scoreBand(trait.score)]}>{Math.round(trait.score * 100)}%</Badge>
+          <p>
+            <b>{trait.name}:</b> {trait.reason || "No evidence reason recorded."}
+          </p>
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 interface EvidenceProps {
   result: ResultRow
@@ -36,18 +53,7 @@ export function Evidence({ result, ranked }: EvidenceProps) {
       {row.traits.length ? (
         <section>
           <h4>Trait scores</h4>
-          <ul className="traits" data-traits>
-            {row.traits.map((trait) => (
-              <li key={trait.name}>
-                <Badge variant={TRAIT_VARIANT[scoreBand(trait.score)]}>
-                  {Math.round(trait.score * 100)}%
-                </Badge>
-                <p>
-                  <b>{trait.name}:</b> {trait.reason || "No evidence reason recorded."}
-                </p>
-              </li>
-            ))}
-          </ul>
+          <TraitList traits={row.traits} />
         </section>
       ) : null}
       {pin ? (

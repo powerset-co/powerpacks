@@ -155,7 +155,8 @@ describe("RunView", () => {
     renderRun()
     const jordan = row("p-jordan")
     expect(jordan.getByTitle("Gmail").textContent).toBe("42")
-    expect(jordan.getByText("Staff Engineer · Example Labs · Oakland, CA")).toBeTruthy()
+    expect(jordan.getByText("Staff Engineer")).toBeTruthy()
+    expect(jordan.getByText("Example Labs · Oakland, CA")).toBeTruthy()
     expect(
       row("p-casey")
         .getAllByRole("img")
@@ -179,6 +180,61 @@ describe("RunView", () => {
     fireEvent.click(toggle)
     expect(toggle.getAttribute("aria-expanded")).toBe("true")
     expect(screen.getByText("Build the payments platform with a small backend team.")).toBeTruthy()
+  })
+
+  it("folds the team open under the job description", () => {
+    renderRun()
+    const toggle = within(screen.getByRole("banner")).getByRole("button", { name: /^Team/ })
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(screen.getByText("Sam India")).toBeTruthy()
+    expect(screen.getByText("Engineering Manager")).toBeTruthy()
+  })
+
+  it("shows the reasoning and the judges' labels on the row", () => {
+    renderRun()
+    const jordan = row("p-jordan")
+    expect(jordan.getByText("Built this exact system twice.")).toBeTruthy()
+    expect(jordan.getByText("Suggested pin")).toBeTruthy()
+    expect(document.querySelector(".result-head")?.textContent).toBe("CandidateOverall score and reasoning")
+  })
+
+  it("opens who brought a source from its pill, with their share, and closes on Escape", () => {
+    renderRun()
+    const name = "Gmail sources for Jordan Bravo"
+    fireEvent.click(row("p-jordan").getByRole("button", { name }))
+    const popover = within(screen.getByRole("region", { name }))
+    expect(popover.getAllByText("42 emails")).toHaveLength(2)
+    expect(popover.getByText("Drew Kilo")).toBeTruthy()
+    expect(popover.queryByText("Emery Lima")).toBeNull()
+    expect(drawerOpen()).toBe("false")
+    key("Escape")
+    expect(screen.queryByRole("region", { name })).toBeNull()
+
+    const stack = "Source operators for Jordan Bravo"
+    fireEvent.click(row("p-jordan").getByRole("button", { name: stack }))
+    const operators = within(screen.getByRole("region", { name: stack }))
+    expect(operators.getByText("Emery Lima")).toBeTruthy()
+    expect(operators.getByText("Gmail · LinkedIn · 42 emails")).toBeTruthy()
+  })
+
+  it("flags a candidate from the drawer", () => {
+    const { submit } = renderRun()
+    fireEvent.click(main("p-jordan"))
+    fireEvent.click(
+      within(drawer() ?? document.body).getByRole("button", { name: "Send feedback about Jordan Bravo" }),
+    )
+    expect(screen.getByRole("dialog", { name: "Candidate feedback" })).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Wrong seniority" } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(submit).toHaveBeenCalledWith({
+      run_id: RUN_ID,
+      person_id: "p-jordan",
+      comment: "Wrong seniority",
+      human_judgment: null,
+    })
+    expect(drawerOpen()).toBe("true")
   })
 
   it("opens a row in the drawer, swaps to another row, and closes on the same row", () => {

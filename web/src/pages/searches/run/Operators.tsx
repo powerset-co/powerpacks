@@ -32,28 +32,41 @@ export function Operators({ operators }: { operators: readonly NetworkOperator[]
   )
 }
 
-// rendering.py .network-operator in the drawer: each person it came through, their sources and
-// counts, and the Gmail accounts.
-export function ConnectedVia({ operators }: { operators: readonly NetworkOperator[] }) {
+interface ConnectedViaProps {
+  operators: readonly NetworkOperator[]
+  // The line under a name: every source and count by default, or one source's share.
+  detail?: (operator: NetworkOperator) => string
+  // The Gmail accounts under each name.
+  accounts?: boolean
+}
+
+// rendering.py .network-operator (the drawer, a source's popover): each person it came
+// through, their sources and counts, and the Gmail accounts.
+export function ConnectedVia({ operators, detail = operatorDetail, accounts = true }: ConnectedViaProps) {
   if (!operators.length) return null
   return (
     <section className="review-sections">
       <h4>Connected via</h4>
       <ul className="evidence-operators" data-operators>
-        {operators.map((operator) => (
-          <li key={operator.operator_id}>
-            <OperatorInitials name={operator.operator_name} />
-            <span>
-              <b>{operator.operator_name}</b>
-              <small>{operatorDetail(operator)}</small>
-              {operator.gmail_account_details.map((account) => (
-                <small key={account.email} className="evidence-account">
-                  {account.email} · {account.interactions.toLocaleString("en-US")} emails
-                </small>
-              ))}
-            </span>
-          </li>
-        ))}
+        {operators.map((operator) => {
+          const line = detail(operator)
+          return (
+            <li key={operator.operator_id}>
+              <OperatorInitials name={operator.operator_name} />
+              <span>
+                <b>{operator.operator_name}</b>
+                {line ? <small>{line}</small> : null}
+                {accounts
+                  ? operator.gmail_account_details.map((account) => (
+                      <small key={account.email} className="evidence-account">
+                        {account.email} · {account.interactions.toLocaleString("en-US")} emails
+                      </small>
+                    ))
+                  : null}
+              </span>
+            </li>
+          )
+        })}
       </ul>
     </section>
   )

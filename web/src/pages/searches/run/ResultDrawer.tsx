@@ -3,11 +3,13 @@ import { useDrawerSwap } from "@/hooks/useDrawerSwap"
 import { teamLikeness } from "@/lib/searches/copy"
 import type { ResultRow } from "@/lib/searches/ranking"
 
+import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
 import { Career } from "./Career"
 import { Evidence } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
 import { ConnectedVia } from "./Operators"
+import type { RowContext } from "./RowActions"
 import { ScoreCell } from "./ScoreCell"
 
 interface ResultDrawerProps {
@@ -16,12 +18,14 @@ interface ResultDrawerProps {
   open: boolean
   ranked: boolean
   labels: boolean
+  context: RowContext
   onClose: () => void
 }
 
-// One candidate in the shared drawer: who they are, the saved overall and the judges' labels,
-// then the evidence, their career, who they came through and their team likeness.
-export function ResultDrawer({ result, open, ranked, labels, onClose }: ResultDrawerProps) {
+// One candidate in the shared drawer: who they are, the feedback flag and Close, the saved
+// overall and the judges' labels, then the evidence, their career, who they came through and
+// their team likeness.
+export function ResultDrawer({ result, open, ranked, labels, context, onClose }: ResultDrawerProps) {
   const swap = useDrawerSwap(result?.key ?? null, result, open)
   const shown = swap.content
   return (
@@ -32,7 +36,9 @@ export function ResultDrawer({ result, open, ranked, labels, onClose }: ResultDr
       leaving={swap.leaving}
       onTransitionEnd={swap.onTransitionEnd}
     >
-      {shown ? <DrawerBody result={shown} ranked={ranked} labels={labels} onClose={onClose} /> : null}
+      {shown ? (
+        <DrawerBody result={shown} ranked={ranked} labels={labels} context={context} onClose={onClose} />
+      ) : null}
     </Drawer>
   )
 }
@@ -41,10 +47,11 @@ interface DrawerBodyProps {
   result: ResultRow
   ranked: boolean
   labels: boolean
+  context: RowContext
   onClose: () => void
 }
 
-function DrawerBody({ result, ranked, labels, onClose }: DrawerBodyProps) {
+function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProps) {
   const { row, candidate } = result
   const role = [row.title, row.company].filter(Boolean).join(" · ")
   const similarity = candidate?.team_similarity
@@ -60,7 +67,18 @@ function DrawerBody({ result, ranked, labels, onClose }: DrawerBodyProps) {
           </div>
           {row.location ? <div className="sub">{row.location}</div> : null}
         </div>
-        <DrawerClose onClose={onClose} />
+        <span className="review-tools">
+          {candidate ? (
+            <SearchFeedbackDialog
+              runId={context.runId}
+              title={role}
+              candidate={candidate}
+              submit={context.submit}
+              onToast={context.onToast}
+            />
+          ) : null}
+          <DrawerClose onClose={onClose} />
+        </span>
       </div>
       <div className="review-scores">
         <ScoreCell result={result} ranked={ranked} />

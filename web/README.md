@@ -89,21 +89,22 @@ server; everything else reads typed values.
 
 ### Hooks
 
-| Hook                                  | Where                   | Role                                                                                                                                |
-| ------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `useSelection`                        | `hooks/`                | Selected ids; select-all takes every matching item                                                                                  |
-| `usePresence`, `usePresenceList`      | `hooks/`                | Keep an overlay / removed items mounted until their exit's opacity ends                                                             |
-| `useKeys`, `useInert`, `useDismiss`   | `hooks/`                | The page's keydown listener and `isTyping`; inert while shut; Escape / outside press closes a panel                                 |
-| `useReducedMotion`, `useListEntrance` | `hooks/`                | The OS motion setting; rows fading in after the list changes                                                                        |
-| `useDrawerSwap`                       | `hooks/`                | What a drawer draws while it switches item: the old content fades out, then the new fades in                                        |
-| `useFilters`, `usePeopleQuery`        | `pages/people/hooks/`   | View state (saved to `sessionStorage`); every person once                                                                           |
-| `useDrawer`, `usePersonDetail`        | `pages/people/hooks/`   | Which person the drawer shows; their detail                                                                                         |
-| `useDecisions`                        | `pages/people/hooks/`   | Share / keep private / use worth in one write, with undo                                                                            |
-| `useKeyboard`, `usePeopleShortcuts`   | `pages/people/hooks/`   | The page's keys and their wiring                                                                                                    |
-| `useCatalog`, `useSearchRun`          | `pages/searches/hooks/` | The saved searches; one run                                                                                                         |
-| `useRunSwap`                          | `pages/searches/hooks/` | The crossfade between runs                                                                                                          |
-| `useSearchTags`, `useFeedback`        | `pages/searches/hooks/` | A run's tags (saved in order; browser-kept tags moved to the server); the open run's feedback queue, its failure, Retry and sign-in |
-| `useSidebarKeys`, `useResultKeys`     | `pages/searches/hooks/` | Sidebar keys; result and review keys (both on `useKeys`)                                                                            |
+| Hook                                  | Where                   | Role                                                                                                                                                                                 |
+| ------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `useSelection`                        | `hooks/`                | Selected ids; select-all takes every matching item                                                                                                                                   |
+| `usePresence`, `usePresenceList`      | `hooks/`                | Keep an overlay / removed items mounted until their exit's opacity ends                                                                                                              |
+| `useKeys`, `useInert`, `useDismiss`   | `hooks/`                | The page's keydown listener and `isTyping`; inert while shut; Escape / outside press closes a panel                                                                                  |
+| `useReducedMotion`, `useListEntrance` | `hooks/`                | The OS motion setting; rows fading in after the list changes                                                                                                                         |
+| `useDrawerSwap`                       | `hooks/`                | What a drawer draws while it switches item: the old content fades out, then the new fades in                                                                                         |
+| `useFilters`, `usePeopleQuery`        | `pages/people/hooks/`   | View state (saved to `sessionStorage`); every person once                                                                                                                            |
+| `useDrawer`, `usePersonDetail`        | `pages/people/hooks/`   | Which person the drawer shows; their detail                                                                                                                                          |
+| `useDecisions`                        | `pages/people/hooks/`   | Share / keep private / use worth in one write, with undo                                                                                                                             |
+| `useKeyboard`, `usePeopleShortcuts`   | `pages/people/hooks/`   | The page's keys and their wiring                                                                                                                                                     |
+| `useCatalog`, `useSearchRun`          | `pages/searches/hooks/` | The saved searches; one run                                                                                                                                                          |
+| `useRunSwap`                          | `pages/searches/hooks/` | The crossfade between runs                                                                                                                                                           |
+| `useSearchTags`, `useFeedback`        | `pages/searches/hooks/` | A run's tags (saved in order; browser-kept tags moved to the server); the open run's feedback queue, its failure, Retry and sign-in                                                  |
+| `useSidebarKeys`, `useResultKeys`     | `pages/searches/hooks/` | Sidebar keys; result and review keys (both on `useKeys`)                                                                                                                             |
+| `useFloatPanel`                       | `pages/searches/hooks/` | A fixed panel under a trigger (tag editor, source popovers): placed inside the window, flipped above when it would run off the bottom, closed by Escape, a press outside or a scroll |
 
 Styling has three layers: the tokens in `index.css`, Tailwind utilities on shared and ui
 components, and the page CSS in `pages/people/styles/`. Motion is CSS transitions and
@@ -117,19 +118,20 @@ open. Picking a run pushes the URL, so back, forward and reload land on it. Sear
 in `src/lib/searches/` (as People's does in `lib/people/`); `src/pages/searches/` holds the
 components and hooks.
 
-| Path (`src/pages/searches/`)            | Role                                                                                                                                                                  |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SearchesPage.tsx`, `SearchesShell.tsx` | Reads `run_id`, loads the catalog; owns the feedback queue (`useFeedback`) and the page's one `Toast`                                                                 |
-| `sidebar/`                              | Search box and recency groups; the search kept for the tab                                                                                                            |
-| `run/RunPane.tsx`                       | Empty state (with the keys), loading, error; crossfades between runs (`hooks/useRunSwap`)                                                                             |
-| `run/RunView.tsx`                       | One run's wiring: its tags (`useSearchTags`), the filters, the rows they keep, each person's own score                                                                |
-| `run/SearchRun.tsx`                     | Header, pond chain, toolbar, the virtualized results table, the team fold                                                                                             |
-| `run/ResultsTable.tsx`, `ResultRow.tsx` | Rows, focus, the open row, keys (`hooks/useResultKeys`) and the advance after a score; the actions column is reserved in the head                                     |
-| `run/ResultDrawer.tsx`, `ReviewBar.tsx` | The candidate in the shared drawer (identity, overall and labels, `Evidence`, `Career`, `ConnectedVia`, team likeness); the rubric, Tag, Pin and Close bar            |
-| `run/RowActions.tsx`, `PinButton.tsx`   | Tag editor, pin (the `Pinned` tag) and score badge at a candidate's row end                                                                                           |
-| `toolbar/`                              | Tagged, Labels, Overall score, Operators, tag filter, count, Copy/CSV, Untag and Clear all                                                                            |
-| `dialogs/`                              | Score dialog (five-point rubric) and search feedback dialog, both handing records to `useFeedback`; `FeedbackStatus`, the stopped queue's count with Retry or sign-in |
-| `styles/`                               | Page CSS: shell, sidebar, run, results, toolbar (panels, `.rise-in`, `.rise-settled`)                                                                                 |
+| Path (`src/pages/searches/`)            | Role                                                                                                                                                                                                                   |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SearchesPage.tsx`, `SearchesShell.tsx` | Reads `run_id`, loads the catalog; owns the feedback queue (`useFeedback`) and the page's one `Toast`                                                                                                                  |
+| `sidebar/`                              | Search box and recency groups; the search kept for the tab                                                                                                                                                             |
+| `run/RunPane.tsx`                       | Empty state (with the keys), loading, error; crossfades between runs (`hooks/useRunSwap`)                                                                                                                              |
+| `run/RunView.tsx`                       | One run's wiring: its tags (`useSearchTags`), the filters, the rows they keep, each person's own score                                                                                                                 |
+| `run/SearchRun.tsx`                     | Header, pond chain, toolbar, the virtualized results table, the team fold                                                                                                                                              |
+| `run/ResultsTable.tsx`, `ResultRow.tsx` | Measured rows laid out as `rendering.py`'s candidate rows (identity, sources and operators left; overall, reasoning and labels right), focus, the open row, keys (`hooks/useResultKeys`) and the advance after a score |
+| `run/NetworkSources.tsx`                | The source pills and operator stack under a name; each opens who brought that source (with counts) on hover or click, on `hooks/useFloatPanel`                                                                         |
+| `run/ResultDrawer.tsx`, `ReviewBar.tsx` | The candidate in the shared drawer (identity, overall and labels, `Evidence`, `Career`, `ConnectedVia`, team likeness); the rubric, Tag, Pin and Close bar                                                             |
+| `run/RowActions.tsx`, `PinButton.tsx`   | `RowTags` (tag editor and the `Pinned` pin over the identity) and `RowScore` (the score badge over the reasoning)                                                                                                      |
+| `toolbar/`                              | Tagged, Labels, Overall score, Operators, tag filter, count, Copy/CSV, Untag and Clear all                                                                                                                             |
+| `dialogs/`                              | Score dialog (five-point rubric) and search feedback dialog, both handing records to `useFeedback`; `FeedbackStatus`, the stopped queue's count with Retry or sign-in                                                  |
+| `styles/`                               | Page CSS: shell, sidebar, run, results, toolbar (panels, `.rise-in`, `.rise-settled`)                                                                                                                                  |
 
 | Path (`src/lib/searches/`) | Role                                                                                           |
 | -------------------------- | ---------------------------------------------------------------------------------------------- |

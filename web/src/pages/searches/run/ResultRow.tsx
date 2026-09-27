@@ -1,15 +1,14 @@
 import { memo, type MouseEvent } from "react"
 
-import { Avatar, SourcePills } from "@/components/shared"
-import { plural } from "@/lib/copy"
+import { Avatar } from "@/components/shared"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
-import { sourceFamilies } from "@/lib/searches/sources"
 import type { PondCandidate } from "@/types/searches"
 
+import { TraitList } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
-import { Operators } from "./Operators"
-import { RowActions, type RowContext } from "./RowActions"
+import { NetworkSources } from "./NetworkSources"
+import { RowScore, RowTags, type RowContext } from "./RowActions"
 import { ScoreCell } from "./ScoreCell"
 
 interface ResultRowProps {
@@ -23,25 +22,25 @@ interface ResultRowProps {
   onToggle: (key: string) => void
 }
 
-function headline(row: PondCandidate): string {
-  return [row.title, row.company, row.location].filter(Boolean).join(" · ") || "Current role unknown"
+function company(row: PondCandidate): string {
+  return [row.company || "Company unknown", row.location].filter(Boolean).join(" · ")
 }
 
-function roles(row: PondCandidate): string {
-  if (!row.positions.length) return "—"
-  const matched = row.matched_positions.filter((index) => index < row.positions.length).length
-  return matched
-    ? `${plural(row.positions.length, "role")} · ${matched} matched`
-    : plural(row.positions.length, "role")
+// A click born on a control inside the row (the LinkedIn link, a source's popover trigger,
+// the actions) is theirs; so is one that bubbled in from a portal (a dialog, a popover), which
+// React routes through the row without the row's DOM ever holding it.
+function onControl(event: MouseEvent<HTMLElement>): boolean {
+  if (!(event.target instanceof Element)) return false
+  return !event.currentTarget.contains(event.target) || event.target.closest("a, button, input") !== null
 }
 
-// A click born on a control inside the row (the LinkedIn link, the actions, a dialog) is theirs.
-function onControl(event: MouseEvent): boolean {
-  return event.target instanceof Element && event.target.closest("a, button, input, [role='dialog']") !== null
-}
-
-// One person: a click on the line opens them in the drawer, or closes it when they are open.
-// `group/row` shows the tag trigger on hover.
+/**
+ * One person as rendering.py _candidate_row lays them out: who they are on the left, the tags
+ * and pin over them, their sources and who they came through under them; the overall score
+ * with its reasoning and the judges' labels on the right, Score over them. A click on the row
+ * opens them in the drawer, or closes it when they are open. `group/row` shows the tag
+ * trigger and pin on hover.
+ */
 export const ResultRow = memo(function ResultRow({
   result,
   ranked,
@@ -52,8 +51,6 @@ export const ResultRow = memo(function ResultRow({
   onToggle,
 }: ResultRowProps) {
   const { row, candidate } = result
-  const attribution = candidate?.network_attribution
-  const families = sourceFamilies(attribution ?? null)
   return (
     <div
       className="result-row group/row"
@@ -73,35 +70,63 @@ export const ResultRow = memo(function ResultRow({
         }}
       >
         <div className="result-main">
-          <span className="result-person">
-            <Avatar name={row.name} size={26} src={row.avatar_url || undefined} />
+          {candidate ? (
+            <span className="result-tags">
+              <RowTags candidate={candidate} context={context} />
+            </span>
+          ) : null}
+          <div className="result-person">
+            <Avatar name={row.name} size={40} src={row.avatar_url || undefined} />
             <span className="result-who">
               <b>{row.name}</b>
-              <small>
+              <span className="result-title">
                 <LinkedInLink row={row} />
-                {headline(row)}
-              </small>
+                {row.title || "Current role unknown"}
+              </span>
+              <small>{company(row)}</small>
+              <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
             </span>
-          </span>
-          <ScoreCell result={result} ranked={ranked} />
-          <JudgeBadges candidate={candidate} shown={labels} />
-          {families.length ? (
-            <SourcePills
-              className="result-sources"
-              size="sm"
-              channels={families.map((family) => family.channel)}
-              counts={Object.fromEntries(families.map((family) => [family.channel, family.count]))}
-            />
-          ) : (
-            <span className="result-sources result-none">—</span>
-          )}
-          <Operators operators={attribution?.operators ?? []} />
-          <span className="result-roles">{roles(row)}</span>
+          </div>
         </div>
-        <span className="result-actions">
-          {candidate ? <RowActions result={result} candidate={candidate} context={context} /> : null}
-        </span>
+        <div className="result-indicators">
+          {candidate ? (
+            <span className="result-actions">
+              <RowScore result={result} candidate={candidate} context={context} />
+            </span>
+          ) : null}
+          {ranked ? <Overall result={result} labels={labels} /> : <PondScores result={result} />}
+        </div>
       </div>
     </div>
   )
 })
+
+// rendering.py _overall_indicator: the badge, the judges' reason, their labels under it. A
+// person without an overall shows what happened instead ("Not judged"), never a zero.
+function Overall({ result, labels }: { result: Result; labels: boolean }) {
+  return (
+    <div className="result-overall">
+      {result.overall === null ? null : <ScoreCell result={result} ranked />}
+      <div className="result-reason">
+        <p className={result.overall === null ? "result-noscore" : undefined}>{result.reason}</p>
+        <JudgeBadges candidate={result.candidate} shown={labels} />
+      </div>
+    </div>
+  )
+}
+
+// rendering.py _pond_table: the pond's own score, then each trait with its reason.
+function PondScores({ result }: { result: Result }) {
+  return (
+    <div className="result-overall">
+      <ScoreCell result={result} ranked={false} />
+      <div className="result-reason">
+        {result.row.traits.length ? (
+          <TraitList traits={result.row.traits} />
+        ) : (
+          <p className="result-noscore">No trait scores</p>
+        )}
+      </div>
+    </div>
+  )
+}

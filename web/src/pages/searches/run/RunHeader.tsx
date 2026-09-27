@@ -9,6 +9,8 @@ import { plural } from "@/lib/copy"
 import { isComplete, money, runDate, statusText } from "@/lib/searches/copy"
 import type { SearchResult } from "@/types/searches"
 
+import { TeamPanel } from "./TeamPanel"
+
 interface RunHeaderProps {
   search: SearchResult
   // From the catalog card; a run opened before the catalog loads shows none yet.
@@ -17,8 +19,8 @@ interface RunHeaderProps {
   actions: ReactNode
 }
 
-// The run's name and facts on one compact block, the job description folded under them
-// (rendering.py _search); the actions slot sits at its right.
+// The run's name and facts on one compact block, the job description and the hiring
+// company's team folded under them (rendering.py _search); the actions slot sits at its right.
 export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
   const [jdOpen, setJdOpen] = useState(false)
   return (
@@ -51,6 +53,7 @@ export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
             <JobDescription text={search.jd_text} />
           </DetailsSection>
         ) : null}
+        <TeamPanel search={search} />
       </div>
       {actions ? <div className="run-head-actions">{actions}</div> : null}
     </header>

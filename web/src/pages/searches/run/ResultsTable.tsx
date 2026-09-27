@@ -16,7 +16,7 @@ import { ResultDrawer } from "./ResultDrawer"
 import { ResultRow } from "./ResultRow"
 import { ReviewBar } from "./ReviewBar"
 import type { RowContext } from "./RowActions"
-import { ROW_H } from "./columns"
+import { ROW_ESTIMATE } from "./rows"
 
 export type ResultItem =
   { kind: "heading"; key: string; text: string } | { kind: "row"; key: string; result: Result }
@@ -165,22 +165,16 @@ export function ResultsTable({ items, ranked, labels, empty, rowContext }: Resul
   return (
     <section className="results" data-results aria-label="People">
       <div className="result-head" aria-hidden="true">
-        <span className="result-head-main">
-          <span>Person</span>
-          <span>{ranked ? "Overall" : "Pond score"}</span>
-          <span>Signals</span>
-          <span>Sources</span>
-          <span>Via</span>
-          <span>Roles</span>
-        </span>
-        <span className="result-actions" />
+        <span>Candidate</span>
+        <span>{ranked ? "Overall score and reasoning" : "Trait scores and reasoning"}</span>
       </div>
       <VirtualRows
         handle={rows}
         className="results-viewport"
         data-results-viewport
         items={items}
-        rowHeight={ROW_H}
+        rowHeight={ROW_ESTIMATE}
+        measure
         getKey={itemKey}
         renderRow={(item) =>
           item.kind === "heading" ? (
@@ -206,7 +200,14 @@ export function ResultsTable({ items, ranked, labels, empty, rowContext }: Resul
       {/* On the body: the run pane is a size container, which would hold a fixed panel inside it. */}
       {createPortal(
         <>
-          <ResultDrawer result={shown} open={open} ranked={ranked} labels={labels} onClose={close} />
+          <ResultDrawer
+            result={shown}
+            open={open}
+            ranked={ranked}
+            labels={labels}
+            context={context}
+            onClose={close}
+          />
           <ReviewBar
             label={current?.row.name ?? null}
             choices={choices}

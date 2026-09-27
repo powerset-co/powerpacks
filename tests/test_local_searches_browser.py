@@ -184,7 +184,7 @@ class SearchesBrowserTests(unittest.TestCase):
             names = page.locator(".result-row .result-who b")
             expect(names).to_have_text(["Jordan Bravo", "Morgan Echo", "Casey Delta"])
             expect(page.locator("[data-person-id='p-jordan'] [data-overall]")).to_have_text("5/5")
-            expect(page.locator("[data-person-id='p-casey'] .result-unscored")).to_have_text("Not judged")
+            expect(page.locator("[data-person-id='p-casey'] .result-noscore")).to_have_text("Not judged")
             expect(page.locator("[data-person-id='p-jordan'] .source")).to_have_count(2)
             self.assertTrue(page.evaluate(kept))
 
@@ -205,6 +205,16 @@ class SearchesBrowserTests(unittest.TestCase):
             expect(drawer.locator("h2")).to_have_text("Morgan Echo")
             page.locator("[data-person-id='p-morgan'] .result-main").click()
             expect(drawer).to_have_attribute("data-open", "false")
+
+            # A source pill opens who brought it on hover; the popover leaves with the pointer.
+            page.locator("[data-person-id='p-jordan'] [data-source='gmail']").hover()
+            popover = page.get_by_role("region", name="Gmail sources for Jordan Bravo")
+            expect(popover).to_be_visible()
+            expect(popover).to_contain_text("Drew Kilo")
+            expect(popover).to_contain_text("42 emails")
+            expect(drawer).to_have_attribute("data-open", "false")
+            page.mouse.move(700, 40)
+            expect(popover).to_have_count(0)
 
             # Another run: the mixed scales show as two tables.
             page.locator("[data-run-id='casey-role']").click()

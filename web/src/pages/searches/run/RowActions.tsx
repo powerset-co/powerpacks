@@ -22,21 +22,19 @@ export interface RowContext {
   onToast: (toast: ToastMessage) => void
 }
 
-interface RowActionsProps {
-  result: ResultRow
+const NO_TAGS: readonly string[] = []
+
+interface RowTagsProps {
   candidate: Candidate
   context: RowContext
 }
 
-const NO_TAGS: readonly string[] = []
-
-// A person's controls at the row's end: tags, pin, score. Only a run's candidates carry them:
+// The tag editor and the pin over a person's identity. Only a run's candidates carry them:
 // the server tags and scores those alone.
-export function RowActions({ result, candidate, context }: RowActionsProps) {
+export function RowTags({ candidate, context }: RowTagsProps) {
   const { tags } = context
   const id = candidate.person_id
   const applied = tags.tagged.assignments[id] ?? NO_TAGS
-  const score = yourScore(result, context.queued)
   return (
     <>
       <TagEditor
@@ -53,16 +51,29 @@ export function RowActions({ result, candidate, context }: RowActionsProps) {
         disabled={tags.loading}
         onToggle={() => tags.toggle(id, PIN_TAG)}
       />
-      <ScoreDialog
-        runId={context.runId}
-        candidate={candidate}
-        rubric={context.rubric}
-        score={score?.score ?? null}
-        note={score?.note ?? ""}
-        onSaved={context.onSaved}
-        submit={context.submit}
-        onToast={context.onToast}
-      />
     </>
+  )
+}
+
+interface RowScoreProps {
+  result: ResultRow
+  candidate: Candidate
+  context: RowContext
+}
+
+// The score button over a person's reasoning: their saved score, and the dialog that sets it.
+export function RowScore({ result, candidate, context }: RowScoreProps) {
+  const score = yourScore(result, context.queued)
+  return (
+    <ScoreDialog
+      runId={context.runId}
+      candidate={candidate}
+      rubric={context.rubric}
+      score={score?.score ?? null}
+      note={score?.note ?? ""}
+      onSaved={context.onSaved}
+      submit={context.submit}
+      onToast={context.onToast}
+    />
   )
 }

@@ -1,8 +1,9 @@
-/* One run: the compact header, the pond chain, the toolbar slot and the team fold. */
+/* One run: the compact header (with the job description and team folds), the pond chain, the
+   toolbar slot and the list. */
 
 .search-run {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -164,23 +165,17 @@ button.pond-card:hover {
   border-bottom: 1px solid var(--line);
 }
 
-/* The team: a bar under the table (DetailsSection); its list folds open under the bar. */
+/* The team fold under the job description (DetailsSection); the roster in a raised box that
+   scrolls, like the description's. */
 .team {
-  border-top: 1px solid var(--line);
-  background: var(--background);
-}
-.team button[aria-expanded] {
-  padding: 10px 20px;
-}
-.team button[aria-expanded] > small {
-  margin-left: auto;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 500;
+  margin-top: 8px;
 }
 .team-body {
   max-height: min(320px, 38vh);
   overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
   scrollbar-width: thin;
 }
 .team table {
@@ -191,16 +186,19 @@ button.pond-card:hover {
 }
 .team th,
 .team td {
-  padding: 0 20px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: middle;
   overflow-wrap: anywhere;
 }
+.team tr:last-child td {
+  border-bottom: 0;
+}
 .team th {
   position: sticky;
   top: 0;
-  background: var(--background);
+  background: var(--surface-2);
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
@@ -223,9 +221,17 @@ button.pond-card:hover {
 .team-name a:hover {
   text-decoration: underline;
 }
-.team-status {
+.team-saved {
+  position: sticky;
+  bottom: 0;
   margin: 0;
-  padding: 0 20px 10px;
+  padding: 6px 14px;
+  background: var(--surface-2);
+  color: var(--faint);
+  font-size: 11px;
+}
+.team-status {
+  margin: 6px 0 0;
   color: var(--faint);
   font-size: 11.5px;
 }

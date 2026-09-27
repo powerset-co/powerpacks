@@ -56,6 +56,15 @@ export function buildSearchFeedback(runId: string, comment: string): FeedbackRec
   return { run_id: runId, person_id: "", comment: comment.trim(), human_judgment: null }
 }
 
+/** A note about one candidate with no score: the drawer's flag. */
+export function buildPersonFeedback(
+  runId: string,
+  candidate: Pick<Candidate, "person_id">,
+  comment: string,
+): FeedbackRecord {
+  return { run_id: runId, person_id: candidate.person_id, comment: comment.trim(), human_judgment: null }
+}
+
 /** The form fields the server reads; `human_judgment` is left out for search feedback, as results.js does. */
 export function formValues(record: FeedbackRecord): Record<string, string> {
   const values = { run_id: record.run_id, person_id: record.person_id, comment: record.comment }

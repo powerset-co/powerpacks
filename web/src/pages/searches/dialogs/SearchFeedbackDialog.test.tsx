@@ -51,6 +51,30 @@ describe("SearchFeedbackDialog", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: TRIGGER }))
   })
 
+  it("sends a candidate's note with their id from the drawer's flag", () => {
+    const submit = vi.fn((_record: FeedbackRecord) => Promise.resolve<FeedbackOutcome>("sent"))
+    render(
+      <SearchFeedbackDialog
+        runId="jordan-role"
+        title="Staff Engineer · Example Labs"
+        candidate={{ person_id: "p-jordan", name: "Jordan Bravo" }}
+        submit={submit}
+        onToast={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Send feedback about Jordan Bravo" }))
+    expect(screen.getByRole("dialog", { name: "Candidate feedback" })).toBeTruthy()
+    expect(screen.getByText("Jordan Bravo · Staff Engineer · Example Labs")).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Too junior" } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(submit).toHaveBeenCalledWith({
+      run_id: "jordan-role",
+      person_id: "p-jordan",
+      comment: "Too junior",
+      human_judgment: null,
+    })
+  })
+
   it("closes on Escape and opens empty next time", () => {
     const { submit } = setup()
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Draft" } })

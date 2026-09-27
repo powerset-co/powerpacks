@@ -9,8 +9,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { buildSearchFeedback } from "@/lib/searches/feedback"
-import type { FeedbackRecord } from "@/types/searches"
+import { buildPersonFeedback, buildSearchFeedback } from "@/lib/searches/feedback"
+import type { Candidate } from "@/types/searches"
 
 import { FeedbackFooter } from "./FeedbackFooter"
 import { NotesField } from "./NotesField"
@@ -18,24 +18,37 @@ import { send, type FeedbackSink } from "./send"
 
 export interface SearchFeedbackDialogProps extends FeedbackSink {
   runId: string
-  /** The search's title: the dialog's context line and the trigger's label. */
+  /** The dialog's context line: the search's title, or a candidate's role. */
   title: string
+  /** Set on a candidate's flag: the note is about them, not the search. */
+  candidate?: Pick<Candidate, "person_id" | "name">
 }
 
-/** The flag button on a search, which opens a note on what should change. */
-export function SearchFeedbackDialog({ runId, title, submit, onToast }: SearchFeedbackDialogProps) {
+/** The flag button on a search (or, in the drawer, on a candidate), which opens a note on
+ *  what should change. */
+export function SearchFeedbackDialog({
+  runId,
+  title,
+  candidate,
+  submit,
+  onToast,
+}: SearchFeedbackDialogProps) {
   const [open, setOpen] = useState(false)
   const notes = useRef<HTMLTextAreaElement>(null)
+  const about = candidate?.name ?? title
 
-  function done(record: FeedbackRecord) {
+  function done(comment: string) {
     setOpen(false)
+    const record = candidate
+      ? buildPersonFeedback(runId, candidate, comment)
+      : buildSearchFeedback(runId, comment)
     send({ submit, onToast }, record)
   }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
-        aria-label={`Send feedback about ${title}`}
+        aria-label={`Send feedback about ${about}`}
         title="Send feedback"
         className="inline-grid min-h-8 min-w-8 cursor-pointer place-items-center rounded-full border border-border bg-secondary px-2 py-1.5 text-foreground transition-[background-color,transform] duration-fast ease-out hover:bg-line-strong active:translate-y-px"
       >
@@ -49,10 +62,14 @@ export function SearchFeedbackDialog({ runId, title, submit, onToast }: SearchFe
         }}
       >
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">Search feedback</DialogTitle>
-          <DialogDescription className="text-[13px]">{title}</DialogDescription>
+          <DialogTitle className="text-lg font-semibold">
+            {candidate ? "Candidate feedback" : "Search feedback"}
+          </DialogTitle>
+          <DialogDescription className="text-[13px]">
+            {[candidate?.name, title].filter(Boolean).join(" · ")}
+          </DialogDescription>
         </DialogHeader>
-        <SearchForm notes={notes} onDone={(comment) => done(buildSearchFeedback(runId, comment))} />
+        <SearchForm notes={notes} onDone={done} />
       </DialogContent>
     </Dialog>
   )

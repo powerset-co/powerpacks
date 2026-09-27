@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
 import { CLOSE_MARK, PlusIcon } from "@/components/shared"
-import { type DismissBy, useDismiss } from "@/hooks/useDismiss"
+import type { DismissBy } from "@/hooks/useDismiss"
 import { usePresence } from "@/hooks/usePresence"
 import { usePresenceList } from "@/hooks/usePresenceList"
 import { existingTag, normalizeTag, TAG_NAME_MAX } from "@/lib/searches/tags"
 import { cn } from "@/lib/utils"
 
+import { useFloatPanel } from "../hooks/useFloatPanel"
+
 const PANEL_WIDTH = 256
-const PANEL_GAP = 6
-const EDGE = 8
 
 export interface TagEditorProps {
   personName: string
@@ -23,59 +23,36 @@ export interface TagEditorProps {
   onRemove: (tag: string) => void
 }
 
-// Below the trigger, kept inside the window. Fixed and portalled: a virtual row clips and
-// recycles its cells, so the panel lives on the body and closes once a scroll moves its row.
-function panelTop(anchor: HTMLElement): number {
-  return anchor.getBoundingClientRect().bottom + PANEL_GAP
-}
-
-function placeBelow(anchor: HTMLElement): CSSProperties {
-  const box = anchor.getBoundingClientRect()
-  return {
-    top: panelTop(anchor),
-    left: Math.max(EDGE, Math.min(box.left, window.innerWidth - PANEL_WIDTH - EDGE)),
-    width: PANEL_WIDTH,
-  }
-}
-
 const sameTag = (tag: string) => tag
 
-// The row's "+ tag" button (its tags as chips) and the popover that edits them: tags as
-// toggles, a field that adds (Enter), × to delete a tag from the search. Escape closes.
-// A chip taken off leaves with the .rise exit; one added rises in.
+// The row's "+ tag" button (its tags as chips) and the panel under it that edits them
+// (hooks/useFloatPanel): tags as toggles, a field that adds (Enter), × to delete a tag from the
+// search. Escape closes. A chip taken off leaves with the .rise exit; one added rises in.
 export function TagEditor({ personName, tags, applied, disabled, onToggle, onRemove }: TagEditorProps) {
-  const [place, setPlace] = useState<CSSProperties | null>(null)
   const [text, setText] = useState("")
-  const anchor = useRef<HTMLButtonElement>(null)
-  const panel = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
   // What was on screen already (the row's chips at mount, the list at open) arrives with its
   // container; only a tag added afterwards rises in on its own.
   const [chipsAtMount] = useState(() => new Set(applied))
   const [tagsAtOpen, setTagsAtOpen] = useState<ReadonlySet<string>>(() => new Set(tags))
-  const presence = usePresence(place)
   const chips = usePresenceList(applied, sameTag)
-  const open = place !== null
 
-  const close = useCallback((by: DismissBy) => {
-    setPlace(null)
+  // Closed by any road, the draft goes.
+  const dismissed = useCallback(() => setText(""), [])
+  const float = useFloatPanel(PANEL_WIDTH, dismissed)
+  const { anchor, panel, open } = float
+  const presence = usePresence(float.place)
+  // The editor's own close (the trigger, Escape typed in the field, which the page never sees):
+  // Escape hands focus back to the trigger, as the panel's dismissal does.
+  const close = (by: DismissBy) => {
+    float.hide()
     setText("")
     if (by === "escape") anchor.current?.focus()
-  }, [])
-  useDismiss(open, panel, anchor, close)
+  }
 
   useEffect(() => {
-    if (!place) return
-    input.current?.focus()
-    // A scroll that leaves the trigger where it was (a clamp, a re-measure) keeps it open.
-    const onScroll = (event: Event) => {
-      if (event.target instanceof Node && panel.current?.contains(event.target)) return
-      if (anchor.current && panelTop(anchor.current) === place.top) return
-      close("outside")
-    }
-    window.addEventListener("scroll", onScroll, true)
-    return () => window.removeEventListener("scroll", onScroll, true)
-  }, [place, close])
+    if (open) input.current?.focus()
+  }, [open])
 
   const typed = normalizeTag(text)
   const matching = typed ? tags.filter((tag) => tag.toLowerCase().includes(typed.toLowerCase())) : tags
@@ -110,9 +87,9 @@ export function TagEditor({ personName, tags, applied, disabled, onToggle, onRem
         )}
         onClick={() => {
           if (open) close("outside")
-          else if (anchor.current) {
+          else {
             setTagsAtOpen(new Set(tags))
-            setPlace(placeBelow(anchor.current))
+            float.show()
           }
         }}
       >
