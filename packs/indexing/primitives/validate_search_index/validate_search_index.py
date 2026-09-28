@@ -16,6 +16,10 @@ Table contract mirrors `packs/search/primitives/local/local_duckdb_store.py`
   optional -- legitimately sparse for some networks (education, schools,
               company signals). Missing or empty => warning, not failure.
 
+Per person: everyone with work history in merged/people.csv must have
+position rows in the index (Gmail-resolved people once reached it with none,
+while the table-level counts still passed). Any miss fails.
+
 Output is JSON on stdout. Exit code: 0 = ok (possibly with warnings),
 1 = fail/missing DuckDB.
 """
@@ -29,7 +33,13 @@ from pathlib import Path
 import duckdb
 
 REPO = Path(__file__).resolve().parents[4]
+# Skills run this file by path; `packs.*` needs the repo root importable.
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
+DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
 
 # Either name is accepted as the person-profile table (store contract).
 PROFILE_TABLE_CANDIDATES = ("local_person_profiles", "local_people_profiles")
@@ -66,7 +76,18 @@ def row_count(con: duckdb.DuckDBPyConnection, table: str) -> int:
     return int(con.execute(f'select count(*) from "{table}"').fetchone()[0])
 
 
-def validate(db_path: Path) -> dict:
+def people_missing_positions(con: duckdb.DuckDBPyConnection, people_csv: Path) -> tuple[int, int]:
+    """(people with work history in the CSV, of those with no position rows)."""
+    with_history = [row["id"] for row in CsvIO.read_dict_rows(people_csv)
+                    if json.loads(row["work_experiences"] or "[]")]
+    if not with_history:
+        return 0, 0
+    indexed = {r[0] for r in con.execute(
+        "select distinct base_id from local_people_positions where base_id = any(?)", [with_history]).fetchall()}
+    return len(with_history), len(set(with_history) - indexed)
+
+
+def validate(db_path: Path, people_csv: Path | None = None) -> dict:
     payload: dict = {
         "primitive": "validate_search_index",
         "db": str(db_path),
@@ -136,6 +157,13 @@ def validate(db_path: Path) -> dict:
                 {"name": table, "tier": "info", "exists": exists, "rows": rows}
             )
             # Informational only: never warns or fails (expected empty here).
+
+        if people_csv is not None and people_csv.exists() and "local_people_positions" in present:
+            with_history, missing = people_missing_positions(con, people_csv)
+            payload["people_missing_positions"] = missing
+            if missing:
+                payload["errors"].append(
+                    f"{missing} of {with_history} people with work history have no positions in the index")
     finally:
         con.close()
 
@@ -161,12 +189,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_DB),
         help="path to local-search.duckdb (default: .powerpacks/search-index/local-search.duckdb)",
     )
+    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV),
+                        help="the merged people the index was built from")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    payload = validate(Path(args.db))
+    payload = validate(Path(args.db), Path(args.people_csv))
     json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")
     sys.exit(0 if payload["status"] == "ok" else 1)
