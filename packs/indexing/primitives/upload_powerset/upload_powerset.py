@@ -331,47 +331,50 @@ class UploadPowerset:
         for namespace_plan in plan.namespaces:
             UploadManifest.read(self.manifest_path).at(Stage(namespace_plan.logical)).write(self.manifest_path)
             ns = self._namespace(namespace_plan.logical)
-            rows = local_index.namespace_rows(con, namespace_plan.logical, namespace_plan.upsert_ids,
-                                              local_allowed, plan.operator_id,
-                                              turbopuffer_writer.live_attributes(ns))
+            live = turbopuffer_writer.live_attributes(ns)
             namespace = NAMESPACE_BY_LOGICAL[namespace_plan.logical]
-            if namespace.person_grain:
-                for row in rows:
-                    key = namespace.doc_key
-                    row[key] = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
-            docs_upserted[namespace_plan.logical] = turbopuffer_writer.upsert_docs(
-                ns, namespace_plan.logical, rows)
-            if namespace.person_grain:
-                uploaded_people.update(local_by_cloud.get(str(row[namespace.doc_key]), str(row[namespace.doc_key]))
-                                       for row in rows)
+            docs_upserted[namespace_plan.logical] = 0
+            for rows in local_index.namespace_row_chunks(con, namespace_plan.logical, namespace_plan.upsert_ids,
+                                                         local_allowed, plan.operator_id, live):
+                if namespace.person_grain:
+                    for row in rows:
+                        key = namespace.doc_key
+                        row[key] = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
+                docs_upserted[namespace_plan.logical] += turbopuffer_writer.upsert_docs(
+                    ns, namespace_plan.logical, rows)
+                if namespace.person_grain:
+                    uploaded_people.update(local_by_cloud.get(str(row[namespace.doc_key]), str(row[namespace.doc_key]))
+                                           for row in rows)
             if namespace_plan.patch_person_ids:
                 doc_ids = turbopuffer_writer.fetch_person_doc_ids(
                     ns, namespace_plan.logical, namespace_plan.patch_person_ids)
                 if namespace.person_grain:
-                    local_rows = local_index.namespace_rows(
-                        con, namespace_plan.logical,
-                        tuple(local_by_cloud.get(person_id, person_id) for person_id in namespace_plan.patch_person_ids),
-                        local_allowed,
-                        plan.operator_id, turbopuffer_writer.live_attributes(ns))
-                    key = namespace.doc_key
-                    by_person: dict[str, list[dict[str, Any]]] = {}
-                    for row in local_rows:
-                        cloud_id = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
-                        row[key] = cloud_id
-                        by_person.setdefault(cloud_id, []).append(row)
-                    for person_id in namespace_plan.patch_person_ids:
-                        if person_id not in local_by_cloud:
-                            continue
-                        local_rows = by_person.get(person_id, [])
-                        present = set(doc_ids.get(person_id, ()))
-                        local_ids = {str(row["id"]) for row in local_rows}
-                        if present and not (present & local_ids):
-                            continue
-                        missing = [row for row in local_rows if str(row["id"]) not in present]
-                        docs_upserted[namespace_plan.logical] += turbopuffer_writer.upsert_docs(
-                            ns, namespace_plan.logical, missing)
-                        if missing:
-                            uploaded_people.add(local_by_cloud[person_id])
+                    patch_ids = namespace_plan.patch_person_ids
+                    for start in range(0, len(patch_ids), local_index.PEOPLE_PER_READ):
+                        chunk = patch_ids[start:start + local_index.PEOPLE_PER_READ]
+                        local_rows = local_index.namespace_rows(
+                            con, namespace_plan.logical,
+                            tuple(local_by_cloud.get(person_id, person_id) for person_id in chunk),
+                            local_allowed, plan.operator_id, live)
+                        key = namespace.doc_key
+                        by_person: dict[str, list[dict[str, Any]]] = {}
+                        for row in local_rows:
+                            cloud_id = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
+                            row[key] = cloud_id
+                            by_person.setdefault(cloud_id, []).append(row)
+                        for person_id in chunk:
+                            if person_id not in local_by_cloud:
+                                continue
+                            local_rows = by_person.get(person_id, [])
+                            present = set(doc_ids.get(person_id, ()))
+                            local_ids = {str(row["id"]) for row in local_rows}
+                            if present and not (present & local_ids):
+                                continue
+                            missing = [row for row in local_rows if str(row["id"]) not in present]
+                            docs_upserted[namespace_plan.logical] += turbopuffer_writer.upsert_docs(
+                                ns, namespace_plan.logical, missing)
+                            if missing:
+                                uploaded_people.add(local_by_cloud[person_id])
                 desired_acl = {doc_id: allowed.get(person_id, ())
                                for person_id, ids in doc_ids.items() for doc_id in ids}
                 current_acl = turbopuffer_writer.fetch_allowed_operator_ids(ns, sorted(desired_acl))

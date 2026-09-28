@@ -438,6 +438,46 @@ class PostgresBatchTests(unittest.TestCase):
         self.assertEqual(cur.statements, [])
 
 
+class LocalReadChunkTests(unittest.TestCase):
+    """Local rows (vectors included) are read a bounded number of people at a time."""
+
+    def _con(self, tmp: str, people: int):
+        con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+        con.execute("CREATE TABLE local_person_profiles (person_id VARCHAR, public_identifier VARCHAR)")
+        con.execute("CREATE TABLE local_people_positions (id VARCHAR, base_id VARCHAR, vector FLOAT[])")
+        con.execute("CREATE TABLE local_summaries (id VARCHAR, base_id VARCHAR)")
+        con.execute("CREATE TABLE local_people_education (id VARCHAR, base_id VARCHAR)")
+        for n in range(people):
+            con.execute("INSERT INTO local_person_profiles VALUES (?, ?)", [f"p{n}", f"slug-{n}"])
+            con.execute("INSERT INTO local_people_positions VALUES (?, ?, [0.5, 0.25])", [f"doc-{n}", f"p{n}"])
+        return con
+
+    def test_hashes_are_the_same_whatever_the_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            con = self._con(tmp, 5)
+            ids = tuple(f"p{n}" for n in range(5))
+            whole = upload_powerset.local_index.person_hashes(con, ids)
+            reads = []
+            execute = con.execute
+            with mock.patch.object(upload_powerset.local_index, "PEOPLE_PER_READ", 2):
+                chunked = upload_powerset.local_index.person_hashes(
+                    mock.Mock(execute=lambda sql, params=None: reads.append(len(params[0])) or execute(sql, params)), ids)
+            con.close()
+        self.assertEqual(chunked, whole)
+        self.assertLessEqual(max(reads), 2)
+
+    def test_documents_are_built_and_written_a_chunk_at_a_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            con = self._con(tmp, 5)
+            ids = tuple(f"p{n}" for n in range(5))
+            with mock.patch.object(upload_powerset.local_index, "PEOPLE_PER_READ", 2):
+                chunks = list(upload_powerset.local_index.namespace_row_chunks(
+                    con, "people", ids, {}, OPERATOR, frozenset()))
+            con.close()
+        self.assertEqual([len(chunk) for chunk in chunks], [2, 2, 1])
+        self.assertEqual(sorted(doc["id"] for chunk in chunks for doc in chunk), [f"doc-{n}" for n in range(5)])
+
+
 class TurbopufferWriterTests(unittest.TestCase):
     def test_missing_namespace_has_no_present_entities_or_person_docs(self):
         missing = turbopuffer.NotFoundError(
