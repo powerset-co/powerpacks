@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.4.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.4...powerpacks-v3.4.5) (2026-09-28)
+
+
+### Bug Fixes
+
+* **search:** bundle the viewer's catalog-writing imports ([9acde98](https://github.com/powerset-co/powerpacks/commit/9acde9879ea81708ae5431710202503b42a4a303))
+* **search:** bundle the viewer's catalog-writing imports ([865d54e](https://github.com/powerset-co/powerpacks/commit/865d54eee46c92944aa061dcf4d1392012d22936))
+* **search:** keep the results viewer importable on Python 3.10 ([7c69d21](https://github.com/powerset-co/powerpacks/commit/7c69d210aab129b92ccc11dd666ea2898b202a14))
+* **search:** keep the results viewer importable on Python 3.10 ([b4c1944](https://github.com/powerset-co/powerpacks/commit/b4c19446dd6b771cb2e2ffe0a0f95e4ef38cf5ec))
+* **search:** trim the result drawer and plain-word missing team data ([c8790d8](https://github.com/powerset-co/powerpacks/commit/c8790d884a4c1b6949e6124a627c4a1695c408b4))
+* **search:** trim the result drawer and plain-word missing team data ([9381aaf](https://github.com/powerset-co/powerpacks/commit/9381aaf3c321d88c34fd1fa053d9007263ecc32f))
+
 ## [3.4.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.3...powerpacks-v3.4.4) (2026-09-28)
 
 
