@@ -4,7 +4,7 @@ import { Avatar, SourcePills } from "@/components/shared"
 import { avatarUrl } from "@/lib/api/people"
 import { toChannels } from "@/lib/channels"
 import { monthYear } from "@/lib/copy"
-import { label, sentence } from "@/lib/people/copy"
+import { sentence } from "@/lib/people/copy"
 import type { Person } from "@/types/people"
 
 import { NumberCell, WarmthCell, WorthCell } from "./cells"
@@ -64,9 +64,6 @@ export const PersonRow = memo(function PersonRow({
         </span>
       </div>
       <SourcePills role="cell" className="sources c-sources" channels={toChannels(row.channels)} />
-      <div role="cell" className={`why c-why${row.share_source === "human" ? " human" : ""}`}>
-        {label("reason", row.reason)}
-      </div>
       <div role="cell" className="rel c-rel">
         {sentence(row.relationship_kind)}
       </div>
