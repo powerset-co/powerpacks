@@ -18,6 +18,7 @@ share list. An un-share removes the operator from allowed_operator_ids and
 deletes its source rows; documents are never deleted.
 
 Changelog:
+  2026-09-28: a person new to the cloud is never counted changed after a failed run.
   2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
   2026-09-27: bind real runs to checked decisions and target; report typed stages.
   2026-09-24: read the share list from SQLite, not share.csv.
@@ -195,9 +196,11 @@ class UploadPowerset:
                     old_hashes = previous.person_hashes if same_target else {}
                     owned_people = set(previous.owned_people) if same_target else set()
                     newly_owned = set(next(ns.upsert_ids for ns in plan.namespaces if ns.logical == "people"))
-                    # Owned people whose content moved; new people are written too but counted as new.
+                    # Owned people the cloud has, whose content moved. Someone new to the cloud is new,
+                    # even when a failed run recorded them as owned before its writes rolled back.
                     changed = tuple(person_id for person_id in plan.persons_upsert
-                                    if person_id in owned_people and old_hashes.get(person_id) != hashes[person_id])
+                                    if person_id in owned_people and person_id not in newly_owned
+                                    and old_hashes.get(person_id) != hashes[person_id])
                     to_write = tuple(sorted(set(changed) | newly_owned))
                     retry_upserts = previous.pending_upserts if same_target else {}
                     shared_ids = set(plan.persons_upsert)
