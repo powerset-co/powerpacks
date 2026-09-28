@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.6.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.6.1...powerpacks-v3.6.2) (2026-09-28)
+
+
+### Bug Fixes
+
+* **search:** give the domain judge a strict JSON schema ([5c139c0](https://github.com/powerset-co/powerpacks/commit/5c139c0f7abf930df65a03d338088b3ac6cc7cb5))
+
 ## [3.6.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.6.0...powerpacks-v3.6.1) (2026-09-28)
 
 
