@@ -117,6 +117,21 @@ async function tagsLoaded(name = "Jordan Bravo") {
 }
 
 describe("RunView", () => {
+  it("narrows a screened run to one pond's people and marks the picked pond", () => {
+    renderRun()
+    const pondTwo = () =>
+      within(document.querySelector<HTMLElement>("[data-pond='2']") ?? document.body).getByRole("button")
+    expect(screen.getByText("Showing every pond. Pick a pond to see only its people.")).toBeTruthy()
+    fireEvent.click(pondTwo())
+    expect(pondTwo().getAttribute("aria-pressed")).toBe("true")
+    expect(screen.getByText("Showing pond 2. Pick it again for every pond.")).toBeTruthy()
+    expect(rowNames().length).toBeGreaterThan(0)
+    expect(rowNames().every((name) => ["Avery Golf", "Quinn Hotel", "Casey Delta"].includes(name))).toBe(true)
+    fireEvent.click(pondTwo())
+    expect(pondTwo().getAttribute("aria-pressed")).toBe("false")
+    expect(rowNames()).toEqual(RANKED_NAMES.flat())
+  })
+
   it("shows the header, the pond chain and both score tables in the documented order", () => {
     renderRun()
     const header = within(screen.getByRole("banner"))
@@ -126,7 +141,7 @@ describe("RunView", () => {
     expect(header.getByText("$1.25")).toBeTruthy()
     expect(header.getByRole("button", { name: "Send feedback about Backend Engineer" })).toBeTruthy()
     expect([...document.querySelectorAll("[data-pond] .pond-count")].map((pond) => pond.textContent)).toEqual(
-      ["Kept 3 of 40", "Kept 3 of 80"],
+      ["Kept 3 of 40", "2 new · Kept 3 of 80"],
     )
     expect(tableHeadings()).toEqual(["Jev qualification scores", "Rating-based scores"])
     expect(rowNames()).toEqual(RANKED_NAMES.flat())

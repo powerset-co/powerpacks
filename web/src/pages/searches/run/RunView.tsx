@@ -35,9 +35,20 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
   const tags = useSearchTags(runId, onToast)
   const [filters, setFilters] = useState<ResultFilters>(() => ({ ...NO_FILTERS, labels: labelsShown() }))
   const [pondAt, setPond] = useState(0)
+  // Screened runs list every pond's people together until a pond card narrows it.
+  const [pondOnly, setPondOnly] = useState<number | null>(null)
 
   const results = useMemo(() => rankResults(search), [search])
-  const sections = useMemo(() => panelSections(search, results, pondAt), [search, results, pondAt])
+  const sections = useMemo(() => {
+    const all = panelSections(search, results, pondAt)
+    const pond = pondOnly === null ? undefined : search.ponds[pondOnly]
+    if (results.mode !== "ranked" || !pond) return all
+    const found = new Set(pond.candidates.map((row) => row.person_id))
+    return all.map((section) => ({
+      ...section,
+      rows: section.rows.filter((row) => found.has(row.row.person_id)),
+    }))
+  }, [search, results, pondAt, pondOnly])
   const rows = useMemo(() => sections.flatMap((section) => section.rows), [sections])
   const kept = useMemo(() => new Set(keptRows(rows, filters, tags.tagged)), [rows, filters, tags.tagged])
   const shownSections = useMemo(
@@ -83,7 +94,9 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
       status={status}
       mode={results.mode}
       pondAt={pondAt}
+      pondOnly={pondOnly}
       onPond={setPond}
+      onPondOnly={(index: number) => setPondOnly((current) => (current === index ? null : index))}
       people={people}
       sections={shownSections}
       filtered={shown.length < people}

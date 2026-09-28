@@ -16,6 +16,9 @@ export interface SearchRunProps {
   // Without a screen the pond chain picks the table's pond.
   pondAt: number
   onPond: (index: number) => void
+  // With a screen: the pond the list is narrowed to, or null for every pond.
+  pondOnly: number | null
+  onPondOnly: (index: number) => void
   // The panel's people before filtering, and the sections the filters keep.
   people: number
   sections: readonly ResultSection[]
@@ -55,7 +58,12 @@ export function SearchRun(props: SearchRunProps) {
   return (
     <div className="search-run" data-search-run>
       <RunHeader search={search} status={props.status} people={props.people} actions={props.headerActions} />
-      <PondChain ponds={search.ponds} selected={mode === "ponds" ? pondAt : null} onSelect={props.onPond} />
+      <PondChain
+        ponds={search.ponds}
+        selected={mode === "ponds" ? pondAt : props.pondOnly}
+        allPonds={mode !== "ponds"}
+        onSelect={mode === "ponds" ? props.onPond : props.onPondOnly}
+      />
       <div className="run-toolbar" data-run-toolbar>
         {props.toolbar}
       </div>
