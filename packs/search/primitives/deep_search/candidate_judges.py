@@ -21,7 +21,7 @@ JUDGE_GUIDANCE = (
     "a missing capability when equivalent work is supported; generic profession or employer association alone is not proof "
     "of an essential specialty. Sparse descriptions do not establish inability or a career switch. Consider relevant "
     "historical work and supported continuity. Keep technical qualification separate from opportunity scope. Explain the "
-    "decisive distinction from the adjacent rating using supplied evidence; do not invent accomplishments, personal intent, "
+    "decisive evidence in plain English without narrating adjacent ratings; do not invent accomplishments, personal intent, "
     "or company facts.\n")
 OPPORTUNITY_GUIDANCE = (
     "Distinguish technical/project leadership from demonstrated people or organizational management. Architecture ownership "
