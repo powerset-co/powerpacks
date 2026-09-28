@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.3...powerpacks-v3.4.4) (2026-09-28)
+
+
+### Bug Fixes
+
+* **deep-context:** carry LinkedIn profiles into merged people and the cloud ([#589](https://github.com/powerset-co/powerpacks/issues/589)) ([3db1e91](https://github.com/powerset-co/powerpacks/commit/3db1e91c88cf3c07bbfc506faa56f2a7db682790))
+
 ## [3.4.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.2...powerpacks-v3.4.3) (2026-09-28)
 
 
