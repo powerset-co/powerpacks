@@ -671,6 +671,36 @@ class DryRunTests(unittest.TestCase):
                     self.assertEqual(saved["last_upload"], last)
                     self.assertFalse((paths["out_dir"] / "errors.log").exists())
 
+    def test_a_failed_first_upload_leaves_new_people_new_on_the_next_check(self):
+        # The failed run recorded Jordan as owned before its writes rolled back; the cloud
+        # still lacks Jordan, so the next check counts one new person, not a changed one.
+        plan = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
+                        [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
+        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+                                              for ns in plan.namespaces))
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._fixture(Path(tmp))
+            connection = mock.MagicMock()
+            connection.__enter__.return_value = connection
+            connection.cursor.return_value.__enter__.return_value = FakeCursor()
+            fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
+            with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
+                 mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
+                 mock.patch.object(postgres, "use_v3_schema"), \
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name",
+                                   side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
+                 mock.patch.object(upload_powerset.UploadPowerset, "_plan", return_value=plan), \
+                 mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
+                upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
+                manifest = paths["out_dir"] / "manifest.json"
+                checked = UploadManifest.read(manifest)
+                replace(checked, status="failed", dry_run=False, target=checked.checked_target,
+                        owned_people=(NEW_PERSON,)).write(manifest)
+                upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
+            again = json.loads(manifest.read_text())["plan"]
+        self.assertEqual((again["new_to_cloud"], again["changed"], again["already_in_cloud"]), (1, 0, 0))
+
     def test_same_network_second_apply_makes_no_cloud_writes(self):
         first = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
                          [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
