@@ -4,6 +4,7 @@ Flow: read person profiles and linked entity ids -> select contract columns
 present in the local and live schemas -> build documents for namespace writes.
 
 Changelog:
+  2026-09-28: hashes and documents are read PEOPLE_PER_READ people at a time.
   2026-09-24: created.
 """
 
@@ -11,15 +12,27 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Iterator
 
 from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract, vector_metadata
 from packs.indexing.primitives.upload_powerset.models import Namespace, PersonProfile
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACE_BY_LOGICAL
 
 
+# Local rows carry 1536-float vectors (~0.5 MB of Python per person): reading
+# 500 people at a time keeps a 28k network's upload to a few hundred MB.
+PEOPLE_PER_READ = 500
+
+
 def person_hashes(con: Any, person_ids: tuple[str, ...]) -> dict[str, str]:
     """Local indexed content for each shared person; successful manifests cache it."""
+    hashes: dict[str, str] = {}
+    for start in range(0, len(person_ids), PEOPLE_PER_READ):
+        hashes.update(_person_hashes(con, person_ids[start:start + PEOPLE_PER_READ]))
+    return hashes
+
+
+def _person_hashes(con: Any, person_ids: tuple[str, ...]) -> dict[str, str]:
     content: dict[str, list[Any]] = {person_id: [] for person_id in person_ids}
     for table, key in (("local_person_profiles", "person_id"),
                        ("local_people_positions", "base_id"),
@@ -81,6 +94,14 @@ def person_profiles(con: Any, person_ids: tuple[str, ...]) -> list[PersonProfile
     )
     columns = [column[0] for column in rows.description]
     return [PersonProfile.from_db_row(dict(zip(columns, row))) for row in rows.fetchall()]
+
+
+def namespace_row_chunks(con: Any, logical: str, ids: tuple[str, ...],
+                         allowed: dict[str, tuple[str, ...]], operator_id: str,
+                         live: frozenset[str]) -> Iterator[list[dict[str, Any]]]:
+    """namespace_rows for PEOPLE_PER_READ ids at a time, so a write never holds them all."""
+    for start in range(0, len(ids), PEOPLE_PER_READ):
+        yield namespace_rows(con, logical, ids[start:start + PEOPLE_PER_READ], allowed, operator_id, live)
 
 
 def namespace_rows(con: Any, logical: str, ids: tuple[str, ...],

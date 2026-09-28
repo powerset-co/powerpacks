@@ -6,7 +6,8 @@ helpers the plan needs (the cloud id of each of our people it already has, this
 operator's own powerpacks source rows, every operator that can see those people,
 this operator's private contact_tags) -> the four writes (persons upsert,
 operator_person_sources upsert/delete, contact_tags put/delete). Each write
-returns the sum of cursor rowcount, rather than attempted rows.
+sends one multi-row statement per BATCH_ROWS rows and returns the sum of cursor
+rowcount, rather than attempted rows.
 
 PERSONS_UPSERT_SQL has the column list of the cloud pipeline's upsert
 (network-search-api/data_pipeline_v2/pipelines/people/processing/
@@ -17,6 +18,7 @@ cloud lacks is created from the local profile. The INSERT column list stays
 pinned to that cloud pipeline's list, including five locally NULL columns.
 
 Changelog:
+  2026-09-28: writes go in multi-row statements of 500 rows, not one per row.
   2026-09-24: created; count affected rows and omit locally NULL update clauses.
 """
 
@@ -35,6 +37,10 @@ from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS
 
 # operator_person_sources.operator_id is VARCHAR; contact_tags.operator_id is uuid.
 
+# Rows per write statement: persons' 25 columns make 12,500 bind parameters, far
+# under Postgres' 65,535, and one round trip replaces 500.
+BATCH_ROWS = 500
+
 PERSONS_UPSERT_SQL = """
     INSERT INTO persons (
         id, public_identifier, public_profile_url, first_name, last_name, full_name,
@@ -44,15 +50,7 @@ PERSONS_UPSERT_SQL = """
         linkedin_connections, ig_handle, ig_followers,
         inferred_birth_year, linkedin_member_id, twitter_user_id,
         created_at, updated_at
-    ) VALUES (
-        %s, %s, %s, %s, %s, %s,
-        %s, %s, %s, %s, %s, %s, %s,
-        %s, %s, %s,
-        %s, %s, %s,
-        %s, %s, %s,
-        %s, %s, %s,
-        NOW(), NOW()
-    )
+    ) VALUES {values}
     ON CONFLICT (public_identifier) DO UPDATE SET
         public_profile_url = COALESCE(persons.public_profile_url, EXCLUDED.public_profile_url),
         first_name = COALESCE(persons.first_name, EXCLUDED.first_name),
@@ -74,41 +72,60 @@ PERSONS_UPSERT_SQL = """
         inferred_birth_year = COALESCE(persons.inferred_birth_year, EXCLUDED.inferred_birth_year),
         updated_at = NOW()
 """
+PERSONS_ROW = "(" + ", ".join(["%s"] * 25) + ", NOW(), NOW())"
 
 SOURCES_UPSERT_SQL = """
     INSERT INTO operator_person_sources (
         operator_id, person_id, source_channel, source_identifier, discovery_method,
         total_interactions, last_interaction_at, discovered_at, created_at, updated_at
-    ) VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
+    ) VALUES {values}
     ON CONFLICT (operator_id, person_id, source_channel, source_identifier) DO UPDATE SET
         total_interactions = EXCLUDED.total_interactions,
         last_interaction_at = EXCLUDED.last_interaction_at,
         updated_at = NOW()
     WHERE operator_person_sources.discovery_method = EXCLUDED.discovery_method
 """
+SOURCES_ROW = "(%s, %s::uuid, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())"
 
 SOURCES_DELETE_SQL = """
-    DELETE FROM operator_person_sources
-    WHERE operator_id = %s
-      AND discovery_method = %s
-      AND person_id = %s::uuid
-      AND source_channel = %s
-      AND source_identifier = %s
+    DELETE FROM operator_person_sources s
+    USING (VALUES {values}) AS d(person_id, source_channel, source_identifier)
+    WHERE s.operator_id = %s
+      AND s.discovery_method = %s
+      AND s.person_id = d.person_id
+      AND s.source_channel = d.source_channel
+      AND s.source_identifier = d.source_identifier
 """
+SOURCES_DELETE_ROW = "(%s::uuid, %s, %s)"
 
 TAG_PUT_SQL = """
     INSERT INTO contact_tags (operator_id, group_key, tag, person_id)
-    VALUES (%s::uuid, %s, %s, %s::uuid)
+    VALUES {values}
     ON CONFLICT (operator_id, group_key, tag)
     DO UPDATE SET person_id = COALESCE(EXCLUDED.person_id, contact_tags.person_id)
 """
+TAG_PUT_ROW = "(%s::uuid, %s, %s, %s::uuid)"
 
 TAG_DELETE_SQL = """
-    DELETE FROM contact_tags
-    WHERE operator_id::text = %s
-      AND group_key = %s
-      AND tag = %s
+    DELETE FROM contact_tags c
+    USING (VALUES {values}) AS d(group_key, tag)
+    WHERE c.operator_id::text = %s
+      AND c.group_key = d.group_key
+      AND c.tag = d.tag
 """
+TAG_DELETE_ROW = "(%s, %s)"
+
+
+def _write_batches(cur: Any, sql: str, row: str, rows: Sequence[tuple[Any, ...]],
+                   trailing: tuple[Any, ...] = ()) -> int:
+    """One statement per BATCH_ROWS rows; `trailing` fills the placeholders after VALUES."""
+    count = 0
+    for start in range(0, len(rows), BATCH_ROWS):
+        batch = rows[start:start + BATCH_ROWS]
+        cur.execute(sql.format(values=", ".join([row] * len(batch))),
+                    tuple(value for values in batch for value in values) + trailing)
+        count += cur.rowcount
+    return count
 
 
 def resolve_operator_id(cur: Any, subject: str) -> str:
@@ -182,76 +199,60 @@ def fetch_private_tag_keys(cur: Any, operator_id: str) -> frozenset[str]:
 
 
 def upsert_persons(cur: Any, profiles: Sequence[PersonProfile]) -> int:
-    count = 0
-    for profile in profiles:
-        cur.execute(PERSONS_UPSERT_SQL, (
-            profile.id,
-            profile.public_identifier,
-            profile.public_profile_url,
-            profile.first_name,
-            profile.last_name,
-            profile.full_name,
-            profile.headline,
-            profile.summary,
-            profile.profile_picture_url,
-            profile.city,
-            profile.state,
-            profile.country,
-            profile.location_raw,
-            None,  # enrichment_provider
-            None,  # provider_entity_urn
-            profile.hydrated_context,
-            profile.x_twitter_handle,
-            profile.x_twitter_followers,
-            profile.linkedin_followers,
-            profile.linkedin_connections,
-            None,  # ig_handle
-            profile.ig_followers,
-            profile.inferred_birth_year,
-            None,  # linkedin_member_id
-            None,  # twitter_user_id
-        ))
-        count += cur.rowcount
-    return count
+    return _write_batches(cur, PERSONS_UPSERT_SQL, PERSONS_ROW, [(
+        profile.id,
+        profile.public_identifier,
+        profile.public_profile_url,
+        profile.first_name,
+        profile.last_name,
+        profile.full_name,
+        profile.headline,
+        profile.summary,
+        profile.profile_picture_url,
+        profile.city,
+        profile.state,
+        profile.country,
+        profile.location_raw,
+        None,  # enrichment_provider
+        None,  # provider_entity_urn
+        profile.hydrated_context,
+        profile.x_twitter_handle,
+        profile.x_twitter_followers,
+        profile.linkedin_followers,
+        profile.linkedin_connections,
+        None,  # ig_handle
+        profile.ig_followers,
+        profile.inferred_birth_year,
+        None,  # linkedin_member_id
+        None,  # twitter_user_id
+    ) for profile in profiles])
 
 
 def upsert_sources(cur: Any, operator_id: str, rows: Sequence[SourceRow]) -> int:
-    count = 0
-    for row in rows:
-        cur.execute(SOURCES_UPSERT_SQL, (
-            operator_id,
-            row.person_id,
-            row.source_channel,
-            row.source_identifier,
-            DISCOVERY_METHOD,
-            row.total_interactions,
-            row.last_interaction_at or None,
-        ))
-        count += cur.rowcount
-    return count
+    return _write_batches(cur, SOURCES_UPSERT_SQL, SOURCES_ROW, [(
+        operator_id,
+        row.person_id,
+        row.source_channel,
+        row.source_identifier,
+        DISCOVERY_METHOD,
+        row.total_interactions,
+        row.last_interaction_at or None,
+    ) for row in rows])
 
 
 def delete_sources(cur: Any, operator_id: str, rows: Sequence[SourceRow]) -> int:
-    count = 0
-    for row in rows:
-        cur.execute(SOURCES_DELETE_SQL, (
-            operator_id, DISCOVERY_METHOD, row.person_id, row.source_channel, row.source_identifier,
-        ))
-        count += cur.rowcount
-    return count
+    return _write_batches(cur, SOURCES_DELETE_SQL, SOURCES_DELETE_ROW, [
+        (row.person_id, row.source_channel, row.source_identifier) for row in rows
+    ], trailing=(operator_id, DISCOVERY_METHOD))
 
 
 def put_tags(cur: Any, operator_id: str, rows: Sequence[TagRow]) -> int:
-    count = 0
-    for row in rows:
-        cur.execute(TAG_PUT_SQL, (operator_id, row.group_key, row.tag, row.person_id or None))
-        count += cur.rowcount
-    return count
+    return _write_batches(cur, TAG_PUT_SQL, TAG_PUT_ROW, [
+        (operator_id, row.group_key, row.tag, row.person_id or None) for row in rows
+    ])
 
 
 def delete_tags(cur: Any, operator_id: str, rows: Sequence[TagRow]) -> int:
-    count = 0
-    for row in rows:
-        cur.execute(TAG_DELETE_SQL, (operator_id, row.group_key, row.tag))
-        count += cur.rowcount
-    return count
+    return _write_batches(cur, TAG_DELETE_SQL, TAG_DELETE_ROW, [
+        (row.group_key, row.tag) for row in rows
+    ], trailing=(operator_id,))

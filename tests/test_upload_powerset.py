@@ -20,6 +20,7 @@ if str(REPO) not in sys.path:
 
 from packs.indexing.primitives.upload_powerset import postgres, turbopuffer_writer, upload_powerset
 from packs.indexing.primitives.upload_powerset.models import (
+    PersonProfile,
     CloudState,
     LocalPerson,
     SourceRow,
@@ -398,6 +399,83 @@ class PostgresSqlTests(unittest.TestCase):
         postgres.put_tags(cur, OPERATOR, [TagRow(CLOUD_PERSON, "casey-lane")])
         sql, _ = cur.statements[0]
         self.assertIn("DO UPDATE SET person_id = COALESCE(EXCLUDED.person_id, contact_tags.person_id)", sql)
+
+
+class PostgresBatchTests(unittest.TestCase):
+    """Writes go in multi-row statements of BATCH_ROWS, not one round trip per row."""
+
+    def _profile(self, n: int) -> PersonProfile:
+        return PersonProfile(f"id-{n}", f"slug-{n}", *([None] * 18))
+
+    def test_persons_upsert_sends_one_statement_per_batch(self):
+        cur = FakeCursor(rowcounts=[postgres.BATCH_ROWS, 1])
+        count = postgres.upsert_persons(cur, [self._profile(n) for n in range(postgres.BATCH_ROWS + 1)])
+        self.assertEqual(len(cur.statements), 2)
+        first_sql, first_params = cur.statements[0]
+        self.assertEqual(first_sql.count("NOW(), NOW())"), postgres.BATCH_ROWS)
+        self.assertEqual(len(first_params), postgres.BATCH_ROWS * 25)
+        self.assertLess(len(first_params), 65_535)
+        self.assertEqual(count, postgres.BATCH_ROWS + 1)
+
+    def test_sources_and_tags_batch_and_sum_affected_rows(self):
+        sources = [SourceRow(NEW_PERSON, "gmail", f"p{n}@example.com", n, "") for n in range(1201)]
+        cur = FakeCursor(rowcounts=[500, 500, 201])
+        self.assertEqual(postgres.upsert_sources(cur, OPERATOR, sources), 1201)
+        self.assertEqual(len(cur.statements), 3)
+        cur = FakeCursor(rowcounts=[3])
+        self.assertEqual(postgres.delete_sources(cur, OPERATOR, sources[:3]), 3)
+        sql, params = cur.statements[0]
+        self.assertIn("USING (VALUES", sql)
+        self.assertEqual(params[-2:], (OPERATOR, "powerpacks"))
+        cur = FakeCursor(rowcounts=[2, 2])
+        self.assertEqual(postgres.put_tags(cur, OPERATOR, [TagRow(CLOUD_PERSON, "casey-lane")] * 2), 2)
+        self.assertEqual(postgres.delete_tags(cur, OPERATOR, [TagRow("", "casey-lane")] * 2), 2)
+        self.assertEqual(len(cur.statements), 2)
+
+    def test_nothing_to_write_sends_nothing(self):
+        cur = FakeCursor()
+        self.assertEqual(postgres.upsert_sources(cur, OPERATOR, []), 0)
+        self.assertEqual(cur.statements, [])
+
+
+class LocalReadChunkTests(unittest.TestCase):
+    """Local rows (vectors included) are read a bounded number of people at a time."""
+
+    def _con(self, tmp: str, people: int):
+        con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+        con.execute("CREATE TABLE local_person_profiles (person_id VARCHAR, public_identifier VARCHAR)")
+        con.execute("CREATE TABLE local_people_positions (id VARCHAR, base_id VARCHAR, vector FLOAT[])")
+        con.execute("CREATE TABLE local_summaries (id VARCHAR, base_id VARCHAR)")
+        con.execute("CREATE TABLE local_people_education (id VARCHAR, base_id VARCHAR)")
+        for n in range(people):
+            con.execute("INSERT INTO local_person_profiles VALUES (?, ?)", [f"p{n}", f"slug-{n}"])
+            con.execute("INSERT INTO local_people_positions VALUES (?, ?, [0.5, 0.25])", [f"doc-{n}", f"p{n}"])
+        return con
+
+    def test_hashes_are_the_same_whatever_the_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            con = self._con(tmp, 5)
+            ids = tuple(f"p{n}" for n in range(5))
+            whole = upload_powerset.local_index.person_hashes(con, ids)
+            reads = []
+            execute = con.execute
+            with mock.patch.object(upload_powerset.local_index, "PEOPLE_PER_READ", 2):
+                chunked = upload_powerset.local_index.person_hashes(
+                    mock.Mock(execute=lambda sql, params=None: reads.append(len(params[0])) or execute(sql, params)), ids)
+            con.close()
+        self.assertEqual(chunked, whole)
+        self.assertLessEqual(max(reads), 2)
+
+    def test_documents_are_built_and_written_a_chunk_at_a_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            con = self._con(tmp, 5)
+            ids = tuple(f"p{n}" for n in range(5))
+            with mock.patch.object(upload_powerset.local_index, "PEOPLE_PER_READ", 2):
+                chunks = list(upload_powerset.local_index.namespace_row_chunks(
+                    con, "people", ids, {}, OPERATOR, frozenset()))
+            con.close()
+        self.assertEqual([len(chunk) for chunk in chunks], [2, 2, 1])
+        self.assertEqual(sorted(doc["id"] for chunk in chunks for doc in chunk), [f"doc-{n}" for n in range(5)])
 
 
 class TurbopufferWriterTests(unittest.TestCase):
@@ -809,7 +887,8 @@ class ApplyTests(unittest.TestCase):
             [local_person(NEW_PERSON, "jordan-bravo"), local_person(CLOUD_PERSON, "casey-lane")],
             cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON, private_person: private_person}),
         )
-        cursor = FakeCursor(rowcounts=[1, 0, 1, 0, 1, 0])
+        # One statement per table: both people in one persons upsert, one of them affected.
+        cursor = FakeCursor(rowcounts=[1, 1, 1])
         namespace = FakeNamespace(rows=[mock.Mock(id="existing-doc", base_id=CLOUD_PERSON,
                                                   person_id=CLOUD_PERSON, allowed_operator_ids=[])])
 
@@ -839,8 +918,9 @@ class ApplyTests(unittest.TestCase):
         patched = [call for call in namespace.writes if "patch_rows" in call]
         self.assertEqual(len(person_writes), 1)
         self.assertTrue(any(row["id"] == "existing-doc" for call in patched for row in call["patch_rows"]))
-        self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO persons" in sql]), 2)
-        self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO operator_person_sources" in sql]), 2)
+        persons = [params for sql, params in cursor.statements if "INSERT INTO persons" in sql]
+        self.assertEqual([len(params) for params in persons], [2 * 25])
+        self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO operator_person_sources" in sql]), 1)
         self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO contact_tags" in sql]), 1)
         self.assertEqual((result.persons_upserted, result.sources_inserted, result.tags_put), (1, 1, 1))
 
