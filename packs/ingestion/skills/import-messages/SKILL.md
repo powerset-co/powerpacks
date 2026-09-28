@@ -5,6 +5,7 @@ description: Import iMessage/WhatsApp contact metadata locally. Sets up source a
 
 <!--
 Changelog:
+- 2026-09-28: Checklist falls back to printing when the harness has no plan tool.
 - 2026-09-25: the import floor is back (usable name, at least one message,
   group-only contacts need ten); unnamed contacts are no longer imported.
 - 2026-09-23: Trimmed Step 2's wacli protocol detail (batch sizes, waits, chat
@@ -31,7 +32,7 @@ fixed paths.
 
 **FIRST, create a literal, visible checklist with all four steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
-/ your harness's todo tool). Seed it with these exact titles:
+/ your harness's todo tool; with none, print it and reprint as you go). Seed it with these exact titles:
 
 ```
 1. Choose Messages sources (iMessage / WhatsApp)

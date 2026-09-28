@@ -6,6 +6,8 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-09-28: Ask the history window once (no second confirm past 3 years);
+  missing machine tools route to install-powerpacks Step 1.3.
 - 2026-09-23: Trimmed instructions. Dropped the last-message resume note from the
   "fixed checklist" paragraph (Step 2 always supplies an explicit window) and the
   duplicated full-mailbox-sync mention in the Step 5 content boundary.
@@ -50,7 +52,7 @@ window deterministically and msgvault skips messages already stored.
 
 **FIRST, create a literal, visible checklist with all seven steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
-/ your harness's todo tool). Seed it with these exact titles:
+/ your harness's todo tool; with none, print it and reprint as you go). Seed it with these exact titles:
 
 ```
 1. Check msgvault status
@@ -130,7 +132,9 @@ The JSON reports `gcloud`, `config.oauth_configured`, `database.exists`, and
 stored `accounts`. This is a **local configuration/presence check only**: an
 account can appear here even when Google has revoked or expired its refresh
 token. If `oauth_configured` is true and the db exists, Step 3 is a no-op. Do
-not call an account healthy until Step 4's explicit `auth-check` passes.
+not call an account healthy until Step 4's explicit `auth-check` passes. Step 3
+also needs `gcloud`, `node`/`npm`, and Chrome; if any is missing, run
+install-powerpacks Step 1.3 first.
 
 ### Step 2 — Ask which Gmail accounts to link (and how far back to sync)
 
@@ -144,8 +148,7 @@ Record the list. Do not guess emails.
 archived? **Default is 3 years.** The user may answer **`all`** (full mailbox
 history) or any number of years (e.g. **1**, **2**, **5**). Record the answer as
 `$SYNC_YEARS` and carry it into Step 5. A wide window — especially `all` — makes
-the first sync much longer; if the user asks for more than 3 years, confirm before
-running Step 5.
+the first sync much longer; say so in the same prompt instead of asking again.
 
 ### Step 3 — Create msgvault OAuth app (browser, if not configured)
 

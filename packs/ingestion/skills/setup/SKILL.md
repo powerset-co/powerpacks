@@ -32,6 +32,8 @@ Changelog:
   sources ($import-gmail / $import-messages), and offer $deep-context processing
   when candidates are staged. $setup keeps its own Modal index (first-run
   search works out of the box); the import skills no longer index.
+- 2026-09-28: Other-source imports stage candidates for $deep-context (they do
+  not re-merge or re-index); checklist falls back to printing without a plan tool.
 -->
 
 # setup
@@ -43,8 +45,8 @@ Modal), merge, index, and validate.
 It runs a **fixed checklist and always reruns it end to end**. Reruns are
 idempotent against fixed paths; rely on the primitives to overwrite.
 
-**Other sources are their own skills** (each adds its source on top of whatever
-is already imported, then re-merges + re-indexes):
+**Other sources are their own skills.** Each stages its contacts as candidates;
+`$deep-context` then resolves, merges, and re-indexes them:
 - **Gmail** → `$import-gmail`
 - **iMessage / WhatsApp** → `$import-messages`
 
@@ -58,6 +60,8 @@ Mandatory. Use your harness's plan/todo/task tool:
   to `in_progress` then `completed`.
 - **Codex:** `update_plan` with the nine steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
+- **No plan tool** (e.g. `codex exec`): print the checklist and reprint it with
+  updated status after each step.
 
 Seed the checklist with these exact item titles:
 
