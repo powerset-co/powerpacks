@@ -3,6 +3,7 @@
 Created: 2026-09-24
 
 Changelog:
+- 2026-09-28: update-powerpacks installs DATABASE_URL and TURBOPUFFER_API_KEY.
 - 2026-09-27: one env load; `POWERPACKS_UPLOAD_ENV_FILE` is gone.
 - 2026-09-25: point the parent-id map and human worth at the SQLite `people` and
   `parents` tables.
@@ -289,7 +290,8 @@ The uploader pins the v3 family itself (`UPLOAD_INDEX_VERSION`), whatever
 `search_path` to `powerset_v2` (`postgres.use_v3_schema`), so the standard
 `.env` that the install renders and `bin/update-powerpacks` preserves is
 enough: its `DATABASE_URL` login has the schema's privileges, and its
-`TURBOPUFFER_API_KEY` reaches the namespaces. The review server loads that `.env` once at
+`TURBOPUFFER_API_KEY` reaches the namespaces. `bin/update-powerpacks` writes both
+from the Powerset API on every update (`pull_runtime_keys.SHARED_KEYS`). The review server loads that `.env` once at
 startup with the shared python-dotenv loader (`load_env`, which never overrides
 an exported value); the uploader reads only that environment, and the standalone
 upload CLI loads `.env` the same way once in `main`. A rehearsal exports its
