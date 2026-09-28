@@ -16,7 +16,8 @@ def _row(**fields) -> dict[str, str]:
 
 
 class HydrateMergedTests(unittest.TestCase):
-    def test_only_slugs_without_a_usable_cached_profile_are_fetched(self):
+    def test_every_linkedin_person_without_work_history_goes_to_the_client(self):
+        # The client decides cache hit, recorded empty, or fetch; a cached shell is re-checked there.
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             cache = base / "profile_cache_v2"
@@ -35,8 +36,21 @@ class HydrateMergedTests(unittest.TestCase):
             with mock.patch.object(hydrate_merged, "hydrate_profiles", return_value=counts) as fetch:
                 payload = hydrate_merged.HydrateMergedProfiles(people_csv=people, cache_dir=cache).run()
         fetch.assert_called_once()
-        self.assertEqual(fetch.call_args.args[0], [("riley-echo", "https://www.linkedin.com/in/riley-echo")])
-        self.assertEqual((payload["status"], payload["missing"], payload["fetched"]), ("completed", 1, 1))
+        self.assertEqual(fetch.call_args.args[0], [
+            ("casey-delta", "https://www.linkedin.com/in/casey-delta"),
+            ("riley-echo", "https://www.linkedin.com/in/riley-echo"),
+        ])
+        self.assertEqual((payload["status"], payload["missing"], payload["fetched"]), ("completed", 2, 1))
+
+    def test_an_unreachable_gateway_fails_instead_of_completing(self):
+        with tempfile.TemporaryDirectory() as td:
+            people = Path(td) / "people.csv"
+            CsvIO.write_dict_rows(people, PEOPLE_SCHEMA_COLUMNS, [
+                _row(id="b", public_identifier="riley-echo", linkedin_url="https://www.linkedin.com/in/riley-echo")])
+            counts = {"wanted": 1, "ok": 0, "failed": 0, "skipped_no_key": 1}
+            with mock.patch.object(hydrate_merged, "hydrate_profiles", return_value=counts):
+                payload = hydrate_merged.HydrateMergedProfiles(people_csv=people, cache_dir=Path(td)).run()
+        self.assertEqual((payload["status"], payload["unreachable"]), ("failed", 1))
 
     def test_nothing_missing_fetches_nothing(self):
         with tempfile.TemporaryDirectory() as td:

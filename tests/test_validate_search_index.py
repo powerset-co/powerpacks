@@ -155,9 +155,11 @@ class WorkHistoryReachesTheIndexTest(unittest.TestCase):
             people = Path(tmp) / "people.csv"
             blank = {column: "" for column in PEOPLE_SCHEMA_COLUMNS}
             CsvIO.write_dict_rows(people, PEOPLE_SCHEMA_COLUMNS, [
-                {**blank, "id": "p-jordan", "work_experiences": '[{"title": "Founder"}]'},
-                {**blank, "id": "p-casey", "work_experiences": '[{"title": "Engineer"}]'},
+                {**blank, "id": "p-jordan", "public_identifier": "jordan-bravo", "work_experiences": '[{"title": "Founder"}]'},
+                {**blank, "id": "p-casey", "public_identifier": "casey-delta", "work_experiences": '[{"title": "Engineer"}]'},
                 {**blank, "id": "p-riley", "work_experiences": "[]"},
+                # No LinkedIn: the index re-derives this id, so it is not checked here.
+                {**blank, "id": "candidate:email:morgan@example.com", "work_experiences": '[{"title": "CFO"}]'},
             ])
             return vsi.validate(db, people_csv=people)
 

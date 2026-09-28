@@ -77,9 +77,12 @@ def row_count(con: duckdb.DuckDBPyConnection, table: str) -> int:
 
 
 def people_missing_positions(con: duckdb.DuckDBPyConnection, people_csv: Path) -> tuple[int, int]:
-    """(people with work history in the CSV, of those with no position rows)."""
+    """(LinkedIn people with work history in the CSV, of those with no position rows).
+
+    A LinkedIn person's merged id is the index's id; a contact-only id is
+    re-derived by the index, so those people are not checked here."""
     with_history = [row["id"] for row in CsvIO.read_dict_rows(people_csv)
-                    if json.loads(row["work_experiences"] or "[]")]
+                    if row["public_identifier"] and json.loads(row["work_experiences"] or "[]")]
     if not with_history:
         return 0, 0
     indexed = {r[0] for r in con.execute(

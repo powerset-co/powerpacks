@@ -34,7 +34,9 @@ Changelog:
   2026-09-28 (profiles): a slugged person's empty profile columns are filled from
     its cached profile. Contacts resolved from Gmail/messages carried only contact
     fields, so their work history never reached the index or the cloud. The
-    manifest counts `profiles_filled` and `profiles_missing`.
+    manifest counts LinkedIn people who gained work history (`profiles_filled`)
+    and those still without it (`profiles_missing`). A retargeted row drops the
+    old identity's profile columns.
   2026-09-23 (typed rows): source rows enter the stage as `PeopleRow` and directory
     rows as `DirectoryRow` — `group_key`, `merge_group`, and `directory_slug_for`
     take typed rows instead of dicts, and the directory lookups build
@@ -280,27 +282,25 @@ def merge_group(key: str, members: list[PeopleRow]) -> dict[str, str]:
     return merged
 
 
-def fill_from_profile(row: dict[str, str], cache_dir: Path) -> bool | None:
-    """Fill the empty profile columns of a LinkedIn person with no work history
-    from its cached profile.
+def has_work_history(row: dict[str, str]) -> bool:
+    return row["work_experiences"] not in ("", "[]")
 
-    True when a usable profile was applied, False when the slug has none cached,
-    None for a row with no slug or with work history (the LinkedIn import already
-    carries the profile). A source's own value is never replaced."""
+
+def fill_from_profile(row: dict[str, str], cache_dir: Path) -> None:
+    """Fill the empty profile columns of a LinkedIn person with no work history
+    from its cached profile. A source's own value is never replaced; people from
+    the LinkedIn import already carry their profile."""
     slug = row["public_identifier"]
-    if not slug or row["work_experiences"] not in ("", "[]"):
-        return None
+    if not slug or has_work_history(row):
+        return
     cached = read_usable_cached_profile(profile_cache_path(cache_dir, slug))
     profile = normalize_rapidapi(cached["raw_response"], slug, row["linkedin_url"]) if cached else {}
-    if not profile:
-        return False
-    for column in PROFILE_COLUMNS:
+    for column in PROFILE_COLUMNS if profile else ():
         value = profile[column]
         if isinstance(value, list):
             value = json.dumps(value, ensure_ascii=False) if value else ""
         if value and row[column] in ("", "[]"):
             row[column] = value
-    return True
 
 
 class MergePeopleInput(BaseModel):
@@ -429,6 +429,10 @@ class PeopleMerge(Node):
             for row in rows:
                 reviewed_slug = directory_slug_for(row, review_emails, review_phones)
                 if reviewed_slug and row.public_identifier != reviewed_slug:
+                    # A retarget: the old identity's profile is not this person's.
+                    if row.public_identifier:
+                        for column in PROFILE_COLUMNS:
+                            setattr(row, column, "")
                     row.public_identifier = reviewed_slug
                     row.linkedin_url = f"https://www.linkedin.com/in/{reviewed_slug}"
                     stamped += 1
@@ -447,10 +451,14 @@ class PeopleMerge(Node):
             return self._payload(
                 status="not_ready", reason="missing_import_people_csvs", started_at=started_at,
                 input_rows=input_rows, rows=0, stamped=stamped, unkeyable=unkeyable, groups={},
-                profiles={},
+                profiles={"filled": 0, "missing": 0},
             )
         merged = [merge_group(key, groups[key]) for key in sorted(groups)]
-        profiles = {row["id"]: fill_from_profile(row, self.profile_cache_dir) for row in merged}
+        needed = [row for row in merged if row["public_identifier"] and not has_work_history(row)]
+        for row in needed:
+            fill_from_profile(row, self.profile_cache_dir)
+        profiles = {"filled": sum(1 for row in needed if has_work_history(row)),
+                    "missing": sum(1 for row in needed if not has_work_history(row))}
         self.output_dir.mkdir(parents=True, exist_ok=True)
         CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, merged)
         progress(f"merged {sum(input_rows.values())} source rows into {len(merged)} people")
@@ -471,7 +479,7 @@ class PeopleMerge(Node):
         stamped: int,
         unkeyable: int,
         groups: dict[str, list[PeopleRow]],
-        profiles: dict[str, bool | None],
+        profiles: dict[str, int],
     ) -> MergePeopleManifest:
         """This stage's typed manifest payload (the Node template writes it)."""
         sizes: dict[str, int] = {}
@@ -493,8 +501,8 @@ class PeopleMerge(Node):
                 candidate_ids=sum(1 for key in groups if key.startswith(CANDIDATE_KEY_PREFIX)),
                 directory_stamped=stamped,
                 dropped_unkeyable=unkeyable,
-                profiles_filled=sum(1 for applied in profiles.values() if applied is True),
-                profiles_missing=sum(1 for applied in profiles.values() if applied is False),
+                profiles_filled=profiles["filled"],
+                profiles_missing=profiles["missing"],
                 groups_by_size=sizes,
             ),
             started_at=started_at,
