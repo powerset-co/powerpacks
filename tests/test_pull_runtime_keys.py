@@ -50,6 +50,8 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertEqual(result["typesafe_api_key"], "preserved")
             self.assertEqual([call.args[1] for call in fetch.call_args_list], [
                 "/v2/integrations/powerset-api/key",
+                "/v2/integrations/turbopuffer/key",
+                "/v2/integrations/powerpacks/database-url",
             ])
 
     def test_update_rejects_empty_or_non_string_typesafe_response(self):
@@ -100,6 +102,38 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertEqual(stage._read_env_file(env)["TYPESAFE_API_KEY"], "typesafe-test")
             self.assertEqual(result["powerset_api_key_refresh"], "not_provisioned")
             self.assertEqual(result["typesafe_api_key"], "installed")
+
+    def test_update_installs_the_shared_search_and_upload_credentials(self):
+        # The API is the source of truth: a stale value is replaced, a missing one filled,
+        # and an unprovisioned route leaves the line alone.
+        def fake_fetch(_base, path, _token, timeout=30):
+            if path.endswith("/turbopuffer/key"):
+                return "ok", {"turbopuffer_api_key": "tp-shared"}
+            if path.endswith("/powerpacks/database-url"):
+                return "ok", {"database_url": "postgresql://shared@db.example.test/app"}
+            return "not_provisioned", None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("TYPESAFE_API_KEY=kept\nDATABASE_URL=postgresql://stale@old.example.test/app\n")
+            with mock.patch.object(stage, "bearer_token", return_value="tok"), \
+                 mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
+                result = stage.refresh_update_keys(env)
+            values = stage._read_env_file(env)
+            self.assertEqual(values["TURBOPUFFER_API_KEY"], "tp-shared")
+            self.assertEqual(values["DATABASE_URL"], "postgresql://shared@db.example.test/app")
+            self.assertEqual(values["TYPESAFE_API_KEY"], "kept")
+            self.assertEqual(result["turbopuffer_api_key"], "refreshed")
+            self.assertEqual(result["database_url"], "refreshed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("DATABASE_URL=postgresql://mine@db.example.test/app\n")
+            with mock.patch.object(stage, "bearer_token", return_value="tok"), \
+                 mock.patch.object(stage, "fetch_endpoint", return_value=("not_provisioned", None)):
+                result = stage.refresh_update_keys(env)
+            self.assertEqual(stage._read_env_file(env)["DATABASE_URL"], "postgresql://mine@db.example.test/app")
+            self.assertEqual(result["database_url"], "not_provisioned")
 
     def test_refresh_cross_encoder_updates_only_gateway_key_and_defaults_ce_on(self):
         for preference in (None, "0", "1"):

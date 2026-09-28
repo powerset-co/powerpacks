@@ -11,6 +11,8 @@ user's Auth0 bearer:
     GET {API}/v2/integrations/parallel/key -> {"parallel_api_key"}
     GET {API}/v2/integrations/powerset-api/key -> {"powerset_api_key"}
     GET {API}/v2/integrations/typesafe/key -> {"typesafe_api_key"}
+    GET {API}/v2/integrations/turbopuffer/key -> {"turbopuffer_api_key"}
+    GET {API}/v2/integrations/powerpacks/database-url -> {"database_url"}
 
 Endpoints are read-only and never mint: a 404/403 means "not provisioned for
 this user" (an admin provisions out of band). Pulled values are written to
@@ -51,8 +53,14 @@ KEY_SOURCES: dict[str, tuple[str, str]] = {
     "PARALLEL_API_KEY": ("/v2/integrations/parallel/key", "parallel_api_key"),
     "POWERSET_API_KEY": ("/v2/integrations/powerset-api/key", "powerset_api_key"),
     "TYPESAFE_API_KEY": ("/v2/integrations/typesafe/key", "typesafe_api_key"),
+    "TURBOPUFFER_API_KEY": ("/v2/integrations/turbopuffer/key", "turbopuffer_api_key"),
+    "DATABASE_URL": ("/v2/integrations/powerpacks/database-url", "database_url"),
 }
 ALLOWED_KEYS = set(KEY_SOURCES)
+
+# The search and People-upload credentials every install shares: the API holds
+# the current value, so an update replaces what .env has.
+SHARED_KEYS = ("TURBOPUFFER_API_KEY", "DATABASE_URL")
 
 
 def emit(payload: dict) -> None:
@@ -211,7 +219,7 @@ def refresh_cross_encoder(env_path: Path, token: str | None = None) -> dict[str,
 
 
 def refresh_update_keys(env_path: Path) -> dict[str, str]:
-    """Refresh CE and fill a missing TypeSafe key during update with one login."""
+    """Refresh CE and the shared credentials, and fill a missing TypeSafe key, with one login."""
     current = _read_env_file(env_path)
     existing_typesafe = bool(current.get("TYPESAFE_API_KEY", "").strip())
     preference = current.get("POWERPACKS_CROSS_ENCODER_BETA")
@@ -219,6 +227,7 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
         "powerset_api_key_refresh": "not_signed_in",
         "cross_encoder": "enabled" if preference == "1" else "disabled",
         "typesafe_api_key": "preserved" if existing_typesafe else "not_signed_in",
+        **{key.lower(): "not_signed_in" for key in SHARED_KEYS},
     }
     try:
         token = bearer_token(env_path)
@@ -226,6 +235,8 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
         return result
 
     result.update(refresh_cross_encoder(env_path, token=token))
+    for key in SHARED_KEYS:
+        result[key.lower()] = _refresh_shared_key(env_path, key, token)
     if existing_typesafe:
         return result
     path, field = KEY_SOURCES["TYPESAFE_API_KEY"]
@@ -237,6 +248,16 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
     write_env(env_path, {"TYPESAFE_API_KEY": key})
     result["typesafe_api_key"] = "installed"
     return result
+
+
+def _refresh_shared_key(env_path: Path, key: str, token: str) -> str:
+    path, field = KEY_SOURCES[key]
+    state, payload = fetch_endpoint(api_base(env_path), path, token)
+    value = payload.get(field) if state == "ok" and isinstance(payload, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return "error" if state == "ok" else state
+    write_env(env_path, {key: value})
+    return "refreshed"
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -259,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     default_env = str(REPO / ".env")
-    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, TypeSafe, and Powerset API keys into .env")
+    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, TypeSafe, Powerset API, TurboPuffer and database keys into .env")
     pull.add_argument("--env-file", default=default_env)
     pull.set_defaults(func=cmd_pull)
     check = sub.add_parser("check", help="report which runtime keys are present in .env")
