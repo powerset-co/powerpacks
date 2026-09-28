@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.7...powerpacks-v3.5.0) (2026-09-28)
+
+
+### Features
+
+* filter team similarity by JD department ([#599](https://github.com/powerset-co/powerpacks/issues/599)) ([0f021df](https://github.com/powerset-co/powerpacks/commit/0f021df29878bd3537430912cecdc25d43fcf15c))
+
 ## [3.4.7](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.6...powerpacks-v3.4.7) (2026-09-28)
 
 
