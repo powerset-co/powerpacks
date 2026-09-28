@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.2...powerpacks-v3.4.3) (2026-09-28)
+
+
+### Bug Fixes
+
+* **upload:** count people new to the cloud as new after a failed run ([#587](https://github.com/powerset-co/powerpacks/issues/587)) ([aca1ba8](https://github.com/powerset-co/powerpacks/commit/aca1ba8b7607fbbbfd5e2b4d967df1bf025a86d6))
+
 ## [3.4.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.1...powerpacks-v3.4.2) (2026-09-28)
 
 
