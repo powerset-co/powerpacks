@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
+import re
+from typing import Any, Mapping
 
 from powerpacks_contracts import TURBOPUFFER_NAMESPACES
 import search_common as _search_common
@@ -59,13 +60,17 @@ def ensure_packages() -> None:
         raise RuntimeError("Missing required package: turbopuffer. Run bin/setup-python.")
 
 
-def namespace_name(logical_name: str = "people") -> str:
+def namespace_name(logical_name: str = "people", *, config: Mapping[str, str] | None = None) -> str:
+    config = os.environ if config is None else config
     env_key = f"POWERPACKS_TURBOPUFFER_{logical_name.upper()}_NAMESPACE"
-    configured = os.getenv(env_key)
+    configured = config.get(env_key)
     if configured:
         return configured
-    base = TURBOPUFFER_NAMESPACES[logical_name]
-    env = os.getenv("ALEPH_ENV", "").strip().lower()
+    version = config.get("ALEPH_INDEX_VERSION", "v1").strip().lower()
+    if not re.fullmatch(r"v[1-9][0-9]*", version):
+        raise ValueError(f"Invalid ALEPH_INDEX_VERSION: {version!r}")
+    base = TURBOPUFFER_NAMESPACES[logical_name].removesuffix("_v1") + f"_{version}"
+    env = config.get("ALEPH_ENV", "").strip().lower()
     if not env or env == "prod":
         return base
     if env == "staging":

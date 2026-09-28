@@ -1,0 +1,46 @@
+/* people.css .facet: head with chevron and active dot; the values fold in a shared Fold. */
+.facet {
+  margin-bottom: 4px;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 8px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-s);
+  transition: color var(--t-fast) var(--ease-out);
+}
+.head:hover {
+  color: var(--foreground);
+}
+/* index.css .chevron, pushed to the end. */
+.head::after {
+  margin-left: auto;
+  opacity: 0.7;
+}
+/* The active dot scales and fades in and out. */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
+}
+.dot[data-active="true"] {
+  opacity: 1;
+  transform: none;
+}

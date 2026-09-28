@@ -1,0 +1,37 @@
+/* people.css .grid-head sort button: the header's own type, a colour change on hover and when
+   sorted, and a fading arrow. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+.button:hover,
+.header:not([aria-sort="none"]) .button {
+  color: var(--foreground);
+}
+/* Unsorted the arrow is a zero-width glyph whose negative margin cancels the button's gap, so
+   the label sits exactly where it would without an arrow. */
+.button::after {
+  content: "↑";
+  width: 0;
+  margin-left: -4px;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+.header:not([aria-sort="none"]) .button::after {
+  width: auto;
+  margin-left: 0;
+  opacity: 1;
+}
+.header[aria-sort="descending"] .button::after {
+  content: "↓";
+}

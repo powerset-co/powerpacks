@@ -354,6 +354,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(results["pending_query"], results["frozen_initial_queries"][0])
         self.assertNotIn("candidate_populations", results)
         self.assertNotIn("network_floors", results)
+        self.assertEqual(results["search_version"], search_harness.SEARCH_VERSION)
         self.assertEqual(manifest, {
             "cost_usd": 0.0, "gt_recall": None, "jd_id": run_dir.name, "ponds_run": 0,
             "rapidapi": {"billing_basis": "unit_price_not_configured", "cache_hits": 0,
@@ -362,6 +363,9 @@ class SearchHarnessTests(unittest.TestCase):
             "results": str(run_dir / "results.json"),
             "shortlist_csv": None, "relationship_csv": None,
             "schema_version": "search-harness.manifest.v1", "status": "ready_to_compile",
+            "search_version": search_harness.SEARCH_VERSION, "candidates": 0,
+            "title": results["title"], "company": results["company"],
+            "created_at": results["created_at"], "updated_at": results["updated_at"],
         })
 
     def test_compile_uses_native_expansion_traits_without_evaluation_overrides(self) -> None:

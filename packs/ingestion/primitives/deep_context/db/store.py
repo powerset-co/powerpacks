@@ -597,6 +597,20 @@ class Db:
         with self.transaction() as conn:
             conn.execute(UPSERTS["person_tags"], asdict(row))
 
+    def decide_share(
+        self,
+        tags: tuple[PersonTagRow, ...],
+        decisions: tuple[ShareDecisionRow, ...],
+    ) -> None:
+        """One human share decision: the tag rows and the share rows they
+        re-decide, committed together. The share node still rewrites the whole
+        table; this keeps it current between runs so the upload never reads a
+        tag the decision does not yet reflect.
+        """
+        with self.transaction() as conn:
+            conn.executemany(UPSERTS["person_tags"], [asdict(row) for row in tags])
+            conn.executemany(UPSERTS["share"], [asdict(row) for row in decisions])
+
     def reset_review(self, *, apply: bool = True) -> ResetReviewCounts:
         """Clear human review state atomically while preserving every machine artifact."""
         with self.transaction() as conn:

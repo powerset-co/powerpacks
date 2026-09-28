@@ -1,7 +1,84 @@
 const toast = document.querySelector(".toast");
+// "" when the viewer serves itself, "/searches" when the review server mounts it.
+const BASE = document.body.dataset.base || "";
 const readOnly = document.documentElement.dataset.readonly === "true";
 const hostedFeedback = document.documentElement.dataset.hostedFeedback === "true";
 const hostedRequests = new Map();
+const LABELS_KEY = "powerpacks:search-labels";
+// The hosted snapshot's sandboxed iframe (no allow-same-origin) throws on any Storage access.
+const sessionStore = (() => { try { return window.sessionStorage; } catch { return null; } })();
+let showLabels = sessionStore?.getItem(LABELS_KEY) !== "hidden";
+const virtualTableModule = readOnly ? Promise.resolve(null) : import(`${BASE}/assets/virtual-table.js`);
+
+function candidateRows(root) {
+  return root._candidateRows || [...root.querySelectorAll(".candidate-row[data-person-id]")];
+}
+
+async function virtualizeResults(body) {
+  const module = await virtualTableModule;
+  if (!module) { watchLazyRows(body); return; }
+  body._candidateRows = candidateRows(body);
+  body.querySelectorAll("[data-pond-panel]").forEach((panel) => {
+    panel._candidateRows = candidateRows(panel);
+    panel.querySelectorAll("[data-results-table]").forEach((table) => {
+      table._candidateRows = candidateRows(table);
+      table._candidateRows.forEach((row) => { row.hidden = false; row.removeAttribute("data-lazy"); });
+      const viewport = document.createElement("div");
+      viewport.className = "results-viewport";
+      viewport.tabIndex = 0;
+      viewport.setAttribute("aria-label", "Search results");
+      table.before(viewport);
+      viewport.append(table);
+      table._virtual = new module.VirtualTable({
+        viewport, content: table.tBodies[0], estimateSize: () => 164,
+        getKey: (row) => row.dataset.personId, createRow: (row) => row, measure: true,
+      });
+    });
+  });
+}
+
+
+document.addEventListener("toggle", async (event) => {
+  const section = event.target;
+  if (!section.matches("[data-team-table]") || !section.open) return;
+  const module = await virtualTableModule;
+  if (!module || section._virtual) return;
+  const viewport = section.querySelector(".team-table-scroll");
+  const table = viewport.querySelector("table");
+  const rows = [...table.querySelectorAll("[data-team-row]")];
+  rows.forEach((row, index) => { row.hidden = false; row.dataset.teamRow = index; });
+  viewport.classList.add("team-viewport");
+  viewport.tabIndex = 0;
+  viewport.setAttribute("aria-label", "Company employees");
+  section.querySelector(".team-pagination").hidden = true;
+  section._virtual = new module.VirtualTable({
+    viewport, content: table.tBodies[0], estimateSize: () => 48,
+    getKey: (row) => row.dataset.teamRow, createRow: (row) => row, measure: true,
+  });
+  section._virtual.setItems(rows, { animate: true });
+}, true);
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-team-page]");
+  if (!button) return;
+  const table = button.closest("[data-team-table]");
+  const rows = [...table.querySelectorAll("[data-team-row]")];
+  const page = Math.max(0, Math.min(Math.ceil(rows.length / 10) - 1,
+    Number(table.dataset.page || 0) + Number(button.dataset.teamPage)));
+  table.dataset.page = String(page);
+  rows.forEach((row, index) => {
+    row.hidden = index < page * 10 || index >= (page + 1) * 10;
+    if (!row.hidden && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      row.getAnimations().forEach((animation) => animation.cancel());
+      row.animate([{ opacity: 0, translate: "0 6px" }, { opacity: 1, translate: "0 0" }],
+        { duration: 200, easing: "cubic-bezier(.2,0,0,1)" });
+    }
+  });
+  table.querySelector("[data-team-range]").textContent =
+    `${page * 10 + 1}–${Math.min((page + 1) * 10, rows.length)} of ${rows.length}`;
+  table.querySelector('[data-team-page="-1"]').disabled = page === 0;
+  table.querySelector('[data-team-page="1"]').disabled = (page + 1) * 10 >= rows.length;
+});
 
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-team-page]");
@@ -56,7 +133,7 @@ function announce(message, isError = false) {
 
 async function post(path, values) {
   if (readOnly) throw new Error("This is a read-only snapshot");
-  const response = await fetch(path, {
+  const response = await fetch(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
@@ -98,13 +175,14 @@ function queuedFeedback() {
 function paintFeedback(values) {
   if (!values.person_id) return;
   const { score } = JSON.parse(values.human_judgment);
-  document.querySelectorAll(
-    `[data-feedback-run="${CSS.escape(values.run_id)}"][data-feedback-person="${CSS.escape(values.person_id)}"]`,
-  ).forEach((button) => {
+  const body = document.querySelector(`[data-search-body="${CSS.escape(values.run_id)}"]`);
+  if (!body) return;
+  candidateRows(body).filter((row) => row.dataset.personId === values.person_id).forEach((row) => {
+    const button = row.querySelector("[data-feedback-score]");
     button.dataset.feedbackScore = String(score);
     button.dataset.feedbackNote = values.comment;
     button.textContent = `Your score: ${score}/5`;
-    updateTags(button.closest("[data-search-body]"));
+    updateTags(body);
   });
 }
 
@@ -293,7 +371,7 @@ function filteredRows(body, toolbar, scoreFor = (row) => row.dataset.personOvera
   const filters = toolbar?._selectedTagFilters || new Set();
   const operators = toolbar._selectedOperators;
   const rows = new Map();
-  toolbar.closest("[data-pond-panel]").querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
+  candidateRows(toolbar.closest("[data-pond-panel]")).forEach((row) => {
     const tags = data.assignments[row.dataset.personId] || [];
     if (toolbar.dataset.tagFilter === "tagged"
         && (!tags.length || (filters.size && !tags.some((tag) => filters.has(tag))))) return;
@@ -337,7 +415,8 @@ function renderTagFilters(toolbar, tags) {
 function updateTags(body) {
   const data = readTagged(body);
   const pinTag = existingTag(data.tags, PIN_TAG);
-  body.querySelectorAll("[data-pin-person]").forEach((button) => {
+  candidateRows(body).forEach((row) => {
+    const button = row.querySelector("[data-pin-person]");
     const pinned = (data.assignments[button.dataset.pinPerson] || []).includes(pinTag);
     button.setAttribute("aria-pressed", String(pinned));
     button.setAttribute("aria-label", `${pinned ? "Unpin" : "Pin"} ${button.closest("tr").dataset.personName}`);
@@ -345,7 +424,8 @@ function updateTags(body) {
     button.disabled = readOnly && !hostedFeedback;
     button.hidden = readOnly && !hostedFeedback && !pinned;
   });
-  body.querySelectorAll("[data-tag-person]").forEach((button) => {
+  candidateRows(body).forEach((row) => {
+    const button = row.querySelector("[data-tag-person]");
     const tags = data.assignments[button.dataset.tagPerson] || [];
     const host = button.querySelector("[data-person-tags]");
     host.replaceChildren(...tags.map((tag) => {
@@ -362,7 +442,11 @@ function updateTags(body) {
   });
   body.querySelectorAll("[data-results-toolbar]").forEach((toolbar) => {
     const panel = toolbar.closest("[data-pond-panel]");
-    const available = new Set([...panel.querySelectorAll("[data-person-id]")]
+    panel.dataset.showLabels = String(showLabels);
+    const labels = toolbar.querySelector("[data-labels-toggle]");
+    labels.classList.toggle("selected", showLabels);
+    labels.setAttribute("aria-pressed", String(showLabels));
+    const available = new Set(candidateRows(panel)
       .map((row) => row.dataset.personId));
     const count = Object.entries(data.assignments)
       .filter(([id, tags]) => available.has(id) && tags.length).length;
@@ -378,13 +462,22 @@ function updateTags(body) {
     toolbar.querySelectorAll('[data-operator-id]').forEach((input) => {
       input.checked = operators.has(input.dataset.operatorId);
     });
-    const filtering = taggedOnly || scores.size > 0 || operators.size > 0;
-    panel.querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
-      const matches = selectedIds.has(row.dataset.personId);
-      if (filtering && matches) row.removeAttribute("data-lazy");
-      row.hidden = filtering ? !matches : row.hasAttribute("data-lazy");
-    });
-    panel.querySelectorAll(".lazy-sentinel").forEach((row) => { row.hidden = filtering; });
+    if (readOnly) {
+      const filtering = taggedOnly || scores.size > 0 || operators.size > 0;
+      candidateRows(panel).forEach((row) => {
+        const matches = selectedIds.has(row.dataset.personId);
+        if (filtering && matches) row.removeAttribute("data-lazy");
+        row.hidden = filtering ? !matches : row.hasAttribute("data-lazy");
+      });
+      panel.querySelectorAll(".lazy-sentinel").forEach((row) => { row.hidden = filtering; });
+    } else {
+      panel.querySelectorAll("[data-results-table]").forEach((table) => {
+        const rows = table._candidateRows.filter((row) => selectedIds.has(row.dataset.personId));
+        const changed = rows.length !== table._virtual.items.length
+          || rows.some((row, index) => row !== table._virtual.items[index]);
+        table._virtual.setItems(rows, { animate: changed, reset: changed });
+      });
+    }
     toolbar.querySelectorAll("[data-tagged-count]").forEach((node) => { node.textContent = count; });
     toolbar.querySelector("[data-result-filter='tagged']").hidden = !count;
     renderTagFilters(toolbar, data.tags);
@@ -591,22 +684,22 @@ async function loadSearchDetails(body) {
       button.disabled = true;
       button.removeAttribute("title");
     });
-    watchLazyRows(body);
+    await virtualizeResults(body);
     updateTags(body);
     return;
   }
   body.dataset.loading = "true";
   try {
-    const response = await fetch(`/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
+    const response = await fetch(`${BASE}/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
     if (!response.ok) throw new Error((await response.text()) || "Could not load results");
-    const tagsResponse = await fetch(`/tags?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
+    const tagsResponse = await fetch(`${BASE}/tags?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
     if (!tagsResponse.ok) throw new Error((await tagsResponse.text()) || "Could not load tags");
     const { tagged } = await tagsResponse.json();
     body.tagged = tagged ?? readTagged(body);
     if (tagged === null && body.tagged.tags.length) await writeTagged(body, body.tagged);
     body.innerHTML = await response.text();
     body.dataset.loaded = "true";
-    watchLazyRows(body);
+    await virtualizeResults(body);
     updateTags(body);
     pendingFeedback.forEach(paintFeedback);
     if (queuedFeedback().length) void flushFeedback();
@@ -794,6 +887,13 @@ document.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const body = event.target.closest(".search-body");
   if (!body) return;
+  const labels = event.target.closest("[data-labels-toggle]");
+  if (labels) {
+    showLabels = !showLabels;
+    sessionStore?.setItem(LABELS_KEY, showLabels ? "shown" : "hidden");
+    updateTags(body);
+    return;
+  }
   const pin = event.target.closest("[data-pin-person]");
   if (pin) {
     if (readOnly && !hostedFeedback) return;
@@ -858,7 +958,7 @@ document.addEventListener("click", (event) => {
   }
   if (event.target.closest("[data-untag-all]")) {
     const data = readTagged(body);
-    toolbar.closest("[data-pond-panel]").querySelectorAll(".candidate-row:not([hidden])").forEach((row) => {
+    filteredRows(body, toolbar).forEach((row) => {
       delete data.assignments[row.dataset.personId];
     });
     writeTagged(body, data);
@@ -997,3 +1097,97 @@ document.addEventListener("click", (event) => {
     setTimeout(() => { copy.textContent = prior; }, 900);
   });
 }, true);
+
+// Catalog page: filter rows by version, company, status and text; arrow keys move, Enter opens.
+const catalog = document.querySelector("[data-catalog]");
+if (catalog) {
+  const rows = [...catalog.querySelectorAll(".catalog-row")];
+  const versionChips = [...catalog.querySelectorAll("[data-filter='version']")];
+  const selects = [...catalog.querySelectorAll("select[data-filter]")];
+  const text = catalog.querySelector("[data-filter-text]");
+  const count = catalog.querySelector("[data-catalog-count]");
+  const empty = catalog.querySelector("[data-catalog-empty]");
+  const CATALOG_KEY = "powerpacks:catalog-filters:v2";
+  const state = { version: new Set(), company: "", status: "", text: "" };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CATALOG_KEY) || "null");
+    if (saved) Object.assign(state, saved, { version: new Set(saved.version || []) });
+  } catch { /* fresh */ }
+  selects.forEach((select) => { select.value = state[select.dataset.filter] || ""; });
+  text.value = state.text;
+
+  function apply() {
+    const needle = state.text.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach((row) => {
+      const matches = (!state.version.size || state.version.has(row.dataset.version))
+        && (!state.company || row.dataset.company === state.company)
+        && (!state.status || row.dataset.status === state.status)
+        && (!needle || row.dataset.search.includes(needle));
+      row.hidden = !matches;
+      if (matches) {
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          row.getAnimations().forEach((animation) => animation.cancel());
+          row.animate([{ opacity: 0, translate: "0 6px" }, { opacity: 1, translate: "0 0" }],
+            { duration: 200, delay: Math.min(shown * 20, 100), fill: "backwards", easing: "ease-out" });
+        }
+        shown += 1;
+      }
+    });
+    versionChips.forEach((chip) => chip.setAttribute("aria-pressed", String(state.version.has(chip.dataset.value))));
+    count.textContent = `${shown} of ${rows.length} searches`;
+    empty.hidden = shown > 0;
+    sessionStorage.setItem(CATALOG_KEY, JSON.stringify({ ...state, version: [...state.version] }));
+  }
+
+  versionChips.forEach((chip) => chip.addEventListener("click", () => {
+    if (state.version.has(chip.dataset.value)) state.version.delete(chip.dataset.value);
+    else state.version.add(chip.dataset.value);
+    apply();
+  }));
+  selects.forEach((select) => select.addEventListener("change", () => {
+    state[select.dataset.filter] = select.value;
+    apply();
+  }));
+  text.addEventListener("input", () => { state.text = text.value; apply(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.target.matches("input, select, textarea")) {
+      if (event.key === "Escape") event.target.blur();
+      return;
+    }
+    if (event.key === "/") { event.preventDefault(); text.focus(); return; }
+    if (!["ArrowDown", "ArrowUp", "j", "k"].includes(event.key)) return;
+    event.preventDefault();
+    const visible = rows.filter((row) => !row.hidden);
+    const index = visible.indexOf(document.activeElement);
+    const step = event.key === "ArrowDown" || event.key === "j" ? 1 : -1;
+    const next = visible[Math.min(visible.length - 1, Math.max(0, index + step))];
+    next?.focus();
+  });
+  apply();
+}
+
+// Native disclosures retain their summary semantics and keyboard activation.
+document.addEventListener("click", (event) => {
+  const summary = event.target.closest("summary");
+  if (!summary || event.target.closest("a, button, input")) return;
+  const details = summary.parentElement;
+  if (details.tagName !== "DETAILS" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  event.preventDefault();
+  const start = details.getBoundingClientRect().height;
+  const opening = details._opening === undefined ? !details.open : !details._opening;
+  details._animation?.cancel();
+  details._opening = opening;
+  details.open = true;
+  details.style.height = "";
+  const end = opening ? details.getBoundingClientRect().height : summary.getBoundingClientRect().height;
+  details.style.overflow = "hidden";
+  details._animation = details.animate({ height: [`${start}px`, `${end}px`] },
+    { duration: 220, easing: "cubic-bezier(.2,0,0,1)" });
+  details._animation.onfinish = () => {
+    details.open = opening;
+    details.style.overflow = "";
+    delete details._opening;
+    delete details._animation;
+  };
+});

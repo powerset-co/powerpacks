@@ -1,0 +1,125 @@
+// The results toolbar's filter over a table's rows (results.js filteredRows): tagged only
+// (and which tags), overall score, operators, plus the labels toggle and the count.
+
+import { readStored, writeStored } from "@/lib/storage"
+import type { Tagged } from "@/types/searches"
+
+import type { ResultRow } from "./ranking"
+
+const LABELS_KEY = "powerpacks:search-labels"
+
+export const SCORES = [1, 2, 3, 4, 5] as const
+export type Score = (typeof SCORES)[number]
+
+/** The score a filter compares: the model's overall for the table, the person's own for export. */
+export type ScoreOf = (row: ResultRow) => number | null
+
+const modelScore: ScoreOf = (row) => row.overall
+
+export interface ResultFilters {
+  taggedOnly: boolean
+  // Within tagged only: people holding any of these tags; empty means any tag.
+  tags: ReadonlySet<string>
+  scores: ReadonlySet<Score>
+  operators: ReadonlySet<string>
+  labels: boolean
+}
+
+export const NO_FILTERS: ResultFilters = {
+  taggedOnly: false,
+  tags: new Set(),
+  scores: new Set(),
+  operators: new Set(),
+  labels: true,
+}
+
+export interface OperatorOption {
+  id: string
+  name: string
+}
+
+function operatorsOf(row: ResultRow) {
+  return row.candidate?.network_attribution?.operators ?? []
+}
+
+function tagsOf(tagged: Tagged, row: ResultRow): readonly string[] {
+  return tagged.assignments[row.row.person_id] ?? []
+}
+
+/** People in `rows` holding at least one tag. */
+export function taggedCount(rows: readonly ResultRow[], tagged: Tagged): number {
+  return new Set(rows.filter((row) => tagsOf(tagged, row).length).map((row) => row.row.person_id)).size
+}
+
+/** The filters as they apply: tagged only lapses when nobody is tagged, and tag filters
+ *  drop tags the search no longer has. */
+export function liveFilters(
+  filters: ResultFilters,
+  rows: readonly ResultRow[],
+  tagged: Tagged,
+): ResultFilters {
+  const tags = new Set([...filters.tags].filter((tag) => tagged.tags.includes(tag)))
+  return { ...filters, taggedOnly: filters.taggedOnly && taggedCount(rows, tagged) > 0, tags }
+}
+
+function matches(row: ResultRow, filters: ResultFilters, tagged: Tagged, scoreOf: ScoreOf): boolean {
+  const tags = tagsOf(tagged, row)
+  const score = scoreOf(row)
+  const tagOk =
+    !filters.taggedOnly ||
+    (tags.length > 0 && (!filters.tags.size || tags.some((tag) => filters.tags.has(tag))))
+  const scoreOk = !filters.scores.size || SCORES.some((held) => held === score && filters.scores.has(held))
+  const operatorOk =
+    !filters.operators.size ||
+    operatorsOf(row).some((operator) => filters.operators.has(operator.operator_id))
+  return tagOk && scoreOk && operatorOk
+}
+
+/** Every row the filters keep, in order; a person ranked in two sections can stay in both. */
+export function keptRows<R extends ResultRow>(
+  rows: readonly R[],
+  filters: ResultFilters,
+  tagged: Tagged,
+  scoreOf: ScoreOf = modelScore,
+): R[] {
+  const live = liveFilters(filters, rows, tagged)
+  return rows.filter((row) => matches(row, live, tagged, scoreOf))
+}
+
+/**
+ * The people the filters keep, one row each (the first: the run view ranks best first): the
+ * count, Untag all and export. The table filters on the model's overall; export passes the
+ * person's own score, so it decides what leaves the page without moving the table.
+ */
+export function filterRows<R extends ResultRow>(
+  rows: readonly R[],
+  filters: ResultFilters,
+  tagged: Tagged,
+  scoreOf: ScoreOf = modelScore,
+): R[] {
+  const kept = new Map<string, R>()
+  for (const row of keptRows(rows, filters, tagged, scoreOf)) {
+    if (!kept.has(row.row.person_id)) kept.set(row.row.person_id, row)
+  }
+  return [...kept.values()]
+}
+
+/** Everyone connected to someone in `rows`, by name (rendering.py _results_toolbar). */
+export function operatorOptions(rows: readonly ResultRow[]): OperatorOption[] {
+  const byId = new Map<string, string>()
+  for (const row of rows) {
+    for (const operator of operatorsOf(row)) byId.set(operator.operator_id, operator.operator_name)
+  }
+  return [...byId]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+}
+
+/** Whether labels (Taste, Suggested pin, Team similarity) show; per tab, like results.js. */
+export function labelsShown(): boolean {
+  return readStored("session", LABELS_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? true
+}
+
+export function saveLabels(shown: boolean): void {
+  writeStored("session", LABELS_KEY, shown)
+}

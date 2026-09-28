@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -76,6 +77,7 @@ from packs.search.primitives.deep_search.candidate_judges import (
 )
 from packs.search.primitives.deep_search.person_attribution import HydratePersonAttribution
 from packs.search.primitives.deep_search import pin_confidence, team_similarity
+from packs.search.primitives.deep_search.results_web.model import index_search, load_catalog
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
@@ -239,12 +241,23 @@ def _usage_cost(path: Path) -> float:
                      for line in path.read_text(encoding="utf-8").splitlines() if line.strip()), 6)
 
 
+# The installed release is stamped once; resuming a run keeps its original version.
+SEARCH_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+
+
 def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
+    """The run's manifest: status, cost and the cells the viewer lists it by."""
     iterations = list(results.get("iterations") or [])
     summary = results.get("summary") or {}
     return {
         "schema_version": "search-harness.manifest.v1", "status": results["status"],
         "jd_id": results["jd_id"],
+        "search_version": results.get("search_version"),
+        "title": str(results.get("title") or ""),
+        "company": str(results.get("company") or ""),
+        "created_at": str(results.get("created_at") or ""),
+        "updated_at": str(results.get("updated_at") or ""),
+        "candidates": int(summary.get("deduped_candidate_count") or 0),
         "ponds_run": max((int(row.get("pond_n") or 0) for row in iterations), default=0),
         "gt_recall": None, "cost_usd": _usage_cost(run_dir / "usage.jsonl"),
         "rapidapi": deepcopy(results.get("rapidapi") or {}),
@@ -252,6 +265,29 @@ def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
         "shortlist_csv": summary.get("shortlist_csv"),
         "relationship_csv": summary.get("relationship_csv"),
     }
+
+
+def backfill_manifests(root: Path) -> list[str]:
+    """Give manifests written before the display cells existed their title,
+    company, dates and candidate count, read from the saved results. The old
+    manifest is kept as `.bkup-<UTC>`; the results file and the absent
+    `search_version` stay untouched. Returns the run ids written."""
+    written: list[str] = []
+    for manifest_path in sorted(root.glob("*/manifest.json")):
+        manifest = _read_json(manifest_path)
+        if not isinstance(manifest, dict) or "title" in manifest:
+            continue
+        results_path = manifest_path.parent / "results.json"
+        if not results_path.is_file():
+            continue
+        results = _read_json(results_path)
+        if not isinstance(results, dict) or "status" not in results or "jd_id" not in results:
+            continue
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        manifest_path.rename(manifest_path.with_name(f"manifest.json.bkup-{stamp}"))
+        _write_json(manifest_path, _manifest(results, manifest_path.parent))
+        written.append(manifest_path.parent.name)
+    return written
 
 
 def _candidate_key(candidate: Mapping[str, Any]) -> str:
@@ -445,7 +481,10 @@ def _save(results: dict[str, Any], run_dir: Path) -> None:
     if results.get("status") == "completed":
         results["summary"].update(export_search_summary(results["summary"], run_dir))
     _write_json(run_dir / "results.json", results)
-    _write_json(run_dir / "manifest.json", _manifest(results, run_dir))
+    manifest = _manifest(results, run_dir)
+    _write_json(run_dir / "manifest.json", manifest)
+    if any(card.run_id == run_dir.name for card in load_catalog(run_dir.parent)):
+        index_search(run_dir.parent, run_dir.name, manifest)
 
 
 def _occupation_heads(queries: Sequence[Any]) -> set[str]:
@@ -474,7 +513,7 @@ def build_initial_results(
     hiring_company = {"name": source.get("company_name"),
                       "website_url": source.get("company_website_url")}
     return {
-        "schema_version": "search-harness.v1", "created_at": _now(),
+        "schema_version": "search-harness.v1", "search_version": SEARCH_VERSION, "created_at": _now(),
         "jd_id": job_id, "company": str(hiring_company.get("name") or ""),
         "hiring_company": hiring_company,
         "title": str(source.get("source_title") or ""),
@@ -515,6 +554,7 @@ def initialize_run(*, run_dir: Path, jd_path: Path, queries_path: Path,
     results = build_initial_results(source, queries, job_id=run_dir.name)
     results.update(retrieval=retrieval, jd_sha256=jd_digest)
     _save(results, run_dir)
+    index_search(run_dir.parent, run_dir.name, _manifest(results, run_dir))
     return results_path
 
 
@@ -1899,6 +1939,9 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
+    backfill = sub.add_parser("backfill-manifests",
+                              help="write the display cells into manifests saved before they existed")
+    backfill.add_argument("--root", required=True)
     for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide",
                  "reannotate-saved", "pin-saved"):
         command = sub.add_parser(name)
@@ -1929,6 +1972,10 @@ def main() -> None:
             command.add_argument("--model", default="gpt-5.6-luna")
             command.add_argument("--reasoning-effort", default="medium")
     args = parser.parse_args()
+    if args.command == "backfill-manifests":
+        written = backfill_manifests(Path(args.root).resolve())
+        print(json.dumps({"status": "completed", "written": written}, indent=2))
+        return
     run_dir = Path(args.run_dir).resolve()
     if args.command == "set-query":
         path = update_pending_query(run_dir=run_dir, query=args.query)

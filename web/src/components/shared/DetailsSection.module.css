@@ -1,0 +1,36 @@
+/* people.css details.dsec: a toggle (title, count, badge, chevron) over its folding body. */
+.heading {
+  margin: 0;
+  font: inherit;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+.title small {
+  margin-left: 4px;
+  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.title + * {
+  margin-left: 2px;
+}
+.toggle:hover .title {
+  color: var(--foreground);
+}
+.title {
+  transition: color var(--t-fast) var(--ease-out);
+}
+/* The gap under the toggle folds with the body; its children flow as blocks. */
+.body {
+  padding-top: 8px;
+}

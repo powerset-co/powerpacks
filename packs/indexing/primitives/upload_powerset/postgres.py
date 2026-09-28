@@ -31,6 +31,7 @@ from packs.indexing.primitives.upload_powerset.models import (
     SourceRow,
     TagRow,
 )
+from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS
 
 # operator_person_sources.operator_id is VARCHAR; contact_tags.operator_id is uuid.
 
@@ -114,8 +115,17 @@ def resolve_operator_id(cur: Any, subject: str) -> str:
     cur.execute("SELECT id::text FROM users WHERE user_id = %s", (subject,))
     row = cur.fetchone()
     if not row:
-        raise RuntimeError("no users row for the current Powerset credentials; run `$powerset login`")
+        raise RuntimeError(SAFE_ERRORS["operator"])
     return str(row[0])
+
+
+def use_v3_schema(cur: Any) -> None:
+    """Point this session at the shared schema and prove it took: the standard login works."""
+    cur.execute("SET search_path TO powerset_v2, pg_catalog")
+    cur.execute("SELECT current_schema(), current_setting('search_path')")
+    schema, search_path = cur.fetchone()
+    if schema != "powerset_v2" or search_path != "powerset_v2, pg_catalog":
+        raise RuntimeError(SAFE_ERRORS["postgres_login"])
 
 
 def fetch_cloud_ids_by_slug(cur: Any, slugs: Sequence[str]) -> dict[str, str]:
@@ -139,6 +149,15 @@ def fetch_operator_sources(cur: Any, operator_id: str) -> tuple[SourceRow, ...]:
         SourceRow(str(row[0]), str(row[1]), str(row[2] or ""), int(row[3] or 0), str(row[4] or ""))
         for row in cur.fetchall()
     )
+
+
+def fetch_operator_source_keys(cur: Any, operator_id: str) -> frozenset[tuple[str, str, str]]:
+    cur.execute("""
+        SELECT person_id::text, source_channel, source_identifier
+        FROM operator_person_sources WHERE operator_id = %s
+    """, (operator_id,))
+    return frozenset((str(person_id), str(channel), str(identifier))
+                     for person_id, channel, identifier in cur.fetchall())
 
 
 def fetch_operator_ids_by_person(cur: Any, person_ids: Sequence[str]) -> dict[str, tuple[str, ...]]:

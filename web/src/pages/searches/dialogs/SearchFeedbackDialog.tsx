@@ -1,0 +1,112 @@
+import { useRef, useState, type RefObject } from "react"
+
+import { FlagIcon } from "@/components/shared"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { buildPersonFeedback, buildSearchFeedback } from "@/lib/searches/feedback"
+import type { Candidate } from "@/types/searches"
+
+import { FeedbackFooter } from "./FeedbackFooter"
+import { NotesField } from "./NotesField"
+import { send, type FeedbackSink } from "./send"
+
+export interface SearchFeedbackDialogProps extends FeedbackSink {
+  runId: string
+  /** The dialog's context line: the search's title, or a candidate's role. */
+  title: string
+  /** Set on a candidate's flag: the note is about them, not the search. */
+  candidate?: Pick<Candidate, "person_id" | "name">
+}
+
+/** The flag button on a search (or, in the drawer, on a candidate), which opens a note on
+ *  what should change. */
+export function SearchFeedbackDialog({
+  runId,
+  title,
+  candidate,
+  submit,
+  onToast,
+}: SearchFeedbackDialogProps) {
+  const [open, setOpen] = useState(false)
+  const notes = useRef<HTMLTextAreaElement>(null)
+  const about = candidate?.name ?? title
+
+  function done(comment: string) {
+    setOpen(false)
+    const record = candidate
+      ? buildPersonFeedback(runId, candidate, comment)
+      : buildSearchFeedback(runId, comment)
+    send({ submit, onToast }, record)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        aria-label={`Send feedback about ${about}`}
+        title="Send feedback"
+        className="inline-grid min-h-8 min-w-8 cursor-pointer place-items-center rounded-full border border-border bg-secondary px-2 py-1.5 text-foreground transition-[background-color,transform] duration-fast ease-out hover:bg-line-strong active:translate-y-px"
+      >
+        <FlagIcon className="size-[13px]" />
+      </DialogTrigger>
+      <DialogContent
+        className="w-[min(448px,calc(100%-32px))] gap-5 p-6"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          notes.current?.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle className="text-lg font-semibold">
+            {candidate ? "Candidate feedback" : "Search feedback"}
+          </DialogTitle>
+          <DialogDescription className="text-[13px]">
+            {[candidate?.name, title].filter(Boolean).join(" · ")}
+          </DialogDescription>
+        </DialogHeader>
+        <SearchForm notes={notes} onDone={done} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+interface SearchFormProps {
+  notes: RefObject<HTMLTextAreaElement>
+  onDone: (comment: string) => void
+}
+
+// Mounted per opening (the dialog unmounts its content once closed), so each opens empty.
+function SearchForm({ notes, onDone }: SearchFormProps) {
+  const [comment, setComment] = useState("")
+  const ready = comment.trim() !== ""
+
+  function save() {
+    if (ready) onDone(comment)
+  }
+
+  return (
+    <form
+      className="grid gap-5"
+      onSubmit={(event) => {
+        event.preventDefault()
+        save()
+      }}
+    >
+      <NotesField
+        ref={notes}
+        label="Notes"
+        optional={false}
+        placeholder="What should change?"
+        value={comment}
+        onChange={setComment}
+        onSave={save}
+      />
+      <FeedbackFooter action="Send" disabled={!ready} />
+    </form>
+  )
+}

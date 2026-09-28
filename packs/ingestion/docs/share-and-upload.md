@@ -3,6 +3,7 @@
 Created: 2026-09-24
 
 Changelog:
+- 2026-09-27: one env load; `POWERPACKS_UPLOAD_ENV_FILE` is gone.
 - 2026-09-25: point the parent-id map and human worth at the SQLite `people` and
   `parents` tables.
 - 2026-09-25 (SQLite store): labels, the share list, and human tags became tables
@@ -237,9 +238,9 @@ CLAUDE.md routing line, `packs/indexing/README.md` row.
 3. A `private` tag written through `TagStore` → `share` → that row reads `no/human_private`.
 4. `upload_powerset.py` (no flag = plan only) → plan counts (persons upserts, OPS
    inserts/deletes, TP upserts/patches per namespace, skipped_no_linkedin).
-5. Real write ONLY after explicit go, first against `ALEPH_ENV=staging` (`_dev` namespaces);
-   Postgres rows are scoped to operator `274ac942…`. Then `$search powerset` on a query that
-   should hit a newly shared person.
+5. Real write ONLY after explicit go, first against isolated `_v3_share_test`
+   namespaces and a disposable PostgreSQL copy. Verify document IDs, access lists,
+   interrupted-upload recovery, and zero writes on the unchanged rerun before v3.
 
 ## Open for Arthur
 
@@ -255,3 +256,63 @@ CLAUDE.md routing line, `packs/indexing/README.md` row.
   stay local until the cloud grows a non-LinkedIn person key.
 - Dossier text goes to TypeSafe for labeling (synthesized facts, not bodies). Say if that
   provider boundary is not acceptable; the fallback is the same questions through OpenAI.
+
+## Local People upload (2026-09-27)
+
+The People page's **Share network** button runs `UploadPowerset` in the review
+server and polls `GET /api/people/upload`. Row-level Share/Keep private edit
+review decisions; Share network reconciles the whole current share list. The
+`POST /api/people/upload/check` checks the plan without writing. Confirm posts
+to `/api/people/upload` only if
+that completed check still matches the share table, target, and freshly
+computed plan counts. A changed share decision or target requires **Check again**;
+the upload stops before writing. A second tab cannot start a run while one is
+active. Both POST routes reject a mismatched `Origin` with 403; requests without
+`Origin` remain available to non-browser clients.
+
+The status endpoint reports `idle`, `checking`, `ready`, `uploading`, `completed`,
+`failed`, or `interrupted`, with a plan, progress, last real upload, and a safe
+error sentence where applicable. An interrupted run says **This upload was
+interrupted. Check again to resume.** Check again computes a fresh plan before
+another Confirm. Closing the modal does not stop the server's upload. Stages
+are `planning`, `checking_access`, `checking_people`, `checking_companies`,
+`checking_schools`, `checking_changes`, then `writing_people` for the Postgres
+persons/sources/tags writes, `people`, `summaries`, `education`, `companies`,
+`schools`, `committing`, and `completed`.
+Namespace progress counts records written; the completed count reports people
+whose documents or sources were written. Missing local company and school rows
+are counted and skipped while the available records upload.
+
+Uploads write the v3 namespace family and the `powerset_v2` PostgreSQL schema.
+The uploader pins the v3 family itself (`UPLOAD_INDEX_VERSION`), whatever
+`ALEPH_INDEX_VERSION` the search side reads, and sets its own session's
+`search_path` to `powerset_v2` (`postgres.use_v3_schema`), so the standard
+`.env` that the install renders and `bin/update-powerpacks` preserves is
+enough: its `DATABASE_URL` login has the schema's privileges, and its
+`TURBOPUFFER_API_KEY` reaches the namespaces. The review server loads that `.env` once at
+startup with the shared python-dotenv loader (`load_env`, which never overrides
+an exported value); the uploader reads only that environment, and the standalone
+upload CLI loads `.env` the same way once in `main`. A rehearsal exports its
+values before starting the server: per-namespace
+`POWERPACKS_TURBOPUFFER_<NAME>_NAMESPACE` overrides that all end in
+`_v3_share_test`, and a `DATABASE_URL` for a disposable copy.
+The local index is `.powerpacks/search-index/local-search.duckdb`.
+
+The existing upload manifest retains content hashes and unfinished writes for
+retries. Stable document IDs make replay safe; existing cloud position IDs and
+cloud-enriched profiles are preserved. Unchanged source rows, access lists and
+private tags do not get rewritten. TurboPuffer's SDK retries transient requests
+up to four times. After an exhausted retry or server restart, **Check again**
+recomputes the plan; Confirm resumes the upload.
+
+Failures append to `.powerpacks/upload-powerset/errors.log` with the stage,
+traceback, provider response, HTTP status and request ID. Credentials are
+redacted, the file is owner-readable only, and retries retain previous entries.
+The browser receives only a safe, one-sentence error and whether the check or
+upload failed.
+
+Open items: company and school gap-fill still writes local entity IDs into the
+shared namespaces, which can differ from cloud IDs for the same entity. Postgres
+writes share one transaction, but TurboPuffer writes happen before it commits;
+a failure can leave TurboPuffer changes visible while Postgres rolls back until
+the next confirmed upload reconciles them.

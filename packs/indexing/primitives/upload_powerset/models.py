@@ -15,6 +15,7 @@ Changelog:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from packs.ingestion.schemas.people_schema import parse_interaction_counts, parse_source_channels
@@ -86,6 +87,13 @@ class SourceRow:
     source_identifier: str
     total_interactions: int = 0
     last_interaction_at: str = ""
+
+    def __post_init__(self) -> None:
+        if self.last_interaction_at:
+            parsed = datetime.fromisoformat(self.last_interaction_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            object.__setattr__(self, "last_interaction_at", parsed.astimezone(timezone.utc).isoformat())
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -177,6 +185,7 @@ class CloudState:
     operator_sources: tuple[SourceRow, ...]
     operator_ids_by_person: dict[str, tuple[str, ...]]
     private_tag_keys: frozenset[str]
+    operator_source_keys: frozenset[tuple[str, str, str]] = frozenset()
     present_entity_ids: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
@@ -206,6 +215,7 @@ class UploadPlan:
     allowed_operator_ids: dict[str, tuple[str, ...]]
     tags_put: tuple[TagRow, ...]
     tags_delete: tuple[TagRow, ...]
+    cloud_id_by_person: dict[str, str] = field(default_factory=dict)
 
     def counts(self) -> dict[str, Any]:
         return {
@@ -224,6 +234,7 @@ class UploadPlan:
 
 @dataclass(frozen=True)
 class UploadResult:
+    people_uploaded: int = 0
     persons_upserted: int = 0
     sources_inserted: int = 0
     sources_deleted: int = 0

@@ -44,6 +44,30 @@ class TeamTest(unittest.TestCase):
             self.assertIn("Team Similarity Rank #2", exported)
             self.assertIn("connect-src 'none'", exported)
 
+    def test_cached_search_reloads_when_team_artifacts_change(self):
+        from packs.search.primitives.deep_search.results_web.server import _run_loader
+        with tempfile.TemporaryDirectory() as directory:
+            root = ResultsWebTest()._fixture(directory, cross_encoder=True)
+            run = root / "jordan-role"
+            load = _run_loader(root)
+            original = load(run.name)
+            (run / "team.json").write_text(json.dumps({"members": [{
+                "name": "Jordan Team", "title": "Engineer", "linkedin_url": "",
+                "location": "Example City", "started_on": "2024-01-01"}]}))
+            with_team = load(run.name)
+            self.assertIsNot(with_team, original)
+            self.assertEqual(with_team.team[0].name, "Jordan Team")
+            (run / "team-similarity.json").write_text(json.dumps({ResultsWebTest.PERSON: {
+                "rank": 1, "candidate_count": 1, "score": .8, "method": "Work history",
+                "closest_names": ["Jordan Team"]}}))
+            ranked = load(run.name)
+            self.assertEqual(ranked.candidate(ResultsWebTest.PERSON).team_similarity.rank, 1)
+            (run / "team-status.json").write_text(json.dumps({
+                "status": "unavailable", "reason": "Stored roster unavailable"}))
+            unavailable = load(run.name)
+            self.assertIsNone(unavailable.candidate(ResultsWebTest.PERSON).team_similarity)
+            self.assertEqual(unavailable.team_status, "Stored roster unavailable")
+
     def test_employee_fetch_paginates_without_enrichment(self):
         responses = [Mock(), Mock()]
         responses[0].json.return_value = {"employees": [{"full_name": "Example"}] * 500}

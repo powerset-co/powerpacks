@@ -476,19 +476,32 @@ Share follows worth: the `share` table says yes to the worth-yes people, no to
 the owner, to a human `private`, and to everyone worth said no or maybe to. The JEV
 labels decide nothing — they raise at most one flag (family, partner, minor,
 sensitive context, clinician/lawyer/banker, automated sender, stranger) on a
-worth-yes person, which makes that row `confirm`. Confirm rows are for the UI to
-put to the user; they upload nothing until the user answers with a tag. Then the
-upload — without `--apply` it plans only, reads the cloud, writes one manifest:
+worth-yes person, which makes that row `confirm`. Confirm rows upload nothing
+until the user answers. The answer is a tag, recorded on the People page:
 
 ```bash
-uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py
+bin/deep-context review people   # your people, one tab per decision
 ```
 
-Show the plan counts and get explicit approval before `--apply`: it upserts
-`persons`, reconciles this operator's `operator_person_sources` rows, writes or
-patches the five TurboPuffer namespaces, and mirrors the user's own `private`
-into `contact_tags`. People without a LinkedIn never reach the cloud
-(`skipped_no_linkedin`). `ALEPH_ENV=staging` targets the `_dev` namespaces.
+The page has three tabs — Needs confirmation, Sharing, Not sharing — one row
+per parent (the emails and phone numbers merged under one person share the row,
+its counts and its decision) with the reason, sources, relationship, worth,
+warmth, last contact and interaction count; the
+left rail filters by those cells and by the JEV labels, the quick filters open
+the usual slices (family, sensitive context, service providers, recruiters,
+strangers, dormant), and the bulk bar tags a whole selection **Share** or
+**Keep private** (`Use worth` clears the tag). Each write re-decides those
+people's `share` rows in the same transaction, so the table stays current; `z`
+undoes the last write. Tell the user the URL and the three counts; do not read
+the list aloud. The upload is the page's **Share network** button (top right):
+the user clicks it, reads the check's counts, and presses **Confirm sharing**
+themselves. Do not run the upload for them. It upserts `persons`, reconciles
+this operator's `operator_person_sources` rows, writes or patches the five v3
+TurboPuffer namespaces, and mirrors the user's own `private` into
+`contact_tags`. People without a LinkedIn never reach the cloud. The
+standalone CLI (`upload_powerset.py`, plan-only without `--apply`) is for
+debugging; `.powerpacks/upload-powerset/manifest.json` and `errors.log` hold
+the last run.
 
 ## Completion report
 

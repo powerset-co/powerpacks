@@ -1,0 +1,93 @@
+/* The drawer shell and its header row (components/shared/Drawer.tsx); ported from
+   share/web/people.css. */
+
+/* A non-modal panel over the right edge; the table keeps its geometry. It slides in from
+   off-screen over --t-slow and back out over --t-med; visibility flips after the exit. */
+.drawer {
+  position: fixed;
+  z-index: 70;
+  top: var(--topbar-height);
+  right: 0;
+  bottom: 0;
+  width: min(var(--drawer-w), 100vw);
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: var(--shadow-2);
+  scrollbar-width: thin;
+  transform: translateX(100%);
+  visibility: hidden;
+  transition:
+    transform var(--t-med) var(--ease-in),
+    visibility 0s linear var(--t-med);
+}
+.drawer[data-open="true"] {
+  transform: none;
+  visibility: visible;
+  transition:
+    transform var(--t-slow) var(--ease-out),
+    visibility 0s;
+}
+/* The content fades in from @starting-style (--t-med) and, when the drawer switches item,
+   fades out first (--t-fast, data-leaving); one transition, so its end always fires. */
+.drawer-inner {
+  display: grid;
+  gap: 20px;
+  padding: 20px 20px 120px;
+  opacity: 1;
+  transition: opacity var(--t-med) var(--ease-out);
+}
+@starting-style {
+  .drawer-inner {
+    opacity: 0;
+  }
+}
+.drawer-inner[data-leaving] {
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease-in);
+}
+
+/* Who this is: the picture, the name over muted lines, the close button. */
+.drawer-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.drawer-top .who {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.drawer-top h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.drawer-top .sub {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.drawer-close {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
+}
+.drawer-close:hover {
+  color: var(--foreground);
+  background: var(--secondary);
+}

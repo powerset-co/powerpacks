@@ -1,0 +1,256 @@
+/* Tokens and base rules copied from
+   packs/search/primitives/deep_search/results_web/results.css (:root and base section), plus
+   --t-slow for the drawer. Keep the two in sync until the legacy page is retired. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    /* surfaces */
+    --background: #1a1614;
+    --card: #242120;
+    --surface-2: #2c2826;
+    --secondary: #2e2a28;
+    --accent: #3a2420;
+    --border: #3a3432;
+    --line: #2f2a28;
+    --line-strong: #4a433e;
+    --input: #4a433e;
+    /* ink */
+    --foreground: #f0eae2;
+    --muted: #9c8e84;
+    --faint: #857a70;
+    /* brand */
+    --primary: #dd3d17;
+    --primary-action: #d33916;
+    --primary-hover: #c73312;
+    --primary-soft: rgba(221, 61, 23, 0.14);
+    /* meaning */
+    --ok: #4ade80;
+    --ok-soft: rgba(34, 197, 94, 0.16);
+    --warn: #fbbf24;
+    --warn-soft: rgba(251, 191, 36, 0.16);
+    --bad: #f87171;
+    --bad-soft: rgba(248, 113, 113, 0.16);
+    --info: #60a5fa;
+    --info-soft: rgba(59, 130, 246, 0.16);
+    --error: #f87171;
+    /* rhythm */
+    --topbar-height: 52px;
+    --drawer-w: 440px;
+    --radius-s: 6px;
+    --radius-m: 10px;
+    --radius-l: 14px;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 12px 40px -12px rgba(0, 0, 0, 0.65);
+    /* motion: short; ease-out in, ease-in out; transform, opacity and color only. The one
+       layout exception is the facet fold (FacetShell), which animates grid-template-rows
+       because a variable-height list cannot fold with a transform. */
+    --ease-out: cubic-bezier(0.2, 0, 0, 1);
+    --ease-in: cubic-bezier(0.4, 0, 1, 1);
+    --t-fast: 120ms;
+    --t-med: 200ms;
+    --t-exit: 160ms;
+    --t-slow: 280ms;
+    /* The loading shimmer's sweep: a loop, not a transition. */
+    --t-shimmer: 1.3s;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-synthesis: none;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body {
+    min-height: 100%;
+  }
+  [hidden] {
+    display: none !important;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  textarea,
+  input,
+  select {
+    font: inherit;
+  }
+  button,
+  a,
+  summary {
+    -webkit-tap-highlight-color: transparent;
+  }
+  button {
+    color: inherit;
+  }
+  a {
+    color: inherit;
+  }
+  ::selection {
+    background: var(--primary-soft);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  summary:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+}
+
+/* Shared keyframes (results.css), and reduced motion: every CSS animation and transition
+   stops. JS animations (row entrance, count roll) check hooks/useReducedMotion themselves. */
+@layer base {
+  @keyframes shimmer {
+    to {
+      transform: translateX(100%);
+    }
+  }
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+  /* A spinner's turn (the share button while a check or upload runs). */
+  @keyframes turn {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+  /* Dialog content (components/ui/dialog.tsx): the .rise overlays' 8px travel, as keyframes
+     because Radix keeps a closing dialog mounted until its exit animation ends. */
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+  @keyframes dialog-out {
+    to {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation: none !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Overlays that rise in and drop out (bulk bar, toast): 8px travel, 200ms in, 160ms out.
+   @starting-style gives the entrance; hooks/usePresence unmounts after the exit. */
+.rise {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition:
+    transform var(--t-exit) var(--ease-in),
+    opacity var(--t-exit) var(--ease-in);
+}
+.rise[data-open="true"] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition-duration: var(--t-med);
+  transition-timing-function: var(--ease-out);
+}
+@starting-style {
+  .rise[data-open="true"] {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Something added after its group appeared (an empty state, a new chip, a changed score)
+   rises in on its own: 6px, --t-med. */
+.rise-in {
+  animation: rise-in var(--t-med) var(--ease-out) backwards;
+}
+
+/* The one disclosure chevron, drawn by ::after on the element carrying .chevron: a corner that
+   points right while shut and down while open (aria-expanded or data-open), turning on --t-fast. */
+.chevron::after {
+  content: "";
+  display: inline-block;
+  box-sizing: content-box;
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--t-fast) var(--ease-out);
+}
+.chevron[aria-expanded="true"]::after,
+.chevron[data-open="true"]::after {
+  transform: rotate(45deg);
+}
+
+/* The keyboard's row on both tables: a 2px bar on the left edge of a positioned element that
+   scales in while data-focus is true. */
+.focus-bar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--primary);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition:
+    transform var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.focus-bar[data-focus="true"]::before {
+  transform: scaleX(1);
+}
+
+/* A section's small uppercase title (drawer sections, the drawer's loading block, run folds). */
+.section-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}

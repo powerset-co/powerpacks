@@ -15,7 +15,7 @@ from packs.search.primitives.shared.human_ratings import (
     RUBRIC,
 )
 from .model import (
-    Candidate, Education, PersonAttribution, Pond, PondCandidate, Position, SearchResult,
+    Candidate, Education, PersonAttribution, Pond, PondCandidate, Position, SearchCard, SearchResult,
     TraitScore,
 )
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
@@ -494,6 +494,8 @@ def _results_toolbar(rows: Sequence[PondCandidate], search: SearchResult, *, sco
     return (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
                f"<button type='button' class='result-filter' data-result-filter='tagged' "
                f"aria-pressed='false' hidden>Tagged (<span data-tagged-count>0</span>)</button>"
+               f"<button type='button' class='result-filter selected' data-labels-toggle aria-pressed='true' "
+               f"title='Show or hide Taste, Suggested Pin and Team Similarity labels'>Labels</button>"
                f"{scores}{operator_filter}<span class='tag-filters' data-tag-filters hidden></span>"
                f"<span class='result-actions'>"
                f"<span data-result-count aria-live='polite'></span>"
@@ -551,7 +553,7 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
 
 
 def _team_table(search: SearchResult) -> str:
-    """Reporting's name/title/location/tenure table, using saved data and ten-row pages."""
+    """Saved employees, virtualized locally with ten-row pages in hosted snapshots."""
     status = (f"<p class='team-source'>Team similarity: {_e(search.team_status)}</p>"
               if search.team_status else "")
     if not search.team:
@@ -567,13 +569,13 @@ def _team_table(search: SearchResult) -> str:
             f"{_e(_initials(member.name))}</span>{name}</span></td>"
             f"<td>{_e(member.title)}</td><td>{_e(member.location)}</td><td>{_e(tenure)}</td></tr>")
     return (f"<details class='jd-details team-details' data-team-table><summary>Team · {len(rows)}</summary>"
-        f"<p class='team-source'>Current staff · Network Search API · saved {_e(_date(search.team_fetched_at))}</p>"
-        "<div class='team-table-scroll'><table class='team-table'><thead><tr>"
+        f"<p class='team-source'>Current employees · Saved {_e(_date(search.team_fetched_at))}</p>"
+        "<div class='team-table-scroll'><table class='team-table' aria-label='Company employees'><thead><tr>"
         "<th>Name</th><th>Title</th><th>Location</th><th>Tenure</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div><div class='team-pagination'>"
         f"<span data-team-range aria-live='polite'>1–{min(10, len(rows))} of {len(rows)}</span>"
-        "<span><button type='button' data-team-page='-1' aria-label='Previous team page' disabled>Prev</button>"
-        f"<button type='button' data-team-page='1' aria-label='Next team page'{' disabled' if len(rows) <= 10 else ''}>"
+        "<span><button class='btn' type='button' data-team-page='-1' aria-label='Previous team page' disabled>Prev</button>"
+        f"<button class='btn' type='button' data-team-page='1' aria-label='Next team page'{' disabled' if len(rows) <= 10 else ''}>"
         "Next</button></span></div></details>" + status)
 
 
@@ -589,6 +591,7 @@ def _search(search: SearchResult, *, readonly: bool = False, feedback_enabled: b
           <small>{_e(search.company) or 'Company unknown'}</small>
           <strong>{_e(search.title)}</strong>
           <span>{_e(_date(search.created_at))} · {_e(search.run_id)}</span>
+          {"<span class='search-complete'>Search Complete</span>" if search.ponds else ''}
         </span>
       </header>
       {jd}
@@ -618,18 +621,91 @@ def render_search_body(search: SearchResult, *, readonly: bool = False) -> str:
             f"</section>")
 
 
+def _shell(body: str, *, base: str, current: str = "searches", title: str = "Search results") -> str:
+    """The page template with its nav: Searches alone when the viewer serves
+    itself, Searches and People when the review server mounts it under a base."""
+    links = [("Searches", f"{base}/" if base else "/", "searches")]
+    if base:
+        links.append(("People", "/people", "people"))
+    nav = "".join(f"<a href='{_e(href)}'{" aria-current='page'" if key == current else ''}>{_e(label)}</a>"
+                  for label, href, key in links)
+    template = RESULTS_HTML.read_text(encoding="utf-8")
+    ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)
+    return (template.replace("{{BASE}}", _e(base)).replace("{{NAV}}", nav).replace("{{TITLE}}", _e(title))
+            .replace("{{CONTENT}}", body).replace("{{HUMAN_RATINGS}}", ratings))
+
+
+def _status_text(status: str) -> str:
+    if status in {"awaiting_diagnosis", "completed"}:
+        return "Search Complete"
+    return status.replace("_", " ").capitalize()
+
+
+def _catalog_row(card: SearchCard, base: str) -> str:
+    version = card.search_version or "unversioned"
+    cost = f"${card.cost_usd:,.2f}" if card.cost_usd else "—"
+    return f"""
+    <a class='catalog-row' href='{_e(base)}/run?run_id={_e(card.run_id)}' role='row'
+       data-run-id='{_e(card.run_id)}' data-version='{_e(version)}' data-company='{_e(card.company)}'
+       data-status='{_e(card.status)}' data-search='{_e(" ".join((card.title, card.company, card.run_id)).lower())}'>
+      <span class='catalog-company'>{_e(card.company) or '—'}</span>
+      <span class='catalog-title'><strong>{_e(card.title)}</strong></span>
+      <span class='catalog-status' data-status='{_e(card.status)}'>{_e(_status_text(card.status))}</span>
+      <span class='catalog-num catalog-people' tabindex='0' aria-describedby='counts-{_e(card.run_id)}'>
+        {card.candidates:,}<span class='people-counts' role='tooltip' id='counts-{_e(card.run_id)}'>
+          <strong>People</strong><span>Pinned <b>{card.pinned:,}</b></span>
+          <small>Overall score</small><span>5 / 5 <b>{card.score_5:,}</b></span>
+          <span>4 / 5 <b>{card.score_4:,}</b></span><span>3 / 5 <b>{card.score_3:,}</b></span>
+        </span></span>
+      <span class='catalog-num'>{card.ponds_run}</span>
+      <span class='catalog-num'>{cost}</span>
+      <span class='catalog-version'>{_e(version)}</span>
+      <span class='catalog-date'>{_e(_date(card.created_at))}</span>
+    </a>"""
+
+
+def render_catalog(cards: Sequence[SearchCard], *, base: str = "") -> str:
+    """The list page: one row per manifest, filters over version, company, status, text."""
+    versions = sorted({card.search_version for card in cards if card.search_version}, reverse=True)
+    companies = sorted({card.company for card in cards if card.company}, key=str.casefold)
+    statuses = sorted({card.status for card in cards if card.status})
+    chips = "".join(
+        f"<button type='button' class='chip' data-filter='version' data-value='{_e(value)}' aria-pressed='false'>{_e(value)}</button>"
+        for value in [*versions, *(["unversioned"] if any(not card.search_version for card in cards) else [])])
+    options = lambda values, text=str: "".join(f"<option value='{_e(value)}'>{_e(text(value))}</option>" for value in values)
+    rows = "".join(_catalog_row(card, base) for card in cards)
+    body = f"""
+    <section class='catalog' data-catalog data-newest-version='{_e(versions[0] if versions else "")}'>
+      <div class='catalog-bar'>
+        <input type='search' class='field catalog-search' data-filter-text placeholder='Search title, company, run' aria-label='Search runs'>
+        <span class='chip-row' role='group' aria-label='Search version'>{chips}</span>
+        <select class='field catalog-select' data-filter='company' aria-label='Company'><option value=''>All companies</option>{options(companies)}</select>
+        <select class='field catalog-select' data-filter='status' aria-label='Status'><option value=''>All statuses</option>{options(statuses, _status_text)}</select>
+        <span class='catalog-count' data-catalog-count aria-live='polite'></span>
+      </div>
+      <div class='catalog-head' role='row'>
+        <span>Company</span><span>Search</span><span>Status</span><span class='catalog-num'>People</span>
+        <span class='catalog-num'>Ponds</span><span class='catalog-num'>Cost</span><span>Version</span><span>Created</span>
+      </div>
+      <div class='catalog-rows' role='table' aria-label='Searches'>{rows}</div>
+      <p class='catalog-empty' data-catalog-empty hidden>No searches match.</p>
+    </section>""" if cards else (
+        "<section class='empty-state'><h2>No completed searches</h2>"
+        "<p>New searches will appear here when they have CE scores.</p></section>")
+    return _shell(body, base=base, title="Searches")
+
+
 def render_page(searches: Iterable[SearchResult], *, readonly: bool = False,
-                tags: dict | None = None, feedback_enabled: bool = False) -> str:
+                tags: dict | None = None, feedback_enabled: bool = False, base: str = "") -> str:
     items = tuple(searches)
     body = "".join(_search(search, readonly=readonly, feedback_enabled=feedback_enabled) for search in items)
     if not body:
         body = "<section class='empty-state'><h2>No completed searches</h2><p>No results.json with a summary block was found.</p></section>"
-    template = RESULTS_HTML.read_text(encoding="utf-8")
+    page = _shell(body, base=base)
     if readonly:
-        template = template.replace("<html lang='en'>", "<html lang='en' data-readonly='true'>")
+        page = page.replace("<html lang='en'>", "<html lang='en' data-readonly='true'>")
         if feedback_enabled:
-            template = template.replace("data-readonly='true'", "data-readonly='true' data-hosted-feedback='true'")
+            page = page.replace("data-readonly='true'", "data-readonly='true' data-hosted-feedback='true'")
         saved_tags = json.dumps(tags, ensure_ascii=False).replace("<", "\\u003c")
-        template = template.replace("<script src=", f"<script id='snapshot-tags' type='application/json'>{saved_tags}</script><script src=")
-    ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)
-    return template.replace("{{CONTENT}}", body).replace("{{HUMAN_RATINGS}}", ratings)
+        page = page.replace("<script src=", f"<script id='snapshot-tags' type='application/json'>{saved_tags}</script><script src=")
+    return page

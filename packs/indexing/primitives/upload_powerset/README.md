@@ -88,15 +88,16 @@ flowchart TD
 ## Run
 
 ```bash
-uv run --env-file .env --project . python \
-  packs/indexing/primitives/upload_powerset/upload_powerset.py --dry-run \
+uv run --project . python \
+  packs/indexing/primitives/upload_powerset/upload_powerset.py \
   --db .powerpacks/search-index/local-search.duckdb \
   --people-csv .powerpacks/network-import/merged/people.csv \
   --share-db .powerpacks/deep-context/deep-context.sqlite
 ```
 
-`ALEPH_ENV=staging` moves every namespace to its `_dev` twin; Postgres stays the
-same database, scoped to this operator's rows.
+Without `--apply` it plans only. The CLI loads `.env` once at start and writes
+the v3 family (`_v3`, or `_v3_share_test` for a rehearsal); any other suffix
+is refused before a write.
 
 The upload runs from the laptop only: the build may run on Modal, but
 `download` already brings `local-search.duckdb` home, and the upload is a few MB

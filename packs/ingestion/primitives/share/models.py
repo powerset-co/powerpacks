@@ -9,6 +9,9 @@ Flow: `evidence.py` parses people.csv + the canonical store into
 `share_list.py` (the node) writes `person_labels` and `share`.
 
 Changelog:
+  2026-09-26: the noul probabilities persist unrounded: the share UI re-decides
+    a tagged person from `person_labels`, and a rounded 0.5999 would cross
+    ACTIVE_P and change `share.labels`.
   2026-09-24: labels/share/tags left CSV for SQLite tables.
   2026-09-24: labels carried one `flag` column; LabelRow carries worth.
 """
@@ -136,5 +139,5 @@ def label_payload(deterministic: DeterministicLabels, jev: JevLabels | None) -> 
         cells.update(jev.choices)
         cells.update({f"{name}_p": round(jev.choice_p[name], 3) for name in CHOICE_LABELS})
         cells.update({name: round(jev.scores[name], 2) for name in SCORE_LABELS})
-        cells.update({name: round(jev.probabilities[name], 3) for name in NOUL_LABELS})
+        cells.update({name: jev.probabilities[name] for name in NOUL_LABELS})
     return json.dumps(cells, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

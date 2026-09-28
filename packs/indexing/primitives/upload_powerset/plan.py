@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure reconcile: local share list + cloud state -> UploadPlan.
 
-Flow: the `yes` share rows with a LinkedIn slug become the persons upsert (the
+Flow: the `yes` share rows with a LinkedIn slug become persons candidates (the
 rest are skipped_no_linkedin, a cloud NOT NULL constraint, not a bug; `confirm`
 rows wait for a human and leave the laptop no more than a `no` does) -> desired
 operator_person_sources rows are one per (person, cloud channel) -> the
@@ -78,7 +78,12 @@ def build_plan(
         (row for row in cloud.operator_sources if row.key not in desired_keys),
         key=lambda row: row.key,
     ))
-    sources_insert = tuple(sorted(desired, key=lambda row: row.key))
+    existing_sources = {row.key: row for row in cloud.operator_sources}
+    sources_insert = tuple(sorted(
+        (row for row in desired if (row.key in existing_sources or row.key not in cloud.operator_source_keys)
+         and existing_sources.get(row.key) != row),
+        key=lambda row: row.key,
+    ))
 
     shared_cloud_ids = set(cloud_id.values())
     unshared = sorted({row.person_id for row in sources_delete} - shared_cloud_ids)
@@ -101,7 +106,7 @@ def build_plan(
                                             tuple(new_to_cloud), tuple(already_in_cloud)))
             continue
         by_person = entity_ids_by_person[logical]
-        referenced = {entity_id for person_id in new_to_cloud for entity_id in by_person.get(person_id, ())}
+        referenced = {entity_id for person_id in persons_upsert for entity_id in by_person.get(person_id, ())}
         missing = referenced - cloud.present_entity_ids.get(logical, frozenset())
         namespaces.append(NamespacePlan(logical, namespace_names[logical], tuple(sorted(missing)), ()))
 
@@ -110,7 +115,8 @@ def build_plan(
     private_rows = [row for row in share_rows if row.reason == HUMAN_PRIVATE and row.public_identifier]
     tags_put = tuple(sorted(
         (TagRow(cloud.cloud_id_by_person[row.person_id], row.public_identifier, PRIVATE_TAG)
-         for row in private_rows if row.person_id in cloud.cloud_id_by_person),
+         for row in private_rows if row.person_id in cloud.cloud_id_by_person
+         and row.public_identifier not in cloud.private_tag_keys),
         key=lambda row: row.group_key,
     ))
     # A cloud private tag is a human decision (the Powerset UI); it yields only
@@ -131,4 +137,5 @@ def build_plan(
         allowed_operator_ids=allowed,
         tags_put=tags_put,
         tags_delete=tags_delete,
+        cloud_id_by_person=cloud_id,
     )
