@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.6.2...powerpacks-v3.7.0) (2026-09-28)
+
+
+### Features
+
+* add Accounts and Scheduled tasks pages to the local UI ([2acbb7a](https://github.com/powerset-co/powerpacks/commit/2acbb7ad4d4328b2aca863549f88257f77c77bc9))
+* add Accounts and Scheduled tasks pages to the local UI ([a865fa0](https://github.com/powerset-co/powerpacks/commit/a865fa09b68cb2f240ec3d59a62bc73627838c98))
+
 ## [3.6.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.6.1...powerpacks-v3.6.2) (2026-09-28)
 
 
