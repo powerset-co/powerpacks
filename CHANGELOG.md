@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.5.0...powerpacks-v3.6.0) (2026-09-28)
+
+
+### Features
+
+* **search:** filter a screened run's results by pond ([5db5b50](https://github.com/powerset-co/powerpacks/commit/5db5b50763a135285550e03e8c6c72a5c1ab04f5))
+* **search:** filter a screened run's results by pond ([a0e02d9](https://github.com/powerset-co/powerpacks/commit/a0e02d9c06763dd2202b5089aa065df4528064f9))
+
 ## [3.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.7...powerpacks-v3.5.0) (2026-09-28)
 
 
