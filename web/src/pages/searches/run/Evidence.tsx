@@ -28,12 +28,11 @@ interface EvidenceProps {
   ranked: boolean
 }
 
-// rendering.py _person_details: why they match, trait scores with reasons, the pin judge,
-// what they matched on, location and about. The drawer's first sections.
+// rendering.py _person_details: the overall reason, trait scores with reasons, what they matched
+// on, location and about. The drawer's first sections.
 export function Evidence({ result, ranked }: EvidenceProps) {
-  const { row, candidate } = result
+  const { row } = result
   const [aboutOpen, setAboutOpen] = useState(false)
-  const pin = candidate?.pin_judgment
   const locationMatched = row.vertical_sources.includes("location")
   const clamp = row.summary.length > ABOUT_CLAMP
   return (
@@ -44,25 +43,10 @@ export function Evidence({ result, ranked }: EvidenceProps) {
           <p>{result.reason}</p>
         </section>
       ) : null}
-      {row.reasoning ? (
-        <section>
-          <h4>Why they match</h4>
-          <p>{row.reasoning}</p>
-        </section>
-      ) : null}
       {row.traits.length ? (
         <section>
           <h4>Trait scores</h4>
           <TraitList traits={row.traits} />
-        </section>
-      ) : null}
-      {pin ? (
-        <section>
-          <h4>Pin confidence</h4>
-          <p>
-            {candidate.pin_confidence === null ? "Unscored" : `${candidate.pin_confidence}/100`} ·{" "}
-            {pin.decision ?? "no decision"}. {pin.reason}
-          </p>
         </section>
       ) : null}
       {row.vertical_sources.length ? (

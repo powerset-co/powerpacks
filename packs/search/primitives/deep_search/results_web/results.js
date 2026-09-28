@@ -1069,6 +1069,10 @@ document.addEventListener("click", (event) => {
     panel.hidden = !willOpen;
     return;
   }
+  if (event.target.closest(".details-close")) {
+    closeDetails();
+    return;
+  }
   const more = event.target.closest(".show-more");
   if (more) {
     event.stopPropagation();

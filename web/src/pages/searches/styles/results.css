@@ -467,10 +467,14 @@ section.review-sections {
   inset: 32px 0 auto;
 }
 
-/* The review bar centres on the page left of the drawer; the choices keep only their digits
-   once the table is too narrow for their names. */
+/* The review bar centres on the results between the saved-searches rail and the drawer, and
+   leaves the name to the drawer; the choices keep only their digits once the table is too
+   narrow for their names. */
 .review-bar {
-  left: calc((100vw - min(var(--drawer-w), 100vw)) / 2);
+  left: calc(248px + (100vw - 248px - min(var(--drawer-w), 100vw)) / 2);
+}
+.review-bar > b {
+  display: none;
 }
 @media (max-width: 1280px) {
   .review-choice-name {

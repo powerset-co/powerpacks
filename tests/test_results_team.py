@@ -80,21 +80,26 @@ class TeamTest(unittest.TestCase):
         self.assertEqual([call.kwargs["json"]["offset"] for call in post.call_args_list], [0, 500])
         self.assertTrue(all(call.args[0].endswith("/v2/company/history/employees") for call in post.call_args_list))
 
-    def test_unavailable_team_status_is_visible_in_local_and_shared_view(self):
+    def test_missing_team_shows_a_plain_notice_in_local_and_shared_view(self):
         with tempfile.TemporaryDirectory() as directory:
             root = ResultsWebTest()._fixture(directory, cross_encoder=True)
             run = root / "jordan-role"
+            results = json.loads((run / "results.json").read_text())
+            results.update(company="", hiring_company={"name": None, "website_url": "https://example.com"})
+            (run / "results.json").write_text(json.dumps(results))
             (run / "team-status.json").write_text(json.dumps({
-                "status": "unavailable", "reason": "Stored company roster unavailable"}))
+                "status": "unavailable", "reason": "HTTPError: 404 Client Error: Not Found"}))
             (run / "team-similarity.json").write_text(json.dumps({ResultsWebTest.PERSON: {
                 "rank": 1, "candidate_count": 1, "score": .9, "method": "old",
                 "closest_names": ["Teammate"]}}))
             search = load_searches(root, run.name)[0]
-            self.assertIn("Team similarity: Stored company roster unavailable",
-                          render_page([search]))
+            shared = render_snapshot(export_snapshot(run), asset_base_url="https://example.com/assets")
+            for page in (render_page([search]), shared):
+                self.assertIn("No team information available", page)
+                self.assertNotIn("HTTPError", page)
+                self.assertNotIn("website_url", page)
+                self.assertIn("Company unknown", page)
             self.assertNotIn("Team Similarity Rank #1", render_search_body(search))
-            self.assertIn("Team similarity: Stored company roster unavailable",
-                          render_snapshot(export_snapshot(run), asset_base_url="https://example.com/assets"))
 
 
 if __name__ == "__main__":
