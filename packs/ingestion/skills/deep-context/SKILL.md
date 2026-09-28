@@ -475,8 +475,6 @@ No -> go to the completion report. Yes (or `$deep-context share` on its own)
 ```text
 [Share] Build the share list
 [Share] Open the People page
-[Share] Confirm flagged people and check the tabs
-[Share] Check and share from the page
 ```
 
 Who leaves the laptop is a per-person decision — see
@@ -523,9 +521,8 @@ standalone CLI (`upload_powerset.py`, plan-only without `--apply`) is for
 debugging; `.powerpacks/upload-powerset/manifest.json` and `errors.log` hold
 the last run.
 
-The last two phases are the user's clicks: mark `[Share] Confirm flagged
-people…` complete when they say they are done tagging, and `[Share] Check and
-share…` when they say it is shared (the page toasts "Shared N people.").
+Opening the page ends the skill: give the URL, the three counts, and one line
+— answer Needs confirmation, then Share network → Confirm sharing.
 
 ## Completion report
 
