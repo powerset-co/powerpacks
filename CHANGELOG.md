@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.0...powerpacks-v3.4.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **deep-context:** the share walk ends when the People page opens ([#583](https://github.com/powerset-co/powerpacks/issues/583)) ([baca198](https://github.com/powerset-co/powerpacks/commit/baca198c03d5ff88c81b677170d0b0e3d48deb50))
+
 ## [3.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.3.0...powerpacks-v3.4.0) (2026-09-28)
 
 
