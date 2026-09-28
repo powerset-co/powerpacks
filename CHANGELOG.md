@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.7](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.6...powerpacks-v3.4.7) (2026-09-28)
+
+
+### Bug Fixes
+
+* **people:** drop the Reason column from the People table ([4d69480](https://github.com/powerset-co/powerpacks/commit/4d69480c6e736671006c07f9020ce658ab3fe0de))
+* **people:** drop the Reason column from the People table ([8f9ea03](https://github.com/powerset-co/powerpacks/commit/8f9ea031a5ef4314898b7a0f4e6e13129c3040e2))
+
 ## [3.4.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.5...powerpacks-v3.4.6) (2026-09-28)
 
 
