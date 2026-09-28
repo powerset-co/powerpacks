@@ -5,7 +5,7 @@ license: MIT
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.0.2
+  version: 1.0.3
   summary: One-sentence bootstrap for the full Powerpacks skill suite
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -28,6 +28,9 @@ Changelog:
   bin/powerpacks-channel instead of being left on the default branch.
 - 2026-08-24: Pull the provisioned Parallel key alongside Modal and OpenAI.
 - 2026-08-31: Pull the provisioned Powerset API key for local profile hydration.
+- 2026-09-28: New Step 1.3 installs the machine tools Gmail import needs
+  (msgvault, gcloud, node, Chrome) so install owns environment setup. Dropped
+  the dead `onboard` route.
 -->
 
 One sentence installs everything:
@@ -92,7 +95,29 @@ Do the following, in order:
    Local-only: git + uv/Python setup, no paid APIs, no uploads. Downstream skills
    gate their own spend and logins.
 
-3. **Initialize the hosted config only when the user chose Powerset.** If the
+3. **Install the machine tools.** Gmail import needs `msgvault`, the Google
+   Cloud CLI, Node/npm (browser automation for the OAuth app), and Google
+   Chrome. Check them in one pass:
+
+   ```bash
+   for t in msgvault gcloud node npm; do printf '%s: ' "$t"; command -v "$t" || echo MISSING; done
+   test -d "/Applications/Google Chrome.app" && echo "chrome: ok" || echo "chrome: MISSING"
+   command -v brew || echo "brew: MISSING"
+   ```
+
+   If anything is missing, list it and ask once (OS install), then install:
+
+   ```bash
+   curl -fsSL https://msgvault.io/install.sh | bash   # msgvault
+   brew install --cask gcloud-cli                     # gcloud
+   brew install node                                  # node + npm
+   brew install --cask google-chrome                  # Chrome
+   ```
+
+   Without Homebrew, point the user at https://brew.sh (needs their password)
+   and rerun the check. Logins are not part of this step.
+
+4. **Initialize the hosted config only when the user chose Powerset.** If the
    ask said "using my Powerset account" (or otherwise named Powerset), work in
    the canonical repo. If `.env` does not exist, copy the public hosted config
    and restrict its permissions:
@@ -111,13 +136,13 @@ Do the following, in order:
    a Powerset account to log in with and initializes `.env` on a yes (own
    Modal/OpenAI/Parallel/Powerset API keys are the alternative).
 
-4. **Continue in THIS session — no restart.** The harness's skill registry is
+5. **Continue in THIS session — no restart.** The harness's skill registry is
    snapshotted at session start, but you do not need it: the skills are now plain
    files on disk. Read the one that matches the user's ask directly (e.g.
    `~/.claude/skills/setup/SKILL.md`) and follow it as if it had been routed.
    New sessions pick up the full skill list automatically.
 
-5. **Route the ask:**
+6. **Route the ask:**
    - "set up my local network search" with or without "using my Powerset
      account" -> follow `$setup` (LinkedIn export -> merge -> search index).
      Its Steps 1-3 authenticate the Powerset user and pull that user's
@@ -125,8 +150,8 @@ Do the following, in order:
      didn't name Powerset, its Step 1 first asks whether to log in with a
      Powerset account (the user's own keys are the alternative). Do not run a
      separate `$powerset setup`; that would duplicate the same login/key pull.
-   - broader source linking/onboarding -> `onboard`; Gmail -> `import-gmail`;
-     iMessage/WhatsApp -> `import-messages`; then searches -> `search`.
+   - Gmail -> `import-gmail`; iMessage/WhatsApp -> `import-messages`;
+     processing -> `deep-context`; then searches -> `search`.
 
 ## Notes
 
