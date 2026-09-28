@@ -18,6 +18,7 @@ cloud lacks is created from the local profile. The INSERT column list stays
 pinned to that cloud pipeline's list, including five locally NULL columns.
 
 Changelog:
+  2026-09-28: a persons row whose context has no positions takes the uploaded one.
   2026-09-28: writes go in multi-row statements of 500 rows, not one per row.
   2026-09-24: created; count affected rows and omit locally NULL update clauses.
 """
@@ -63,7 +64,11 @@ PERSONS_UPSERT_SQL = """
         state = COALESCE(persons.state, EXCLUDED.state),
         country = COALESCE(persons.country, EXCLUDED.country),
         location_raw = COALESCE(persons.location_raw, EXCLUDED.location_raw),
-        hydrated_context = COALESCE(persons.hydrated_context, EXCLUDED.hydrated_context),
+        -- A context without positions came from a profile-less upload: ours replaces it.
+        hydrated_context = CASE
+            WHEN COALESCE(persons.hydrated_context -> 'positions', '[]'::jsonb) = '[]'::jsonb
+            THEN COALESCE(EXCLUDED.hydrated_context, persons.hydrated_context)
+            ELSE persons.hydrated_context END,
         x_twitter_handle = COALESCE(persons.x_twitter_handle, EXCLUDED.x_twitter_handle),
         x_twitter_followers = COALESCE(persons.x_twitter_followers, EXCLUDED.x_twitter_followers),
         linkedin_followers = COALESCE(persons.linkedin_followers, EXCLUDED.linkedin_followers),
@@ -150,6 +155,18 @@ def fetch_cloud_ids_by_slug(cur: Any, slugs: Sequence[str]) -> dict[str, str]:
     cloud minted under its own id is still found."""
     cur.execute("SELECT public_identifier, id::text FROM persons WHERE public_identifier = ANY(%s)", (list(slugs),))
     return {str(row[0]).lower(): str(row[1]) for row in cur.fetchall()}
+
+
+def fetch_ids_without_positions(cur: Any, person_ids: Sequence[str]) -> frozenset[str]:
+    """The persons whose hydrated_context has no positions (uploaded before the profile fix)."""
+    if not person_ids:
+        return frozenset()
+    cur.execute("""
+        SELECT id::text FROM persons
+        WHERE id = ANY(%s::uuid[])
+          AND COALESCE(hydrated_context -> 'positions', '[]'::jsonb) = '[]'::jsonb
+    """, (list(person_ids),))
+    return frozenset(row[0] for row in cur.fetchall())
 
 
 def fetch_operator_sources(cur: Any, operator_id: str) -> tuple[SourceRow, ...]:

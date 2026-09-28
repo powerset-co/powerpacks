@@ -402,12 +402,18 @@ case "$cmd" in
     "${PY[@]}" "$PKG.realize.persist_review_identities" "$@"
     ;;
   realize)
-    # Phase 4 (free, local): durable reviewed identities -> directory.csv, then fan-in rebuilds
-    # merged/people.csv from source people files. Synthetic profiles remain deliberately separate.
+    # Phase 4: durable reviewed identities -> directory.csv, then fan-in rebuilds
+    # merged/people.csv from source people files, each LinkedIn person filled from
+    # its cached profile. Profiles still missing are fetched through the Powerset
+    # gateway (cache-first) and the fan-in runs again so they carry them.
+    # Synthetic profiles remain deliberately separate.
     "${PY[@]}" "$PKG.realize.persist_review_identities"
+    FAN_IN=(uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in
+            --people-csv .powerpacks/network-import/merged/people.csv)
+    "${FAN_IN[@]}" "$@"
+    "${PY[@]}" packs.ingestion.primitives.enrich.hydrate_merged
+    "${FAN_IN[@]}" "$@"
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
-    uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
-      --people-csv .powerpacks/network-import/merged/people.csv "$@"
     echo "people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;

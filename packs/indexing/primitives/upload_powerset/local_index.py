@@ -50,6 +50,14 @@ def _person_hashes(con: Any, person_ids: tuple[str, ...]) -> dict[str, str]:
             for person_id, rows in content.items()}
 
 
+def people_with_positions(con: Any, person_ids: tuple[str, ...]) -> frozenset[str]:
+    if not person_ids:
+        return frozenset()
+    rows = con.execute("SELECT DISTINCT base_id FROM local_people_positions WHERE base_id = ANY(?)",
+                       [list(person_ids)]).fetchall()
+    return frozenset(str(row[0]) for row in rows)
+
+
 def entity_ids_by_person(con: Any, logical: str, person_ids: list[str]) -> dict[str, tuple[str, ...]]:
     if logical == "companies":
         sql = """

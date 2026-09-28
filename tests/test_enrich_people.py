@@ -696,7 +696,7 @@ class ProfileDoorContractTests(unittest.TestCase):
             self.assertEqual(http3.call_count, 0)
 
     def test_gateway_headers_match_freshness_demand(self):
-        for fresh, freshness in ((False, "31536000"), (True, "live")):
+        for fresh, freshness in ((False, "7776000"), (True, "live")):
             with self.subTest(fresh=fresh), tempfile.TemporaryDirectory() as tmp:
                 _, http = self.get(Path(tmp), (404, None, "gone"), fresh=fresh)
                 self.assertEqual(

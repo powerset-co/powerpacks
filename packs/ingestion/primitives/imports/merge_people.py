@@ -21,13 +21,22 @@ Flow:
      channel-wise max; last_interaction takes the latest)
   6. id = uuid5(PERSON_ID_NAMESPACE, "linkedin:<slug>") for a linkedin key,
      else the `candidate:<candidate_key>` key verbatim
-  7. write `merged/people.csv` + `manifest.json`
+  7. a person with a slug takes the empty profile columns (work history,
+     education, headline, location, current role) from its cached LinkedIn
+     profile in `profile_cache_v2`; the cache is read, never fetched
+  8. write `merged/people.csv` + `manifest.json`
 
 A person either has a `public_identifier` or does not. That is the only
 distinction the merge makes, and it is a column — not a second file, not an
 admission decision.
 
 Changelog:
+  2026-09-28 (profiles): a slugged person's empty profile columns are filled from
+    its cached profile. Contacts resolved from Gmail/messages carried only contact
+    fields, so their work history never reached the index or the cloud. The
+    manifest counts LinkedIn people who gained work history (`profiles_filled`)
+    and those still without it (`profiles_missing`). A retargeted row drops the
+    old identity's profile columns.
   2026-09-23 (typed rows): source rows enter the stage as `PeopleRow` and directory
     rows as `DirectoryRow` — `group_key`, `merge_group`, and `directory_slug_for`
     take typed rows instead of dicts, and the directory lookups build
@@ -83,7 +92,13 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
+    DEFAULT_PROFILE_CACHE_DIR,
 )
+from packs.ingestion.primitives.enrich.profile_cache import (  # noqa: E402
+    profile_cache_path,
+    read_usable_cached_profile,
+)
+from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapidapi  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
     Artifact,
     Node,
@@ -120,6 +135,12 @@ LINKEDIN_KEY_PREFIX = "linkedin:"
 CANDIDATE_KEY_PREFIX = "candidate:"
 # Alias list column -> the primary column whose value belongs in that union.
 PRIMARY_FOR_LIST_COLUMN = {"all_emails": "primary_email", "all_phones": "primary_phone"}
+# The profile columns a cached LinkedIn profile fills when the sources left them empty.
+PROFILE_COLUMNS = (
+    "first_name", "last_name", "full_name", "headline", "summary", "city", "state", "country",
+    "location_raw", "profile_picture_url", "work_experiences", "education",
+    "current_title", "current_company",
+)
 
 
 def default_input_paths(import_dir: Path | None = None) -> list[Path]:
@@ -261,6 +282,27 @@ def merge_group(key: str, members: list[PeopleRow]) -> dict[str, str]:
     return merged
 
 
+def has_work_history(row: dict[str, str]) -> bool:
+    return row["work_experiences"] not in ("", "[]")
+
+
+def fill_from_profile(row: dict[str, str], cache_dir: Path) -> None:
+    """Fill the empty profile columns of a LinkedIn person with no work history
+    from its cached profile. A source's own value is never replaced; people from
+    the LinkedIn import already carry their profile."""
+    slug = row["public_identifier"]
+    if not slug or has_work_history(row):
+        return
+    cached = read_usable_cached_profile(profile_cache_path(cache_dir, slug))
+    profile = normalize_rapidapi(cached["raw_response"], slug, row["linkedin_url"]) if cached else {}
+    for column in PROFILE_COLUMNS if profile else ():
+        value = profile[column]
+        if isinstance(value, list):
+            value = json.dumps(value, ensure_ascii=False) if value else ""
+        if value and row[column] in ("", "[]"):
+            row[column] = value
+
+
 class MergePeopleInput(BaseModel):
     """The `input` block: what this run was pointed at."""
     people_csvs: list[str]
@@ -281,6 +323,8 @@ class MergePeopleStats(BaseModel):
     candidate_ids: int
     directory_stamped: int
     dropped_unkeyable: int
+    profiles_filled: int
+    profiles_missing: int
     groups_by_size: dict[str, int]
 
 
@@ -343,6 +387,7 @@ class PeopleMerge(Node):
         inputs: list[Path] | None = None,
         output_dir: Path | None = None,
         directory_csv: Path | None = None,
+        profile_cache_dir: Path | None = None,
     ) -> None:
         # `source_csvs`, not `inputs`: `inputs` is now the declared Artifact tuple
         # (the contract); this is the path list THIS run was constructed with.
@@ -351,6 +396,7 @@ class PeopleMerge(Node):
         self.people_csv = self.output_dir / "people.csv"
         self.manifest_json = self.output_dir / "manifest.json"
         self.directory_csv = Path(directory_csv or DEFAULT_DIRECTORY_CSV)
+        self.profile_cache_dir = Path(profile_cache_dir or DEFAULT_PROFILE_CACHE_DIR)
 
     def bindings(self) -> dict[str, str]:
         """Declared path -> this instance's path, so an explicit `--output-dir` /
@@ -383,6 +429,10 @@ class PeopleMerge(Node):
             for row in rows:
                 reviewed_slug = directory_slug_for(row, review_emails, review_phones)
                 if reviewed_slug and row.public_identifier != reviewed_slug:
+                    # A retarget: the old identity's profile is not this person's.
+                    if row.public_identifier:
+                        for column in PROFILE_COLUMNS:
+                            setattr(row, column, "")
                     row.public_identifier = reviewed_slug
                     row.linkedin_url = f"https://www.linkedin.com/in/{reviewed_slug}"
                     stamped += 1
@@ -401,14 +451,21 @@ class PeopleMerge(Node):
             return self._payload(
                 status="not_ready", reason="missing_import_people_csvs", started_at=started_at,
                 input_rows=input_rows, rows=0, stamped=stamped, unkeyable=unkeyable, groups={},
+                profiles={"filled": 0, "missing": 0},
             )
         merged = [merge_group(key, groups[key]) for key in sorted(groups)]
+        needed = [row for row in merged if row["public_identifier"] and not has_work_history(row)]
+        for row in needed:
+            fill_from_profile(row, self.profile_cache_dir)
+        profiles = {"filled": sum(1 for row in needed if has_work_history(row)),
+                    "missing": sum(1 for row in needed if not has_work_history(row))}
         self.output_dir.mkdir(parents=True, exist_ok=True)
         CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, merged)
         progress(f"merged {sum(input_rows.values())} source rows into {len(merged)} people")
         return self._payload(
             status="completed", reason="", started_at=started_at, input_rows=input_rows,
             rows=len(merged), stamped=stamped, unkeyable=unkeyable, groups=groups,
+            profiles=profiles,
         )
 
     def _payload(
@@ -422,6 +479,7 @@ class PeopleMerge(Node):
         stamped: int,
         unkeyable: int,
         groups: dict[str, list[PeopleRow]],
+        profiles: dict[str, int],
     ) -> MergePeopleManifest:
         """This stage's typed manifest payload (the Node template writes it)."""
         sizes: dict[str, int] = {}
@@ -443,6 +501,8 @@ class PeopleMerge(Node):
                 candidate_ids=sum(1 for key in groups if key.startswith(CANDIDATE_KEY_PREFIX)),
                 directory_stamped=stamped,
                 dropped_unkeyable=unkeyable,
+                profiles_filled=profiles["filled"],
+                profiles_missing=profiles["missing"],
                 groups_by_size=sizes,
             ),
             started_at=started_at,

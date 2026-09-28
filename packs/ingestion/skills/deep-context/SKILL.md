@@ -436,8 +436,7 @@ runtime state.
 
 Machine-cleared retargets attempt hydration when the judge records them. A
 human-pasted or human-fixed retarget may have no cached profile and projects
-from its SQLite carry instead. Applying and realizing are still local,
-paid-free projections and need no provider approval:
+from its SQLite carry instead. Applying and realizing need no provider approval:
 
 ```bash
 bin/deep-context stop
@@ -445,9 +444,13 @@ bin/deep-context apply-retargets
 bin/deep-context realize
 ```
 
-`apply-retargets` and `realize` make no network calls. `realize` rebuilds
+`apply-retargets` makes no network calls. `realize` rebuilds
 `.powerpacks/network-import/merged/people.csv` from the durable Yes/No,
-verify/detach/retarget, consolidation, and synthetic decisions.
+verify/detach/retarget, consolidation, and synthetic decisions, and fills each
+LinkedIn person's work history, education and headline from the cached
+profile. Profiles not yet cached are fetched through the Powerset gateway
+(cache-first, gateway copies up to 90 days old) before a second merge. Report the
+merge manifest's `profiles_filled` and `profiles_missing` in one line.
 
 For the Modal index, disclose that the merged CSV uploads to the configured
 workspace and provider processing may take 5-30+ quiet minutes. Get explicit
@@ -464,7 +467,9 @@ Finally:
 uv run --project . python packs/indexing/primitives/validate_search_index/validate_search_index.py
 ```
 
-Pass only on `status: ok`.
+Pass only on `status: ok`. The validator also fails when someone with work
+history in `merged/people.csv` has no positions in the index
+(`people_missing_positions`); rebuild the index before sharing.
 
 ### 9. Share: who leaves the laptop
 

@@ -5,6 +5,9 @@ from pathlib import Path
 
 import duckdb
 
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
+from packs.shared.csv_io import CsvIO
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "packs/indexing/primitives/validate_search_index" / "validate_search_index.py"
@@ -135,3 +138,37 @@ class ValidateSearchIndexTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkHistoryReachesTheIndexTest(unittest.TestCase):
+    """A person with work history in merged/people.csv must have positions in the index."""
+
+    def _validate(self, positions_for: list[str]):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local-search.duckdb"
+            build_db(db, tables=HEALTHY)
+            con = duckdb.connect(str(db))
+            con.execute("alter table local_people_positions add column base_id VARCHAR")
+            for person_id in positions_for:
+                con.execute("insert into local_people_positions values (?, ?)", [f"pos-{person_id}", person_id])
+            con.close()
+            people = Path(tmp) / "people.csv"
+            blank = {column: "" for column in PEOPLE_SCHEMA_COLUMNS}
+            CsvIO.write_dict_rows(people, PEOPLE_SCHEMA_COLUMNS, [
+                {**blank, "id": "p-jordan", "public_identifier": "jordan-bravo", "work_experiences": '[{"title": "Founder"}]'},
+                {**blank, "id": "p-casey", "public_identifier": "casey-delta", "work_experiences": '[{"title": "Engineer"}]'},
+                {**blank, "id": "p-riley", "work_experiences": "[]"},
+                # No LinkedIn: the index re-derives this id, so it is not checked here.
+                {**blank, "id": "candidate:email:morgan@example.com", "work_experiences": '[{"title": "CFO"}]'},
+            ])
+            return vsi.validate(db, people_csv=people)
+
+    def test_people_whose_work_history_did_not_reach_the_index_fail(self):
+        payload = self._validate(positions_for=["p-jordan"])
+        self.assertEqual(payload["status"], "fail")
+        self.assertEqual(payload["people_missing_positions"], 1)
+        self.assertIn("1 of 2 people with work history have no positions in the index", payload["errors"])
+
+    def test_every_person_with_work_history_has_positions(self):
+        payload = self._validate(positions_for=["p-jordan", "p-casey"])
+        self.assertEqual((payload["status"], payload["people_missing_positions"]), ("ok", 0))

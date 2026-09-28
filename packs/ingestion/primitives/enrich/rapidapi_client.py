@@ -47,6 +47,7 @@ resolution reads POWERSET_API_KEY from the environment, seeded from the repo
 - `hydrate_profiles(...)` — bulk ensure-usable-profiles over `get_profile`.
 
 Changelog:
+  2026-09-28: profile fetches accept a gateway copy up to 90 days old (was one year).
   2026-08-05 (one door, three states): `fetch_profile` (public, with a
     caller-facing `refresh_cache` flag) became the internal `_fetch_fresh`;
     the public door is `get_profile` returning `content|empty|error` with the
@@ -118,6 +119,11 @@ RETRYABLE_STATUS_CODES = frozenset({0, 429, 500, 502, 503, 504})
 # `success: false` body on an HTTP 200 counts as permanent too (see
 # `is_permanent_failure`) — that is the provider saying the profile is not there.
 PERMANENT_FAILURE_STATUS_CODES = frozenset({404, 410})
+
+
+# The gateway may answer from its own copy when it is younger than this (90 days);
+# older, it fetches LinkedIn again.
+PROFILE_FRESHNESS_SECONDS = "7776000"
 
 
 class RapidApiClient:
@@ -311,7 +317,7 @@ class RapidApiClient:
                 f"{self.BASE_URL}/get-profile-data-by-url",
                 headers={
                     "x-powerset-key": self.api_key,
-                    "X-Freshness": "live" if fresh else "31536000",
+                    "X-Freshness": "live" if fresh else PROFILE_FRESHNESS_SECONDS,
                 },
                 params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
                 timeout=90,
