@@ -6,6 +6,9 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-09-28: Step 4 adds Step 2 accounts missing from `desired_emails` as OAuth
+  test users before any grant (a new second account's consent failed without
+  it). Step 3 drops the removed `--init-db` flag.
 - 2026-09-28: Ask the history window once (no second confirm past 3 years);
   missing machine tools route to install-powerpacks Step 1.3.
 - 2026-09-23: Trimmed instructions. Dropped the last-message resume note from the
@@ -158,7 +161,7 @@ the Google OAuth Desktop app, inits the db, authorizes the primary account**:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py browser-setup \
-  --email <primary-gmail> --add-account --init-db
+  --email <primary-gmail> --add-account
 ```
 
 Writes `~/.msgvault/config.toml`, the client secret, and `~/.msgvault/msgvault.db`
@@ -167,8 +170,18 @@ Writes `~/.msgvault/config.toml`, the client secret, and `~/.msgvault/msgvault.d
 ### Step 4 — Check OAuth health + authorize unhealthy Gmail accounts
 
 Re-run `msgvault_setup.py status` after Step 3, because a fresh
-`browser-setup --add-account` already authorized the primary. Then check **every
-requested account in one command** before syncing anything:
+`browser-setup --add-account` already authorized the primary.
+
+Google only lets the OAuth app's test users grant access. `status` lists them
+(with the owner) as `desired_emails`. If any Step 2 account is missing from
+`desired_emails`, add all of them in one command before any grant (it drives the
+same Chrome console session and skips users already present):
+
+```bash
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-test-users <email> [<email> ...]
+```
+
+Then check **every requested account in one command** before syncing anything:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py auth-check \
