@@ -539,6 +539,7 @@ class SearchHarnessTests(unittest.TestCase):
             }) + "\n", encoding="utf-8")
             results = json.loads((run_dir / "results.json").read_text())
             results["status"] = "ready_to_run"
+            results["hiring_company_ref"] = {"verified_domain": "acme.example"}
             results["pending_payload"] = {  # written before compile-pond --limit existed
                 "pond_n": 1, "query": results["pending_query"]["query"],
                 "payload_json": str(payload_path), "ledger": "ledger", "payload": _payload(),
@@ -547,6 +548,8 @@ class SearchHarnessTests(unittest.TestCase):
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
 
             with (mock.patch.object(search_harness, "ROOT", run_dir),
+                  mock.patch.object(search_harness.team_similarity, "prepare_team",
+                                    return_value={"employees": []}) as prepare_team,
                   mock.patch.object(search_harness, "_run_command", return_value={
                     "artifacts": {"jsonl": "rows.jsonl"},
                   }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context") as hiring,
@@ -559,6 +562,9 @@ class SearchHarnessTests(unittest.TestCase):
                 search_harness.run_pond(run_dir=run_dir, env_file=".env")
             saved = json.loads((run_dir / "results.json").read_text())
             self.assertEqual(saved["traits"], [])
+            prepare_team.assert_called_once_with(
+                "acme.example", Path(".env"), run_dir,
+                jd=(run_dir / "jd.txt").read_text(), as_of=results["created_at"][:10])
 
         self.hydrate_attribution.assert_called_once_with()
 

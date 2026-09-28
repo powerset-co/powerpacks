@@ -17,14 +17,15 @@ PAGE_SIZE = 500
 
 
 def _fetch_pages(company_id: str, env_file: Path, *, domain: str = "",
-                 embed: bool = False) -> tuple[list[dict], dict]:
+                 embed: bool = False, department: str = "") -> tuple[list[dict], dict]:
     headers = {"Authorization": "Bearer " + bearer_token(env_file)}
     employees = []
     metadata = {}
     while True:
         company = ({"company_id": company_id} if company_id else {"domain": domain})
+        filters = {"departments": [department]} if department else {}
         response = requests.post(api_base(env_file) + "/v2/company/history/employees",
-            headers=headers, json={"company_id_source": "coresignal_company", **company,
+            headers=headers, json={"company_id_source": "coresignal_company", **company, **filters,
                 "current": True, "is_staff": True, "embed": embed,
                 "limit": PAGE_SIZE, "offset": len(employees)}, timeout=120 if embed else 30)
         response.raise_for_status()
@@ -46,8 +47,8 @@ def fetch_employees(company_id: str, env_file: Path) -> list[dict]:
     return _fetch_pages(company_id, env_file)[0]
 
 
-def fetch_embedded_employees(domain: str, env_file: Path) -> tuple[list[dict], dict]:
-    return _fetch_pages("", env_file, domain=domain, embed=True)
+def fetch_embedded_employees(domain: str, env_file: Path, *, department: str) -> tuple[list[dict], dict]:
+    return _fetch_pages("", env_file, domain=domain, embed=True, department=department)
 
 
 def team_members(employees: list[dict]) -> tuple[TeamMember, ...]:

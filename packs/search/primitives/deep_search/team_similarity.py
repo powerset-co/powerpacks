@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -17,6 +18,7 @@ from packs.search.primitives.shared.openai_client import make_openai_client
 from packs.search.primitives.deep_search.results_web.team import (
     fetch_embedded_employees, team_members,
 )
+from packs.search.primitives.deep_search.team_department import Department
 
 MODEL = "text-embedding-3-small"
 METHOD = "Titles + descriptions + company names · five jobs"
@@ -26,29 +28,33 @@ EMBED_BATCH = 32
 ENCODING = tiktoken.get_encoding("cl100k_base")
 
 
-def prepare_team(domain: str, env_file: Path, run_dir: Path) -> dict:
-    """Snapshot the stored roster and API-owned employee embeddings once per run."""
+def prepare_team(domain: str, env_file: Path, run_dir: Path, *, jd: str, as_of: str) -> dict:
+    """Classify the JD, then snapshot only that department's staff and embeddings."""
+    department = asyncio.run(Department.from_jd(jd, as_of=as_of, run_dir=run_dir))
     path = run_dir / "team-embeddings.json"
-    fetched = not path.is_file()
-    if not fetched:
-        snapshot = json.loads(path.read_text())
-    else:
-        employees, metadata = fetch_embedded_employees(domain, env_file)
+    snapshot = json.loads(path.read_text()) if path.is_file() else {}
+    fetched = snapshot.get("domain") != domain or snapshot.get("department") != department.value
+    if fetched:
+        employees, metadata = fetch_embedded_employees(domain, env_file, department=department.value)
         if metadata["company_id_source"] != "coresignal_company" or not metadata["company_id"]:
             raise ValueError("employee roster did not resolve a CoreSignal company")
         if metadata["embedding_model"] != MODEL:
             raise ValueError("employee embedding model differs from candidate model")
         fields = ("provider_employee_id", "full_name", "linkedin_url", "title", "location",
-                  "started_on", "embedding_status", "embedding")
+                  "started_on", "department", "embedding_status", "embedding")
         employees = [{field: row.get(field) for field in fields} for row in employees]
-        snapshot = {**metadata, "domain": domain, "employees": employees,
+        snapshot = {**metadata, "domain": domain, "department": department.value, "employees": employees,
                     "fetched_at": datetime.now(timezone.utc).isoformat()}
     team_path = run_dir / "team.json"
-    if not team_path.is_file() or not path.is_file():
+    if not team_path.is_file() or fetched:
         team_path.write_text(json.dumps({
+            "department": department.value,
             "members": [asdict(member) for member in team_members(snapshot["employees"])],
             "fetched_at": snapshot["fetched_at"]}, indent=2) + "\n")
     if fetched:
+        if path.is_file():
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            path.rename(path.with_name(f"{path.name}.{stamp}.bkup"))
         path.write_text(json.dumps(snapshot) + "\n")
     return snapshot
 

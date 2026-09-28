@@ -1484,10 +1484,13 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
             results["hiring_company_ref"] = ref
             domain = str(ref.get("verified_domain") or "")
             if domain:
+                os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.team_department"
                 team_executor = ThreadPoolExecutor(max_workers=1)
                 team_similarity.save_status(run_dir, "preparing", "Refreshing team similarity")
                 team_future = team_executor.submit(
-                    team_similarity.prepare_team, domain, Path(env_file), run_dir)
+                    team_similarity.prepare_team, domain, Path(env_file), run_dir,
+                    jd=(run_dir / "jd.txt").read_text(encoding="utf-8"),
+                    as_of=str(results["created_at"])[:10])
                 team_executor.shutdown(wait=False)
             else:
                 team_similarity.save_status(run_dir, "unavailable", "Hiring company domain unavailable")
