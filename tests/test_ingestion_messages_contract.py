@@ -408,7 +408,9 @@ class IngestionMessagesContractTests(unittest.TestCase):
             self.assertEqual(result.contacts_csv, str(whatsapp))
             self.assertEqual(whatsapp_run.call_count, 1)
 
-    def test_messages_discovery_merges_only_selected_channels(self) -> None:
+    def test_single_channel_run_keeps_the_other_channels_last_export(self) -> None:
+        # `discover --include-imessage` refreshes iMessage alone; WhatsApp's last
+        # export still feeds the merge, so its contacts stay in contacts.csv.
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             imessage = root / "imessage.csv"
@@ -430,7 +432,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertIsNone(result)
         inputs = merge.call_args.kwargs["inputs"]
         self.assertIn(imessage, inputs)
-        self.assertNotIn(whatsapp, inputs)
+        self.assertIn(whatsapp, inputs)
 
     def test_refreshed_export_overwrites_downstream_contacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:

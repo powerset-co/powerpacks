@@ -31,6 +31,8 @@ from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.search.primitives.deep_search.results_web import server as results_web
 from packs.search.primitives.deep_search.results_web.api import search_api
+from packs.ingestion.primitives.accounts.api import AccountsApi
+from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.shared.web.app import AppRoutes
 
 from .server import make_handler
@@ -61,11 +63,13 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
                                       base="/searches")
     app = AppRoutes()
     searches_json = search_api(routes)
+    accounts = AccountsApi()
+    tasks = TasksApi()
 
     class Handler(viewer):
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if app.get(self, parsed) or searches_json.get(self, parsed):
+            if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed) or searches_json.get(self, parsed):
                 return
             if parsed.path in {"/", "/directory"}:
                 self.send_response(HTTPStatus.FOUND)
@@ -79,6 +83,11 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
                 self.wfile.write(_NO_PEOPLE)
             else:
                 super().do_GET()
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            if not (accounts.post(self, parsed) or tasks.post(self, parsed)):
+                super().do_POST()
 
     return Handler
 

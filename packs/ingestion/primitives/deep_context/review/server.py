@@ -78,6 +78,8 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
 )
 from packs.ingestion.primitives.share.web.server import share_routes
 from packs.search.primitives.deep_search.results_web.api import search_api
+from packs.ingestion.primitives.accounts.api import AccountsApi
+from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
 from packs.shared.web.app import AppRoutes
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
@@ -173,6 +175,8 @@ def make_handler(
     share = share_routes(db)
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
     searches_json = search_api(searches)
+    accounts = AccountsApi()
+    tasks = TasksApi()
 
     if guided_retargets is None and run_jobs:
         guided_retargets = GuidedRetargetWorker(db, on_change=notify)
@@ -366,7 +370,7 @@ def make_handler(
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             params = urllib.parse.parse_qs(parsed.query)
-            if app.get(self, parsed):
+            if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
                 return None
             if parsed.path == "/healthz":
                 return self.send_bytes(b"ok", "text/plain")
@@ -483,7 +487,7 @@ def make_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if share.post(self, parsed) or searches.post(self, parsed):
+            if share.post(self, parsed) or searches.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed):
                 return None
             routes = {"/decide", "/worth", "/complete", "/approve-enrichment", "/retarget", "/feedback", "/auth/login"}
             if parsed.path not in routes:

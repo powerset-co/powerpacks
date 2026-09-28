@@ -12,6 +12,8 @@ account — and `CHECK_BUCKETS` says which payload lists each verdict lands in.
 nested dict.
 
 Changelog:
+  2026-09-28 (revoked grant): `unauthorized (401)` also means re-authorize; a grant
+    revoked at Google fails verify with a 401 on its cached access token.
   2026-09-23 (typed rows): subprocess and visible-run results read their
     `CommandResult` fields, and the bucket lookup is a direct table index, so no
     `.get` remains outside `VaultHealth.from_status` (the status-payload boundary).
@@ -77,6 +79,7 @@ MSGVAULT_REAUTH_ERROR_MARKERS = (
     "missing token",
     "no valid token",
     "token is missing",
+    "unauthorized (401)",
 )
 # Which auth-check payload lists each verdict lands in, in verdict order. A
 # verdict that needs the user's browser also lands in accounts_to_authorize.
