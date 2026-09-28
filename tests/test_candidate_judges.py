@@ -49,6 +49,11 @@ class CandidateJudgeTests(unittest.TestCase):
         self.assertTrue(schema["strict"])
         self.assertEqual(schema["schema"]["properties"]["cap"]["enum"], [2, 3, 5])
         self.assertFalse(schema["schema"]["additionalProperties"])
+        domain_schema = domain["response_format"]["json_schema"]
+        self.assertTrue(domain_schema["strict"])
+        self.assertEqual(set(domain_schema["schema"]["required"]), {"score", "evidence", "concerns", "why"})
+        self.assertEqual(domain_schema["schema"]["properties"]["score"]["enum"], [1, 2, 3, 4, 5, None])
+        self.assertFalse(domain_schema["schema"]["additionalProperties"])
 
     def test_only_luna_cap_two_gets_independent_terra_review_and_resumes(self):
         for cap, reviewed_cap in ((2, 2), (2, 3), (2, 5), (3, None), (5, None)):

@@ -33,6 +33,18 @@ _OPPORTUNITY_PROPERTIES = {
     "company_context": {"type": "string"},
     "missing_facts": {"type": "array", "items": {"type": "string"}},
 }
+_DOMAIN_PROPERTIES = {
+    "score": {"type": ["integer", "null"], "enum": [1, 2, 3, 4, 5, None]},
+    "evidence": {"type": "array", "items": {"type": "string"}},
+    "concerns": {"type": "array", "items": {"type": "string"}},
+    "why": {"type": "string"},
+}
+
+
+def _strict_schema(properties: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "json_schema", "json_schema": {"name": "candidate_judge", "strict": True,
+            "schema": {"type": "object", "properties": properties,
+                       "required": list(properties), "additionalProperties": False}}}
 
 
 def candidate_judge_messages(*, dimension: str, jd: str, candidate: Mapping[str, Any],
@@ -59,11 +71,11 @@ def candidate_judge_messages(*, dimension: str, jd: str, candidate: Mapping[str,
 def candidate_judge_request(*, dimension: str, opportunity_review: bool = False,
                             **inputs: Any) -> dict[str, Any]:
     request = {**JUDGE_CONFIG, "messages": candidate_judge_messages(dimension=dimension, **inputs)}
+    if dimension == "domain":
+        request["response_format"] = _strict_schema(_DOMAIN_PROPERTIES)
     if dimension == "opportunity" and not opportunity_review:
-        request.update(model="gpt-5.6-luna", reasoning_effort="low", response_format={
-            "type": "json_schema", "json_schema": {"name": "candidate_judge", "strict": True,
-                "schema": {"type": "object", "properties": _OPPORTUNITY_PROPERTIES,
-                           "required": list(_OPPORTUNITY_PROPERTIES), "additionalProperties": False}}})
+        request.update(model="gpt-5.6-luna", reasoning_effort="low",
+                       response_format=_strict_schema(_OPPORTUNITY_PROPERTIES))
         request["messages"][0]["content"] += "\n\n" + JUDGE_GUIDANCE + "\n\n" + OPPORTUNITY_GUIDANCE
     return request
 
