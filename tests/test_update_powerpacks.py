@@ -244,6 +244,10 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
                     self.end_headers()
                     if self.path == "/v2/integrations/typesafe/key":
                         self.wfile.write(b'{"typesafe_api_key":"fixture-typesafe-key"}')
+                    elif self.path == "/v2/integrations/turbopuffer/key":
+                        self.wfile.write(b'{"turbopuffer_api_key":"fixture-turbopuffer-key"}')
+                    elif self.path == "/v2/integrations/powerpacks/database-url":
+                        self.wfile.write(b'{"database_url":"postgresql://fixture@db.example.test/app"}')
                     else:
                         self.wfile.write(b'{"powerset_api_key":"fixture-gateway-key"}')
 
@@ -266,6 +270,8 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
                 thread.join()
             self.assertEqual(requests, [
                 ("/v2/integrations/powerset-api/key", "Bearer fixture-bearer"),
+                ("/v2/integrations/turbopuffer/key", "Bearer fixture-bearer"),
+                ("/v2/integrations/powerpacks/database-url", "Bearer fixture-bearer"),
                 ("/v2/integrations/typesafe/key", "Bearer fixture-bearer"),
             ])
             refreshed_env = (checkout / ".env").read_text()
@@ -273,11 +279,17 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             self.assertIn("POWERPACKS_CROSS_ENCODER_BETA=1", refreshed_env)
             self.assertIn("OPENAI_API_KEY=personal", refreshed_env)
             self.assertIn("TYPESAFE_API_KEY=fixture-typesafe-key", refreshed_env)
+            self.assertIn("TURBOPUFFER_API_KEY=fixture-turbopuffer-key", refreshed_env)
+            self.assertIn("DATABASE_URL=postgresql://fixture@db.example.test/app", refreshed_env)
             self.assertIn("KEEP_ENV=yes", refreshed_env)
             self.assertIn("powerset_api_key_refresh=refreshed", refreshed.stdout)
             self.assertIn("cross_encoder=enabled", refreshed.stdout)
             self.assertIn("typesafe_api_key=installed", refreshed.stdout)
+            self.assertIn("turbopuffer_api_key=refreshed", refreshed.stdout)
+            self.assertIn("database_url=refreshed", refreshed.stdout)
             self.assertNotIn("fixture-gateway-key", refreshed.stdout + refreshed.stderr)
+            self.assertNotIn("fixture-turbopuffer-key", refreshed.stdout + refreshed.stderr)
+            self.assertNotIn("db.example.test", refreshed.stdout + refreshed.stderr)
             self.assertNotIn("fixture-typesafe-key", refreshed.stdout + refreshed.stderr)
 
             write(checkout / "after-reset.txt", "stash me after reset\n")
