@@ -18,6 +18,7 @@ share list. An un-share removes the operator from allowed_operator_ids and
 deletes its source rows; documents are never deleted.
 
 Changelog:
+  2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
   2026-09-27: bind real runs to checked decisions and target; report typed stages.
   2026-09-24: read the share list from SQLite, not share.csv.
   2026-09-24: shared = the three-way share value `yes`; `confirm` rows stay home.
@@ -37,7 +38,6 @@ from urllib.parse import urlparse
 
 import duckdb
 import turbopuffer
-from dotenv import dotenv_values
 
 REPO = Path(__file__).resolve().parents[4]
 SEARCH_PRIMITIVES = REPO / "packs/search/primitives"
@@ -93,7 +93,6 @@ class UploadPowerset:
         operator_id: str | None = None,
         dry_run: bool = True,
         require_checked: bool = False,
-        env_file: Path | None = None,
     ) -> None:
         self.db = db
         self.share_db = share_db
@@ -102,7 +101,6 @@ class UploadPowerset:
         self.operator_id = operator_id
         self.dry_run = dry_run
         self.require_checked = require_checked
-        self.env_file = env_file
         self.manifest_path = out_dir / "manifest.json"
         self._database_url = ""
         self._namespace_names: dict[str, str] = {}
@@ -140,14 +138,13 @@ class UploadPowerset:
                     "status": "failed", "uploaded": current.progress["uploaded"],
                     "skipped": current.progress["skipped"]})
             current.write(self.manifest_path)
-            log_error(self.out_dir, current.stage or Stage.PLANNING, exc, self.env_file)
+            log_error(self.out_dir, current.stage or Stage.PLANNING, exc)
             raise
 
     def _run(self, current: UploadManifest, previous: UploadManifest) -> dict[str, Any]:
+        # The server (cmd_serve) and the CLI (main) each load .env once, at start.
         config = dict(os.environ)
-        if self.env_file:
-            config.update({key: value for key, value in dotenv_values(self.env_file).items() if value is not None})
-        self._database_url = config.get("DATABASE_URL") or postgres_client.database_url()
+        self._database_url = postgres_client.database_url()
         # The shared cloud the upload writes is the v3 family, whatever version the search
         # side reads; a per-namespace override still points a rehearsal at _v3_share_test.
         self._namespace_names = {
@@ -431,7 +428,6 @@ def main() -> int:
     parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--operator-id", default=None, help="override the credentials-derived users.id")
-    parser.add_argument("--env-file", default=None)
     parser.add_argument("--apply", action="store_true",
                         help="execute the plan against Postgres + TurboPuffer; without it: plan only, write nothing")
     args = parser.parse_args()
@@ -443,7 +439,6 @@ def main() -> int:
         out_dir=Path(args.out_dir),
         operator_id=args.operator_id,
         dry_run=not args.apply,
-        env_file=Path(args.env_file) if args.env_file else None,
     ).run()
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0

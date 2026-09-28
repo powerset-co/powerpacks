@@ -18,10 +18,8 @@ class UploadErrorTests(unittest.TestCase):
     def test_provider_failure_records_traceback_body_request_and_survives_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            env = root / 'target.env'
-            env.write_text('TURBOPUFFER_API_KEY=synthetic-private-key\n')
             uploader = UploadPowerset(db=root/'db', share_db=root/'share', people_csv=root/'people',
-                                      out_dir=root/'out', env_file=env)
+                                      out_dir=root/'out')
             request = httpx.Request('POST', 'https://api.example.test/v2/namespaces/education/query',
                                     headers={'Authorization': 'Bearer synthetic-private-key'})
             response = httpx.Response(400, request=request, headers={'x-request-id': 'request-example'})
@@ -32,7 +30,8 @@ class UploadErrorTests(unittest.TestCase):
                 replace(payload, stage=Stage.EDUCATION).write(uploader.manifest_path)
                 raise error
 
-            with patch.object(uploader, '_run', side_effect=fail):
+            with patch.object(uploader, '_run', side_effect=fail), \
+                    patch.dict(os.environ, {'TURBOPUFFER_API_KEY': 'synthetic-private-key'}):
                 for _ in range(2):
                     with self.assertRaises(turbopuffer.BadRequestError):
                         uploader.run()

@@ -30,7 +30,7 @@ From the canonical Powerpacks repo (`$POWERPACKS_REPO_ROOT`, else
    moved files):
 
    ```bash
-   lsof -ti :8765 | xargs kill 2>/dev/null || true
+   bin/deep-context stop
    ```
 
 2. **Dry run** (default — free, read-only) and show the user the table:

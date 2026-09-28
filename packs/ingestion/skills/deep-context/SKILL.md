@@ -493,18 +493,15 @@ strangers, dormant), and the bulk bar tags a whole selection **Share** or
 **Keep private** (`Use worth` clears the tag). Each write re-decides those
 people's `share` rows in the same transaction, so the table stays current; `z`
 undoes the last write. Tell the user the URL and the three counts; do not read
-the list aloud. Then the upload — without `--apply` it plans only, reads the
-cloud, writes one manifest:
-
-```bash
-uv run --env-file .env --project . python packs/indexing/primitives/upload_powerset/upload_powerset.py
-```
-
-Show the plan counts and get explicit approval before `--apply`: it upserts
-`persons`, reconciles this operator's `operator_person_sources` rows, writes or
-patches the five TurboPuffer namespaces, and mirrors the user's own `private`
-into `contact_tags`. People without a LinkedIn never reach the cloud
-(`skipped_no_linkedin`). `ALEPH_ENV=staging` targets the `_dev` namespaces.
+the list aloud. The upload is the page's **Share network** button (top right):
+the user clicks it, reads the check's counts, and presses **Confirm sharing**
+themselves. Do not run the upload for them. It upserts `persons`, reconciles
+this operator's `operator_person_sources` rows, writes or patches the five v3
+TurboPuffer namespaces, and mirrors the user's own `private` into
+`contact_tags`. People without a LinkedIn never reach the cloud. The
+standalone CLI (`upload_powerset.py`, plan-only without `--apply`) is for
+debugging; `.powerpacks/upload-powerset/manifest.json` and `errors.log` hold
+the last run.
 
 ## Completion report
 

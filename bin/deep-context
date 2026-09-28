@@ -57,7 +57,36 @@ stop_review_server() {
       kill -0 "$pid" 2>/dev/null || break
       sleep 0.2
     done
+    # A server that ignored TERM for 2s would keep the port; the state is in files.
+    kill -9 "$pid" 2>/dev/null || true
   done
+}
+
+port_holder() {
+  # The command still listening on the port after our server stopped, if any.
+  local pid
+  pid="$(lsof -tnP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1)"
+  [[ -n "$pid" ]] && echo "pid $pid: $(ps -p "$pid" -o command= 2>/dev/null)"
+  return 0
+}
+
+review_server_has_active_upload() {
+  # A People upload runs inside the server; restarting would interrupt it.
+  curl -fsS --max-time 2 "http://127.0.0.1:$1/api/people/upload" 2>/dev/null \
+    | grep -qE '"status": *"(checking|uploading)"'
+}
+
+review_url() {
+  local port="$1" stage="$2" run="${3:-}"
+  if [[ "$stage" == "searches" && -n "$run" ]]; then
+    echo "http://127.0.0.1:$port/searches/run?run_id=$run"
+  elif [[ "$stage" == "people" || "$stage" == "searches" ]]; then
+    echo "http://127.0.0.1:$port/$stage"
+  elif [[ -n "$stage" && "$stage" != "directory" ]]; then
+    echo "http://127.0.0.1:$port/?stage=$stage"
+  else
+    echo "http://127.0.0.1:$port/directory"
+  fi
 }
 
 review_server_has_active_retargets() {
@@ -84,15 +113,7 @@ open_review_ui_when_healthy() {
   # goes down, print the URL but never auto-open a server we did not start.
   # The URL line always prints; a missing `open` (non-macOS) degrades to it.
   local port="$1" stage="$2" run="${3:-}" url _ stale=0
-  if [[ "$stage" == "searches" && -n "$run" ]]; then
-    url="http://127.0.0.1:$port/searches/run?run_id=$run"
-  elif [[ "$stage" == "people" || "$stage" == "searches" ]]; then
-    url="http://127.0.0.1:$port/$stage"
-  elif [[ -n "$stage" && "$stage" != "directory" ]]; then
-    url="http://127.0.0.1:$port/?stage=$stage"
-  else
-    url="http://127.0.0.1:$port/directory"
-  fi
+  url="$(review_url "$port" "$stage" "$run")"
   if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
     stale=1
     for _ in $(seq 1 25); do
@@ -316,12 +337,23 @@ case "$cmd" in
     done
     if (( ! wants_help )); then
       review_port="$(review_port_from_args "$@")"
+      if review_server_has_active_upload "$review_port"; then
+        # Every page lives on the one server: open the route instead of restarting.
+        echo "review: an upload is running; keeping the server on port ${review_port}" >&2
+        echo "review UI: $(review_url "$review_port" "$review_stage" "$review_run")" >&2
+        exit 0
+      fi
       if review_server_has_active_enrichment "$review_port" \
           || review_server_has_active_retargets "$review_port"; then
         echo "warning: active enrichment/guided re-research detected; restarting anyway; guidance, projected research, and the SQLite job receipt are durable" >&2
       fi
       echo "review: restarting the review server on port ${review_port}..." >&2
       stop_review_server "$review_port"
+      holder="$(port_holder "$review_port")"
+      if [[ -n "$holder" ]]; then
+        echo "review: port ${review_port} is held by another program (${holder}); quit it, or pass --port" >&2
+        exit 1
+      fi
       open_review_ui_when_healthy "$review_port" "$review_stage" "$review_run" &
     fi
     "${PY[@]}" "$PKG.review.reconcile_review_web" serve "${review_args[@]}"
@@ -334,6 +366,9 @@ case "$cmd" in
       echo '{"primitive": "reconcile_review_web", "status": "stopped", "note": "no review server was running"}'
     elif review_server_has_active_enrichment "$stop_port"; then
       echo "refusing: enrichment is running inside the live review server; wait for it (bin/deep-context review-status --wait), then re-run stop" >&2
+      exit 1
+    elif review_server_has_active_upload "$stop_port"; then
+      echo "refusing: a People upload is running inside the live review server; wait for it to finish, then re-run stop" >&2
       exit 1
     else
       stop_review_server "$stop_port"

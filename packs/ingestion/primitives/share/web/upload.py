@@ -1,12 +1,12 @@
 """Run one People upload and project its typed manifest to the status route.
 
 Changelog:
+  2026-09-27: the job reads the server's environment; no second env file.
   2026-09-27: bind confirm to checked decisions, expose the upload status contract.
 """
 
 from __future__ import annotations
 
-import os
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -71,7 +71,7 @@ class ShareUpload:
                     self.manifest_path.replace(self.manifest_path.with_name("manifest.json.bkup"))
             failed = replace(saved, status="failed", error=CHECK_FAILED if saved.dry_run else UPLOAD_FAILED)
             failed.write(self.manifest_path)
-            log_error(self.out_dir, saved.stage or Stage.PLANNING, exc, self._env_file())
+            log_error(self.out_dir, saved.stage or Stage.PLANNING, exc)
             return self._status()
 
     def _status(self) -> dict[str, Any]:
@@ -140,7 +140,7 @@ class ShareUpload:
                     except BaseException as exc:
                         if isinstance(exc, KeyboardInterrupt):
                             raise
-                        log_error(self.out_dir, Stage.PLANNING, exc, self._env_file())
+                        log_error(self.out_dir, Stage.PLANNING, exc)
                         raise ValueError(CHECK_FAILED) from exc
                     if previous.share_digest != current_digest:
                         raise ValueError(CHANGED_CHECK)
@@ -152,24 +152,18 @@ class ShareUpload:
                 self._thread.start()
         return self.status()
 
-    @staticmethod
-    def _env_file() -> Path | None:
-        value = os.environ.get("POWERPACKS_UPLOAD_ENV_FILE")
-        return Path(value) if value else None
-
     def _run(self, dry_run: bool) -> None:
         try:
             upload_powerset.UploadPowerset(
                 db=self.index_db, share_db=self.share_db, people_csv=self.people_csv,
                 out_dir=self.out_dir, dry_run=dry_run, require_checked=not dry_run,
-                env_file=self._env_file(),
             ).run()
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt):
                 raise
             saved = self._saved()
             if saved.status != "failed":
-                log_error(self.out_dir, saved.stage or Stage.PLANNING, exc, self._env_file())
+                log_error(self.out_dir, saved.stage or Stage.PLANNING, exc)
                 failed = replace(saved, status="failed", error=safe_error(
                     exc, CHECK_FAILED if dry_run else UPLOAD_FAILED))
                 if not dry_run:

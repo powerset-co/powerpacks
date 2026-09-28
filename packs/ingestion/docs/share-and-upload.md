@@ -3,6 +3,7 @@
 Created: 2026-09-24
 
 Changelog:
+- 2026-09-27: one env load; `POWERPACKS_UPLOAD_ENV_FILE` is gone.
 - 2026-09-25: point the parent-id map and human worth at the SQLite `people` and
   `parents` tables.
 - 2026-09-25 (SQLite store): labels, the share list, and human tags became tables
@@ -289,11 +290,12 @@ The uploader pins the v3 family itself (`UPLOAD_INDEX_VERSION`), whatever
 `.env` that the install renders and `bin/update-powerpacks` preserves is
 enough: its `DATABASE_URL` login has the schema's privileges, and its
 `TURBOPUFFER_API_KEY` reaches the namespaces. The review server loads that `.env` once at
-startup with the shared python-dotenv loader; the uploader reads that
-environment, and the standalone upload CLI does the same. `POWERPACKS_UPLOAD_ENV_FILE`
-exists only for a rehearsal: an env file whose per-namespace
-`POWERPACKS_TURBOPUFFER_<NAME>_NAMESPACE` overrides all end in `_v3_share_test`
-and whose `DATABASE_URL` is a disposable copy.
+startup with the shared python-dotenv loader (`load_env`, which never overrides
+an exported value); the uploader reads only that environment, and the standalone
+upload CLI loads `.env` the same way once in `main`. A rehearsal exports its
+values before starting the server: per-namespace
+`POWERPACKS_TURBOPUFFER_<NAME>_NAMESPACE` overrides that all end in
+`_v3_share_test`, and a `DATABASE_URL` for a disposable copy.
 The local index is `.powerpacks/search-index/local-search.duckdb`.
 
 The existing upload manifest retains content hashes and unfinished writes for

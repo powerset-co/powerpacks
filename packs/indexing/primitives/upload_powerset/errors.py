@@ -10,7 +10,6 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import turbopuffer
-from dotenv import dotenv_values
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.indexing.primitives.upload_powerset.manifest import CHANGED_CHECK
@@ -33,7 +32,7 @@ def safe_error(error: BaseException, fallback: str) -> str:
     return fallback
 
 
-def log_error(out_dir: Path, stage: str, error: BaseException, env_file: Path | None) -> None:
+def log_error(out_dir: Path, stage: str, error: BaseException) -> None:
     details = [f"{now_iso()} stage={stage}", ''.join(traceback.format_exception(error))]
     if isinstance(error, turbopuffer.APIStatusError):
         response = error.response
@@ -44,10 +43,7 @@ def log_error(out_dir: Path, stage: str, error: BaseException, env_file: Path | 
                 details.append(f"{header}: {value}")
         details.append('Response: ' + json.dumps(error.body, ensure_ascii=False, default=str))
     text = '\n'.join(details)
-    config = dict(os.environ)
-    if env_file:
-        config.update({key: value for key, value in dotenv_values(env_file).items() if value})
-    secrets = {value for key, value in config.items()
+    secrets = {value for key, value in os.environ.items()
                if re.search(r'KEY|TOKEN|PASSWORD|SECRET|DATABASE_URL|DB_URL', key) and value}
     for value in tuple(secrets):
         if '://' in value:
