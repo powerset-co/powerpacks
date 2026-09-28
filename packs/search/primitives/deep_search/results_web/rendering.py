@@ -614,13 +614,16 @@ def render_search_body(search: SearchResult, *, readonly: bool = False) -> str:
             f"</section>")
 
 
+CURRENT_PAGE = " aria-current='page'"
+
+
 def _shell(body: str, *, base: str, current: str = "searches", title: str = "Search results") -> str:
     """The page template with its nav: Searches alone when the viewer serves
     itself, Searches and People when the review server mounts it under a base."""
     links = [("Searches", f"{base}/" if base else "/", "searches")]
     if base:
         links.append(("People", "/people", "people"))
-    nav = "".join(f"<a href='{_e(href)}'{" aria-current='page'" if key == current else ''}>{_e(label)}</a>"
+    nav = "".join(f"<a href='{_e(href)}'{CURRENT_PAGE if key == current else ''}>{_e(label)}</a>"
                   for label, href, key in links)
     template = RESULTS_HTML.read_text(encoding="utf-8")
     ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)
