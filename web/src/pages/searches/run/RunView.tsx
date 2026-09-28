@@ -34,9 +34,10 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
   const queryClient = useQueryClient()
   const tags = useSearchTags(runId, onToast)
   const [filters, setFilters] = useState<ResultFilters>(() => ({ ...NO_FILTERS, labels: labelsShown() }))
-  const [pondAt, setPond] = useState(0)
-  // Screened runs list every pond's people together until a pond card narrows it.
-  const [pondOnly, setPondOnly] = useState<number | null>(null)
+  // The table opens on the latest pond; a screened run's pond card, picked again, shows every pond.
+  const latest = Math.max(search.ponds.length - 1, 0)
+  const [pondAt, setPond] = useState(latest)
+  const [pondOnly, setPondOnly] = useState<number | null>(search.ponds.length ? latest : null)
 
   const results = useMemo(() => rankResults(search), [search])
   const sections = useMemo(() => {

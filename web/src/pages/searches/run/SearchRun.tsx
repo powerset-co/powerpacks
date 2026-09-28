@@ -61,7 +61,6 @@ export function SearchRun(props: SearchRunProps) {
       <PondChain
         ponds={search.ponds}
         selected={mode === "ponds" ? pondAt : props.pondOnly}
-        allPonds={mode !== "ponds"}
         onSelect={mode === "ponds" ? props.onPond : props.onPondOnly}
       />
       <div className="run-toolbar" data-run-toolbar>
