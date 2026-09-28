@@ -943,6 +943,36 @@ class ApplyTests(unittest.TestCase):
             con.close()
         self.assertEqual(result.docs_upserted["people"], 1)
 
+    def test_missing_docs_for_people_already_in_the_cloud_go_in_one_write(self):
+        # Two people the cloud has, neither with position docs: one people-namespace write, not one each.
+        plan = plan_for(
+            [share_row(NEW_PERSON, "jordan-bravo"), share_row(CLOUD_PERSON, "casey-lane")],
+            [local_person(NEW_PERSON, "jordan-bravo"), local_person(CLOUD_PERSON, "casey-lane")],
+            cloud_state(cloud_id_by_person={NEW_PERSON: NEW_PERSON, CLOUD_PERSON: CLOUD_PERSON}),
+        )
+        namespace = FakeNamespace()
+        with tempfile.TemporaryDirectory() as tmp:
+            con = duckdb.connect(str(Path(tmp) / "local-search.duckdb"))
+            con.execute("CREATE TABLE local_person_profiles (person_id VARCHAR, public_identifier VARCHAR)")
+            con.execute("CREATE TABLE local_people_positions (id VARCHAR, base_id VARCHAR, position_title VARCHAR)")
+            con.execute("INSERT INTO local_people_positions VALUES ('pos-a', ?, 'Engineer'), ('pos-b', ?, 'Founder')",
+                        [NEW_PERSON, CLOUD_PERSON])
+            con.execute("CREATE TABLE local_summaries (id VARCHAR, base_id VARCHAR, summary VARCHAR)")
+            con.execute("CREATE TABLE local_people_education (id VARCHAR, base_id VARCHAR, person_id VARCHAR)")
+            con.execute("CREATE TABLE local_companies (id VARCHAR, company_name VARCHAR)")
+            con.execute("CREATE TABLE local_education (id VARCHAR, school_name VARCHAR)")
+            uploader = upload_powerset.UploadPowerset(
+                db=Path(tmp) / "local-search.duckdb", share_db=Path(tmp) / "deep-context.sqlite",
+                people_csv=Path(tmp) / "people.csv", operator_id=OPERATOR, out_dir=Path(tmp) / "out")
+            uploader._tp_client = mock.Mock(namespace=mock.Mock(return_value=namespace))
+            uploader._namespace_names = {logical: logical for logical in NAMESPACE_NAMES}
+            with mock.patch.object(turbopuffer_writer, "fetch_allowed_operator_ids", return_value={}):
+                uploader._apply(con, FakeCursor(), plan, changed=())
+            con.close()
+        position_writes = [call["upsert_rows"] for call in namespace.writes
+                           if "upsert_rows" in call and {row["id"] for row in call["upsert_rows"]} & {"pos-a", "pos-b"}]
+        self.assertEqual([sorted(row["id"] for row in rows) for rows in position_writes], [["pos-a", "pos-b"]])
+
     def test_apply_counts_written_rows_and_upserts_new_docs_but_patches_existing_docs(self):
         private_person = "55555555-5555-5555-8555-555555555555"
         plan = plan_for(

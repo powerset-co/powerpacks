@@ -374,6 +374,7 @@ class UploadPowerset:
                             cloud_id = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
                             row[key] = cloud_id
                             by_person.setdefault(cloud_id, []).append(row)
+                        missing: list[dict[str, Any]] = []
                         for person_id in chunk:
                             if person_id not in local_by_cloud:
                                 continue
@@ -382,11 +383,13 @@ class UploadPowerset:
                             local_ids = {str(row["id"]) for row in local_rows}
                             if present and not (present & local_ids):
                                 continue
-                            missing = [row for row in local_rows if str(row["id"]) not in present]
-                            docs_upserted[namespace_plan.logical] += turbopuffer_writer.upsert_docs(
-                                ns, namespace_plan.logical, missing)
-                            if missing:
+                            person_missing = [row for row in local_rows if str(row["id"]) not in present]
+                            missing.extend(person_missing)
+                            if person_missing:
                                 uploaded_people.add(local_by_cloud[person_id])
+                        # One write per chunk; upsert_docs splits it into 500-row requests.
+                        docs_upserted[namespace_plan.logical] += turbopuffer_writer.upsert_docs(
+                            ns, namespace_plan.logical, missing)
                 desired_acl = {doc_id: allowed.get(person_id, ())
                                for person_id, ids in doc_ids.items() for doc_id in ids}
                 current_acl = turbopuffer_writer.fetch_allowed_operator_ids(ns, sorted(desired_acl))
