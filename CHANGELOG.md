@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.6.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.6.0...powerpacks-v3.6.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **search:** open a run on its latest pond; drop the pond caption ([47f379f](https://github.com/powerset-co/powerpacks/commit/47f379f0cc2daa45c094e595f26016aed0c34e7d))
+* **search:** open a run on its latest pond; drop the pond caption ([8ff2003](https://github.com/powerset-co/powerpacks/commit/8ff20030eff61b46636d4ba5d494b38402c33412))
+
 ## [3.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.5.0...powerpacks-v3.6.0) (2026-09-28)
 
 
