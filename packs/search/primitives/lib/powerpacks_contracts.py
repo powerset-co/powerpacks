@@ -322,6 +322,7 @@ def normalize_hydrated_context(row: dict[str, Any]) -> dict[str, Any]:
         "inferred_age": inferred_age,
         "years_of_experience": context.get("years_of_experience") or compute_years_of_experience(positions),
         "total_interactions": row.get("total_interactions"),
+        "last_interaction": row.get("last_interaction") or context.get("last_interaction") or None,
         "base_score": context.get("base_score", 0.0),
         "matched_position_indexes": context.get("matched_position_indexes") or [],
         "trait_scores": context.get("trait_scores") or {},
