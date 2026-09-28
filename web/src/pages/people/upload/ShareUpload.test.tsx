@@ -91,6 +91,18 @@ describe("ShareUpload dialog", () => {
     expect(posts(fetch)).toEqual([])
   })
 
+  it("checks again when Share changes opens after a finished upload", async () => {
+    let state = uploadStatus({ status: "completed", plan: PLAN, last_upload: SHARED })
+    const fetch = serve({
+      get: () => state,
+      check: () => (state = uploadStatus({ status: "checking", plan: PLAN, last_upload: SHARED })),
+    })
+    show()
+    const dialog = await openDialog("Share changes")
+    await within(dialog).findByRole("heading", { name: "Checking your network" })
+    expect(posts(fetch)).toEqual(["/api/people/upload/check"])
+  })
+
   it("checks a never-checked network on the first open, then lists the plan", async () => {
     let state = uploadStatus()
     const fetch = serve({
@@ -150,10 +162,12 @@ describe("ShareUpload dialog", () => {
   })
 
   it("says up to date when the run had nothing to write", async () => {
-    serve({ get: () => uploadStatus({ status: "completed", last_upload: { ...SHARED, uploaded: 0 } }) })
+    let state = uploadStatus({ status: "uploading", plan: PLAN, last_upload: SHARED })
+    serve({ get: () => state })
     show()
-    const dialog = await openDialog("Share changes")
-    expect(within(dialog).getByRole("heading", { name: "Your network is up to date" })).toBeTruthy()
+    const dialog = await openDialog("View upload")
+    state = uploadStatus({ status: "completed", plan: PLAN, last_upload: { ...SHARED, uploaded: 0 } })
+    await within(dialog).findByRole("heading", { name: "Your network is up to date" }, POLLED)
     // Nothing follows a finished upload: Close alone, and it takes the colour.
     expect(buttons(dialog)).toEqual(["Close"])
     expect(within(dialog).getByText("Close", { selector: "button" }).className).toContain("primary")

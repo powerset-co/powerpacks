@@ -99,6 +99,12 @@ describe("csvFilename", () => {
     )
   })
 
+  it("dates the file by the local calendar, not UTC", () => {
+    // Just after midnight and just before: one of them crosses the UTC date in any zone but UTC.
+    expect(csvFilename("Backend", [], new Date(2026, 8, 27, 0, 30))).toBe("backend_2026-09-27.csv")
+    expect(csvFilename("Backend", [], new Date(2026, 8, 27, 23, 30))).toBe("backend_2026-09-27.csv")
+  })
+
   it("falls back to results when no title word is left", () => {
     expect(csvFilename("find the", [], TODAY)).toBe("results_2026-09-26.csv")
   })

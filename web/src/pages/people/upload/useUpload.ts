@@ -53,9 +53,10 @@ export function useUpload(onToast: (message: string) => void) {
 
   const busy = Boolean(starting) || (status !== undefined && isActive(status.status))
 
-  /** Opening shows the saved status; only a network never checked starts a check. */
+  /** Opening checks a network never checked, or checked and shared since (Share changes);
+   * any other state opens on the saved status. */
   function onOpen() {
-    if (!busy && (!status || (status.status === "idle" && !status.plan))) void start("check")
+    if (!busy && (!status || status.status === "idle" || status.status === "completed")) void start("check")
   }
 
   return {

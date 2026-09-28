@@ -136,7 +136,11 @@ export function csvFilename(title: string, tags: readonly string[], today: Date 
     .filter(Boolean)
     .join("_")
   const stem = words.join("-") || "results"
-  return `${prefix ? `${prefix}_` : ""}${stem}_${today.toISOString().slice(0, 10)}.csv`
+  // The local calendar day: toISOString would name tomorrow's UTC date on a western evening.
+  const day = [today.getFullYear(), today.getMonth() + 1, today.getDate()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join("-")
+  return `${prefix ? `${prefix}_` : ""}${stem}_${day}.csv`
 }
 
 export function downloadCsv(rows: readonly ResultRow[], scoreOf: ScoreOf, filename: string): void {
