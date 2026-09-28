@@ -9,7 +9,7 @@
 .grid-head,
 .row {
   display: grid;
-  grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 84px 92px 82px;
+  grid-template-columns: 36px minmax(220px, 1.6fr) 128px 124px 96px 84px 92px 82px;
   align-items: center;
   gap: 10px;
   padding: 0 20px 0 12px;
@@ -114,16 +114,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.why {
-  color: var(--muted);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.why.human {
-  color: var(--info);
-}
 .rel {
   color: var(--foreground);
   font-size: 12px;
@@ -210,7 +200,7 @@
 @container people (max-width: 1180px) {
   .grid-head,
   .row {
-    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 84px 92px;
+    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 124px 96px 84px 92px;
   }
   .grid-head .c-msgs,
   .row .c-msgs {
@@ -220,7 +210,7 @@
 @container people (max-width: 1060px) {
   .grid-head,
   .row {
-    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 124px 96px 92px;
+    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 124px 96px 92px;
   }
   .grid-head .c-warmth,
   .row .c-warmth {
@@ -230,7 +220,7 @@
 @container people (max-width: 940px) {
   .grid-head,
   .row {
-    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 150px 96px 92px;
+    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 96px 92px;
   }
   .grid-head .c-rel,
   .row .c-rel {
@@ -240,7 +230,7 @@
 @container people (max-width: 800px) {
   .grid-head,
   .row {
-    grid-template-columns: 36px minmax(180px, 1fr) 150px 96px 92px;
+    grid-template-columns: 36px minmax(180px, 1fr) 96px 92px;
   }
   .grid-head .c-sources,
   .row .c-sources {

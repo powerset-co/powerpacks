@@ -173,7 +173,7 @@ export const QUICK: readonly QuickFilter[] = [
   { name: "Close friends", set: { relationship_kind: ["close_friend"] } },
 ]
 
-export type SortKey = "name" | "reason" | "relationship" | "worth" | "warmth" | "last" | "messages"
+export type SortKey = "name" | "relationship" | "worth" | "warmth" | "last" | "messages"
 
 export interface Sort {
   key: SortKey
@@ -184,7 +184,6 @@ const WORTH_ORDER = ["yes", "maybe", "no", ""]
 
 const SORTERS: Readonly<Record<SortKey, (a: Person, b: Person) => number>> = {
   name: (a, b) => a.name.localeCompare(b.name),
-  reason: (a, b) => a.reason.localeCompare(b.reason) || a.name.localeCompare(b.name),
   relationship: (a, b) => (a.relationship_kind || "~").localeCompare(b.relationship_kind || "~"),
   worth: (a, b) => WORTH_ORDER.indexOf(a.worth) - WORTH_ORDER.indexOf(b.worth),
   warmth: (a, b) => (b.warmth ?? -1) - (a.warmth ?? -1),

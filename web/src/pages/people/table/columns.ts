@@ -14,7 +14,6 @@ export interface GridColumn {
 export const COLUMNS: readonly GridColumn[] = [
   { sort: "name", cls: "c-person", label: "Person" },
   { cls: "c-sources", label: "Sources" },
-  { sort: "reason", cls: "c-why", label: "Reason" },
   { sort: "relationship", cls: "c-rel", label: "Relationship" },
   { sort: "worth", cls: "c-worth", label: "Worth" },
   { sort: "warmth", cls: "c-warmth", label: "Warmth" },
