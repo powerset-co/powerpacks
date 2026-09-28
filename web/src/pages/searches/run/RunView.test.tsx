@@ -87,6 +87,16 @@ function renderRun(tags: Tagged | null = null, stopped: Pick<Feedback, "pending"
   return { saves, submit, retry, onToast }
 }
 
+// The run opens on its latest pond; most tests read every pond, so they unpick it first.
+function renderEveryPond(
+  tags: Tagged | null = null,
+  stopped: Pick<Feedback, "pending" | "failure"> = NOT_STOPPED,
+) {
+  const rendered = renderRun(tags, stopped)
+  fireEvent.click(screen.getByRole("button", { pressed: true, name: /Kept/ }))
+  return rendered
+}
+
 const tableHeadings = () =>
   [...document.querySelectorAll<HTMLElement>(".results-heading")].map((heading) => heading.textContent)
 
@@ -117,14 +127,11 @@ async function tagsLoaded(name = "Jordan Bravo") {
 }
 
 describe("RunView", () => {
-  it("narrows a screened run to one pond's people and marks the picked pond", () => {
+  it("opens a screened run on its latest pond, and the picked card again shows every pond", () => {
     renderRun()
     const pondTwo = () =>
       within(document.querySelector<HTMLElement>("[data-pond='2']") ?? document.body).getByRole("button")
-    expect(screen.getByText("Showing every pond. Pick a pond to see only its people.")).toBeTruthy()
-    fireEvent.click(pondTwo())
     expect(pondTwo().getAttribute("aria-pressed")).toBe("true")
-    expect(screen.getByText("Showing pond 2. Pick it again for every pond.")).toBeTruthy()
     expect(rowNames().length).toBeGreaterThan(0)
     expect(rowNames().every((name) => ["Avery Golf", "Quinn Hotel", "Casey Delta"].includes(name))).toBe(true)
     fireEvent.click(pondTwo())
@@ -133,7 +140,7 @@ describe("RunView", () => {
   })
 
   it("shows the header, the pond chain and both score tables in the documented order", () => {
-    renderRun()
+    renderEveryPond()
     const header = within(screen.getByRole("banner"))
     expect(header.getByRole("heading", { name: "Backend Engineer" })).toBeTruthy()
     expect(header.getByText("Search complete")).toBeTruthy()
@@ -148,7 +155,7 @@ describe("RunView", () => {
   })
 
   it("shows scores, missing scores as words, labels and sources", () => {
-    renderRun()
+    renderEveryPond()
     const jordan = row("p-jordan")
     expect(jordan.getByText("5/5")).toBeTruthy()
     expect(jordan.getByText("Suggested pin")).toBeTruthy()
@@ -167,7 +174,7 @@ describe("RunView", () => {
   })
 
   it("shows every source family, email and message counts, and where the person is", () => {
-    renderRun()
+    renderEveryPond()
     const jordan = row("p-jordan")
     expect(jordan.getByTitle("Gmail").textContent).toBe("42")
     expect(jordan.getByText("Staff Engineer")).toBeTruthy()
@@ -180,7 +187,7 @@ describe("RunView", () => {
   })
 
   it("lists who a person came through, with their counts, in the drawer", () => {
-    renderRun()
+    renderEveryPond()
     fireEvent.click(main("p-jordan"))
     const operators = within(document.querySelector<HTMLElement>("[data-operators]") ?? document.body)
     expect(operators.getByText("Drew Kilo")).toBeTruthy()
@@ -189,7 +196,7 @@ describe("RunView", () => {
   })
 
   it("folds the job description open under the header", () => {
-    renderRun()
+    renderEveryPond()
     const toggle = screen.getByRole("button", { name: /Job description/ })
     expect(toggle.getAttribute("aria-expanded")).toBe("false")
     fireEvent.click(toggle)
@@ -198,7 +205,7 @@ describe("RunView", () => {
   })
 
   it("folds the team open under the job description", () => {
-    renderRun()
+    renderEveryPond()
     const toggle = within(screen.getByRole("banner")).getByRole("button", { name: /^Team/ })
     expect(toggle.getAttribute("aria-expanded")).toBe("false")
     fireEvent.click(toggle)
@@ -208,7 +215,7 @@ describe("RunView", () => {
   })
 
   it("shows the reasoning and the judges' labels on the row", () => {
-    renderRun()
+    renderEveryPond()
     const jordan = row("p-jordan")
     expect(jordan.getByText("Built this exact system twice.")).toBeTruthy()
     expect(jordan.getByText("Suggested pin")).toBeTruthy()
@@ -216,7 +223,7 @@ describe("RunView", () => {
   })
 
   it("opens who brought a source from its pill, with their share, and closes on Escape", () => {
-    renderRun()
+    renderEveryPond()
     const name = "Gmail sources for Jordan Bravo"
     fireEvent.click(row("p-jordan").getByRole("button", { name }))
     const popover = within(screen.getByRole("region", { name }))
@@ -235,7 +242,7 @@ describe("RunView", () => {
   })
 
   it("flags a candidate from the drawer", () => {
-    const { submit } = renderRun()
+    const { submit } = renderEveryPond()
     fireEvent.click(main("p-jordan"))
     fireEvent.click(
       within(drawer() ?? document.body).getByRole("button", { name: "Send feedback about Jordan Bravo" }),
@@ -253,7 +260,7 @@ describe("RunView", () => {
   })
 
   it("opens a row in the drawer, swaps to another row, and closes on the same row", () => {
-    renderRun()
+    renderEveryPond()
     fireEvent.click(main("p-jordan"))
     expect(drawerOpen()).toBe("true")
     expect(drawerName()).toBe("Jordan Bravo")
@@ -271,7 +278,7 @@ describe("RunView", () => {
   })
 
   it("follows j/k with the drawer open and closes on Escape", () => {
-    renderRun()
+    renderEveryPond()
     fireEvent.click(main("p-riley"))
     key("j")
     expect(drawerName()).toBe("Avery Golf")
@@ -283,7 +290,7 @@ describe("RunView", () => {
   })
 
   it("scores the open candidate with a digit, then opens the next row; the last one closes", async () => {
-    const { submit } = renderRun()
+    const { submit } = renderEveryPond()
     fireEvent.click(main("p-morgan"))
     expect(bar().getByRole("button", { name: "4 Yes" }).getAttribute("aria-pressed")).toBe("false")
     key("4")
@@ -303,7 +310,7 @@ describe("RunView", () => {
   })
 
   it("marks the saved score in the bar and ignores digits outside the rubric", async () => {
-    const { submit } = renderRun()
+    const { submit } = renderEveryPond()
     fireEvent.click(main("p-jordan"))
     key("5")
     key("k")
@@ -317,7 +324,7 @@ describe("RunView", () => {
   })
 
   it("advances after a score saved in the dialog", () => {
-    renderRun()
+    renderEveryPond()
     fireEvent.click(main("p-jordan"))
     key("s")
     fireEvent.click(screen.getByRole("radio", { name: /^Score 3:/ }))
@@ -326,7 +333,7 @@ describe("RunView", () => {
   })
 
   it("opens the tag editor with t and toggles the pin with p for the open candidate", async () => {
-    const { saves } = renderRun()
+    const { saves } = renderEveryPond()
     await tagsLoaded()
     fireEvent.click(main("p-jordan"))
     key("p")
@@ -345,7 +352,7 @@ describe("RunView", () => {
   })
 
   it("filters the table through the toolbar; the count reads the same rows", () => {
-    renderRun()
+    renderEveryPond()
     fireEvent.click(screen.getByRole("button", { name: "Overall score 5" }))
     expect(rowNames()).toEqual(["Jordan Bravo"])
     expect(tableHeadings()).toEqual(["Rating-based scores"])
@@ -362,7 +369,7 @@ describe("RunView", () => {
   })
 
   it("tags a row, pins another, and filters to the tagged people", async () => {
-    const { saves } = renderRun()
+    const { saves } = renderEveryPond()
     await tagsLoaded()
     fireEvent.click(screen.getByRole("button", { name: "Add tag to Jordan Bravo" }))
     const field = screen.getByRole("textbox", { name: "Add tag" })
@@ -387,7 +394,7 @@ describe("RunView", () => {
   })
 
   it("scores a person: the badge shows the saved score and the record goes to the queue", async () => {
-    const { submit, onToast } = renderRun()
+    const { submit, onToast } = renderEveryPond()
     fireEvent.click(screen.getByRole("button", { name: "Score Morgan Echo" }))
     fireEvent.click(screen.getByRole("radio", { name: /^Score 4:/ }))
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
@@ -410,7 +417,7 @@ describe("RunView", () => {
       comment: "",
       human_judgment: { score: 4, scale: 5 },
     }
-    const { retry } = renderRun(null, { pending: [waiting], failure: "failed" })
+    const { retry } = renderEveryPond(null, { pending: [waiting], failure: "failed" })
     const header = within(screen.getByRole("banner"))
     expect(header.getByText("Saved on this device. 1 waiting to send.")).toBeTruthy()
     fireEvent.click(header.getByRole("button", { name: "Retry" }))
@@ -418,7 +425,7 @@ describe("RunView", () => {
   })
 
   it("moves with j/k, opens the drawer with Enter, and presses the row's tag and score with t and s", async () => {
-    renderRun()
+    renderEveryPond()
     await tagsLoaded()
     key("j")
     key("j")

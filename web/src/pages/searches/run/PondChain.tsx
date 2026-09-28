@@ -5,14 +5,12 @@ interface PondChainProps {
   ponds: readonly Pond[]
   // The pond the table shows, or null: every pond's people together.
   selected: number | null
-  // Screened runs list every pond's people together; a card narrows the list to its pond.
-  allPonds: boolean
   onSelect: (index: number) => void
 }
 
 // rendering.py _pond: the search chain top to bottom, each pond's query, how many it kept and
 // how many of those no earlier pond found.
-export function PondChain({ ponds, selected, allPonds, onSelect }: PondChainProps) {
+export function PondChain({ ponds, selected, onSelect }: PondChainProps) {
   if (!ponds.length) return null
   const seen = new Set<string>()
   const fresh = ponds.map((pond) => {
@@ -21,10 +19,6 @@ export function PondChain({ ponds, selected, allPonds, onSelect }: PondChainProp
     ids.forEach((id) => seen.add(id))
     return count
   })
-  const picked = selected === null ? undefined : ponds[selected]
-  const showing = picked
-    ? `Showing pond ${picked.pond_n}${allPonds ? ". Pick it again for every pond." : "."}`
-    : "Showing every pond. Pick a pond to see only its people."
   return (
     <section className="pond-chain" data-ponds aria-label="Search chain">
       <ol>
@@ -47,7 +41,6 @@ export function PondChain({ ponds, selected, allPonds, onSelect }: PondChainProp
           </li>
         ))}
       </ol>
-      {ponds.length > 1 ? <p className="pond-showing">{showing}</p> : null}
     </section>
   )
 }

@@ -133,11 +133,6 @@ button.pond-card:hover {
   border-color: var(--primary);
   background: var(--primary-soft);
 }
-.pond-showing {
-  margin: 8px 2px 0;
-  color: var(--muted);
-  font-size: 11.5px;
-}
 .pond-n {
   display: grid;
   place-items: center;
