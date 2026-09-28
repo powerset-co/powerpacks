@@ -40,7 +40,8 @@ Use the narrow path when the user names one:
   both are durable (identical guided resubmits reuse projected research;
   enrichment recomputes pending work from projected SQLite artifacts).
   `--force-restart` is accepted for
-  compatibility but is a no-op — restart is always unconditional.
+  compatibility but is a no-op. While a People upload runs, `review` keeps the
+  running server and prints the requested page instead of restarting.
 - "Review complete proceed with enrichment" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
@@ -58,6 +59,9 @@ Use the narrow path when the user names one:
   scratch" -> the BIG reset (full derived-state scrub + reimport walk): load
   and follow `packs/ingestion/skills/clean-slate/SKILL.md` — do not improvise
   the steps here.
+- `$deep-context share`, "share my network", "who gets shared", "upload my
+  network to Powerset", "open the People page" -> the share walk only: create
+  the plan in step 9 and follow it. No other stage.
 - A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
   context", or a full rerun -> use the complete staged workflow below.
 
@@ -107,6 +111,7 @@ Create a visible plan with these exact phases and keep it current:
 [Build] Build merged people list
 [Build] Rebuild the search index
 [Build] Validate the index
+[Share] Ask whether to share your network
 ```
 
 Mark a no-op complete; do not silently drop it.
@@ -461,16 +466,31 @@ uv run --project . python packs/indexing/primitives/validate_search_index/valida
 
 Pass only on `status: ok`.
 
-### 9. Share (optional): share list, upload to Powerset
+### 9. Share: who leaves the laptop
+
+After the index validates, ask once: **"Share your network with the team?"**
+No -> go to the completion report. Yes (or `$deep-context share` on its own)
+-> create a visible plan with these exact phases:
+
+```text
+[Share] Build the share list
+[Share] Open the People page
+[Share] Confirm flagged people and check the tabs
+[Share] Check and share from the page
+```
 
 Who leaves the laptop is a per-person decision — see
 `packs/ingestion/docs/share-and-upload.md`. Synthesize (step 3) already asked
 JEV the label questions and saved the answers with each person's facts; `share`
-is free and local.
+is free and local, and safe to rerun: it rebuilds `person_labels` and `share`
+and never touches the user's tags, which win over worth.
 
 ```bash
 bin/deep-context share   # person_labels + share tables, every merged person
 ```
+
+Report its `share_yes`, `share_no` and `confirm` counts in one line, then open
+the page (run it in the background; it serves in the foreground):
 
 Share follows worth: the `share` table says yes to the worth-yes people, no to
 the owner, to a human `private`, and to everyone worth said no or maybe to. The JEV
@@ -480,7 +500,7 @@ worth-yes person, which makes that row `confirm`. Confirm rows upload nothing
 until the user answers. The answer is a tag, recorded on the People page:
 
 ```bash
-bin/deep-context review people   # your people, one tab per decision
+bin/deep-context review people   # prints review UI: http://127.0.0.1:8765/people
 ```
 
 The page has three tabs — Needs confirmation, Sharing, Not sharing — one row
@@ -502,6 +522,10 @@ TurboPuffer namespaces, and mirrors the user's own `private` into
 standalone CLI (`upload_powerset.py`, plan-only without `--apply`) is for
 debugging; `.powerpacks/upload-powerset/manifest.json` and `errors.log` hold
 the last run.
+
+The last two phases are the user's clicks: mark `[Share] Confirm flagged
+people…` complete when they say they are done tagging, and `[Share] Check and
+share…` when they say it is shared (the page toasts "Shared N people.").
 
 ## Completion report
 
