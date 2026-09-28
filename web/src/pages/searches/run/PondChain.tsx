@@ -3,49 +3,51 @@ import type { Pond } from "@/types/searches"
 
 interface PondChainProps {
   ponds: readonly Pond[]
-  // Without a screen the table shows one pond at a time: the cards pick it.
+  // The pond the table shows, or null: every pond's people together.
   selected: number | null
+  // Screened runs list every pond's people together; a card narrows the list to its pond.
+  allPonds: boolean
   onSelect: (index: number) => void
 }
 
-// rendering.py _pond: the search chain top to bottom, each pond's query and how many it kept.
-export function PondChain({ ponds, selected, onSelect }: PondChainProps) {
+// rendering.py _pond: the search chain top to bottom, each pond's query, how many it kept and
+// how many of those no earlier pond found.
+export function PondChain({ ponds, selected, allPonds, onSelect }: PondChainProps) {
   if (!ponds.length) return null
+  const seen = new Set<string>()
+  const fresh = ponds.map((pond) => {
+    const ids = pond.candidates.map((row) => row.person_id)
+    const count = ids.filter((id) => !seen.has(id)).length
+    ids.forEach((id) => seen.add(id))
+    return count
+  })
+  const picked = selected === null ? undefined : ponds[selected]
+  const showing = picked
+    ? `Showing pond ${picked.pond_n}${allPonds ? ". Pick it again for every pond." : "."}`
+    : "Showing every pond. Pick a pond to see only its people."
   return (
     <section className="pond-chain" data-ponds aria-label="Search chain">
       <ol>
-        {ponds.map((pond, index) => {
-          const body = (
-            <>
+        {ponds.map((pond, index) => (
+          <li key={`${pond.run_id}:${pond.pond_n}`} data-pond={pond.pond_n}>
+            <button
+              type="button"
+              className="pond-card"
+              title={[pond.diagnosis || "Final pond", pond.move].filter(Boolean).join(" → ")}
+              aria-pressed={selected === index}
+              onClick={() => onSelect(index)}
+            >
               <span className="pond-n">{pond.pond_n}</span>
               <span className="pond-query">{pond.query}</span>
               <span className="pond-count">
+                {index > 0 ? `${(fresh[index] ?? 0).toLocaleString()} new · ` : ""}
                 Kept <b>{pondKept(pond).toLocaleString()}</b> of {pond.result_count.toLocaleString()}
               </span>
-            </>
-          )
-          const note = [pond.diagnosis || "Final pond", pond.move].filter(Boolean).join(" → ")
-          return (
-            <li key={`${pond.run_id}:${pond.pond_n}`} data-pond={pond.pond_n}>
-              {selected === null ? (
-                <div className="pond-card" title={note}>
-                  {body}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="pond-card"
-                  title={note}
-                  aria-pressed={selected === index}
-                  onClick={() => onSelect(index)}
-                >
-                  {body}
-                </button>
-              )}
-            </li>
-          )
-        })}
+            </button>
+          </li>
+        ))}
       </ol>
+      {ponds.length > 1 ? <p className="pond-showing">{showing}</p> : null}
     </section>
   )
 }
