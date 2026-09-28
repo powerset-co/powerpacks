@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.3.0...powerpacks-v3.4.0) (2026-09-28)
+
+
+### Features
+
+* **deep-context:** a share route with its own plan, asked at the end ([#581](https://github.com/powerset-co/powerpacks/issues/581)) ([f3799fd](https://github.com/powerset-co/powerpacks/commit/f3799fde526099117ae3a9f8a903bb9ef2eeba87))
+
 ## [3.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.2.0...powerpacks-v3.3.0) (2026-09-28)
 
 
