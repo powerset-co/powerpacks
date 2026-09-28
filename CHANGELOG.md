@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.1.0...powerpacks-v3.2.0) (2026-09-28)
+
+
+### Features
+
+* add independent team similarity to deep search ([#574](https://github.com/powerset-co/powerpacks/issues/574)) ([42d0ac3](https://github.com/powerset-co/powerpacks/commit/42d0ac30adb720fd19736dc37efcb2dc9afbe883))
+* **deep-context:** one local server and one React app for People and Searches ([#575](https://github.com/powerset-co/powerpacks/issues/575)) ([89eb388](https://github.com/powerset-co/powerpacks/commit/89eb3885aa894ee60d878aa61eea27db0ec691f3))
+
+
+### Bug Fixes
+
+* default unjudged LinkedIn imports to worth yes ([#577](https://github.com/powerset-co/powerpacks/issues/577)) ([3e5bc3b](https://github.com/powerset-co/powerpacks/commit/3e5bc3ba55f287ec33ccc6365b71d2c9dfa4ae8f))
+
 ## [3.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.0.0...powerpacks-v3.1.0) (2026-09-26)
 
 
