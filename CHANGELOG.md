@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.5...powerpacks-v3.4.6) (2026-09-28)
+
+
+### Bug Fixes
+
+* **skills:** install owns Gmail machine tools; drop stale onboarding text ([#596](https://github.com/powerset-co/powerpacks/issues/596)) ([58f6663](https://github.com/powerset-co/powerpacks/commit/58f66632ddfbf9114b9288f1d39f8582897bdc21))
+
 ## [3.4.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.4...powerpacks-v3.4.5) (2026-09-28)
 
 
