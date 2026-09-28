@@ -156,6 +156,12 @@ class MsgvaultSetupTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             accounts.normalize_email_list(["not-an-email"])
 
+    def test_revoked_grant_401_needs_reauthorization(self):
+        # A grant revoked at Google leaves a cached access token that msgvault
+        # rejects as a 401, not the invalid_grant a lapsed refresh token gives.
+        self.assertTrue(accounts.msgvault_reauthorization_required(
+            "Error: get Gmail profile: unauthorized (401): token may be invalid"))
+
     def test_auth_check_aggregates_healthy_expired_and_missing_accounts(self):
         calls = []
 

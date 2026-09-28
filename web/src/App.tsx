@@ -3,8 +3,10 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "rea
 
 import { TopBar } from "@/components/shared"
 import { HOME, pageAt } from "@/lib/nav"
+import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
+import { TasksPage } from "@/pages/tasks/TasksPage"
 
 // The top bar row, then the page: the page owns its own scrolling inside the second row.
 function Shell() {
@@ -33,6 +35,8 @@ export function App() {
             <Route index element={null} />
             <Route path="run" element={null} />
           </Route>
+          <Route path="/accounts" element={<AccountsPage />} />
+          <Route path="/tasks" element={<TasksPage />} />
           <Route path="*" element={<Navigate to={HOME.href} replace />} />
         </Route>
       </Routes>

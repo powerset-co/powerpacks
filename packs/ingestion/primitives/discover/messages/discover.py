@@ -8,6 +8,9 @@ matcher columns are not inputs. No message bodies, enrichment, or uploads.
 Post-import review and enrichment belong to deep_context.
 
 Changelog:
+  2026-09-28 (per-channel runs): the merge reads every channel's last export, not
+    only this run's selection, so `--include-imessage` or `--include-whatsapp` alone
+    refreshes that channel without dropping the other's contacts.
   2026-09-23 (typed rows): `_merge` reads the merge result's `status` key directly
     instead of `.get(...)`; it is the manifest `ContactsMerger.merge` just built,
     not untrusted input.
@@ -140,14 +143,18 @@ class MessagesDiscovery(Node):
         # that patches it still gets a store pointed at its own temp file.
         self.contacts_csv = MERGED_CONTACTS
         self.manifest_json = self.out_dir / "manifest.json"
-        self.channels: list[MessageChannel] = []
-        if self.selection.include_imessage:
-            self.channels.append(IMessageChannel(
-                other_enabled=self.selection.include_whatsapp))
-        if self.selection.include_whatsapp:
-            self.channels.append(WhatsAppChannel(
-                other_enabled=self.selection.include_imessage,
-                max_messages=wacli_max_messages))
+        # Every channel's last export feeds the merge; only the selected ones run.
+        # So `--include-imessage` alone refreshes iMessage and keeps WhatsApp's
+        # contacts from its last run instead of dropping them.
+        imessage = IMessageChannel(other_enabled=self.selection.include_whatsapp)
+        whatsapp = WhatsAppChannel(other_enabled=self.selection.include_imessage,
+                                   max_messages=wacli_max_messages)
+        self.channels: list[MessageChannel] = [imessage, whatsapp]
+        self.selected: list[MessageChannel] = [
+            channel for channel, include in ((imessage, self.selection.include_imessage),
+                                             (whatsapp, self.selection.include_whatsapp))
+            if include
+        ]
 
     def bindings(self) -> dict[str, str]:
         """Declared path -> this instance's path, so an explicit ``out_dir`` (or a
@@ -179,7 +186,7 @@ class MessagesDiscovery(Node):
                 updated_at=now_iso(),
             )
         extracted: list[MessageChannelExtracted] = []
-        for channel in self.channels:
+        for channel in self.selected:
             child = channel.run()
             if child.status != "completed":
                 return self._not_completed(child)
@@ -205,7 +212,7 @@ class MessagesDiscovery(Node):
         return artifacts
 
     def _merge(self) -> MessageChannelFailed | None:
-        """Union the enabled channels' contacts CSVs by canonical phone into
+        """Union every channel's contacts CSV on disk by canonical phone into
         MERGED_CONTACTS (via ``ContactsMerger`` in-process). Writes an empty
         merged CSV + manifest when no channel produced an export; returns a failed
         child on a non-``ok`` merge."""
