@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.1...powerpacks-v3.4.2) (2026-09-28)
+
+
+### Performance Improvements
+
+* **upload:** batch Postgres writes and local reads for 8 GB laptops ([#585](https://github.com/powerset-co/powerpacks/issues/585)) ([a4e91f4](https://github.com/powerset-co/powerpacks/commit/a4e91f4608c02587efa1fbe360dcc718ab32c939))
+
 ## [3.4.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.4.0...powerpacks-v3.4.1) (2026-09-28)
 
 
