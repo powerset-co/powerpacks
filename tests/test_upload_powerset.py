@@ -376,7 +376,8 @@ class SourceRowTests(unittest.TestCase):
 class PostgresSqlTests(unittest.TestCase):
     def test_persons_upsert_keeps_every_existing_cloud_value(self):
         # The cloud owns a person it already has: fill NULLs, never replace.
-        for column in CLOUD_PERSONS_COLUMNS:
+        # hydrated_context: see test_the_persons_upsert_fills_an_empty_positions_context.
+        for column in [column for column in CLOUD_PERSONS_COLUMNS if column != "hydrated_context"]:
             self.assertIn(f"{column} = COALESCE(persons.{column}, EXCLUDED.{column})",
                           postgres.PERSONS_UPSERT_SQL)
 
@@ -700,6 +701,40 @@ class DryRunTests(unittest.TestCase):
                 upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
             again = json.loads(manifest.read_text())["plan"]
         self.assertEqual((again["new_to_cloud"], again["changed"], again["already_in_cloud"]), (1, 0, 0))
+
+    def test_a_shared_person_the_cloud_has_without_positions_is_rewritten(self):
+        # Jordan is in the cloud with an empty-positions context (an upload before the
+        # profile fix) and has positions locally: the check counts Jordan as changed.
+        plan = plan_for([share_row(NEW_PERSON, "jordan-bravo")], [local_person(NEW_PERSON, "jordan-bravo")],
+                        cloud_state(cloud_id_by_person={NEW_PERSON: NEW_PERSON}))
+        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+                                              for ns in plan.namespaces))
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._fixture(Path(tmp))
+            con = duckdb.connect(str(paths["db"]))
+            con.execute("ALTER TABLE local_people_positions ADD COLUMN IF NOT EXISTS base_id VARCHAR")
+            con.close()
+            connection = mock.MagicMock()
+            connection.__enter__.return_value = connection
+            connection.cursor.return_value.__enter__.return_value = FakeCursor()
+            fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
+            with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
+                 mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
+                 mock.patch.object(postgres, "use_v3_schema"), \
+                 mock.patch.object(postgres, "fetch_ids_without_positions", return_value=frozenset({NEW_PERSON})), \
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name",
+                                   side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
+                 mock.patch.object(upload_powerset.UploadPowerset, "_plan", return_value=plan), \
+                 mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
+                upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
+            saved = json.loads((paths["out_dir"] / "manifest.json").read_text())
+        self.assertEqual((saved["plan"]["changed"], saved["plan"]["already_in_cloud"]), (1, 0))
+        self.assertEqual(saved["progress"]["skipped"], 0)
+
+    def test_the_persons_upsert_fills_an_empty_positions_context(self):
+        self.assertIn("WHEN COALESCE(persons.hydrated_context -> 'positions', '[]'::jsonb) = '[]'::jsonb",
+                      postgres.PERSONS_UPSERT_SQL)
 
     def test_same_network_second_apply_makes_no_cloud_writes(self):
         first = plan_for([share_row(NEW_PERSON, "jordan-bravo")],

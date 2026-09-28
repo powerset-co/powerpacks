@@ -18,6 +18,7 @@ share list. An un-share removes the operator from allowed_operator_ids and
 deletes its source rows; documents are never deleted.
 
 Changelog:
+  2026-09-28: shared people the cloud has without positions are written again when the local index has them.
   2026-09-28: a person new to the cloud is never counted changed after a failed run.
   2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
   2026-09-27: bind real runs to checked decisions and target; report typed stages.
@@ -201,7 +202,15 @@ class UploadPowerset:
                     changed = tuple(person_id for person_id in plan.persons_upsert
                                     if person_id in owned_people and person_id not in newly_owned
                                     and old_hashes.get(person_id) != hashes[person_id])
-                    to_write = tuple(sorted(set(changed) | newly_owned))
+                    # In the cloud without positions while the local index has them (an upload
+                    # before the profile fix): their persons row is written again.
+                    in_cloud = {person_id: plan.cloud_id_by_person[person_id] for person_id in plan.persons_upsert
+                                if person_id in plan.cloud_id_by_person and person_id not in newly_owned}
+                    without = postgres.fetch_ids_without_positions(cur, sorted(set(in_cloud.values())))
+                    repair = ({person_id for person_id, cloud_id in in_cloud.items() if cloud_id in without}
+                              & local_index.people_with_positions(con, tuple(sorted(in_cloud)))) - set(changed)
+                    rewritten = set(changed) | repair
+                    to_write = tuple(sorted(rewritten | newly_owned))
                     retry_upserts = previous.pending_upserts if same_target else {}
                     shared_ids = set(plan.persons_upsert)
                     namespaces = []
@@ -222,13 +231,13 @@ class UploadPowerset:
                     preview.update(marked_share=sum(row.share == SHARE_YES for row in share_rows),
                                    with_linkedin=len(plan.persons_upsert),
                                    without_linkedin=len(plan.skipped_no_linkedin),
-                                   new_to_cloud=len(newly_owned), changed=len(changed),
-                                   already_shared=len(shared_ids & old_hashes.keys()) - len(set(changed) & old_hashes.keys()),
+                                   new_to_cloud=len(newly_owned), changed=len(rewritten),
+                                   already_shared=len(shared_ids & old_hashes.keys()) - len(rewritten & old_hashes.keys()),
                                    losing_access=len({row.person_id for row in plan.sources_delete} -
                                                      set(plan.cloud_id_by_person.values())),
                                    companies_missing=preview["companies_skipped_no_row"])
                     # In the cloud through another operator: this upload adds you as a source.
-                    preview["already_in_cloud"] = (len(shared_ids) - len(newly_owned) - len(changed)
+                    preview["already_in_cloud"] = (len(shared_ids) - len(newly_owned) - len(rewritten)
                                                    - preview["already_shared"])
                     if self.require_checked and not self.dry_run and (previous.plan is None or previous.checked_target != target
                                              or previous.plan != preview or previous.share_digest != digest):
