@@ -11,10 +11,10 @@ import { OperatorInitials } from "./Operators"
 // description in the run's header.
 export function TeamPanel({ search }: { search: SearchResult }) {
   const [open, setOpen] = useState(false)
+  if (!search.team.length) return <p className="team-status">No team information available</p>
   const status = search.team_status ? (
     <p className="team-status">Team similarity: {search.team_status}</p>
   ) : null
-  if (!search.team.length) return status
   return (
     <div className="team" data-team>
       <DetailsSection

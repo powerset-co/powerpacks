@@ -660,7 +660,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     return SearchResult(
         run_id=run_id,
         title=_text(payload.get("title")) or run_id,
-        company=_text(payload.get("company") or payload.get("hiring_company")),
+        company=_text(payload.get("company")),
         created_at=_text(payload.get("created_at") or payload.get("updated_at")),
         total_cost_usd=_number(summary.get("total_cost_usd")),
         ponds=tuple(ponds),

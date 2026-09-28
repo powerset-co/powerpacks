@@ -256,22 +256,13 @@ def _overall_indicator(overall: int, reason: str, candidate: Candidate | None) -
             f"<div class='judge-badges'>{_judge_badges(candidate)}</div></div></div>")
 
 
-def _person_details(pond_candidate: PondCandidate, candidate: Candidate | None = None) -> str:
+def _person_details(pond_candidate: PondCandidate) -> str:
     sources = "".join(f"<b class='source-chip'>{_e(source.capitalize())}</b>"
                       for source in pond_candidate.vertical_sources)
     sources = (f"<div class='details-section'><p class='details-label'>Sources</p>"
                f"<div class='details-chips'>{sources}</div></div>" if sources else "")
-    reasoning = (f"<div class='details-reasoning'><p class='details-label'>Why they match</p>"
-                 f"<p>{_e(pond_candidate.reasoning)}</p></div>"
-                 if pond_candidate.reasoning else "")
     traits = "".join(_trait_indicator(trait, mark_core=False) for trait in pond_candidate.traits)
-    reasoning += f"<div class='trait-indicators'>{traits}</div>" if traits else ""
-    if candidate and candidate.pin_judgment:
-        confidence = (f"{candidate.pin_confidence}/100" if candidate.pin_confidence is not None
-                      else "unscored")
-        reasoning += (f"<div class='details-reasoning'><p class='details-label'>Pin confidence</p>"
-                      f"<p>{_e(confidence)} · {_e(candidate.pin_judgment.decision or 'no decision')}. "
-                      f"{_e(candidate.pin_judgment.reason)}</p></div>")
+    traits = f"<div class='trait-indicators'>{traits}</div>" if traits else ""
     location_matched = "location" in pond_candidate.vertical_sources
     location = (f"<div class='details-section'><p class='details-label'>Location"
                 f"{_MATCHED_CHIP if location_matched else ''}</p>"
@@ -297,10 +288,12 @@ def _person_details(pond_candidate: PondCandidate, candidate: Candidate | None =
     education = "".join(_education_item(entry) for entry in pond_candidate.education)
     education = (f"<div class='details-section'><p class='details-label'>Education</p>"
                  f"<div class='details-list'>{education}</div></div>" if education else "")
-    if not (reasoning or about or experience or education):
+    if not (traits or about or experience or education):
         return ""
-    return (f"<div class='person-details' hidden><div class='details-scroll'>"
-            f"{sources}{reasoning}{location}{about}{experience}{education}</div></div>")
+    header = (f"<div class='details-header'><strong class='details-name'>{_e(pond_candidate.name)}</strong>"
+              f"<button type='button' class='details-close' aria-label='Close profile details'>×</button></div>")
+    return (f"<div class='person-details' hidden>{header}<div class='details-scroll'>"
+            f"{sources}{traits}{location}{about}{experience}{education}</div></div>")
 
 
 def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
@@ -437,7 +430,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       <td class='candidate-indicators'>
         <span class='person-actions'>{score_button}{_details_button(pond_candidate.name)}</span>
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {_person_details(pond_candidate, graded)}
+        {_person_details(pond_candidate)}
       </td>
     </tr>"""
 
@@ -554,10 +547,10 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
 
 def _team_table(search: SearchResult) -> str:
     """Saved employees, virtualized locally with ten-row pages in hosted snapshots."""
+    if not search.team:
+        return "<p class='team-source'>No team information available</p>"
     status = (f"<p class='team-source'>Team similarity: {_e(search.team_status)}</p>"
               if search.team_status else "")
-    if not search.team:
-        return status
     rows = []
     for index, member in enumerate(search.team):
         name = _e(member.name) or "Name unavailable"

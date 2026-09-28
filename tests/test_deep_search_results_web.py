@@ -1199,7 +1199,6 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("candidate-badges", casey_cell)
         self.assertIn("aria-label='Score Casey Delta'", casey_cell)
         self.assertIn("person-details", casey_cell)           # details still open
-        self.assertIn("Casey has adjacent platform evidence only.", casey_cell)
 
         # An ungraded row outscoring every graded row renders first.
         source = search.ponds[0].candidates[0]
@@ -1281,7 +1280,10 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("score-trigger", actions)
         self.assertIn("Score</button>", actions)
         self.assertIn("data-feedback-person", actions)
-        self.assertIn("Why they match", indicator_cell)
+        self.assertNotIn("Why they match", indicator_cell)
+        self.assertNotIn("Pin confidence", indicator_cell)
+        self.assertIn("<button type='button' class='details-close' aria-label='Close profile details'>", indicator_cell)
+        self.assertIn("<strong class='details-name'>Jordan Bravo</strong>", indicator_cell)
         self.assertIn("Jordan is a direct match for the current brief.", detail)
         self.assertIn(">Role</b>", indicator_cell)          # sources chips
         self.assertIn("Oakland, California, United States", indicator_cell)

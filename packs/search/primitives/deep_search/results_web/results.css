@@ -604,6 +604,10 @@ button.pond-row:hover { border-color: var(--line-strong); background: rgba(255, 
 /* Profile details open beside the row (the hosted snapshot shares this behavior). */
 .person-details { position: absolute; z-index: 40; top: 40px; right: 8px; width: min(420px, 92vw); border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--card); box-shadow: var(--shadow-2); animation: rise-in var(--t-fast) var(--ease-out) both; }
 .person-details[hidden] { display: none; }
+.details-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
+.details-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details-close { flex: none; width: 26px; height: 26px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.details-close:hover, .details-close:focus-visible { background: var(--secondary); color: var(--foreground); }
 .details-scroll { max-height: 520px; overflow: auto; padding: 14px 16px; display: grid; gap: 14px; }
 .details-label { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .details-chips { display: flex; flex-wrap: wrap; gap: 6px; }
