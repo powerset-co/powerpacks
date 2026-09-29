@@ -683,7 +683,7 @@ document.addEventListener("click", async (event) => {
     // The end-of-review handoff: hand the user the exact phrase for Codex.
     event.preventDefault();
     try {
-      const phrase = button.dataset.phrase || "Review complete proceed with enrichment";
+      const phrase = button.dataset.phrase || "Review complete, continue";
       await navigator.clipboard.writeText(phrase);
       announce(button.dataset.toast || "Copied");
     } catch (error) {

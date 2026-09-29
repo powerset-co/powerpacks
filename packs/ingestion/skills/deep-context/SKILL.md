@@ -42,7 +42,7 @@ Use the narrow path when the user names one:
   `--force-restart` is accepted for
   compatibility but is a no-op. While a People upload runs, `review` keeps the
   running server and prints the requested page instead of restarting.
-- "Review complete proceed with enrichment" (the phrase the Done screen
+- "Review complete, continue" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
   (normally `realize` -> export + index).
@@ -427,22 +427,21 @@ approval already happened, so the number is noise.
 
 ### 7. LinkedIn decision gate
 
-When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
-That compatibility click opens Check LinkedIn; it does not create stage state
-or start work. The first review server stays alive.
+When enrichment is complete, the page advances to Check LinkedIn automatically.
+Continue also opens Check LinkedIn; it does not create stage state or start work.
+The first review server stays alive.
 
 For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
 decision. The correction panel accepts a replacement URL or a terminal Skip;
 Skip writes a detach decision, rejects the shown/proposed LinkedIn, and leaves
 the person out of the index for now. A synthetic result has the same two
-outcomes: paste the LinkedIn URL to create an approved retarget, or Skip it.
-Synthetic rows are never directly approved for indexing.
+outcomes for indexing: paste the LinkedIn URL to create an approved retarget,
+or Skip it. “Use this profile” keeps synthetic research locally; it does not
+approve a synthetic identity for indexing or upload.
 
 Continue through the wait loop. Continue to realization only when
 `bin/deep-context review-status --wait` returns `next_action == "realize"`.
-A LinkedIn page opened directly before current enrichment completes remains a
-read-only waiting view.
 
 ### 8. Apply and realize
 
