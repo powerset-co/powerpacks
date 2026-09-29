@@ -47,9 +47,9 @@ exactly four LinkedIn reviews and one approved enrichment run.
 
 The browser checks:
 
-- Actual `pagereveal.viewTransition` on each stage navigation, visible compositor
-  frames throughout handoffs, card swaps, failed saves and idle periods, and
-  retained card elements during person swaps.
+- Actual `pagereveal.viewTransition` and computed 350 ms crossfades on each stage
+  navigation, visible compositor frames throughout handoffs, card swaps, failed
+  saves and idle periods, and retained card elements during person swaps.
 - Exactly three completion checks and one “LinkedIn Profiles Checked” handoff;
   no “Decisions Ready” interstitial or loading-card replacement.
 - No repeated person, backward navigation, extra reload, browser exception, or

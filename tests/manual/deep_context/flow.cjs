@@ -11,7 +11,7 @@ async function status(page, base) {
 }
 
 async function settled(page) {
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
 }
 
 async function sameCard(page, card) {
@@ -187,6 +187,10 @@ async function flow(page, base, observation, options) {
   } else {
     assert.equal(observation.events.filter(event => event.kind === 'reveal' && event.crossfade).length, 3,
       'Stage navigation did not use an actual browser crossfade');
+    const durations = observation.events.filter(event => event.kind === 'crossfade-duration');
+    assert.equal(durations.length, 3, 'Missing computed crossfade timing');
+    assert(durations.every(event => event.old === '0.35s' && event.next === '0.35s'),
+      'Browser did not apply the 350ms crossfade');
   }
   return final;
 }

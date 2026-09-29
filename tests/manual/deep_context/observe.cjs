@@ -66,7 +66,14 @@ function observeDocument() {
       }
     }
   }).observe(document, {childList: true, characterData: true, subtree: true});
-  window.addEventListener('pagereveal', event => emit({kind: 'reveal', crossfade: Boolean(event.viewTransition)}));
+  window.addEventListener('pagereveal', event => {
+    emit({kind: 'reveal', crossfade: Boolean(event.viewTransition)});
+    if (!event.viewTransition) return;
+    requestAnimationFrame(() => emit({kind: 'crossfade-duration',
+      old: getComputedStyle(document.documentElement, '::view-transition-old(root)').animationDuration,
+      next: getComputedStyle(document.documentElement, '::view-transition-new(root)').animationDuration,
+    }));
+  });
 }
 
 // Inspect the central stage, excluding the sidebar and top bar: those can stay
