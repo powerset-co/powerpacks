@@ -19,7 +19,7 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_GATE_ACCEPTED,
     WORTH_GATE_REJECTED,
 )
-from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue, judge_candidates, unassembled_research
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_rows
 
@@ -143,12 +143,7 @@ SELECT count(DISTINCT parent_id) AS n FROM (
         linkedin_pending=linkedin.pending,
         linkedin_done=linkedin.done,
         rejected=int(rejected),
-        enrichment_pending=len(
-            enrichment_queue(
-                db,
-                include_plausibly_absent=True,
-            )
-        ),
+        enrichment_pending=int(unassembled_research(db)) + len(judge_candidates(db)) + len(enrichment_queue(db)),
     )
 
 

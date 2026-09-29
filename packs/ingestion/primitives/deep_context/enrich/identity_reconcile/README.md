@@ -9,14 +9,11 @@ and the [deep-context skill](../../../../skills/deep-context/SKILL.md).
 
 ## Who judges
 
-- `research_reconcile/judging.py` (enrichment) and `guided.py` (guided
-  re-research): judge research-proposed LinkedIns through `judge.py` and
-  settle them through `results.upsert_retargets`.
-
-Attached links are not machine-judged.
+- Enrichment judges every mapped real LinkedIn without a human or valid
+  machine verdict, including attached and researched links. Guided correction
+  uses the same judge and settlement primitives.
 
 ## Invariant
 
-Human-settled rows are skipped — a machine verdict would be discarded — and
-judgments key on their judge-input fingerprint, so unchanged evidence reuses
-the stored verdict instead of re-billing.
+Human-settled rows and rows with a valid machine verdict are skipped.
+Empty or unreadable verdicts are retried.

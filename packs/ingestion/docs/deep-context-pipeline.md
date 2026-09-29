@@ -52,9 +52,9 @@ enrichment, review, realization, and indexing behavior now lives in
   lookup indexes for name, email, and phone.
 - **People decision:** the model assigns Yes/Maybe/No. Only genuine uncertainty
   appears in the main review queue; Yes and No remain visible and editable.
-- **Enrichment:** Parallel research runs only for effective-Yes parents,
-  gated in SQL before paid work; attached links are not machine-judged.
-  Completed research is reused and only net-new submissions are priced.
+- **Enrichment:** Parallel research runs for effective-Yes parents without a
+  LinkedIn or completed research. Completed research, including no-match, is
+  reused. Every mapped real LinkedIn without a human or machine verdict is judged.
 - **LinkedIn decision:** a found LinkedIn can be verified, replaced with a known
   URL, or skipped. A no-LinkedIn research result can only be given a real
   LinkedIn URL or skipped; synthetic records are not directly indexed.
@@ -173,7 +173,7 @@ browser button and cannot be blocked by the Done page.
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, except that a notable imported LinkedIn headline (CEO or any chief officer, founder, president, chair, partner, managing director) is Yes. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs with JEV (one request per pair, merge at p(yes) ≥ 0.5), caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
-| Attached-LinkedIn judging | There is no standalone step. The review app judges research results when enrichment completes and applies guided retargets. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts |
+| LinkedIn judging | After cache-first profile preparation, enrichment judges mapped attached and researched links lacking a decision. Existing human and valid machine decisions are kept. | SQLite identity verdicts |
 | People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
 | Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
 | Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |

@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
 from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
 from packs.ingestion.primitives.deep_context.db import identity_queries as queries
+from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     IdentityOrigin,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewExportRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
@@ -37,6 +40,10 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results i
     upsert_retargets,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import (
+    MachineIdentitySettlement,
+    settle_machine_identities,
+)
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileTarget
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
@@ -259,3 +266,77 @@ def _research_result(
     """Read the one parent-level research result for this stable handle."""
     row = next(iter(queries.research_rows(db, handle=handle)), None)
     return ResearchResult.from_json(row.result_json) if row is not None else None
+
+
+def judge_mapped_candidates(
+    db: Db,
+    *,
+    model: str,
+    effort: str,
+    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
+    heartbeat: Callable[[int, int], None] | None = None,
+) -> RetargetRunResult:
+    """Judge each mapped real LinkedIn still lacking any decision."""
+    candidates = judge_candidates(db)
+    if not candidates:
+        return RetargetRunResult(0, 0, 0, 0)
+    config = OpenAIResponsesConfig.resolve(
+        model=model, effort=effort, concurrency=None, timeout=120, max_retries=6,
+    )
+    owner = owner_background(db)
+    profiles = projection.profile_payloads(db)
+    research = {row.candidate_key: ResearchResult.from_json(row.result_json)
+                for row in queries.research_rows(db) if row.candidate_key}
+    tasks = []
+    prepared = []
+    for row in candidates:
+        result = research.get(row.row_key)
+        url = row.machine_proposed_url or row.linkedin_url or (result.linkedin_url if result else "")
+        if not url:
+            continue
+        origin = IdentityOrigin.RESEARCH if result and result.linkedin_url == url else IdentityOrigin.ATTACHED
+        source = IdentityProfileSource(
+            public_identifier=extract_public_identifier(url).lower(),
+            linkedin_url=url,
+            display_name=row.display_name or "",
+        )
+        profile = linkedin_view(source, profiles.get(row.row_key))
+        if result and origin == IdentityOrigin.RESEARCH:
+            profile = judge.prefer_cached_profile(result.identity_profile(), profile)
+        evidence = DossierEvidence.from_db(db, (row.parent_id,))
+        tasks.append(judge.research_proposal_task(evidence, profile) if origin == IdentityOrigin.RESEARCH
+                     else judge.IdentityTask(evidence, profile, origin))
+        prepared.append((row, url, origin, evidence, profile))
+    if not tasks:
+        return RetargetRunResult(0, 0, 0, 0)
+    results = judge.judge_batch(
+        tasks, owner_block=owner, model=config.model, effort=config.effort,
+        concurrency=None, timeout=120, max_retries=6, on_done=heartbeat,
+    )
+    settlements = []
+    errors = 0
+    for (row, url, origin, evidence, profile), outcome in zip(prepared, results, strict=True):
+        verdict = outcome.verdict
+        if verdict is None:
+            errors += 1
+            continue
+        confirmed = verdict.value == "confirmed" and verdict.confidence >= confirm_threshold
+        settlements.append(MachineIdentitySettlement(
+            key=row.row_key,
+            judgment_fingerprint=outcome.fingerprint or judge.judgment_fingerprint(
+                evidence, profile, origin, owner, model=config.model, effort=config.effort,
+            ),
+            judgment_payload_json=json.dumps(verdict.as_dict()),
+            machine_action="retarget" if origin == IdentityOrigin.RESEARCH else "verify",
+            machine_approved=ApprovedState.AUTO.value if confirmed else None,
+            machine_confidence=verdict.confidence,
+            machine_reason=verdict.reason,
+            machine_judgment=verdict.value,
+            machine_proposed_url=normalize_linkedin_url(url) if origin == IdentityOrigin.RESEARCH else None,
+            machine_proposed_public_identifier=extract_public_identifier(url).lower() if origin == IdentityOrigin.RESEARCH else None,
+            paid_profile=row.paid_profile or origin == IdentityOrigin.RESEARCH,
+            source=(WriterSource.DEEP_RESEARCH.value if origin == IdentityOrigin.RESEARCH
+                    else WriterSource.RECONCILE.value),
+        ))
+    projected = settle_machine_identities(db, settlements)
+    return RetargetRunResult(len(projected), len(tasks), 0, 0, errors)

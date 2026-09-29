@@ -27,6 +27,7 @@ class SeedManifest(StageManifest):
     research_duplicate_dropped: int = 0
     research_two_plus: int = 0
     research_unmatched: int = 0
+    profiles_carried: int = 0
     machine_review_rows_not_carried: int = 0
     synthetic_rows_not_carried: int = 0
     seeded_at: IsoTimestamp | None = None

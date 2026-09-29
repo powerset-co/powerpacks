@@ -153,9 +153,9 @@ bin/deep-context check
 `seed` is free and local. It merges the cold parents a legacy same-person
 family spans, re-owns each legacy raw bundle and facts record to its cold
 parent, replays the human worth and LinkedIn decisions from
-`overrides/review.csv`, and projects Parallel research results so enrichment
-reuses them. Machine review rows, dossiers and the profile cache are not
-carried. Unmatched worth and identity decisions remain in the legacy files; the
+`overrides/review.csv`, and projects Parallel research results and matching
+cached profiles onto the current candidates. Machine review rows and dossiers
+are not carried. Unmatched worth and identity decisions remain in the legacy files; the
 manifest counts them as `worth_unmatched` and `identity_unmatched`.
 A seeded store refuses a second run. Carried facts with a message
 baseline skip synthesis while that evidence is unchanged. New or changed
@@ -311,9 +311,10 @@ merge folds its email/phone/channel metadata onto the kept LinkedIn.
 
 ### 5. People decision gate
 
-A contact-only person (email/phone only, no LinkedIn) shows up in the review
-and can be kept or rejected. They are never queued for paid research; only the
-worth-gated candidate path spends on a lookup.
+A contact-only person (email/phone only, no LinkedIn) can enter paid research
+when worth is Yes. Existing LinkedIns and completed research, including
+no-match, skip new lookup. Mapped real LinkedIns without human or valid machine
+identity decisions enter the identity judge before LinkedIn review.
 
 Launch the local UI once in a background terminal:
 

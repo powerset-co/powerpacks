@@ -84,7 +84,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             ArtifactRow("facts:one", "facts", parent_id, "/facts/one", "sha", "projected"),
             FactRow(parent_id, parent_id, "facts:one", machine_worth="yes", facts_json="{}"),
         ))
-        self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
+        self.assertEqual(workflow_state(self.db).next_action, "enrich")
         self.assertEqual(enrichment_queue(self.db), [])
         candidate = linkedin_queue(self.db)[0].candidates[0]
         self.assertEqual(candidate.row_key, "jordan-bravo")
@@ -93,7 +93,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.assertEqual(links(self.db)[0].decision_action, "verify")
         self.assertEqual(ExportPeople(db=self.db, out_dir=self.root / "merged").run()["accepted_identities"], 1)
         self.db.reset_review()
-        self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
+        self.assertEqual(workflow_state(self.db).next_action, "enrich")
         self.assertEqual(links(self.db)[0].linkedin_url, imported[0].linkedin_url)
 
         self.db.project_rows((LinkRow(

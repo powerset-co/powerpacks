@@ -87,31 +87,13 @@ def select_research(
     db: Db,
     *,
     processor: str,
-    confirm_threshold: float,
-    include_plausibly_absent: bool,
     fingerprint: ReviewSelection | None = None,
 ) -> ResearchSelection:
     if fingerprint is None:
         fingerprint = workflow_state(db).selection
-    # Strict worth='yes' here, not the '!=no' ("maybe" included) predicate attached
-    # judging uses — research is paid per person, so only the confirmed-worth set
-    # qualifies. A row also drops out once it already carries a live (non-rejected)
-    # retarget proposal, so a settled parent doesn't re-enter this queue next run.
-    eligible = enrichment_queue(
-        db,
-        include_plausibly_absent=include_plausibly_absent,
-        confirm_threshold=confirm_threshold,
-    )
+    # Only worth-Yes parents without a known LinkedIn or completed research enter.
+    eligible = enrichment_queue(db)
     queue = build_queue(eligible, db)
-    request_queue = build_queue(
-        enrichment_queue(
-            db,
-            include_plausibly_absent=include_plausibly_absent,
-            include_applied_retargets=True,
-            confirm_threshold=confirm_threshold,
-        ),
-        db,
-    )
     # pending/reused_completed is the artifact-level reuse that makes an unchanged
     # re-run free: filter_already_done matches each row's input_fingerprint against
     # the last projected research artifact for its handle.
@@ -135,7 +117,7 @@ def select_research(
     return ResearchSelection(
         fingerprint=fingerprint,
         request_fingerprint=request_plan_fingerprint(
-            request_queue,
+            queue,
             processor=processor,
         ),
         eligible=tuple(eligible),

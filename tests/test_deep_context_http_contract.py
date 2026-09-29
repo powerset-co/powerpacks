@@ -646,9 +646,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 self.assertTrue(content_type.startswith("text/plain"))
                 self.assertEqual(body, marker)
 
-        status, payload = self.json_request("POST", "/approve-enrichment")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["enrichment"]["status"], "completed")
+        status, content_type, body, _ = self.request("POST", "/approve-enrichment")
+        self.assertEqual(status, 409)
+        self.assertTrue(content_type.startswith("text/plain"))
+        self.assertEqual(body, b"enrichment job execution is disabled")
 
     def test_disabled_jobs_reject_computed_enrichment_approval(self) -> None:
         base = SqliteReviewAdapter(self.db).enrichment()

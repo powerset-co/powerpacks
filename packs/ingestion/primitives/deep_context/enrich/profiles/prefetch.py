@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.db.identity_views import approved_identities, linkedin_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import approved_identities, judge_candidates, linkedin_queue, research_candidate_urls
 from packs.ingestion.primitives.deep_context.db.identity_queries import links as identity_links
 from packs.ingestion.primitives.deep_context.db.view_models import ParentViewRow
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
@@ -177,6 +177,13 @@ class PrefetchProfiles:
         all_links = {row.row_key: row for row in identity_links(self.db)}
         links = [row for row in review_queue_links(linkedin_queue(self.db))
                  if row.candidate_key not in accepted_keys]
+        research_urls = research_candidate_urls(self.db)
+        links.extend(
+            ProfileTarget(extract_public_identifier(url).lower(), url, row.row_key, row.parent_id)
+            for row in judge_candidates(self.db)
+            if (url := row.machine_proposed_url or row.linkedin_url or research_urls.get(row.row_key))
+            and extract_public_identifier(url)
+        )
         parent_by_key = {key: row.parent_id for key, row in all_links.items()}
         links.extend(
             ProfileTarget(
