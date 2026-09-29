@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Manual browser QA; no provider calls or CI registration.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SUITE="$ROOT/tests/manual/deep_context"
+if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
+  echo "Run bin/setup-python first." >&2
+  exit 1
+fi
+if [[ ! -d "$SUITE/node_modules/playwright" || ! -d "$SUITE/node_modules/pngjs" ]]; then
+  npm ci --prefix "$SUITE" --no-audit --no-fund
+fi
+export POWERPACKS_QA_PYTHON="$ROOT/.venv/bin/python"
+exec node "$SUITE/run.cjs" "$@"
