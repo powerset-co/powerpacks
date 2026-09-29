@@ -7,18 +7,18 @@
     <div class='enrich-progress-fill' style='width:{{ percent }}%'></div>
   </div>
   {%- endset %}
-  {{ ui.empty_state('Enriching contacts', body, 'enrich-state') }}
+  {{ ui.empty_state('Enriching Contacts', body, 'enrich-state') }}
 {% elif mode == 'approval' %}
   {% set body -%}
   <button class='button button-primary button-hero' data-approve-enrichment>{{ approval_label }}</button>
   {%- endset %}
-  {{ ui.empty_state('Ready to enrich', body, 'enrich-state') }}
+  {{ ui.empty_state('Ready to Enrich', body, 'enrich-state') }}
 {% elif mode == 'completed' %}
   {% set body -%}<button class='button button-primary' data-complete='enrich'>Continue</button>{%- endset %}
-  {{ ui.empty_state('Contacts enriched', body, 'enrich-state') }}
+  {{ ui.empty_state('Contacts Enriched', body, 'enrich-state') }}
 {% elif mode == 'failed' %}
   {% set body -%}<p>{{ error }}</p>{%- endset %}
-  {{ ui.empty_state('Enrichment paused', body, 'enrich-state') }}
+  {{ ui.empty_state('Enrichment Paused', body, 'enrich-state') }}
 {% else %}
-  {{ ui.empty_state('Preparing enrichment', '', 'enrich-state') }}
+  {{ ui.empty_state('Preparing Enrichment', '', 'enrich-state') }}
 {% endif %}

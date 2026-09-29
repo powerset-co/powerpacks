@@ -222,6 +222,19 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.review.unlink()
         self.http = InProcessHttpClient(handler)
 
+    def test_last_worth_card_has_no_intermediate_completion_screen(self) -> None:
+        key = worth_queue(self.db)[0].key
+        status, _, body = self.request("GET", f"/api/worth-card?exclude={key}")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"")
+
+    def test_completed_worth_review_opens_enrichment_directly(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        status, _, body = self.request("GET", "/?stage=worth")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-stage='enrich'", body)
+        self.assertNotIn(b"Decisions ready", body)
+
     def tearDown(self) -> None:
         worker = self.queue._thread
         if worker is not None:

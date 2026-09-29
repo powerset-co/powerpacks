@@ -58,7 +58,6 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     render_decision_table,
     render_enrichment,
     render_linkedin_card,
-    worth_finished_body,
 )
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
@@ -428,6 +427,8 @@ class DeepContextHttpContractTests(unittest.TestCase):
         # "Parallel estimate:" / cost-detail paragraph was removed.
         self.assertIn("Approve $0.04", approval)
         self.assertIn("data-approve-enrichment", approval)
+        self.assertIn("Ready to Enrich", approval)
+        self.assertIn("Enriching Contacts", running)
         progress = SqliteReviewAdapter(self.db).snapshot().progress
         extra_markup = "".join(
             (
@@ -445,8 +446,8 @@ class DeepContextHttpContractTests(unittest.TestCase):
                     "yes",
                     total=2,
                 ),
-                worth_finished_body(progress, auto_continue=True),
                 linkedin_finished_body(progress, linkedin_complete=True),
+                linkedin_finished_body(progress, linkedin_complete=False, auto_continue=True),
                 GO_BACK_HTML,
             )
         )

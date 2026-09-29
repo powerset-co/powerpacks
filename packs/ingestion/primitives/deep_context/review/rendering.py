@@ -325,14 +325,6 @@ def _carousel_nav() -> str:
     return _render("carousel_nav.html.j2")
 
 
-def worth_finished_body(progress: StageProgress, *, auto_continue: bool = False) -> str:
-    if progress.synthesize_pending:
-        return SYNTHESIZE_HTML
-    return _render(
-        "worth_finished.html.j2", progress=progress, auto_continue=auto_continue,
-    )
-
-
 def linkedin_finished_body(progress: StageProgress, *, linkedin_complete: bool,
                            retargets_in_flight: int = 0, auto_continue: bool = False) -> str:
     if progress.synthesize_pending:
