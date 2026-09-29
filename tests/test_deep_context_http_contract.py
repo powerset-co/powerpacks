@@ -309,6 +309,15 @@ class DeepContextHttpContractTests(unittest.TestCase):
         status, _, _, _ = self.request("GET", "/share")
         self.assertEqual(status, 404)
 
+    def test_stage_transition_opts_in_before_external_styles_load(self) -> None:
+        for stage in ("worth", "enrich", "linkedin"):
+            with self.subTest(stage=stage):
+                status, _, body, _ = self.request("GET", f"/?stage={stage}")
+                self.assertEqual(status, 200)
+                early_head = body.split(b"<link", 1)[0]
+                self.assertIn(b"@view-transition { navigation: auto; }", early_head)
+                self.assertIn(b"prefers-reduced-motion: no-preference", early_head)
+
     def test_get_route_inventory_and_content_types(self) -> None:
         html_routes: dict[str, bytes | None] = {
             "/": b"<!doctype html>",

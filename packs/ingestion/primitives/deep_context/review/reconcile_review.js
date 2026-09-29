@@ -203,15 +203,13 @@ function leaveAndReload(message) {
 }
 
 // The check between sections. An empty message shows the check alone, for a
-// destination page that already carries the completion text.
+// destination page that already carries the completion text. The check stays
+// painted until the destination renders; the CSS view transition crossfades.
 function leaveAndNavigate(message, url) {
   completingStage = true;
   stage.innerHTML = "<div class='empty-state stage-complete'><span class='empty-mark' aria-hidden='true'>✓</span><h2></h2></div>";
   stage.querySelector("h2").textContent = message;
-  window.setTimeout(() => {
-    stage.classList.add("leaving");
-    window.setTimeout(() => { window.location.href = url; }, reduceMotion ? 0 : 170);
-  }, 650);
+  window.setTimeout(() => { window.location.href = url; }, 650);
 }
 
 // Decision cards keep their frame mounted: the caller fades the contents out

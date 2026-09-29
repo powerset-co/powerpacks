@@ -941,7 +941,15 @@ details.decision-row[open] .decision-row-main > span { display: none; }
 .toast.show { transform: translate(-50%, 0); opacity: 1; }
 .toast.error { background: var(--error); color: #1a1614; }
 .stage.leaving { transform: translateY(-5px); opacity: 0; transition: opacity 160ms ease, transform 160ms ease; }
-.stage { animation: stage-enter 180ms ease-out; }
+/* Same-origin navigations crossfade (opt-in is inline in page.html.j2's head:
+   a linked stylesheet arrives too late for the destination's first reveal);
+   under that crossfade the stage's own fade finishes at once, so it is not
+   faded twice (a zero duration, unlike `none`, does not replay afterwards). */
+@media (prefers-reduced-motion: no-preference) {
+  .stage { animation: stage-enter 180ms ease-out; }
+}
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 200ms; }
+:active-view-transition .stage { animation-duration: 0s; }
 .stage-complete { height: 100%; }
 .stage-complete .empty-mark { animation: completion-check 200ms ease-out; }
 @keyframes stage-enter { from { opacity: 0; } to { opacity: 1; } }
