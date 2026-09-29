@@ -349,17 +349,15 @@ payloads into SQLite, and writes a display-only manifest receipt. The agent owns
 run the wait command, then run only the exact `next_action` it returns, then
 wait again. Never infer readiness from chat text or browser state. Direct
 progress-step navigation is preview only; it does not itself advance provider
-work. A clicked preview stage stays visible and keeps refreshing from database
-changes instead of being forced back to the actual workflow stage.
+work. A clicked preview stage stays visible.
 The browser observes SQLite through the existing HTTP API and automatically
 refreshes or moves to the current stage. People and LinkedIn decisions commit
 directly to SQLite, and each save returns the new state token. No status poll is
 part of a decision click.
 The page listens to the server's `/api/events` stream only while external
-changes are possible: on Enrich and Done, plus a LinkedIn preview opened
-before enrichment completes. It snapshots `/api/status` once on load and again
-on every server nudge; it never polls. Once enrichment is current, LinkedIn
-stops listening and remains a purely local buffered review queue.
+changes are possible: on Enrich and Done. Those pages snapshot `/api/status`
+once on load and again on every server nudge; they never poll. LinkedIn is a
+local buffered review queue.
 A non-empty replacement URL on a listening preview pauses reload/navigation
 until it is saved; merely focusing an empty field does not. Open the UI once; do not
 open additional tabs or repeatedly open stage URLs as the workflow advances.
