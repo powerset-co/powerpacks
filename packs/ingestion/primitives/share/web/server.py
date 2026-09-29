@@ -210,7 +210,7 @@ class ShareRoutes:
 def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV, *,
                  upload_db: Path | None = None, upload_dir: Path | None = None) -> ShareRoutes:
     """The routes over one store, rows re-read whenever the store file changes."""
-    people = SharePeople(db, people_csv=people_csv)
+    people = SharePeople(db)
     cache: dict[str, Any] = {}
 
     def load() -> tuple:

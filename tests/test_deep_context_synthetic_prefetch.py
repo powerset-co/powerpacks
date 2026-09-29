@@ -168,6 +168,32 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.assertEqual(prefetched.status, "completed")
         self.assertFalse((self.research_dir / "manifest.json").exists())
 
+    def test_empty_profile_completes_but_provider_error_blocks_review(self) -> None:
+        self.db.project_rows((LinkRow(
+            "jordan-bravo", "parent-1", "jordan-bravo", "pub",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            source=WriterSource.RECONCILE.value,
+        ),))
+        for state, key, expected in (
+            (rapidapi_client.PROFILE_EMPTY, "key", "completed"),
+            (rapidapi_client.PROFILE_ERROR, "key", "completed_with_failures"),
+            (rapidapi_client.PROFILE_ERROR, "", "blocked_no_key"),
+        ):
+            with (
+                self.subTest(state=state, key=bool(key)),
+                mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key", return_value=key),
+                mock.patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={
+                    "state": state, "normalized_profile": {},
+                    "from_cache": False, "fetched": bool(key),
+                }),
+            ):
+                result = PrefetchProfiles(
+                    db=self.db, profile_cache_dir=self.cache, fetch=True,
+                ).run()
+                self.assertEqual(result.queue_links, 1)
+                self.assertEqual(result.status, expected)
+                self.assertEqual(len(linkedin_queue(self.db)), 1)
+
     def test_without_manifest_projects_sqlite_without_duplicate_files(self) -> None:
         self._write_no_linkedin_result()
         result = AssembleSyntheticProfile(db=self.db).run()

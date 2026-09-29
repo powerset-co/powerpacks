@@ -52,6 +52,14 @@ def directory_row(**fields) -> dict[str, str]:
 
 
 class KeyAndIdTests(unittest.TestCase):
+    def test_rekey_retains_source_ids_and_previous_aliases(self) -> None:
+        rows = [person(id="candidate:phone:+15550100", public_identifier="jordan-bravo",
+                       superseded_person_ids=["old-person"]),
+                person(id=generate_person_id("jordan-bravo"), public_identifier="jordan-bravo")]
+        merged = merge_group("linkedin:jordan-bravo", rows)
+        self.assertEqual(set(json.loads(merged["superseded_person_ids"])),
+                         {"candidate:phone:+15550100", "old-person"})
+
     def test_a_slug_keys_on_linkedin_and_mints_the_canonical_uuid5(self) -> None:
         row = person(public_identifier="jordan-bravo", primary_email="jordan@example.com")
         self.assertEqual(group_key(row), "linkedin:jordan-bravo")
@@ -219,43 +227,6 @@ class DirectoryStampTests(unittest.TestCase):
             payload = PeopleMerge(inputs=[base / "linkedin.csv"], output_dir=base / "out",
                                   directory_csv=base / "directory.csv", profile_cache_dir=cache).run().to_payload()
         self.assertEqual((payload["stats"]["profiles_filled"], payload["stats"]["profiles_missing"]), (0, 1))
-
-    def test_a_retargeted_row_takes_the_new_persons_profile_not_the_old_one(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            write_directory(base / "directory.csv", [
-                directory_row(source="deep_context_review", email="casey@example.com",
-                              linkedin_url="https://www.linkedin.com/in/casey-correct"),
-            ])
-            write_people(base / "gmail.csv", [
-                {"public_identifier": "casey-wrong", "primary_email": "casey@example.com",
-                 "linkedin_url": "https://www.linkedin.com/in/casey-wrong", "headline": "Wrong person",
-                 "current_company": "Wrong Co", "work_experiences": [{"title": "Wrong", "company": "Wrong Co"}]},
-            ])
-            cache = self._cache(base, "casey-correct", {
-                "full_name": "Casey Delta", "headline": "Founder at Example Labs",
-                "experiences": [{"title": "Founder", "company": "Example Labs", "ends_at": None}]})
-            PeopleMerge(inputs=[base / "gmail.csv"], output_dir=base / "out",
-                        directory_csv=base / "directory.csv", profile_cache_dir=cache).run()
-            (row,) = CsvIO.read_dict_rows(base / "out" / "people.csv")
-        self.assertEqual([exp["title"] for exp in json.loads(row["work_experiences"])], ["Founder"])
-        self.assertEqual((row["headline"], row["current_company"]), ("Founder at Example Labs", "Example Labs"))
-
-    def test_approved_deep_context_mapping_retargets_an_attached_source_row(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            write_directory(base / "directory.csv", [
-                directory_row(source="deep_context_review", email="casey@example.com",
-                              linkedin_url="https://www.linkedin.com/in/casey-correct"),
-            ])
-            write_people(base / "gmail.csv", [
-                {"public_identifier": "casey-wrong", "full_name": "Casey Delta",
-                 "primary_email": "casey@example.com", "linkedin_url": "https://www.linkedin.com/in/casey-wrong"},
-            ])
-            PeopleMerge(inputs=[base / "gmail.csv"], output_dir=base / "out",
-                        directory_csv=base / "directory.csv").run()
-            (row,) = CsvIO.read_dict_rows(base / "out" / "people.csv")
-        self.assertEqual(row["public_identifier"], "casey-correct")
 
 
 class MergeGroupTests(unittest.TestCase):

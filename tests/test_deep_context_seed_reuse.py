@@ -115,7 +115,7 @@ class SeedReuseTests(SeedFixture):
         legacy.raw_ids.return_value = Ids()
         cold = mock.Mock()
         cold.decide.return_value = {parent_id}
-        Seed(db=db, people_csv=self.people_csv)._carry_facts(cold, legacy)
+        Seed(db=db)._carry_facts(cold, legacy)
         self.assertEqual(path.with_suffix('.jsonl.bkup').read_bytes(), original)
 
     def test_old_seed_version_does_not_rebill_unchanged_messages(self):

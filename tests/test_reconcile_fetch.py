@@ -23,7 +23,8 @@ from parallel.types import TaskGroupStatus, TaskRunJsonOutput
 
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection as profile_projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
-from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
+from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import judging
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -372,7 +373,7 @@ class HydrateProfilesTests(unittest.TestCase):
 
         self.assertEqual(
             (hydrated.wanted, hydrated.ok, hydrated.failed, hydrated.skipped_no_key),
-            (3, 1, 1, 1),
+            (3, 1, 0, 1),
         )
         self.assertEqual(
             {key: value.state for key, value in hydrated.profiles.items()},
@@ -389,7 +390,7 @@ class HydrateProfilesTests(unittest.TestCase):
 
         def fake(self, pub, url, *, cache_dir=None, **kw):
             calls.append(pub)
-            state = rapid.PROFILE_CONTENT if pub == "good" else rapid.PROFILE_EMPTY
+            state = rapid.PROFILE_CONTENT if pub == "good" else rapid.PROFILE_ERROR
             return {"state": state, "normalized_profile": {}}
 
         with (
@@ -487,23 +488,21 @@ class RetargetProposalHydrationTests(unittest.TestCase):
             decision = db.query("SELECT machine_action, machine_approved FROM links WHERE row_key='jordan-bravo'")[0]
             self.assertEqual(tuple(decision), ("retarget", "auto"))
 
-            out = root / "retarget.csv"
+            db.replace_imported_people((PeopleRow(
+                id="pid-1", full_name="Jordan Bravo", public_identifier="jordan-bravo",
+                linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            ),))
             with mock.patch.object(
                 profile_projection,
                 "hydrate_profiles",
                 side_effect=AssertionError("realize must not hydrate profiles"),
             ):
-                realized = ApplyRetargets(
-                    db=db,
-                    profile_cache_dir=cache,
-                    out_csv=out,
-                ).run()
+                realized = ExportPeople(db=db, out_dir=root / "merged").run()
 
-            self.assertEqual((realized["approved_retargets"], realized["rows"]), (1, 1))
-            self.assertEqual(
-                CsvIO.read_dict_rows(out)[0]["public_identifier"],
-                "jordan-correct",
-            )
+            self.assertEqual((realized["accepted_identities"], realized["rows"]), (1, 1))
+            (row,) = CsvIO.read_dict_rows(root / "merged" / "people.csv")
+            self.assertEqual(row["public_identifier"], "jordan-correct")
+            self.assertEqual(json.loads(row["work_experiences"])[0]["title"], "Founder")
 
     def test_judge_error_does_not_persist_a_reusable_proposal(self):
         with TemporaryDirectory() as directory:

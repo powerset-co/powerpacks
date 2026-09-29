@@ -7,6 +7,7 @@ Changelog:
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
 from typing import TypeVar
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
@@ -25,9 +26,19 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 RowT = TypeVar("RowT")
+
+
+def imported_people(db: Db) -> tuple[PeopleRow, ...]:
+    """The full current import roster, with stable ownership in `people`."""
+    return tuple(
+        PeopleRow.model_validate(json.loads(row["row_json"]))
+        for row in db.query("SELECT row_json FROM imported_people ORDER BY person_id")
+    )
+
 
 _BOOLEAN_COLUMNS = frozenset(
     {

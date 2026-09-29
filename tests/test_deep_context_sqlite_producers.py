@@ -7,15 +7,11 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.realize import apply_retargets
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection
-from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
+from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
-    PersonIdentifierRow,
-    PersonIdentifiersProjection,
-    PersonSourceRow,
-    PersonSourcesProjection,
     ReviewSource,
     WriterSource,
 )
@@ -72,6 +68,20 @@ class SqliteProducerTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def export(self) -> tuple[dict, list[dict[str, str]]]:
+        self.db.replace_imported_people((PeopleRow(
+            id="person-1", full_name="Alice Example", public_identifier="alice",
+            linkedin_url="https://www.linkedin.com/in/alice", primary_email="alice@example.com",
+            source_channels="gmail",
+        ),))
+        with mock.patch.object(
+            projection,
+            "hydrate_profiles",
+            side_effect=AssertionError("realize must not hydrate profiles"),
+        ):
+            result = ExportPeople(db=self.db, out_dir=self.root / "merged").run()
+        return result, CsvIO.read_dict_rows(self.root / "merged" / "people.csv")
 
     def test_machine_settlement_never_overwrites_a_human_decision(self) -> None:
         self.db.decide_identity("alice", "verify", source=ReviewSource.REVIEW.value)
@@ -198,22 +208,9 @@ class SqliteProducerTests(unittest.TestCase):
             (row["machine_judgment"], row["machine_confidence"]),
             ("confirmed", 0.91),
         )
-        out = self.root / "retarget.csv"
-        with mock.patch.object(
-            projection,
-            "hydrate_profiles",
-            side_effect=AssertionError("realize must not hydrate profiles"),
-        ):
-            result = ApplyRetargets(
-                db=self.db,
-                profile_cache_dir=self.root / "cache",
-                out_csv=out,
-            ).run()
-        self.assertEqual((result["approved_retargets"], result["rows"]), (1, 1))
-        self.assertEqual(
-            CsvIO.read_dict_rows(out)[0]["public_identifier"],
-            "alice-correct",
-        )
+        result, rows = self.export()
+        self.assertEqual((result["accepted_identities"], result["rows"]), (1, 1))
+        self.assertEqual(rows[0]["public_identifier"], "alice-correct")
 
     def test_uncleared_retarget_stays_pending_and_is_not_realized(self) -> None:
         facts_dir = self.root / "facts"
@@ -262,36 +259,17 @@ class SqliteProducerTests(unittest.TestCase):
             "https://www.linkedin.com/in/alice-uncertain",
         )
 
-        result = ApplyRetargets(
-            db=self.db,
-            profile_cache_dir=self.root / "cache",
-            out_csv=self.root / "retarget.csv",
-        ).run()
-        self.assertEqual((result["approved_retargets"], result["rows"]), (0, 0))
+        result, rows = self.export()
+        self.assertEqual(result["accepted_identities"], 0)
+        self.assertEqual(rows[0]["public_identifier"], "alice")
 
     def test_machine_settlement_rejects_a_missing_judge_fingerprint(self) -> None:
         with self.assertRaisesRegex(StoreError, "lacks decision fingerprint"):
             upsert_retargets(self.db, [retarget_proposal(fingerprint="")])
-
-        baton = self.root / "review.csv"
-        result = ApplyRetargets(
-            db=self.db,
-            profile_cache_dir=self.root / "cache",
-            out_csv=self.root / "retarget.csv",
-        ).run()
-        self.assertFalse(baton.exists())
-        self.assertTrue((self.root / "retarget.csv").exists())
-        self.assertEqual(result["approved_retargets"], 0)
+        result, _rows = self.export()
+        self.assertEqual(result["accepted_identities"], 0)
 
     def test_approved_retarget_carries_contact_identity_from_sqlite(self) -> None:
-        self.db.project_rows(
-            (
-                PersonIdentifiersProjection(
-                    "person-1", (PersonIdentifierRow("person-1", "email", "alice@example.com"),)
-                ),
-                PersonSourcesProjection("person-1", (PersonSourceRow("person-1", "gmail"),)),
-            )
-        )
         self.db.project_rows(
             (
                 IdentityMachineProjection(
@@ -339,30 +317,11 @@ class SqliteProducerTests(unittest.TestCase):
             ],
             cache_dir,
         )
-        captured = {}
+        result, (row,) = self.export()
 
-        def build(url, pub, raw, carry):
-            del raw
-            captured.update(carry.to_payload())
-            return {"public_identifier": pub, "linkedin_url": url}
-
-        with (
-            mock.patch.object(
-                projection,
-                "hydrate_profiles",
-                side_effect=AssertionError("realize must not hydrate profiles"),
-            ),
-            mock.patch.object(apply_retargets, "build_retarget_row", side_effect=build),
-        ):
-            result = ApplyRetargets(
-                db=self.db,
-                profile_cache_dir=cache_dir,
-                out_csv=self.root / "retarget.csv",
-            ).run()
-
-        self.assertEqual((result["approved_retargets"], result["enriched"]), (1, 1))
-        self.assertEqual(captured["primary_email"], "alice@example.com")
-        self.assertEqual(captured["source_channels"], "gmail")
+        self.assertEqual((result["accepted_identities"], result["profiles_filled"]), (1, 1))
+        self.assertEqual((row["primary_email"], row["source_channels"]), ("alice@example.com", "gmail"))
+        self.assertEqual(json.loads(row["work_experiences"])[0]["company"], "Correct Robotics")
 
     def test_human_retarget_projects_without_profile_spend(self) -> None:
         projection.project_profile_results(
@@ -401,20 +360,9 @@ class SqliteProducerTests(unittest.TestCase):
             replacement_url="https://www.linkedin.com/in/alice-human-choice",
             replacement_public_identifier="alice-human-choice",
         )
-        out = self.root / "retarget.csv"
-        with mock.patch.object(
-            projection,
-            "hydrate_profiles",
-            side_effect=AssertionError("realize must not hydrate profiles"),
-        ):
-            result = ApplyRetargets(
-                db=self.db,
-                profile_cache_dir=self.root / "cache",
-                out_csv=out,
-            ).run()
+        result, (row,) = self.export()
 
-        self.assertEqual((result["approved_retargets"], result["rows"]), (1, 1))
-        (row,) = CsvIO.read_dict_rows(out)
+        self.assertEqual((result["accepted_identities"], result["profiles_missing"]), (1, 1))
         self.assertEqual(row["public_identifier"], "alice-human-choice")
         self.assertEqual(
             row["linkedin_url"],

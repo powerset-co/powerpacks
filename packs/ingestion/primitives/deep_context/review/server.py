@@ -255,14 +255,7 @@ def make_handler(
         progress = state.progress
         view = _phase_view(params)
         preview = _value(params, "preview") == "1"
-        # The research plan is the enrich stage's own view query (~0.5s);
-        # every other stage reads its pending count from the cheap queue
-        # count already on StageProgress.
-        enrichment = (
-            api.enrichment(state)
-            if view == "enrich"
-            else None
-        )
+        enrichment = api.enrichment(state)
         if view == "worth":
             tab = _value(params, "view", "review").lower()
             tab = tab if tab in {"review", "yes", "no"} else "review"
@@ -314,12 +307,8 @@ def make_handler(
                 2,
                 "Enrich Contacts",
                 active == 1,
-                synthesized and (
-                    enrichment.status == "completed"
-                    if enrichment is not None
-                    else progress.enrichment_pending == 0
-                ),
-                enrichment.counts.pending if enrichment is not None else progress.enrichment_pending,
+                synthesized and enrichment.status == "completed",
+                enrichment.counts.pending,
                 "/?stage=enrich&preview=1",
             ),
             (
@@ -339,7 +328,7 @@ def make_handler(
             preview=preview,
             external_updates=view in {"enrich", "done"},
             state_token=state.state_token,
-            enrichment_status=enrichment.status if enrichment is not None else "",
+            enrichment_status=enrichment.status,
             stepper=steps,
         )
 

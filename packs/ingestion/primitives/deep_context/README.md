@@ -3,6 +3,9 @@
 Created: 2026-08-06
 
 Changelog:
+- 2026-09-28: `realize/export_people.py` writes the final roster into SQLite
+  and exports people.csv from it; the directory.csv / retarget-people.csv
+  round trip is gone.
 - 2026-09-25: `migration/seed.py` carries a legacy install's decisions onto
   the cold parents by identifier after ensure-parents; the whole-graph
   legacy import is unrouted.
@@ -63,7 +66,7 @@ flowchart TD
   research --> receipt["manifest.json\nwrite-only stats receipt"]
   research --> sqlite
 
-  sqlite --> realize["persist_review_identities / apply_retargets\n→ people.csv → index build"]
+  sqlite --> realize["realize/export_people\nfinal roster in SQLite → people.csv → index build"]
 ```
 
 ## Contracts
@@ -180,7 +183,7 @@ flowchart LR
 | `merge_candidates/` | same-person blocking/judging, accepted merge application, parent rendering | facts, SQLite | merge proposals, cached verdicts, `parents/*.md` |
 | `enrich/` | Parallel research, profile hydration, identity judging, synthetic fallback | SQLite queue, provider caches | research artifacts, SQLite verdicts |
 | `review/` | worth and identity web review, guided retarget, and restart | named SQLite views | human decisions via `db/store` |
-| `realize/` | paid-free projection of approved identity decisions | SQLite, cached profiles | network exports |
+| `realize/` | free, local: reviewed identities → final SQLite roster → people.csv | SQLite (roster, decisions, projected profiles) | SQLite roster, merged/people.csv |
 | `migration/` | `seed.py`: identifier-keyed carry-over of legacy merges, raw bundles, facts, human decisions and research onto cold parents; `legacy.py`: the retired whole-graph import | legacy artifacts, SQLite | SQLite merges/bundles/facts/decisions/research, `raw/`, `facts/`, `reconcile/deep-research/` |
 | `shared/` | common paths, readiness, owner, lookup, and dossier evidence | varies | owner cache where applicable |
 | `manifests/` | one public receipt model per stage contract | — | serialized stage receipts |

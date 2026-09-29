@@ -82,8 +82,6 @@ PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
 # The shared paid LinkedIn-profile cache, keyed by public_identifier and written by imports'
 # profile-fetch primitives outside deep_context. Read here by build_owner,
 # profiles/prefetch, and research judging — a hit here means no RapidAPI spend.
-OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
-RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"  # written and read only by realize.apply_retargets
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 # build_owner writes this file, but most consumers never read it back: build_owner also
 # projects it into CANONICAL_DB's owner_context table, and every downstream reader (synthesis,

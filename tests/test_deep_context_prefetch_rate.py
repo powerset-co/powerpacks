@@ -87,10 +87,7 @@ class PrefetchRateTest(unittest.TestCase):
         monotonic.assert_not_called()
 
     def test_billed_empty_fetch_still_counts_as_a_network_call(self) -> None:
-        """A live fetch that comes back empty is money spent: the receipt's
-        network signal must come from the client's fetched flag, not from
-        successes — every miss here lands in `failed`, and the old
-        successes-only signal would report a fully billed run as offline."""
+        """An empty answer completes hydration and still records its cost."""
         link = ProfileTarget(
             "casey-delta",
             "https://www.linkedin.com/in/casey-delta",
@@ -111,7 +108,7 @@ class PrefetchRateTest(unittest.TestCase):
 
         self.assertEqual(
             counts,
-            ProfilePrefetchCounts(1, 0, 0, 1, 0, 1),
+            ProfilePrefetchCounts(1, 0, 0, 0, 0, 1),
         )
 
 

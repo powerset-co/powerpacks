@@ -86,7 +86,6 @@ from packs.ingestion.primitives.deep_context.manifests.seed_manifest import Seed
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DEEP_RESEARCH_DIR,
-    DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
     RAW_DIR,
     emit,
@@ -251,7 +250,7 @@ class Ids:
 class ColdIndex:
     """Identifier -> cold parent, kept current while the seed merges parents."""
 
-    def __init__(self, db: Db, people_csv: Path) -> None:
+    def __init__(self, db: Db) -> None:
         self.parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
         self.slug_of = {row.parent_id: str(row.display_slug or "") for row in queries.parents(db)}
         self.linkedin_parents: set[str] = set()
@@ -261,9 +260,9 @@ class ColdIndex:
             self.index[row.kind][row.normalized_value].add(self.parent_of[row.person_id])
         # The store keeps no LinkedIn identifier rows: the fan-in export that
         # ensure-parents read supplies each person's slug.
-        for raw in _csv_rows(people_csv):
-            person_id = _text(raw.get("id")).lower()
-            value = _slug(row_public_identifier(raw))
+        for row in queries.imported_people(db):
+            person_id = row.id.lower()
+            value = _slug(row.public_identifier)
             if value and person_id in self.parent_of:
                 parent_id = self.parent_of[person_id]
                 self.index[LINKEDIN][value].add(parent_id)
@@ -456,14 +455,12 @@ class Seed(Node):
         *,
         db: Db,
         legacy_root: Path = DEFAULT_LEGACY_ROOT,
-        people_csv: Path = DEFAULT_PEOPLE_CSV,
         raw_dir: Path = RAW_DIR,
         facts_dir: Path = FACTS_DIR,
         research_dir: Path = DEEP_RESEARCH_DIR,
     ) -> None:
         self.db = db
         self.legacy_root = Path(legacy_root)
-        self.people_csv = Path(people_csv)
         self.raw_dir = Path(raw_dir)
         self.facts_dir = Path(facts_dir)
         self.research_dir = Path(research_dir)
@@ -475,7 +472,7 @@ class Seed(Node):
         carried = carried_over_at(self.db)
         if carried is not None:
             raise SeedRefused(f"store already carries its legacy decisions ({carried}); seed runs once")
-        cold = ColdIndex(self.db, self.people_csv)
+        cold = ColdIndex(self.db)
         if not cold.parent_of:
             raise SeedRefused("store holds no people; run ensure-parents first")
         legacy = LegacyTree(self.legacy_root)
@@ -793,7 +790,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--legacy-root", default=str(DEFAULT_LEGACY_ROOT), help="a .powerpacks tree")
-    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     return parser
 
 
@@ -802,7 +798,6 @@ def main(argv: list[str] | None = None) -> int:
     node = Seed(
         db=open_existing_db(args.db),
         legacy_root=Path(args.legacy_root),
-        people_csv=Path(args.people_csv),
     )
     try:
         payload = node.run()

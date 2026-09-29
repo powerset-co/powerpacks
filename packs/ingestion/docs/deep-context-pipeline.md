@@ -3,6 +3,10 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-09-28: the post-review block is stop → realize. Realize writes the
+  final roster into SQLite and exports merged/people.csv from it; no
+  directory.csv, retarget-people.csv, fan-in, or provider call. Cold start,
+  one-time legacy seed and incremental refresh are documented under State.
 - 2026-09-25: the seed upgrade path, the deletion of the old migration and the
   store scale fixes ship together as 3.1.0; 3.0.0 was the breaking cut.
 - 2026-09-25: a notable imported LinkedIn headline is worth Yes (code rule after
@@ -81,7 +85,7 @@ flowchart TD
     P --> Q["LinkedIn UI: verify, replace, or Skip"]
     Q --> R{"LinkedIn review complete"}
     R --> R1["Agent's wait returns realize"]
-    R1 --> T["Project recorded retargets + persist identities to directory.csv + rebuild merged people.csv"]
+    R1 --> T["Apply reviewed identities in SQLite + export merged people.csv"]
     T --> U{"Approve Modal upload/build"}
     U --> V["Build and validate search index"]
 
@@ -175,7 +179,7 @@ browser button and cannot be blocked by the Done page.
 | Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |
 | Profile prefetch | The review app runs profile hydration automatically after research completes (RapidAPI is credits-based, one call per distinct profile cache miss). The UI stays cache-only. | Shared profile cache and SQLite profile artifacts |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
-| Realization | Purely projects recorded human/machine identity decisions to `directory.csv`, using a cached profile when present or the SQLite decision carry otherwise; fan-in then rebuilds the fixed merged people CSV. It makes no provider calls. Synthetic profiles remain outside the directory because they have no real LinkedIn identity. | `directory.csv`, `.powerpacks/network-import/merged/people.csv` |
+| Realization | Applies reviewed identities and merges their parents in SQLite, then exports the final roster. Fills profiles from SQLite and makes no provider calls. Synthetic profiles require a reviewed real LinkedIn replacement to be indexed. | SQLite roster, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
 
 ## Commands and approval boundaries
@@ -207,7 +211,6 @@ After LinkedIn review:
 
 ```bash
 bin/deep-context stop
-bin/deep-context apply-retargets
 bin/deep-context realize
 
 uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
@@ -249,8 +252,8 @@ Worth is intentionally decisive:
   the JEV answers, so it re-bills nothing; the reason reads `Notable title: …`.
 
 The durable worth authority is the parent row in
-`.powerpacks/deep-context/deep-context.sqlite`; `review.csv` is compatibility
-input/output at the migration or realization boundary only.
+`.powerpacks/deep-context/deep-context.sqlite`; legacy `review.csv` is read only
+at the one-time seed boundary.
 
 - Synthesis writes one machine worth verdict into `facts/<parent_id>.jsonl`
   and projects it onto that parent.
@@ -292,6 +295,21 @@ For a researched result with no LinkedIn:
   workflow; it is never directly approved for indexing.
 
 ## State and repeatability
+
+The store's state picks one of three starts; there is no mode flag:
+
+- **Cold start (new account):** no store yet. `ensure-parents` creates it and
+  projects the imported people as the roster.
+- **One-time legacy seed:** `check` reports `seed_required` for an install with
+  pre-SQLite artifacts. Run `seed` once after `ensure-parents`; a seeded store
+  refuses a second run.
+- **Incremental refresh:** a store exists. Re-import, fan in, and run
+  `ensure-parents`: new contacts and evidence are added, existing contacts and
+  every decision are kept, and a contact the refresh omitted is not deleted.
+  New unresolved contacts enter the worth and lookup queues like any other.
+
+After `ensure-parents`, every stage reads SQLite only; `realize` is the one
+place a CSV is written again.
 
 SQLite is the record; the enrichment manifest is a display-only receipt:
 
@@ -347,6 +365,7 @@ facts, not verbatim messages.
 
 ```text
 .powerpacks/deep-context/
+|-- deep-context.sqlite
 |-- owner.json
 |-- raw/
 |   |-- <parent_id>.json
@@ -369,14 +388,6 @@ facts, not verbatim messages.
         |-- manifest.json
         `-- <handle>/
             `-- 00_parallel_result.json
-
-.powerpacks/network-import/overrides/
-|-- review.csv
-|-- consolidate-people.csv
-`-- retarget-people.csv
-
-.powerpacks/network-import/
-`-- directory.csv
 
 .powerpacks/network-import/merged/
 `-- people.csv
@@ -411,5 +422,4 @@ Not every request needs the full workflow:
 | Parallel enrichment | [`enrich/research_reconcile/reconcile_deep_research.py`](../primitives/deep_context/enrich/research_reconcile/reconcile_deep_research.py) |
 | No-LinkedIn research cards | [`enrich/synthetic/assemble.py`](../primitives/deep_context/enrich/synthetic/assemble.py) |
 | LinkedIn review profile prefetch | [`enrich/profiles/prefetch.py`](../primitives/deep_context/enrich/profiles/prefetch.py) |
-| Retarget projection | [`realize/apply_retargets.py`](../primitives/deep_context/realize/apply_retargets.py) |
-| Fan-in realization | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |
+| Realization (final roster + people.csv export) | [`realize/export_people.py`](../primitives/deep_context/realize/export_people.py) |

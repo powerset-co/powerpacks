@@ -90,7 +90,7 @@ def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
         (review, link)
         for review in review_rows(db, include_worth=False)
         if (link := links_by_key.get(review.key)) is not None
-        and link.kind != RowKind.SYNTHETIC.value
+        and (link.kind != RowKind.SYNTHETIC.value or review.action == ReviewAction.RETARGET.value)
         and review.action in AFFIRMATIVE_MACHINE_ACTIONS
         and review.approved in AFFIRMATIVE_MACHINE_APPROVALS
     ]

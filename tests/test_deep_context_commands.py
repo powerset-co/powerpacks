@@ -1,4 +1,6 @@
 """Keep one ordinary deep-context path and hide retired maintenance verbs."""
+import os
+import tempfile
 import subprocess
 import unittest
 from pathlib import Path
@@ -9,6 +11,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeepContextCommandsTests(unittest.TestCase):
+    def test_realize_is_one_sqlite_export(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = root / "calls"
+            uv = root / "uv"
+            uv.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n')
+            uv.chmod(0o755)
+            subprocess.run([str(ROOT / "bin/deep-context"), "realize"], cwd=ROOT,
+                           env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "CALLS": str(calls)},
+                           capture_output=True, text=True, check=True)
+            commands = calls.read_text().splitlines()
+        self.assertEqual(len(commands), 1)
+        self.assertIn("deep_context.realize.export_people", commands[0])
+
     def test_maintenance_verbs_are_not_public(self) -> None:
         result = subprocess.run([str(ROOT / 'bin/deep-context'), '--help'], cwd=ROOT,
                                 capture_output=True, text=True, check=True)
@@ -20,7 +36,8 @@ class DeepContextCommandsTests(unittest.TestCase):
         self.assertNotIn('--fresh', help_text)
 
     def test_retired_verbs_fail_before_running(self) -> None:
-        for command in ('refresh', 'rejudge', 're-review', 'heal', 'reconcile'):
+        for command in ('refresh', 'rejudge', 're-review', 'heal', 'reconcile', 'apply-retargets',
+                        'persist-review-identities'):
             with self.subTest(command=command):
                 result = subprocess.run([str(ROOT / 'bin/deep-context'), command], cwd=ROOT,
                                         capture_output=True, text=True)

@@ -11,6 +11,7 @@ from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactR
 from packs.ingestion.primitives.deep_context.db.share_views import person_labels, share_decisions
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
 from packs.ingestion.primitives.share.labels import ACTIVE_P, share_decision
 from packs.ingestion.primitives.share.models import HumanTags, LabelRow
 from packs.ingestion.primitives.share.questions import build_questions
@@ -123,7 +124,8 @@ class ShareListTests(unittest.TestCase):
                 public_identifier=slug,
                 labels=_saved_labels(is_automated_sender=automated),
             )
-        self.evidence = ShareEvidence(self.db, people_csv=people_csv)
+        self.db.replace_imported_people(tuple(row.index_row for row in read_imported_people(people_csv)))
+        self.evidence = ShareEvidence(self.db)
 
     def _run(self) -> dict:
         # The canonical inputs are declared external artifacts; the explicit db
@@ -209,7 +211,8 @@ class ShareWithoutFactsTests(unittest.TestCase):
                 "stub", "projected", payload_json=json.dumps({"body": "# Jordan Bravo\n"}),
             ),
         ))
-        self.evidence = ShareEvidence(self.db, people_csv=people_csv)
+        self.db.replace_imported_people(tuple(row.index_row for row in read_imported_people(people_csv)))
+        self.evidence = ShareEvidence(self.db)
 
     def _run(self) -> dict:
         return ShareList(db=self.db, out_dir=self.out, evidence=self.evidence).run().to_payload()

@@ -62,6 +62,8 @@ EXPECTED_DB_OPERATIONS = {
     "store.Db.project_rows",
     "store.Db.prune_synthetic_candidates",
     "store.Db.query",
+    "store.Db.replace_imported_people",
+    "queries.imported_people",
     "store.Db.replace_merge_verdicts",
     "store.Db.replace_share_rows",
     "store.Db.reset_review",

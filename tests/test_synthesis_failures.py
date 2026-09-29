@@ -69,7 +69,7 @@ class SynthesisFailureTests(unittest.TestCase):
             return AsyncOpenAI(**{**kwargs, 'api_key': 'synthetic-key', 'base_url': 'https://synthetic.test'},
                                http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)))
 
-        node = SynthesizePersonContext(db=db, raw_dir=raw, out_dir=root / 'facts', people_csv=root / 'people.csv',
+        node = SynthesizePersonContext(db=db, raw_dir=raw, out_dir=root / 'facts',
                                        model='fixture-model', chunk_chars=1, force=force)
         with mock.patch.object(openai_responses, 'AsyncOpenAI', side_effect=client), \
                 mock.patch.object(runner, 'tag_saved_facts', return_value=runner.JevUsage()) as tag:
@@ -102,7 +102,7 @@ class SynthesisFailureTests(unittest.TestCase):
             self.assertEqual(manifest['failures'], [{'person_id': 'parent-casey', 'batch': 1, 'error': 'RateLimitError HTTP 429'}])
             self.assertNotIn('private content', json.dumps(manifest))
             resumed = SynthesizePersonContext(db=db, raw_dir=root / 'raw', out_dir=root / 'facts',
-                people_csv=root / 'people.csv', model='fixture-model', chunk_chars=1, force=True)
+                model='fixture-model', chunk_chars=1, force=True)
             self.assertEqual([bundle.person_id for bundle in resumed._plan().bundles], ['parent-casey'])
 
     def test_changed_evidence_failure_retries_normally(self):

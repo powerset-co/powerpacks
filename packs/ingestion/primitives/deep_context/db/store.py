@@ -8,6 +8,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
+import json
 from pathlib import Path
 from typing import Iterator
 
@@ -52,10 +53,12 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     ID_SET,
     id_set,
     DDL,
+    IMPORTED_PEOPLE_DDL,
     SCHEMA_VERSION,
     TABLE_BY_TYPE,
     UPSERTS,
 )
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class StoreError(ValueError):
@@ -77,6 +80,11 @@ _signature_db = sqlite3.connect(":memory:")
 _signature_db.executescript(DDL)
 EXPECTED_SCHEMA_SIGNATURE = _schema_signature(_signature_db)
 _signature_db.close()
+
+_legacy_db = sqlite3.connect(":memory:")
+_legacy_db.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, ""))
+LEGACY_SCHEMA_SIGNATURE = _schema_signature(_legacy_db)
+_legacy_db.close()
 
 
 _CHILD_KEYS = {
@@ -156,6 +164,11 @@ class Db:
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()
             found = row["value"] if row else "missing"
+            if found == "1" and _schema_signature(conn) == LEGACY_SCHEMA_SIGNATURE:
+                conn.execute(IMPORTED_PEOPLE_DDL)
+                conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+                conn.commit()
+                found = str(SCHEMA_VERSION)
             if found != str(SCHEMA_VERSION):
                 raise SchemaVersionError(
                     f"deep-context DB schema is {found}, expected {SCHEMA_VERSION}; "
@@ -188,6 +201,15 @@ class Db:
     def query(self, sql: str, params: tuple | dict = ()) -> list[sqlite3.Row]:
         with self.transaction() as conn:
             return conn.execute(sql, params).fetchall()
+
+    def replace_imported_people(self, rows: tuple[PeopleRow, ...]) -> None:
+        """Replace only the live imported roster; historical people remain."""
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM imported_people")
+            conn.executemany(
+                "INSERT INTO imported_people(person_id, row_json) VALUES (?, ?)",
+                ((row.id, json.dumps(row.to_row(), ensure_ascii=False)) for row in rows),
+            )
 
     def _write(self, table: str, row: object, conn: sqlite3.Connection) -> None:
         conn.execute(UPSERTS[table], asdict(row))

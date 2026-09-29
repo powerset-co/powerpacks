@@ -170,7 +170,7 @@ class SeedFixture(unittest.TestCase):
         return db
 
     def seed(self, db: Db):
-        return Seed(db=db, legacy_root=self.legacy, people_csv=self.people_csv).run()
+        return Seed(db=db, legacy_root=self.legacy).run()
 
     def readiness(self, db: Db | None = None):
         check = "packs.ingestion.primitives.deep_context.shared.check_readiness"

@@ -37,7 +37,7 @@ from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts 
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     ImportedPerson,
-    read_imported_people,
+    stored_imported_people,
 )
 from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.deep_context.synthesis.facts import collapse_fact_records
@@ -245,7 +245,7 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
             for batch in person_batches
         )
         total_batches += len(person_batches)
-    headlines = parent_headlines(db, config.people_csv)
+    headlines = parent_headlines(db)
     for parent_id, path in _tagging_paths(db, config, bundles, owner, headlines=headlines):
         if parent_id in synthesized_ids:
             continue
@@ -386,14 +386,14 @@ def _write_worth(path: Path, result: WorthResult, timestamp: str) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def parent_headlines(db: Db, people_csv: Path) -> dict[str, str]:
+def parent_headlines(db: Db) -> dict[str, str]:
     """Each parent's imported LinkedIn headline, read once from the roster.
 
     A parent takes the first non-empty headline among its members, members with
     a public identifier first; a parent with no roster row or no headline is
     absent from the map.
     """
-    roster = {person.person_id: person for person in read_imported_people(people_csv)}
+    roster = {person.person_id: person for person in stored_imported_people(db)}
     members: dict[str, list[ImportedPerson]] = {}
     for row in person_rows(db):
         person = roster.get(str(row.person_id))
@@ -459,7 +459,7 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
     """
     owner = plan.owner
     bundles = selection.effective_parent_bundles(db)
-    headlines = parent_headlines(db, config.people_csv)
+    headlines = parent_headlines(db)
     paths = _tagging_paths(db, config, bundles, owner, headlines=headlines)
     if not paths:
         return JevUsage()

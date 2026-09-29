@@ -290,7 +290,7 @@ def _all_parents(db: Db) -> list[ParentViewRow]:
               WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
             ) AND EXISTS (
               SELECT 1 FROM candidate_policy c WHERE c.parent_id=p.parent_id
-                AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
+                AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic' OR COALESCE(c.linkedin_url, '')!='')
             )"""
         )
     )

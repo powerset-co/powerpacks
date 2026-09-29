@@ -3,9 +3,8 @@
 ``people.csv`` is the one live input owned by the import fan-in. This module is
 its only Deep Context reader. It converts rows to frozen values at the boundary,
 then get-or-creates stable parent ownership before message collection starts.
-Everything downstream reads the SQLite projection, except the roster headline,
-which the worth stage reads back through this same boundary for its
-notable-title rule (the store keeps no LinkedIn title).
+Everything downstream reads the SQLite roster, including the headline used by
+the notable-title rule.
 
 Changelog:
   2026-09-26: the profile cells a person list renders (LinkedIn URL, avatar,
@@ -16,7 +15,8 @@ Changelog:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import json
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import (
@@ -28,7 +28,11 @@ from packs.ingestion.primitives.common.contact_fields import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.common import slugify
 from packs.ingestion.primitives.deep_context.db.models import (
+    CandidatePeopleProjection,
+    CandidatePersonRow,
     IdentifierKind,
+    LinkRow,
+    RowKind,
     ParentRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
@@ -37,6 +41,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourcesProjection,
     WriterSource,
 )
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_MACHINE_ACTIONS,
+    AFFIRMATIVE_MACHINE_APPROVALS,
+)
 from packs.ingestion.primitives.deep_context.db.queries import (
     identifiers as identifier_rows,
     parents as parent_rows,
@@ -44,8 +53,12 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     sources as source_rows,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.queries import imported_people as stored_people_rows
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
+from packs.ingestion.primitives.imports.merge_people import merge_group
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import load_assignment
 from packs.ingestion.schemas.people_schema import (
+    CONTACT_CARRY_COLUMNS,
     normalize_linkedin_url,
     parse_interaction_counts,
     parse_jsonish,
@@ -69,6 +82,7 @@ class ImportedPerson:
     phones: tuple[str, ...]
     source_channels: tuple[str, ...]
     superseded_person_ids: tuple[str, ...]
+    index_row: PeopleRow = field(compare=False)
     public_identifier: str = ""
     interaction_counts: dict[str, int] = field(default_factory=dict)
     last_interaction: str = ""
@@ -108,12 +122,11 @@ def _channels(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for raw in values if (item := _text(raw))))
 
 
-def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
-    """Read the canonical fan-in CSV into one deduplicated typed row per id."""
-    if not path.is_file():
-        return ()
+def _imported_people(rows: tuple[PeopleRow, ...]) -> tuple[ImportedPerson, ...]:
+    """Project typed full rows to the fields used within Deep Context."""
     combined: dict[str, ImportedPerson] = {}
-    for raw in CsvIO.read_dict_rows(path):
+    for row in rows:
+        raw = row.to_row()
         person_id = _text(raw.get("id")).lower()
         if not person_id or "/" in person_id or "\\" in person_id:
             continue
@@ -136,12 +149,13 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             title=_text(raw.get("current_title")),
             company=_text(raw.get("current_company")),
             location=_location(raw),
+            index_row=row,
         )
         prior: ImportedPerson | None = combined.get(person_id)
         if prior is None:
             combined[person_id] = incoming
             continue
-        combined[person_id] = ImportedPerson(
+        merged = ImportedPerson(
             person_id=person_id,
             display_name=incoming.display_name or prior.display_name,
             emails=tuple(dict.fromkeys((*prior.emails, *incoming.emails))),
@@ -159,8 +173,36 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             title=incoming.title or prior.title,
             company=incoming.company or prior.company,
             location=incoming.location or prior.location,
+            index_row=incoming.index_row,
         )
+        full = merge_group(person_id, [incoming.index_row, prior.index_row])
+        full["id"] = merged.person_id
+        full["superseded_person_ids"] = json.dumps(
+            [value for value in _superseded(full["superseded_person_ids"]) if value != person_id]
+        )
+        full["full_name"] = merged.display_name
+        full["headline"] = merged.headline
+        full["public_identifier"] = merged.public_identifier
+        full["linkedin_url"] = merged.linkedin_url
+        combined[person_id] = replace(merged, index_row=PeopleRow.model_validate(full))
     return tuple(combined[key] for key in sorted(combined))
+
+
+def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
+    """Read the canonical fan-in CSV only at the import boundary."""
+    if not path.is_file():
+        return ()
+    rows = []
+    for raw in CsvIO.read_dict_rows(path):
+        if not raw.get("primary_phone"):
+            raw["primary_phone"] = raw.get("phone") or raw.get("phone_e164") or ""
+        rows.append(PeopleRow.model_validate(raw))
+    return _imported_people(tuple(rows))
+
+
+def stored_imported_people(db: Db) -> tuple[ImportedPerson, ...]:
+    """Read the current roster from SQLite for all downstream stages."""
+    return _imported_people(stored_people_rows(db))
 
 
 def _components(
@@ -199,7 +241,72 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     """Get or create imported people, incrementally joining prior families."""
     if not imported:
         return 0
+    current = {row.id: row for row in stored_people_rows(db)}
+    canonical_by_alias = {
+        alias: row.id
+        for row in current.values()
+        for alias in _superseded(row.superseded_person_ids)
+    }
+    incoming_ids = {canonical_by_alias.get(person.person_id, person.person_id) for person in imported}
+    represented_ids = set(incoming_ids)
+    represented_ids.update(alias for person in imported for alias in person.superseded_person_ids)
+    combined_rows: list[PeopleRow] = []
+    for person in imported:
+        source = person.index_row
+        original_id = person.person_id
+        canonical_id = canonical_by_alias.get(original_id, original_id)
+        prior = current.get(canonical_id)
+        prior_aliases = [current[alias] for alias in person.superseded_person_ids
+                         if alias in current and alias != canonical_id]
+        source = source.model_copy(update={
+            "id": canonical_id,
+            "full_name": person.display_name,
+            "public_identifier": prior.public_identifier if canonical_id != original_id and prior else person.public_identifier,
+            "linkedin_url": prior.linkedin_url if canonical_id != original_id and prior else person.linkedin_url,
+            "superseded_person_ids": json.dumps((*person.superseded_person_ids, original_id)
+                                               if canonical_id != original_id else person.superseded_person_ids),
+        })
+        if prior and canonical_id != original_id and person.public_identifier != prior.public_identifier:
+            carry = {column: getattr(source, column)
+                     for column in ("id", "superseded_person_ids", "source_artifacts", *CONTACT_CARRY_COLUMNS)}
+            carry.update(public_identifier=prior.public_identifier, linkedin_url=prior.linkedin_url)
+            source = PeopleRow.model_validate(carry)
+        previous = ([prior] if prior is not None else []) + prior_aliases
+        if previous:
+            previous = [
+                PeopleRow.model_validate({
+                    column: getattr(row, column)
+                    for column in ("id", "superseded_person_ids", "source_artifacts", *CONTACT_CARRY_COLUMNS)
+                })
+                if source.public_identifier and row.public_identifier and source.public_identifier != row.public_identifier
+                else row
+                for row in previous
+            ]
+            merged = merge_group(canonical_id, [source, *previous])
+            merged["id"] = canonical_id
+            merged["superseded_person_ids"] = json.dumps(
+                [value for value in _superseded(merged["superseded_person_ids"])
+                 if value != canonical_id]
+            )
+            source = PeopleRow.model_validate(merged)
+        combined_rows.append(source)
+    combined_rows.extend(row for key, row in current.items() if key not in represented_ids)
+    imported = _imported_people(tuple(combined_rows))
     existing_people = {row.person_id: row for row in person_rows(db)}
+    existing_links = {row.row_key: row for row in links(db)}
+    people_by_parent: dict[str, list[str]] = {}
+    for person in existing_people.values():
+        people_by_parent.setdefault(person.parent_id, []).append(person.person_id)
+    # A realized LinkedIn keeps the people its SQLite decision already belongs to.
+    approved_people: dict[str, list[str]] = {}
+    for row in review_rows(db, include_worth=False):
+        slug = row.new_public_identifier or row.public_identifier
+        if slug and row.action in AFFIRMATIVE_MACHINE_ACTIONS and row.approved in AFFIRMATIVE_MACHINE_APPROVALS:
+            approved_people.setdefault(slug, []).extend(people_by_parent[existing_links[row.key].parent_id])
+    imported = tuple(
+        replace(person, superseded_person_ids=(*person.superseded_person_ids, *approved_people.get(person.public_identifier, ())))
+        for person in imported
+    )
     parent_by_person = {row.person_id: row.parent_id for row in existing_people.values()}
     parent_slugs = {row.parent_id: row.display_slug for row in parent_rows(db)}
     assignment = load_assignment(db)
@@ -246,7 +353,14 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     sources_by_person: dict[str, dict[str, PersonSourceRow]] = {}
     for row in source_rows(db):
         sources_by_person.setdefault(row.person_id, {})[row.source] = row
-    projection_rows: list[PersonRow | PersonIdentifiersProjection | PersonSourcesProjection] = []
+    existing_links = {row.row_key: row for row in links(db)}
+    represented_slugs = {
+        (existing_links[row.key].parent_id, row.new_public_identifier or row.public_identifier)
+        for row in review_rows(db, include_worth=False)
+    }
+    projection_rows: list[
+        PersonRow | PersonIdentifiersProjection | PersonSourcesProjection | LinkRow | CandidatePeopleProjection
+    ] = []
     for person in imported:
         prior: PersonRow | None = existing_people.get(person.person_id)
         parent_id = target_by_input[person.person_id]
@@ -302,5 +416,28 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
                 tuple(sources[key] for key in sorted(sources)),
             )
         )
+        # Imported assignments are candidates, not approvals. Existing review
+        # rows own their verdicts, including retargets realized under a new id.
+        slug = person.public_identifier
+        url = person.linkedin_url or (f"https://www.linkedin.com/in/{slug}" if slug else "")
+        if slug and slug not in existing_links and (parent_id, slug) not in represented_slugs:
+            projection_rows.extend((
+                LinkRow(slug, parent_id, slug, RowKind.PUB.value, url, person.display_name,
+                        source=WriterSource.RECONCILE.value, updated_at=now_iso()),
+                CandidatePeopleProjection(slug, (CandidatePersonRow(slug, person.person_id, parent_id),)),
+            ))
+            represented_slugs.add((parent_id, slug))
+        if not slug and person.person_id.startswith("candidate:") and person.person_id not in existing_links:
+            kind = RowKind.CANDIDATE_EMAIL if ":email:" in person.person_id else RowKind.CANDIDATE_PHONE
+            projection_rows.extend((
+                LinkRow(person.person_id, parent_id, "", kind.value,
+                        display_name=person.display_name, candidate_origin=True, raw_import=True,
+                        source=WriterSource.RECONCILE.value, updated_at=now_iso()),
+                CandidatePeopleProjection(
+                    person.person_id,
+                    (CandidatePersonRow(person.person_id, person.person_id, parent_id),),
+                ),
+            ))
     db.project_rows(tuple(projection_rows))
+    db.replace_imported_people(tuple(person.index_row for person in imported))
     return len(imported)

@@ -20,10 +20,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates import (
     build_parents,
     cluster_merge_candidates,
 )
-from packs.ingestion.primitives.deep_context.realize import (
-    apply_retargets,
-    persist_review_identities,
-)
+from packs.ingestion.primitives.deep_context.realize import export_people
 from packs.ingestion.primitives.deep_context.review import restart_review
 from packs.ingestion.primitives.deep_context.synthesis import (
     compose_dossier,
@@ -48,12 +45,11 @@ class ReconcileCliDbTest(unittest.TestCase):
 
     def test_guarded_cli_mains_fail_without_creating_missing_database(self) -> None:
         cli_modules = (
-            apply_retargets,
+            export_people,
             assemble,
             build_parents,
             cluster_merge_candidates,
             compose_dossier,
-            persist_review_identities,
             prefetch,
             reconcile,
             restart_review,

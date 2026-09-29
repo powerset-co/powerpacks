@@ -424,10 +424,8 @@ def hydrate_profiles(
             state = result["state"]
             if state == PROFILE_CONTENT:
                 counts["ok"] += 1
-            elif state == PROFILE_EMPTY:
-                counts["failed"] += 1
-            else:
-                counts["skipped_no_key"] += 1
+            elif state == PROFILE_ERROR:
+                counts["failed" if has_key else "skipped_no_key"] += 1
     return counts
 
 
