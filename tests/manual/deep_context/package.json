@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "Opt-in Deep Context browser regression checks",
+  "dependencies": {
+    "playwright": "1.63.0",
+    "pngjs": "7.0.0"
+  }
+}

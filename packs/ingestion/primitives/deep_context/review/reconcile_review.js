@@ -373,7 +373,7 @@ async function decideWorthCard(button, card) {
   const postPromise = post("/worth", {
     pub, worth, parent_slug: button.dataset.parent || "", note,
   }); // fire-and-track, no await
-  postPromise.finally(() => inFlightWorth.delete(pub));
+  postPromise.then(() => inFlightWorth.delete(pub), () => inFlightWorth.delete(pub));
   const prefetched = worthPrefetch?.promise
     || fetchText(`/api/worth-card?exclude=${encodeURIComponent(pub)}`);
   worthPrefetch = null; // consumed — the swap re-prefetches for the new card

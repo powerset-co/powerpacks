@@ -948,7 +948,7 @@ details.decision-row[open] .decision-row-main > span { display: none; }
 @media (prefers-reduced-motion: no-preference) {
   .stage { animation: stage-enter 180ms ease-out; }
 }
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: 200ms; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 350ms; }
 :active-view-transition .stage { animation-duration: 0s; }
 .stage-complete { height: 100%; }
 .stage-complete .empty-mark { animation: completion-check 200ms ease-out; }
