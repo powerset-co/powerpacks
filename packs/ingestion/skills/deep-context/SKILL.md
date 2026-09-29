@@ -42,7 +42,7 @@ Use the narrow path when the user names one:
   `--force-restart` is accepted for
   compatibility but is a no-op. While a People upload runs, `review` keeps the
   running server and prints the requested page instead of restarting.
-- "Review complete proceed with enrichment" (the phrase the Done screen
+- "Review complete, continue" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
   (normally `realize` -> export + index).
@@ -349,17 +349,15 @@ payloads into SQLite, and writes a display-only manifest receipt. The agent owns
 run the wait command, then run only the exact `next_action` it returns, then
 wait again. Never infer readiness from chat text or browser state. Direct
 progress-step navigation is preview only; it does not itself advance provider
-work. A clicked preview stage stays visible and keeps refreshing from database
-changes instead of being forced back to the actual workflow stage.
+work. A clicked preview stage stays visible.
 The browser observes SQLite through the existing HTTP API and automatically
 refreshes or moves to the current stage. People and LinkedIn decisions commit
 directly to SQLite, and each save returns the new state token. No status poll is
 part of a decision click.
 The page listens to the server's `/api/events` stream only while external
-changes are possible: on Enrich and Done, plus a LinkedIn preview opened
-before enrichment completes. It snapshots `/api/status` once on load and again
-on every server nudge; it never polls. Once enrichment is current, LinkedIn
-stops listening and remains a purely local buffered review queue.
+changes are possible: on Enrich and Done. Those pages snapshot `/api/status`
+once on load and again on every server nudge; they never poll. LinkedIn is a
+local buffered review queue.
 A non-empty replacement URL on a listening preview pauses reload/navigation
 until it is saved; merely focusing an empty field does not. Open the UI once; do not
 open additional tabs or repeatedly open stage URLs as the workflow advances.
@@ -427,22 +425,21 @@ approval already happened, so the number is noise.
 
 ### 7. LinkedIn decision gate
 
-When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
-That compatibility click opens Check LinkedIn; it does not create stage state
-or start work. The first review server stays alive.
+When enrichment is complete, the page advances to Check LinkedIn automatically.
+Continue also opens Check LinkedIn; it does not create stage state or start work.
+The first review server stays alive.
 
 For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
 decision. The correction panel accepts a replacement URL or a terminal Skip;
 Skip writes a detach decision, rejects the shown/proposed LinkedIn, and leaves
 the person out of the index for now. A synthetic result has the same two
-outcomes: paste the LinkedIn URL to create an approved retarget, or Skip it.
-Synthetic rows are never directly approved for indexing.
+outcomes for indexing: paste the LinkedIn URL to create an approved retarget,
+or Skip it. “Use this profile” keeps synthetic research locally; it does not
+approve a synthetic identity for indexing or upload.
 
 Continue through the wait loop. Continue to realization only when
 `bin/deep-context review-status --wait` returns `next_action == "realize"`.
-A LinkedIn page opened directly before current enrichment completes remains a
-read-only waiting view.
 
 ### 8. Apply and realize
 

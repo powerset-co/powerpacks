@@ -342,6 +342,12 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 self.assertTrue(body)
                 self.assertEqual(headers["cache-control"], "no-cache")
 
+    def test_completed_review_handoff_continues_without_repeating_enrichment(self) -> None:
+        status, _, body, _ = self.request("GET", "/?stage=done")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-phrase='Review complete, continue'", body)
+        self.assertNotIn(b"proceed with enrichment", body)
+
     def test_rendered_markup_covers_every_javascript_dispatch_contract(self) -> None:
         # Keep these selectors pinned to reconcile_review.js:217, 418-420,
         # 543-608, 754-777, 922-975, 1024, 1093-1103, and 1297-1325.
