@@ -72,7 +72,6 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     render_linkedin_card,
     render_person_detail,
     render_worth_card,
-    worth_finished_body,
     worth_pending_entries,
     worth_search_html,
 )
@@ -209,9 +208,7 @@ def make_handler(
         queue = [p for p in queue if p.key.lower() not in excluded]
         queue.sort(key=lambda p: p.name.lower())
         if not queue:
-            state = api.snapshot()
-            progress = state.progress
-            return worth_finished_body(progress, auto_continue=bool(progress.worth_pending))
+            return SYNTHESIZE_HTML if api.snapshot().progress.synthesize_pending else ""
         index = _index(params, len(queue))
         selected = queue[index]
         parent = person_detail(db, selected.parent_id)
@@ -260,6 +257,9 @@ def make_handler(
         view = _phase_view(params)
         preview = _value(params, "preview") == "1"
         enrichment = api.enrichment(state)
+        if (view == "worth" and _value(params, "view", "review") == "review"
+                and not progress.worth_pending and not progress.synthesize_pending):
+            view = "enrich"
         if view == "worth":
             tab = _value(params, "view", "review").lower()
             tab = tab if tab in {"review", "yes", "no"} else "review"

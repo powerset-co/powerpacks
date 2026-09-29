@@ -202,10 +202,36 @@ function leaveAndReload(message) {
   window.setTimeout(() => window.location.reload(), 170);
 }
 
+// The check between sections. An empty message shows the check alone, for a
+// destination page that already carries the completion text.
 function leaveAndNavigate(message, url) {
-  announce(message);
-  stage?.classList.add("leaving");
-  window.setTimeout(() => { window.location.href = url; }, 170);
+  completingStage = true;
+  stage.innerHTML = "<div class='empty-state stage-complete'><span class='empty-mark' aria-hidden='true'>✓</span><h2></h2></div>";
+  stage.querySelector("h2").textContent = message;
+  window.setTimeout(() => {
+    stage.classList.add("leaving");
+    window.setTimeout(() => { window.location.href = url; }, reduceMotion ? 0 : 170);
+  }, 650);
+}
+
+// Decision cards keep their frame mounted: the caller fades the contents out
+// with `.swapping`, then this moves the next card's attributes and children
+// into the same element, which fades them in. Anything that is not a card
+// (synthesis state, debug carousel) replaces the panel.
+function swapCardContent(panel, html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const next = template.content.firstElementChild;
+  const card = panel.querySelector(":scope > .decision-card");
+  if (!card || !next?.matches(".decision-card")) {
+    panel.innerHTML = html;
+  } else {
+    [...card.attributes].forEach(({ name }) => card.removeAttribute(name));
+    [...next.attributes].forEach(({ name, value }) => card.setAttribute(name, value));
+    card.classList.add("entering");
+    card.replaceChildren(...next.childNodes);
+  }
+  wireDynamicContent(panel);
 }
 
 // --- optimistic decision plumbing --------------------------------------------
@@ -337,13 +363,13 @@ async function decideWorthCard(button, card) {
   // The optional collapsed "why" box: whatever is in it when Yes/No lands
   // rides along with the SQLite decision and is filed as feedback.
   const note = (card.querySelector("[data-worth-note]")?.value || "").trim();
+  const panel = card.closest(".worth-panel");
+  const oldHtml = panel ? panel.innerHTML : null; // before the buttons lock
   card.querySelectorAll("button").forEach((item) => { item.disabled = true; });
-  card.classList.add("leaving");
+  card.classList.add("swapping");
   bumpTabCount("review", -1); // leaves the Review queue for the yes/no pile
   bumpTabCount(worth, 1);
   inFlightWorth.add(pub);
-  const panel = card.closest(".worth-panel");
-  const oldHtml = panel ? panel.innerHTML : null;
   // parent_slug pins the patch to the exact parent this card was rendered
   // from — a worth key alone is ambiguous when split parents share a pub
   const postPromise = post("/worth", {
@@ -354,7 +380,7 @@ async function decideWorthCard(button, card) {
     || fetchText(`/api/worth-card?exclude=${encodeURIComponent(pub)}`);
   worthPrefetch = null; // consumed — the swap re-prefetches for the new card
   try {
-    const [nextHtml] = await Promise.all([prefetched, delay(170)]);
+    const [nextHtml] = await Promise.all([prefetched, delay(reduceMotion ? 0 : 170)]);
     if (!panel || nextHtml === null) {
       // Could not swap in the next card: fall back to the serialized save+reload.
       const response = await postPromise;
@@ -362,23 +388,19 @@ async function decideWorthCard(button, card) {
       leaveAndReload("Saved");
       return;
     }
-    panel.innerHTML = nextHtml; // next queue card, or the Decisions-ready state
-    wireDynamicContent(panel);  // also prefetches the card after this one
-    maybeAutoComplete(panel);
+    // The last card has no next: its frame holds until the check replaces it.
+    if (nextHtml.trim()) swapCardContent(panel, nextHtml);
     postPromise.then((response) => {
       adoptMutationState(response);
       applyProgress(response.progress);
       pruneWorthPending(pub); // the settled decision leaves the typeahead's queue
       announce(worth === "yes" ? "Added" : "Rejected");
       if (Number(response.progress?.worth_pending) === 0) {
-        leaveAndNavigate("People complete", "/?stage=enrich");
+        leaveAndNavigate("People Reviewed", "/?stage=enrich");
       }
     }).catch((error) => {
       // The save failed after the optimistic swap: restore the undecided card.
-      if (panel && oldHtml !== null) {
-        panel.innerHTML = oldHtml;
-        wireDynamicContent(panel);
-      }
+      swapCardContent(panel, oldHtml);
       bumpTabCount("review", 1);
       bumpTabCount(worth, -1);
       announce(error.message, true);
@@ -390,7 +412,7 @@ async function decideWorthCard(button, card) {
       applyProgress(response.progress);
       leaveAndReload("Saved");
     } catch (postError) {
-      card.classList.remove("leaving");
+      card.classList.remove("swapping");
       card.querySelectorAll("button").forEach((item) => { item.disabled = false; });
       bumpTabCount("review", 1);
       bumpTabCount(worth, -1);
@@ -444,11 +466,9 @@ async function jumpToWorthCard(key) {
     return;
   }
   const nextHtml = await response.text();
-  panel.querySelector("[data-card]")?.classList.add("leaving");
-  await delay(170);
-  panel.innerHTML = nextHtml; // the picked card, via the existing swap path
-  maybeAutoComplete(panel);
-  wireDynamicContent(panel);  // re-prefetches with the picked card excluded
+  panel.querySelector(".decision-card")?.classList.add("swapping");
+  await delay(reduceMotion ? 0 : 170);
+  swapCardContent(panel, nextHtml); // re-prefetches with the picked card excluded
 }
 
 function wireWorthTypeahead(box, input) {
@@ -615,35 +635,30 @@ async function decideLinkedinCard(card, values, message) {
     }
     return;
   }
+  const oldHtml = panel.innerHTML; // before the controls lock
   card.querySelectorAll("button, input").forEach((item) => { item.disabled = true; });
-  const oldHtml = panel.innerHTML;
-  // Spinner occupies the panel the instant the card animates out, so the
-  // save-then-fetch gap never reads as a blank void.
-  panel.innerHTML = "<div class='linkedin-stage'><div class='card-loading'><div class='progress-spinner' aria-hidden='true'></div><span>Saving…</span></div></div>";
-  card.classList.add("leaving");
+  card.classList.add("swapping");
   try {
     // ONE round trip: /decide commits the write and renders the next card
-    // in the same response (always fresh — no prefetch, no race); the 170ms
-    // exit animation covers the POST latency.
+    // in the same response (always fresh — no prefetch, no race); the card
+    // frame stays on screen while its contents fade over the POST latency.
     const [response] = await Promise.all([
       post("/decide", values),
-      delay(170),
+      delay(reduceMotion ? 0 : 170),
     ]);
     adoptMutationState(response);
     applyProgress(response.progress);
-    panel.innerHTML = response.next; // next parent's card, or the finished state
-    wireDynamicContent(panel);
     if (Number(response.progress?.linkedin_pending) === 0) {
-      // Last decision: a non-preview page load self-completes the stage
-      // server-side and paints the go-back handoff state directly.
-      leaveAndNavigate("Review complete", "/?stage=linkedin");
+      // Last decision: the check, then the page load paints the finished
+      // go-back state — its text appears once, after the check.
+      leaveAndNavigate("", "/?stage=linkedin");
       return;
     }
+    swapCardContent(panel, response.next);
     announce(message);
   } catch (error) {
     // The save itself failed: restore the undecided card.
-    panel.innerHTML = oldHtml;
-    wireDynamicContent(panel);
+    swapCardContent(panel, oldHtml);
     announce(error.message, true);
   }
 }
@@ -829,11 +844,11 @@ document.addEventListener("click", async (event) => {
     try {
       await post("/complete", { stage: button.dataset.complete });
       const next = {
-        worth: ["People complete", "/?stage=enrich"],
-        enrich: ["Enrichment complete", "/?stage=linkedin"],
+        worth: ["People Reviewed", "/?stage=enrich"],
+        enrich: ["Contacts Enriched", "/?stage=linkedin"],
         // Finish transforms THIS screen into the go-back handoff state —
         // never a surprise jump to the directory.
-        linkedin: ["Review complete", "/?stage=linkedin"],
+        linkedin: ["", "/?stage=linkedin"],
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
     } catch (error) {
@@ -893,13 +908,16 @@ document.addEventListener("submit", async (event) => {
     const panel = card?.closest("[data-linkedin-panel]");
     if (panel) {
       const slug = card.dataset.parent || form.dataset.parent || "";
-      const next = await fetchText(
-        `/api/linkedin-card?exclude=${encodeURIComponent(slug)}`);
+      card.classList.add("swapping");
+      const [next] = await Promise.all([
+        fetchText(`/api/linkedin-card?exclude=${encodeURIComponent(slug)}`),
+        delay(reduceMotion ? 0 : 170),
+      ]);
       if (next !== null) {
-        panel.innerHTML = next;
-        wireDynamicContent(panel);
+        swapCardContent(panel, next);
         return;
       }
+      card.classList.remove("swapping");
     }
     // The debug/preview carousel has no swap panel; a reload re-renders the
     // queue without the now-inflight person, so the next card shows at the
@@ -1031,10 +1049,7 @@ const observesExternalUpdates = document.body.dataset.externalUpdates === "true"
 
 let autoCompleted = false;
 
-// First arrival at "Decisions ready": fire the same flow the Continue button
-// runs (POST /complete + navigate) so the user never clicks through a done
-// screen. Server marks the block data-auto-complete only when the stage is
-// not yet completed, so deliberate revisits keep the button and never yank.
+// Finish the LinkedIn stage when its remaining background work settles.
 function maybeAutoComplete(root) {
   if (autoCompleted || completingStage) return;
   const button = (root || document).querySelector("[data-auto-complete]");
@@ -1107,7 +1122,7 @@ async function syncFileState() {
     if (!isStagePreview && state.stage && state.stage !== currentStage
         && movesForward && observedTransition) {
       if (preserveDraft) return;
-      window.location.replace(state.stage === "done"
+      leaveAndNavigate("Contacts Enriched", state.stage === "done"
         ? "/directory" : `/?stage=${encodeURIComponent(state.stage)}`);
       return;
     }
