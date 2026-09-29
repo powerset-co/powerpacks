@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.7.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.7.0...powerpacks-v3.7.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **import-gmail:** add extra accounts as OAuth test users before consent ([#607](https://github.com/powerset-co/powerpacks/issues/607)) ([d71060e](https://github.com/powerset-co/powerpacks/commit/d71060e06d2d6b6159887792f802e18ea704648a))
+
 ## [3.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.6.2...powerpacks-v3.7.0) (2026-09-28)
 
 
