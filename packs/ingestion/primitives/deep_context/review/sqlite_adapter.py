@@ -274,10 +274,15 @@ class SqliteReviewAdapter:
         if enrichment_running is None:
             enrichment_running = self._running()
         workflow = self.snapshot(enrichment_running=enrichment_running)
+        action = workflow.next_action
+        if action == "enrich" and self.enrichment(
+            workflow, enrichment_running=enrichment_running,
+        ).state == "done":
+            action = "review_linkedin" if workflow.progress.linkedin_pending else "realize"
         return {
             "primitive": "reconcile_review_web",
             "ok": True,
-            "stage": STAGE_BY_ACTION[workflow.next_action],
-            "next_action": workflow.next_action,
+            "stage": STAGE_BY_ACTION[action],
+            "next_action": action,
             "state_token": workflow.state_token,
         }

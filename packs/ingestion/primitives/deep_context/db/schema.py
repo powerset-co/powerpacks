@@ -21,7 +21,7 @@ def id_set(values: Sequence[str]) -> str:
     return json.dumps(list(values))
 
 # Pre-release installs re-migrate instead of carrying an upgrade ladder.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _values(*items: object) -> str:
@@ -37,6 +37,12 @@ _WORTH = _values(*models.MachineWorth)
 # string values — see ReviewSource / WriterSource in db/models.py.
 _DECISION_SOURCES = _values(*models.ReviewSource)
 _WRITER_SOURCES = _values(*models.WriterSource)
+
+IMPORTED_PEOPLE_DDL = """CREATE TABLE imported_people (
+  person_id TEXT PRIMARY KEY,
+  row_json TEXT NOT NULL CHECK (json_valid(row_json)),
+  FOREIGN KEY (person_id) REFERENCES people(person_id) ON DELETE CASCADE
+);"""
 
 DDL = f"""
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -70,6 +76,8 @@ CREATE TABLE people (
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE
 );
 CREATE INDEX people_by_parent ON people(parent_id);
+
+{IMPORTED_PEOPLE_DDL}
 
 CREATE TABLE person_identifiers (
   person_id TEXT NOT NULL,

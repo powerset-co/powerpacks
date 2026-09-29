@@ -536,6 +536,10 @@ class SqliteCollectionTest(unittest.TestCase):
                 },
             ],
         )
+        from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
+            project_imported_people, read_imported_people,
+        )
+        project_imported_people(self.db, read_imported_people(people_csv))
 
         # Ready means synthesis can run, which needs the owner profile.
         owner = self.root / "owner.json"

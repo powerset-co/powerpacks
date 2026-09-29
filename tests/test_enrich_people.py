@@ -90,6 +90,32 @@ class EnrichPeopleTests(unittest.TestCase):
             "normalized_profile": {"success": True},
         }
 
+    def test_reuses_raw_profile_misclassified_by_old_parser_without_network(self):
+        raw = {
+            "username": "jordan-bravo", "firstName": "Jordan", "lastName": "Bravo",
+            "educations": [{"schoolName": "Example University"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "jordan-bravo.json"
+            path.write_text(json.dumps({
+                "public_identifier": "jordan-bravo",
+                "raw_response": raw,
+                "normalized_profile": {"success": False, "education": [], "experiences": []},
+                "error": "unrecognized linkedin profile payload",
+                "status_code": 200,
+            }))
+            before = path.read_bytes()
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
+                result = rapidapi_client.RapidApiClient(api_key="").get_profile(
+                    "jordan-bravo", "https://www.linkedin.com/in/jordan-bravo", cache_dir=Path(tmp),
+                )
+            self.assertEqual(result["state"], rapidapi_client.PROFILE_CONTENT)
+            self.assertEqual(result["data"], raw)
+            self.assertTrue(result["from_cache"])
+            self.assertFalse(result["fetched"])
+            self.assertEqual(result["normalized_profile"]["education"][0]["school_name"], "Example University")
+            self.assertEqual(path.read_bytes(), before)
+
     def test_run_with_approve_spend_fetches_cache_miss(self):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"

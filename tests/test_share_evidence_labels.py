@@ -8,6 +8,8 @@ from pathlib import Path
 
 from deep_context_sqlite_test_helpers import seed_identity
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.queries import people as stored_people
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import project_imported_people, read_imported_people
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.shared.csv_io import CsvIO
 
@@ -36,7 +38,12 @@ class ShareEvidenceLabelsTests(unittest.TestCase):
         self.db = Db(self.root / "deep-context.sqlite")
 
     def _load(self) -> list:
-        return ShareEvidence(self.db, people_csv=_write_people(self.root, self._people)).load()
+        imported = read_imported_people(_write_people(self.root, self._people))
+        known = {row.person_id for row in stored_people(self.db)}
+        if any(row.person_id not in known for row in imported):
+            project_imported_people(self.db, imported)
+        self.db.replace_imported_people(tuple(row.index_row for row in imported))
+        return ShareEvidence(self.db).load()
 
     def test_unjudged_linkedin_imports_default_yes_other_sources_stay_maybe(self) -> None:
         for channels, expected in (

@@ -75,12 +75,15 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
 
 PENDING_CANDIDATE = """
 (
-  l.raw_import=0
+  (l.kind='synthetic' OR COALESCE(l.linkedin_url, '')!=''
+   OR COALESCE(l.machine_proposed_url, '')!=''
+   OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key
+              AND r.status='complete' AND json_extract(r.result_json, '$.content.linkedin_url') IS NOT NULL))
   AND (
   (l.kind='synthetic' AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no'))
   OR
   (l.kind!='synthetic'
-   AND (l.paid_profile=1 OR l.candidate_origin=1)
+   AND (l.paid_profile=1 OR l.candidate_origin=1 OR COALESCE(l.linkedin_url, '')!='')
    AND l.decision_action IS NULL
    AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
    AND l.authoritative_detach=0
@@ -150,12 +153,6 @@ LINKEDIN_CTE = (
         )
       )
     )
-    -- Raw imports are source prerequisites, never review cards; wait until the
-    -- candidate projection has normalized them.
-    AND NOT EXISTS (
-      SELECT 1 FROM candidate_policy raw
-      WHERE raw.parent_id=p.parent_id AND raw.raw_import=1
-    )
     -- A rejected synthetic-only family has no alternate identity to review;
     -- serving it again would create an endless pending card.
     AND NOT (
@@ -175,8 +172,11 @@ LINKEDIN_CTE = (
     AND EXISTS (
       SELECT 1 FROM candidate_policy c
       WHERE c.parent_id=p.parent_id
-        AND c.raw_import=0
-        AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
+        AND (c.kind='synthetic' OR COALESCE(c.linkedin_url, '')!=''
+             OR COALESCE(c.machine_proposed_url, '')!=''
+             OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=c.row_key
+                        AND r.status='complete' AND json_extract(r.result_json, '$.content.linkedin_url') IS NOT NULL))
+        AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic' OR COALESCE(c.linkedin_url, '')!='')
         AND (c.candidate_origin=1 OR c.kind='synthetic' OR c.is_pending=1
              OR c.decision_action IS NOT NULL
              OR COALESCE(c.decision_approved, '') IN ('yes', 'no')

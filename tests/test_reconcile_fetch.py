@@ -23,7 +23,8 @@ from parallel.types import TaskGroupStatus, TaskRunJsonOutput
 
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection as profile_projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
-from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
+from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import judging
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -74,6 +75,7 @@ from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.shared.csv_io import CsvIO
 from deep_context_sqlite_test_helpers import seed_identity
+from deep_context_sqlite_test_helpers import stub_identity_judge
 
 
 def task(
@@ -106,6 +108,107 @@ def profile_db(root: Path) -> Db:
         linkedin_url="https://www.linkedin.com/in/jordan-bravo",
     )
     return db
+
+
+class MappedCandidateJudgeTests(unittest.TestCase):
+    def test_research_only_person_stays_reviewable_after_uncertain_verdict(self) -> None:
+        from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
+
+        with TemporaryDirectory() as temp:
+            db = Db(Path(temp) / "deep-context.sqlite")
+            seed_identity(db, parent_id="parent-1", person_id="person-jordan",
+                          row_key="unused", name="Jordan Bravo", machine_worth="yes",
+                          include_link=False)
+            result = current_research_result()
+            row = ResearchQueueRow(
+                parent_id="parent-1", candidate_exists=False, row_key="research:parent-1",
+                handle="jordan-bravo", source_person_ids=("person-jordan",),
+                display_name="Jordan Bravo", bio="", known_info="", primary_email="",
+                retarget_hint="",
+            )
+            data = json.dumps(result.output.model_dump(mode="json")).encode()
+            path = Path(temp) / "00_parallel_result.json"
+            path.write_bytes(data)
+            db.project_rows((projection.research_artifact_projection(
+                ResearchRunParams(output_dir=Path(temp), rows=(row,), db=db), row, result, path, data
+            ),))
+            with stub_identity_judge({"verdict": "needs_review", "confidence": 0.6, "reason": "uncertain"}):
+                self.assertEqual(judging.judge_mapped_candidates(db, model="fixture-model", effort="medium").judge_calls, 1)
+            self.assertEqual([candidate.row_key for parent in linkedin_queue(db)
+                              for candidate in parent.candidates], [row.row_key])
+
+    def test_researched_raw_candidate_enters_prefetch_and_judge(self) -> None:
+        from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, linkedin_queue
+        from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
+
+        with TemporaryDirectory() as temp:
+            db = Db(Path(temp) / "deep-context.sqlite")
+            seed_identity(
+                db, parent_id="parent-1", person_id="candidate:email:jordan@example.test",
+                row_key="candidate:email:jordan@example.test", name="Jordan Bravo",
+                machine_worth="yes", linkedin_url="", kind=RowKind.CANDIDATE_EMAIL.value,
+                link_updates={"candidate_origin": True, "raw_import": True},
+            )
+            result = current_research_result(linkedin_url="https://linkedin.com/in/Jordan-Researched/?trk=x")
+            row = ResearchQueueRow(
+                parent_id="parent-1", candidate_exists=True,
+                row_key="candidate:email:jordan@example.test", handle="jordan-bravo",
+                source_person_ids=("candidate:email:jordan@example.test",),
+                display_name="Jordan Bravo", bio="", known_info="",
+                primary_email="jordan@example.test", retarget_hint="",
+            )
+            data = json.dumps(result.output.model_dump(mode="json")).encode()
+            path = Path(temp) / "00_parallel_result.json"
+            path.write_bytes(data)
+            params = ResearchRunParams(output_dir=Path(temp), rows=(row,), db=db)
+            db.project_rows((projection.research_artifact_projection(params, row, result, path, data),))
+            self.assertEqual([item.row_key for item in judge_candidates(db)], [row.row_key])
+            self.assertEqual([item.parent_id for item in linkedin_queue(db)], ["parent-1"])
+            prefetch = PrefetchProfiles(db=db, profile_cache_dir=Path(temp)).run()
+            self.assertGreater(prefetch.queue_links, 0)
+            with stub_identity_judge({"verdict": "confirmed", "confidence": 0.94, "reason": "same work"}):
+                judged = judging.judge_mapped_candidates(db, model="fixture-model", effort="medium")
+            self.assertEqual(judged.judge_calls, 1)
+            self.assertEqual(db.query("SELECT machine_proposed_url FROM links WHERE row_key=?", (row.row_key,))[0][0],
+                             "https://www.linkedin.com/in/jordan-researched")
+            self.assertEqual(judging.judge_mapped_candidates(db, model="fixture-model", effort="medium").judge_calls, 0)
+
+    def test_attached_verdict_is_persisted_once_and_human_choice_wins(self) -> None:
+        with TemporaryDirectory() as temp:
+            db = profile_db(Path(temp))
+            answer = {"verdict": "confirmed", "confidence": 0.94, "reason": "same work"}
+            with stub_identity_judge(answer):
+                first = judging.judge_mapped_candidates(db, model="fixture-model", effort="medium")
+                second = judging.judge_mapped_candidates(db, model="different-model", effort="high")
+            self.assertEqual((first.judge_calls, second.judge_calls), (1, 0))
+            row = db.query("SELECT machine_action, machine_approved FROM links WHERE row_key='jordan-bravo'")[0]
+            self.assertEqual(tuple(row), ("verify", "auto"))
+            db.decide_identity("jordan-bravo", "detach")
+            with stub_identity_judge(answer):
+                after_human = judging.judge_mapped_candidates(db, model="another-model", effort="high")
+            self.assertEqual(after_human.judge_calls, 0)
+
+    def test_malformed_machine_verdict_is_retried(self) -> None:
+        with TemporaryDirectory() as temp:
+            db = profile_db(Path(temp))
+            with db.transaction() as conn:
+                conn.execute("UPDATE links SET judgment_fingerprint='failed', judgment_payload_json='{}'")
+            with stub_identity_judge({"verdict": "needs_review", "confidence": 0.6, "reason": "uncertain"}):
+                outcome = judging.judge_mapped_candidates(db, model="fixture-model", effort="medium")
+            self.assertEqual(outcome.judge_calls, 1)
+
+    def test_each_valid_verdict_skips_even_without_fingerprint(self) -> None:
+        for verdict in ("confirmed", "wrong_person", "needs_review"):
+            with self.subTest(verdict=verdict), TemporaryDirectory() as temp:
+                db = profile_db(Path(temp))
+                with db.transaction() as conn:
+                    conn.execute(
+                        "UPDATE links SET judgment_fingerprint='', judgment_payload_json=?",
+                        (json.dumps({"verdict": verdict, "confidence": 0.7}),),
+                    )
+                self.assertEqual(judging.judge_mapped_candidates(
+                    db, model="fixture-model", effort="medium"
+                ).judge_calls, 0)
 
 
 def current_research_result(
@@ -372,7 +475,7 @@ class HydrateProfilesTests(unittest.TestCase):
 
         self.assertEqual(
             (hydrated.wanted, hydrated.ok, hydrated.failed, hydrated.skipped_no_key),
-            (3, 1, 1, 1),
+            (3, 1, 0, 1),
         )
         self.assertEqual(
             {key: value.state for key, value in hydrated.profiles.items()},
@@ -389,7 +492,7 @@ class HydrateProfilesTests(unittest.TestCase):
 
         def fake(self, pub, url, *, cache_dir=None, **kw):
             calls.append(pub)
-            state = rapid.PROFILE_CONTENT if pub == "good" else rapid.PROFILE_EMPTY
+            state = rapid.PROFILE_CONTENT if pub == "good" else rapid.PROFILE_ERROR
             return {"state": state, "normalized_profile": {}}
 
         with (
@@ -487,23 +590,21 @@ class RetargetProposalHydrationTests(unittest.TestCase):
             decision = db.query("SELECT machine_action, machine_approved FROM links WHERE row_key='jordan-bravo'")[0]
             self.assertEqual(tuple(decision), ("retarget", "auto"))
 
-            out = root / "retarget.csv"
+            db.replace_imported_people((PeopleRow(
+                id="pid-1", full_name="Jordan Bravo", public_identifier="jordan-bravo",
+                linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            ),))
             with mock.patch.object(
                 profile_projection,
                 "hydrate_profiles",
                 side_effect=AssertionError("realize must not hydrate profiles"),
             ):
-                realized = ApplyRetargets(
-                    db=db,
-                    profile_cache_dir=cache,
-                    out_csv=out,
-                ).run()
+                realized = ExportPeople(db=db, out_dir=root / "merged").run()
 
-            self.assertEqual((realized["approved_retargets"], realized["rows"]), (1, 1))
-            self.assertEqual(
-                CsvIO.read_dict_rows(out)[0]["public_identifier"],
-                "jordan-correct",
-            )
+            self.assertEqual((realized["accepted_identities"], realized["rows"]), (1, 1))
+            (row,) = CsvIO.read_dict_rows(root / "merged" / "people.csv")
+            self.assertEqual(row["public_identifier"], "jordan-correct")
+            self.assertEqual(json.loads(row["work_experiences"])[0]["title"], "Founder")
 
     def test_judge_error_does_not_persist_a_reusable_proposal(self):
         with TemporaryDirectory() as directory:
@@ -1161,8 +1262,6 @@ class ResearchSelectionTests(unittest.TestCase):
             batch = selection.select_research(
                 db,
                 processor="core2x",
-                confirm_threshold=0.8,
-                include_plausibly_absent=False,
                 fingerprint=ReviewSelection("fixture", 0, 0, 0, 0, ""),
             )
             parent = person_detail(db, "parent-1")
@@ -1176,8 +1275,7 @@ class ResearchSelectionTests(unittest.TestCase):
             )
             guided = GuidedResearch(db).research_row(request, parent)
 
-        self.assertEqual(len(batch.pending), 1)
-        self.assertEqual(batch.pending[0].handle, "parent-1")
+        self.assertEqual(len(batch.pending), 0)
         self.assertEqual(guided.handle, "parent-1")
 
     def test_supplied_fingerprint_does_not_requery_workflow_state(self):
@@ -1192,8 +1290,6 @@ class ResearchSelectionTests(unittest.TestCase):
                 result = selection.select_research(
                     db,
                     processor="core2x",
-                    confirm_threshold=0.8,
-                    include_plausibly_absent=True,
                     fingerprint=ReviewSelection("fixture-selection", 0, 0, 0, 0, ""),
                 )
         self.assertEqual(result.fingerprint.fingerprint, "fixture-selection")

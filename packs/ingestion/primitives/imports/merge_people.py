@@ -35,8 +35,9 @@ Changelog:
     its cached profile. Contacts resolved from Gmail/messages carried only contact
     fields, so their work history never reached the index or the cloud. The
     manifest counts LinkedIn people who gained work history (`profiles_filled`)
-    and those still without it (`profiles_missing`). A retargeted row drops the
-    old identity's profile columns.
+    and those still without it (`profiles_missing`). The Deep Context review
+    slice of `directory.csv` is no longer special: realize exports reviewed
+    identities straight from SQLite (`deep_context/realize/export_people.py`).
   2026-09-23 (typed rows): source rows enter the stage as `PeopleRow` and directory
     rows as `DirectoryRow` — `group_key`, `merge_group`, and `directory_slug_for`
     take typed rows instead of dicts, and the directory lookups build
@@ -174,36 +175,6 @@ def directory_slug_lookups(directory_csv: Path) -> tuple[dict[str, str], dict[st
     return emails, phones
 
 
-def deep_context_slug_lookups(directory_csv: Path) -> tuple[dict[str, str], dict[str, str]]:
-    """Final review mappings from the shared directory.
-
-    Unlike ordinary directory rows, an approved Deep Context decision is allowed
-    to replace a source row's already-attached slug: that is the purpose of a
-    reviewed retarget.  Other directory sources retain the historical
-    fill-only behavior below.
-    """
-    emails: dict[str, str] = {}
-    phones: dict[str, str] = {}
-    if not directory_csv.exists():
-        return emails, phones
-    for raw in CsvIO.read_dict_rows(directory_csv):
-        row = DirectoryRow.model_validate(raw)
-        if row.source.strip().lower() != "deep_context_review":
-            continue
-        slug = extract_public_identifier(row.linkedin_url) or row.public_identifier.strip().lower()
-        if not slug or row.status.strip().lower() != "found":
-            continue
-        if parse_confidence(row.confidence, 0.0) < MIN_DIRECTORY_CONFIDENCE:
-            continue
-        email = row.email.strip().lower()
-        if email:
-            emails[email] = slug
-        phone = normalize_phone(row.phone)
-        if phone:
-            phones[phone] = slug
-    return emails, phones
-
-
 def directory_slug_for(row: PeopleRow, emails: dict[str, str], phones: dict[str, str]) -> str:
     """The directory's slug for a row's identifiers — every email first, then phones."""
     for email in emails_from_row(row.to_row()):
@@ -279,6 +250,9 @@ def merge_group(key: str, members: list[PeopleRow]) -> dict[str, str]:
             aliases = unique_strings(parse_jsonish(merged[column], []))
             merged[primary] = aliases[0] if aliases else ""
     merged["id"] = person_id_for(key)
+    for row in members:
+        if row.id and row.id != merged["id"]:
+            merged["superseded_person_ids"] = union_alias_list(merged["superseded_person_ids"], "", row.id)
     return merged
 
 
@@ -294,7 +268,11 @@ def fill_from_profile(row: dict[str, str], cache_dir: Path) -> None:
     if not slug or has_work_history(row):
         return
     cached = read_usable_cached_profile(profile_cache_path(cache_dir, slug))
-    profile = normalize_rapidapi(cached["raw_response"], slug, row["linkedin_url"]) if cached else {}
+    fill_profile_columns(row, normalize_rapidapi(cached["raw_response"], slug, row["linkedin_url"]) if cached else {})
+
+
+def fill_profile_columns(row: dict[str, str], profile: dict) -> None:
+    """Fill the row's empty profile columns from one normalized profile."""
     for column in PROFILE_COLUMNS if profile else ():
         value = profile[column]
         if isinstance(value, list):
@@ -416,7 +394,6 @@ class PeopleMerge(Node):
         writes the manifest)."""
         started_at = now_iso()
         email_slugs, phone_slugs = directory_slug_lookups(self.directory_csv)
-        review_emails, review_phones = deep_context_slug_lookups(self.directory_csv)
         groups: dict[str, list[PeopleRow]] = {}
         input_rows: dict[str, int] = {}
         stamped = 0
@@ -427,16 +404,7 @@ class PeopleMerge(Node):
             rows = [PeopleRow.model_validate(raw) for raw in CsvIO.read_dict_rows(path)]
             input_rows[str(path)] = len(rows)
             for row in rows:
-                reviewed_slug = directory_slug_for(row, review_emails, review_phones)
-                if reviewed_slug and row.public_identifier != reviewed_slug:
-                    # A retarget: the old identity's profile is not this person's.
-                    if row.public_identifier:
-                        for column in PROFILE_COLUMNS:
-                            setattr(row, column, "")
-                    row.public_identifier = reviewed_slug
-                    row.linkedin_url = f"https://www.linkedin.com/in/{reviewed_slug}"
-                    stamped += 1
-                elif not row.public_identifier:
+                if not row.public_identifier:
                     slug = directory_slug_for(row, email_slugs, phone_slugs)
                     if slug:
                         row.public_identifier = slug

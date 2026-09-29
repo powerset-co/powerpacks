@@ -4,7 +4,7 @@
 An install that predates the SQLite store keeps its old artifacts under its
 `.powerpacks` tree. `ensure-parents` mints fresh parents from the current
 `merged/people.csv`; this stage then carries over, keyed by identifier (email,
-phone, LinkedIn public identifier) onto those parents, exactly five things, in
+phone, LinkedIn public identifier) onto those parents, in
 this order:
 
   1. merges: legacy same-person families (index.json multi-child parents and
@@ -12,12 +12,12 @@ this order:
   2. raw bundles: each legacy message bundle, re-owned by the cold parent so
      compose has evidence before the next collect
   3. facts: each legacy facts record, written as the cold parent's facts file
-  4. human decisions from review.csv: worth marks and identity clicks
-  5. Parallel research results, keyed by the cold parent's slug so enrichment
-     reuses them instead of re-billing
+  4. Parallel research results, keyed by the cold parent's slug and candidate
+  5. human decisions from review.csv: worth marks and identity clicks
+  6. cached LinkedIn profiles associated with those candidates
 
-Machine review rows, dossiers, the profile cache, synthetic rows and avatars
-are not carried. A record whose identifiers hit no cold parent, or two, is
+Machine review rows, dossiers, synthetic rows and avatars are not carried.
+A record whose identifiers hit no cold parent, or two, is
 counted and left alone. A seeded store records `meta.seeded_at` and refuses
 a second run.
 
@@ -63,12 +63,15 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactProjection,
     ArtifactRow,
+    CandidatePeopleProjection,
+    CandidatePersonRow,
     HumanWorth,
     IdentifierKind,
     LinkRow,
     ProjectionStatus,
     ResearchRow,
     ResearchStatus,
+    ResearchHandle,
     ReviewAction,
     ReviewSource,
     WriterSource,
@@ -82,11 +85,17 @@ from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, ope
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.projection import (
     native_research_payload,
 )
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult, ProfileTarget
+from packs.ingestion.primitives.deep_context.enrich.profiles.projection import project_profile_results
+from packs.ingestion.primitives.enrich.profile_cache import (
+    indexed_profile_cache_path,
+    profile_cache_index,
+    read_usable_cached_profile,
+)
 from packs.ingestion.primitives.deep_context.manifests.seed_manifest import SeedManifest
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DEEP_RESEARCH_DIR,
-    DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
     RAW_DIR,
     emit,
@@ -112,6 +121,7 @@ LEGACY_RESEARCH_DIR = LEGACY_DEEP_CONTEXT / "reconcile/deep-research"
 LEGACY_PEOPLE_CSV = Path("network-import/merged/people.csv")
 LEGACY_REVIEW_CSV = Path("network-import/overrides/review.csv")
 LEGACY_SYNTHETIC_CSV = Path("network-import/overrides/synthetic-people.csv")
+LEGACY_PROFILE_CACHE = Path("network-import/profile_cache_v2")
 # The provider envelope enrichment writes today, and the retired normalized
 # shape older installs hold instead.
 NATIVE_RESULT_FILE = "00_parallel_result.json"
@@ -251,7 +261,7 @@ class Ids:
 class ColdIndex:
     """Identifier -> cold parent, kept current while the seed merges parents."""
 
-    def __init__(self, db: Db, people_csv: Path) -> None:
+    def __init__(self, db: Db) -> None:
         self.parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
         self.slug_of = {row.parent_id: str(row.display_slug or "") for row in queries.parents(db)}
         self.linkedin_parents: set[str] = set()
@@ -261,9 +271,9 @@ class ColdIndex:
             self.index[row.kind][row.normalized_value].add(self.parent_of[row.person_id])
         # The store keeps no LinkedIn identifier rows: the fan-in export that
         # ensure-parents read supplies each person's slug.
-        for raw in _csv_rows(people_csv):
-            person_id = _text(raw.get("id")).lower()
-            value = _slug(row_public_identifier(raw))
+        for row in queries.imported_people(db):
+            person_id = row.id.lower()
+            value = _slug(row.public_identifier)
             if value and person_id in self.parent_of:
                 parent_id = self.parent_of[person_id]
                 self.index[LINKEDIN][value].add(parent_id)
@@ -456,14 +466,12 @@ class Seed(Node):
         *,
         db: Db,
         legacy_root: Path = DEFAULT_LEGACY_ROOT,
-        people_csv: Path = DEFAULT_PEOPLE_CSV,
         raw_dir: Path = RAW_DIR,
         facts_dir: Path = FACTS_DIR,
         research_dir: Path = DEEP_RESEARCH_DIR,
     ) -> None:
         self.db = db
         self.legacy_root = Path(legacy_root)
-        self.people_csv = Path(people_csv)
         self.raw_dir = Path(raw_dir)
         self.facts_dir = Path(facts_dir)
         self.research_dir = Path(research_dir)
@@ -475,7 +483,7 @@ class Seed(Node):
         carried = carried_over_at(self.db)
         if carried is not None:
             raise SeedRefused(f"store already carries its legacy decisions ({carried}); seed runs once")
-        cold = ColdIndex(self.db, self.people_csv)
+        cold = ColdIndex(self.db)
         if not cold.parent_of:
             raise SeedRefused("store holds no people; run ensure-parents first")
         legacy = LegacyTree(self.legacy_root)
@@ -483,8 +491,9 @@ class Seed(Node):
         merges, ambiguous = self._merge_families(cold, legacy)
         bundles = self._carry_bundles(cold, legacy)
         facts = self._carry_facts(cold, legacy)
-        worth, identity, machine_rows = self._carry_decisions(cold, legacy)
         research = self._carry_research(cold, legacy)
+        worth, identity, machine_rows = self._carry_decisions(cold, legacy)
+        profiles = self._carry_profiles(legacy)
 
         seeded_at = now_iso()
         with self.db.transaction() as conn:
@@ -512,6 +521,7 @@ class Seed(Node):
             research_duplicate_dropped=research.duplicate_dropped,
             research_two_plus=research.two_plus,
             research_unmatched=research.unmatched,
+            profiles_carried=profiles,
             machine_review_rows_not_carried=machine_rows,
             synthetic_rows_not_carried=legacy.synthetic_rows(),
             seeded_at=seeded_at,
@@ -646,10 +656,17 @@ class Seed(Node):
             if decision is None:
                 continue
             if key.startswith((MESSAGE_LINKEDIN_PREFIX, PARENT_WORTH_PREFIX)):
-                # A click on a retired alias key has no candidate row to settle on.
-                print(f"[seed] identity decision on a retired key not carried: {key}", file=sys.stderr)
-                identity.unmatched += 1
-                continue
+                url = row.get("linkedin_url") or row.get("new_linkedin_url")
+                candidates = self.db.query(
+                    "SELECT row_key, linkedin_url FROM links WHERE parent_id=? AND kind!='synthetic'",
+                    (next(iter(parents)) if len(parents) == 1 else "",),
+                ) if url else []
+                matches = [candidate for candidate in candidates
+                           if _slug(candidate["linkedin_url"]) == _slug(url)]
+                if len(matches) != 1:
+                    identity.unmatched += 1
+                    continue
+                key = str(matches[0]["row_key"])
             self._carry_identity(key, row, decision, identity.one(parents), identity)
         return worth, identity, machine_rows
 
@@ -744,7 +761,7 @@ class Seed(Node):
             parent_id = tally.one(cold.decide(primary, secondary))
             if parent_id is None:
                 continue
-            handle = cold.slug_of[parent_id]
+            handle = ResearchHandle.for_parent(parent_id, cold.slug_of[parent_id])
             if handle in seen:
                 tally.duplicate_dropped += 1
                 continue
@@ -754,9 +771,34 @@ class Seed(Node):
         return tally
 
     def _project_research(self, handle: str, parent_id: str, native: dict[str, Any], linkedin_url: str) -> None:
+        existing = self.db.query(
+            "SELECT row_key, linkedin_url FROM links WHERE parent_id=? AND kind!='synthetic' ORDER BY row_key",
+            (parent_id,),
+        )
+        matching = next((row for row in existing if linkedin_url and _slug(row["linkedin_url"]) == _slug(linkedin_url)), None)
+        available = next((row for row in existing if not row["linkedin_url"]), None) if not linkedin_url else None
+        chosen = matching or available
+        candidate_key = str(chosen["row_key"]) if chosen else f"research:{handle}"
+        if chosen is None:
+            person_ids = tuple(row["person_id"] for row in self.db.query(
+                "SELECT person_id FROM people WHERE parent_id=? AND is_owner=0 AND is_ghost=0 ORDER BY person_id",
+                (parent_id,),
+            ))
+            self.db.project_rows((
+                LinkRow(candidate_key, parent_id, _slug(linkedin_url), "research",
+                        linkedin_url or None, paid_profile=True,
+                        source=WriterSource.LEGACY_MIGRATION.value),
+                CandidatePeopleProjection(candidate_key, tuple(
+                    CandidatePersonRow(candidate_key, person_id, parent_id) for person_id in person_ids
+                )),
+            ))
         target = self.research_dir / handle / NATIVE_RESULT_FILE
         target.parent.mkdir(parents=True, exist_ok=True)
         data = json.dumps(native, indent=2, ensure_ascii=False).encode("utf-8")
+        if target.exists() and target.read_bytes() != data:
+            backup = target.with_suffix(target.suffix + ".bkup")
+            if not backup.exists():
+                shutil.copy2(target, backup)
         target.write_bytes(data)
         artifact_key = f"research:{handle}"
         now = now_iso()
@@ -770,6 +812,7 @@ class Seed(Node):
                     path=str(target.resolve()),
                     content_fingerprint=hashlib.sha256(data).hexdigest(),
                     status=ProjectionStatus.PROJECTED.value,
+                    candidate_key=candidate_key,
                     input_fingerprint=LEGACY_PARALLEL_HANDLE_RESULT,
                     payload_json=payload_json,
                     projected_at=now,
@@ -778,13 +821,32 @@ class Seed(Node):
                     handle,
                     parent_id,
                     ResearchStatus.COMPLETE.value if linkedin_url else ResearchStatus.NO_MATCH.value,
-                    None,
+                    candidate_key,
                     artifact_key,
                     payload_json,
                     now,
                 ),
             ),
         ))
+
+    def _carry_profiles(self, legacy: LegacyTree) -> int:
+        cache_dir = legacy.root / LEGACY_PROFILE_CACHE
+        available = profile_cache_index(cache_dir)
+        results = []
+        for link in self.db.query(
+            "SELECT row_key, parent_id, linkedin_url, machine_proposed_url, replacement_url "
+            "FROM links WHERE kind!='synthetic'"
+        ):
+            url = str(link["replacement_url"] or link["machine_proposed_url"] or link["linkedin_url"] or "")
+            public_identifier = _slug(url)
+            path = indexed_profile_cache_path(cache_dir, public_identifier, available)
+            cached = read_usable_cached_profile(path)
+            if cached is None:
+                continue
+            target = ProfileTarget(public_identifier, url, link["row_key"], link["parent_id"])
+            results.append((target, ProfileResult.from_payload(public_identifier, url, cached)))
+        project_profile_results(self.db, results, cache_dir)
+        return len(results)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -793,7 +855,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--legacy-root", default=str(DEFAULT_LEGACY_ROOT), help="a .powerpacks tree")
-    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     return parser
 
 
@@ -802,7 +863,6 @@ def main(argv: list[str] | None = None) -> int:
     node = Seed(
         db=open_existing_db(args.db),
         legacy_root=Path(args.legacy_root),
-        people_csv=Path(args.people_csv),
     )
     try:
         payload = node.run()

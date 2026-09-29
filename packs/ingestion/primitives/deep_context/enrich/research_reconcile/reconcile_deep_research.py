@@ -6,14 +6,10 @@ import argparse
 import math
 import sys
 
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     emit,
-)
-from packs.ingestion.primitives.deep_context.db.models import (
-    RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
@@ -38,7 +34,7 @@ def _finite_non_negative_float(value: str) -> float:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Deep-research the correct identity for wrong_person detaches (cost-gated)."
+        description="Research worth-Yes people without LinkedIn or completed research (cost-gated)."
     )
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument(
@@ -46,7 +42,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=config.DEFAULT_PROCESSOR,
         choices=sorted(config.PROCESSOR_PRICING_USD),
     )
-    parser.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
     parser.add_argument(
         "--budget",
         type=_finite_non_negative_float,
@@ -56,14 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
     # --approve plus --budget at/above the plan's estimate is the whole spend
     # gate: execute_reconcile refuses to call Parallel.ai otherwise, returning
     # ReceiptStatus.NEEDS_APPROVAL with the estimate instead of raising.
-    for flag in ("approve", "dry-run", "include-plausibly-absent"):
+    for flag in ("approve", "dry-run"):
         parser.add_argument(f"--{flag}", action="store_true")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument(
-        "--reasoning-effort",
-        default="medium",
-        choices=["minimal", "low", "medium", "high"],
-    )
     return parser
 
 
@@ -72,13 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     db = open_existing_db(args.db)
     node = ReconcileDeepResearch(
         processor=args.processor,
-        confirm_threshold=args.confirm_threshold,
         budget=args.budget,
         approve=args.approve,
         dry_run=args.dry_run,
-        include_plausibly_absent=args.include_plausibly_absent,
-        model=args.model,
-        reasoning_effort=args.reasoning_effort,
         db=db,
     )
     result = node.run()

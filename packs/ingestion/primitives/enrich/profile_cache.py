@@ -133,14 +133,15 @@ def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None
     raw = cached.get("raw_response")
     if isinstance(normalized, dict) and normalized.get("success") is True and isinstance(raw, dict):
         return cached
-    normalized = normalize_linkedin_profile(cached)
+    raw = raw if isinstance(raw, dict) else cached
+    normalized = normalize_linkedin_profile(raw)
     if normalized.get("success") is True:
         return {
             "fetched_at": cached.get("fetched_at") or cached.get("last_checked_at") or "",
             "last_checked_at": cached.get("last_checked_at") or cached.get("fetched_at") or "",
             "public_identifier": cached.get("public_identifier") or normalized.get("public_identifier") or cache_path.stem,
             "linkedin_url": cached.get("linkedin_url") or normalized.get("linkedin_url") or "",
-            "raw_response": cached,
+            "raw_response": raw,
             "normalized_profile": normalized,
         }
     return None

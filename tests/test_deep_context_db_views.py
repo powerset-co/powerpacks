@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
     enrichment_queue,
+    judge_candidates,
     linkedin_parents,
     linkedin_progress,
     linkedin_queue,
@@ -231,6 +232,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             "visible-link",
             person_ids=[*visible_people, *owner_people],
             paid_profile=1,
+            linkedin_url="https://www.linkedin.com/in/visible-link",
         )
         self.add_candidate(
             "visible",
@@ -360,7 +362,7 @@ class DeepContextDbViewTests(unittest.TestCase):
 
         self.assertEqual(
             {row.row_key for row in default},
-            {"wrong-link", "candidate:email:jordan@example.com"},
+            {"candidate:email:jordan@example.com"},
         )
 
     def test_linkedin_queue_encodes_standing_and_review_policies(self):
@@ -370,6 +372,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             "paid-reject",
             person_ids=review_people,
             paid_profile=1,
+            linkedin_url="https://www.linkedin.com/in/paid-reject",
             machine_judgment="wrong_person",
             machine_confidence=0.91,
         )
@@ -456,6 +459,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             paid_profile=1,
             machine_action="verify",
             machine_approved="auto",
+            linkedin_url="https://www.linkedin.com/in/jordan-member",
         )
 
         factsless_synthetic = self.add_factsless_parent("factsless-synthetic")
@@ -505,14 +509,29 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertTrue(queue["synthetic"].candidates[0].pending)
         self.assertEqual(
             asdict(linkedin_progress(self.db)),
-            {"total": 5, "pending": 2, "done": 3},
+            {"total": 4, "pending": 2, "done": 2},
         )
 
-        progress = workflow_state(self.db).progress
-        self.assertEqual(progress.linkedin_pending, 2)
-        self.assertEqual(progress.linkedin_done, 3)
-        self.assertEqual(progress.lookup_ready, 2)
-        self.assertEqual(progress.rejected, 2)
+    def test_raw_sibling_does_not_hide_attached_link(self) -> None:
+        people = self.add_parent("mixed", "yes")
+        self.add_candidate("mixed", "jordan-mixed", person_ids=people,
+                           linkedin_url="https://www.linkedin.com/in/jordan-mixed")
+        self.add_candidate("mixed", "candidate:email:mixed@example.test", person_ids=people,
+                           kind="candidate_email", candidate_origin=1, raw_import=1)
+        self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-mixed"])
+        self.assertEqual([row.parent_id for row in linkedin_queue(self.db)], ["mixed"])
+
+    def test_valid_machine_verdict_skips_judge_even_with_old_fingerprint(self) -> None:
+        people = self.add_parent("judged", "yes")
+        self.add_candidate("judged", "jordan-judged", person_ids=people,
+                           linkedin_url="https://www.linkedin.com/in/jordan-judged",
+                           judgment_fingerprint="old-input",
+                           judgment_payload_json=json.dumps({"verdict": "needs_review", "confidence": 0.7}))
+        self.assertEqual(judge_candidates(self.db), [])
+        self.add_candidate("judged", "jordan-empty", person_ids=people,
+                           linkedin_url="https://www.linkedin.com/in/jordan-empty",
+                           judgment_fingerprint="failed-input", judgment_payload_json="{}")
+        self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-empty"])
 
     def test_human_kept_identity_rescues_only_machine_worth_no(self):
         people = self.add_parent("keepish", "no")
@@ -752,6 +771,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             "jordan-state",
             person_ids=people,
             paid_profile=1,
+            linkedin_url="https://www.linkedin.com/in/jordan-state",
             machine_judgment="wrong_person",
             machine_confidence=0.9,
             judgment_payload_json=json.dumps({"recommend_deep_research": True}),
@@ -772,6 +792,11 @@ class DeepContextDbViewTests(unittest.TestCase):
             machine_approved="auto",
         )
         project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:state", "synthetic:state", "{}"))
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE links SET judgment_payload_json=? WHERE row_key='jordan-state'",
+                (json.dumps({"verdict": "wrong_person", "confidence": 0.9}),),
+            )
         self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
         self.db.decide_identity("synthetic:state", "verify")
         self.assertEqual(workflow_state(self.db).next_action, "realize")

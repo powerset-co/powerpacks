@@ -49,7 +49,7 @@ import sqlite3
 import sys
 from typing import Any
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
-from packs.ingestion.primitives.deep_context.db.store import EXPECTED_SCHEMA_SIGNATURE
+from packs.ingestion.primitives.deep_context.db.store import LEGACY_SCHEMA_SIGNATURE
 
 
 def scrub_august_deep_context_store(db_path: Path) -> None:
@@ -60,7 +60,7 @@ def scrub_august_deep_context_store(db_path: Path) -> None:
     if not db_path.is_file():
         return
     august_signature = tuple(
-        row for row in EXPECTED_SCHEMA_SIGNATURE
+        row for row in LEGACY_SCHEMA_SIGNATURE
         if row[2] not in {"person_labels", "person_tags", "share"}
     )
     try:

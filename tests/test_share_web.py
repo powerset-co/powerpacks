@@ -20,6 +20,7 @@ from packs.ingestion.primitives.deep_context.db.models import HumanWorth, Machin
 from packs.ingestion.primitives.deep_context.db.share_views import person_labels, person_tags, share_decisions
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.questions import build_questions
@@ -127,9 +128,10 @@ class ShareWebFixture(unittest.TestCase):
         ):
             seed_identity(self.db, parent_id=parent_id, person_id=person_id, row_key=row_key, name=name,
                           machine_worth=worth, public_identifier=slug, labels=labels)
-        self.evidence = ShareEvidence(self.db, people_csv=self.people_csv)
+        self.db.replace_imported_people(tuple(row.index_row for row in read_imported_people(self.people_csv)))
+        self.evidence = ShareEvidence(self.db)
         self._share()
-        self.people = SharePeople(self.db, people_csv=self.people_csv)
+        self.people = SharePeople(self.db)
 
     def _share(self) -> dict:
         return ShareList(db=self.db, out_dir=self.root / "share", evidence=self.evidence).run().to_payload()
@@ -207,7 +209,7 @@ class RowModelTests(ShareWebFixture):
         with self.db.transaction() as conn:
             conn.execute("update facts set facts_json = json_patch(facts_json, ?) where parent_id = 'parent-bbbb'",
                          (json.dumps(facts),))
-        detail = SharePeople(self.db, people_csv=self.people_csv).detail("parent-bbbb")
+        detail = SharePeople(self.db).detail("parent-bbbb")
         self.assertEqual([(event.date, event.summary) for event in detail.events],
                          [("2026-03", "Caught up over coffee."), ("2024-10-30", "Introduced by a mutual friend.")])
         self.assertEqual(detail.shared_context, ("school: Example University",))

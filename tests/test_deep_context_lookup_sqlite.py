@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
     project_imported_people,
 )
 from packs.ingestion.primitives.deep_context.shared.lookup_person import PersonLookup, main
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class PersonLookupSqliteTest(unittest.TestCase):
@@ -41,6 +42,8 @@ class PersonLookupSqliteTest(unittest.TestCase):
                         ("+1 415-555-0100",),
                         ("imessage",),
                         (),
+                        PeopleRow(id="person-phone", full_name="Jordan Bravo",
+                                  primary_phone="+1 415-555-0100", source_channels="imessage"),
                     ),
                 ),
             )

@@ -81,7 +81,7 @@ class AppendPipelineTests(unittest.TestCase):
 
     def run_node(self, **kwargs):
         node = SynthesizePersonContext(db=self.db, raw_dir=self.root, out_dir=self.root / 'facts',
-            people_csv=self.root / 'people.csv', model='fixture-model', chunk_chars=1, **kwargs)
+            model='fixture-model', chunk_chars=1, **kwargs)
         return node.run()
 
     def test_delta_keeps_historical_employer_and_skips_old_same_time_message(self):
@@ -142,7 +142,7 @@ class AppendPipelineTests(unittest.TestCase):
         self.bundle(['old-company'])
         self.run_node()
         node = SynthesizePersonContext(db=self.db, raw_dir=self.root, out_dir=self.root / 'facts',
-            people_csv=self.root / 'people.csv', model='other-model', chunk_chars=1)
+            model='other-model', chunk_chars=1)
         self.fail = True
         self.assertEqual(node.run().status, 'failed')
         self.assertEqual(len(node._plan().bundles), 1)

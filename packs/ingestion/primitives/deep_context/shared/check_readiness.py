@@ -42,6 +42,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     ImportedPerson,
     read_imported_people,
+    stored_imported_people,
 )
 from packs.ingestion.primitives.deep_context.migration.seed import (
     carried_over_at,
@@ -189,14 +190,14 @@ class CheckReadiness:
         chat: ChatDbProbe = context_sources.probe_chat_db(self.chat_db)
         database_exists = self.db is not None or self.db_path.is_file()
         db: Db | None = self.db or Db(self.db_path) if database_exists else None
-        has_people = bool(db is not None and any(not row.is_owner for row in queries.people(db)))
+        has_people = bool(db is not None and queries.imported_people(db))
         legacy_present = legacy_decisions_present(self.db_path.parent.parent)
         seed_required = legacy_present and has_people and carried_over_at(db) is None
         # Two different questions, two different sources: imported_counts answers
         # "what did we import" from people.csv (below, message_people/candidates on
         # the report); projected answers "what did we actually collect" from SQLite
         # (only its .messages/.has_owner/.owner_path are used — see sqlite_counts).
-        imported = read_imported_people(self.people_csv)
+        imported = stored_imported_people(db) if has_people and db is not None else read_imported_people(self.people_csv)
         imported_counts = _import_counts(imported, db)
         # Before the store exists, owner.json has not been imported yet: read the file.
         owner_json = self.db_path.parent / OWNER_JSON.name
@@ -231,7 +232,7 @@ class CheckReadiness:
                 str(self.wacli_db),
             ),
             people_csv=PeopleCsvCheck(
-                "ok" if self.people_csv.is_file() else "missing",
+                "ok" if self.people_csv.is_file() or has_people else "missing",
                 str(self.people_csv),
                 imported_counts.message_people,
             ),

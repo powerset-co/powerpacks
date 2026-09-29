@@ -26,7 +26,6 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.result imp
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     EnrichmentProgress,
-    RetargetRunResult,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
@@ -205,7 +204,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.assertEqual(result["status"], "needs_approval")
         self.assertFalse(self.manifest.exists())
 
-    def test_reconcile_without_receipt_still_reports_provider_and_judge_progress(self) -> None:
+    def test_reconcile_without_receipt_reports_provider_progress(self) -> None:
         plan = selection.ResearchSelection(
             fingerprint=ReviewSelection("selection-1", 1, 1, 0, 0, ""),
             request_fingerprint="request-1",
@@ -227,13 +226,9 @@ class EnrichmentProjectionTest(unittest.TestCase):
             db=self.db,
             out_dir=self.out,
             processor="core2x",
-            confirm_threshold=0.8,
             budget=0.05,
             approve=True,
             dry_run=False,
-            include_plausibly_absent=False,
-            model="test-model",
-            reasoning_effort="medium",
             on_progress=progress.append,
         )
 
@@ -241,19 +236,9 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params.on_progress(ReceiptCounts(1, 1, 0, 0))
             return research_models.ResearchRunResult(1, completed=1)
 
-        def propose(*_args, heartbeat, **_kwargs):
-            heartbeat(1, 1)
-            return RetargetRunResult(
-                proposed=0,
-                judge_calls=1,
-                cached_verdicts=0,
-                grandfathered=0,
-            )
-
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
             mock.patch.object(driver, "run_research", side_effect=run),
-            mock.patch.object(coordinator, "propose_retargets", side_effect=propose),
         ):
             payload = node.run().to_payload()
 
@@ -263,7 +248,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
                 event.phase
                 for event in progress
             ],
-            ["research", "research", "judging_retargets"],
+            ["research", "research"],
         )
 
     def test_receipt_counts_never_include_duplicate_handles(self) -> None:
@@ -297,21 +282,12 @@ class EnrichmentProjectionTest(unittest.TestCase):
             db=self.db,
             out_dir=self.out,
             processor="core2x",
-            confirm_threshold=0.8,
             budget=0.0,
             approve=True,
             dry_run=False,
-            include_plausibly_absent=False,
-            model="test-model",
-            reasoning_effort="medium",
         )
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
-            mock.patch.object(
-                coordinator,
-                "propose_retargets",
-                return_value=RetargetRunResult(0, 0, 0, 0),
-            ),
         ):
             payload = node.run().to_payload()
 
@@ -351,21 +327,12 @@ class EnrichmentProjectionTest(unittest.TestCase):
             db=self.db,
             out_dir=self.out,
             processor="core2x",
-            confirm_threshold=0.8,
             budget=0.0,
             approve=False,
             dry_run=False,
-            include_plausibly_absent=False,
-            model="test-model",
-            reasoning_effort="medium",
         )
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
-            mock.patch.object(
-                coordinator,
-                "propose_retargets",
-                side_effect=AssertionError("approval gate must precede paid follow-up"),
-            ),
         ):
             payload = node.run().to_payload()
 
@@ -413,13 +380,9 @@ class EnrichmentProjectionTest(unittest.TestCase):
             db=self.db,
             out_dir=self.out,
             processor="core2x",
-            confirm_threshold=0.8,
             budget=0.10,
             approve=True,
             dry_run=False,
-            include_plausibly_absent=False,
-            model="test-model",
-            reasoning_effort="medium",
         )
 
         def run(_params):
@@ -432,25 +395,13 @@ class EnrichmentProjectionTest(unittest.TestCase):
                 errors=("casey-delta: result did not match a submitted subject",),
             )
 
-        proposed_subsets: list[int] = []
-
-        def propose(*args, heartbeat, **_kwargs):
-            proposed_subsets.append(len(args[0]))
-            heartbeat(len(args[0]), len(args[0]))
-            return RetargetRunResult(1, 1, 0, 0)
-
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
             mock.patch.object(driver, "run_research", side_effect=run),
-            mock.patch.object(coordinator, "propose_retargets", side_effect=propose),
         ):
             payload = node.run().to_payload()
 
-        # propose() ran over both eligible rows — a partial-error batch is not
-        # discarded as a total failure.
-        self.assertEqual(proposed_subsets, [2])
         self.assertEqual(payload["status"], "failed")
-        self.assertEqual(payload["retargets_proposed"], 1)
         self.assertEqual(
             payload["errors"],
             ["casey-delta: result did not match a submitted subject"],

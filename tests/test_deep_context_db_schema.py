@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION
+from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION, DDL, IMPORTED_PEOPLE_DDL
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
 from deep_context_sqlite_test_helpers import (
     project_artifact,
@@ -66,8 +66,27 @@ class DeepContextSchemaTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM parents").fetchone()[0], 1)
             self.assertIn("rogue", {row[1] for row in conn.execute("PRAGMA table_info(links)")})
 
-    def test_schema_version_stays_at_pre_release_baseline(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 1)
+    def test_schema_version_includes_imported_roster(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 2)
+
+    def test_v1_upgrade_preserves_decisions_and_reopens(self) -> None:
+        self.path.unlink()
+        with sqlite3.connect(self.path) as conn:
+            conn.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, ""))
+            conn.execute("INSERT INTO meta VALUES ('schema_version', '1')")
+            conn.execute("INSERT INTO parents(parent_id, public_identifier, human_worth) "
+                         "VALUES ('parent-1', 'parent-worth:parent-1', 'yes')")
+            conn.execute("INSERT INTO people(person_id, parent_id) VALUES ('person-1', 'parent-1')")
+            conn.execute("INSERT INTO links(row_key, parent_id, public_identifier, kind, "
+                         "decision_action, decision_approved, source) "
+                         "VALUES ('jordan-bravo', 'parent-1', 'jordan-bravo', 'pub', "
+                         "'verify', 'yes', 'deep-context-reconcile')")
+        upgraded = Db(self.path)
+        self.assertEqual(upgraded.query("SELECT human_worth FROM parents")[0][0], "yes")
+        self.assertEqual(upgraded.query("SELECT decision_approved FROM links")[0][0], "yes")
+        self.assertEqual(upgraded.query("PRAGMA foreign_key_check"), [])
+        self.assertEqual(upgraded.query("SELECT * FROM imported_people"), [])
+        self.assertEqual(Db(self.path).query("SELECT value FROM meta WHERE key='schema_version'")[0][0], "2")
 
     def test_merge_verdict_requires_cache_provenance(self) -> None:
         self.parent()

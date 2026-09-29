@@ -28,7 +28,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ShareDecisionRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, DEFAULT_PEOPLE_CSV
+from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
 from packs.ingestion.primitives.pipeline.contract import (
     STATUS_COMPLETED,
     Artifact,
@@ -123,7 +123,6 @@ class ShareList(Node):
     name = "share"
     # `person_tags` is the human's table (the UI writes it); no node produces it.
     inputs = (
-        Artifact(path=str(DEFAULT_PEOPLE_CSV), external=True),
         Artifact(path=str(CANONICAL_DB), external=True),
     )
     # The table writes are the deliverable; only the run manifest is a file.
@@ -145,7 +144,6 @@ class ShareList(Node):
 
     def bindings(self) -> dict[str, str]:
         return {
-            str(DEFAULT_PEOPLE_CSV): str(self.evidence.people_csv),
             str(CANONICAL_DB): str(self.db.db_path),
             str(MANIFEST_PATH): str(self.out_dir / MANIFEST_FILENAME),
         }

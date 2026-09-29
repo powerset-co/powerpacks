@@ -798,8 +798,7 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     lock(button);
     // The approved job updates projected queue/job state during this click.
-    // A freshness reload could tear down the page before the POST leaves the
-    // browser, so park the observer until the deliberate success reload.
+    // Pause freshness updates until the POST response has replaced the panel.
     completingStage = true;
     try {
       const response = await post("/approve-enrichment", {});
@@ -808,7 +807,10 @@ document.addEventListener("click", async (event) => {
       const panel = document.querySelector(".worth-panel") || document.querySelector(".stage");
       if (panel && response.panel) {
         panel.innerHTML = response.panel;
+        completingStage = false;
+        lastServerStage = "enrich";
         announce("Approved");
+        if (response.enrichment?.status !== "running") void syncFileState();
       } else {
         leaveAndReload("Approved");
       }

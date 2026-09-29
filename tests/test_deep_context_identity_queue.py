@@ -76,7 +76,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         self.assertEqual(linkedin_parents(self.db), [])
         self.assertIsNone(person_detail(self.db, "parent-factsless"))
 
-    def test_research_queue_keeps_its_effective_yes_only_gate(self) -> None:
+    def test_research_requires_yes_and_no_known_linkedin(self) -> None:
         research = {
             "machine_judgment": "wrong_person",
             "machine_confidence": 0.91,
@@ -90,10 +90,31 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
 
         rows = enrichment_queue(self.db)
 
-        self.assertEqual(
-            {row.row_key for row in rows},
-            {"yes", "human-yes"},
+        self.assertEqual(rows, [])
+
+        seed_identity(
+            self.db,
+            parent_id="parent-unlinked", person_id="person-unlinked",
+            row_key="candidate:email:unlinked@example.test",
+            name="Jordan Unlinked", machine_worth="yes",
+            display_slug="unlinked", parent_public_identifier="",
+            linkedin_url=None,
+            link_updates={"candidate_origin": 1, "raw_import": 1},
         )
+        self.assertEqual(
+            [row.row_key for row in enrichment_queue(self.db)],
+            ["candidate:email:unlinked@example.test"],
+        )
+
+        seed_identity(
+            self.db, parent_id="parent-nameless", person_id="person-nameless",
+            row_key="unused", name="Jordan Nameless", machine_worth="yes",
+            include_link=False,
+        )
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE parents SET display_name=NULL WHERE parent_id='parent-nameless'")
+        row = next(row for row in enrichment_queue(self.db) if row.parent_id == "parent-nameless")
+        self.assertEqual(row.name, "parent-nameless")
 
 
 if __name__ == "__main__":

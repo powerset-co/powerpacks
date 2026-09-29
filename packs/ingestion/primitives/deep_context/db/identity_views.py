@@ -17,6 +17,7 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _linkedin_queue,
 )
 from packs.ingestion.primitives.deep_context.db._view_sql import (
+    LINKEDIN_CTE,
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
 )
@@ -26,12 +27,14 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import (
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentifierKind,
-    RESEARCH_CONFIRM_THRESHOLD,
+    LinkSnapshotRow,
     ReviewAction,
     RowKind,
     ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import VERDICTS, stored_judgments
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import (
@@ -90,7 +93,7 @@ def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
         (review, link)
         for review in review_rows(db, include_worth=False)
         if (link := links_by_key.get(review.key)) is not None
-        and link.kind != RowKind.SYNTHETIC.value
+        and (link.kind != RowKind.SYNTHETIC.value or review.action == ReviewAction.RETARGET.value)
         and review.action in AFFIRMATIVE_MACHINE_ACTIONS
         and review.approved in AFFIRMATIVE_MACHINE_APPROVALS
     ]
@@ -132,104 +135,109 @@ def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
     ]
 
 
-def enrichment_queue(
-    db: Db,
-    *,
-    include_plausibly_absent: bool = False,
-    include_applied_retargets: bool = False,
-    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
-) -> list[EnrichmentQueueRow]:
-    """Return worth='yes' families eligible for paid research.
-
-    ``confirm_threshold`` binds twice below: once to decide whether an
-    existing confirmed sibling link is trusted enough to suppress research on
-    this row, and again to decide whether this row's own wrong_person verdict
-    is confident enough to warrant deep research. Same number, two gates.
-    """
+def enrichment_queue(db: Db) -> list[EnrichmentQueueRow]:
+    """Return worth-Yes parents with no known LinkedIn or completed research."""
     rows = db.query(
         WORTH_CTE
         + f"""
-SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,
-       l.machine_reason, l.machine_judgment, l.candidate_origin,
+SELECT l.row_key, w.parent_id, w.display_slug, w.display_name,
+       l.candidate_origin,
        (SELECT json_group_array(person_id) FROM (
           SELECT person_id FROM people
-          WHERE parent_id=l.parent_id AND is_owner=0 AND is_ghost=0
+          WHERE parent_id=w.parent_id AND is_owner=0 AND is_ghost=0
           ORDER BY person_id
         )) AS person_ids_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
           FROM people pe JOIN person_identifiers i USING(person_id)
-          WHERE pe.parent_id=l.parent_id AND pe.is_owner=0 AND i.kind='email'
+          WHERE pe.parent_id=w.parent_id AND pe.is_owner=0 AND i.kind='email'
           ORDER BY value
         )) AS emails_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
           FROM people pe JOIN person_identifiers i USING(person_id)
-          WHERE pe.parent_id=l.parent_id AND pe.is_owner=0 AND i.kind='phone'
+          WHERE pe.parent_id=w.parent_id AND pe.is_owner=0 AND i.kind='phone'
           ORDER BY value
         )) AS phones_json
-FROM eligible_links l JOIN worth w USING(parent_id)
+FROM worth w
+LEFT JOIN eligible_links l ON l.row_key=(
+  SELECT choice.row_key FROM eligible_links choice
+  WHERE choice.parent_id=w.parent_id AND choice.kind!='synthetic'
+  ORDER BY choice.candidate_origin DESC, choice.row_key LIMIT 1
+)
 WHERE {WORTH_GATE_ACCEPTED}
-  AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=l.parent_id)
-  AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no')
-  AND COALESCE(l.decision_action, '')!='exclude'
-  AND (
-    ? OR NOT (
-      l.machine_action='retarget'
-      AND l.machine_proposed_url IS NOT NULL
-      AND COALESCE(l.machine_approved, '') IN ('auto', 'yes')
-    )
+  AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=w.parent_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links known
+    WHERE known.parent_id=w.parent_id AND known.kind!='synthetic'
+      AND (COALESCE(known.linkedin_url, '')!=''
+           OR COALESCE(known.machine_proposed_url, '')!=''
+           OR COALESCE(known.replacement_url, '')!='')
   )
   AND NOT EXISTS (
-    SELECT 1 FROM eligible_links kept
-    WHERE kept.parent_id=l.parent_id AND kept.row_key!=l.row_key
-      AND (
-        (kept.machine_judgment='confirmed'
-         AND COALESCE(kept.machine_confidence, 0)>=?)
-        OR (kept.machine_action='verify'
-            AND COALESCE(kept.machine_approved, '') IN ('auto', 'yes'))
-        OR (kept.decision_action='verify' AND kept.decision_approved='yes')
-      )
+    SELECT 1 FROM research done WHERE done.parent_id=w.parent_id
+      AND done.status IN ('complete', 'no_match')
   )
-  AND (
-    (l.candidate_origin=1 AND l.raw_import=1)
-    OR (
-      l.machine_judgment='wrong_person'
-      AND COALESCE(l.machine_confidence, 0)>=?
-      AND COALESCE(json_extract(l.judgment_payload_json,
-                               '$.recommend_deep_research'), 0)=1
-    )
-    OR (
-      ? AND COALESCE(json_extract(l.judgment_payload_json,
-                                  '$.linkedin_plausibly_absent'), 0)=1
-    )
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links decided WHERE decided.parent_id=w.parent_id
+      AND decided.decision_approved IN ('yes', 'no')
   )
-ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
+ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
 """,
-        (
-            int(include_applied_retargets),
-            confirm_threshold,
-            confirm_threshold,
-            int(include_plausibly_absent),
-        ),
     )
     return [
         EnrichmentQueueRow(
             parent_id=row["parent_id"],
             parent_slug=ResearchHandle.for_parent(row["parent_id"], row["display_slug"]),
-            name=row["display_name"] or row["row_key"],
+            name=row["display_name"] or row["row_key"] or row["parent_id"],
             person_ids=tuple(_json(row["person_ids_json"], [])),
-            row_key=row["row_key"],
-            candidate_exists=True,
-            linkedin_url=row["linkedin_url"] or "",
-            verdict=row["machine_judgment"] or "no_linkedin_candidate",
-            verdict_reason=row["machine_reason"] or "",
+            row_key=row["row_key"] or f"research:{row['parent_id']}",
+            candidate_exists=bool(row["row_key"]),
+            linkedin_url="",
+            verdict="no_linkedin_candidate",
+            verdict_reason="",
             match_emails=tuple(_json(row["emails_json"], [])),
             match_phones=tuple(_json(row["phones_json"], [])),
             candidate_origin=bool(row["candidate_origin"]),
         )
         for row in rows
     ]
+
+
+def judge_candidates(db: Db) -> list[LinkSnapshotRow]:
+    """Real mapped LinkedIns without human or valid machine decisions."""
+    judged = {key for key, stored in stored_judgments(db).items()
+              if stored.verdict.value in VERDICTS}
+    keys = {row["row_key"] for row in db.query(
+        LINKEDIN_CTE + """
+SELECT l.row_key FROM eligible_links l JOIN identity_scope s USING(parent_id)
+WHERE l.kind!='synthetic' AND l.decision_action IS NULL
+  AND (COALESCE(l.linkedin_url, '')!='' OR COALESCE(l.machine_proposed_url, '')!=''
+       OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
+"""
+    )}
+    return [
+        row for row in links(db)
+            if row.row_key in keys and row.row_key not in judged
+    ]
+
+
+def research_candidate_urls(db: Db) -> dict[str, str]:
+    return {row["candidate_key"]: row["linkedin_url"] for row in db.query(
+        "SELECT candidate_key, json_extract(result_json, '$.content.linkedin_url') AS linkedin_url "
+        "FROM research WHERE status='complete' AND candidate_key IS NOT NULL"
+    )}
+
+
+def unassembled_research(db: Db) -> bool:
+    """Usable no-match research without its synthetic review card."""
+    for row in synthetic_fallback(db):
+        if db.query("SELECT 1 FROM synthetic_profiles WHERE public_identifier=?", (row.parent_id,)):
+            continue
+        result = ResearchResult.from_json(row.result_json)
+        if result and result.usable and (not result.linkedin_url or row.research_link_rejected):
+            return True
+    return False
 
 
 def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:

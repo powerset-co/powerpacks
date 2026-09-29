@@ -16,7 +16,6 @@ Changelog:
 from __future__ import annotations
 
 from dataclasses import asdict, astuple, dataclass, fields
-from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -31,10 +30,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     ImportedPerson,
-    read_imported_people,
+    stored_imported_people,
 )
 from packs.ingestion.primitives.deep_context.review.rendering import markdown_to_html
-from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE_CSV
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags
@@ -175,15 +173,14 @@ class SharePeople:
     """The roster joined to the store. Construct once; `load()` re-reads the
     store (it changes as the human tags), the roster is read on first use."""
 
-    def __init__(self, db: Db, *, people_csv: Path = DEFAULT_PEOPLE_CSV) -> None:
+    def __init__(self, db: Db) -> None:
         self._families: dict[str, tuple[ImportedPerson, ...]] = {}
         self._families_stamp = 0
         self.db = db
-        self.people_csv = Path(people_csv)
 
-    @cached_property
+    @property
     def roster(self) -> dict[str, ImportedPerson]:
-        return {row.person_id: row for row in read_imported_people(self.people_csv)}
+        return {row.person_id: row for row in stored_imported_people(self.db)}
 
     def families(self) -> dict[str, tuple[ImportedPerson, ...]]:
         """The roster people the list decides on, grouped under the store's parent:

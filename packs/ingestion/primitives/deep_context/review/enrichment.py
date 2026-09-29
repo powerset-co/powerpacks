@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, unassembled_research
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
@@ -60,8 +61,6 @@ def enrichment_view(
     plan = research_selection.select_research(
         db,
         processor=DEFAULT_PROCESSOR,
-        confirm_threshold=confirm_threshold,
-        include_plausibly_absent=True,
         fingerprint=state.selection,
     )
     current_selection = plan.fingerprint
@@ -87,13 +86,12 @@ def enrichment_view(
             state="running",
             approvable=False,
         )
-    # A plan whose paid research is all cached still has an unapplied local
-    # chain (synthetic assembly and profile prefetch). It costs nothing, so it
-    # is not a spend approval; it is a $0 continue that reruns the chain so
-    # cached installs lose nothing. Once this process ran the chain for the
-    # current plan, the stage is finished and Continue advances instead.
+    # The remaining chain prepares profiles, assembles no-match cards, and
+    # judges real candidates. The estimate covers Parallel research only.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
-    if not total:
+    if not total and (judge_candidates(db) or unassembled_research(db)):
+        status, route_state = "not_started", "profile_prep_pending"
+    elif not total:
         status, route_state = "completed", "done"
     elif pending:
         status, route_state = ReceiptStatus.NEEDS_APPROVAL, "needs_approval"

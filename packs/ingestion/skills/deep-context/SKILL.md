@@ -45,7 +45,7 @@ Use the narrow path when the user names one:
 - "Review complete proceed with enrichment" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
-  (normally `realize` -> merge + index).
+  (normally `realize` -> export + index).
 - `$deep-context restart`, "restart the review", "clear my review decisions",
   "take the staged review again" -> the SMALL reset: clear HUMAN decisions
   only, keep all derived state, review re-takeable immediately (no re-walk).
@@ -153,9 +153,9 @@ bin/deep-context check
 `seed` is free and local. It merges the cold parents a legacy same-person
 family spans, re-owns each legacy raw bundle and facts record to its cold
 parent, replays the human worth and LinkedIn decisions from
-`overrides/review.csv`, and projects Parallel research results so enrichment
-reuses them. Machine review rows, dossiers and the profile cache are not
-carried. Unmatched worth and identity decisions remain in the legacy files; the
+`overrides/review.csv`, and projects Parallel research results and matching
+cached profiles onto the current candidates. Machine review rows and dossiers
+are not carried. Unmatched worth and identity decisions remain in the legacy files; the
 manifest counts them as `worth_unmatched` and `identity_unmatched`.
 A seeded store refuses a second run. Carried facts with a message
 baseline skip synthesis while that evidence is unchanged. New or changed
@@ -168,6 +168,21 @@ Seed uses only its carried raw messages as the known baseline.
 
 Do not run `seed` for a narrow `$deep-context check`; report its
 `next_command` and stop.
+
+The store's state picks one of three starts; there is no mode flag:
+
+- **Cold start (new account):** no store yet. `ensure-parents` creates it and
+  projects the imported people as the roster.
+- **One-time legacy seed:** `check` reports `seed_required` for an install with
+  pre-SQLite artifacts. Run `seed` once after `ensure-parents`; a seeded store
+  refuses a second run.
+- **Incremental refresh:** a store exists. Re-import, fan in, and run
+  `ensure-parents`: new contacts and evidence are added, existing contacts and
+  every decision are kept, and a contact the refresh omitted is not deleted.
+  New unresolved contacts enter the worth and lookup queues like any other.
+
+After `ensure-parents`, every stage reads SQLite only; `realize` is the one
+place a CSV is written again.
 
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
 source. Stop on unreadable iMessage Full Disk Access.
@@ -296,9 +311,10 @@ merge folds its email/phone/channel metadata onto the kept LinkedIn.
 
 ### 5. People decision gate
 
-A contact-only person (email/phone only, no LinkedIn) shows up in the review
-and can be kept or rejected. They are never queued for paid research; only the
-worth-gated candidate path spends on a lookup.
+A contact-only person (email/phone only, no LinkedIn) can enter paid research
+when worth is Yes. Existing LinkedIns and completed research, including
+no-match, skip new lookup. Mapped real LinkedIns without human or valid machine
+identity decisions enter the identity judge before LinkedIn review.
 
 Launch the local UI once in a background terminal:
 
@@ -434,23 +450,22 @@ Stop the review UI first so realization is not competing with an in-process
 enrichment job. SQLite transactions serialize the writes without auxiliary
 runtime state.
 
-Machine-cleared retargets attempt hydration when the judge records them. A
-human-pasted or human-fixed retarget may have no cached profile and projects
-from its SQLite carry instead. Applying and realizing need no provider approval:
+Realizing reads only the SQLite store and needs no provider approval:
 
 ```bash
 bin/deep-context stop
-bin/deep-context apply-retargets
 bin/deep-context realize
 ```
 
-`apply-retargets` makes no network calls. `realize` rebuilds
-`.powerpacks/network-import/merged/people.csv` from the durable Yes/No,
-verify/detach/retarget, consolidation, and synthetic decisions, and fills each
-LinkedIn person's work history, education and headline from the cached
-profile. Profiles not yet cached are fetched through the Powerset gateway
-(cache-first, gateway copies up to 90 days old) before a second merge. Report the
-merge manifest's `profiles_filled` and `profiles_missing` in one line.
+`realize` applies every verified or retargeted LinkedIn (including a pasted
+LinkedIn on a synthetic card) and every detach to the SQLite roster, then
+exports `.powerpacks/network-import/merged/people.csv` from that same roster.
+Each accepted LinkedIn fills its work history, education and headline from the
+profile already projected into SQLite; realize never calls a provider. Report
+`rows`, `profiles_filled` and `profiles_missing` in one line. When
+`profiles_missing` is not 0, run `bin/deep-context profile-prefetch` (free
+preview), get approval for the RapidAPI calls it lists, run it with `--fetch`,
+then realize again.
 
 For the Modal index, disclose that the merged CSV uploads to the configured
 workspace and provider processing may take 5-30+ quiet minutes. Get explicit
@@ -547,7 +562,6 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/reconcile/deep-research/manifest.json  display-only stage receipt
 .powerpacks/deep-context/deep-context.sqlite      canonical runtime state
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
-.powerpacks/network-import/overrides/retarget-people.csv
 .powerpacks/network-import/merged/people.csv
 ```
 

@@ -1,4 +1,4 @@
-"""Construct and run one cost-gated Parallel research and identity pass."""
+"""Construct and run one cost-gated Parallel research pass."""
 
 from __future__ import annotations
 
@@ -9,22 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
-from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, driver
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchRunParams,
     ResearchRunResult,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import (
-    propose_retargets,
-)
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     EnrichmentProgress,
     ResearchOutcome,
     ResearchSelection,
-    RetargetRunResult,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
     select_research,
@@ -32,23 +26,18 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.shared.common import DEEP_RESEARCH_DIR
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
 
 
 @dataclass(frozen=True)
 class ReconcileDeepResearch:
-    """One select -> consent -> research -> judge stage."""
+    """One select -> consent -> research stage."""
 
     db: Db
     out_dir: Path = DEEP_RESEARCH_DIR
     processor: str = config.DEFAULT_PROCESSOR
-    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
     budget: float = 0.0
     approve: bool = False
     dry_run: bool = False
-    include_plausibly_absent: bool = False
-    model: str = DEFAULT_MODEL
-    reasoning_effort: str = "medium"
     on_progress: Callable[[EnrichmentProgress], None] | None = None
 
     def _outcome(
@@ -58,7 +47,6 @@ class ReconcileDeepResearch:
         started: float,
         *,
         counts: ReceiptCounts | None = None,
-        proposals: RetargetRunResult | None = None,
         errors: tuple[str, ...] = (),
         reason: str | None = None,
         message: str | None = None,
@@ -70,7 +58,6 @@ class ReconcileDeepResearch:
             plan=plan,
             budget_usd=self.budget,
             elapsed_ms=int((time.monotonic() - started) * 1000),
-            proposals=proposals,
             errors=errors,
             reason=reason,
             message=message,
@@ -105,8 +92,6 @@ class ReconcileDeepResearch:
         plan = select_research(
             self.db,
             processor=self.processor,
-            confirm_threshold=self.confirm_threshold,
-            include_plausibly_absent=self.include_plausibly_absent,
         )
         self.out_dir.mkdir(parents=True, exist_ok=True)
         total = plan.deduped_total
@@ -123,25 +108,6 @@ class ReconcileDeepResearch:
                 counts,
                 phase_done=local.completed,
                 phase_total=local.total,
-            )
-
-        def heartbeat(done: int, judge_total: int) -> None:
-            self._progress(
-                "judging_retargets",
-                ReceiptCounts.create(total=total, completed=research_completed),
-                phase_done=done,
-                phase_total=judge_total,
-            )
-
-        def propose() -> RetargetRunResult:
-            return propose_retargets(
-                plan.eligible,
-                db=self.db,
-                owner_block=owner_background(self.db),
-                model=self.model,
-                effort=self.reasoning_effort,
-                confirm_threshold=self.confirm_threshold,
-                heartbeat=heartbeat,
             )
 
         if not plan.eligible:
@@ -182,26 +148,11 @@ class ReconcileDeepResearch:
             )
 
         if not plan.pending:
-            proposals = propose()
-            if proposals.judge_errors:
-                error = (
-                    "identity judge returned no verdict for "
-                    f"{proposals.judge_errors} proposal(s)"
-                )
-                return self._outcome(
-                    ReceiptStatus.FAILED,
-                    plan,
-                    started,
-                    counts=ReceiptCounts(total, total, 0, 0),
-                    proposals=proposals,
-                    errors=(error,),
-                )
             return self._outcome(
                 ReceiptStatus.REUSED,
                 plan,
                 started,
                 counts=ReceiptCounts(total, total, 0, 0),
-                proposals=proposals,
                 reason="all eligible people already have completed Parallel research",
             )
 
@@ -239,14 +190,7 @@ class ReconcileDeepResearch:
             flush=True,
         )
 
-        proposals = propose() if research.usable else None
         errors = research.errors
-        if proposals and proposals.judge_errors:
-            errors = (
-                *errors,
-                "identity judge returned no verdict for "
-                f"{proposals.judge_errors} proposal(s)",
-            )
         complete = research.complete and not errors
         failed = 0 if complete else max(0, total - research_completed)
         return self._outcome(
@@ -258,6 +202,5 @@ class ReconcileDeepResearch:
                 completed=research_completed,
                 failed=failed,
             ),
-            proposals=proposals,
             errors=errors,
         )

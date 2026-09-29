@@ -109,6 +109,21 @@ class LinkedinProfileNormalizerTests(unittest.TestCase):
         self.assertEqual(profile["experiences"][0]["title"], "Engineer")
         self.assertEqual(profile["experiences"][0]["company_name"], "Widgets")
 
+    def test_native_profile_without_jobs_preserves_identity_and_education(self) -> None:
+        for education in ([], [{"schoolName": "Example University"}]):
+            with self.subTest(education=education):
+                payload = {
+                    "id": "123", "username": "jordan-bravo",
+                    "firstName": "Jordan", "lastName": "Bravo",
+                    "headline": "Student", "educations": education,
+                }
+                profile = normalize_linkedin_profile(payload)
+                self.assertTrue(profile["success"])
+                self.assertEqual(profile["full_name"], "Jordan Bravo")
+                self.assertEqual(profile["headline"], "Student")
+                self.assertEqual(profile["experiences"], [])
+                self.assertEqual(len(profile["education"]), len(education))
+
     def test_linkedin_native_full_positions(self) -> None:
         payload = {
             "firstName": "Native",

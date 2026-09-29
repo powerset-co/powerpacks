@@ -15,6 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.share_views import person_labels, share_decisions
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
 from packs.ingestion.primitives.share.labels import (
     share_decision,
     ACTIVE_P,
@@ -303,7 +304,8 @@ class ShareNodeTests(unittest.TestCase):
         self.people_csv = _write_people(self.root)
 
     def _evidence(self, db: Db) -> ShareEvidence:
-        return ShareEvidence(db, people_csv=self.people_csv)
+        db.replace_imported_people(tuple(row.index_row for row in read_imported_people(self.people_csv)))
+        return ShareEvidence(db)
 
     def _run(self, db: Db) -> dict:
         # The canonical inputs are declared external artifacts; the explicit db
@@ -348,7 +350,8 @@ class EvidenceJoinTests(unittest.TestCase):
 
     def test_facts_dossier_and_messages_join_through_the_parent_id(self) -> None:
         db = _seed_store(self.root, save_labels=True)
-        people = ShareEvidence(db, people_csv=self.people_csv).load()
+        db.replace_imported_people(tuple(row.index_row for row in read_imported_people(self.people_csv)))
+        people = ShareEvidence(db).load()
         by_id = {person.person_id: person for person in people}
         self.assertEqual(by_id["person-a"].facts["canonical_name"], "Jordan Bravo")
         self.assertIn("Storage work", by_id["person-a"].dossier)
@@ -359,8 +362,9 @@ class EvidenceJoinTests(unittest.TestCase):
 
     def test_absent_cells_stay_absent(self) -> None:
         db = _seed_store(self.root, save_labels=True)
+        db.replace_imported_people(tuple(row.index_row for row in read_imported_people(self.people_csv)))
         casey = next(
-            person for person in ShareEvidence(db, people_csv=self.people_csv).load()
+            person for person in ShareEvidence(db).load()
             if person.person_id == "person-b"
         )
         self.assertEqual(casey.public_identifier, "casey-delta")

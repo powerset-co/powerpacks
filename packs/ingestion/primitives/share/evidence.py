@@ -15,7 +15,6 @@ Changelog:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
@@ -27,8 +26,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ParentSnapshotRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
-from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE_CSV
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import stored_imported_people
 from packs.ingestion.primitives.share.models import NO_MESSAGES, MessageStats, PersonEvidence
 
 
@@ -74,9 +72,8 @@ def _messages(bundle: dict[str, Any] | None) -> MessageStats:
 class ShareEvidence:
     """The roster joined to the canonical store, parsed once at the boundary."""
 
-    def __init__(self, db: Db, *, people_csv: Path = DEFAULT_PEOPLE_CSV) -> None:
+    def __init__(self, db: Db) -> None:
         self.db = db
-        self.people_csv = Path(people_csv)
 
     def load(self) -> list[PersonEvidence]:
         parent_of_person = {row.person_id: row.parent_id for row in queries.people(self.db)}
@@ -89,7 +86,7 @@ class ShareEvidence:
             children.setdefault(parent_id, []).append(person_id)
 
         people: list[PersonEvidence] = []
-        for imported in read_imported_people(self.people_csv):
+        for imported in stored_imported_people(self.db):
             identities = {imported.person_id, *imported.superseded_person_ids}
             parent_ids = {parent_of_person[key] for key in identities if key in parent_of_person}
             for parent_id in parent_ids:

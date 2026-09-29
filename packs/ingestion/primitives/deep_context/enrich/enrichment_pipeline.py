@@ -13,12 +13,13 @@ from typing import Callable
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
-    EnrichmentProgress,
-)
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import EnrichmentProgress
+from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.coordinator import (
     ReconcileDeepResearch,
 )
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import judge_mapped_candidates
+from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
@@ -33,7 +34,7 @@ from packs.ingestion.primitives.deep_context.shared.common import ENRICH_MANIFES
 
 
 class EnrichmentPipeline:
-    """One approved research -> synthetic -> profile chain."""
+    """One approved research -> profile -> judge -> synthetic chain."""
 
     def __init__(
         self,
@@ -110,8 +111,6 @@ class EnrichmentPipeline:
             approve=True,
             budget=round(budget, 2),
             on_progress=on_progress,
-            confirm_threshold=self.confirm_threshold,
-            include_plausibly_absent=True,
         ).run()
         if research.status.value not in RECONCILE_SUCCESS_STATUSES:
             detail = "; ".join(research.errors) or research.message or research.reason
@@ -119,13 +118,22 @@ class EnrichmentPipeline:
                 f"research stopped with status {research.status.value}"
                 f"{f': {detail}' if detail else ''}"
             )
-        AssembleSyntheticProfile(db=self.db).run()
         profiles = PrefetchProfiles(db=self.db, fetch=True).run()
         if profiles.status != "completed":
             raise RuntimeError(
                 f"profile prefetch stopped with status {profiles.status}"
                 f"{f': {profiles.note}' if profiles.note else ''}"
             )
+        judged = judge_mapped_candidates(
+            self.db, model=DEFAULT_MODEL, effort="medium",
+            confirm_threshold=self.confirm_threshold,
+            heartbeat=lambda done, total: on_progress(EnrichmentProgress(
+                "judging_retargets", ReceiptCounts.create(total=total, completed=done), done, total,
+            )),
+        )
+        if judged.judge_errors:
+            raise RuntimeError(f"identity judge returned no verdict for {judged.judge_errors} candidate(s)")
+        AssembleSyntheticProfile(db=self.db).run()
 
     def start(self, total: int, budget: float, request_fingerprint: str) -> bool:
         if not self._running.acquire(blocking=False):

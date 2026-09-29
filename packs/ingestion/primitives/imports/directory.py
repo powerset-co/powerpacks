@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Shared directory persistence and pure people-row merge helpers.
+"""The `directory.csv` row shape and pure people-row merge helpers.
 
-Deep Context persists reviewed identities here; the shared fan-in reads them.
-Source imports reuse metadata unions without matching or updating the directory.
+The fan-in reads directory rows; source imports reuse the metadata unions.
 
 Changelog:
+  2026-09-28: the Deep Context review writer (`replace_directory_source_rows`
+    and its row normalizer/ranker) is gone; realize exports reviewed identities
+    straight from SQLite.
   2026-09-23 (typed rows): `normalized_directory_row` is the ONE boundary parse of
     a source/review row into the declared `DirectoryRow` and returns that instance;
     `merge_directory_rows` compares typed rows (rank from
@@ -29,17 +31,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.schemas.people_schema import (  # noqa: E402
-    extract_public_identifier,
-    normalize_linkedin_url,
-    parse_jsonish,
-)
-
-from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
-    normalize_name_key,
-    normalize_phone,
-)
-from packs.ingestion.primitives.discover.common import read_csv_rows, write_csv_rows  # noqa: E402
+from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import row_model_for  # noqa: E402
 
 DIRECTORY_COLUMNS = [
@@ -64,15 +56,7 @@ DIRECTORY_COLUMNS = [
 ]
 # The declared row shape of `directory.csv`, generated FROM DIRECTORY_COLUMNS so
 # field order stays the on-disk header order and the column list keeps one home.
-# `_priority` is deliberately absent: a row's rank is derived from its `source`
-# by `directory_source_priority`, so it never becomes a column.
 DirectoryRow = row_model_for("DirectoryRow", DIRECTORY_COLUMNS)
-
-# The row SLICE each source's writer owns, as declared by `Artifact.owns_rows_where`
-# (declaration only — the graph checker compares these strings, never evaluates
-# them). directory.csv is a cross-source aggregate: every writer writes every
-# column, of its own source's rows only, so columns are the wrong ownership axis.
-DEEP_CONTEXT_DIRECTORY_ROWS = "source == 'deep_context_review'"
 
 
 def parse_confidence(value: Any, default: float = 0.0) -> float:
@@ -88,111 +72,6 @@ def parse_confidence(value: Any, default: float = 0.0) -> float:
         return parsed / 100.0 if parsed > 1 else parsed
     except ValueError:
         return default
-
-
-def directory_source_priority(source: str, url_col: str) -> int:
-    if source == "deep_context_review":
-        return 100
-    if source == "directory":
-        return 85
-    if url_col in {"confirmed_linkedin_url", "human_confirmed_linkedin"}:
-        return 100
-    if source == "confirmed_candidates":
-        return 90
-    if source == "linkedin_resolutions":
-        return 88
-    if source == "parallel_enriched":
-        return 80
-    if url_col in {"final_linkedin_url", "linkedin_url"}:
-        return 70
-    if url_col in {"pass1_linkedin_url", "llm_selected_linkedin"}:
-        return 60
-    return 50
-
-
-def directory_identity_key(email: str, phone: str, name: str, public_identifier: str, source_key: str = "") -> str:
-    if email:
-        return f"email:{email.lower()}"
-    if phone:
-        return f"phone:{normalize_phone(phone)}"
-    if source_key:
-        return f"source:{source_key.strip().lower()}"
-    name_key = normalize_name_key(name)
-    if name_key and public_identifier:
-        return f"name:{name_key}|linkedin:{public_identifier}"
-    return ""
-
-
-def gmail_account_from_source_key(source_key: str) -> str:
-    if not source_key.startswith("gmail:"):
-        return ""
-    parts = source_key.split(":", 3)
-    if len(parts) < 2:
-        return ""
-    return parts[1].strip().lower()
-
-
-def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> DirectoryRow:
-    """Parse a source/review row into the declared `DirectoryRow` — the ONE place
-    the tolerant source-column names (`primary_email`, `display_name`, ...) are
-    read. A row with no derivable `source_key` comes back with `source_key == ""`,
-    which the callers treat as unkeyable."""
-    linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
-    public_identifier = extract_public_identifier(linkedin_url)
-    email = (str(row.get("email") or row.get("primary_email") or "").strip().lower())
-    phone = normalize_phone(row.get("phone") or row.get("primary_phone") or "")
-    name = str(row.get("name") or row.get("matched_name") or row.get("display_name") or row.get("full_name") or "").strip()
-    source_key = str(row.get("source_key") or "").strip()
-    if not source_key:
-        source_key = directory_identity_key(email, phone, name, public_identifier)
-    if not source_key:
-        return DirectoryRow()
-    confidence = parse_confidence(row.get("confidence"), 0.0)
-    status = str(row.get("status") or ("found" if public_identifier else "observed")).strip().lower()
-    source_name = str(row.get("source") or source or "directory")
-    source_account = str(row.get("source_account") or row.get("account_email") or "")
-    if not source_account and (source_name == "gmail_msgvault" or source_key.startswith("gmail:")):
-        source_account = gmail_account_from_source_key(source_key)
-    if not source_account and source_name == "messages":
-        source_account = str(row.get("source_channels") or "messages")
-    return DirectoryRow(
-        source=source_name,
-        source_key=source_key,
-        source_account=source_account,
-        source_id=str(row.get("source_id") or ""),
-        source_channels=str(row.get("source_channels") or ""),
-        status=status,
-        email=email,
-        phone=phone,
-        name=name,
-        linkedin_url=linkedin_url,
-        public_identifier=public_identifier,
-        confidence=f"{confidence:.2f}",
-        matched_name=str(row.get("matched_name") or name),
-        matched_headline=str(row.get("matched_headline") or ""),
-        evidence=str(row.get("evidence") or ""),
-        reasoning=str(row.get("reasoning") or ""),
-        source_artifact=str(row.get("source_artifact") or source_artifact),
-        updated_at=str(row.get("updated_at") or updated_at),
-    )
-
-
-def merge_directory_rows(rows: list[DirectoryRow], existing_by_key: dict[str, DirectoryRow] | None = None) -> list[dict[str, str]]:
-    best: dict[str, DirectoryRow] = dict(existing_by_key or {})
-    for row in rows:
-        if not row.source_key:
-            continue
-        key = row.source_key
-        confidence = parse_confidence(row.confidence, 0.0)
-        priority = directory_source_priority(row.source, "")
-        if key in best:
-            current = best[key]
-            current_confidence = parse_confidence(current.confidence, 0.0)
-            current_priority = directory_source_priority(current.source, "")
-            if (confidence, priority) <= (current_confidence, current_priority):
-                continue
-        best[key] = row
-    return [best[key].to_row() for key in sorted(best)]
 
 
 def merge_jsonish_lists(current: str, incoming: str) -> str:
@@ -232,25 +111,3 @@ def union_alias_list(current: str, incoming: str, primary_current: str = "", pri
             if value and value not in seen:
                 seen.append(value)
     return json.dumps(seen, ensure_ascii=False) if seen else ""
-
-
-def replace_directory_source_rows(
-    directory_csv: Path,
-    source: str,
-    rows: list[dict[str, str]],
-) -> dict[str, Any]:
-    """Replace one writer-owned source slice without touching other sources."""
-    existing: dict[str, DirectoryRow] = {}
-    if directory_csv.exists():
-        for row in read_csv_rows(directory_csv)[1]:
-            normalized = normalized_directory_row(row, source="directory")
-            if normalized.source_key and normalized.source != source:
-                existing[normalized.source_key] = normalized
-    merged = merge_directory_rows([normalized_directory_row(row) for row in rows], existing)
-    write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
-    return {
-        "directory_csv": str(directory_csv),
-        "existing_rows": len(existing),
-        "imported_rows": len(rows),
-        "rows": len(merged),
-    }

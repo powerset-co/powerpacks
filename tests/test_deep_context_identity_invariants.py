@@ -25,9 +25,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.realize.persist_review_identities import (
-    PersistReviewIdentities,
-)
+from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.shared.csv_io import CsvIO
 from deep_context_sqlite_test_helpers import query
 
@@ -166,19 +165,17 @@ class IdentityInvariantTest(unittest.TestCase):
                 )
             )
         db.project_rows(tuple(rows))
-        directory = self.base / "directory.csv"
+        db.replace_imported_people(tuple(
+            PeopleRow(id=f"child-{index}", primary_email=f"child-{index}@example.test") for index in range(5)
+        ))
+        out_dir = self.base / "merged"
 
-        def exported_identifiers() -> set[str]:
-            PersistReviewIdentities(directory_csv=directory, db=db).run()
-            return {
-                row["public_identifier"]
-                for row in CsvIO.read_dict_rows(directory)
-                if row["source"] == "deep_context_review"
-            }
+        def exported_identifiers() -> list[str]:
+            ExportPeople(db=db, out_dir=out_dir).run()
+            return [row["public_identifier"] for row in CsvIO.read_dict_rows(out_dir / "people.csv")]
 
         db.decide_identity("original", "verify")
-        self.assertEqual(exported_identifiers(), {"original"})
-        self.assertEqual(len(CsvIO.read_dict_rows(directory)), 5)
+        self.assertEqual(exported_identifiers(), ["original"])
 
         db.decide_identity(
             "original",
@@ -186,12 +183,10 @@ class IdentityInvariantTest(unittest.TestCase):
             replacement_url="https://www.linkedin.com/in/replacement",
             replacement_public_identifier="replacement",
         )
-        self.assertEqual(exported_identifiers(), {"replacement"})
-        self.assertEqual(len(CsvIO.read_dict_rows(directory)), 5)
+        self.assertEqual(exported_identifiers(), ["replacement"])
 
         db.decide_identity("original", None)
-        self.assertEqual(exported_identifiers(), {"original"})
-        self.assertEqual(len(CsvIO.read_dict_rows(directory)), 5)
+        self.assertEqual(exported_identifiers(), ["original"])
         self.assert_invariants(db)
 
     def test_decide_then_merge_matches_merge_then_decide(self) -> None:

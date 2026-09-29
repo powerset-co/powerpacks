@@ -194,7 +194,9 @@ def detect_linkedin_schema(data: dict[str, Any]) -> str:
         return "rapidapi_parsed"
     if any(key in data for key in ("profile", "profile_url", "profileURL")) and any(key in data for key in ("firstName", "lastName", "fullName")):
         return "rapidapi_converted"
-    if any(key in data for key in ("fullPositions", "position")):
+    if any(key in data for key in ("fullPositions", "position")) or (
+        "username" in data and any(key in data for key in ("firstName", "lastName"))
+    ):
         return "linkedin_native"
     return "unknown"
 

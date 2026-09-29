@@ -262,7 +262,7 @@ class SynthesisJevTests(unittest.TestCase):
             self._mark_facts_cached(root, node)
             owner = OwnerProfile("Mailbox Owner")
             bundles = selection.effective_parent_bundles(database)
-            headlines = runner.parent_headlines(database, people_csv)
+            headlines = runner.parent_headlines(database)
             self.assertEqual(headlines, {"p1": "CEO @ Example Labs"})
 
             with patch.object(runner.jev_worth, "estimate", return_value=WorthEstimate(cached=True)):
@@ -335,12 +335,15 @@ class SynthesisJevTests(unittest.TestCase):
                 )
             )
         database.project_rows(tuple(rows))
+        if people_csv is not None:
+            from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
+
+            database.replace_imported_people(tuple(row.index_row for row in read_imported_people(people_csv)))
         (root / "raw").mkdir(exist_ok=True)
         node = SynthesizePersonContext(
             db=database,
             raw_dir=root / "raw",
             out_dir=root / "facts",
-            people_csv=people_csv,
             concurrency=1,
         )
         return node, database

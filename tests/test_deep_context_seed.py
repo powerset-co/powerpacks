@@ -170,7 +170,7 @@ class SeedFixture(unittest.TestCase):
         return db
 
     def seed(self, db: Db):
-        return Seed(db=db, legacy_root=self.legacy, people_csv=self.people_csv).run()
+        return Seed(db=db, legacy_root=self.legacy).run()
 
     def readiness(self, db: Db | None = None):
         check = "packs.ingestion.primitives.deep_context.shared.check_readiness"
@@ -262,6 +262,96 @@ class SeedTests(SeedFixture):
         self.assertEqual((manifest.research_carried, manifest.research_unmatched), (1, 0))
         self.assertIsNotNone(carried_over_at(db))
         self.assertEqual(db.query("SELECT value FROM meta WHERE key=?", (SEEDED_AT_KEY,))[0]["value"], manifest.seeded_at)
+
+    def test_seed_associates_research_and_profile_with_current_candidate(self) -> None:
+        cache = self.legacy / "network-import/profile_cache_v2"
+        cache.mkdir(parents=True)
+        (cache / "morgan-delta.json").write_text(json.dumps({
+            "public_identifier": "morgan-delta",
+            "linkedin_url": "https://www.linkedin.com/in/morgan-delta",
+            "raw_response": {"name": "Morgan Delta"},
+            "normalized_profile": {
+                "success": True, "public_identifier": "morgan-delta",
+                "experiences": [{"title": "Engineer", "company_name": "Example"}],
+            },
+        }))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        research = db.query("SELECT candidate_key FROM research WHERE status='complete'")[0]
+        self.assertTrue(research["candidate_key"])
+        profile = db.query("SELECT candidate_key FROM artifacts WHERE kind='profile'")[0]
+        self.assertEqual(profile["candidate_key"], research["candidate_key"])
+        self.assertEqual(manifest.profiles_carried, 1)
+
+    def test_human_retarget_settles_research_candidate_before_judging(self) -> None:
+        research = self.legacy / "deep-context/reconcile/deep-research/morgan-delta-parent/00_parallel_result.json"
+        payload = json.loads(research.read_text())
+        payload["content"]["linkedin_url"] = "https://www.linkedin.com/in/morgan-new"
+        research.write_text(json.dumps(payload))
+        review = self.legacy / "network-import/overrides/review.csv"
+        with review.open("a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=REVIEW_COLUMNS).writerow({
+                "public_identifier": "candidate:email:morgan@example.com",
+                "person_id": "person-morgan", "action": "retarget", "approved": "yes",
+                "new_linkedin_url": "https://www.linkedin.com/in/morgan-new",
+                "source": "deep-context-review", "updated_at": "2026-09-06T00:00:00Z",
+            })
+        db = self.cold_store()
+        self.seed(db)
+        parent_id = next(row.parent_id for row in queries.people(db) if row.person_id == "person-morgan")
+        links = db.query("SELECT row_key, decision_approved FROM links WHERE parent_id=? AND kind!='synthetic'", (parent_id,))
+        self.assertTrue(all(row["decision_approved"] in ("yes", "no") for row in links))
+        from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates
+        self.assertFalse(any(row.parent_id == parent_id for row in judge_candidates(db)))
+
+    def test_seeded_no_match_still_needs_synthetic_assembly(self) -> None:
+        from packs.ingestion.primitives.deep_context.db.identity_views import unassembled_research
+        from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+        from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import AssembleSyntheticProfile
+
+        research = self.legacy / "deep-context/reconcile/deep-research/morgan-delta-parent/00_parallel_result.json"
+        payload = json.loads(research.read_text())
+        payload["content"]["linkedin_url"] = ""
+        payload["content"]["location_city"] = "Oakland"
+        research.write_text(json.dumps(payload))
+        (self.legacy / "deep-context/facts/person-morgan.jsonl").write_text(
+            _facts_record("Morgan Delta", "2026-09-02T00:00:00+00:00")
+        )
+        db = self.cold_store()
+        self.seed(db)
+        self.assertTrue(unassembled_research(db))
+        self.assertEqual(workflow_state(db).next_action, "enrich")
+        AssembleSyntheticProfile(db=db).run()
+        self.assertFalse(unassembled_research(db))
+
+    def test_seed_reuses_link_for_equivalent_research_url(self) -> None:
+        research = self.legacy / "deep-context/reconcile/deep-research/morgan-delta-parent/00_parallel_result.json"
+        payload = json.loads(research.read_text())
+        payload["content"]["linkedin_url"] = "https://linkedin.com/in/morgan-delta/"
+        research.write_text(json.dumps(payload))
+        people = list(CsvIO.read_dict_rows(self.people_csv))
+        next(row for row in people if row["id"] == "person-morgan")["linkedin_url"] = \
+            "https://www.linkedin.com/in/morgan-delta"
+        CsvIO.write_dict_rows(self.people_csv, list(people[0]), people)
+        db = self.cold_store()
+        self.seed(db)
+        parent_id = next(row.parent_id for row in queries.people(db) if row.person_id == "person-morgan")
+        links = db.query("SELECT row_key FROM links WHERE parent_id=? AND kind!='synthetic'", (parent_id,))
+        self.assertEqual(len(links), 1)
+
+    def test_retired_alias_uses_observed_url_with_trailing_slash(self) -> None:
+        review = self.legacy / "network-import/overrides/review.csv"
+        with review.open("a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=REVIEW_COLUMNS).writerow({
+                "public_identifier": "message-linkedin:jordan-bravo", "person_id": "person-jordan",
+                "linkedin_url": "https://linkedin.com/in/jordan-bravo/", "action": "detach",
+                "approved": "yes", "source": "deep-context-review",
+                "updated_at": "2026-09-06T00:00:00Z",
+            })
+        db = self.cold_store()
+        manifest = self.seed(db)
+        self.assertEqual(db.query("SELECT decision_action FROM links WHERE row_key='jordan-bravo'")[0][0], "detach")
+        self.assertGreaterEqual(manifest.identity_carried, 2)
 
     def test_a_second_seed_is_refused_and_an_empty_store_is_refused(self) -> None:
         empty = Db(self.db_path)

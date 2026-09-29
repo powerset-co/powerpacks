@@ -184,9 +184,8 @@ usage: bin/deep-context <command> [args]
                staged journey without re-spending (free; dry run by default,
                --apply writes after .bkup backups)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
-  apply-retargets           project approved retargets -> retarget-people.csv
-  persist-review-identities persist approved real LinkedIn identities -> directory.csv
-  realize      fan-in merge of the per-source import people files (free, local)
+  realize      apply reviewed LinkedIns to the SQLite roster and export
+               merged/people.csv for indexing (free, local, no provider calls)
   share        write the person_labels + share tables for every merged person
                from their worth and the JEV labels synthesize saved (free, local).
                `review people` then opens the page where you tag people share
@@ -392,29 +391,12 @@ case "$cmd" in
     # Parallel.ai run needs an estimate, explicit approval, and approved budget.
     "${PY[@]}" "$PKG.enrich.research_reconcile.reconcile_deep_research" "$@"
     ;;
-  apply-retargets)
-    # Project re-attach rows for recorded `retarget` decisions -> retarget-people.csv.
-    # Cached profile data is optional here; provider access stays in stage 6.
-    # `realize` persists the reviewed identity mappings before fan-in.
-    "${PY[@]}" "$PKG.realize.apply_retargets" "$@"
-    ;;
-  persist-review-identities)
-    "${PY[@]}" "$PKG.realize.persist_review_identities" "$@"
-    ;;
   realize)
-    # Phase 4: durable reviewed identities -> directory.csv, then fan-in rebuilds
-    # merged/people.csv from source people files, each LinkedIn person filled from
-    # its cached profile. Profiles still missing are fetched through the Powerset
-    # gateway (cache-first) and the fan-in runs again so they carry them.
-    # Synthetic profiles remain deliberately separate.
-    "${PY[@]}" "$PKG.realize.persist_review_identities"
-    FAN_IN=(uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in
-            --people-csv .powerpacks/network-import/merged/people.csv)
-    "${FAN_IN[@]}" "$@"
-    "${PY[@]}" packs.ingestion.primitives.enrich.hydrate_merged
-    "${FAN_IN[@]}" "$@"
+    # Reviewed LinkedIns -> the final SQLite roster -> merged/people.csv. Reads
+    # only SQLite; profiles come from those already projected there.
+    "${PY[@]}" "$PKG.realize.export_people" "$@"
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
-    echo "people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
+    echo "people.csv exported from SQLite. Now rebuild search on Modal:" >&2
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;
   share)

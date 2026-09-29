@@ -174,8 +174,9 @@ class FreshInstallTests(unittest.TestCase):
     def _make_august_store(self) -> bytes:
         Db(self.db_path)
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
             conn.execute("INSERT INTO meta VALUES ('legacy_imported_at', '2026-08-19T00:00:00Z')")
-            for table in ("person_labels", "person_tags", "share"):
+            for table in ("person_labels", "person_tags", "share", "imported_people"):
                 conn.execute(f"DROP TABLE {table}")
         return self.db_path.read_bytes()
 
@@ -226,7 +227,7 @@ class FreshInstallTests(unittest.TestCase):
         before = self.db_path.read_bytes()
         for run in (self.readiness, self.ensure_parents):
             with self.subTest(stage=run.__name__):
-                with self.assertRaisesRegex(SchemaVersionError, "layout does not match schema version 1"):
+                with self.assertRaisesRegex(SchemaVersionError, "schema is 1, expected 2"):
                     run()
                 self.assertEqual(self.db_path.read_bytes(), before)
                 self.assertEqual(list(self.deep_context.glob("*.bkup-schema-*")), [])

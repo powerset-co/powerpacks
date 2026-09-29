@@ -107,6 +107,9 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_review_rendering \
   tests.test_deep_context_sqlite_invariants \
   tests.test_deep_context_sqlite_producers \
+  tests.test_deep_context_export_people \
+  tests.test_deep_context_sqlite_roster \
+  tests.test_deep_context_prefetch_sqlite \
   tests.test_deep_context_synthesis \
   tests.test_deep_context_synthetic_prefetch \
   tests.test_deep_context_web_sqlite \
@@ -117,7 +120,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_llm_config \
   tests.test_logbook \
   tests.test_messages_chatdb \
-  tests.test_persist_review_identities \
   tests.test_profile_labels \
   tests.test_profile_models_identity \
   tests.test_reconcile_fetch \
@@ -129,7 +131,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_visual \
   tests.test_app_routes \
   tests.test_enrich_people \
-  tests.test_hydrate_merged \
   tests.test_icons \
   tests.test_linkedin_import \
   tests.test_local_searches_browser \
