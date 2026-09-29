@@ -133,6 +133,7 @@ class HistoryDepthRow:
 
 
 def read_history_depth_results(path: Path) -> dict[str, HistoryDepthRow]:
+    """Last run's rows keyed by chat_ref; empty when no `results.csv` exists yet."""
     if not path.exists():
         return {}
     with path.open(newline="", encoding="utf-8") as handle:
@@ -144,6 +145,8 @@ def read_history_depth_results(path: Path) -> dict[str, HistoryDepthRow]:
 
 
 def read_history_depth_manifest(path: Path) -> PriorDepthManifest:
+    """Last run's manifest (policy version, source message total, DM-state
+    digest); a missing or unreadable file parses as empty, which forces a bootstrap."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -186,7 +189,10 @@ def history_depth_summary(
     source_dm_state_sha256: str,
     recovered_pre_sync_changes: bool,
 ) -> dict[str, Any]:
-    target_rows = [rows[target.chat_ref] for target in targets if target.chat_ref in rows]
+    """The stage manifest for this run's targets: `completed` counts targets in a
+    terminal outcome, the rest are `pending`; status is `completed` only when
+    none are pending, else `partial`."""
+    target_rows =[rows[target.chat_ref] for target in targets if target.chat_ref in rows]
     completed = sum(
         1 for row in target_rows if row.outcome in HISTORY_DEPTH_TERMINAL_OUTCOMES
     )

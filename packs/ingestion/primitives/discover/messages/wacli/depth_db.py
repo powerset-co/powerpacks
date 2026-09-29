@@ -1,4 +1,9 @@
-"""History-depth selection and measurement queries over ``wacli.db``."""
+"""History-depth selection and measurement queries over ``wacli.db``.
+
+A "direct chat" here is a non-group, non-newsletter chat whose JID ends in
+``@s.whatsapp.net`` or ``@lid``; only visible messages (not revoked, not
+deleted-for-me) are counted. Queries select counts and timestamps, never bodies.
+"""
 
 from __future__ import annotations
 
@@ -40,6 +45,7 @@ def history_depth_direct_predicates(
 
 
 def history_depth_chat_states(store: Path) -> dict[str, tuple[int, int]]:
+    """Each direct chat's (visible message count, latest ts); empty with no store."""
     if not (store / "wacli.db").exists():
         return {}
     conn = store_db.open_wacli_db(store)
@@ -68,6 +74,8 @@ def history_depth_chat_states(store: Path) -> dict[str, tuple[int, int]]:
 
 
 def history_depth_total_count(store: Path) -> int:
+    """All rows in `messages` (any chat, revoked included); 0 with no store.
+    The extractor treats 0 as a cold start."""
     if not (store / "wacli.db").exists():
         return 0
     conn = store_db.open_wacli_db(store)
@@ -90,6 +98,10 @@ def history_depth_targets(
     resume_refs: set[str] | None = None,
     exclude_jids: set[str] | None = None,
 ) -> list[HistoryDepthTarget]:
+    """Direct chats with at most `max_count` (20) visible messages and a latest
+    message at or after `active_since_ts` (3 years back), minus `exclude_jids`.
+    A chat is taken when `bootstrap`, when it is unfinished (`resume_refs`), or
+    when its (count, latest ts) differs from `before_states`. Newest first."""
     previous = before_states or {}
     resumable = resume_refs or set()
     excluded = exclude_jids or set()
@@ -134,6 +146,7 @@ def history_depth_targets(
 
 
 def history_depth_counts(store: Path, chat_jid: str) -> tuple[int, int, int]:
+    """(visible messages in this chat, all messages in the store, chat's latest ts)."""
     conn = store_db.open_wacli_db(store)
     try:
         where_sql = " AND ".join(["m.chat_jid = ?", *history_depth_visible_predicates(conn)])

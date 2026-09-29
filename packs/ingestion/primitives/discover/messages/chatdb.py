@@ -130,6 +130,7 @@ def apple_timestamp_to_iso(value: int | float | None) -> str | None:
         return None
     if raw <= 0:
         return None
+    # Above 1e10 is Apple nanoseconds, below 2e9 Apple seconds, else Unix seconds.
     if raw > 10_000_000_000:
         unix_ts = (raw / NS_PER_SEC) + APPLE_EPOCH_OFFSET
     elif raw < 2_000_000_000:
@@ -155,7 +156,8 @@ def phone_lookup_key(raw: str) -> str:
 
 
 def is_phone_identifier(identifier: str) -> bool:
-    """Whether an Apple handle is plausibly a phone rather than email/chat ID."""
+    """Whether an Apple handle is plausibly a phone rather than email/chat ID:
+    no ``@``, no ``urn:`` or ``chat`` prefix, and at least 7 digits."""
     if not identifier or "@" in identifier or identifier.startswith("urn:") or identifier.startswith("chat"):
         return False
     return len(re.sub(r"[^\d]", "", identifier)) >= 7

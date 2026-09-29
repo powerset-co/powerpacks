@@ -1,4 +1,11 @@
-"""Discovery metadata queries and per-contact aggregation for msgvault."""
+"""Discovery metadata queries and per-contact aggregation for msgvault.
+
+Reads only metadata tables (sources, participants, messages,
+message_recipients, and labels/message_labels when present); never bodies.
+aggregate_contacts streams one row per (message, recipient), groups the rows of
+one real message, counts each contact once per message and direction, and
+returns one record per contact address.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ from packs.ingestion.primitives.discover.gmail.msgvault.util import (
 
 
 def has_label_tables(con: sqlite3.Connection) -> bool:
+    """True when both `labels` and `message_labels` exist (Gmail label data)."""
     rows = con.execute(
         "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') "
         "AND name IN ('labels', 'message_labels')"
@@ -32,7 +40,14 @@ def iter_metadata(
     *,
     stream_order: bool = False,
 ) -> Iterator[sqlite3.Row]:
-    """Yield one row per message recipient from msgvault metadata tables."""
+    """Yield one row per message recipient from msgvault metadata tables.
+
+    Kept: recipients with a non-blank address on email-type (or untyped),
+    non-deleted messages of `account_email` (all accounts when blank). A message
+    carrying any `exclude_labels` label (case-insensitive) is dropped whole; with
+    no label tables nothing is label-filtered. `stream_order` sorts by canonical
+    message id (RFC822 id, then source id, then row id) so each message's rows
+    are contiguous."""
     labels = normalize_label_names(exclude_labels)
     label_filter = ""
     params: list[Any] = [account_email, account_email]
@@ -141,6 +156,8 @@ def iter_metadata(
 
 
 def list_accounts(con: sqlite3.Connection) -> list[dict[str, Any]]:
+    """List Gmail (or untyped) sources with a non-blank identifier, lowercased,
+    with their distinct message count, sorted by account email."""
     rows = con.execute("""
         SELECT s.id AS source_id, s.identifier AS account_email,
                s.display_name AS display_name, COUNT(DISTINCT m.id) AS message_count
@@ -199,7 +216,13 @@ class _ContactAccumulator:
 def _fold_msgvault_message(
     message: _MessageMetadata, records: dict[str, _ContactAccumulator], account_filter: str,
 ) -> None:
-    """Count each canonical message once per contact and direction."""
+    """Count each canonical message once per contact and direction.
+
+    Sent = the message has Gmail's SENT label (without label tables: the account
+    is a sender, or there is no sender but a to/cc/bcc recipient). A sent message
+    counts for its to/cc/bcc recipients; any other message counts as received
+    for its sender. Group = more than one address other than the account on the
+    message, else 1:1. The account's own address is never counted."""
     source_account = message.source_account
     if account_filter and source_account != account_filter:
         return
@@ -268,6 +291,13 @@ def aggregate_contacts(con: sqlite3.Connection, account_email: str = "", exclude
     folding one message at a time instead of materializing all messages. Peak
     memory becomes O(unique contacts) + one buffered message instead of
     O(total messages). Output is byte-identical to the materialized path.
+
+    Each record carries sent/received/total counts split 1:1 vs group, thread
+    counts (distinct conversation_id), first/last message time, the most
+    frequent display name, and `automated_filtered` from is_automated_email
+    (noreply/unsubscribe/bounce/notification-style keywords, support-ticket or
+    travel domains, 16+ hex chars, or a long low-vowel local part). Sorted by
+    total_messages descending, then email. Nothing is dropped here.
     """
     account_filter = account_email.strip().lower()
     records: dict[str, _ContactAccumulator] = {}

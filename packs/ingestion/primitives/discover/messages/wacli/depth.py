@@ -114,6 +114,16 @@ def run_history_depth_stage(
     cold_start: bool = False,
     exclude_jids: set[str] | None = None,
 ) -> dict[str, Any]:
+    """Deepen recent shallow DMs once, within `time_budget_seconds` (6,300 s default).
+
+    - Unfinished rows from the last run become `gone` (chat vanished),
+      `out_of_scope` (excluded, or latest message older than 3 years), or
+      `completed_threshold` (now over `max_count`, 20 by default).
+    - Every recent short chat is selected (bootstrap) on a cold start, a first
+      run, a policy-version change, or when the last manifest's message total or
+      DM-state digest differs from this run's pre-sync state; otherwise only
+      unfinished chats and chats whose count/latest time changed in this sync.
+    Returns the stage summary also written to `manifest.json`."""
     if active_since_ts is None:
         active_since_ts = history_depth_cutoff_ts()
     results_path = out_dir / "results.csv"
@@ -347,6 +357,10 @@ def run_history_depth_stage(
             row.error_category = attempt.error_category
             row.updated_at = now_iso()
 
+            # Outcome, first rule wins: grew -> threshold/recovered/pending;
+            # retryable -> pending (threshold if now over max_count); answered with zero messages -> server_zero
+            # after `no_growth_limit` tries unless WhatsApp says more remain;
+            # other clean exit -> pending; non-retryable error -> terminal_error.
             if attempt.returncode == 0 and attempt.target_added > 0:
                 row.no_growth_attempts = 0
                 if attempt.after_count > max_count:

@@ -4,6 +4,18 @@
 Selected account people.csv files -> merge metadata by email -> people.csv +
 manifest.json. Identity matching and worth decisions belong to Deep Context.
 
+Flow (`GmailImport.execute`, run via `importer.py run [--force]`):
+  1. if `import/gmail/manifest.json` is current (same contract version and
+     discovery manifest path, every fingerprinted file unchanged) and no
+     `--force`, return it; nothing is rewritten
+  2. read the accounts listed under `children` in the discover manifest
+     (`discover/gmail/manifest.json` by default), sorted by account email
+  3. read each account's people.csv, key every row by its lowercased
+     `primary_email`, and merge rows sharing an email across accounts into one
+     candidate with id `candidate:email:<address>` (`merge_people.merge_group`)
+  4. write `import/gmail/people.csv` (full rewrite) and the import manifest;
+     with no accounts, people.csv is left untouched and the status is `skipped`
+
 Changelog:
   2026-09-23 (typed rows): account contacts are read as `PeopleRow` and handed to
     `merge_group` typed; the only raw `.get` left is the discovery children
@@ -46,7 +58,9 @@ class _Account:
 
 
 def _read_accounts(manifest_json: Path) -> tuple[_Account, ...]:
-    manifest = read_json(manifest_json, {})
+    """The accounts the discover manifest lists under `children`, sorted by email.
+    Only these accounts are imported."""
+    manifest =read_json(manifest_json, {})
     return tuple(sorted(
         (_Account(child["account_email"], Path(child["people_csv"])) for child in manifest.get("children", [])),
         key=lambda account: account.email,
@@ -54,7 +68,12 @@ def _read_accounts(manifest_json: Path) -> tuple[_Account, ...]:
 
 
 def _people_from_accounts(accounts: tuple[_Account, ...]) -> list[dict[str, str]]:
-    grouped: dict[str, list[PeopleRow]] = {}
+    """One candidate per lowercased email across all accounts, sorted by key.
+
+    Rows sharing an email are merged by `merge_group`: first non-empty value per
+    column, unioned lists, max per-channel interaction count (not the sum), newest
+    last_interaction. A row without a valid email aborts the import."""
+    grouped:dict[str, list[PeopleRow]] = {}
     for account in accounts:
         fields, rows = read_csv_rows(account.people_csv)
         if not {"primary_email", "interaction_counts"}.issubset(fields):
@@ -110,6 +129,8 @@ class GmailImport(Node):
         }
 
     def execute(self) -> GmailImportManifest:
+        """Rebuild `import/gmail/people.csv` unless the last import is current
+        (skipped check under `--force`); no discovered accounts -> `skipped`."""
         expected_input = {
             "pipeline_contract": GMAIL_IMPORT_CONTRACT,
             "discovery_manifest": str(self.manifest_json),

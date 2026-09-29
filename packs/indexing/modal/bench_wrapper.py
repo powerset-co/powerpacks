@@ -6,6 +6,9 @@ Usage: bench_wrapper.py <report.json> <command> [args...]
 Samples the child's /proc/<pid>/status VmRSS once per second and records
 resource.getrusage(RUSAGE_CHILDREN).ru_maxrss after exit. Exits with the
 child's exit code.
+
+run_indexing.py wraps both the processing pipeline and the DuckDB build with
+it, writing <run-vol>/bench-pipeline.json and <run-vol>/bench-duckdb.json.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ from pathlib import Path
 
 
 def read_rss_kb(pid: int) -> int:
+    """Current VmRSS of `pid` in KB; 0 when /proc is unreadable (process gone)."""
     try:
         for line in Path(f"/proc/{pid}/status").read_text().splitlines():
             if line.startswith("VmRSS:"):

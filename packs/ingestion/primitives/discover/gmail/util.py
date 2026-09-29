@@ -120,7 +120,12 @@ def _merge_rows(rows: Iterable[RowModel]) -> list[dict[str, str]]:
     `rows` are the declared `models.GmailContactRow` instances the caller validated
     the on-disk queue rows into (typing that class by name here would be an import
     cycle, so the parameter is the generic `RowModel`). Reads `to_row()`, so every
-    declared column is present and no field is probed by name. Returns CSV rows."""
+    declared column is present and no field is probed by name. Returns CSV rows.
+
+    Key = lowercased primary_email (else handle); rows with neither are dropped.
+    Per key: total_messages and thread_count are summed, the newest
+    last_interaction wins, the first non-empty name/company/type/source wins,
+    and account_emails/source_ids are unioned. Output is sorted by email."""
     keyed: dict[str, dict[str, str]] = {}
     for row in rows:
         fields = row.to_row()
@@ -155,6 +160,7 @@ def _merge_rows(rows: Iterable[RowModel]) -> list[dict[str, str]]:
 
 
 def _same_account_emails(left: Any, right: list[str]) -> bool:
+    """True when both account lists hold the same emails, ignoring order."""
     return sorted(_as_list(left)) == sorted(_as_list(right))
 
 
@@ -191,7 +197,8 @@ def gmail_discovery_merge_plan(
 
     Pure — every input is passed in, so the caller owns all filesystem reads and
     the parse of the prior manifest (`GmailManifestResume.from_document`).
-    `output_rows` is the row count of the existing contacts.csv (0 when the file
+    `output_rows` is the row count of the existing stage
+    linkedin_resolution_queue.csv (0 when the file
     is missing or header-only); `full_rerun_requested` is the caller's explicit
     rescan request (`--fresh`).
 
@@ -200,7 +207,7 @@ def gmail_discovery_merge_plan(
     GMAIL_CALCULATION_FULL_RECOUNT), so the children alone are always the new
     output and nothing on disk is preserved. Only the diagnostic `reason` varies,
     first match wins:
-      empty_output                    contacts.csv is missing or header-only.
+      empty_output                    the stage queue is missing or header-only.
       full_rerun_requested            the caller passed --fresh.
       calculation_version_changed     the rows on disk were computed under
                                       different interaction-counting rules.
@@ -250,6 +257,9 @@ def resolve_discovery_inputs(
     Precedence, highest first:
       1. explicit caller/CLI override (the keyword args here)
       2. discovery.config.json defaults (msgvault db default, sync query)
+    Today those defaults are ~/.msgvault/msgvault.db and "-category:social
+    -category:promotions -category:forums -category:updates", so msgvault never
+    downloads those four Gmail categories. Accounts are deduped in order.
     The account_emails list IS the selection — there is no accounts.json fallback,
     so an empty/None list resolves to no accounts selected. Only msgvault_db and
     sync_query have a config-default layer beneath the explicit override; callers

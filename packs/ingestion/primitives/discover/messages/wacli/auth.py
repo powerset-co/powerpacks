@@ -52,7 +52,9 @@ DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "1080
 
 
 def auth_status(store: Path) -> AuthStatus:
-    parsed = AuthStatus.from_payload(binary.wacli_json(store, ["auth", "status"], timeout=60))
+    """`wacli auth status` for the store. When unlinked, also reports the QR
+    page/PNG paths if they exist and the PNG's mtime as `qr_updated_at`."""
+    parsed =AuthStatus.from_payload(binary.wacli_json(store, ["auth", "status"], timeout=60))
     if parsed.authenticated:
         return parsed
     qr_page = str(DEFAULT_QR_HTML) if DEFAULT_QR_HTML.exists() else ""
@@ -92,6 +94,12 @@ class AuthRunResult:
 
 
 def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> AuthRunResult:
+    """Run `wacli auth`, redrawing the QR page on every new code (browser opened
+    once), until wacli exits or `timeout` passes. A `connected` event restarts
+    the timeout so the initial account download gets a full window.
+    Blocks when qrencode is missing, WhatsApp refuses new devices, or login
+    fails before connecting; fails when it connected but the download did not
+    finish."""
     if not shutil.which("qrencode"):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",

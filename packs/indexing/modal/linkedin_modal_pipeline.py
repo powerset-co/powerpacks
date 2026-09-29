@@ -23,6 +23,19 @@ Commands:
             auto-download. Emits onboarding-v2-format progress to
             .powerpacks/runs/setup-linkedin-modal/. Re-dropping an unchanged
             csv is a no-op.
+  import-linkedin
+            Importing only: upload Connections.csv, run run_linkedin.py in a
+            2-CPU / 4 GiB sandbox, poll its status.json, then download the
+            enriched people.csv to
+            .powerpacks/network-import/import/linkedin/people.csv (old copy
+            kept as .bkup). Progress goes to .powerpacks/runs/setup-linkedin-modal/.
+  index-people
+            Indexing only: upload a local people.csv to <operator>/input/,
+            run run_indexing.py (--enrich, --max-usd) in a 16-CPU / 16 GiB
+            sandbox, poll status.json, then download local-search.duckdb +
+            manifest.json to .powerpacks/search-index/ (old copies kept as
+            .bkup). Progress goes to .powerpacks/runs/setup-gmail-modal/.
+  preload   union-merge local cache payloads into the shared volume cache
   upload    push this operator's people.csv (--seed-cache bootstraps /data/cache)
   amplify   build the synthetic Jake-scale dataset in-sandbox (no paid calls)
   run       client-driven benchmark run (streams per-phase, exec per step)
@@ -72,7 +85,8 @@ def require_modal_credentials() -> None:
     """Fail with actionable guidance instead of an SDK auth traceback.
 
     We cannot provision Modal credentials locally, but we can say exactly what
-    to run.
+    to run. Passes when MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are both set, or
+    ~/.modal.toml exists.
     """
     if os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET"):
         return
@@ -90,6 +104,7 @@ APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
 # this default volume; outsiders cannot reach it. Inputs and runs remain
 # operator-prefixed; POWERPACKS_MODAL_VOLUME can select an isolated volume.
 VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing-v2")
+# Operator dir under /data/operators/; all-zeros when POWERPACKS_OPERATOR_ID is unset.
 DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", "00000000-0000-0000-0000-000000000000")
 
 REPO = Path(__file__).resolve().parents[3]
@@ -276,6 +291,7 @@ class PipelineProgress:
 
     def __init__(self, progress_dir: Path = PROGRESS_DIR, stages: list[dict] = PIPELINE_STAGES,
                  vertical: str = PIPELINE_VERTICAL) -> None:
+        """Start a fresh run: truncate events.jsonl and write status.json running."""
         self.run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         self.stages = stages
         self.vertical = vertical
@@ -304,6 +320,10 @@ class PipelineProgress:
 
     def event(self, stage_id: str, message: str, *, status: str = "running",
               progress: float | None = None, payload: dict | None = None) -> None:
+        """Append one event and update status.json for `stage_id`.
+
+        Default progress is (stage index) / (stage count) when completed, else
+        the previous stage's share. A failed event marks the whole run failed."""
         index = next((i for i, s in enumerate(self.stages) if s["id"] == stage_id), 0) + 1
         label = self.stages[index - 1]["label"]
         if progress is None:
@@ -335,12 +355,16 @@ class PipelineProgress:
         print(f"[{stage_id}] {message}", flush=True)
 
     def finish(self, result: dict) -> None:
+        """Mark the run completed at progress 1.0 with the result counts."""
         self.status |= {"status": "completed", "progress": 1.0, "result": result}
         self._write()
 
 
 def csv_connection_rows(path: Path) -> int:
-    """Count data rows in a LinkedIn export (skips the Notes preamble)."""
+    """Count data rows in a LinkedIn export (skips the Notes preamble).
+
+    Counts every non-blank line after the first line starting with "First Name,".
+    """
     count = 0
     seen_header = False
     with path.open(encoding="utf-8-sig", errors="replace") as handle:
@@ -370,6 +394,7 @@ def reset_run_status(vol: modal.Volume, label: str) -> None:
 
 
 def read_run_status(label: str) -> dict | None:
+    """The run's volume status.json; None when missing or not valid JSON."""
     vol = get_volume()
     path = run_vol_path(label).removeprefix("/data/") + "/status.json"
     try:
@@ -380,7 +405,10 @@ def read_run_status(label: str) -> dict | None:
 
 def watch_run(label: str, progress: PipelineProgress, stage_id: str, message_prefix: str,
               timeout_s: int = 7200) -> dict | None:
-    """Poll a sandbox run's volume status and mirror it into the local stage."""
+    """Poll a sandbox run's volume status and mirror it into the local stage.
+
+    Polls every 3 s; emits one event per phase change. Returns the payload once
+    status is completed or failed, or None after timeout_s (default 7200 s)."""
     deadline = time.time() + timeout_s
     last_phase = None
     while time.time() < deadline:
@@ -402,6 +430,11 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     Importing (run_linkedin.py: parse + RapidAPI enrich, always approved) ->
     Indexing (run_indexing.py: cache-replayed processing + duckdb) ->
     auto-download. Re-dropping an unchanged csv is a no-op.
+
+    "Unchanged" = the csv's sha256 equals <operator>/runs/last-input.sha and
+    --force is not set; the no-op still downloads the index if the local
+    local-search.duckdb is missing or empty. last-input.sha is written only
+    after a successful download.
     """
     csv_path = Path(args.csv).expanduser()
     if not csv_path.exists():
@@ -672,6 +705,7 @@ def cmd_process(args: argparse.Namespace) -> int:
 
 
 def wait_for_status(label: str, timeout_s: int = 7200) -> dict | None:
+    """Poll the run's status.json every 30 s until completed/failed; None on timeout."""
     vol = get_volume()
     # volume reads are relative to the volume root (no /data prefix)
     status_path = run_vol_path(label).removeprefix("/data/") + "/status.json"
@@ -721,6 +755,9 @@ def cmd_download(args: argparse.Namespace) -> int:
     The volume stays the durable home for ledger/records/enrichment caches
     (resume + incremental state); local search only needs local-search.duckdb
     plus manifest.json.
+
+    With --wait, returns 1 unless the run's status.json reaches "completed".
+    Returns 1 if either file is missing on the volume.
     """
     run_prefix = run_vol_path(args.label).removeprefix("/data/")
     if getattr(args, "wait", False):
@@ -909,6 +946,7 @@ def pipeline_cmd(people_csv: str, out_dir: str, artifacts: str) -> list[str]:
 
 
 def step_durations(ledger: dict) -> list[tuple[str, float | None]]:
+    """(step id, seconds since the previous step's updated_at) per ledger step."""
     rows: list[tuple[str, float | None]] = []
     prev = None
     for step in ledger.get("steps", []):

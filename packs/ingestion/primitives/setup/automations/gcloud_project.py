@@ -135,7 +135,11 @@ def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[s
     """Ensure a working gcloud login, re-running `gcloud auth login` when stale.
 
     When expected_account is set, a login under any other account is an
-    error — msgvault setup must run against the mailbox owner's project."""
+    error — msgvault setup must run against the mailbox owner's project.
+
+    The active login is reused when it matches (case-insensitive) and can
+    print an access token. A token error that is not a reauth error returns
+    error without logging in; otherwise `gcloud auth login` runs visibly."""
     if not shutil.which("gcloud"):
         return {"status": "error", "message": "gcloud not installed"}
     progress("Checking Google Cloud login...")
@@ -232,7 +236,11 @@ def create_gcloud_project(
     allow_fallback: bool = True,
     max_attempts: int = 4,
 ) -> dict[str, Any]:
-    """Create (or adopt) a gcloud project, retrying with fresh ids when taken."""
+    """Create (or adopt) a gcloud project, retrying with fresh ids when taken.
+
+    A project the active account can describe is adopted as is. An "already in
+    use" error retries with a random `local-msg-vault-<6 hex>` id, up to
+    max_attempts creates in total; a reauth error returns reauth_required."""
     project_id = validate_project_id(project_id)
     if not shutil.which("gcloud"):
         return {"status": "error", "message": "gcloud not installed"}

@@ -189,12 +189,21 @@ class MsgvaultSetup:
         )
 
     def needs_oauth_app(self) -> bool:
-        """True when no client secret was given and none is configured yet."""
+        """True when no client secret was given and config.toml lists none for any app."""
         if self.client_secret:
             return False
         return not msgvault_home.parse_client_secret_paths(msgvault_home.config_path(self.home))
 
     def run(self) -> dict[str, Any]:
+        """Run setup; returns ok, needs_user_action, or error.
+
+        1. Find or install msgvault; missing -> error.
+        2. Enable the Gmail API on the given or current gcloud project.
+        3. --client-secret given: validate, copy into the home, point
+           config.toml at it, save state; invalid -> error.
+        4. `init-db` and Codex MCP registration.
+        5. Still no client secret -> needs_user_action with manual steps.
+        6. --email given: `msgvault add-account`; failure -> error."""
         msgvault = msgvault_home.ensure_msgvault(self.install)
         if not msgvault["installed"]:
             return {"status": "error", "message": "msgvault is not installed.", "msgvault": msgvault}
@@ -310,6 +319,8 @@ class AccountAuthorization:
         )
 
     def run(self) -> dict[str, Any]:
+        """needs_user_action when config.toml lists no client secret for any app;
+        otherwise run `msgvault add-account` and return its status."""
         if not msgvault_home.parse_client_secret_paths(msgvault_home.config_path(self.home)):
             action = oauth_browser.build_user_action(None, self.email, self.app_name, self.home)
             return {"status": "needs_user_action", "message": action["message"], "action": action}

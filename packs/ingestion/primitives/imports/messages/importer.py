@@ -5,6 +5,15 @@ Flow: current-output check -> parse contacts -> floor -> write people.csv -> man
 Identity, worth, and person merging belong to Deep Context; the floor
 (`util.contact_floor_reason`) only drops contacts nobody could research.
 
+  1. if `import/messages/manifest.json` is current (same contract version and
+     contacts path, every fingerprinted file unchanged), return it untouched
+  2. no `.powerpacks/messages/contacts.csv` -> write a `failed` manifest
+     (`messages_contacts_missing`) naming the discover command; CLI exits 1
+  3. run every contact through the floor; a dropped contact is counted under
+     its reason in the manifest's `skipped` block
+  4. map each kept contact to a candidate row (`util.contact_to_person`) and
+     write `import/messages/people.csv` (full rewrite) plus the manifest
+
 Changelog:
   2026-09-25: restored the import floor deleted by #486; skips are counted by
     reason on the manifest's `skipped` block. Contract bumped to v8 so
@@ -111,7 +120,9 @@ class MessagesImport(Node):
         return payload
 
     def execute(self) -> MessagesImportManifest:
-        current = import_manifest_current(
+        """Rebuild `import/messages/people.csv` from contacts.csv unless the last
+        import is current; a missing contacts.csv records a `failed` manifest."""
+        current =import_manifest_current(
             self.source, self.manifest_input, import_dir=self.import_dir.parent,
         )
         if current:

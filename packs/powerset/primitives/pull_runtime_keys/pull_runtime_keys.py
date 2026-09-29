@@ -17,6 +17,22 @@ user's Auth0 bearer:
 Endpoints are read-only and never mint: a 404/403 means "not provisioned for
 this user" (an admin provisions out of band). Pulled values are written to
 .env (upsert, preserving other lines, mode 0600).
+
+What `pull` actually does:
+  1. API base = POWERSET_API_URL from the shell, else from .env, else the
+     hosted default.
+  2. Get a bearer by running `auth.py token --bearer-only` (refreshes an
+     expiring token); stop with "not signed in" if none comes back.
+  3. Fetch each of the 7 endpoints once (the two Modal keys share one) and
+     keep a key only when its endpoint answered ok with a non-empty field.
+  4. Upsert the kept keys into the repo-root .env; empty values never
+     overwrite.
+  5. Status: `ok` if all 8 keys arrived, `partial` if some were written,
+     `error` if none were written and an endpoint errored, else
+     `not_provisioned`. Exit 2 when nothing was written.
+
+`check` reads .env only and exits 2 if any of the 8 keys is empty.
+`refresh_update_keys` is the refresh `bin/update-powerpacks` imports and runs.
 """
 from __future__ import annotations
 
@@ -68,6 +84,7 @@ def emit(payload: dict) -> None:
 
 
 def _read_env_file(path: Path | None) -> dict[str, str]:
+    """Parse KEY=VALUE lines (skips blanks/comments, drops `export `, strips quotes)."""
     values: dict[str, str] = {}
     if path is None or not path.exists():
         return values
@@ -125,7 +142,11 @@ def _quote(value: str) -> str:
 
 
 def write_env(path: Path, updates: dict[str, str]) -> list[str]:
-    """Upsert keys, preserving comments/order/other keys. Mode 0600, atomic."""
+    """Upsert keys, preserving comments/order/other keys. Mode 0600, atomic.
+
+    Empty values are skipped, so they never blank an existing key. New keys are
+    appended after a blank line. Returns the keys actually written.
+    """
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     index: dict[str, int] = {}
     for i, line in enumerate(lines):
@@ -154,6 +175,7 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
+    """Fetch all 8 keys and upsert the non-empty ones (flow and status rule in the module docstring)."""
     env_path = Path(args.env_file)
     base = api_base(env_path)
     token = bearer_token(env_path)
@@ -197,7 +219,11 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
 
 def refresh_cross_encoder(env_path: Path, token: str | None = None) -> dict[str, str]:
-    """Refresh the gateway key on update; default CE on, retaining explicit opt-outs."""
+    """Refresh the gateway key on update; default CE on, retaining explicit opt-outs.
+
+    Writes POWERSET_API_KEY and POWERPACKS_CROSS_ENCODER_BETA (existing value,
+    else "1") only when the API returns a key; otherwise .env is untouched.
+    """
     preference = _read_env_file(env_path).get("POWERPACKS_CROSS_ENCODER_BETA")
     result = {"powerset_api_key_refresh": "not_signed_in",
               "cross_encoder": "enabled" if preference == "1" else "disabled"}
@@ -219,7 +245,12 @@ def refresh_cross_encoder(env_path: Path, token: str | None = None) -> dict[str,
 
 
 def refresh_update_keys(env_path: Path) -> dict[str, str]:
-    """Refresh CE and the shared credentials, and fill a missing TypeSafe key, with one login."""
+    """Refresh CE and the shared credentials, and fill a missing TypeSafe key, with one login.
+
+    Signed out: nothing is written. Signed in: POWERSET_API_KEY, TURBOPUFFER_API_KEY
+    and DATABASE_URL are overwritten with the API's values; TYPESAFE_API_KEY is
+    fetched only when .env has none. Returns a per-key status dict.
+    """
     current = _read_env_file(env_path)
     existing_typesafe = bool(current.get("TYPESAFE_API_KEY", "").strip())
     preference = current.get("POWERPACKS_CROSS_ENCODER_BETA")
@@ -251,6 +282,7 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
 
 
 def _refresh_shared_key(env_path: Path, key: str, token: str) -> str:
+    """Overwrite one shared key from the API; return refreshed, error, or not_provisioned."""
     path, field = KEY_SOURCES[key]
     state, payload = fetch_endpoint(api_base(env_path), path, token)
     value = payload.get(field) if state == "ok" and isinstance(payload, dict) else None
@@ -261,6 +293,7 @@ def _refresh_shared_key(env_path: Path, key: str, token: str) -> str:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
+    """List which of the 8 keys are set in .env; exit 2 if any is empty. No network."""
     env_path = Path(args.env_file)
     values = _read_env_file(env_path)
     have = [key for key in KEY_SOURCES if values.get(key, "").strip()]

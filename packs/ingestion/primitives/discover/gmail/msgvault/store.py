@@ -53,7 +53,9 @@ class MsgvaultStore:
         return False
 
     def connect(self) -> sqlite3.Connection:
-        """Open the database read-only, or return the injected connection."""
+        """Open the database read-only, or return the injected connection.
+
+        Exits (SystemExit) when the file is missing or cannot be opened."""
         if self._con is None:
             db_path = self.db_path.expanduser()
             if not db_path.exists():
@@ -118,6 +120,7 @@ class MsgvaultStore:
         account_email: str = "",
         exclude_labels: Iterable[str] | None = None,
     ) -> list[dict[str, Any]]:
+        """One record per contact for `account_email`; see aggregation.aggregate_contacts."""
         return aggregation.aggregate_contacts(self.con, account_email, exclude_labels)
 
     def list_accounts(self) -> list[dict[str, Any]]:

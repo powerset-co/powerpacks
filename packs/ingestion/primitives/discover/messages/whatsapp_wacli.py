@@ -31,7 +31,9 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import Primitive
 
 
 def status_report(store: Path) -> dict[str, Any]:
-    """Install / auth / pairing / doctor / store-size snapshot for one store."""
+    """Install / auth / pairing / doctor / store-size snapshot for one store.
+    Never installs the binary; ``status`` is ``ok`` even when unlinked, since
+    link and pairing state are reported in the payload."""
     wacli_info = binary.ensure_wacli_installed(install=False)
     status = auth.auth_status(store)
     doctor = binary.wacli_json(store, ["doctor"], timeout=60)
@@ -77,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     """The wacli client's standalone lifecycle CLI (status/auth/ensure-wacli/
     logout): parse, build the subcommand's payload, emit it, map status to the
-    exit code (20 blocked, 1 failed or not-linked-on-status, else 0). One
+    exit code (20 blocked or auth ending unlinked, 1 failed, else 0). One
     envelope and one error mapping for every subcommand. The discovery
     `run`/`export` entry points live in `extract_whatsapp.py`."""
     args = build_parser().parse_args()

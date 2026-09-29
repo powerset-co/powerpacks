@@ -130,6 +130,9 @@ def discover_status(source: str, base_dir: Path) -> dict[str, Any]:
 
 
 def import_status(source: str, import_dir: Path) -> dict[str, Any]:
+    """This source's import state. Imported = manifest `status: completed` and its
+    `outputs.people_csv` exists; current = `import_manifest_current` agrees;
+    candidates = people rows whose id starts with `candidate:`."""
     manifest_path = import_dir / source / "manifest.json"
     manifest = ImportManifest.read(source, import_dir)
     people_csv = manifest.output_path()
@@ -154,6 +157,7 @@ def import_status(source: str, import_dir: Path) -> dict[str, Any]:
 
 
 def merged_status() -> dict[str, Any]:
+    """Whether `merged/people.csv` exists and how many people rows it holds."""
     return {
         "people_csv": str(CANONICAL_MERGED_PEOPLE_CSV),
         "exists": CANONICAL_MERGED_PEOPLE_CSV.exists(),
@@ -162,6 +166,7 @@ def merged_status() -> dict[str, Any]:
 
 
 def status_payload(sources: list[str]) -> dict[str, Any]:
+    """The full report: discover + import state per source, plus the merged count."""
     return {
         "primitive": "import_contacts_status",
         "status": "ok",

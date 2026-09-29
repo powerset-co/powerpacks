@@ -1,11 +1,10 @@
 """Shared candidates schema for ingestion primitives.
 
-A candidate is a contact worth researching that does NOT yet have a resolved
-identity (no LinkedIn attachment). Import stages write candidates next to
-their people.csv (`import/<source>/candidates.csv`); the deep-context processing
-layer consumes them to build cross-channel context and run one reverse lookup
-per person. people.csv keeps meaning "resolved identity" — candidates never
-enter it directly.
+A candidate is a contact that does NOT yet have a resolved identity (no
+LinkedIn attachment). The Gmail and Messages importers write candidates as
+rows of their own `import/<source>/people.csv`, with id
+`candidate:<candidate_key_for(...)>`; the merge keeps that id until a LinkedIn
+slug arrives. `candidate_key_for` is the one home for that key.
 """
 
 from __future__ import annotations
@@ -41,7 +40,10 @@ PHONE_DIGITS_RE = re.compile(r"\d")
 
 
 def candidate_key_for(email: str = "", phone: str = "") -> str:
-    """Stable key: email wins over phone; both normalized. Empty if neither."""
+    """Stable key: email wins over phone; both normalized. Empty if neither.
+
+    `email:<trimmed lowercased address>` when the email contains `@`, else
+    `phone:<digits>` keeping a leading `+` (e.g. `phone:+15550100`)."""
     email = (email or "").strip().lower()
     if email and "@" in email:
         return f"email:{email}"
@@ -54,6 +56,8 @@ def candidate_key_for(email: str = "", phone: str = "") -> str:
 
 
 def normalize_candidate_row(row: dict[str, Any]) -> dict[str, str]:
+    """Project a row onto the candidate columns as strings (dict/list -> JSON),
+    filling a blank `candidate_key` from the row's primary email/phone."""
     normalized: dict[str, str] = {col: "" for col in CANDIDATES_SCHEMA_COLUMNS}
     for col in CANDIDATES_SCHEMA_COLUMNS:
         value = row.get(col, "")

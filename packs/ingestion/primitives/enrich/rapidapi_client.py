@@ -156,6 +156,7 @@ class RapidApiClient:
 
     @staticmethod
     def resolve_key() -> str:
+        """POWERSET_API_KEY from the environment, stripped; empty when unset."""
         return os.getenv("POWERSET_API_KEY", "").strip()
 
     @staticmethod
@@ -179,6 +180,9 @@ class RapidApiClient:
 
     @staticmethod
     def http_json(method: str, url: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None, timeout: int = 60) -> tuple[int, dict[str, Any] | None, str]:
+        """One request -> (HTTP status, parsed JSON or None, error text). HTTP
+        errors return their code and the first 1000 chars of the body; any other
+        exception (network, timeout, bad JSON) returns status 0."""
         if params:
             url = url + "?" + urllib.parse.urlencode(params)
         req = urllib.request.Request(url, method=method, headers=headers or {})
@@ -304,7 +308,13 @@ class RapidApiClient:
         wait_for_attempt: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """INTERNAL: one network fetch (with retry/backoff) plus the cache
-        writes. Never reads the cache — `get_profile` owns that resolution."""
+        writes. Never reads the cache — `get_profile` owns that resolution.
+
+        Up to `retry_attempts` (default 3) tries, retrying only on
+        RETRYABLE_STATUS_CODES with backoff doubling from `retry_backoff_seconds`
+        (default 1s). The gateway may answer from a copy up to 90 days old
+        unless `fresh`. A success is cached; a permanent failure is recorded
+        without overwriting a paid profile; a transient failure writes nothing."""
         attempts = max(1, self.retry_attempts)
         status = 0
         data: dict[str, Any] | None = None

@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Combine selected message-channel metadata by normalized phone or email.
+"""Combine selected message-channel metadata by canonical phone.
 
-Flow: parse contact CSVs -> union names/groups/channels -> write contacts + manifest.
-The first nonempty name wins. Later rows replace counts for the same channel.
-Identity matching and person review belong to Deep Context.
+Flow (``ContactsMerger.merge``, called by messages discovery):
+  1. Read each input CSV in the order given (discovery passes
+     ``imessage.contacts.csv`` then ``whatsapp.contacts.csv``); a row whose
+     phone does not canonicalize (under 7 digits) is dropped and counted invalid.
+  2. Fold rows sharing a canonical phone into one contact.
+  3. Write ``.powerpacks/messages/contacts.csv`` (most messages first) and its
+     ``contacts.csv.manifest.json`` with per-input and cross-channel counts.
+The first nonempty name wins, so iMessage's Contacts.app name beats WhatsApp's.
+Later rows replace counts for the same channel. Sources and group names are
+unioned. Identity matching and person review belong to Deep Context.
 
 Changelog:
   2026-09-23 (typed rows): each input row is parsed once into the artifact's
@@ -69,6 +76,7 @@ def schema_error(path: Path, fieldnames: list[str] | None) -> str:
 
 
 def validate_input_headers(path: Path, fieldnames: list[str] | None) -> None:
+    """Exit with a conversion hint unless the CSV has the required input columns."""
     names = {str(value or "").strip() for value in (fieldnames or [])}
     if not REQUIRED_INPUT_HEADERS.issubset(names):
         raise SystemExit(schema_error(path, fieldnames))
@@ -88,6 +96,8 @@ def serialize_sources(sources: Iterable[str]) -> str:
 
 
 def serialize_groups(groups: Iterable[str]) -> str:
+    """Whitespace-collapsed, deduped group names sorted ignoring case, joined by
+    ``GROUP_SEPARATOR``."""
     deduped: list[str] = []
     seen: set[str] = set()
     for group in groups:
@@ -133,7 +143,10 @@ class MergedContact:
 
 
 def _record_from_row(row: MessageContactRow) -> MergedContact | None:
-    phone = canonicalize_phone(row.phone)
+    """One input row as a ``MergedContact``, or None when the phone does not
+    canonicalize. A single-source row's plain ``message_count`` /
+    ``last_message`` fills that channel's cells when they are empty."""
+    phone =canonicalize_phone(row.phone)
     if not phone:
         return None
     fields = row.to_row()
@@ -154,7 +167,11 @@ def _record_from_row(row: MessageContactRow) -> MergedContact | None:
 
 
 def _merge_records(existing: MergedContact, new: MergedContact) -> MergedContact:
-    sources = tuple(dict.fromkeys([*existing.sources, *new.sources]))
+    """Fold a later row into the contact for the same phone: the earlier
+    nonempty name is kept, sources and groups are unioned in order, a later
+    per-channel count or last date replaces the earlier one when set, and the
+    contact is in group chats if either side was or any group name exists."""
+    sources =tuple(dict.fromkeys([*existing.sources, *new.sources]))
     groups = tuple(dict.fromkeys([*existing.group_names, *new.group_names]))
     channel_counts = dict(existing.channel_counts)
     for channel, value in new.channel_counts.items():
@@ -205,6 +222,10 @@ def read_input_csv(path: Path) -> tuple[list[MergedContact], dict[str, int]]:
 
 
 def write_output_csv(path: Path, records: list[MergedContact]) -> int:
+    """Write the merged CSV and return its row count. ``message_count`` is the
+    sum of the channel counts and ``last_message`` the latest channel date.
+    Rows sort by total messages (high first), then ``last_message`` ascending
+    (empty first), then phone."""
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = sorted(
         records,

@@ -1,5 +1,29 @@
 #!/usr/bin/env python3
-"""Resumable local Powerpacks search-index processing pipeline."""
+"""Resumable local Powerpacks search-index processing pipeline.
+
+Turns a merged people.csv into the record files the DuckDB shim loads. Every
+output lives at a fixed path under --output-dir (see `paths()`); ledger.json
+there records per-step status so a partial run resumes where it stopped.
+
+What `run` actually does:
+  1. --dry-run: flatten people.csv, count pending people (not yet processed or
+     changed since the last completed run), estimate paid calls and USD, print
+     JSON; no writes, no provider calls.
+  2. If ledger.json is pending/running/partial, resume it. Otherwise clear the
+     checkpoint files, write a fresh ledger, and rehydrate stage files from
+     existing records/*.parquet when those stage files are missing.
+  3. Run the 15 STEPS as a dependency graph on up to 4 worker processes
+     (STEP_DEPENDENCIES). Each step reads the whole flattened set; role,
+     company and embedding steps reuse cached rows (by title_hash,
+     company_urn, person_id) and only call OpenAI for misses, and only when
+     the matching --allow-paid-* flag is set.
+  4. A step that checkpoints mid-way marks the run "partial" and stops
+     scheduling; otherwise, after the last step, write
+     unified/person_hashes.json and mark the ledger completed.
+Outputs: unified/flattened_people.jsonl, roles/, company/, education/,
+location/, summaries/, records/{people,companies,summaries,education,schools}
+.records.parquet (+ .hashes.json), vectors/checkpoint.json, stats/<step>.json.
+"""
 from __future__ import annotations
 
 import argparse
@@ -552,6 +576,11 @@ def _processed_person_ids(output_dir: Path) -> set[str]:
 
 
 def _processed_person_ids_with_current_hashes(output_dir: Path, people: list[dict[str, Any]]) -> set[str]:
+    """Ids the dry-run may treat as already processed.
+
+    Needs a summary vector for the id, a completed ledger, and an unchanged
+    person hash in person_hashes.json. With no hash file, falls back to every
+    id with a summary vector unless the ledger exists and is not completed."""
     processed_ids = _processed_person_ids(output_dir)
     hash_file = paths(output_dir)["person_hashes"]
     old_hashes = load_hashes(hash_file)
@@ -1114,6 +1143,8 @@ def public_identifier_from_url(value: Any) -> str:
 
 
 def person_keys(row: dict[str, Any]) -> set[str]:
+    """Every match key for a person: id/person_id/base_id, normalized LinkedIn
+    URL, and public_identifier (from the row or parsed from the URL)."""
     keys: set[str] = set()
     for field in ["id", "person_id", "base_id"]:
         value = str(row.get(field) or "").strip().lower()
@@ -1129,6 +1160,8 @@ def person_keys(row: dict[str, Any]) -> set[str]:
 
 
 def primary_person_key(row: dict[str, Any]) -> str:
+    """First of id/person_id/base_id, else LinkedIn URL, else public_identifier,
+    else a sha256 of the whole row. Keys person_hashes.json."""
     for field in ["id", "person_id", "base_id"]:
         value = str(row.get(field) or "").strip().lower()
         if value:
@@ -1143,6 +1176,11 @@ def primary_person_key(row: dict[str, Any]) -> str:
 
 
 def upsert_people_jsonl(path: Path, incoming: list[dict[str, Any]], hash_file: Path | None = None, *, prune_stale: bool = False) -> dict[str, Any]:
+    """Upsert incoming people into a JSONL file, matching on any person_keys().
+
+    A match replaces the existing row in place; no match appends. With
+    prune_stale, rows not in `incoming` are dropped. The file is rewritten only
+    when its bytes change."""
     existing_rows = read_jsonl(path) if path.exists() else []
     rows_by_key: dict[str, dict[str, Any]] = {}
     key_index: dict[str, str] = {}
@@ -1205,6 +1243,8 @@ def upsert_people_jsonl(path: Path, incoming: list[dict[str, Any]], hash_file: P
 
 
 def step_flatten(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    """people.csv -> unified/flattened_people.jsonl, one line per person;
+    people no longer in the input are pruned."""
     people = flatten_people(ledger["input"])
     # This stage owns the canonical flattened JSONL, but deliberately does not
     # persist person_hashes.json. That sidecar is authoritative for dry-run
@@ -1244,7 +1284,11 @@ def embedding_concurrency(ledger: dict[str, Any]) -> int:
 
 
 def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
-    """Run mandatory checkpointed role enrichment; no scaffold fallback."""
+    """Run mandatory checkpointed role enrichment; no scaffold fallback.
+
+    Titles found in the role cache (by title_hash) are reused; only misses go
+    to OpenAI, and only with --allow-paid-role-provider. Exits if there is
+    neither a cache nor the paid flag."""
 
     role_provider = str(ledger.get("role_provider") or "openai")
     role_input_classifications = _cache_path(ledger, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
@@ -1419,6 +1463,8 @@ def _embedding_stats(result: dict[str, Any], ledger: dict[str, Any]) -> dict[str
 
 
 def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    """Embed job titles; vectors come from the cache by title_hash and only
+    titles without one are embedded (paid, needs --allow-paid-embeddings)."""
     result = _run_embedding_stage(
         ledger,
         ps["roles_dense"],
@@ -1709,6 +1755,11 @@ def _company_corpus_to_record(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    """Build the company corpus and records/companies.records.parquet.
+
+    Companies in the classification cache are reused; misses go to OpenAI only
+    with --allow-paid-company-provider. With --skip-unresolved-companies, a
+    company with no LinkedIn slug that misses the cache is skipped."""
     raw_started = time.perf_counter()
     raw_corpus = build_company_corpus(read_jsonl(ps["flattened"]), ledger.get("default_operator_id"))
     write_jsonl(ps["companies_raw"], raw_corpus)
@@ -1813,6 +1864,8 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
 
 
 def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    """Embed companies (cache hits by company_urn are free; misses are paid)
+    and attach each vector to its company record."""
     result = _run_embedding_stage(
         ledger,
         ps["companies_corpus_v3"],
@@ -1953,6 +2006,9 @@ def step_infer_ages(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[s
 
 
 def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    """One record per position: joins role data + vector (title_hash), company
+    fields (company_id), founder tags and inferred birth year, then writes
+    records/people.records.parquet."""
     role_data = _load_by_id(ps["roles_dense"], "title_hash")
     # Memory: at ~40k roles / ~25k companies the full embedding rows cost multiple
     # GB of boxed floats. This join only needs one vector per title_hash, stored
@@ -1974,6 +2030,7 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
     founder_position_ids: set[str] = set()
     founder_person_ids: set[str] = set()
     for row in _iter_jsonl(ps["founder_enrichment"]):
+        # Founder tags only for detections with confidence >= 0.7.
         if row.get("is_founder") and float(row.get("confidence", 0)) >= 0.7:
             founder_position_ids.add(str(row.get("position_id", "")))
             founder_person_ids.add(str(row.get("person_id", "")))
@@ -2103,6 +2160,8 @@ def step_summary(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
 
 
 def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    """Embed person summaries (cache hits by person_id are free; misses are
+    paid) and attach text, tokens and vector to each summary record."""
     result = _run_embedding_stage(
         ledger,
         ps["summary_internal"],
@@ -2143,7 +2202,10 @@ def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
 
 
 def step_vectors(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
-    """Compatibility aggregate vector checkpoint after per-surface embedding stages."""
+    """Compatibility aggregate vector checkpoint after per-surface embedding stages.
+
+    Counts 1536-dim vectors in the people, summary and company records and
+    writes vectors/checkpoint.json."""
 
     def count_vectors(path: Path) -> int:
         return sum(1 for row in _iter_rows(path) if isinstance(row.get("vector"), list) and len(row.get("vector")) == 1536)
@@ -2261,6 +2323,7 @@ def commit_processed_person_hashes(ledger: dict[str, Any], ps: dict[str, Path]) 
 
 
 def pipeline_worker_count() -> int:
+    """min(4, CPU count, number of steps), at least 1."""
     available = os.cpu_count() or DEFAULT_PIPELINE_WORKERS
     return max(1, min(DEFAULT_PIPELINE_WORKERS, available, len(STEPS)))
 
@@ -2342,6 +2405,10 @@ def _execute_parallel(
     max_workers: int,
     executor_factory: Callable[..., concurrent.futures.Executor],
 ) -> dict[str, Any]:
+    """Start each pending step once all its dependencies are completed, up to
+    max_workers at a time, saving the ledger after each result. A failure or
+    partial step stops new starts; running steps finish first. Person hashes
+    are committed only when every step completed."""
     active_steps = set(STEPS)
     dependencies = {
         step: {dependency for dependency in STEP_DEPENDENCIES.get(step, ()) if dependency in active_steps}
@@ -2466,6 +2533,8 @@ def execute(
     executor_factory: Callable[..., concurrent.futures.Executor] | None = None,
     max_workers: int | None = None,
 ) -> dict[str, Any]:
+    """Run the ledger's unfinished steps in parallel on up to
+    DEFAULT_PIPELINE_WORKERS (4) processes, capped by the CPU count."""
     ledger, ps = _prepare_ledger(ledger_path)
     workers = max_workers if max_workers is not None else pipeline_worker_count()
     workers = max(1, min(workers, len(STEPS)))
@@ -2518,6 +2587,11 @@ def _arg_artifact(args: argparse.Namespace, attr: str, relative: str) -> str | N
 
 
 def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
+    """Dry-run counts and cost estimate; writes nothing.
+
+    Pending people = those without an id, or whose id is not processed with an
+    unchanged hash (see _processed_person_ids_with_current_hashes). Costs are
+    estimated for the pending people only."""
     input_path = Path(args.input)
     if not input_path.exists():
         raise SystemExit(f"missing input: {input_path}")

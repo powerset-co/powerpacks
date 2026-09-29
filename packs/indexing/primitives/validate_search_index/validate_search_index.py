@@ -79,6 +79,8 @@ def row_count(con: duckdb.DuckDBPyConnection, table: str) -> int:
 def people_missing_positions(con: duckdb.DuckDBPyConnection, people_csv: Path) -> tuple[int, int]:
     """(LinkedIn people with work history in the CSV, of those with no position rows).
 
+    Checked: rows with a public_identifier and a non-empty work_experiences,
+    matched by `id` against distinct local_people_positions.base_id.
     A LinkedIn person's merged id is the index's id; a contact-only id is
     re-derived by the index, so those people are not checked here."""
     with_history = [row["id"] for row in CsvIO.read_dict_rows(people_csv)
@@ -91,6 +93,11 @@ def people_missing_positions(con: duckdb.DuckDBPyConnection, people_csv: Path) -
 
 
 def validate(db_path: Path, people_csv: Path | None = None) -> dict:
+    """Check the DuckDB's tables and per-person position coverage.
+
+    status: "missing" if the file is absent, "fail" on any error, else "ok"
+    (warnings allowed). total_people is the person-profile table's row count.
+    The coverage check runs only when people_csv exists and positions exist."""
     payload: dict = {
         "primitive": "validate_search_index",
         "db": str(db_path),

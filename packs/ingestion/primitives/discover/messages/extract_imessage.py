@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """Extract iMessage and AddressBook contact metadata from read-only SQLite.
 
-Flow: check database access -> aggregate metadata -> CSV/JSONL -> manifest.
+Flow (``IMessageExtractor.extract``, run by the iMessage channel):
+  1. Probe ``~/Library/Messages/chat.db``: it must exist, open read-only, and
+     have the ``message`` and ``handle`` tables, else write a failure manifest
+     and stop (previous exports are left as they are).
+  2. Read names from every Contacts.app database
+     (``~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb``).
+  3. Count non-tapback messages and the latest date per phone handle.
+  4. Read which phones sit in group chats, and those groups' names.
+  5. Build one contact per phone, busiest first, and write
+     ``.powerpacks/messages/imessage.contacts.csv``, the raw JSONL, and
+     ``imessage.manifest.json`` (the paths the channel passes).
 Database and extraction failures write a failure manifest and retain exports.
 No message body columns are selected. Contacts without message history are
 included unless --message-handles-only is set.
@@ -87,7 +97,9 @@ class Contact:
 
 
 def clean_name(first: str, last: str) -> str:
-    first = re.sub(r"/\d+$", "", (first or "").strip())
+    """Join first and last name, dropping a trailing ``/<digits>`` suffix from
+    each part and turning ``Last;First`` into ``First Last``."""
+    first =re.sub(r"/\d+$", "", (first or "").strip())
     last = re.sub(r"/\d+$", "", (last or "").strip())
     if first and last:
         name = f"{first} {last}"
@@ -100,6 +112,7 @@ def clean_name(first: str, last: str) -> str:
 
 
 def iso_desc_sort_value(value: str | None) -> float:
+    """Sort key putting newer ISO timestamps first; empty or unparsable last."""
     if not value:
         return float("inf")
     try:
@@ -109,7 +122,9 @@ def iso_desc_sort_value(value: str | None) -> float:
 
 
 def check_addressbook(addressbook_glob: str) -> dict[str, Any]:
-    matches = sorted(glob.glob(addressbook_glob))
+    """Try to read every Contacts.app database the glob matches. ``readable`` is
+    true only when at least one opened and none errored."""
+    matches =sorted(glob.glob(addressbook_glob))
     contacts, diagnostics = read_addressbook_contacts(addressbook_glob)
     error_diagnostics = [item for item in diagnostics if item["status"] == "error"]
     read_diagnostics = [item for item in diagnostics if item["status"] == "read"]
@@ -125,7 +140,11 @@ def check_addressbook(addressbook_glob: str) -> dict[str, Any]:
 
 
 def read_addressbook_contacts(addressbook_glob: str) -> tuple[dict[str, str], list[dict[str, Any]]]:
-    contacts: dict[str, str] = {}
+    """Map each Contacts.app phone (canonical: 7+ digits, a leading ``+`` kept, a
+    bare 10-digit number gets ``+1``) to one name. Across all address books the
+    longest full name wins; ties go to the alphabetically first, ignoring case.
+    Also returns a read/error diagnostic per database."""
+    contacts:dict[str, str] = {}
     diagnostics: list[dict[str, Any]] = []
     query = """
         SELECT p.ZFULLNUMBER, r.ZFIRSTNAME, r.ZLASTNAME
@@ -157,7 +176,11 @@ def read_addressbook_contacts(addressbook_glob: str) -> tuple[dict[str, str], li
 
 
 def aggregate_message_stats(chat_db: Path) -> dict[str, dict[str, Any]]:
-    query = f"""
+    """Message count and latest date per phone handle, keyed by the phone lookup
+    key (US ``+1`` dropped). Tapback reactions (associated_message_type
+    2000-3006) are not counted; email, ``chat*`` and handles under 7 digits are
+    skipped. Handles that share a key (``+1555...`` and ``555...``) are summed."""
+    query =f"""
         SELECT
             h.id AS identifier,
             COUNT(*) AS msg_count,
@@ -189,6 +212,8 @@ def aggregate_message_stats(chat_db: Path) -> dict[str, dict[str, Any]]:
 
 
 def resolve_group_chat_name(chat_identifier: str, display_name: str | None, room_name: str | None) -> str:
+    """The group's display name, else its room name, ignoring either when it
+    only repeats the chat identifier; empty when neither is a real name."""
     for candidate in (display_name, room_name):
         cleaned = re.sub(r"\s+", " ", (candidate or "").strip())
         if cleaned and cleaned != chat_identifier:
@@ -197,7 +222,10 @@ def resolve_group_chat_name(chat_identifier: str, display_name: str | None, room
 
 
 def read_group_metadata(chat_db: Path) -> dict[str, set[str]]:
-    query = """
+    """Group names per phone lookup key. A chat is a group when its identifier
+    starts with ``chat``; every phone member is recorded, even when the group
+    has no usable name. A SQLite error yields no group data rather than failing."""
+    query ="""
         SELECT
             h.id AS identifier,
             c.chat_identifier,
@@ -235,6 +263,10 @@ def build_contacts(
     group_metadata: dict[str, set[str]],
     include_contact_only: bool,
 ) -> list[Contact]:
+    """One contact per canonical phone with messages, named from Contacts.app.
+    With ``include_contact_only``, every Contacts.app phone without messages is
+    added with no count. Sorted by message count (high first), then latest
+    message (newest first), then phone, then name."""
     contacts_by_phone: dict[str, Contact] = {}
 
     for key, stats in message_stats.items():
@@ -375,6 +407,8 @@ class IMessageExtractor:
             "python": sys.version.split()[0],
             "platform": sys.platform,
         }
+        # No AddressBook databases at all is fine (names stay empty); one that
+        # exists but will not open means Contacts access is missing.
         unreadable = (
             not result["chat_db"]["readable"]
             or result["chat_db"]["missing_tables"]

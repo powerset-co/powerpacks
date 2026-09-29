@@ -10,6 +10,26 @@ whatsapp_wacli.py.
 CLI output defaults to wacli.contacts.*; the discovery channel explicitly uses
 whatsapp.contacts.*. Name fallbacks require an explicit --name-fallback-csv.
 
+What `run` actually does, in order:
+  1. Install the pinned wacli binary if missing or stale (`binary.py`).
+  2. Count messages already in `.powerpacks/messages/wacli/wacli.db`; 0 means a
+     cold start, more than 0 means an incremental run.
+  3. Link the account: if `wacli auth status` says unlinked, run the QR login
+     (`auth.py`); still unlinked afterwards blocks with "needs a QR scan". A
+     fresh link stamps the full-sync pairing marker (`pairing.py`).
+  4. Snapshot each direct chat's (count, latest ts), then run one
+     `wacli sync --once`: uncapped on a cold start, otherwise capped at
+     max(20,000, existing + 2,000) messages (`sync.py`).
+  5. Deepen recent shallow DMs in one paced batch (`depth.py`), writing
+     `<manifest dir>/history-depth/{results.csv,progress.jsonl,manifest.json}`.
+  6. Refresh group member lists into `wacli.group-participants.json` and
+     contact names (a contact-refresh failure only warns).
+  7. Export one contact per direct chat plus members of groups with 30 or
+     fewer participants (`export_contacts_from_store`), then write the CSV
+     (busiest first), JSONL, manifest, and progress JSONL next to it.
+A blocked step writes a `blocked_user_action` manifest (exit 20); any other
+error writes a `failed` manifest (exit 1).
+
 Changelog:
   2026-09-23 (typed rows): the `contacts` and `messages` SQLite rows are parsed
     into the frozen `ContactRow`/`MessageStats` at the read, so `phone_for_jid`,
@@ -138,6 +158,10 @@ def serialize_groups(groups: set[str]) -> str:
 
 
 def add_contact(contacts: dict[str, Contact], incoming: Contact) -> None:
+    """Merge `incoming` into `contacts`, keyed by canonical phone (no phone:
+    dropped). On a repeat phone: the first non-empty name wins, group flags and
+    names are unioned, a non-None message count overwrites, and the later
+    `last_message` is kept."""
     phone = canonicalize_phone(incoming.phone)
     if not phone:
         return
@@ -161,6 +185,9 @@ def load_lid_map(store: Path) -> dict[str, str]:
 
 
 def phone_for_jid(jid: str, contacts_by_jid: dict[str, ContactRow], lid_map: dict[str, str]) -> str:
+    """Phone for a JID, first hit wins: the contact row's phone, the phone of
+    the contact its LID maps to, the mapped JID's digits, the JID's own digits.
+    Empty when none gives a valid number (group, newsletter, unmapped LID)."""
     contact = contacts_by_jid.get(jid)
     mapped_jid = lid_map.get(jid) or ""
     mapped_contact = contacts_by_jid.get(mapped_jid)
@@ -180,6 +207,7 @@ def name_for_jid(jid: str, contacts_by_jid: dict[str, ContactRow], lid_map: dict
 
 
 def names_by_phone(contacts_by_jid: dict[str, ContactRow], lid_map: dict[str, str]) -> dict[str, str]:
+    """Phone -> wacli's saved name; the first contact row seen for a phone wins."""
     out: dict[str, str] = {}
     for jid, contact in contacts_by_jid.items():
         phone = phone_for_jid(jid, contacts_by_jid, lid_map)
@@ -190,6 +218,8 @@ def names_by_phone(contacts_by_jid: dict[str, ContactRow], lid_map: dict[str, st
 
 
 def load_name_fallbacks(path: Path | None) -> dict[str, str]:
+    """Phone -> name from an optional CSV (`name`, then `display_name`,
+    `full_name`, `contact_name`); first row per phone wins. No path, no names."""
     if path is None or not path.exists():
         return {}
     out: dict[str, str] = {}
@@ -348,6 +378,16 @@ def export_contacts_from_store(
     # WhatsApp cycle). A caller with a name source passes it explicitly.
     name_fallback_csv: Path | None = None,
 ) -> tuple[dict[str, Contact], dict[str, Any]]:
+    """Build the contact list from wacli's store, reading metadata only.
+
+    - Cached groups (`wacli.group-participants.json`) at or under
+      `max_group_participants` (default 30; <=0 means no cap) add every member.
+    - Every direct chat with a resolvable phone adds one contact; name is the
+      chat name, then wacli's contact name, then the name-by-phone map.
+    - Live `group_participants` rows add members only for groups that are not
+      in the cache, not left (unless `include_left_groups`), and within the cap.
+    Group members get `is_in_group_chats`; duplicates merge by phone
+    (`add_contact`). Returns the contacts and a diagnostics dict."""
     conn = store_db.open_wacli_db(store)
     try:
         contacts_by_jid = load_contacts_by_jid(conn)
@@ -436,6 +476,7 @@ def export_contacts_from_store(
 
         for row in store_db.group_participant_rows(conn):
             group_jid = str(row["group_jid"] or "")
+            # The fresher cache owns any group it lists, even a malformed entry.
             if group_jid in cached_group_jids:
                 continue
             if group_jid not in active_group_jids:
@@ -471,6 +512,7 @@ def export_contacts_from_store(
 
 
 def sorted_contacts(contacts: dict[str, Contact]) -> list[Contact]:
+    """Busiest first: message count, then latest message, then phone, all descending."""
     return sorted(
         contacts.values(),
         key=lambda item: ((item.message_count or 0), item.last_message or "", item.phone),
@@ -696,6 +738,7 @@ class WhatsAppExtractor:
                 runtime.emit_status(pairing_state.hint or "")
             runtime.write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing_state.to_payload()})
 
+            # Counted before auth, so a fresh QR link's bootstrap download still counts as a cold start.
             cold_start = existing_messages_at_start == 0
             before_states = depth_db.history_depth_chat_states(store)
             before_total_messages = depth_db.history_depth_total_count(store)

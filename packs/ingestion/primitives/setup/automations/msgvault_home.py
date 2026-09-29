@@ -106,7 +106,10 @@ def ensure_msgvault(install: bool) -> dict[str, Any]:
 
 
 def default_project_id(seed: str = "") -> str:
-    """Return a `local-msg-vault-*` project id, deterministic when seeded."""
+    """Return a `local-msg-vault-*` project id, deterministic when seeded.
+
+    Seeded: the first 10 hex chars of sha1(lowercased seed). Unseeded: 6
+    random hex chars."""
     if seed:
         digest = hashlib.sha1(seed.strip().lower().encode("utf-8")).hexdigest()[:10]
         return f"{DEFAULT_PROJECT_NAME}-{digest}"
@@ -189,7 +192,9 @@ def load_setup_state(home: Path, app_name: str = "") -> SetupState:
 
 
 def save_setup_state(home: Path, state: dict[str, Any]) -> None:
-    """Merge truthy state values into the setup-state JSON on disk."""
+    """Merge truthy state values into the setup-state JSON on disk.
+
+    Empty values are dropped, so a save never clears a key already stored."""
     path = setup_state_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     current = read_state_document(home)
@@ -358,7 +363,10 @@ def copy_client_secret(source: Path, home: Path, app_name: str, *, copy_secret: 
 
 
 def configured_client_secret(home: Path, app_name: str) -> dict[str, Any] | None:
-    """Return the configured client secret record for an app, or None when unconfigured."""
+    """Return the configured client secret record for an app, or None when unconfigured.
+
+    None when config.toml names no secret for the app; status "invalid" when
+    the named file fails `validate_client_secret`; "configured" otherwise."""
     key = app_name or "default"
     secret_paths = parse_client_secret_paths(config_path(home))
     if key not in secret_paths:
@@ -415,7 +423,9 @@ def set_toml_value(text: str, table: str, key: str, value: str) -> str:
 
 
 def write_msgvault_config(path: Path, client_secret_path: Path, app_name: str = "") -> None:
-    """Point config.toml's [oauth] (or [oauth.apps.<name>]) client_secrets at the file, chmod 600."""
+    """Point config.toml's [oauth] (or [oauth.apps.<name>]) client_secrets at the file, chmod 600.
+
+    Also appends `[sync] rate_limit_qps = 5` when the file has no [sync] table."""
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     table = "oauth" if not app_name else f"oauth.apps.{app_name}"

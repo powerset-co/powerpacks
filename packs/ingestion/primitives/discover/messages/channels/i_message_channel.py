@@ -120,6 +120,10 @@ class IMessageChannel(MessageChannel, Node):
         return {self.outputs[0].path: str(self.contacts_csv)}
 
     def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
+        """Check chat.db and AddressBook open, then export iMessage contacts.
+        Unreadable databases -> ``blocked_user_action`` (grant Full Disk Access /
+        Contacts, rerun the continue command); an extract that is not
+        ``completed`` -> ``failed``; else the written CSV path."""
         extractor = IMessageExtractor()
         check = extractor.check(strict=True)
         if check["status"] != "ok":

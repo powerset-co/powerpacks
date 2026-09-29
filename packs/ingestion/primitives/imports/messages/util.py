@@ -54,7 +54,8 @@ def _last_name_tokens(cleaned: str) -> set[str]:
 
 
 def _has_searchable_name(cleaned: str) -> bool:
-    """True when the saved name has enough real tokens/letters to research."""
+    """True when the saved name has enough real tokens/letters to research:
+    at least 2 tokens of 2+ characters and at least 5 letters overall."""
     tokens = [token for token in cleaned.split(" ") if len(token) >= MIN_TOKEN_LEN]
     if len(tokens) < MIN_NAME_TOKENS:
         return False
@@ -86,7 +87,12 @@ def contact_floor_reason(row: MessageContact) -> str:
     """First failing floor reason for a source contact ("" = passes).
 
     The floor owns identifier validity: a contact that passes always has a
-    candidate key, so `contact_to_person` never has to refuse one."""
+    candidate key, so `contact_to_person` never has to refuse one.
+
+    Rules, first failure wins: a phone key must have 10-15 digits (email keys
+    are exempt); the name must be usable (`_bad_name_reason`); at least 1
+    message; a contact seen in group chats with no WhatsApp DM messages needs
+    at least 10 messages."""
     is_email = "@" in row.phone
     if not candidate_key_for(row.phone if is_email else "", "" if is_email else row.phone):
         return SHORT_CODE_OR_INVALID_PHONE
@@ -141,7 +147,11 @@ def contact_last_interaction(row: MessageContact) -> str:
 
 
 def contact_to_person(row: MessageContact, contacts_csv: Path) -> dict[str, str]:
-    """Keep the source identity and metadata of a contact that cleared the floor."""
+    """Keep the source identity and metadata of a contact that cleared the floor.
+
+    The id is `candidate:email:<address>` when the identifier contains `@`, else
+    `candidate:phone:<digits>` (leading `+` kept). The name splits on the first
+    space into first/last."""
     email = row.phone if "@" in row.phone else ""
     phone = "" if email else row.phone
     key = candidate_key_for(email, phone)

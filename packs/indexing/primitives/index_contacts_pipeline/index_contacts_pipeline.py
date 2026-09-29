@@ -10,6 +10,23 @@ This is the stage-owned indexing entrypoint for local setup/app flows:
 The lower-level record builders stay in build_processing_pipeline.py. This
 wrapper owns orchestration and writes a stable stage manifest.
 
+What `run` actually does (manifest: .powerpacks/network-import/index/contacts/
+manifest.json, rewritten only when more than its timestamps changed):
+  1. fan-in: merges .powerpacks/network-import/import/{linkedin,gmail,messages}/
+     people.csv (plus any --input) in-process into index/contacts/merged/, then
+     copies people.csv + manifest.json to .powerpacks/network-import/merged/
+     when their bytes differ. No source file => not_ready.
+  2. preflight: if records/people.records.parquet exists but
+     local-search.duckdb is missing or <= 1 KB, builds the DuckDB from it.
+  3. estimate: build_processing_pipeline.py `run --dry-run` on merged people.csv.
+  4. nothing pending and no paid calls: "ready" no-op when the DuckDB is not older
+     than any input it is built from, otherwise refresh the DuckDB only.
+  5. otherwise runs the processing pipeline (paid flags on when the estimate
+     has paid calls or cost > 0), then scripts/build-local-duckdb-shim.py
+     --incremental into .powerpacks/search-index/local-search.duckdb.
+Other subcommands: `fan-in` (step 1 only), `plan` (print the commands),
+`status` (print the manifest).
+
 Changelog:
   2026-07-26 (declaration owns the path): DELETED `read_manifest_people_csv`. The
     fan-in used to read each `import/<source>/manifest.json` to learn where that
@@ -113,6 +130,7 @@ def payload_without_volatile_timestamps(payload: dict[str, Any]) -> dict[str, An
 
 
 def copy_if_changed(src: Path, dst: Path) -> bool:
+    """Copy src over dst unless both have the same size and sha256; True if copied."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and dst.is_file() and src.stat().st_size == dst.stat().st_size and sha256_file(src) == sha256_file(dst):
         return False
@@ -121,6 +139,7 @@ def copy_if_changed(src: Path, dst: Path) -> bool:
 
 
 def count_csv_rows(path: str | Path) -> int:
+    """Parsed CSV records after the header (0 if the file is missing or empty)."""
     target = ROOT / Path(path)
     if not target.exists():
         return 0
@@ -207,6 +226,8 @@ def run_merge(args: argparse.Namespace, input_paths: list[Path]) -> dict[str, An
 
 
 def processing_args(args: argparse.Namespace, *, dry_run: bool, allow_paid: bool) -> list[str]:
+    """build_processing_pipeline.py `run` command; allow_paid adds the three
+    paid-provider flags (role, embeddings, company)."""
     cmd = [
         sys.executable,
         "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py",
@@ -244,6 +265,8 @@ def local_search_duckdb_path(args: argparse.Namespace) -> Path:
 
 
 def duckdb_input_paths(args: argparse.Namespace) -> list[Path]:
+    """The existing files the DuckDB is built from: people.csv, person hashes,
+    and the records/*.parquet + *.hashes.json outputs."""
     output_dir = ROOT / Path(args.output_dir)
     candidates = [
         ROOT / Path(args.people_csv),
@@ -262,6 +285,8 @@ def duckdb_input_paths(args: argparse.Namespace) -> list[Path]:
 
 
 def duckdb_current_for_processing_hashes(args: argparse.Namespace) -> bool:
+    """True when local-search.duckdb is > 1 KB and its mtime is not older than
+    any duckdb_input_paths file (mtime only; no content check)."""
     duckdb = local_search_duckdb_path(args)
     if not duckdb.exists() or duckdb.stat().st_size <= 1024:
         return False
@@ -285,6 +310,9 @@ def duckdb_freshness_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
+    """Copy the merge's people.csv and manifest.json into
+    .powerpacks/network-import/merged/ (skipping byte-identical files);
+    returns the destination paths."""
     promoted: dict[str, str] = {}
     merged_people = artifacts.get("merged_people_csv")
     if merged_people:
@@ -343,6 +371,10 @@ def root_relative(path_text: Any) -> str:
 
 
 def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progress_callback: ProgressCallback | None = None) -> tuple[dict[str, Any], int]:
+    """Merge every existing source people.csv, promote the result, write the manifest.
+
+    Reruns on every call (no skip on unchanged inputs). No inputs => not_ready,
+    exit 0; merge status other than completed => failed, exit 1."""
     started_at = started_at or now_iso()
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
@@ -412,6 +444,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
 
 
 def estimated_paid_calls(estimate: dict[str, Any]) -> int:
+    """Sum of the dry-run's estimated_paid_calls values (non-numeric ones skipped)."""
     paid = estimate.get("estimated_paid_calls") if isinstance(estimate.get("estimated_paid_calls"), dict) else {}
     total = 0
     for value in paid.values():
@@ -423,6 +456,7 @@ def estimated_paid_calls(estimate: dict[str, Any]) -> int:
 
 
 def estimated_cost_usd(estimate: dict[str, Any]) -> float | None:
+    """estimated_cost_usd, else estimated_costs.total_estimated_usd; None if unparseable."""
     costs = estimate.get("estimated_costs") if isinstance(estimate.get("estimated_costs"), dict) else {}
     value = estimate.get("estimated_cost_usd")
     if value is None:
@@ -434,6 +468,7 @@ def estimated_cost_usd(estimate: dict[str, Any]) -> float | None:
 
 
 def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The short `run` summary printed to stdout (counts, cost, DuckDB tables)."""
     estimate = payload.get("processing_estimate") if isinstance(payload.get("processing_estimate"), dict) else {}
     counts = estimate.get("counts") if isinstance(estimate.get("counts"), dict) else {}
     fan_in = payload.get("fan_in") if isinstance(payload.get("fan_in"), dict) else {}
@@ -492,6 +527,8 @@ def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Write the stage manifest unless it differs from the existing one only in
+    started_at/updated_at; returns whichever payload is on disk."""
     target = ROOT / path
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
@@ -506,6 +543,8 @@ def write_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def maybe_materialize_existing_records(args: argparse.Namespace) -> dict[str, Any]:
+    """Build the DuckDB from existing records only when people.records.parquet
+    is non-empty and local-search.duckdb is missing or <= 1 KB; else skipped."""
     records = ROOT / Path(args.output_dir) / "records"
     people_records = records / "people.records.parquet"
     duckdb = ROOT / Path(args.output_dir) / "local-search.duckdb"
@@ -520,6 +559,10 @@ def maybe_materialize_existing_records(args: argparse.Namespace) -> dict[str, An
 
 
 def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback | None = None) -> tuple[dict[str, Any], int]:
+    """`run`: fan-in -> preflight -> dry-run estimate -> process -> DuckDB.
+
+    Exit 1 on any failed step; not_ready (missing people.csv or incomplete
+    processing) and ready both exit 0."""
     started_at = now_iso()
     manifest_path = Path(args.manifest)
 
@@ -678,6 +721,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         write_manifest(manifest_path, payload)
         notify_progress(progress_callback, "search_duckdb", "Local search database is ready", status="completed", payload=duckdb_payload if isinstance(duckdb_payload, dict) else {})
         return payload, 0
+    # Paid flags follow the estimate; there is no approval prompt at this layer.
     allow_paid = bool(paid_calls > 0 or (total_cost and total_cost > 0))
     progress("processing: running fixed-output incremental pipeline")
     notify_progress(progress_callback, "index_records", "Building local search records", payload={"pending_people": pending_people, "estimated_paid_calls": estimate.get("estimated_paid_calls", {})})

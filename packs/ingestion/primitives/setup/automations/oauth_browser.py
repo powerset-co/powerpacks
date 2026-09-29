@@ -59,7 +59,10 @@ BROWSER_SCRIPT = Path(__file__).with_name("google_oauth_browser.js")
 
 
 def ensure_playwright_core(node_deps: Path = DEFAULT_NODE_DEPS.expanduser()) -> dict[str, Any]:
-    """Ensure playwright-core is npm-installed under the node deps prefix."""
+    """Ensure playwright-core is npm-installed under the node deps prefix.
+
+    Skips npm when `node_modules/playwright-core` already exists there
+    (default prefix `~/.powerpacks/browser-node`)."""
     if not shutil.which("node"):
         return {"status": "error", "message": "node is not installed"}
     if not shutil.which("npm"):
@@ -104,7 +107,11 @@ def run_browser_automation(
     timeout_seconds: int,
     audience: str,
 ) -> dict[str, Any]:
-    """Drive google_oauth_browser.js to create the OAuth app and download its secret."""
+    """Drive google_oauth_browser.js to create the OAuth app and download its secret.
+
+    The script's stderr log streams live; the JSON it prints on stdout is the payload.
+    Unparseable stdout is an error, and a non-zero exit downgrades a reported
+    "ok" to "error". The run is killed after timeout_seconds + 180."""
     progress("Opening Chrome to create the Google OAuth app...")
     deps = ensure_playwright_core()
     if deps["status"] != "ok":

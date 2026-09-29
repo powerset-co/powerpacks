@@ -18,6 +18,9 @@ def now_iso() -> str:
 
 
 def write_status(run_vol: Path, payload: dict) -> None:
+    """Replace <run_vol>/status.json in one rename, stamping `updated_at`.
+
+    The laptop polls this file, so it never sees a half-written status."""
     run_vol.mkdir(parents=True, exist_ok=True)
     tmp = run_vol / "status.json.tmp"
     tmp.write_text(json.dumps(payload | {"updated_at": now_iso()}, indent=2))
@@ -25,6 +28,9 @@ def write_status(run_vol: Path, payload: dict) -> None:
 
 
 def row_key(row: dict, key_fields: tuple[str, ...]) -> str:
+    """Cache key `<field>=<value>` from the first non-blank key field, else "".
+
+    A row with no key ("") is never deduped: every such row is kept."""
     for field in key_fields:
         value = str(row.get(field) or "").strip()
         if value:
@@ -54,7 +60,11 @@ def merge_parquet_cache_file(
     cache_path: Path,
     key_fields: tuple[str, ...],
 ) -> tuple[int, int]:
-    """Atomically key-union a native Parquet run artifact into its cache."""
+    """Atomically key-union a native Parquet run artifact into its cache.
+
+    Output = every run row + every cached row whose key is blank or not in the
+    run. An empty run artifact leaves the cache untouched. Returns
+    (rows from run, cached rows kept)."""
     import duckdb  # type: ignore
 
     if new_rows_path.suffix.lower() != ".parquet":
@@ -118,6 +128,10 @@ def merge_cache_file(
 
     JSONL merges stream through Python; native Parquet run artifacts merge in
     DuckDB. Atomic replacement prevents corruption from interrupted writes.
+
+    JSONL rule: run rows are written first (first row per key wins among them),
+    then cached rows whose key the run did not already write; keyless rows are
+    always kept. Returns (rows from run, cached rows kept).
     """
     if cache_path.suffix.lower() == ".parquet":
         return merge_parquet_cache_file(new_rows_path, cache_path, key_fields)

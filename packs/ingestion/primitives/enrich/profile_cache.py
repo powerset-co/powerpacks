@@ -3,13 +3,13 @@
 
 The one home for the on-disk profile cache the RapidAPI enrichment path reads
 and seeds (default dir `.powerpacks/network-import/profile_cache_v2`; the
-fetch-and-write side lives in `rapidapi_client.rapidapi_profile`).
+fetch-and-write side lives in `rapidapi_client.RapidApiClient.get_profile`).
 
 Cache seeding format: one JSON file per sanitized LinkedIn public identifier,
 e.g. `profile_cache_v2/jane-example.json` containing `fetched_at`,
 `public_identifier`, `linkedin_url`, `raw_response`, and
-`normalized_profile: {"success": true}`. Usable entries enrich without
-RAPIDAPI_* keys. Failed lookups are cached with `last_checked_at` and retried
+`normalized_profile: {"success": true}`. Usable entries enrich without a
+POWERSET_API_KEY. Failed lookups are cached with `last_checked_at` and retried
 only after the TTL (`recent_cached_failure`).
 
 - `cache_slug_candidates` / `profile_cache_path` / `indexed_profile_cache_path` —
@@ -54,6 +54,8 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier, par
 
 
 def parse_iso(value: str) -> datetime | None:
+    """ISO-8601 timestamp (a trailing `Z` allowed) -> datetime; None when empty
+    or unparseable."""
     if not value:
         return None
     try:
@@ -63,11 +65,15 @@ def parse_iso(value: str) -> datetime | None:
 
 
 def safe_cache_slug(public_identifier: str) -> str:
+    """Cache file stem: lowercased, every char other than letters, digits,
+    `-`, `_`, `.` becomes `_`, and leading/trailing `.`/`_` are stripped."""
     cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in public_identifier.lower().strip())
     return cleaned.strip("._")
 
 
 def legacy_byte_cache_slug(public_identifier: str) -> str:
+    """Older cache file stem: like `safe_cache_slug`, but each non-ASCII char
+    becomes its UTF-8 bytes as `_xx` hex. Read-only; new files use the safe slug."""
     parts: list[str] = []
     for ch in public_identifier.lower().strip():
         if ch.isascii() and (ch.isalnum() or ch in {"-", "_", "."}):
@@ -80,6 +86,9 @@ def legacy_byte_cache_slug(public_identifier: str) -> str:
 
 
 def cache_slug_candidates(public_identifier: str) -> list[str]:
+    """Every stem an existing cache file for this identifier may have, in
+    lookup order: raw, safe and legacy-byte slugs of the identifier as given,
+    then of its percent-decoded form, deduplicated."""
     values = [
         public_identifier,
         urllib.parse.unquote(public_identifier or ""),
@@ -93,6 +102,8 @@ def cache_slug_candidates(public_identifier: str) -> list[str]:
 
 
 def profile_cache_index(cache_dir: Path | str | None) -> set[str]:
+    """File stems of every `*.json` in the cache dir except `_metadata.json`;
+    empty when the dir is missing."""
     if not cache_dir:
         return set()
     root = Path(cache_dir)
@@ -113,6 +124,8 @@ def profile_cache_path(cache_dir: Path | str | None, public_identifier: str) -> 
 
 
 def indexed_profile_cache_path(cache_dir: Path | str | None, public_identifier: str, cache_index: set[str] | None) -> Path | None:
+    """The existing cache file for this identifier (first candidate slug found
+    in `cache_index`), else the path a new entry would be written to."""
     if not cache_dir:
         return None
     if cache_index is not None:
@@ -124,6 +137,11 @@ def indexed_profile_cache_path(cache_dir: Path | str | None, public_identifier: 
 
 
 def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None:
+    """The cache record when it holds a successful profile, else None.
+
+    Usable = `normalized_profile.success is True` with a dict `raw_response`. A
+    file without that shape (legacy raw payload) is re-normalized on read and
+    counts as usable when normalization succeeds. Content is not required."""
     if not cache_path or not cache_path.exists():
         return None
     cached = read_json(cache_path, None)
@@ -161,6 +179,10 @@ def profile_has_content(record: dict[str, Any] | None) -> bool:
 
 
 def recent_cached_failure(cache_path: Path | None, retry_hours: float) -> dict[str, Any] | None:
+    """The cached failure record (plus `retry_after`) when the entry has
+    `normalized_profile.success is False` and `last_checked_at` (or
+    `fetched_at`) is less than `retry_hours` ago; None otherwise or when
+    `retry_hours <= 0`."""
     if not cache_path or not cache_path.exists() or retry_hours <= 0:
         return None
     cached = read_json(cache_path, None)
@@ -181,6 +203,9 @@ def recent_cached_failure(cache_path: Path | None, retry_hours: float) -> dict[s
 
 
 def cached_profile_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    """The raw provider payload already on a people row: the first of
+    `rapidapi_response_enriched`, `rapidapi_response` that normalizes to a
+    successful profile, else None."""
     for col in ("rapidapi_response_enriched", "rapidapi_response"):
         parsed = parse_jsonish(row.get(col), None)
         if isinstance(parsed, dict) and normalize_linkedin_profile(parsed).get("success") is True:
@@ -194,6 +219,13 @@ def classify_rapidapi_cache_status(
     retry_hours: float,
     cache_index: set[str] | None = None,
 ) -> tuple[str, str, Path | None, dict[str, Any] | None]:
+    """Classify one LinkedIn row for the enrich queue; first rule wins:
+
+    1. `hit`: the row itself carries a successful payload (`cached_profile_from_row`).
+    2. `hit`: a cache file exists and `read_usable_cached_profile` accepts it.
+    3. `recent_failure`: a cached failed lookup checked within `retry_hours`.
+    4. `miss`: anything else (a paid fetch).
+    Returns (status, reason, cache_path, recent_failure_record)."""
     public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
     cache_path = indexed_profile_cache_path(profile_cache_dir, public_identifier, cache_index)
     if cached_profile_from_row(row) is not None:

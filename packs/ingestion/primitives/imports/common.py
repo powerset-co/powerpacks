@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """Shared helpers for import/enrich contact stages.
 
+What lives here: the import-stage manifest (`import/<source>/manifest.json`),
+its reader, its writer, and the "is this import still current?" check that lets
+the Gmail and Messages importers skip a rebuild.
+
+  - `write_manifest` writes the manifest with a `fingerprints` block
+    (path/size/mtime_ns/sha256 per input and output file it names); a payload
+    identical to the one on disk (timestamps aside) leaves the file untouched.
+  - `import_manifest_current` returns the saved manifest when its status is
+    `completed`, its recorded input matches, and every fingerprinted file
+    (except the shared `directory.csv`) still matches on disk; else None.
+  - `ImportManifest.read` parses the manifest once into typed attributes;
+    `imports/status.py` and both importers read it through that.
+
 Changelog:
   2026-09-23 (typed rows): `output_path`/`matches_input` and the previous-fingerprint
     lookup in `manifest_fingerprints` now read the typed `outputs`/`input`/
@@ -103,7 +116,8 @@ class ImportManifest:
 
     @classmethod
     def from_payload(cls, source: str, payload: Any) -> "ImportManifest":
-        raw = payload if isinstance(payload, dict) else {}
+        """Parse a raw manifest dict; missing fields read as "" / {} / 0."""
+        raw =payload if isinstance(payload, dict) else {}
         return cls(
             source=str(raw.get("source") or source),
             status=str(raw.get("status") or ""),
@@ -124,9 +138,12 @@ class ImportManifest:
         return bool(self.raw)
 
     def output_path(self, key: str = "people_csv") -> str:
+        """The recorded output path for `key` ("" when the manifest names none)."""
         return str(self.outputs[key] or "") if key in self.outputs else ""
 
     def matches_input(self, expected: dict[str, Any]) -> bool:
+        """True when every expected `input` key has the same value on disk
+        (e.g. the importer's `pipeline_contract` version string)."""
         return all(
             (self.input[key] if key in self.input else None) == value
             for key, value in expected.items()
@@ -145,7 +162,11 @@ def _previous(stat: ArtifactStat | None) -> dict[str, Any] | None:
 
 
 def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    path = Path(str(path_text or ""))
+    """Path, size, mtime_ns and sha256 of one file (`exists: False` if absent).
+
+    When size and mtime still equal the `existing` record, that record is reused
+    as-is so an unchanged file is not re-hashed."""
+    path =Path(str(path_text or ""))
     if not path_text or not path.exists() or not path.is_file():
         return {"path": str(path_text or ""), "exists": False}
     stat = path.stat()
@@ -169,6 +190,8 @@ def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None)
 
 
 def collect_artifact_paths(value: Any) -> list[str]:
+    """Every string nested in `value` that looks like a file path: it starts with
+    `.powerpacks/` or exists on disk. De-duplicated, first-seen order."""
     paths: list[str] = []
     if isinstance(value, dict):
         for item in value.values():
@@ -184,7 +207,10 @@ def collect_artifact_paths(value: Any) -> list[str]:
 
 
 def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    document = ImportManifest.from_payload("", payload)
+    """The manifest's `fingerprints` block: one fingerprint per path found in
+    `input` (input_artifacts) and in `outputs` + `artifacts` (output_artifacts),
+    reusing the prior manifest's record for files that have not changed."""
+    document =ImportManifest.from_payload("", payload)
     previous = ArtifactFingerprints.from_record(existing)
     input_paths = collect_artifact_paths(document.input)
     output_paths = collect_artifact_paths({"outputs": document.outputs, "artifacts": document.artifacts})
@@ -209,7 +235,12 @@ def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_manifest(source: str, payload: dict[str, Any], import_dir: Path | None = None) -> dict[str, Any]:
-    """Write a receipt; prior receipt is read only to keep identical bytes stable."""
+    """Write a receipt; prior receipt is read only to keep identical bytes stable.
+
+    Writes `<import_dir>/<source>/manifest.json`. Status defaults to `completed`;
+    `fingerprints` is computed from the payload's paths unless the payload brings
+    its own. If the result equals the existing manifest ignoring `updated_at` /
+    `created_at`, the file is not rewritten and the existing one is returned."""
     import_dir = (import_dir or DEFAULT_IMPORT_DIR) / source
     manifest = import_dir / "manifest.json"
     existing = read_json(manifest, {}) or {}
@@ -235,6 +266,8 @@ def fingerprint_matches(path_text: str, fingerprint: ArtifactStat) -> bool:
 
 
 def is_shared_directory_csv(path_text: str) -> bool:
+    """True for the cross-source `directory.csv`, which other sources rewrite and
+    so must never make an import look stale."""
     if str(path_text) == str(DEFAULT_DIRECTORY_CSV):
         return True
     try:

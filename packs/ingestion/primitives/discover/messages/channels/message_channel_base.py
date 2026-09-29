@@ -120,7 +120,8 @@ def blocked_child(
 
 def failed_child(step_id: str, payload: dict[str, Any]) -> MessageChannelFailed:
     """Build the ``failed`` payload a channel (or the store's merge) returns when
-    a child step reports a non-success status; picks the most specific error text."""
+    a child step reports a non-success status; picks the most specific error text:
+    the payload's ``error``, else its ``message``, else the whole payload."""
     detail = payload.get("error") or payload.get("message") or payload or "child command failed"
     return MessageChannelFailed(step_id=step_id, error=detail)
 
@@ -153,4 +154,5 @@ class MessageChannel:
         self.other_enabled = other_enabled
 
     def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
+        """Extract this source's contacts; implemented by each concrete channel."""
         raise NotImplementedError
