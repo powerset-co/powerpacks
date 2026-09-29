@@ -170,18 +170,8 @@ Writes `~/.msgvault/config.toml`, the client secret, and `~/.msgvault/msgvault.d
 ### Step 4 — Check OAuth health + authorize unhealthy Gmail accounts
 
 Re-run `msgvault_setup.py status` after Step 3, because a fresh
-`browser-setup --add-account` already authorized the primary.
-
-Google only lets the OAuth app's test users grant access. `status` lists them
-(with the owner) as `desired_emails`. If any Step 2 account is missing from
-`desired_emails`, add all of them in one command before any grant (it drives the
-same Chrome console session and skips users already present):
-
-```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-test-users <email> [<email> ...]
-```
-
-Then check **every requested account in one command** before syncing anything:
+`browser-setup --add-account` already authorized the primary. Then check **every
+requested account in one command** before syncing anything:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py auth-check \
@@ -203,8 +193,17 @@ the whole requested set instead of stopping at the first bad account:
 
 If any accounts need authorization, show the **complete list** (missing and
 expired separately) and ask once for explicit consent to open OAuth for all of
-them sequentially. After approval, run the normal grant for every missing
-account:
+them sequentially. After approval, first make sure Google will accept them:
+the OAuth app only lets its test users grant access, and `status` lists those
+(with the owner) as `desired_emails`. Add every account missing from
+`desired_emails` in one command (it drives the same Chrome console session and
+skips users already present):
+
+```bash
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-test-users <email> [<email> ...]
+```
+
+Then run the normal grant for every missing account:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <email>
