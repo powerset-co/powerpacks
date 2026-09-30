@@ -1,5 +1,33 @@
 # Changelog
 
+## [3.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.7.1...powerpacks-v3.8.0) (2026-09-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove apply-retargets and persist-review-identities; use deep-context realize. Seed and synthesis read SQLite and no longer accept --people-csv.
+
+### Features
+
+* **install:** one bootstrap command any agent can run for the user ([#621](https://github.com/powerset-co/powerpacks/issues/621)) ([271a992](https://github.com/powerset-co/powerpacks/commit/271a9921626bbdb5abc23c7eeeb71747d76207a1))
+
+
+### Bug Fixes
+
+* clarify completed Deep Context review handoff ([#613](https://github.com/powerset-co/powerpacks/issues/613)) ([e6e367c](https://github.com/powerset-co/powerpacks/commit/e6e367c039ef936b2b4ff2520dd7a34f967bfb1a))
+* **codex:** install skills to ~/.agents/skills and clean the old folder ([#620](https://github.com/powerset-co/powerpacks/issues/620)) ([b7d93f2](https://github.com/powerset-co/powerpacks/commit/b7d93f2a08e6ac7c8deb1a2fd611c74d59c90abf))
+* **install:** stop off-Mac surfaces and guide bypass permissions ([#619](https://github.com/powerset-co/powerpacks/issues/619)) ([1bde962](https://github.com/powerset-co/powerpacks/commit/1bde9621024fa22cfbb6f913daa2bb7b306093c8))
+* keep Deep Context processing in SQLite ([#610](https://github.com/powerset-co/powerpacks/issues/610)) ([437dbe1](https://github.com/powerset-co/powerpacks/commit/437dbe1e99b29a618f53f6f3f1e9662b38b8c91a))
+* keep review stages visible during navigation ([#617](https://github.com/powerset-co/powerpacks/issues/617)) ([93bef8a](https://github.com/powerset-co/powerpacks/commit/93bef8ac742368925cad8b5b6488e1aa9ffd2059))
+* recover legacy seed data and remove redundant integrity scans ([#623](https://github.com/powerset-co/powerpacks/issues/623)) ([d6c5fb2](https://github.com/powerset-co/powerpacks/commit/d6c5fb26d01a22b763f370e02776e38f159e9174))
+* **skills:** keep every skill installable by the Agent Skills standard ([#622](https://github.com/powerset-co/powerpacks/issues/622)) ([ebab68a](https://github.com/powerset-co/powerpacks/commit/ebab68aa22ecd6671ffac0eb606322ea18907503))
+* smooth Deep Context review transitions ([#616](https://github.com/powerset-co/powerpacks/issues/616)) ([012c532](https://github.com/powerset-co/powerpacks/commit/012c532d51c30658377b5d689bff37e57f7f7fdd))
+
+
+### Miscellaneous Chores
+
+* release 3.8.0 as a minor, not a major ([#624](https://github.com/powerset-co/powerpacks/issues/624)) ([aa4fce4](https://github.com/powerset-co/powerpacks/commit/aa4fce4c916f48c1a569b98a8b0e8fdf03b8ee78))
+
 ## [3.7.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.7.0...powerpacks-v3.7.1) (2026-09-29)
 
 
