@@ -381,7 +381,7 @@ class ProjectorTest(unittest.TestCase):
                     "$ROOT/subject/00_parallel_result.json",
                     "bec813940a813c79449d1a1c467809be3d33defcb83f9bea30f897ef38ba729c",
                     candidate="candidate:email:jordan",
-                    input_fingerprint="710f5bb77050690c5d78d87277c3071372d8a8fefe04948ec868b58d9d63ba90",
+                    input_fingerprint="2e600b520c634aa5fd95fb520462e41a68857721238fa8da0a60d6ab4715b41f",
                     payload=research_payload_json,
                 ),
                 self._artifact(

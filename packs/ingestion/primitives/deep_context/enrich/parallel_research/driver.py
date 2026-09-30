@@ -43,7 +43,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     params.output_dir.mkdir(parents=True, exist_ok=True)
     inputs: list[RunInputParam] = [
         {
-            "input": queue.build_input(row, row.handle),
+            "input": queue.build_input(row),
             "metadata": {"handle": row.handle},
             "processor": processor,
         }

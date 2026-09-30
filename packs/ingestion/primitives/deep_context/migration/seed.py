@@ -8,11 +8,11 @@ phone, LinkedIn public identifier) onto those parents, in
 this order:
 
   1. merges: legacy same-person families (index.json multi-child parents and
-     accepted merge verdicts) whose members land on distinct cold parents
+     accepted merge verdicts) and human Verify Yes matches
   2. raw bundles: each legacy message bundle, re-owned by the cold parent so
      compose has evidence before the next collect
   3. facts: each legacy facts record, written as the cold parent's facts file
-  4. Parallel research results, keyed by the cold parent's slug and candidate
+  4. Parallel research results whose LinkedIn URLs agree for the cold parent
   5. human decisions from review.csv: worth marks and identity clicks
   6. cached LinkedIn profiles associated with those candidates
 
@@ -408,6 +408,9 @@ class LegacyTree:
             pair = frozenset({row.get("slug_a", ""), row.get("slug_b", "")})
             if row.get("same_person", "").lower() == "true" and pair in accepted:
                 families.append([self.slug_ids(row["slug_a"]), self.slug_ids(row["slug_b"])])
+        for row in self.review:
+            if human_identity_decision(row) == (ReviewAction.VERIFY.value, ApprovedState.YES.value):
+                families.append([self.key_ids(row.get("public_identifier", "")), self.key_ids(row.get("person_id", ""))])
         return families
 
     def facts_files(self) -> list[Path]:
@@ -738,7 +741,7 @@ class Seed(Node):
 
     def _carry_research(self, cold: ColdIndex, legacy: LegacyTree) -> _Tally:
         tally = _Tally()
-        seen: set[str] = set()
+        grouped: dict[str, list[tuple[dict[str, Any], str]]] = {}
         for legacy_handle, path in legacy.research_results():
             payload = _json_object(path)
             try:
@@ -761,11 +764,15 @@ class Seed(Node):
             parent_id = tally.one(cold.decide(primary, secondary))
             if parent_id is None:
                 continue
-            handle = ResearchHandle.for_parent(parent_id, cold.slug_of[parent_id])
-            if handle in seen:
-                tally.duplicate_dropped += 1
+            grouped.setdefault(parent_id, []).append((native, linkedin_url))
+        for parent_id, results in grouped.items():
+            if len({_slug(url) for _, url in results}) > 1:
+                # Conflicting identities need the ordinary research/judge flow.
+                tally.duplicate_dropped += len(results)
                 continue
-            seen.add(handle)
+            native, linkedin_url = results[0]
+            tally.duplicate_dropped += len(results) - 1
+            handle = ResearchHandle.for_parent(parent_id, cold.slug_of[parent_id])
             self._project_research(handle, parent_id, native, linkedin_url)
             tally.carried += 1
         return tally

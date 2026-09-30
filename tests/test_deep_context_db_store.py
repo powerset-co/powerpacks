@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -13,6 +15,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     MergeVerdictRow,
     ParentRow,
     PersonRow,
+    ResearchRow,
+    ResearchStatus,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -152,12 +156,8 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
             Db(broken)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class Foreign_key_delta(unittest.TestCase):
-    """project_rows validates the FK delta, not the whole world."""
+class ForeignKeyEnforcementTest(unittest.TestCase):
+    """SQLite checks writes without scanning unrelated records."""
 
     def _planted_orphan(self, root: Path) -> Db:
         db = Db(root / "t.sqlite")
@@ -166,14 +166,16 @@ class Foreign_key_delta(unittest.TestCase):
             PersonRow("person-1", "parent-1"),
             ArtifactRow("research:x", "research", "parent-1", "/dev/null",
                         "fp", "projected"),
+            ResearchRow("x", "parent-1", ResearchStatus.COMPLETE.value,
+                        None, "research:x", "{}", "2026-01-01T00:00:00Z"),
         ))
         # Bypass the store (foreign_keys OFF) exactly like a raw sqlite3 CLI
         # delete: artifact gone, dependent research row orphaned.
-        import sqlite3 as _s
-        conn = _s.connect(root / "t.sqlite")
+        conn = sqlite3.connect(root / "t.sqlite")
         conn.execute("DELETE FROM artifacts WHERE artifact_key='research:x'")
         conn.commit()
         conn.close()
+        self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 1)
         return db
 
     def test_pre_existing_orphan_does_not_block_unrelated_projection(self) -> None:
@@ -185,7 +187,6 @@ class Foreign_key_delta(unittest.TestCase):
             ))  # must not raise
 
     def test_healing_upsert_lands(self) -> None:
-        from packs.ingestion.primitives.deep_context.db.models import ResearchRow, ResearchStatus
         with tempfile.TemporaryDirectory() as directory:
             db = self._planted_orphan(Path(directory))
             # Re-project the artifact + its research row: heals the orphan.
@@ -197,3 +198,31 @@ class Foreign_key_delta(unittest.TestCase):
             ))
             row = db.query("SELECT artifact_key FROM research WHERE handle='x'")[0]
             self.assertEqual(row["artifact_key"], "research:x")
+            self.assertEqual(db.query("PRAGMA foreign_key_check"), [])
+
+    def test_projection_does_not_scan_all_foreign_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "t.sqlite")
+            statements: list[str] = []
+            connect = sqlite3.connect
+
+            def traced_connect(*args, **kwargs):
+                conn = connect(*args, **kwargs)
+                conn.set_trace_callback(statements.append)
+                return conn
+
+            with mock.patch("packs.ingestion.primitives.deep_context.db.store.sqlite3.connect", side_effect=traced_connect):
+                db.project_rows((ParentRow("parent-1", "p1"), PersonRow("person-1", "parent-1")))
+            self.assertFalse(any("foreign_key_check" in sql.lower() for sql in statements))
+
+    def test_invalid_foreign_key_rolls_back_entire_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "t.sqlite")
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.project_rows((ParentRow("parent-1", "p1"), PersonRow("person-1", "missing-parent")))
+            self.assertEqual(db.query("SELECT * FROM parents"), [])
+            self.assertEqual(db.query("SELECT * FROM people"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

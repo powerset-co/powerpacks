@@ -187,6 +187,99 @@ class SeedFixture(unittest.TestCase):
 
 
 class SeedTests(SeedFixture):
+    def test_saved_verify_merges_source_with_imported_linkedin_before_copying_decision(self) -> None:
+        review = self.legacy / "network-import/overrides/review.csv"
+        with review.open("a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=REVIEW_COLUMNS).writerow({
+                "public_identifier": "jordan-bravo", "person_id": "candidate:phone:+15550100",
+                "linkedin_url": JORDAN_URL, "action": "verify", "approved": "yes",
+                "source": "deep-context-review", "updated_at": "2026-09-06T00:00:00Z",
+            })
+        db = self.cold_store()
+        self.seed(db)
+        parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
+        self.assertEqual(parent_of["person-jordan"], parent_of["candidate:phone:+15550100"])
+        self.assertEqual(db.query("SELECT decision_action FROM links WHERE row_key='jordan-bravo'")[0][0], "verify")
+        parent = next(row for row in queries.parents(db) if row.parent_id == parent_of["person-jordan"])
+        self.assertEqual(parent.human_worth, "no")
+
+    def test_saved_detach_does_not_merge_source_or_detach_other_persons_linkedin(self) -> None:
+        review = self.legacy / "network-import/overrides/review.csv"
+        rows = list(CsvIO.read_dict_rows(review))
+        rows = [row for row in rows if row["public_identifier"] != "jordan-bravo"]
+        rows.append({
+            "public_identifier": "jordan-bravo", "person_id": "candidate:phone:+15550100",
+            "linkedin_url": JORDAN_URL, "action": "detach", "approved": "yes",
+            "source": "deep-context-review", "updated_at": "2026-09-06T00:00:00Z",
+        })
+        CsvIO.write_dict_rows(review, REVIEW_COLUMNS, rows)
+        db = self.cold_store()
+        manifest = self.seed(db)
+        parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
+        self.assertNotEqual(parent_of["person-jordan"], parent_of["candidate:phone:+15550100"])
+        self.assertIsNone(db.query("SELECT decision_action FROM links WHERE row_key='jordan-bravo'")[0][0])
+        self.assertEqual(manifest.identity_two_plus, 1)
+
+    def test_disagreeing_research_is_left_for_normal_enrichment(self) -> None:
+        from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
+
+        base = self.legacy / "deep-context/reconcile/deep-research"
+        (base / "morgan-alternative").mkdir()
+        (base / "morgan-alternative/00_parallel_result.json").write_text(json.dumps({
+            "type": "json", "content": {"linkedin_url": ""},
+            "metadata": {"source_identifier": "morgan@example.com"},
+        }))
+        (self.legacy / "deep-context/facts/person-morgan.jsonl").write_text(
+            _facts_record("Morgan Delta", "2026-09-02T00:00:00Z"))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        parent_id = next(row.parent_id for row in queries.people(db) if row.person_id == "person-morgan")
+        self.assertFalse(db.query("SELECT 1 FROM research WHERE parent_id=?", (parent_id,)))
+        self.assertFalse(db.query("SELECT 1 FROM artifacts WHERE parent_id=? AND kind='research'", (parent_id,)))
+        self.assertFalse(db.query("SELECT 1 FROM links WHERE parent_id=? AND kind='research'", (parent_id,)))
+        self.assertIn(parent_id, {row.parent_id for row in enrichment_queue(db)})
+        self.assertEqual(manifest.research_duplicate_dropped, 2)
+
+    def test_equivalent_research_urls_are_still_reused(self) -> None:
+        base = self.legacy / "deep-context/reconcile/deep-research"
+        (base / "morgan-alternative").mkdir()
+        (base / "morgan-alternative/00_parallel_result.json").write_text(json.dumps({
+            "type": "json", "content": {"linkedin_url": "https://linkedin.com/in/morgan-delta/"},
+            "metadata": {"source_identifier": "morgan@example.com"},
+        }))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        self.assertEqual(len(db.query("SELECT * FROM research")), 1)
+        self.assertEqual(manifest.research_carried, 1)
+        self.assertEqual(manifest.research_duplicate_dropped, 1)
+
+    def test_different_nonempty_research_urls_are_not_chosen_by_filename(self) -> None:
+        base = self.legacy / "deep-context/reconcile/deep-research"
+        (base / "morgan-alternative").mkdir()
+        (base / "morgan-alternative/00_parallel_result.json").write_text(json.dumps({
+            "type": "json", "content": {"linkedin_url": "https://linkedin.com/in/another-morgan"},
+            "metadata": {"source_identifier": "morgan@example.com"},
+        }))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        self.assertFalse(db.query("SELECT 1 FROM research"))
+        self.assertEqual(manifest.research_duplicate_dropped, 2)
+
+    def test_agreeing_no_match_research_is_reused(self) -> None:
+        base = self.legacy / "deep-context/reconcile/deep-research"
+        (base / "morgan-alternative").mkdir()
+        for name in ("morgan-alternative", "morgan-delta-parent"):
+            path = base / name / "00_parallel_result.json"
+            path.write_text(json.dumps({
+                "type": "json", "content": {"linkedin_url": ""},
+                "metadata": {"source_identifier": "morgan@example.com"},
+            }))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        self.assertEqual([row["status"] for row in db.query("SELECT status FROM research")], ["no_match"])
+        self.assertEqual(manifest.research_carried, 1)
+        self.assertEqual(manifest.research_duplicate_dropped, 1)
+
     def test_bare_slugs_follow_the_roster_normalization(self) -> None:
         self.assertEqual(seed._slug("jordan%2Dbravo"), "jordan-bravo")
         self.assertEqual(seed._slug("Jordan-Bravo/"), "jordan-bravo")
