@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.3...powerpacks-v3.8.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* **deep-context:** delete the directory page; a worth click answers in 0.4s ([#633](https://github.com/powerset-co/powerpacks/issues/633)) ([fd05614](https://github.com/powerset-co/powerpacks/commit/fd056149a7fd3288641bcc921dd061a25a172298))
+
 ## [3.8.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.2...powerpacks-v3.8.3) (2026-09-30)
 
 
