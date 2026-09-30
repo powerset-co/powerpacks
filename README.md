@@ -262,10 +262,7 @@ run sets up the runtime at `~/powerpacks`:
 | Any agent with Node | `npx skills add powerset-co/powerpacks -g -y` | `npx skills update` |
 | No Node, or no agent yet | Paste into Claude Code or Codex: *Download and install the Powerpacks skill from https://powerset.dev/powerpacks* | `$update-powerpacks` |
 
-The second door runs `bin/bootstrap` for the user:
-
-One command does the whole first install (what the `install-powerpacks` skill
-runs for the user): it clones or reuses the checkout, pins it to the newest
+The second door runs `bin/bootstrap` for the user. It clones or reuses the checkout, pins it to the newest
 release, installs the skills for every agent found on the Mac, and ends with
 one line (`DONE:`, `NEEDS YOU:`, `ASK:`, `STOP:` or `FAILED:`) that says what
 to do next. Safe to run again.
