@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,7 +24,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION, DDL, IMPORTED_PEOPLE_DDL
+from packs.ingestion.primitives.deep_context.db.schema import (
+    DDL,
+    IMPORTED_PEOPLE_DDL,
+    RESEARCH_INDEX_DDL,
+    SCHEMA_VERSION,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
 from deep_context_sqlite_test_helpers import (
     project_artifact,
@@ -36,6 +42,16 @@ from deep_context_sqlite_test_helpers import (
     replace_person_identifiers,
     replace_person_sources,
 )
+
+
+def _journal_mode(path: Path) -> str:
+    with closing(sqlite3.connect(path)) as conn:
+        return conn.execute("PRAGMA journal_mode").fetchone()[0]
+
+
+def _index_names(path: Path) -> set[str]:
+    with closing(sqlite3.connect(path)) as conn:
+        return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
 
 
 class DeepContextSchemaTests(unittest.TestCase):
@@ -72,7 +88,7 @@ class DeepContextSchemaTests(unittest.TestCase):
     def test_v1_upgrade_preserves_decisions_and_reopens(self) -> None:
         self.path.unlink()
         with sqlite3.connect(self.path) as conn:
-            conn.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, ""))
+            conn.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, "").replace(RESEARCH_INDEX_DDL, ""))
             conn.execute("INSERT INTO meta VALUES ('schema_version', '1')")
             conn.execute("INSERT INTO parents(parent_id, public_identifier, human_worth) "
                          "VALUES ('parent-1', 'parent-worth:parent-1', 'yes')")
@@ -87,6 +103,23 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.assertEqual(upgraded.query("PRAGMA foreign_key_check"), [])
         self.assertEqual(upgraded.query("SELECT * FROM imported_people"), [])
         self.assertEqual(Db(self.path).query("SELECT value FROM meta WHERE key='schema_version'")[0][0], "2")
+
+    def test_store_opens_in_wal_with_research_index(self) -> None:
+        # A fresh store and a pre-3.8.2 store (rollback journal, no research index)
+        # both end up in WAL — a long read no longer blocks a decision's commit —
+        # with the index that keeps identity queries off full scans of research.
+        self.assertEqual(_journal_mode(self.path), "wal")
+        self.assertIn("research_by_candidate", _index_names(self.path))
+        self.path.unlink()
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.executescript(DDL.replace(RESEARCH_INDEX_DDL, ""))
+            conn.execute("INSERT INTO meta VALUES ('schema_version', '2')")
+            conn.commit()
+        self.assertEqual(_journal_mode(self.path), "delete")
+        Db(self.path)
+        self.assertEqual(_journal_mode(self.path), "wal")
+        self.assertIn("research_by_candidate", _index_names(self.path))
+        Db(self.path)  # a second open is a no-op on an up-to-date store
 
     def test_merge_verdict_requires_cache_provenance(self) -> None:
         self.parent()

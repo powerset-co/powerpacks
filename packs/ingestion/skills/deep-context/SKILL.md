@@ -333,7 +333,7 @@ works in any harness):
 bin/deep-context review-status --wait --timeout 900
 ```
 
-It queries canonical SQLite once a second and returns the current queue-derived
+It queries canonical SQLite every five seconds and returns the current queue-derived
 `next_action`: pending worth parents -> `review_people`; uncovered effective-Yes
 parents -> `enrich`; pending LinkedIn candidates -> `review_linkedin`; otherwise
 `realize`. The app itself runs everything in between:

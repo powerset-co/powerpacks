@@ -1,6 +1,8 @@
 """Command-line parsing and dispatch for the review UI.
 
 Changelog:
+- 2026-09-30: serve no longer counts LinkedIn parents at startup (minutes on a
+  large store, read by nobody); `status --wait` polls every five seconds.
 - 2026-09-26: the searches-only server serves the React shell at /people; its
   rows request answers 404 with what to run first.
 - 2026-09-26: it serves the shell first (now also /searches and /searches/run), then the
@@ -25,7 +27,6 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     load_env,
 )
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_parents
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
@@ -41,6 +42,10 @@ from .sqlite_adapter import SqliteReviewAdapter
 
 # The actions the agent runs itself; every other action waits on the user.
 _AGENT_ACTIONS = frozenset({"synthesize", "realize"})
+
+# The status query walks every parent; a tight loop would keep the CPU busy
+# for the whole review.
+_WAIT_POLL_SECONDS = 5
 
 # The People page's rows request before a store exists: the page shows this message.
 _NO_PEOPLE = json.dumps({
@@ -137,7 +142,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             run_jobs=True,
             db=db,
         )
-        extra = {"parents": len(linkedin_parents(db)), "progress": asdict(workflow_state(db).progress)}
+        extra = {"progress": asdict(workflow_state(db).progress)}
     else:
         handler = searches_only_handler()
         extra = {"note": "no deep-context store yet; serving the searches alone"}
@@ -159,7 +164,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         started = time.monotonic()
         deadline = started + max(1, int(args.timeout))
         while status["next_action"] not in _AGENT_ACTIONS and time.monotonic() < deadline:
-            time.sleep(1)
+            time.sleep(_WAIT_POLL_SECONDS)
             status = workflow_status()
         status["waited_seconds"] = int(time.monotonic() - started)
         if status["next_action"] not in _AGENT_ACTIONS:
