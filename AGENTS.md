@@ -728,7 +728,7 @@ powerpacks/
 │   └── powerset/               # cross-pack tooling (doctor, auth, ...)
 ├── skills/                     # core skills (search, search-company)
 ├── tests/                      # unittest, run with uv run --project . python -m unittest discover
-├── adapters/codex/install.sh   # installs skills into ~/.codex/skills
+├── adapters/codex/install.sh   # installs skills into ~/.agents/skills
 ├── bin/                        # update-codex, update-claude-code, agent-bootstrap, sync-agent-files.sh, etc.
 ├── PROFILE.md                  # source template for generated local profiles
 ├── .codex/AGENTS.md            # ignored Codex profile rendered from PROFILE.md

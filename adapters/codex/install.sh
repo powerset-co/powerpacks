@@ -3,7 +3,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-SKILLS_DIR="${1:-$CODEX_HOME/skills}"
+# Codex reads user skills from ~/.agents/skills (the Agent Skills standard).
+# $CODEX_HOME/skills is its deprecated location; installs before 2026-09-30
+# wrote there, and Codex still reads it, so we clean our skills out of it or
+# each one would load twice.
+SKILLS_DIR="${1:-$HOME/.agents/skills}"
+LEGACY_SKILLS_DIR="$CODEX_HOME/skills"
 BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
@@ -25,8 +30,9 @@ RETIRED_SKILLS=(
 
 mkdir -p "$SKILLS_DIR"
 for skill in "${MANAGED_SKILLS[@]}" "${RETIRED_SKILLS[@]}"; do
-  rm -rf "$SKILLS_DIR/$skill"
+  rm -rf "$SKILLS_DIR/$skill" "$LEGACY_SKILLS_DIR/$skill"
 done
+rm -f "$LEGACY_SKILLS_DIR/.powerpacks-install.json"
 "$REPO_ROOT/bin/setup-python"
 
 install_powerpacks_bundle() {

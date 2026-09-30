@@ -131,7 +131,7 @@ cd powerpacks
 
 bin/update-codex                         # Codex: pull, sync agent files, reinstall skills/profile
 bin/update-claude-code                   # Claude Code: pull, sync agent files, reinstall skills
-./install.sh codex                       # → ~/.codex/skills/
+./install.sh codex                       # → ~/.agents/skills/
 ./install.sh claude-code                 # → ~/.claude/skills/
 ./install.sh pi                          # → ~/.pi/agent/skills/
 ./install.sh nanoclaw /path/to/nanoclaw

@@ -112,6 +112,37 @@ class UpdatePowerpacksTests(unittest.TestCase):
             self.assertFalse(Path(f"{bundle_dir}.backup").exists())
             self.assertTrue((skills_dir / "update-powerpacks/update-powerpacks").is_file())
 
+    def test_codex_adapter_moves_skills_out_of_the_deprecated_folder(self) -> None:
+        # Codex now reads user skills from ~/.agents/skills; $CODEX_HOME/skills is
+        # its deprecated location. An install cleans our skills out of the old
+        # folder (so Codex never sees each one twice) and leaves other skills alone.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            codex_home = root / "codex"
+            legacy_dir = codex_home / "skills"
+            skills_dir = root / ".agents/skills"
+            write(legacy_dir / "setup/SKILL.md", "old powerpacks skill\n")
+            write(legacy_dir / "import-email/SKILL.md", "retired powerpacks skill\n")
+            write(legacy_dir / ".powerpacks-install.json", "{}\n")
+            write(legacy_dir / "my-own-skill/SKILL.md", "not ours\n")
+
+            env = os.environ | {
+                "CODEX_HOME": str(codex_home),
+                "CODEX_POWERPACKS_BUNDLE_DIR": str(codex_home / "powerpacks"),
+                "POWERPACKS_SKIP_AGENT_BOOTSTRAP": "1",
+            }
+            run(ROOT / "adapters/codex/install.sh", skills_dir, cwd=ROOT, env=env)
+
+            self.assertTrue((skills_dir / "setup/SKILL.md").is_file())
+            self.assertTrue((skills_dir / ".powerpacks-install.json").is_file())
+            self.assertFalse((legacy_dir / "setup").exists())
+            self.assertFalse((legacy_dir / "import-email").exists())
+            self.assertFalse((legacy_dir / ".powerpacks-install.json").exists())
+            self.assertEqual((legacy_dir / "my-own-skill/SKILL.md").read_text(encoding="utf-8"), "not ours\n")
+
+        adapter = (ROOT / "adapters/codex/install.sh").read_text(encoding="utf-8")
+        self.assertIn('SKILLS_DIR="${1:-$HOME/.agents/skills}"', adapter)
+
     def test_script_stashes_dirty_files_resets_main_and_preserves_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -150,7 +181,7 @@ if [[ "${POWERPACKS_TEST_INSTALL_FAIL:-}" == "1" ]]; then
   exit 42
 fi
 printf '%s\n%s\n' "$*" "${POWERPACKS_SKIP_AGENT_BOOTSTRAP:-}" > "$POWERPACKS_TEST_INSTALL_RECORD"
-skills_dir="${2:-$HOME/.codex/skills}"
+skills_dir="${2:-$HOME/.agents/skills}"
 mkdir -p "$skills_dir"
 printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}\n' "$PWD" > "$skills_dir/.powerpacks-install.json"
 """,
@@ -180,6 +211,8 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             write(checkout / ".powerpacks/sentinel", "keep powerpacks state\n")
             write(checkout / ".env", "KEEP_ENV=yes\n")
 
+            # An install from before the move to ~/.agents/skills: the launcher and
+            # stamp still sit in Codex's deprecated folder, and the update must find them.
             installed_launcher = home / ".codex/skills/update-powerpacks/update-powerpacks"
             write(installed_launcher, UPDATE_SCRIPT.read_text(encoding="utf-8"), executable=True)
             write(
@@ -231,7 +264,7 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             self.assertIn("preserved=.powerpacks,.env", proc.stdout)
             self.assertEqual(install_record.read_text(encoding="utf-8"), "codex\n1\n")
             self.assertEqual(sync_record.read_text(encoding="utf-8"), "synced\n")
-            self.assertTrue((home / ".codex/skills/.powerpacks-install.json").is_file())
+            self.assertTrue((home / ".agents/skills/.powerpacks-install.json").is_file())
             self.assertIn("powerset_api_key_refresh=not_signed_in", proc.stdout)
 
             requests = []
@@ -513,7 +546,7 @@ class ReleaseChannelTests(unittest.TestCase):
             write(
                 publisher / "install.sh",
                 '#!/usr/bin/env bash\nset -euo pipefail\n'
-                'skills_dir="${2:-$HOME/.codex/skills}"\nmkdir -p "$skills_dir"\n',
+                'skills_dir="${2:-$HOME/.agents/skills}"\nmkdir -p "$skills_dir"\n',
                 executable=True,
             )
             run("git", "add", ".", cwd=publisher)

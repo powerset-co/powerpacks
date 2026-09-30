@@ -10,7 +10,7 @@ Run exactly one command for the current harness:
 **Codex**
 
 ```bash
-"${CODEX_HOME:-$HOME/.codex}/skills/update-powerpacks/update-powerpacks" codex
+"$HOME/.agents/skills/update-powerpacks/update-powerpacks" codex
 ```
 
 **Claude Code**

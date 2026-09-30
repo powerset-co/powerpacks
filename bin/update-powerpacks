@@ -26,6 +26,7 @@ stamp_candidates=()
 case "$HARNESS" in
   codex)
     stamp_candidates+=(
+      "$HOME/.agents/skills/.powerpacks-install.json"
       "${CODEX_HOME:-$HOME/.codex}/skills/.powerpacks-install.json"
       "${CODEX_HOME:-$HOME/.codex}/powerpacks/.powerpacks-install.json"
     )
@@ -196,7 +197,7 @@ case "$HARNESS" in
       stamp_path="$SKILLS_DIR/.powerpacks-install.json"
     else
       POWERPACKS_SKIP_AGENT_BOOTSTRAP=1 "$REPO/install.sh" codex
-      stamp_path="${CODEX_HOME:-$HOME/.codex}/skills/.powerpacks-install.json"
+      stamp_path="$HOME/.agents/skills/.powerpacks-install.json"
     fi
     ;;
   claude-code)
