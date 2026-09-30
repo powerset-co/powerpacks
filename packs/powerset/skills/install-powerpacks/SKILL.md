@@ -3,15 +3,11 @@ name: install-powerpacks
 description: Bootstrap Powerpacks into this agent from one URL — clone the public repo, install every Powerpacks skill for this harness (Claude Code, Codex, or Pi), initialize the hosted Powerset config when requested, then continue the user's ask in the same session without a restart. Use for "install powerpacks", "download the powerpacks skill", "use powerpacks to set up ...", or "set up my local network search using my Powerset account".
 license: MIT
 allowed-tools:
-  - Bash(git clone https://github.com/powerset-co/powerpacks.git *)
-  - Bash(~/powerpacks/bin/powerpacks-channel *)
-  - Bash(./install.sh claude-code)
-  - Bash(command -v *)
-  - Bash(test -d *)
+  - Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap *)
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.0.4
+  version: 1.0.5
   summary: One-sentence bootstrap for the full Powerpacks skill suite
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -41,6 +37,9 @@ Changelog:
   and cloud sessions and names the tool to use instead; Permissions note
   before Step 1 with per-harness bypass steps and a stop-on-denial rule;
   allowed-tools pre-approves Step 1's local commands in Claude Code.
+- 2026-09-30: Step 1 is one command, `bin/bootstrap`, and one rule: do what its
+  last line says. The clone, release pin, installer, tool check and .env moved
+  into the script so any model can run it and the user only has to approve.
 -->
 
 One sentence installs everything:
@@ -65,14 +64,10 @@ ChatGPT chat, the desktop app's Chat tab, or a Claude Code cloud session
 (Claude Code on the web, or Cloud in the desktop app): none of those run
 commands on the user's Mac, so nothing lands where Powerpacks looks for it.
 
-Run this first, before Step 0 or Step 1:
-
-```bash
-[[ "$(uname -s)" == Darwin && "$HOME" == /Users/* && -d "$HOME/Library" && "${CLAUDE_CODE_REMOTE:-}" != true ]] && echo "local mac: ok"
-```
-
-If there is no shell tool, or it does not print `local mac: ok`: stop. Do not
-run Step 0 or Step 1. Tell the user which tool to use instead, in a few lines:
+The Step 1 command checks this itself and prints a line starting with
+`STOP:` when it is not on the user's Mac. The one case it cannot catch is an
+agent with no shell tool at all: then stop here, do not run Step 0 or Step 1,
+and tell the user which tool to use instead, in a few lines:
 
 - In ChatGPT chat: "This needs a coding agent on your Mac. Please use Codex
   instead: open Terminal, run
@@ -108,9 +103,8 @@ Trigger phrases (any harness):
 - "Import my LinkedIn/Gmail/iMessage network with powerpacks"
 - "Search my network for ..." (when Powerpacks skills are not installed yet)
 
-**Permissions.** This step runs about a dozen local shell commands (git
-clone, the release checkout, `./install.sh`, tool checks; Homebrew and curl
-installs only after the user says yes) and no paid APIs. Each command prompts
+**Permissions.** This step runs one local command, a few times at most, and
+no paid APIs (Homebrew installs only after the user says yes). Each run prompts
 unless the harness is set to allow it. Before the first command, tell the
 user once: "For the best experience enable bypass permissions", with the steps
 for their harness, then proceed. The agent cannot read or change the mode;
@@ -133,80 +127,44 @@ before continuing.
 
 Do the following, in order:
 
-1. **Resolve or clone the repo.** Use the first that exists: `$POWERPACKS_REPO_ROOT`,
-   `~/powerpacks`, `~/workspace/powerpacks`. Otherwise clone the public repo:
+1. **Run one command.** Add `--powerset` only when the ask named Powerset
+   ("using my Powerset account"):
 
    ```bash
-   git clone https://github.com/powerset-co/powerpacks.git ~/powerpacks
-   ~/powerpacks/bin/powerpacks-channel --checkout ~/powerpacks
+   curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
    ```
 
-   The second command moves a fresh clone off the unreleased tip of the default
-   branch onto the newest published release, which is what installs follow. Run
-   it only on a clone you just made — on a checkout that already existed, leave
-   the working tree alone and let `$update-powerpacks` move it.
+   It downloads Powerpacks to `~/powerpacks` (or reuses an existing checkout),
+   pins it to the newest release, installs the skills for every agent found on
+   this Mac, and, only when the user chose Powerset, runs
+   `cp packs/powerset/templates/env.powerset.example .env` (never touching an
+   existing `.env`). Local-only: no paid APIs, no uploads, no logins.
 
-2. **Run the installer for THIS harness** from the repo root (it sets up the
-   Python env via uv, installs/refreshes every Powerpacks skill, and cleans
-   stale ones):
+2. **Read its LAST line and do exactly what it says.** Nothing else in the
+   output needs a decision.
 
-   ```bash
-   ./install.sh claude-code   # Claude Code -> ~/.claude/skills
-   ./install.sh codex         # Codex       -> ~/.codex/skills
-   adapters/pi/install.sh     # Pi
-   ```
+   - `DONE: ...` — installed. Go to step 3.
+   - `NEEDS YOU: ...` — a step only the human can do (a click, a password).
+     Show the user that line word for word, wait for them to say it is done,
+     then run the same command again.
+   - `ASK: ...` — one yes/no question about installing the free Gmail-import
+     tools. Ask the user that question. Yes: run the command again with
+     `--tools` added. No: run it again with `--no-tools` added.
+   - `STOP: ...` — wrong place to run this. Show the user that line and the
+     matching tool from "Where this can run". Do not continue.
+   - `FAILED: ...` — show the user that line and the lines above it. Do not
+     continue.
 
-   Local-only: git + uv/Python setup, no paid APIs, no uploads. Downstream skills
-   gate their own spend and logins.
+   Run the command as many times as those lines ask; it is safe to repeat and
+   skips every step already done.
 
-3. **Install the machine tools.** Gmail import needs `msgvault`, the Google
-   Cloud CLI, Node/npm (browser automation for the OAuth app), and Google
-   Chrome. Check them in one pass:
-
-   ```bash
-   for t in msgvault gcloud node npm; do printf '%s: ' "$t"; command -v "$t" || echo MISSING; done
-   test -d "/Applications/Google Chrome.app" && echo "chrome: ok" || echo "chrome: MISSING"
-   command -v brew || echo "brew: MISSING"
-   ```
-
-   If anything is missing, list it and ask once (OS install), then install:
-
-   ```bash
-   curl -fsSL https://msgvault.io/install.sh | bash   # msgvault
-   brew install --cask gcloud-cli                     # gcloud
-   brew install node                                  # node + npm
-   brew install --cask google-chrome                  # Chrome
-   ```
-
-   Without Homebrew, point the user at https://brew.sh (needs their password)
-   and rerun the check. Logins are not part of this step.
-
-4. **Initialize the hosted config only when the user chose Powerset.** If the
-   ask said "using my Powerset account" (or otherwise named Powerset), work in
-   the canonical repo. If `.env` does not exist, copy the public hosted config
-   and restrict its permissions:
-
-   ```bash
-   cp packs/powerset/templates/env.powerset.example .env
-   chmod 600 .env
-   ```
-
-   If `.env` already exists, preserve its secrets and other settings. Ensure its
-   public Powerset URL/Auth0 keys match
-   `packs/powerset/templates/env.powerset.example`; do not replace the whole file.
-
-   If the ask did NOT mention Powerset (plain "set up my local network
-   search"), skip this step — `$setup` Step 1 asks the user whether they have
-   a Powerset account to log in with and initializes `.env` on a yes (own
-   Modal/OpenAI/Parallel/Powerset API keys are the alternative).
-
-5. **Continue in THIS session — no restart.** The harness's skill registry is
+3. **Continue in THIS session — no restart.** The harness's skill registry is
    snapshotted at session start, but you do not need it: the skills are now plain
    files on disk. Read the one that matches the user's ask directly (e.g.
    `~/.claude/skills/setup/SKILL.md`) and follow it as if it had been routed.
    New sessions pick up the full skill list automatically.
 
-6. **Route the ask:**
+4. **Route the ask:**
    - "set up my local network search" with or without "using my Powerset
      account" -> follow `$setup` (LinkedIn export -> merge -> search index).
      Its Steps 1-3 authenticate the Powerset user and pull that user's

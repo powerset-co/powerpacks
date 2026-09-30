@@ -14,6 +14,7 @@ on:
       - packs/ingestion/primitives/setup/**
       - adapters/claude-code/install.sh
       - adapters/codex/install.sh
+      - bin/bootstrap
       - bin/ensure-uv
       - bin/setup-python
       - bin/doctor
@@ -30,10 +31,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Claude Code adapter install
-        run: adapters/claude-code/install.sh
-      - name: Codex adapter install
-        run: adapters/codex/install.sh
+      - name: Bootstrap (the one command the install skill runs)
+        # A fresh runner has neither agent, so bootstrap installs for both.
+        run: POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | tee bootstrap.log && grep -q '^DONE: ' bootstrap.log
+      - name: Bootstrap again is a no-op
+        run: POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | grep -q '^DONE: '
       - name: Verify installed skills
         run: |
           for dir in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
