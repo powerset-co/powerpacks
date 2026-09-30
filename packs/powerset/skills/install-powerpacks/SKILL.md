@@ -2,10 +2,16 @@
 name: install-powerpacks
 description: Bootstrap Powerpacks into this agent from one URL — clone the public repo, install every Powerpacks skill for this harness (Claude Code, Codex, or Pi), initialize the hosted Powerset config when requested, then continue the user's ask in the same session without a restart. Use for "install powerpacks", "download the powerpacks skill", "use powerpacks to set up ...", or "set up my local network search using my Powerset account".
 license: MIT
+allowed-tools:
+  - Bash(git clone https://github.com/powerset-co/powerpacks.git *)
+  - Bash(~/powerpacks/bin/powerpacks-channel *)
+  - Bash(./install.sh claude-code)
+  - Bash(command -v *)
+  - Bash(test -d *)
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.0.3
+  version: 1.0.4
   summary: One-sentence bootstrap for the full Powerpacks skill suite
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -31,6 +37,10 @@ Changelog:
 - 2026-09-28: New Step 1.3 installs the machine tools Gmail import needs
   (msgvault, gcloud, node, Chrome) so install owns environment setup. Dropped
   the dead `onboard` route.
+- 2026-09-30: "Where this can run" check stops claude.ai chat, ChatGPT chat,
+  and cloud sessions and names the tool to use instead; Permissions note
+  before Step 1 with per-harness bypass steps and a stop-on-denial rule;
+  allowed-tools pre-approves Step 1's local commands in Claude Code.
 -->
 
 One sentence installs everything:
@@ -45,6 +55,37 @@ Then a Powerset user says:
 This wording is explicit but not required. With the shorter prompt (no
 Powerset mentioned), `$setup` asks whether to log in with a Powerset account
 before anything runs; answering yes gives the same Powerset-backed setup.
+
+## Where this can run
+
+This skill runs shell commands on the user's Mac, so it works only in a local
+coding agent there: Claude Code (the CLI, or the desktop app's Code tab in a
+Local session), Codex (CLI or app), or Pi. It does not work in claude.ai chat,
+ChatGPT chat, the desktop app's Chat tab, or a Claude Code cloud session
+(Claude Code on the web, or Cloud in the desktop app): none of those run
+commands on the user's Mac, so nothing lands where Powerpacks looks for it.
+
+Run this first, before Step 0 or Step 1:
+
+```bash
+[[ "$(uname -s)" == Darwin && "$HOME" == /Users/* && -d "$HOME/Library" && "${CLAUDE_CODE_REMOTE:-}" != true ]] && echo "local mac: ok"
+```
+
+If there is no shell tool, or it does not print `local mac: ok`: stop. Do not
+run Step 0 or Step 1. Tell the user which tool to use instead, in a few lines:
+
+- In ChatGPT chat: "This needs a coding agent on your Mac. Please use Codex
+  instead: open Terminal, run
+  `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
+  (https://learn.chatgpt.com/docs/codex/cli), then `cd ~`, run `codex`, and
+  paste the same sentence."
+- In claude.ai chat or a cloud session: "This needs a coding agent on your
+  Mac. Please use the Claude Code app or CLI on your Mac instead: install the
+  app from https://code.claude.com/docs/en/desktop-quickstart and open a Local
+  session on your home folder, or open Terminal, run
+  `curl -fsSL https://claude.ai/install.sh | bash`
+  (https://code.claude.com/docs/en/setup), then `cd ~` and run `claude`. Then
+  paste the same sentence."
 
 ## Step 0 — install this file (the "download and install" sentence)
 
@@ -66,6 +107,29 @@ Trigger phrases (any harness):
 - "Set up powerpacks" / "install powerpacks fully"
 - "Import my LinkedIn/Gmail/iMessage network with powerpacks"
 - "Search my network for ..." (when Powerpacks skills are not installed yet)
+
+**Permissions.** This step runs about a dozen local shell commands (git
+clone, the release checkout, `./install.sh`, tool checks; Homebrew and curl
+installs only after the user says yes) and no paid APIs. Each command prompts
+unless the harness is set to allow it. Before the first command, tell the
+user once: "For the best experience enable bypass permissions", with the steps
+for their harness, then proceed. The agent cannot read or change the mode;
+only the user can.
+
+- Claude Code CLI: restart with `claude --dangerously-skip-permissions` (same
+  as `--permission-mode bypassPermissions`); a session started without it
+  cannot switch into bypass with Shift+Tab. Or allow the commands in
+  `/permissions`.
+- Claude Code desktop app: Settings > Claude Code > "Allow bypass permissions
+  mode", then pick Bypass permissions in the mode selector next to the send
+  button (Cmd+Shift+M).
+- Codex CLI: restart with `codex --yolo` (or `-a never -s danger-full-access`),
+  or pick a profile in `/permissions`.
+- Codex app: the permissions control beneath the composer > Full access.
+
+Rule: if any Step 1 command is denied, or the user has had to approve more
+than one prompt, stop and repeat the enable-bypass steps for their harness
+before continuing.
 
 Do the following, in order:
 
