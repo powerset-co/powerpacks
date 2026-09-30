@@ -108,7 +108,7 @@ def research_artifact_projection(
             content_fingerprint=hashlib.sha256(result_data).hexdigest(),
             status=ProjectionStatus.PROJECTED.value,
             candidate_key=row_key,
-            input_fingerprint=input_fingerprint(row, handle, processor=params.processor, beta_header=params.beta_header),
+            input_fingerprint=input_fingerprint(row, processor=params.processor, beta_header=params.beta_header),
             payload_json=payload_json,
             projected_at=now,
         ),

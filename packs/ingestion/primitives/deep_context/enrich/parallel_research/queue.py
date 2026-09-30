@@ -36,29 +36,28 @@ class ResearchQueueRow:
             raise ValueError("research handle must be non-empty and trimmed")
 
 
-def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
+def build_input(row: ResearchQueueRow) -> dict[str, Any]:
     """Collapse a queue row into one dossier plus optional human guidance.
 
     Example, for a row with display_name="Jordan Bravo",
-    primary_email="casey@example.com": {"handle": "jbravo",
-    "dossier": "Name: Jordan Bravo\\nEmail: casey@example.com\\n..."}.
+    primary_email="casey@example.com":
+    {"dossier": "Name: Jordan Bravo\\nEmail: casey@example.com\\n..."}.
     This dict, unchanged, becomes the SDK RunInputParam.input and feeds the
     paid request fingerprint below.
     """
-    name = row.display_name.strip()
     guidance = row.retarget_hint.strip()
-    known = row.known_info.strip()
-    lines = [f"Name: {name or handle}"]
+    lines = []
     for label, value in (
+        ("Name", row.display_name),
         ("Relationship dossier", row.bio),
         ("Email", row.primary_email),
         ("Phone", row.phone_e164),
-        ("Additional context", known),
+        ("Additional context", row.known_info),
     ):
         text = str(value).strip()
         if text:
             lines.append(f"{label}: {text}")
-    payload: dict[str, Any] = {"handle": handle, "dossier": "\n".join(lines)}
+    payload: dict[str, Any] = {"dossier": "\n".join(lines)}
     if guidance:
         payload["guidance"] = guidance
     return payload
@@ -84,7 +83,6 @@ def _json_fingerprint(payload: object) -> str:
 
 def input_fingerprint(
     row: ResearchQueueRow,
-    handle: str,
     *,
     processor: str = config.DEFAULT_PROCESSOR,
     beta_header: str = config.DEFAULT_BETA_HEADER,
@@ -96,7 +94,7 @@ def input_fingerprint(
     """
     return _json_fingerprint(
         {
-            "input": build_input(row, handle),
+            "input": build_input(row),
             **_provider_contract(processor, beta_header),
         }
     )
@@ -119,7 +117,6 @@ def request_plan_fingerprint(
             row.handle,
             input_fingerprint(
                 row,
-                row.handle,
                 processor=processor,
                 beta_header=beta_header,
             ),
@@ -161,9 +158,9 @@ def filter_already_done(
         if handle.lower() in completed:
             stored = str(completed[handle.lower()] or "")
             current = input_fingerprint(
-                row, handle, processor=processor, beta_header=beta_header
+                row, processor=processor, beta_header=beta_header
             )
-            legacy = legacy_parallel_input_fingerprint(build_input(row, handle))
+            legacy = legacy_parallel_input_fingerprint(build_input(row))
             if stored in {current, legacy, LEGACY_PARALLEL_HANDLE_RESULT}:
                 skipped += 1
                 continue

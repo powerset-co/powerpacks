@@ -109,6 +109,16 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("name_confidence", properties)
         self.assertIn("field-basis-2025-11-25", config.DEFAULT_BETA_HEADER)
         self.assertEqual(config.DEFAULT_STREAM_TIMEOUT, 3600)
+        self.assertNotIn("handle", config.PERSON_RESEARCH_INPUT_SCHEMA["properties"])
+        self.assertEqual(config.PERSON_RESEARCH_INPUT_SCHEMA["required"], ["dossier"])
+
+    def test_blank_name_does_not_put_local_handle_in_provider_input(self) -> None:
+        row = replace(research_queue_row("parent:local-subject"), display_name=" ")
+        payload = queue.build_input(row)
+
+        self.assertEqual(set(payload), {"dossier"})
+        self.assertNotIn(row.handle, json.dumps(payload))
+        self.assertNotIn("Name:", payload["dossier"])
 
     def test_stringified_nested_arrays_fail_at_the_provider_boundary(self) -> None:
         output = provider_output()
@@ -118,10 +128,10 @@ class ProviderTests(unittest.TestCase):
 
     def test_paid_fingerprint_covers_guidance_processor_and_contract(self) -> None:
         row = research_queue_row(guidance="Find the right LinkedIn")
-        original = queue.input_fingerprint(row, row.handle)
-        self.assertNotEqual(original, queue.input_fingerprint(replace(row, retarget_hint="Better clue"), row.handle))
-        self.assertNotEqual(original, queue.input_fingerprint(row, row.handle, processor="pro"))
-        self.assertEqual(original, queue.input_fingerprint(row, row.handle))
+        original = queue.input_fingerprint(row)
+        self.assertNotEqual(original, queue.input_fingerprint(replace(row, retarget_hint="Better clue")))
+        self.assertNotEqual(original, queue.input_fingerprint(row, processor="pro"))
+        self.assertEqual(original, queue.input_fingerprint(row))
 
     def test_request_plan_fingerprint_covers_dossier_contract_and_dedupes(self) -> None:
         row = research_queue_row(guidance="Find the right LinkedIn")
@@ -146,9 +156,19 @@ class ProviderTests(unittest.TestCase):
             queue.request_plan_fingerprint((row,), beta_header="new-contract"),
         )
 
-    def test_pre_contract_paid_fingerprint_is_grandfathered_without_spend(self) -> None:
+    def test_old_handle_input_is_a_different_provider_contract(self) -> None:
         row = research_queue_row()
-        legacy = legacy_parallel_input_fingerprint(queue.build_input(row, row.handle))
+        old_input = {"handle": row.handle, **queue.build_input(row)}
+        pending, reused = queue.filter_already_done((row,), (
+            ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected",
+                        input_fingerprint=legacy_parallel_input_fingerprint(old_input)),
+        ))
+        self.assertEqual(pending, [row])
+        self.assertEqual(reused, 0)
+
+    def test_input_only_fingerprint_is_reused_without_spend(self) -> None:
+        row = research_queue_row()
+        legacy = legacy_parallel_input_fingerprint(queue.build_input(row))
         pending, reused = queue.filter_already_done((row,), (
             ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected", input_fingerprint=legacy),
         ))
@@ -292,7 +312,9 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(json.loads(projected[0].payload_json)["type"], "json")
             submitted = StubParallelClient.submissions[0][0]
             self.assertNotIn("task_spec", submitted)
-            self.assertEqual(set(submitted["input"]), {"handle", "dossier"})
+            self.assertEqual(set(submitted["input"]), {"dossier"})
+            self.assertEqual(submitted["metadata"], {"handle": "jordan-a"})
+            self.assertNotIn("jordan-a", json.dumps(submitted["input"]))
 
     def test_each_streamed_success_is_durable_before_later_error(self) -> None:
         class PartialClient(StubParallelClient):

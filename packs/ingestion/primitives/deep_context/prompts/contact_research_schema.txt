@@ -2,7 +2,6 @@
   "input": {
     "type": "object",
     "properties": {
-      "handle": {"type": "string", "description": "Stable local subject key"},
       "dossier": {
         "type": "string",
         "description": "Known identity, relationship, and contact evidence for one person"
@@ -12,7 +11,7 @@
         "description": "Optional human correction or search guidance"
       }
     },
-    "required": ["handle", "dossier"]
+    "required": ["dossier"]
   },
   "output": {
     "type": "object",

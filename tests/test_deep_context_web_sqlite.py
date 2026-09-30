@@ -327,7 +327,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             encoding="utf-8",
         )
         payload = result_path.read_text(encoding="utf-8")
-        fingerprint = input_fingerprint(row, row.handle)
+        fingerprint = input_fingerprint(row)
         self.db.project_rows(
             (
                 ArtifactRow(
@@ -1050,8 +1050,8 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(captured, expected)
         self.assertIsNotNone(captured)
         self.assertEqual(
-            build_input(captured, captured.handle),
-            build_input(expected, expected.handle),
+            build_input(captured),
+            build_input(expected),
         )
         self.assertFalse((queue_dir / "manifest.json").exists())
 
