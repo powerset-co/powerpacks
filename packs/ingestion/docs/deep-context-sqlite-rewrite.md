@@ -209,8 +209,8 @@ The database package should expose only what the product uses:
   and job state;
 - domain transactions: `decide_worth`, `settle_identity`, `reset_identity`,
   `save_guidance`, and async job receipt updates;
-- named reads: `worth_queue`, `linkedin_queue`, `siblings_of`,
-  `stage_progress`, `directory`, and `person_detail`;
+- named reads: `worth_queue`, `linkedin_queue`, `siblings_of`, and
+  `stage_progress`;
 - explicit compatibility exports.
 
 Do not provide a generic `update_link(**columns)` escape hatch, automatic mtime
@@ -234,10 +234,11 @@ smaller.
 
 The frozen route inventory is:
 
-- GET `/`, `/directory`, `/healthz`, `/api/events`, `/api/status`,
+- GET `/`, `/healthz`, `/api/events`, `/api/status`,
   `/api/enrichment`, `/api/retargets`, `/api/dossier`,
   `/api/worth-card`, `/api/linkedin-card`,
-  `/api/person`, `/api/avatar`, and the two existing asset paths;
+  `/api/avatar`, and the two existing asset paths
+  (`/directory` and `/api/person` were removed on 2026-09-30; People is the browse surface);
 - POST `/decide`, `/worth`, `/complete`, `/approve-enrichment`, `/retarget`,
   `/feedback`, and `/auth/login`.
 
@@ -251,7 +252,7 @@ The required surface is small:
 - status/progress;
 - next worth card and set/reset worth;
 - next LinkedIn card and settle/reset identity;
-- directory/person/dossier/avatar reads;
+- dossier/avatar reads;
 - guided retarget submit/status;
 - stage-complete compatibility and budget-approved job launch;
 - feedback/auth adapters;

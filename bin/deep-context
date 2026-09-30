@@ -85,7 +85,7 @@ review_url() {
   elif [[ -n "$stage" ]]; then
     echo "http://127.0.0.1:$port/?stage=$stage"
   else
-    echo "http://127.0.0.1:$port/people"
+    echo "http://127.0.0.1:$port/"
   fi
 }
 
@@ -168,7 +168,7 @@ usage: bin/deep-context <command> [args]
                is accepted for compat but is a
                no-op — restart is always unconditional.
                Add a stage word to land there directly
-               (review linkedin | worth | enrich | people | searches; default: People);
+               (review linkedin | worth | enrich | people | searches; default: the current stage);
                pass --stage worth|enrich|linkedin for the staged workflow
   stop         stop the review UI server (free)
   review-status  read canonical SQLite and print the exact next workflow action

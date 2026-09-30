@@ -1,7 +1,7 @@
 """Command-line parsing and dispatch for the review UI.
 
 Changelog:
-- 2026-09-30: the directory stage is gone; a store's default page is People.
+- 2026-09-30: the directory stage is gone; bare `serve` opens the current review stage.
 - 2026-09-30: serve no longer counts LinkedIn parents at startup (minutes on a
   large store, read by nobody); `status --wait` polls every five seconds.
 - 2026-09-26: the searches-only server serves the React shell at /people; its
@@ -57,6 +57,8 @@ _NO_PEOPLE = json.dumps({
 def _url(host: str, port: int, stage: str, run_id: str = "") -> str:
     if stage == "searches" and run_id:
         return f"http://{host}:{port}/searches/run?run_id={urllib.parse.quote(run_id)}"
+    if not stage:
+        return f"http://{host}:{port}/"  # the current review stage
     route = stage if stage in {"people", "searches"} else f"?stage={stage}"
     return f"http://{host}:{port}/{route}"
 
@@ -127,7 +129,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     except (OSError, json.JSONDecodeError):
         live = {}
     has_store = CANONICAL_DB.is_file()
-    stage = args.stage or ("people" if has_store else "searches")
+    stage = args.stage or ("" if has_store else "searches")
     url = _url(args.host, args.port, stage, args.run)
     if live.get("primitive") == "reconcile_review_web":
         _announce("reused", url, stage=stage)

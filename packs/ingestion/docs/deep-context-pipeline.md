@@ -342,9 +342,9 @@ This gives repeatability without a ledger:
 - Direct progress-step navigation is preview-only; the preview remains visible
   and current with SQLite changes, while SQLite still determines the actual
   workflow stage.
-- `$deep-context review` always opens the read-only `/directory` browser. The
-  full workflow uses `review worth` to open the People stage without erasing
-  sticky human decisions.
+- `$deep-context review` opens the current review stage; `review people` opens
+  the People page (your network with its share decisions, populated by the
+  share step). Neither erases sticky human decisions.
 
 ## What leaves the machine
 
@@ -402,7 +402,7 @@ Not every request needs the full workflow:
 | Look up one person by name/email/phone | `bin/deep-context lookup ...` | Free, read-only dossier lookup. |
 | Check readiness | `bin/deep-context check` | Free, read-only source/config check. |
 | Validate dossiers | `bin/deep-context validate` | Free validation only. |
-| Browse people | `bin/deep-context review` | Opens the read-only A-Z directory; `review <stage>` opens that stage. Does not restart processing. |
+| Open the review | `bin/deep-context review` | Opens the current review stage; `review <stage>` opens that stage, `review people` the People page. Does not restart processing. |
 
 ## Implementation map
 

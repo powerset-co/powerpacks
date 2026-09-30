@@ -842,7 +842,7 @@ document.addEventListener("click", async (event) => {
         worth: ["People Reviewed", "/?stage=enrich"],
         enrich: ["Contacts Enriched", "/?stage=linkedin"],
         // Finish transforms THIS screen into the go-back handoff state —
-        // never a surprise jump to People.
+        // never a surprise jump elsewhere.
         linkedin: ["", "/?stage=linkedin"],
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
@@ -1116,7 +1116,7 @@ async function syncFileState() {
         && movesForward && observedTransition) {
       if (preserveDraft) return;
       leaveAndNavigate("Contacts Enriched", state.stage === "done"
-        ? "/people" : `/?stage=${encodeURIComponent(state.stage)}`);
+        ? "/?stage=done" : `/?stage=${encodeURIComponent(state.stage)}`);
       return;
     }
     if (state.state_token && state.state_token !== reviewStateToken) {
