@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# One command that takes a Mac from nothing to installed Powerpacks skills.
+#
+# The coding agent (Claude Code, Codex, Pi) runs this on the user's behalf. It
+# asks nothing and decides nothing for the agent: the LAST line of its output
+# says what happens next, and the agent only relays it.
+#
+#   DONE: ...        installed; continue with the user's ask
+#   NEEDS YOU: ...   a step needs the human (a click, a password); show the line
+#                    word for word, wait, then run the same command again
+#   ASK: ...         one yes/no question for the user; rerun with the flag it names
+#   STOP: ...        wrong place to run this; show the line, do not continue
+#   FAILED: ...      something broke; show the line
+#
+# Safe to run again: every step is skipped once done.
+#
+#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools]
+#
+#   --harness   which agent's skills folder to install into; default: every one
+#               found on this Mac (both Claude Code and Codex when none is found)
+#   --powerset  the user named their Powerset account: create .env from the template
+#   --tools     install the Gmail-import tools (msgvault, gcloud, node, Chrome)
+#               through Homebrew; --no-tools skips the check; neither = check only
+#
+# Exit codes: 0 done or ASK; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
+#
+# Created: 2026-09-30
+# Changelog:
+#   2026-09-30: created. Replaces the six-step prose in install-powerpacks/SKILL.md
+#     so a small model can install by running one command and reading one line.
+set -euo pipefail
+
+REPO_URL="${POWERPACKS_REPO_URL:-https://github.com/powerset-co/powerpacks.git}"
+DEFAULT_ROOT="$HOME/powerpacks"
+CHROME_APP="/Applications/Google Chrome.app"
+HOMEBREW_INSTALL='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+harness="auto"
+powerset=0
+tools="check"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --harness) harness="${2:-}"; shift 2 ;;
+    --powerset) powerset=1; shift ;;
+    --tools) tools="install"; shift ;;
+    --no-tools) tools="skip"; shift ;;
+    *)
+      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+say() { echo "powerpacks: $*"; }
+needs_you() { echo "NEEDS YOU: $*"; exit 10; }
+failed() { echo "FAILED: $*"; exit 1; }
+
+# 1. This must be a local session on the user's own Mac: the skills read mail
+#    and messages from this machine. A cloud session or a Linux sandbox is not it.
+if [[ "$(uname -s)" != Darwin || ! -d "$HOME/Library" || "${CLAUDE_CODE_REMOTE:-}" == true ]]; then
+  echo "STOP: This is not a session on the user's own Mac, so Powerpacks cannot be installed from here. Tell the user: open Terminal on your Mac, start Claude Code or Codex there, and paste the same sentence."
+  exit 3
+fi
+
+# 2. git comes with Apple's command line tools. Missing means a first-run Mac;
+#    the install is a dialog only the human can click.
+if ! xcode-select -p >/dev/null 2>&1; then
+  xcode-select --install >/dev/null 2>&1 || true
+  needs_you "A macOS window is asking to install the command line developer tools. Click Install and wait for it to finish (a few minutes). Then tell me and I'll continue."
+fi
+
+# 3. The repo: reuse a checkout if one exists, otherwise clone and pin it to the
+#    newest release (installs follow releases, not the tip of main).
+root=""
+for candidate in "${POWERPACKS_REPO_ROOT:-}" "$DEFAULT_ROOT" "$HOME/workspace/powerpacks"; do
+  if [[ -n "$candidate" && -x "$candidate/install.sh" && -d "$candidate/packs" ]]; then
+    root="$candidate"
+    break
+  fi
+done
+if [[ -z "$root" ]]; then
+  say "downloading Powerpacks to $DEFAULT_ROOT"
+  git clone --quiet "$REPO_URL" "$DEFAULT_ROOT" || failed "could not download Powerpacks from $REPO_URL. Check the internet connection and run this again."
+  "$DEFAULT_ROOT/bin/powerpacks-channel" --checkout "$DEFAULT_ROOT" >/dev/null || failed "downloaded Powerpacks but could not pick a release. Run this again."
+  root="$DEFAULT_ROOT"
+fi
+say "repo: $root"
+
+# 4. Which agents live on this Mac. None found (a brand-new machine) installs
+#    for both, so whichever the user opens next has the skills.
+found=()
+if [[ -n "${CLAUDECODE:-}" || -d "$HOME/.claude" ]] || command -v claude >/dev/null 2>&1; then found+=(claude-code); fi
+if [[ -d "$HOME/.codex" ]] || command -v codex >/dev/null 2>&1; then found+=(codex); fi
+if [[ -d "$HOME/.pi/agent" ]]; then found+=(pi); fi
+case "$harness" in
+  auto) harnesses=("${found[@]:-}"); [[ -n "${harnesses[0]}" ]] || harnesses=(claude-code codex) ;;
+  all) harnesses=(claude-code codex pi) ;;
+  codex|claude-code|pi) harnesses=("$harness") ;;
+  *) echo "usage: --harness codex|claude-code|pi|all" >&2; exit 2 ;;
+esac
+
+log="$(mktemp -t powerpacks-bootstrap)"
+for h in "${harnesses[@]}"; do
+  say "installing skills for $h"
+  if ! "$root/install.sh" "$h" >"$log" 2>&1; then
+    tail -n 20 "$log" >&2
+    failed "installing the skills for $h did not finish. The last lines above say why; fix that and run this again."
+  fi
+done
+rm -f "$log"
+
+# 5. A Powerset user gets the hosted config; an existing .env is theirs and is
+#    never touched.
+if [[ "$powerset" == 1 && ! -f "$root/.env" ]]; then
+  cp "$root/packs/powerset/templates/env.powerset.example" "$root/.env"
+  chmod 600 "$root/.env"
+  say "created $root/.env from the Powerset template"
+fi
+
+# 6. Gmail import needs four tools. Installing them is the one thing the user
+#    should hear about before it happens, so a plain check ends in one question.
+if [[ "$tools" != skip ]]; then
+  missing=()
+  for t in msgvault gcloud node npm; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
+  [[ -d "$CHROME_APP" ]] || missing+=(chrome)
+  if [[ ${#missing[@]} -gt 0 && "$tools" == check ]]; then
+    echo "ASK: Gmail import needs these free tools, which are not installed yet: ${missing[*]}. Ask the user: \"May I install them with Homebrew? It's free and takes a few minutes.\" Yes: run this again with --tools. No: run this again with --no-tools."
+    exit 0
+  fi
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    command -v brew >/dev/null 2>&1 || needs_you "Homebrew is needed to install ${missing[*]}, and only you can install it because it asks for your Mac password. Open Terminal, paste this line, press Return, and type your password when asked: $HOMEBREW_INSTALL   (from https://brew.sh). When it finishes, tell me and I'll continue."
+    for t in "${missing[@]}"; do
+      say "installing $t"
+      case "$t" in
+        msgvault) curl -fsSL https://msgvault.io/install.sh | bash >/dev/null 2>&1 || needs_you "msgvault did not install. Open Terminal and paste: curl -fsSL https://msgvault.io/install.sh | bash   Then tell me and I'll continue." ;;
+        gcloud) brew install --cask gcloud-cli >/dev/null 2>&1 || needs_you "gcloud did not install. Open Terminal and paste: brew install --cask gcloud-cli   (it may ask for your password). Then tell me and I'll continue." ;;
+        node|npm) command -v node >/dev/null 2>&1 || brew install node >/dev/null 2>&1 || needs_you "node did not install. Open Terminal and paste: brew install node   Then tell me and I'll continue." ;;
+        chrome) brew install --cask google-chrome >/dev/null 2>&1 || needs_you "Google Chrome did not install. Open Terminal and paste: brew install --cask google-chrome   (it may ask for your password). Then tell me and I'll continue." ;;
+      esac
+    done
+  fi
+fi
+
+echo "DONE: Powerpacks is installed for ${harnesses[*]} from $root. Continue with the user's ask: read the matching skill file in this agent's skills folder (for example setup/SKILL.md) and follow it."

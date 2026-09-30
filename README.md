@@ -252,6 +252,17 @@ locally outside the provisioned Powerset API path.
 
 ## Install
 
+One command does the whole first install (what the `install-powerpacks` skill
+runs for the user): it clones or reuses the checkout, pins it to the newest
+release, installs the skills for every agent found on the Mac, and ends with
+one line (`DONE:`, `NEEDS YOU:`, `ASK:`, `STOP:` or `FAILED:`) that says what
+to do next. Safe to run again.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
+# flags: --harness codex|claude-code|pi|all, --powerset, --tools, --no-tools
+```
+
 The top-level `install.sh` dispatches to a per-host adapter. **All adapters
 are idempotent — re-run them any time skills change** (you do not need
 to uninstall first; each adapter wipes and re-copies the skill directories).
