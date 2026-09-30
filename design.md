@@ -111,3 +111,28 @@ motion timings are our existing product choices, not copied Carbon branding.
   — subtle task-focused motion, easing and duration matched to the interaction.
 - [W3C: animation from interactions](https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions.html)
   — support disabling nonessential interaction-triggered motion.
+
+## People and Logbook
+
+Top navigation order: Searches, People, Scheduled tasks, Accounts. Logbook belongs
+inside People: use the Has logbook filter and a person's View logbook action,
+not another top-level tab. An existing archive offers View logbook; Refresh
+logbook lives in the reader.
+
+Keep only the share action beside the decision tabs; those tabs already show
+the totals. Quick filters omit zero counts and sort by descending count within
+the selected tab. Has logbook stays last when available, regardless of count.
+
+The reader URL includes the selected conversation, so refresh and copied links
+open the same thread. Email participants show names and addresses inline under
+From, To and Cc. Reuse the shared colored source icons.
+
+Opening Logbook crossfades over the mounted People view for 350ms, with at most
+8px of horizontal movement. Keep a stable reader shell while messages load;
+never insert a blank page between views. Back restores the same filters,
+selection, drawer and scroll position. Reduced motion removes the animation.
+
+The selected month fills its whole button with the primary color and contrasting
+text, rather than a left border. In a person's event timeline, connectors run
+between circle centers, behind opaque circles; no line extends above the first
+circle or below the last.

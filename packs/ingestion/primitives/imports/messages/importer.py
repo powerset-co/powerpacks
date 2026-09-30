@@ -6,6 +6,7 @@ Identity, worth, and person merging belong to Deep Context; the floor
 (`util.contact_floor_reason`) only drops contacts nobody could research.
 
 Changelog:
+  2026-09-30: contract v9 re-imports contacts with surname initials.
   2026-09-25: restored the import floor deleted by #486; skips are counted by
     reason on the manifest's `skipped` block. Contract bumped to v8 so
     existing installs re-import.
@@ -52,7 +53,7 @@ from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     contact_to_person,
 )
 
-MESSAGES_IMPORT_CONTRACT = "messages-source-only-v8"
+MESSAGES_IMPORT_CONTRACT = "messages-source-only-v9"
 WORKING_CONTACTS_CSV = MESSAGES_OUT_DIR / "contacts.csv"
 
 

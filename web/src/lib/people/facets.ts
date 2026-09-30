@@ -30,6 +30,7 @@ export type FacetKey =
   | "last"
   | "channels"
   | "linkedin"
+  | "logbook"
   | "worth_source"
   | "tags"
   | "labels"
@@ -81,6 +82,13 @@ export const FACETS: readonly FacetDef[] = [
     label: "LinkedIn",
     get: (r) => [r.public_identifier ? "Has LinkedIn" : "No LinkedIn"],
     order: ["Has LinkedIn", "No LinkedIn"],
+  },
+  {
+    key: "logbook",
+    label: "Logbook",
+    // No values until the saved logbooks are read: an unread catalog is not "No logbook".
+    get: (r) => (r.logbook === null ? [] : [r.logbook ? "Has logbook" : "No logbook"]),
+    order: ["Has logbook", "No logbook"],
   },
   {
     key: "worth_source",
@@ -171,6 +179,7 @@ export const QUICK: readonly QuickFilter[] = [
   { name: "Automated senders", set: { labels: ["is_automated_sender"] } },
   { name: "Last contact > 2 years", set: { last: [LAST[2]] } },
   { name: "Close friends", set: { relationship_kind: ["close_friend"] } },
+  { name: "Has logbook", set: { logbook: ["Has logbook"] } },
 ]
 
 export type SortKey = "name" | "relationship" | "worth" | "warmth" | "last" | "messages"

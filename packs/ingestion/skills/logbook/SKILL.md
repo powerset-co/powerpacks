@@ -6,6 +6,15 @@ description: Download EVERYTHING for a set of people across Gmail, iMessage, and
 <!--
 Created: 2026-06-25
 Changelog:
+- 2026-09-30: People page reads saved logbooks in-app (Logbook reader, Has logbook
+  filter); the ZIP download is gone.
+- 2026-09-30: WhatsApp reads include `@lid` chats and groups where the person is a
+  silent participant; export stages each entry so a failed read keeps the old
+  archive; unreadable chat.db reports `unreadable`; memory and sync-order notes
+  corrected.
+- 2026-09-30: People page "Build logbook" (selected people, in-process, no CSV);
+  export keeps other entries and moves rebuilt files to `<slug>.bkup-<utc>/`;
+  missing/unreadable channels are reported and left untouched.
 - 2026-06-25: Initial skill. Raw verbatim archive (no LLM, no network, no spend) from a
   people CSV. Streaming readers (uncapped, group-aware) reuse deep_context.context_sources for the
   msgvault connection, attributedBody decoding, and immutable chat.db open. One entry per
@@ -39,7 +48,9 @@ keeps the text.
   default. Use `--no-groups` only if the user explicitly asks to exclude groups.
 - **Deepen ALWAYS** (step 3 below) — it is not optional and you do not ask to skip.
 - **There is no `--force` flag.** If the user says "force"/"refresh", they mean
-  rebuild from scratch: that's just `export` (it overwrites). Do not invent flags.
+  rebuild from scratch: that's just `export`. It rebuilds only the CSV's entries,
+  moves their prior files to `<slug>.bkup-<utc>/`, and keeps every other entry.
+  Do not invent flags.
 - **When a request is genuinely ambiguous, ASK** — do not silently pick a
   conservative default. "Everything" means everything; if you're unsure of scope,
   ask the user rather than quietly narrowing it.
@@ -92,8 +103,8 @@ Gmail (msgvault) and WhatsApp (wacli) read fine from anywhere.
    bin/logbook check --csv "<path>"
    ```
    Report per-channel `status` + earliest/latest dates. If iMessage is
-   `unreadable_full_disk_access`, tell the user to grant FDA (or run in their
-   terminal) before relying on iMessage.
+   `unreadable`, the usual cause is missing Full Disk Access (grant it or run in
+   their terminal); a corrupt chat.db reads the same way.
 
 3. **Deepen the local stores — ALWAYS. Not optional, do not ask, do not offer to
    skip.** "Everything" means deepest-available, so deepen is part of every run. It
@@ -122,22 +133,37 @@ Gmail (msgvault) and WhatsApp (wacli) read fine from anywhere.
    Then point the user at `.powerpacks/logbook/index.md`.
 
 5. **Sync** later (incremental, **append-only** — never overwrites). Reads the
-   per-channel watermark from `manifest.json`, pulls only newer messages, and
-   appends them to the existing files:
+   per-channel watermark from `manifest.json`, pulls only messages the stores got
+   since, and appends them to the existing files. The watermark is store insertion
+   order, so history deepened after the last sync is appended at the end, out of
+   date order — run `export` after a deepen to get date order back:
    ```bash
    bin/logbook sync --csv "<path>"
    ```
    Re-running with nothing new is a no-op.
 
+## From the People page
+
+`bin/deep-context review people` → select people (or open one) → **Build logbook**.
+It runs the same export for exactly those people (every child's email and phone
+under each parent; no Worth or share filter), over every date the local stores
+hold, groups included. It reads only what is already synced — no deepen, no
+network — and says which channel was missing or unreadable. When it finishes the
+page opens the Logbook reader on what it built; **Back to People** (or browser
+Back) returns to the same list. Saved logbooks stay readable after a restart:
+filter People by **Logbook: Has logbook** and use **View logbook** on a person or
+selection. Nothing is uploaded with Share.
+
 ## Notes
 
-- **Memory:** one ordered cursor per (entry, channel), streamed row-by-row; one
-  output file open at a time. Peak RSS stays in the tens of MB even for a contact
-  with 100k+ messages — bounded by the work, not the corpus.
+- **Memory:** one output file open at a time. Gmail streams one message at a time;
+  iMessage and WhatsApp load one conversation (a person's DMs or one group) at a
+  time, so memory follows the largest single conversation.
 - **Stable ids for dedupe/sync** live in each file's frontmatter (`container_id`)
   and the manifest watermark map: Gmail thread id + message id (+ `sources.sync_cursor`
-  historyId), wacli `chat_jid` + `msg_id` + monotonic `rowid`, chat.db `chat.guid`
-  + monotonic `ROWID`. Sync filters on the monotonic id, so appends never duplicate.
+  historyId), wacli `chat_jid` + `msg_id` + `rowid`, chat.db `chat.guid` + `ROWID`.
+  Sync filters on those increasing ids. A failed append can leave unrecorded lines;
+  run `export` to rebuild after a failure. IDs follow insertion, not message date.
 - **Raw fidelity:** bodies are kept verbatim (quoted reply chains, signatures,
   `[cid:...]` image refs and all) — this is a raw archive, not a summary.
 - Group entries are keyed by group name (their own top-level slug), so a shared

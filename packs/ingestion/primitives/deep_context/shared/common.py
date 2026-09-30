@@ -224,9 +224,9 @@ def slugify(name: str, person_id: str) -> str:
 
 @dataclass
 class Person:
-    # Opaque lookup key, not one id type: collection.planning.source_parents fills this
-    # with a canonical parent_id (message-store reads run per merged identity); logbook
-    # fills it with a raw people.csv row id — logbook has no parent/child merge concept.
+    # Opaque lookup key, not one id type: collection.planning.source_parents and the
+    # People page's logbook (logbook_people.people_for_parents) fill it with a canonical
+    # parent_id (reads run per merged identity); the logbook CLI fills it with a CSV row id.
     person_id: str
     full_name: str
     emails: list[str] = field(default_factory=list)

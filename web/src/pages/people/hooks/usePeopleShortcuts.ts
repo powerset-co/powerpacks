@@ -10,6 +10,8 @@ import type { useDrawer } from "./useDrawer"
 import { useKeyboard } from "./useKeyboard"
 
 interface ShortcutTargets {
+  // Off while another view covers the page (the Logbook reader).
+  active: boolean
   search: RefObject<HTMLInputElement>
   table: RefObject<PeopleTableHandle>
   matching: readonly Person[]
@@ -26,6 +28,7 @@ interface ShortcutTargets {
 
 // The People page's keys wired to its state; the Keyboard shortcuts list in the rail names them.
 export function usePeopleShortcuts({
+  active,
   search,
   table,
   matching,
@@ -43,7 +46,7 @@ export function usePeopleShortcuts({
     if (targets.length) void label(action, targets)
   }
 
-  useKeyboard({
+  useKeyboard(active, {
     focusSearch: () => {
       search.current?.focus()
       search.current?.select()

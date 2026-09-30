@@ -58,13 +58,15 @@ export interface Person {
   last: LastBucket
   warmthBucket: WarmthBucket | ""
   search: string
+  // The saved Logbook entry's slug, "" for none; null until the saved logbooks are read.
+  logbook: string | null
 }
 
 /** A person's identity everywhere on the page: selection, pending writes, virtual row keys. */
 export const personKey = (row: Person): string => row.parent_id
 
 /** The server's columns: every `Person` field but the derived ones. */
-export type PersonColumn = Exclude<keyof Person, "last" | "warmthBucket" | "search">
+export type PersonColumn = Exclude<keyof Person, "last" | "warmthBucket" | "search" | "logbook">
 
 /** The client's copy of model.py `PEOPLE_COLUMNS`, in its order. tests/test_share_web.py pins
  *  the two lists equal, so a server field rename fails a test instead of blanking a column. */
