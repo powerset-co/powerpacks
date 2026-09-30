@@ -6,6 +6,8 @@ description: Download EVERYTHING for a set of people across Gmail, iMessage, and
 <!--
 Created: 2026-06-25
 Changelog:
+- 2026-09-30: People page reads saved logbooks in-app (Logbook reader, Has logbook
+  filter); the ZIP download is gone.
 - 2026-09-30: WhatsApp reads include `@lid` chats and groups where the person is a
   silent participant; export stages each entry so a failed read keeps the old
   archive; unreadable chat.db reports `unreadable`; memory and sync-order notes
@@ -146,9 +148,11 @@ Gmail (msgvault) and WhatsApp (wacli) read fine from anywhere.
 It runs the same export for exactly those people (every child's email and phone
 under each parent; no Worth or share filter), over every date the local stores
 hold, groups included. It reads only what is already synced — no deepen, no
-network — and says which channel was missing or unreadable. Download the ZIP
-from the completion toast or **Download logbook** in the page header. Nothing is
-uploaded with Share.
+network — and says which channel was missing or unreadable. When it finishes the
+page opens the Logbook reader on what it built; **Back to People** (or browser
+Back) returns to the same list. Saved logbooks stay readable after a restart:
+filter People by **Logbook: Has logbook** and use **View logbook** on a person or
+selection. Nothing is uploaded with Share.
 
 ## Notes
 

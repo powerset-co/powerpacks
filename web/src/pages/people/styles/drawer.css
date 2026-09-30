@@ -35,14 +35,15 @@
 .drawer-inner p.dim {
   color: var(--muted);
 }
+/* The line and its dots sit inside the list's own left padding: the section body folds with
+   overflow hidden (Fold), so nothing may reach left of the list. */
 .timeline {
   position: relative;
   display: grid;
   gap: 10px;
   margin: 2px 0 0;
-  padding: 0 0 0 14px;
+  padding: 0 0 0 20px;
   list-style: none;
-  border-left: 1px solid var(--line-strong);
 }
 .timeline li {
   position: relative;
@@ -51,11 +52,22 @@
   font-size: 12.5px;
   line-height: 1.5;
 }
-/* The dot sits on the line: the line's centre is the border plus the padding left of the item. */
-.timeline li::before {
+.timeline li:not(:last-child)::after {
   content: "";
   position: absolute;
-  left: -14.5px;
+  top: 10px;
+  bottom: -20px;
+  left: -16px;
+  width: 1px;
+  background: var(--line-strong);
+  transform: translateX(-50%);
+}
+/* The dot is centred on the line: 16px left of the item is 4px into the list. */
+.timeline li::before {
+  z-index: 1;
+  content: "";
+  position: absolute;
+  left: -16px;
   top: 6px;
   width: 8px;
   height: 8px;

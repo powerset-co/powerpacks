@@ -1,15 +1,17 @@
+import { useQuery } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
-import { LOGBOOK_DOWNLOAD_URL } from "@/lib/api/logbook"
 import { useSelection } from "@/hooks/useSelection"
 import { nextOpenIndex } from "@/lib/advance"
 import type { FacetKey, FacetSet, QuickFilter, TagAction } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
+import { LOGBOOK } from "@/lib/people/copy"
+import { withLogbooks } from "@/lib/people/logbook"
 import { personKey, type Decision, type Person } from "@/types/people"
 
-import { BulkBar } from "./BulkBar"
+import { BulkBar, type LogbookAction } from "./BulkBar"
 import { PersonDrawer } from "./drawer/PersonDrawer"
 import { FilterBar } from "./filters/FilterBar"
 import { QuickFilters } from "./filters/QuickFilters"
@@ -17,16 +19,32 @@ import { DecisionTabs } from "./head/DecisionTabs"
 import { useDecisions } from "./hooks/useDecisions"
 import { useDrawer } from "./hooks/useDrawer"
 import { useFilters } from "./hooks/useFilters"
-import { useLogbook } from "./hooks/useLogbook"
+import type { useLogbook } from "./hooks/useLogbook"
 import { usePeopleShortcuts } from "./hooks/usePeopleShortcuts"
 import { PeopleShell } from "./PeopleShell"
+import { entriesQuery } from "./logbook/queries"
 import { FacetRail } from "./rail/FacetRail"
 import { EmptyText } from "./table/EmptyText"
 import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable"
 import { ShareUpload } from "./upload/ShareUpload"
 
+interface PeopleWorkspaceProps {
+  people: Person[]
+  // The Logbook reader covers the page: its keys are off.
+  reading: boolean
+  // The page's one Logbook build (PeoplePage), and opening saved logbooks in the reader.
+  logbook: ReturnType<typeof useLogbook>
+  onView: (slugs: readonly string[]) => void
+}
+
 // The loaded page: every person once, filtered client-side, with one write for share / private tags.
-export function PeopleWorkspace({ rows }: { rows: Person[] }) {
+export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWorkspaceProps) {
+  // The saved logbooks fill the Logbook column; while they can't be read the rows still show.
+  const catalog = useQuery(entriesQuery)
+  const rows = useMemo(
+    () => (catalog.data ? withLogbooks(people, catalog.data) : people),
+    [people, catalog.data],
+  )
   const filters = useFilters(rows)
   const { view } = filters
   const { matching, counts, quickCounts } = useMemo(() => filterRows(rows, view), [rows, view])
@@ -53,8 +71,6 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
     [clearSelection, openId, refresh],
   )
   const decisions = useDecisions(byId, onWritten)
-  // Builds leave the selection, the drawer and the rows as they are.
-  const logbook = useLogbook(decisions.showToast)
 
   // Quick labeling: a label on the open person moves the drawer to whoever is next
   // (lib/advance.ts) once the list reflects the write; nothing cycles.
@@ -90,6 +106,14 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
 
   // The bar and the s / p keys act on the selection, else on the open person.
   const targets = selection.selected.size ? [...selection.selected] : openId ? [openId] : []
+  // The selection's one logbook action: View when everyone has a saved logbook, else Build.
+  // The open person's is in the drawer.
+  const saved = targets.map((id) => byId.get(id)?.logbook ?? "")
+  const barLogbook: LogbookAction | null = !selection.selected.size
+    ? null
+    : saved.every(Boolean)
+      ? "view"
+      : "build"
   const barLabel = selection.selected.size
     ? `${selection.selected.size.toLocaleString()} selected`
     : openId
@@ -150,6 +174,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
   )
 
   usePeopleShortcuts({
+    active: !reading,
     search,
     table,
     matching,
@@ -172,18 +197,8 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
           <DecisionTabs
             tab={view.tab}
             totals={totals}
-            total={rows.length}
             onTab={setTab}
-            action={
-              <>
-                {logbook.result?.files ? (
-                  <Button asChild title={logbook.result.root}>
-                    <a href={LOGBOOK_DOWNLOAD_URL}>Download logbook</a>
-                  </Button>
-                ) : null}
-                <ShareUpload onToast={(message) => decisions.showToast({ message })} />
-              </>
-            }
+            action={<ShareUpload onToast={(message) => decisions.showToast({ message })} />}
           />
           <QuickFilters filters={view.filters} counts={quickCounts} onPick={pickQuick} />
           <FilterBar
@@ -195,6 +210,16 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
             onText={setText}
             onRemove={toggleFilter}
             onClear={clearFilters}
+            notice={
+              catalog.error ? (
+                <span className="bar-notice" data-logbook-unread>
+                  {LOGBOOK.unread}
+                  <Button variant="ghost" size="sm" onClick={() => void catalog.refetch()}>
+                    {LOGBOOK.retry}
+                  </Button>
+                </span>
+              ) : null
+            }
           />
           <PeopleTable
             ref={table}
@@ -236,6 +261,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
             onLogbook={() => {
               if (openId) void logbook.build([openId])
             }}
+            onView={onView}
             onClose={drawer.close}
             onRetry={refresh}
           />
@@ -244,8 +270,9 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
             selection={selection.selected.size > 0}
             saving={decisions.saving}
             building={logbook.building}
+            logbook={barLogbook}
             onAction={(action) => void label(action, targets)}
-            onLogbook={() => void logbook.build(targets)}
+            onLogbook={() => (barLogbook === "view" ? onView(saved) : void logbook.build(targets))}
             onClear={selection.selected.size ? clearSelection : closeDrawer}
           />
           <Toast

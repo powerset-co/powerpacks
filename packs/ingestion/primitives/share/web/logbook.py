@@ -3,11 +3,12 @@
 Flow: POST `/api/people/logbook` resolves the selected parents
 (`logbook_people.people_for_parents`) and starts one thread running
 `build_logbook` over the local stores; GET `/api/people/logbook` reads the status
-and never builds; GET `/api/people/logbook/download` zips the entries the last
-completed build wrote. The status lives in this process only: a restart is idle.
-Nothing here uploads or shares the archive.
+and never builds. The status lives in this process only: a restart is idle; the
+saved archive is read from disk by logbook_archive.py. Nothing here uploads or shares
+the archive.
 
 Changelog:
+  2026-09-30: the zip download is gone; the People page reads the saved archive.
   2026-09-30: created.
 """
 
@@ -16,11 +17,10 @@ from __future__ import annotations
 import sys
 import threading
 import traceback
-import zipfile
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import IO, Any
+from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.common import Person
@@ -29,7 +29,6 @@ from packs.ingestion.primitives.logbook.logbook_export import LogbookBuild, buil
 from packs.ingestion.primitives.logbook.logbook_people import people_for_parents
 
 BUILD_ACTIVE = "A logbook is already being built. Wait for it to finish."
-NOTHING_TO_DOWNLOAD = "Build a logbook first."
 
 
 class LogbookState(StrEnum):
@@ -94,15 +93,3 @@ class PeopleLogbook:
             return
         with self._lock:
             self._build = build
-
-    def write_archive(self, out: IO[bytes]) -> None:
-        """Zip the entries the last completed build wrote; nothing else under the root."""
-        with self._lock:
-            if self._state() is not LogbookState.COMPLETED or self._build is None:
-                raise RuntimeError(NOTHING_TO_DOWNLOAD)
-            entries = self._build.entries
-        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
-            for slug in entries:
-                for path in sorted((self.root / slug).rglob("*")):
-                    if path.is_file():
-                        archive.write(path, path.relative_to(self.root).as_posix())

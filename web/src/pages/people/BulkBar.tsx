@@ -5,6 +5,9 @@ import type { TagAction } from "@/lib/people/facets"
 
 const BAR_BUTTON = "min-h-[30px]"
 
+/** A selection's logbook action: open what everyone has saved, or build it. */
+export type LogbookAction = "view" | "build"
+
 interface BulkBarProps {
   // "3 selected" for a selection, else the open person's name, else null: no bar.
   label: string | null
@@ -14,12 +17,23 @@ interface BulkBarProps {
   // A logbook build is running; one runs at a time.
   building: boolean
   onAction: (action: TagAction) => void
+  // The selection's logbook action; null for the open person, whose drawer has it.
+  logbook: LogbookAction | null
   onLogbook: () => void
   onClear: () => void
 }
 
-// Share / Keep private and Build logbook for the selection or the open person, on the shared action bar.
-export function BulkBar({ label, selection, saving, building, onAction, onLogbook, onClear }: BulkBarProps) {
+// Share / Keep private for the selection or the open person, and the selection's logbook, on the shared action bar.
+export function BulkBar({
+  label,
+  selection,
+  saving,
+  building,
+  logbook,
+  onAction,
+  onLogbook,
+  onClear,
+}: BulkBarProps) {
   return (
     <ActionBar label={label} name={selection ? "Selection" : "Open person"}>
       <Button
@@ -35,16 +49,23 @@ export function BulkBar({ label, selection, saving, building, onAction, onLogboo
         Keep private <Kbd className="ml-0.5">P</Kbd>
       </Button>
       <ActionBarRule />
-      <Button
-        shape="pill"
-        className={BAR_BUTTON}
-        title={LOGBOOK.explainer}
-        disabled={building}
-        onClick={onLogbook}
-      >
-        {building ? LOGBOOK.building : LOGBOOK.build}
-      </Button>
-      <ActionBarRule />
+      {logbook === "view" ? (
+        <Button shape="pill" className={BAR_BUTTON} onClick={onLogbook}>
+          {LOGBOOK.view}
+        </Button>
+      ) : null}
+      {logbook === "build" ? (
+        <Button
+          shape="pill"
+          className={BAR_BUTTON}
+          title={LOGBOOK.explainer}
+          disabled={building}
+          onClick={onLogbook}
+        >
+          {building ? LOGBOOK.building : LOGBOOK.build}
+        </Button>
+      ) : null}
+      {logbook ? <ActionBarRule /> : null}
       <Button variant="ghost" shape="pill" className={BAR_BUTTON} onClick={onClear}>
         {selection ? "Clear selection" : "Close"} <Kbd className="ml-0.5">Esc</Kbd>
       </Button>

@@ -16,6 +16,8 @@ export interface VirtualRowsHandle {
   element: HTMLDivElement | null
   scrollToIndex: (index: number, options?: ScrollToOptions) => void
   scrollToOffset: (offset: number, options?: ScrollToOptions) => void
+  // The first row at least partly in view.
+  firstVisible: () => number
 }
 
 export interface VirtualRowsProps<T> extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
@@ -71,6 +73,10 @@ export function VirtualRows<T>({
       },
       scrollToOffset: (offset, options) => {
         virtualizer.scrollToOffset(offset, options)
+      },
+      firstVisible: () => {
+        const offset = virtualizer.scrollOffset ?? 0
+        return virtualizer.getVirtualItems().find((row) => row.end > offset)?.index ?? 0
       },
     }),
     [virtualizer],

@@ -4,13 +4,11 @@ Synthetic stores only; nothing reads a real message store or the network.
 """
 from __future__ import annotations
 
-import io
 import json
 import re
 import socket
 import subprocess
 import urllib.parse
-import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -113,7 +111,6 @@ class LogbookRoutesTests(LogbookPeopleFixture):
     def test_idle_status_has_every_contract_field_and_opening_never_builds(self):
         with mock.patch.object(web_logbook, "build_logbook") as build:
             self.assertEqual(self._get(), (200, b'{"status":"idle","people":[],"result":null,"error":null}'))
-            self.assertEqual(self._get("/api/people/logbook/download")[0], 409)
         build.assert_not_called()
 
     def test_building_selected_people_reads_the_stores_directly_without_a_csv(self):
@@ -130,21 +127,6 @@ class LogbookRoutesTests(LogbookPeopleFixture):
         self.assertEqual({row["channel"]: row["status"] for row in result["channels"]},
                          {"gmail": "missing", "imessage": "missing", "whatsapp": "ok"})
         self.assertEqual(list(self.logbook_root.rglob("*.csv")), [])
-
-    def test_download_zips_only_what_the_build_wrote(self):
-        other = self.logbook_root / "someone-else-1234" / "whatsapp" / "dm.md"
-        other.parent.mkdir(parents=True)
-        other.write_text("not in this build", encoding="utf-8")
-        add_whatsapp(self.wacli, "14155550101@s.whatsapp.net", "c1", RECENT_TS, "hi casey")
-        status = self._built(["parent-bbbb"])
-        (slug,) = status["result"]["entries"]
-
-        code, body = self._get("/api/people/logbook/download?path=../../deep-context.sqlite&slug=someone-else-1234")
-
-        self.assertEqual(code, 200)
-        names = zipfile.ZipFile(io.BytesIO(body)).namelist()
-        self.assertEqual(names, [f"{slug}/whatsapp/dm.md"])
-        self.assertTrue(other.exists())
 
     def test_a_selection_without_messages_completes_with_zero(self):
         status = self._built(["parent-cccc"])

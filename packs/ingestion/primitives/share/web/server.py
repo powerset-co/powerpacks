@@ -11,23 +11,22 @@ under those parents and re-decides their share rows through
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
 GET `/api/people/logbook` reads the Logbook build; POST `/api/people/logbook` builds
-the raw local archive for the selected parents; GET `/api/people/logbook/download`
-zips what that build wrote.
+the raw local archive for the selected parents. GET `/api/people/logbook/entries`,
+`/entry?slug=` and `/conversation?slug=&path=` read the saved archive (logbook_archive.py).
 
 Changelog:
   2026-09-26: created.
   2026-09-26: serves the React build from web/dist; legacy page and vendor/ removed.
   2026-09-26: the page and its assets moved to packs/shared/web/app.py.
   2026-09-30: the Logbook build, status and download routes.
+  2026-09-30: the saved-Logbook read routes; the download route is gone.
 """
 
 from __future__ import annotations
 
 import gzip
 import json
-import shutil
 import sys
-import tempfile
 import urllib.parse
 from dataclasses import asdict
 from http import HTTPStatus
@@ -46,6 +45,12 @@ from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, joi
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
 from packs.ingestion.primitives.logbook.logbook_common import LOGBOOK_ROOT
 from packs.ingestion.primitives.share.web.logbook import PeopleLogbook
+from packs.ingestion.primitives.share.web.logbook_archive import (
+    LogbookArchive,
+    conversation_payload,
+    entries_payload,
+    entry_payload,
+)
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 from packs.shared.web.app import AppRoutes
@@ -55,8 +60,6 @@ API_PREFIX = "/api/people/"
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
-# Archives below this stay in memory while zipping; larger ones spill to a temp file.
-ARCHIVE_SPOOL_BYTES = 32 * 1024 * 1024
 
 TagChanges = dict[str, frozenset[str]]
 
@@ -120,12 +123,13 @@ class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
     def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple], upload: ShareUpload,
-                 logbook: PeopleLogbook) -> None:
+                 logbook: PeopleLogbook, archive: LogbookArchive) -> None:
         self.db = db
         self.people = people
         self.load = load
         self.upload = upload
         self.logbook = logbook
+        self.archive = archive
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
@@ -135,8 +139,10 @@ class ShareRoutes:
             self._send_json(handler, self.upload.status())
         elif parsed.path == f"{API_PREFIX}logbook":
             self._send_json(handler, self.logbook.status())
-        elif parsed.path == f"{API_PREFIX}logbook/download":
-            self._send_archive(handler)
+        elif parsed.path == f"{API_PREFIX}logbook/entries":
+            self._send_json(handler, entries_payload(self.archive.entries()))
+        elif parsed.path in {f"{API_PREFIX}logbook/entry", f"{API_PREFIX}logbook/conversation"}:
+            self._send_saved(handler, parsed.path, query)
         elif parsed.path == f"{API_PREFIX}person":
             detail = self.people.detail((query.get("id") or [""])[0])
             if detail is None:
@@ -229,24 +235,18 @@ class ShareRoutes:
         else:
             self._send_json(handler, status)
 
-    def _send_archive(self, handler: BaseHTTPRequestHandler) -> None:
-        """The last completed build's entries as one zip; no path comes from the request."""
-        with tempfile.SpooledTemporaryFile(max_size=ARCHIVE_SPOOL_BYTES) as archive:
-            try:
-                self.logbook.write_archive(archive)
-            except RuntimeError as exc:
-                self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
-                return
-            size = archive.tell()
-            archive.seek(0)
-            handler.send_response(HTTPStatus.OK)
-            handler.send_header("Content-Type", "application/zip")
-            handler.send_header("Content-Disposition", 'attachment; filename="logbook.zip"')
-            handler.send_header("Content-Length", str(size))
-            handler.send_header("Cache-Control", "no-store")
-            handler.send_header("X-Content-Type-Options", "nosniff")
-            handler.end_headers()
-            shutil.copyfileobj(archive, handler.wfile)
+    def _send_saved(self, handler: BaseHTTPRequestHandler, path: str, query: dict[str, list[str]]) -> None:
+        """One saved entry, or one of its conversations; the slug and path only key the manifest."""
+        slug = (query.get("slug") or [""])[0]
+        try:
+            if path == f"{API_PREFIX}logbook/entry":
+                payload = entry_payload(self.archive.entry(slug))
+            else:
+                payload = conversation_payload(*self.archive.conversation(slug, (query.get("path") or [""])[0]))
+        except LookupError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+        else:
+            self._send_json(handler, payload)
 
     @staticmethod
     def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str = "text/html; charset=utf-8",
@@ -286,7 +286,9 @@ def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV, *,
 
     upload = ShareUpload(db.db_path, people_csv, index_db=upload_db or DEFAULT_DB,
                          out_dir=upload_dir or DEFAULT_OUT_DIR)
-    return ShareRoutes(db, people, load, upload, PeopleLogbook(db, root=logbook_root, stores=logbook_stores))
+    logbook = PeopleLogbook(db, root=logbook_root, stores=logbook_stores)
+    return ShareRoutes(db, people, load, upload, logbook,
+                       LogbookArchive(db, logbook_root, gmail_store=logbook.stores["gmail"]))
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:
