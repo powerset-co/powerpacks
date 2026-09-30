@@ -62,6 +62,7 @@ def build_plan(
     namespace_names: dict[str, str],
     company_ids_by_person: dict[str, tuple[str, ...]],
     school_ids_by_person: dict[str, tuple[str, ...]],
+    entity_aliases: dict[str, dict[str, str]] | None = None,
 ) -> UploadPlan:
     shared = [row for row in share_rows if row.share == SHARE_YES]
     persons_upsert = sorted(row.person_id for row in shared if row.public_identifier)
@@ -107,7 +108,9 @@ def build_plan(
             continue
         by_person = entity_ids_by_person[logical]
         referenced = {entity_id for person_id in persons_upsert for entity_id in by_person.get(person_id, ())}
-        missing = referenced - cloud.present_entity_ids.get(logical, frozenset())
+        aliases = (entity_aliases or {}).get(logical, {})
+        missing = {entity_id for entity_id in referenced
+                   if aliases.get(entity_id, entity_id) not in cloud.present_entity_ids.get(logical, frozenset())}
         namespaces.append(NamespacePlan(logical, namespace_names[logical], tuple(sorted(missing)), ()))
 
     # Only a human's `private` reaches the cloud as a tag; a machine flag asks a
@@ -138,4 +141,5 @@ def build_plan(
         tags_put=tags_put,
         tags_delete=tags_delete,
         cloud_id_by_person=cloud_id,
+        entity_aliases=entity_aliases or {},
     )

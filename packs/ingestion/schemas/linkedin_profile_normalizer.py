@@ -142,6 +142,8 @@ def _normalize_education(edu: Any) -> dict[str, Any] | None:
     school_name = _first(edu, "school_name", "school", "schoolName", "institution", "name")
     normalized["school_name"] = school_name
     normalized.setdefault("school", school_name)
+    if not normalized.get("school_id") and edu.get("schoolId"):
+        normalized["school_id"] = str(edu["schoolId"])
     for output_key, input_keys in {
         "starts_at": ("starts_at", "start_date", "startDate", "start"),
         "ends_at": ("ends_at", "end_date", "endDate", "end"),

@@ -14,9 +14,77 @@ import hashlib
 import json
 from typing import Any, Iterator
 
+from packs.indexing.lib.artifacts import stable_education_edge_uuid
 from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract, vector_metadata
 from packs.indexing.primitives.upload_powerset.models import Namespace, PersonProfile
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACE_BY_LOGICAL
+
+
+REFERENCE_FIELDS = {
+    "company_id": "companies", "company_urn": "companies", "current_company_urn": "companies",
+    "school_id": "schools", "school_urn": "schools", "education_id": "schools",
+    "canonical_education_id": "schools",
+}
+
+
+def remap_references(row: dict[str, Any], aliases: dict[str, dict[str, str]]) -> dict[str, Any]:
+    return {key: aliases.get(REFERENCE_FIELDS[key], {}).get(value, value)
+            if key in REFERENCE_FIELDS and isinstance(value, str) else value
+            for key, value in row.items()}
+
+
+def remap_context(context: dict[str, Any], aliases: dict[str, dict[str, str]]) -> dict[str, Any]:
+    result = remap_references(context, aliases)
+    for key in ("positions", "education"):
+        if isinstance(result.get(key), list):
+            result[key] = [remap_references(item, aliases) for item in result[key]]
+    return result
+
+
+def referenced_alias_ids(con: Any, person_ids: list[str]) -> dict[str, list[str]]:
+    ids: dict[str, set[str]] = {"companies": set(), "schools": set()}
+    for table in ("local_people_positions", "local_people_education"):
+        columns = {column[0] for column in con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?", [table]
+        ).fetchall()}
+        fields = [field for field in REFERENCE_FIELDS if field in columns]
+        if not fields:
+            continue
+        rows = con.execute(
+            f"SELECT {', '.join(fields)} FROM {table} WHERE base_id = ANY(?)", [person_ids]
+        )
+        for values in rows.fetchall():
+            for field, value in zip(fields, values):
+                if value:
+                    ids[REFERENCE_FIELDS[field]].add(str(value))
+    profile_columns = {column[0] for column in con.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = ?", ["local_person_profiles"]
+    ).fetchall()}
+    if "hydrated_context" in profile_columns:
+        for (raw,) in con.execute(
+            "SELECT hydrated_context FROM local_person_profiles WHERE person_id = ANY(?)", [person_ids]
+        ).fetchall():
+            if not raw:
+                continue
+            context = json.loads(raw) if isinstance(raw, str) else raw
+            for row in [context, *(context.get("positions") or []), *(context.get("education") or [])]:
+                for field, value in row.items():
+                    if field in REFERENCE_FIELDS and isinstance(value, str) and value:
+                        ids[REFERENCE_FIELDS[field]].add(value)
+    return {key: sorted(values) for key, values in ids.items()}
+
+
+def remap_document(logical: str, row: dict[str, Any], aliases: dict[str, dict[str, str]]) -> dict[str, Any]:
+    original_school = row.get("education_id")
+    row = remap_references(row, aliases)
+    if logical in ("companies", "schools"):
+        row["id"] = aliases.get(logical, {}).get(str(row["id"]), row["id"])
+    if logical == "education" and row.get("education_id") != original_school:
+        row["id"] = stable_education_edge_uuid(
+            row["base_id"], row["education_id"], row.get("degree") or "",
+            row.get("field_of_study") or "", row.get("start_year") or "", row.get("end_year") or "",
+        )
+    return row
 
 
 # Local rows carry 1536-float vectors (~0.5 MB of Python per person): reading
@@ -95,45 +163,54 @@ def count_missing_schools(con: Any, person_ids: tuple[str, ...]) -> int:
     """, [list(person_ids)]).fetchone()[0])
 
 
-def person_profiles(con: Any, person_ids: tuple[str, ...]) -> list[PersonProfile]:
+def person_profiles(con: Any, person_ids: tuple[str, ...],
+                    aliases: dict[str, dict[str, str]] | None = None) -> list[PersonProfile]:
     rows = con.execute(
         "SELECT * FROM local_person_profiles WHERE person_id = ANY(?) ORDER BY person_id",
         [list(person_ids)],
     )
     columns = [column[0] for column in rows.description]
-    return [PersonProfile.from_db_row(dict(zip(columns, row))) for row in rows.fetchall()]
+    profiles = []
+    for values in rows.fetchall():
+        row = dict(zip(columns, values))
+        if aliases and row.get("hydrated_context"):
+            context = json.loads(row["hydrated_context"]) if isinstance(row["hydrated_context"], str) else row["hydrated_context"]
+            row["hydrated_context"] = json.dumps(remap_context(context, aliases))
+        profiles.append(PersonProfile.from_db_row(row))
+    return profiles
 
 
 def namespace_row_chunks(con: Any, logical: str, ids: tuple[str, ...],
                          allowed: dict[str, tuple[str, ...]], operator_id: str,
-                         live: frozenset[str]) -> Iterator[list[dict[str, Any]]]:
+                         live: frozenset[str], aliases: dict[str, dict[str, str]] | None = None
+                         ) -> Iterator[list[dict[str, Any]]]:
     """namespace_rows for PEOPLE_PER_READ ids at a time, so a write never holds them all."""
     for start in range(0, len(ids), PEOPLE_PER_READ):
-        yield namespace_rows(con, logical, ids[start:start + PEOPLE_PER_READ], allowed, operator_id, live)
+        yield namespace_rows(con, logical, ids[start:start + PEOPLE_PER_READ], allowed, operator_id, live, aliases)
 
 
 def namespace_rows(con: Any, logical: str, ids: tuple[str, ...],
                    allowed: dict[str, tuple[str, ...]], operator_id: str,
-                   live: frozenset[str]) -> list[dict[str, Any]]:
+                   live: frozenset[str], aliases: dict[str, dict[str, str]] | None = None
+                   ) -> list[dict[str, Any]]:
     if not ids:
         return []
     namespace = NAMESPACE_BY_LOGICAL[logical]
     columns = doc_columns(con, namespace, live)
-    select = ", ".join(f't."{column}"' for column in columns)
     key = "base_id" if namespace.person_grain else "id"
-    person_key = f', t."{key}" AS "_person_key"' if namespace.person_grain else ""
     rows = con.execute(
-        f'SELECT {select}{person_key} FROM {namespace.table} t WHERE t."{key}" = ANY(?) ORDER BY t."id"',
+        f'SELECT t.* FROM {namespace.table} t WHERE t."{key}" = ANY(?) ORDER BY t."id"',
         [list(ids)],
     )
     names = [column[0] for column in rows.description]
-    docs = []
+    docs = {}
     for row in rows.fetchall():
-        doc = dict(zip(names, row))
+        source = dict(zip(names, row))
+        doc = remap_document(logical, source, aliases or {})
         if namespace.person_grain:
-            person_id = str(doc.pop("_person_key"))
+            person_id = str(source[key])
         # TurboPuffer writes only present values; NULL would erase a live attribute.
-        doc = {name: value for name, value in doc.items() if value is not None}
+        doc = {name: value for name, value in doc.items() if name in columns and value is not None}
         if namespace.person_grain:
             if logical == "summaries":
                 doc["id"] = person_id
@@ -143,8 +220,10 @@ def namespace_rows(con: Any, logical: str, ids: tuple[str, ...],
         elif logical == "companies":
             # Companies have allowed_operator_ids in WRITE_SCHEMA; schools do not.
             doc["allowed_operator_ids"] = [operator_id]
-        docs.append(doc)
-    return docs
+        if doc["id"] in docs and docs[doc["id"]] != doc:
+            raise ValueError(f"Conflicting local documents resolve to the same {logical} id: {doc['id']}")
+        docs[doc["id"]] = doc
+    return list(docs.values())
 
 
 def doc_columns(con: Any, namespace: Namespace, live: frozenset[str]) -> list[str]:
