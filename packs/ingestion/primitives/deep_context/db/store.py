@@ -166,6 +166,7 @@ class Db:
         conn = sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)
         try:
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=5000")  # the in-place upgrade waits out a reader
             tables = {row["name"] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )}
