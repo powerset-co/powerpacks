@@ -2,7 +2,8 @@
 
 Changelog:
 - 2026-09-30: /directory and /api/person are gone (People is the browse surface);
-  a worth decision answers with its counts instead of the full workflow state.
+  the bare root opens the store's current stage; a worth decision answers with
+  its counts instead of the full workflow state.
 - 2026-09-25: a worth decision re-reads its one row instead of every worth row.
 - 2026-09-26: the React app's shell page and assets (AppRoutes) answer before People's data routes.
 - 2026-09-26: AppRoutes answers first (the shell now owns /searches and /searches/run); the
@@ -89,6 +90,14 @@ from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
 
 
 ESTIMATED_COST_USD = 0.06
+# The review page a store's next_action belongs to (the bare server root).
+CURRENT_STAGE_VIEW = {
+    "synthesize": "worth",
+    "review_people": "worth",
+    "enrich": "enrich",
+    "review_linkedin": "linkedin",
+    "realize": "done",
+}
 # Non-terminal wire-level progress codes (GuidanceOutcome.state / GuidanceViewRow.state) —
 # not the coarse persisted GuidanceState set in identity_reconcile/guidance.py.
 IN_FLIGHT_RETARGET_STATES = {"queued", "researching", "judging", "hydrating"}
@@ -254,7 +263,8 @@ def make_handler(
     def full_page(params: dict[str, list[str]]) -> bytes:
         state = api.snapshot()
         progress = state.progress
-        view = _phase_view(params)
+        # No stage in the URL: land on the stage the store is at.
+        view = _phase_view(params) or CURRENT_STAGE_VIEW.get(state.next_action, "worth")
         preview = _value(params, "preview") == "1"
         enrichment = api.enrichment(state)
         if (view == "worth" and _value(params, "view", "review") == "review"

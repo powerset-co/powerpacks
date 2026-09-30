@@ -271,8 +271,9 @@ def _value(params: dict[str, list[str]], key: str, default: str = "") -> str:
 
 
 def _phase_view(params: dict[str, list[str]]) -> str:
+    """The stage the URL asks for, or "" when it asks for none."""
     requested = _value(params, "stage").lower()
-    return requested if requested in {"worth", "enrich", "linkedin", "done"} else "worth"
+    return requested if requested in {"worth", "enrich", "linkedin", "done"} else ""
 
 
 def render_enrichment(enrichment: EnrichmentView) -> str:
