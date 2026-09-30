@@ -12,6 +12,11 @@ on a malformed address (used for the discovery aggregation's participant rows);
 `common/contact_fields.py:normalize_email` is the plain strip+lowercase key.
 
 Changelog:
+  2026-09-29: `is_automated_email` no longer matches keywords or service names
+    inside the company's own domain, which dropped everyone at airbnb.com,
+    uber.com, delta.com, alaska.edu and similar. Keywords match the local part
+    and sending subdomains; support-desk and travel services match only their
+    subdomains (acme.zendesk.com, reply.airbnb.com).
   2026-09-23 (typed rows): added `MsgvaultContactRow`, the typed form of one
     `MsgvaultStore.aggregate_contacts` row, with `from_row` as the ONE tolerant
     read of that row shape (a dict row, or an already-typed row passed through).
@@ -90,28 +95,29 @@ AUTOMATED_EMAIL_KEYWORDS = {
     "booking",
     "bookings",
 }
-SUPPORT_TICKET_DOMAINS = {"zendesk", "freshdesk", "intercom", "helpscout", "helpdesk"}
+# Mail from a subdomain of these services is a relay or notification
+# (acme.zendesk.com, reply.airbnb.com); the bare domain is where their staff live.
+SUPPORT_TICKET_DOMAINS = {"zendesk.com", "freshdesk.com", "intercom.io", "helpscout.net"}
 TRAVEL_SERVICE_DOMAINS = {
-    "airbnb",
-    "vrbo",
+    "airbnb.com",
+    "vrbo.com",
     "booking.com",
     "hotels.com",
-    "expedia",
+    "expedia.com",
     "uber.com",
     "lyft.com",
-    "united",
-    "delta",
+    "united.com",
+    "delta.com",
     "aa.com",
-    "americanairlines",
-    "southwest",
-    "jetblue",
-    "alaska",
-    "marriott",
-    "hilton",
-    "hyatt",
-    "hertz",
-    "avis",
-    "enterprise",
+    "southwest.com",
+    "jetblue.com",
+    "alaskaair.com",
+    "marriott.com",
+    "hilton.com",
+    "hyatt.com",
+    "hertz.com",
+    "avis.com",
+    "enterprise.com",
 }
 
 
@@ -278,18 +284,23 @@ def parse_email_header(header_value: str) -> list[tuple[str, str]]:
 
 
 def is_automated_email(email: str) -> tuple[bool, str]:
-    """Detect automated/service addresses; return (is_automated, reason)."""
+    """Detect automated/service addresses; return (is_automated, reason).
+
+    Keywords match the local part and sending subdomains (bounce.mailer.com),
+    never the company's own domain, so people at delta.com or alaska.edu are
+    kept. Support-desk and travel services count only from their subdomains."""
     if not email or "@" not in email:
         return True, "invalid email"
     local_part, domain = email.lower().rsplit("@", 1)
+    subdomain_labels = domain.split(".")[:-2]
     for keyword in AUTOMATED_EMAIL_KEYWORDS:
-        if keyword in local_part or keyword in domain:
+        if keyword in local_part or any(keyword in label for label in subdomain_labels):
             return True, f"contains '{keyword}'"
     for system in SUPPORT_TICKET_DOMAINS:
-        if system in domain:
+        if domain.endswith("." + system):
             return True, f"support ticket system ({system})"
     for service in TRAVEL_SERVICE_DOMAINS:
-        if service in domain:
+        if domain.endswith("." + service):
             return True, f"travel/hospitality service ({service})"
     if re.search(r"[a-f0-9]{16,}", local_part):
         return True, "hash-like pattern in email"
