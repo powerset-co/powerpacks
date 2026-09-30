@@ -671,8 +671,7 @@ the primitive blocks/fails or the user asks for implementation details.
 - **Don't ask permission for read-only operations** (TurboPuffer filter
   searches, local file reads, scoped `check`/`status` commands, `whoami`,
   `estimate` subcommands, and doctor `run` when it is actually needed by the
-  health-check policy). Ask only for spend (LLM calls, Parallel.ai submits,
-  uploads, Docker pulls, browser-based logins, OS installs).
+  health-check policy).
 - Prefer small, inspectable primitives. Dependencies are allowed when they make
   product paths safer or clearer; add them through project metadata and run via
   `uv run --project . ...` so agents use the locked environment.
