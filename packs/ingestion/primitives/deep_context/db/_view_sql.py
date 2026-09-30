@@ -1,6 +1,8 @@
 """SQL relations shared by the Deep Context review projections.
 
 Changelog:
+- 2026-09-30: `CANDIDATE_SELECT` pins its identifier lookups to the candidate's
+  person; the planner's kind-first order was quadratic in the store.
 - 2026-09-25: `CANDIDATE_SELECT` takes its parent ids as one JSON-bound set, not placeholders.
 """
 
@@ -236,16 +238,20 @@ SELECT c.*,
        sp.profile_json AS synthetic_profile_json,
        pa.payload_json AS profile_artifact_json,
        r.result_json AS research_json,
+       -- CROSS JOIN pins the join order candidate -> person -> identifiers.
+       -- Left to itself the planner walks identifiers_by_value(kind) for every
+       -- candidate row, which is quadratic in the store (a 5k-candidate queue
+       -- took a minute per card).
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
-          FROM candidate_people cp JOIN people pe USING(person_id)
-          JOIN person_identifiers pi USING(person_id)
+          FROM candidate_people cp CROSS JOIN people pe ON pe.person_id=cp.person_id
+          CROSS JOIN person_identifiers pi ON pi.person_id=cp.person_id
           WHERE cp.row_key=c.row_key AND pe.is_owner=0 AND pi.kind='email' ORDER BY value
         )) AS emails_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
-          FROM candidate_people cp JOIN people pe USING(person_id)
-          JOIN person_identifiers pi USING(person_id)
+          FROM candidate_people cp CROSS JOIN people pe ON pe.person_id=cp.person_id
+          CROSS JOIN person_identifiers pi ON pi.person_id=cp.person_id
           WHERE cp.row_key=c.row_key AND pe.is_owner=0 AND pi.kind='phone' ORDER BY value
         )) AS phones_json
 FROM candidate_policy c
