@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.1...powerpacks-v3.8.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* **deep-context:** stop the status poll from locking out Yes/No saves ([#629](https://github.com/powerset-co/powerpacks/issues/629)) ([b8b937c](https://github.com/powerset-co/powerpacks/commit/b8b937c9eecf206b36c25dc660d8c8f336b4d6c6))
+
 ## [3.8.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.0...powerpacks-v3.8.1) (2026-09-30)
 
 
