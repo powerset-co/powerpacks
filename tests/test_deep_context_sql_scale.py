@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +19,7 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context.db import identity_queries, identity_views, merge_queries, queries, worth_views
 from packs.ingestion.primitives.deep_context.db._view_rows import _hydrate_parents
-from packs.ingestion.primitives.deep_context.db._view_sql import LINKEDIN_CTE, PARENT_SELECT
+from packs.ingestion.primitives.deep_context.db._view_sql import CANDIDATE_SELECT, LINKEDIN_CTE, PARENT_SELECT
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -95,6 +96,32 @@ def _store(root: Path, count: int, *, facts: bool = False, bundles: bool = False
             for i, pid in enumerate(ids)
         ))
     return db
+
+
+class CandidateHydrationPlanTest(unittest.TestCase):
+    """The candidate select reaches identifiers through the candidate's person.
+
+    Left to itself the planner walks identifiers_by_value(kind) for every
+    candidate row, which is quadratic in the store: a 5k-candidate review queue
+    took a minute per LinkedIn card. The join order is pinned, and this test
+    pins the plan."""
+
+    def test_identifier_lookups_go_through_the_person(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "deep-context.sqlite"
+            Db(path)
+            with sqlite3.connect(path) as conn:
+                plan = [
+                    row[3] for row in conn.execute(
+                        "EXPLAIN QUERY PLAN " + LINKEDIN_CTE + CANDIDATE_SELECT.format(pending=""),
+                        (json.dumps(["parent-1"]),),
+                    )
+                ]
+        identifier_steps = [step for step in plan if "pi USING" in step]
+        self.assertEqual(len(identifier_steps), 2, plan)
+        for step in identifier_steps:
+            self.assertIn("(person_id=?", step, plan)
+            self.assertNotIn("identifiers_by_value", step, plan)
 
 
 class IdSetQueryTests(unittest.TestCase):
