@@ -354,6 +354,36 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertIn(b"data-phrase='Review complete, continue'", body)
         self.assertNotIn(b"proceed with enrichment", body)
 
+    def test_default_page_follows_current_stage_and_preserves_explicit_stage(self) -> None:
+        def assert_stage(expected: str) -> None:
+            status, payload = self.json_request("GET", "/api/status")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["stage"], expected)
+            status, _, body, _ = self.request("GET", "/")
+            self.assertEqual(status, 200)
+            self.assertIn(f"data-stage='{expected}'".encode(), body)
+
+        assert_stage("worth")
+        self.db.decide_worth("parent-jordan-bravo", "yes")
+        assert_stage("enrich")
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE row_key=?",
+                (json.dumps({"verdict": "needs_review", "confidence": 0.5}), self.PUB),
+            )
+        assert_stage("linkedin")
+        status, _, body, _ = self.request("GET", "/?stage=worth&view=yes")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-stage='worth'", body)
+        self.db.decide_identity(self.PUB, "verify")
+        assert_stage("done")
+        status, _, body, _ = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-phrase='Review complete, continue'", body)
+        status, _, body, _ = self.request("GET", "/?stage=enrich")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-stage='enrich'", body)
+
     def test_rendered_markup_covers_every_javascript_dispatch_contract(self) -> None:
         # Keep these selectors pinned to reconcile_review.js:217, 418-420,
         # 543-608, 754-777, 922-975, 1024, 1093-1103, and 1297-1325.

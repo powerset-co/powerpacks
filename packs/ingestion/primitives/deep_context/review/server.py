@@ -82,6 +82,7 @@ from packs.ingestion.primitives.accounts.api import AccountsApi
 from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
 from packs.shared.web.app import AppRoutes
+from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     STAGES,
     GuidanceViewRow,
@@ -90,14 +91,6 @@ from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
 
 
 ESTIMATED_COST_USD = 0.06
-# The review page a store's next_action belongs to (the bare server root).
-CURRENT_STAGE_VIEW = {
-    "synthesize": "worth",
-    "review_people": "worth",
-    "enrich": "enrich",
-    "review_linkedin": "linkedin",
-    "realize": "done",
-}
 # Non-terminal wire-level progress codes (GuidanceOutcome.state / GuidanceViewRow.state) —
 # not the coarse persisted GuidanceState set in identity_reconcile/guidance.py.
 IN_FLIGHT_RETARGET_STATES = {"queued", "researching", "judging", "hydrating"}
@@ -264,7 +257,7 @@ def make_handler(
         state = api.snapshot()
         progress = state.progress
         # No stage in the URL: land on the stage the store is at.
-        view = _phase_view(params) or CURRENT_STAGE_VIEW.get(state.next_action, "worth")
+        view = _phase_view(params) or STAGE_BY_ACTION[state.next_action]
         preview = _value(params, "preview") == "1"
         enrichment = api.enrichment(state)
         if (view == "worth" and _value(params, "view", "review") == "review"
