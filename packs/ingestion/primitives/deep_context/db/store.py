@@ -1,6 +1,9 @@
 """Narrow projector and domain-transaction API for Deep Context SQLite.
 
 Changelog:
+- 2026-09-30: stores open in WAL, so a long read (the status poll) no longer
+  blocks a decision's commit; stores from before v3.8.2 get the research
+  index in place.
 - 2026-09-25: synthetic prune and scrub reset bind their key lists as one JSON array.
 """
 from __future__ import annotations
@@ -54,6 +57,7 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     id_set,
     DDL,
     IMPORTED_PEOPLE_DDL,
+    RESEARCH_INDEX_DDL,
     SCHEMA_VERSION,
     TABLE_BY_TYPE,
     UPSERTS,
@@ -81,8 +85,14 @@ _signature_db.executescript(DDL)
 EXPECTED_SCHEMA_SIGNATURE = _schema_signature(_signature_db)
 _signature_db.close()
 
+# Stores created before v3.8.2 (delete once no install predates it).
+_pre_index_db = sqlite3.connect(":memory:")
+_pre_index_db.executescript(DDL.replace(RESEARCH_INDEX_DDL, ""))
+PRE_INDEX_SCHEMA_SIGNATURE = _schema_signature(_pre_index_db)
+_pre_index_db.close()
+
 _legacy_db = sqlite3.connect(":memory:")
-_legacy_db.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, ""))
+_legacy_db.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, "").replace(RESEARCH_INDEX_DDL, ""))
 LEGACY_SCHEMA_SIGNATURE = _schema_signature(_legacy_db)
 _legacy_db.close()
 
@@ -142,6 +152,7 @@ class Db:
         try:
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript(DDL)
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
                          (str(SCHEMA_VERSION),))
             conn.commit()
@@ -155,6 +166,7 @@ class Db:
         conn = sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)
         try:
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=5000")  # the in-place upgrade waits out a reader
             tables = {row["name"] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )}
@@ -164,21 +176,28 @@ class Db:
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()
             found = row["value"] if row else "missing"
-            if found == "1" and _schema_signature(conn) == LEGACY_SCHEMA_SIGNATURE:
+            signature = _schema_signature(conn)
+            if found == "1" and signature == LEGACY_SCHEMA_SIGNATURE:
                 conn.execute(IMPORTED_PEOPLE_DDL)
                 conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
                 conn.commit()
                 found = str(SCHEMA_VERSION)
+                signature = _schema_signature(conn)
             if found != str(SCHEMA_VERSION):
                 raise SchemaVersionError(
                     f"deep-context DB schema is {found}, expected {SCHEMA_VERSION}; "
                     "migrate into a new canonical DB explicitly"
                 )
-            if _schema_signature(conn) != EXPECTED_SCHEMA_SIGNATURE:
+            if signature == PRE_INDEX_SCHEMA_SIGNATURE:
+                conn.execute(RESEARCH_INDEX_DDL)
+                signature = _schema_signature(conn)
+            if signature != EXPECTED_SCHEMA_SIGNATURE:
                 raise SchemaVersionError(
                     f"deep-context DB layout does not match schema version {SCHEMA_VERSION}; "
                     "migrate into a new canonical DB explicitly"
                 )
+            # Readers never block the one writer's commit; persisted in the file.
+            conn.execute("PRAGMA journal_mode=WAL")
         finally:
             conn.close()
 

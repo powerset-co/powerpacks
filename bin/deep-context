@@ -377,7 +377,7 @@ case "$cmd" in
   review-status)
     # Read-only deterministic SQLite status target. No browser, provider, or write.
     # `--wait [--timeout N]` blocks until next_action is an AGENT action by
-    # querying the canonical database once a second — the entire agent-handoff
+    # querying the canonical database every five seconds — the entire agent-handoff
     # mechanism, deliberately primitive so it always works. Prefer the
     # already-provisioned repo interpreter; keep uv as the setup fallback.
     if [[ -x "$ROOT/.venv/bin/python" ]]; then

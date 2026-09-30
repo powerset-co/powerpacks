@@ -1,6 +1,8 @@
 """Versioned relational DDL, row-to-table registry, and generated upserts.
 
 Changelog:
+- 2026-09-30: `RESEARCH_INDEX_DDL` — research(candidate_key). Every identity
+  query probes research per link; without it each probe was a full scan.
 - 2026-09-25: `ID_SET`/`id_set` bind an id list as one JSON array for every reader and writer.
 """
 from __future__ import annotations
@@ -37,6 +39,8 @@ _WORTH = _values(*models.MachineWorth)
 # string values — see ReviewSource / WriterSource in db/models.py.
 _DECISION_SOURCES = _values(*models.ReviewSource)
 _WRITER_SOURCES = _values(*models.WriterSource)
+
+RESEARCH_INDEX_DDL = "CREATE INDEX research_by_candidate ON research(candidate_key);"
 
 IMPORTED_PEOPLE_DDL = """CREATE TABLE imported_people (
   person_id TEXT PRIMARY KEY,
@@ -186,6 +190,7 @@ CREATE TABLE research (
   FOREIGN KEY (candidate_key, parent_id) REFERENCES links(row_key, parent_id) ON DELETE CASCADE,
   FOREIGN KEY (artifact_key, parent_id) REFERENCES artifacts(artifact_key, parent_id) ON DELETE RESTRICT
 );
+{RESEARCH_INDEX_DDL}
 
 CREATE TABLE guidance (
   handle TEXT PRIMARY KEY, parent_id TEXT NOT NULL, candidate_key TEXT,

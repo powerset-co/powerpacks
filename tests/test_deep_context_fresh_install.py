@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -173,11 +174,16 @@ class FreshInstallTests(unittest.TestCase):
 
     def _make_august_store(self) -> bytes:
         Db(self.db_path)
-        with sqlite3.connect(self.db_path) as conn:
+        # An August store predates the research index and WAL; closing the
+        # connection checkpoints the edits into the file the bytes are read from.
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
             conn.execute("INSERT INTO meta VALUES ('legacy_imported_at', '2026-08-19T00:00:00Z')")
             for table in ("person_labels", "person_tags", "share", "imported_people"):
                 conn.execute(f"DROP TABLE {table}")
+            conn.execute("DROP INDEX research_by_candidate")
+            conn.execute("PRAGMA journal_mode=DELETE")
+            conn.commit()
         return self.db_path.read_bytes()
 
     def test_check_sets_aside_august_store_without_changing_its_bytes(self) -> None:
