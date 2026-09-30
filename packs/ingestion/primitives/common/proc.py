@@ -54,6 +54,8 @@ def run_cmd(cmd: list[str], *, timeout: int | None = None, prefix: str = DEFAULT
     stderr is streamed through live for progress; stdout is captured and its
     last top-level JSON object is returned. On timeout the child is killed and a
     timeout note is appended to stderr and emitted as progress under `prefix`.
+    Default timeout is 6 hours (POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS);
+    the payload is `{}` when stdout holds no JSON object.
     """
     effective_timeout = DEFAULT_CHILD_TIMEOUT_SECONDS if timeout is None else timeout
     proc = subprocess.Popen(

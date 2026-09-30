@@ -95,6 +95,7 @@ class BrowserSetup:
 
     @classmethod
     def from_args(cls, args: Namespace) -> BrowserSetup:
+        """Build from argv; a bad --oauth-app or --project raises ValueError."""
         return cls(
             home=expand(args.home),
             app_name=msgvault_home.validate_oauth_app(args.oauth_app),
@@ -175,6 +176,18 @@ class BrowserSetup:
         }
 
     def run(self) -> dict[str, Any]:
+        """Run browser-setup; returns ok, needs_user_action, or error.
+
+        1. Find or install msgvault; missing -> error.
+        2. Valid client secret already configured -> `already_configured`.
+        3. gcloud login (pinned to --email when given); failure -> error.
+        4. Choose the project id, create or adopt it; adopt a fallback id.
+        5. Enable the Gmail API, `init-db`, register the Codex MCP server.
+        6. Chrome creates the OAuth client and downloads its secret; a valid
+           secret is copied into the home, config.toml points at it, and the
+           account is authorized when --add-account.
+        7. ok when configured, else needs_user_action; save state either way
+           (secret path and client id only on ok)."""
         progress("Starting local message vault setup.")
         msgvault = msgvault_home.ensure_msgvault(self.install)
         if not msgvault["installed"]:
@@ -332,6 +345,7 @@ class TestUsers:
 
     @classmethod
     def from_args(cls, args: Namespace) -> TestUsers:
+        """Build from argv; positional and --test-user emails are merged and deduped."""
         return cls(
             home=expand(args.home),
             app_name=msgvault_home.validate_oauth_app(args.oauth_app),
@@ -362,6 +376,10 @@ class TestUsers:
         )
 
     def run(self) -> dict[str, Any]:
+        """Add test users: gcloud login, pick the project, Chrome adds the users.
+
+        The status is the browser script's; only on ok are the users merged
+        into setup state. No users given -> error before any login."""
         if not self.test_users:
             return {"status": "error", "message": "Provide at least one OAuth test user email."}
 
@@ -370,6 +388,7 @@ class TestUsers:
             return {"status": "error", "message": "Google login failed.", "gcloud_auth": auth}
 
         login_email = self.login_email or str(auth["account"] or "")
+        # Same address as email and account: the different-mailbox rule never fires.
         project_id, project_choice = gcloud_project.choose_project_id(
             self.home, self.requested_project, login_email, login_email, self.app_name
         )

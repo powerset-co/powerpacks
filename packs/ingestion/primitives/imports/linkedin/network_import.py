@@ -29,10 +29,20 @@ Usage:
 
 `run` converts the CSV locally, then enriches. Artifacts (paths exposed in the
 manifest `artifacts` map; `people_csv` is the canonical interface):
-`source_people.csv`, `linkedin_enrichment_queue.csv`, `rapidapi_cache_hits.csv`,
-`rapidapi_cache_misses.csv`, `rapidapi_recent_failures.csv`,
-`needs_resolution_queue.csv`, `skipped_enrichment.csv`,
-`provider_enriched.csv`, `raw_provider_responses/`, and `people.csv`.
+`source_people.csv`, `rapidapi_cache_hits.csv`, `rapidapi_cache_misses.csv`,
+`rapidapi_recent_failures.csv`, `provider_enriched.csv`, and `people.csv`.
+
+What `run` actually does (`LinkedInImport.execute`):
+  1. convert: read `--csv`, skip LinkedIn's note lines above the header, drop
+     rows with no LinkedIn identifier and repeats of one, and upsert one people
+     row per connection into `discover/linkedin/source_people.csv`.
+  2. enrich: run `enrich_people.EnrichPeople` in-process on that file against
+     the same dir (cache split -> spend gate -> fetch misses -> merge), which
+     writes the enrich CSVs and `people.csv` there.
+  3. write `discover/linkedin/manifest.json` with the convert + enrich counts;
+     a `needs_approval` or `failed` enrich status becomes this stage's status.
+  `--convert-only` stops after step 1. The Modal `$setup` path
+  (`packs/indexing/modal/run_linkedin.py`) runs it with spend approved.
 
 Declared contract (`LinkedInImport`, node `linkedin_import`):
 
@@ -185,6 +195,9 @@ class LinkedInConnection:
     source_user: str
 
     def people_row(self, source_csv: Path) -> dict[str, str]:
+        """This connection as a shared-schema people row: Company/Position fill
+        current company/title, the email fills primary + all emails, and
+        provenance goes in `source_artifacts`."""
         full_name = f"{self.first_name} {self.last_name}".strip()
         provenance = {
             "source": "linkedin_csv",
@@ -210,11 +223,18 @@ class LinkedInConnection:
 
 
 def linkedin_export_header(line: str) -> bool:
+    """True for the Connections.csv header line: starts with `first name,`, or
+    contains both `first name` and `url` and a comma (case-insensitive)."""
     lowered = line.strip().lower()
     return lowered.startswith("first name,") or ("first name" in lowered and "url" in lowered and "," in lowered)
 
 
 def parse_connections_csv(path: Path, source_user: str, limit: int | None = None) -> tuple[list[LinkedInConnection], dict[str, Any]]:
+    """Parse a LinkedIn Connections.csv export into one connection per profile.
+
+    Lines before the header (LinkedIn's notes) are skipped. A row whose URL
+    yields no public identifier is counted `skipped_invalid`; a later row with an
+    identifier already seen is counted `duplicates`. Stops at `limit` if given."""
     if not path.exists():
         raise PipelineFailed(f"LinkedIn Connections CSV not found: {path}")
     connections: list[LinkedInConnection] = []
@@ -391,6 +411,9 @@ class LinkedInImport(Node):
         }
 
     def execute(self) -> LinkedInImportManifest:
+        """convert -> enrich; the enrich status (`needs_approval` / `failed` /
+        `completed`) becomes this stage's status. Enrich counts missing from the
+        delegate's manifest (e.g. when it stopped early) are recorded as 0."""
         try:
             convert = self._timed("convert", self.convert)
         except PipelineFailed as exc:
@@ -436,7 +459,11 @@ class LinkedInImport(Node):
 
     def convert(self) -> dict[str, Any]:
         """Parse the Connections.csv into the source-people CSV, upserted in place
-        under the fixed discover dir."""
+        under the fixed discover dir.
+
+        Rows match an existing row on the first non-empty of person_id,
+        public_identifier, linkedin_url, email; non-empty new values overwrite,
+        and existing rows are never removed."""
         inp = self.cfg.csv
         connections, stats = parse_connections_csv(inp, self.cfg.source_user, self.cfg.limit)
         people_rows = [conn.people_row(inp) for conn in connections]
@@ -445,6 +472,8 @@ class LinkedInImport(Node):
             people_out,
             PEOPLE_COLUMNS,
             people_rows,
+            # person_id/email are not people-schema columns, so in practice
+            # rows match on public_identifier (every parsed connection has one).
             ["person_id", "public_identifier", "linkedin_url", "email"],
         )
         self.artifacts.update({"source_people_csv": str(people_out)})
@@ -484,6 +513,8 @@ class LinkedInImport(Node):
     # argparse to these.
     @classmethod
     def command_run(cls, args: argparse.Namespace) -> int:
+        """`run`: build the config from args, run the node, emit the manifest,
+        and exit 0 / 20 (needs_approval) / nonzero per its status."""
         run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
         cfg = LinkedInImportConfig(
             csv=Path(args.csv),

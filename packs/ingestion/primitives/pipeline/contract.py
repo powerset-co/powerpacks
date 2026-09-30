@@ -308,6 +308,7 @@ class Node(ABC):
         return {}
 
     def resolved(self, artifacts: tuple[Artifact, ...]) -> list[Artifact]:
+        """The declared artifacts with each path swapped for this instance's binding."""
         binding = self.bindings()
         return [item.model_copy(update={"path": binding.get(item.path, item.path)}) for item in artifacts]
 
@@ -345,7 +346,11 @@ class Node(ABC):
         return payload
 
     def verify_outputs(self) -> None:
-        """Every declared output exists and its header still matches its model."""
+        """Every declared output exists and its header still matches its model.
+
+        Raises `ContractError` when a required output is missing, when an
+        `owns_columns` output lacks one of its columns, or when any other row-model
+        output's header differs from the model's columns (names or order)."""
         for item in self.resolved(self.outputs):
             path = Path(item.path)
             if not path.is_file():
@@ -443,5 +448,6 @@ def _brief(columns: list[str], limit: int = 5) -> str:
 
 
 def _readable(path_text: str) -> bool:
+    """True when the path is a regular file this process can read."""
     path = Path(path_text)
     return path.is_file() and os.access(path, os.R_OK)

@@ -5,6 +5,20 @@ Reads contact metadata only. Writes accounts, thread counts, aggregated contacts
 targeted emails, the LinkedIn queue, people.csv, and manifest.json. Identity
 matching belongs to Deep Context.
 
+What this actually does (`GmailExtractor().run_msgvault(...)` or the `msgvault`
+subcommand):
+  1. Open msgvault.db read-only and exit unless sources/participants/messages/
+     message_recipients exist (MsgvaultStore).
+  2. aggregate_contacts: one record per contact address for this account,
+     skipping CATEGORY_SOCIAL/PROMOTIONS/FORUMS/UPDATES mail unless
+     --include-category-mail; sorted by total_messages descending.
+  3. write_msgvault_artifacts: drop automated addresses and one-way contacts
+     (need >= 1 sent AND >= 1 received), apply --limit, then upsert
+     <output_dir>/discover/gmail/<account_slug>/{accounts,gmail_threads,
+     gmail_contacts_aggregated,targeted_emails,linkedin_resolution_queue,
+     people}.csv (default output_dir .powerpacks/network-import) and rewrite
+     manifest.json. Upserts keep rows from earlier runs this run does not restate.
+
 Changelog:
   2026-09-23 (typed rows): every aggregated contact row is folded ONCE into
     `msgvault.util.MsgvaultContactRow` at the top of `write_msgvault_artifacts`,
@@ -122,7 +136,10 @@ PEOPLE_COLUMNS = list(PEOPLE_SCHEMA_COLUMNS)
 def people_rows_from_msgvault(rows: Iterable[Any], source_artifacts: list[str]) -> list[dict[str, Any]]:
     """Project aggregated msgvault contacts onto the canonical people schema.
 
-    Accepts the store's dict rows or already-typed `MsgvaultContactRow` values."""
+    Accepts the store's dict rows or already-typed `MsgvaultContactRow` values.
+    One row per contact: id `gmail:<16-char hash of the email>`, first/last name
+    = first/last word of the display name, interaction_counts {"gmail": total
+    messages} (blank when 0)."""
     people: list[dict[str, Any]] = []
     for row in rows:
         contact = MsgvaultContactRow.from_row(row)
@@ -152,7 +169,11 @@ def linkedin_resolution_queue_rows(rows: Iterable[Any]) -> list[dict[str, Any]]:
     Single home for this shape: `write_msgvault_artifacts` emits it as
     `linkedin_resolution_queue.csv`, and
     `deep_context/collection/email_context.py` imports it to re-derive the same
-    candidate set."""
+    candidate set.
+
+    Keyed by lowercased email (blank emails dropped); id `gmail:<16-char hash>`;
+    company_guess is the domain's first label, title-cased on - and _
+    (casey@acme-corp.com -> "Acme Corp"; personal domains too: "Gmail")."""
     queue: list[dict[str, Any]] = []
     for row in rows:
         contact = MsgvaultContactRow.from_row(row)
@@ -185,7 +206,13 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     manifest. Returns the manifest payload.
 
     The store's dict rows are folded into typed `MsgvaultContactRow` values ONCE
-    here; everything below reads attributes."""
+    here; everything below reads attributes.
+
+    Kept = not automated (unless include_automated) AND total_sent > 0 AND
+    total_received > 0; `limit` then keeps the first N in the store's order
+    (most messages first). Each CSV is upserted by its email key, so rows from
+    earlier runs that this run does not restate are preserved; manifest.json is
+    rewritten, keeping the first run's created_at."""
     contacts = [MsgvaultContactRow.from_row(row) for row in rows]
     automated_filtered = [contact for contact in contacts if contact.automated_filtered and not include_automated]
     non_automated = [contact for contact in contacts if include_automated or not contact.automated_filtered]

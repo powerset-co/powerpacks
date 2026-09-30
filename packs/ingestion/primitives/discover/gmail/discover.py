@@ -1,5 +1,22 @@
 """Gmail contact discovery CLI: sync msgvault, aggregate contacts, build queues.
 
+What this actually does (`discover.py discover --account-email casey@example.com`):
+  1. Resolve config (resolve_discovery_inputs): accounts = the deduped
+     --account-email list; db = --msgvault-db, else ~/.msgvault/msgvault.db;
+     sync query = --sync-query, else "-category:social -category:promotions
+     -category:forums -category:updates". No accounts -> status skipped.
+  2. Per account, in order: `msgvault sync-full <email>` (unless
+     --skip-msgvault-sync; a missing msgvault binary is a skip, not a failure),
+     then GmailExtractor.run_msgvault reads the archive read-only and upserts
+     .powerpacks/network-import/discover/gmail/<account_slug>/
+     {linkedin_resolution_queue,people,...}.csv + manifest.json. The first failed
+     account stops the run; the stage queue below is left untouched.
+  3. Read back every account's linkedin_resolution_queue.csv, merge by
+     lowercased email (_merge_rows), and fully rewrite
+     .powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv.
+  4. Node.run writes .powerpacks/network-import/discover/gmail/manifest.json
+     (completed, skipped or failed) with counts, timing and per-account children.
+
 Shape (GmailDiscovery(...).run()):
   GmailDiscovery is the whole thing: its constructor resolves config ONCE
   (resolve_discovery_inputs: explicit --account-email/--msgvault-db/--sync-query
@@ -305,7 +322,11 @@ class GmailAccountChannel(Node):
 
     def execute(self) -> GmailAccountExtracted | GmailDiscoveryFailed:
         """Sync then run the engine in-process, recording the contribution on self.
-        Returns the typed per-account payload, or GmailDiscoveryFailed."""
+        Returns the typed per-account payload, or GmailDiscoveryFailed.
+
+        A failed sync returns before any extract; a skipped sync (flag or no
+        msgvault binary) still extracts from whatever the archive already holds.
+        An extractor status other than `completed` fails the account."""
         started = time.monotonic()
         sync = MsgvaultSyncPayload.from_payload(self._sync())
         if sync.status == "failed":
@@ -385,8 +406,10 @@ class GmailDiscovery(Node):
 
     Every run is a full rewrite: extract_gmail re-derives whole-store totals from
     the entire archive, so a child's rows always restate its account's whole truth
-    and the children alone are the new contacts.csv. gmail_discovery_merge_plan
-    only names the reason (empty output, --fresh, calc-version/account-set change,
+    and the children alone are the new linkedin_resolution_queue.csv. (The
+    per-account CSVs are upserts, so a contact written by an earlier run and not
+    restated now stays in its account's queue and is carried in.)
+    gmail_discovery_merge_plan only names the reason (empty output, --fresh, calc-version/account-set change,
     or the ordinary full recount) for the manifest."""
 
     name = "gmail_stage_merge"
@@ -425,8 +448,8 @@ class GmailDiscovery(Node):
         )
         self.skip_msgvault_sync = skip_msgvault_sync
         # --fresh IS the explicit full-rerun door (one door, not two): it already
-        # means "rescan the whole window, do not resume", so it also forces the
-        # merge to rebuild contacts.csv from the children instead of appending.
+        # means "rescan the whole window, do not resume"; for the merge it only
+        # sets the recorded reason to full_rerun_requested.
         self.full_rerun_requested = bool(fresh)
         self.queue_csv = output_path("gmail", "linkedin_resolution_queue_csv")
         self.manifest_json = output_path("gmail", "manifest_json")
@@ -468,6 +491,11 @@ class GmailDiscovery(Node):
         return bound
 
     def execute(self) -> GmailDiscoveryCompleted | GmailDiscoveryFailed | GmailDiscoverySkipped:
+        """Run every account channel in order, then merge their queue rows.
+
+        No account emails -> Skipped. The first failed channel -> Failed, and the
+        stage queue is not rewritten. Otherwise the channels' rows are merged by
+        lowercased email and fully rewrite linkedin_resolution_queue.csv."""
         started_at = now_iso()
         started = time.monotonic()
         account_emails = list(self.config.account_emails)

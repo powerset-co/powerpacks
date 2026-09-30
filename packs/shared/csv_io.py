@@ -257,7 +257,8 @@ class CsvIO:
         ``upserted``).
 
         Rows keyed by :meth:`_upsert_key` are overlaid via :meth:`_merge_row`;
-        rows with an all-blank key are appended verbatim (keyless). Output is
+        rows with an all-blank key are appended verbatim (keyless). Keyed rows are
+        written sorted by key, keyless rows after them. Output is
         written with :meth:`write_dict_rows_strict` (the strict extra-key guard).
         Generic dict-row upsert-by-key logic — absorbed from the discover engine's
         local ``upsert_csv``."""

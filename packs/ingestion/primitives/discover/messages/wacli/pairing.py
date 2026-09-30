@@ -89,6 +89,7 @@ def write_pairing_marker(store: Path) -> None:
 
 
 def read_pairing_marker(store: Path) -> PairingMarker | None:
+    """The store's `.powerpacks-pairing.json`, or None when missing or corrupt."""
     try:
         data = json.loads(pairing_marker_path(store).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):

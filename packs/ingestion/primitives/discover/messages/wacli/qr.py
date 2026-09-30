@@ -54,6 +54,7 @@ def wa_qr_payload(text: str) -> str | None:
 
 
 def redact_qr_payloads(text: str) -> str:
+    """Replace every line holding a QR payload or a `qr_code` event with `QR_REDACTION`."""
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -65,6 +66,7 @@ def redact_qr_payloads(text: str) -> str:
 
 
 def clear_qr_artifacts(*paths: Path) -> None:
+    """Delete any old QR page/PNG so a stale code is never shown."""
     for path in paths:
         try:
             path.unlink()
@@ -73,6 +75,7 @@ def clear_qr_artifacts(*paths: Path) -> None:
 
 
 def write_qr_html(path: Path, png_path: Path) -> None:
+    """Write a page that shows the PNG and reloads itself every 2 seconds."""
     path.parent.mkdir(parents=True, exist_ok=True)
     rel_png = html.escape(png_path.name, quote=True)
     path.write_text(
@@ -95,6 +98,8 @@ def write_qr_html(path: Path, png_path: Path) -> None:
 
 
 def update_qr_page(payload: str, png_path: Path, html_path: Path, *, open_page: bool) -> None:
+    """Render `payload` to the PNG with qrencode, rewrite the HTML page, and
+    open it with macOS `open` when `open_page`. Blocks when qrencode is missing."""
     qrencode = shutil.which("qrencode")
     if not qrencode:
         raise PrimitiveBlocked({

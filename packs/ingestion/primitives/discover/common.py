@@ -70,7 +70,11 @@ def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
-    """Write rows with LF line endings, skipping the write when bytes are unchanged."""
+    """Write rows with LF line endings, skipping the write when bytes are unchanged.
+
+    Only `fieldnames` columns are written (missing ones blank, extras dropped).
+    Skipping identical bytes leaves the file's mtime alone on a no-op rerun.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")

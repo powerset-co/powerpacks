@@ -168,6 +168,10 @@ class WhatsAppChannel(MessageChannel, Node):
         return {self.outputs[0].path: str(self.contacts_csv)}
 
     def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
+        """Run the full wacli pass (install, auth, sync, deepen, export) with a
+        3h sync timeout, exporting members of groups of 30 or fewer. A needed QR scan -> ``blocked_user_action`` with the QR page;
+        any other non-``completed`` status -> ``failed``; else the CSV path plus
+        the re-link nudge when the pairing predates full history sync."""
         result = WhatsAppExtractResult.from_payload(WhatsAppExtractor().run(
             output_csv=self.contacts_csv,
             output_jsonl=self.raw_jsonl,

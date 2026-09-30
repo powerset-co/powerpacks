@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 """Discover iMessage and WhatsApp contact metadata.
 
-Flow: explicit channel selection -> per-channel extract -> merge by phone
--> stage manifest. A blocked or failed channel stops discovery before merging.
-The merged CSV contains only the selected channels' current exports; prior
-matcher columns are not inputs. No message bodies, enrichment, or uploads.
-Post-import review and enrichment belong to deep_context.
+Flow (`discover.py discover [--include-imessage] [--include-whatsapp]`):
+  1. Neither flag set -> write a `skipped` stage manifest and stop.
+  2. Run the selected channels in order, iMessage then WhatsApp. iMessage
+     writes `.powerpacks/messages/imessage.contacts.csv` from chat.db +
+     AddressBook; WhatsApp syncs wacli and writes
+     `.powerpacks/messages/whatsapp.contacts.csv`. The first blocked (Full Disk
+     Access, QR scan) or failed channel stops the run before merging.
+  3. Merge every channel CSV already on disk, selected this run or not, by
+     canonical phone into `.powerpacks/messages/contacts.csv`
+     (+ `contacts.csv.manifest.json`).
+  4. Write the stage manifest to
+     `.powerpacks/network-import/discover/messages/manifest.json`.
+Exit codes: 20 blocked, 1 failed, 0 otherwise. Prior matcher columns are not
+inputs. No message bodies, enrichment, or uploads. Post-import review and
+enrichment belong to deep_context.
 
 Changelog:
   2026-09-28 (per-channel runs): the merge reads every channel's last export, not
@@ -213,7 +223,9 @@ class MessagesDiscovery(Node):
 
     def _merge(self) -> MessageChannelFailed | None:
         """Union every channel's contacts CSV on disk by canonical phone into
-        MERGED_CONTACTS (via ``ContactsMerger`` in-process). Writes an empty
+        MERGED_CONTACTS (via ``ContactsMerger`` in-process). Inputs are every
+        channel's last export, iMessage first, including a channel not run this
+        time, so its contacts are kept rather than dropped. Writes an empty
         merged CSV + manifest when no channel produced an export; returns a failed
         child on a non-``ok`` merge."""
         inputs = [channel.contacts_csv for channel in self.channels if channel.contacts_csv.exists()]

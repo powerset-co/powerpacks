@@ -99,7 +99,10 @@ CHECK_LISTS = (
 
 
 def normalize_email_list(values: list[str]) -> list[str]:
-    """Split, validate, and case-insensitively dedupe emails, preserving order."""
+    """Split, validate, and case-insensitively dedupe emails, preserving order.
+
+    Each value may hold several addresses separated by commas or whitespace. The
+    first spelling of a duplicate is kept; any invalid address raises ValueError."""
     emails: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -118,7 +121,9 @@ def normalize_email_list(values: list[str]) -> list[str]:
 
 
 def msgvault_reauthorization_required(text: str) -> bool:
-    """Return True when msgvault output means the account token needs re-auth."""
+    """Return True when msgvault output means the account token needs re-auth.
+
+    Case-insensitive substring match against MSGVAULT_REAUTH_ERROR_MARKERS."""
     haystack = text.lower()
     return any(marker in haystack for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
 
@@ -210,6 +215,7 @@ def check_account(home: Path, email: str, *, stored: bool) -> AccountCheck:
             error_code="gmail_authorization_missing",
             authorize_command=msgvault_account_authorize_command(home, email, force=False),
         )
+    # `--sample 0 --local` checks the token only; no mail is fetched.
     result = run_msgvault(["verify", email, "--skip-db-check", "--sample", "0", "--local"], home, timeout=60)
     if result.ok:
         return AccountCheck(email=email, status="healthy", network_called=True)
@@ -275,7 +281,13 @@ def add_account(home: Path, email: str, app_name: str, *, headless: bool, force:
 
 
 def status_payload(home: Path) -> dict[str, Any]:
-    """Build the full `status` payload: binary, config, accounts, MCP, gcloud."""
+    """Build the full `status` payload: binary, config, accounts, MCP, gcloud.
+
+    Accounts are listed only when the binary and `msgvault.db` both exist.
+    Status is "ok" only when the binary, config.toml, at least one client
+    secret, the database, and at least one stored account are all present;
+    otherwise "needs_setup". `desired_emails` is the saved owner email plus the
+    saved test users, deduped."""
     msgvault_path = shutil.which("msgvault") or ""
     version = run_command(["msgvault", "version"], timeout=15) if msgvault_path else CommandResult(ok=False, returncode=0)
     cfg_path = config_path(home)
@@ -362,6 +374,7 @@ def check_accounts_payload(home: Path, requested_emails: list[str]) -> dict[str,
     for check in checks:
         for bucket in CHECK_BUCKETS[check.status]:
             buckets[bucket].append(check.email)
+    # Any error outranks any account the user must authorize.
     if buckets["error_accounts"]:
         status = "error"
     elif buckets["accounts_to_authorize"]:

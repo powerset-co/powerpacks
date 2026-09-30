@@ -58,13 +58,18 @@ DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "1080
 
 
 def effective_max_messages(requested: int, existing: int) -> int:
+    """max(requested, existing + max(1000, requested // 10)); 0 (no cap) when
+    requested <= 0. With the 20,000 default: max(20,000, existing + 2,000)."""
     if requested <= 0:
         return 0
     return max(requested, existing + max(1000, requested // 10))
 
 
 def resolve_effective_max(requested: int, existing: int) -> int:
-    """Choose full on an empty store and incremental once it is populated."""
+    """Choose full on an empty store and incremental once it is populated.
+
+    An explicit `requested` > 0 is used as the budget; otherwise a populated
+    store uses `DEFAULT_INCREMENTAL_BUDGET` (20,000) and an empty one gets 0 (no cap)."""
     if requested and requested > 0:
         return effective_max_messages(requested, existing)
     if existing > 0:
@@ -73,6 +78,9 @@ def resolve_effective_max(requested: int, existing: int) -> int:
 
 
 def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) -> dict[str, Any]:
+    """One `wacli sync --once` with contact and group refresh, capped at
+    `max_messages` (0 = no cap) and `timeout` seconds (10,800 default). Blocks on
+    WhatsApp's "can't link new devices"; any other non-zero exit fails."""
     runtime.emit_status("Syncing WhatsApp Messages and Contacts.")
     cmd = [
         binary.wacli_bin() or "wacli",
@@ -106,6 +114,7 @@ def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) ->
 
 
 def refresh_contacts(store: Path) -> dict[str, Any]:
+    """`wacli contacts refresh`; a failure returns a warning instead of raising."""
     try:
         payload = binary.wacli_json(store, ["contacts", "refresh"], timeout=300)
     except PrimitiveFailed as exc:
@@ -120,6 +129,10 @@ def group_participants_cache_path(store: Path) -> Path:
 
 
 def refresh_group_info(store: Path, *, timeout: int, min_interval: float) -> dict[str, Any]:
+    """Call `wacli groups info` for every group chat, one at a time with
+    `min_interval` seconds between calls, and rewrite the participants cache
+    from the successful answers. Groups you are not in are counted, not cached;
+    any other failure makes the summary status `warning`."""
     jids = store_db.group_chat_jids(store)
     cache_path = group_participants_cache_path(store)
     cache = {

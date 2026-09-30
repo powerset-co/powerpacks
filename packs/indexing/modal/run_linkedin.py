@@ -16,6 +16,17 @@ operator.
 
 Output people.csv is written to the operator's volume input path, ready for
 run_indexing.py.
+
+What this actually does:
+  1. Writes <run-vol>/status.json = running/parse.
+  2. Fails (exit 2) if POWERSET_API_KEY is unset or --connections-csv is missing.
+  3. Runs LinkedInImport.command_run with spend approved, output under
+     /tmp/linkedin-import, profile cache <cache-root>/profile_cache_v2.
+  4. Fails if the import exits non-zero, its manifest status is not
+     "completed", or the manifest's people_csv artifact is missing.
+  5. Copies people.csv to --people-out, writes <run-vol>/import-stats.json
+     (queue / cache-hit / paid-call / recent-failure counts + people rows),
+     and marks status.json completed/done.
 """
 from __future__ import annotations
 
@@ -43,6 +54,8 @@ WORK = Path("/tmp/linkedin-import")
 
 
 def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Namespace:
+    """CLI namespace for LinkedInImport.command_run: no row limit, spend
+    approved, no forced re-enrich, default RapidAPI workers/rpm/retry window."""
     return argparse.Namespace(
         csv=args.connections_csv,
         source_user=args.source_user,
@@ -65,6 +78,7 @@ def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Name
 
 
 def enrichment_stats(manifest: dict) -> dict:
+    """The import manifest's RapidAPI counts that go into import-stats.json."""
     counts = manifest.get("counts") or {}
     return {
         "queue_count": counts.get("queue_count"),
@@ -121,6 +135,7 @@ def main() -> int:
     people_out = Path(args.people_out)
     people_out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(people_csv, people_out)
+    # People = parsed CSV records (header excluded), not lines.
     with Path(people_csv).open(newline="", encoding="utf-8-sig") as handle:
         people_count = sum(1 for _ in CsvIO.dict_reader(handle))
 

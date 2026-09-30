@@ -5,11 +5,30 @@ Subcommands:
     login    Open browser, capture Auth0 callback, save JWT to disk.
     whoami   Print stored credential info (no refresh).
     token    Print a fresh access token, refreshing if needed.
+    inspect  Decode the cached JWT into email, roles and admin/user/unauthorized.
     logout   Remove stored credentials.
 
 Credentials live at `~/.powerpacks/credentials.json` (mode 0600). They are
 intentionally separate from `contact-exporter`'s `~/.powerset/credentials.json`
 so the two tools don't fight over token state.
+
+What `login` actually does:
+  1. Require POWERPACKS_AUTH0_DOMAIN / _CLIENT_ID / _AUDIENCE (exit 2 if any
+     is empty, naming the missing ones).
+  2. Make a PKCE verifier/challenge pair and a random `state`.
+  3. Bind a one-shot callback server on 127.0.0.1:9876 by default (fail if the
+     port is taken), try to open the browser, and always print the authorize URL.
+  4. Wait up to 180 seconds (`--timeout`) for Auth0 to redirect to
+     `http://localhost:9876/callback`; a wrong `state`, an Auth0 error, or no
+     code fails the login.
+  5. Exchange the code (plus verifier) at `/oauth/token` for access and
+     refresh tokens.
+  6. Write tokens, expiry, email (read from the JWT) and Auth0 config to the
+     credentials file.
+
+`token` reuses the saved access token until it is within 60 seconds of expiry,
+then refreshes it through Auth0 and saves the result; `pull_runtime_keys.py`
+gets its bearer this way.
 """
 
 from __future__ import annotations
@@ -74,6 +93,7 @@ def emit(value: Any) -> None:
 
 
 def _missing_config_message(keys: list[str]) -> str:
+    """Name the missing Auth0 settings and point to the hosted .env template."""
     joined = ", ".join(keys)
     return (
         f"missing required Powerset hosted config: {joined}. "
@@ -88,6 +108,7 @@ def require_config_value(value: str | None, key: str) -> str:
 
 
 def require_config_values(pairs: list[tuple[str, str | None]]) -> dict[str, str]:
+    """Return the settings as a dict; raise SystemExit naming every empty one."""
     missing = [key for key, value in pairs if not value]
     if missing:
         raise SystemExit(_missing_config_message(missing))
@@ -107,6 +128,11 @@ def _auth0_url(domain: str, path: str) -> str:
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> tuple[int, dict[str, Any] | None, str]:
+    """POST JSON and return `(status, parsed_json_or_None, raw_text)`.
+
+    HTTP errors come back as their status, not an exception; only a network
+    failure raises (ConnectionError).
+    """
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -136,6 +162,7 @@ def _post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> tuple[in
 
 
 def _generate_pkce() -> tuple[str, str]:
+    """Return a PKCE `(verifier, S256 challenge)` pair for one login attempt."""
     verifier = secrets.token_urlsafe(64)[:128]
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -157,6 +184,7 @@ def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
 
 
 def _decode_jwt_email(token: str) -> str | None:
+    """Email from the `email` claim, else the Powerset namespaced email claim."""
     payload = _decode_jwt_payload(token) or {}
     return (
         payload.get("email")
@@ -176,6 +204,7 @@ _ROLE_CLAIMS = (
 
 
 def _decode_jwt_roles(token: str) -> list[str]:
+    """Lowercased, de-duplicated roles from the role claims, `permissions`, and `scope`."""
     payload = _decode_jwt_payload(token) or {}
     out: list[str] = []
     seen: set[str] = set()
@@ -212,6 +241,7 @@ _REQUIRED_ROLES = ("user", "admin")
 
 
 def _classify_authorization(roles: list[str]) -> str:
+    """First match wins: `admin` role, then `user` role, else `unauthorized`."""
     if "admin" in roles:
         return "admin"
     if "user" in roles:
@@ -224,6 +254,7 @@ def _classify_authorization(roles: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def _save_credentials(path: Path, creds: dict[str, Any]) -> None:
+    """Overwrite the credentials file; best-effort 0700 on the dir, 0600 on the file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(path.parent, 0o700)
@@ -237,6 +268,7 @@ def _save_credentials(path: Path, creds: dict[str, Any]) -> None:
 
 
 def _load_credentials(path: Path) -> dict[str, Any] | None:
+    """Saved credentials, or None when the file is missing or not valid JSON. Never refreshes."""
     if not path.exists():
         return None
     try:
@@ -246,6 +278,11 @@ def _load_credentials(path: Path) -> dict[str, Any] | None:
 
 
 def _refresh_credentials(creds: dict[str, Any], domain: str, client_id: str) -> dict[str, Any]:
+    """Trade the refresh token for a new access token; return the updated credentials.
+
+    Fails (SystemExit) when no refresh token is saved or Auth0 answers anything
+    but HTTP 200 with JSON. Expiry defaults to 24h when Auth0 omits `expires_in`.
+    """
     refresh_token = creds.get("refresh_token")
     if not refresh_token:
         raise SystemExit("session expired and no refresh token; run login")
@@ -272,6 +309,11 @@ def _refresh_credentials(creds: dict[str, Any], domain: str, client_id: str) -> 
 def _credentials_with_fresh_token(
     path: Path, domain: str, client_id: str
 ) -> dict[str, Any]:
+    """Saved credentials, refreshed and re-saved when the token expires within 60 seconds.
+
+    Fails when no credentials are saved, or when a refresh is needed but the
+    Auth0 domain or client id is empty.
+    """
     creds = _load_credentials(path)
     if not creds:
         raise SystemExit("not logged in; run login")
@@ -330,6 +372,10 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         return
 
     def do_GET(self):  # noqa: N802
+        """Handle Auth0's redirect once: record the code or the error, then stop the server.
+
+        A `state` that differs from this login's is rejected before the code is read.
+        """
         params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         received_state = params.get("state", [None])[0]
         if self.expected_state and received_state != self.expected_state:
@@ -358,6 +404,11 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def cmd_login(args: argparse.Namespace) -> int:
+    """Run the PKCE browser login (flow in the module docstring).
+
+    Exit 2 on missing Auth0 config; exit 1 on port-in-use, timeout, callback
+    error, missing code, or failed token exchange; 0 once credentials are saved.
+    """
     try:
         config = require_config_values([
             ("POWERPACKS_AUTH0_DOMAIN", args.auth0_domain),
@@ -499,6 +550,11 @@ def cmd_login(args: argparse.Namespace) -> int:
 
 
 def cmd_whoami(args: argparse.Namespace) -> int:
+    """Report the saved login without refreshing.
+
+    `anonymous` + exit 1 only when the file is missing or unparseable; an
+    expired token still counts as `logged_in` (with `expired: true`).
+    """
     creds = _load_credentials(args.credentials_path)
     if not creds:
         emit({
@@ -526,6 +582,7 @@ def cmd_whoami(args: argparse.Namespace) -> int:
 
 
 def cmd_token(args: argparse.Namespace) -> int:
+    """Print a fresh access token (bare with `--bearer-only`, else JSON); exit 1 if none."""
     try:
         creds = _credentials_with_fresh_token(
             args.credentials_path,
@@ -601,6 +658,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def cmd_logout(args: argparse.Namespace) -> int:
+    """Delete the credentials file if present; `removed` says whether it existed."""
     existed = args.credentials_path.exists()
     if existed:
         try:

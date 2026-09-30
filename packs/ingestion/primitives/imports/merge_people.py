@@ -4,13 +4,14 @@
 This is the whole fan-in. It combines the per-source `people.csv` artifacts,
 resolves LinkedIn identity from the shared cross-source `directory.csv`, groups
 rows that name the same human, and writes ONE output. It applies no human
-decisions, admits nobody, and drops nobody.
+decisions and admits nobody; the only rows it drops are unkeyable ones (no
+slug, no email, no phone), counted as `dropped_unkeyable`.
 
 Flow:
   1. read `import/<source>/people.csv` for linkedin, gmail, messages (in that
      order — earlier sources win a scalar-field tie)
   2. read `directory.csv` when it exists; build email -> slug and phone -> slug
-     lookups from its confident `found` rows
+     lookups from its `found` rows with confidence >= 0.75
   3. for a row with no slug: look it up by email, then by phone, and stamp
      `public_identifier` + `linkedin_url`
   4. key = `linkedin:<slug>` when a slug is known; else the row's own
@@ -24,7 +25,8 @@ Flow:
   7. a person with a slug takes the empty profile columns (work history,
      education, headline, location, current role) from its cached LinkedIn
      profile in `profile_cache_v2`; the cache is read, never fetched
-  8. write `merged/people.csv` + `manifest.json`
+  8. write `merged/people.csv` + `manifest.json`; when no source people.csv
+     exists, nothing is written but the manifest (`not_ready`, CLI exit 1)
 
 A person either has a `public_identifier` or does not. That is the only
 distinction the merge makes, and it is a column — not a second file, not an
@@ -219,7 +221,13 @@ def person_id_for(key: str) -> str:
 
 
 def merge_group(key: str, members: list[PeopleRow]) -> dict[str, str]:
-    """Union the rows that named one human into a single people row."""
+    """Union the rows that named one human into a single people row.
+
+    Rows are applied in source order (linkedin, gmail, messages): scalar columns
+    keep the first non-empty value; all_emails/all_phones, source_channels and
+    source_artifacts are set-unions; interaction_counts is the per-channel max;
+    last_interaction is the latest. Ids of member rows that differ from the new
+    id are kept in `superseded_person_ids`."""
     merged = {column: "" for column in PEOPLE_SCHEMA_COLUMNS}
     for row in members:
         for column in PEOPLE_SCHEMA_COLUMNS:
@@ -257,6 +265,7 @@ def merge_group(key: str, members: list[PeopleRow]) -> dict[str, str]:
 
 
 def has_work_history(row: dict[str, str]) -> bool:
+    """True when `work_experiences` is neither empty nor an empty JSON list."""
     return row["work_experiences"] not in ("", "[]")
 
 

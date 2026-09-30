@@ -14,6 +14,22 @@ and overlap across networks means free cache hits. After a successful run the
 caches are refreshed by KEY-UNION merge - never overwrite - because a run's
 output only contains rows for that operator's network and a plain copy would
 drop other operators' cached rows.
+
+What this actually does (each phase is written to <run-vol>/status.json):
+  1. seed: copies cached seeds/founder_enrichment.jsonl and
+     seeds/inferred_ages.jsonl into /tmp/run/search-index/unified/.
+  2. estimate (only with --enrich and --max-usd > 0): dry-runs the pipeline,
+     writes <run-vol>/estimate.json, fails if the estimate exceeds --max-usd.
+     With --enrich and --max-usd <= 0 paid calls are enabled with no estimate.
+  3. pipeline: runs build_processing_pipeline.py `run` against the shared
+     cache artifacts; a non-zero exit fails the job and skips steps 4-6.
+  4. refresh-cache: key-union merges each non-empty WORK_TO_CACHE output into
+     the shared cache (skipped with --no-refresh-cache).
+  5. duckdb: builds local-search.duckdb with scripts/build-local-duckdb-shim.py,
+     using the same people.csv for local_person_profiles.
+  6. persist: copies ledger.json, manifest.json, stats/ and
+     local-search.duckdb (plus records/ with --persist-artifacts) to <run-vol>,
+     then marks status completed/done.
 """
 from __future__ import annotations
 
@@ -58,6 +74,9 @@ WORK_TO_CACHE = {
 
 
 def main() -> int:
+    """Run seed -> estimate -> pipeline -> cache refresh -> duckdb -> persist.
+
+    Returns the failing phase's exit code (2 for an estimate failure), else 0."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--people-csv", required=True)
     ap.add_argument("--cache-root", required=True)
@@ -179,6 +198,7 @@ def main() -> int:
         write_status(run_vol, status | {"phase": "refresh-cache"})
         for rel_src, rel_cache in WORK_TO_CACHE.items():
             src = work / rel_src
+            # A missing or empty output means this run added nothing; keep the cache.
             if not src.exists() or src.stat().st_size == 0:
                 continue
             new_count, kept_count = merge_cache_file(

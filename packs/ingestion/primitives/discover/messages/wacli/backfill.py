@@ -76,6 +76,10 @@ def classify_history_backfill_error(
     stderr: str,
     requests_sent: int,
 ) -> tuple[str, bool]:
+    """Map a return code and stderr text to `(category, retryable)`, first rule
+    wins: timeout (rc 124 or "timeout" text), connection, and store_lock are
+    retryable; unauthenticated, access_limited, request_error (a request was
+    sent) and command_error are not."""
     if returncode == 0:
         return "none", False
     text = stderr.casefold()
@@ -159,6 +163,10 @@ class WacliHistoryDepthAdapter:
         self,
         targets: list[HistoryDepthTarget],
     ) -> tuple[dict[str, HistoryDepthAttempt], int]:
+        """Run one backfill-batch command for all targets and return one attempt
+        per chat_ref plus the rows added to chats outside the targets. Growth is
+        measured by counting each chat's visible messages before and after; a
+        chat missing from wacli's result is `missing_result` (retryable)."""
         if not targets:
             return {}, 0
         before_counts = {
@@ -244,6 +252,8 @@ def run_history_backfill_batch_attempt(
     timeout_backoff: str = DEFAULT_HISTORY_DEPTH_TIMEOUT_BACKOFF,
     timeout: int = DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT,
 ) -> tuple[dict[str, HistoryDepthAttempt], int]:
+    """Hand every target to one `wacli history backfill-batch` call (up to 10
+    requests of 500 messages per chat by default); see the adapter's `run`."""
     return WacliHistoryDepthAdapter(
         store=store,
         count=count,
@@ -267,6 +277,8 @@ def run_history_backfill_attempt(
     request_delay: str = DEFAULT_HISTORY_DEPTH_REQUEST_DELAY,
     timeout: int = DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT,
 ) -> HistoryDepthAttempt:
+    """Single-chat form of the batch call (batch size and in-flight 1); the
+    batch's unrelated-row count is folded into the returned attempt."""
     attempts, unrelated_added = run_history_backfill_batch_attempt(
         store,
         [target],

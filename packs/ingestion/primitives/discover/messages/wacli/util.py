@@ -35,7 +35,9 @@ DEFAULT_HISTORY_DEPTH_LOOKBACK_YEARS = 3
 
 
 def canonicalize_phone(raw: str | None) -> str:
-    value = (raw or "").strip()
+    """`+E164` for a phone string or JID, else "". Fewer than 7 digits is
+    rejected; 10 digits without `+` is taken as US (+1); more than 15 is rejected."""
+    value =(raw or "").strip()
     if "@" in value:
         return jid_to_phone(value) or ""
     digits = re.sub(r"[^\d]", "", value)
@@ -53,7 +55,9 @@ def canonicalize_phone(raw: str | None) -> str:
 
 
 def jid_to_phone(jid: str | None) -> str | None:
-    value = (jid or "").strip()
+    """`+<digits>` from a user JID with 7-15 leading digits; None for group,
+    LID, and newsletter JIDs, which carry no phone."""
+    value =(jid or "").strip()
     if not value or "@g.us" in value or "@lid" in value or "@newsletter" in value:
         return None
     match = re.match(r"(\d+)@", value)
@@ -72,6 +76,7 @@ def clean_name(value: str | None) -> str:
 
 
 def linked_device_blocked(text: str) -> bool:
+    """True when wacli output carries WhatsApp's "can't link new devices" refusal."""
     lowered = text.lower()
     return (
         "can't link new devices right now" in lowered
@@ -89,10 +94,12 @@ def result_int(row: dict[str, Any], key: str) -> int:
 
 
 def history_chat_ref(jid: str) -> str:
+    """`wa-` plus the first 16 hex chars of sha256(jid); the only chat id stage artifacts store."""
     return "wa-" + hashlib.sha256(jid.encode("utf-8")).hexdigest()[:16]
 
 
 def history_depth_cutoff_ts(now: datetime | None = None) -> int:
+    """Epoch seconds for the same date 3 years ago (Feb 29 falls back to the 28th)."""
     current = now or datetime.now(timezone.utc)
     try:
         cutoff = current.replace(year=current.year - DEFAULT_HISTORY_DEPTH_LOOKBACK_YEARS)
@@ -105,6 +112,7 @@ def history_depth_cutoff_ts(now: datetime | None = None) -> int:
 
 
 def history_depth_state_digest(states: dict[str, tuple[int, int]]) -> str:
+    """sha256 over every DM's hashed ref, count, and latest ts; any DM change changes it."""
     digest = hashlib.sha256()
     for chat_jid, (message_count, latest_ts) in sorted(states.items()):
         digest.update(history_chat_ref(chat_jid).encode("ascii"))

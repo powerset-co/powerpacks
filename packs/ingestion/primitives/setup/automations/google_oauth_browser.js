@@ -4,6 +4,20 @@
  * This is intentionally best-effort. Google login, MFA, and anti-abuse screens
  * stay human-controlled in the opened Chrome window; after those screens are
  * cleared, this script tries to finish the routine form work.
+ *
+ * Launched by oauth_browser.py with a persistent Chrome profile. Two modes:
+ *   setup (default):
+ *     1. setupConsent: wait for sign-in, then fill the consent screen (app
+ *        name, support email, audience, contact email) unless already set up.
+ *     2. addScopes: ensure gmail.readonly and gmail.modify are saved.
+ *     3. createClient: reuse the named Desktop client's secret if it can be
+ *        re-downloaded, else create a new Desktop client and download it into
+ *        --download-dir.
+ *   add-test-users: add the --test-users addresses missing from the OAuth
+ *     audience page, then reload and verify they are all listed.
+ * Output: one JSON payload on stdout (status ok / needs_user_action / error);
+ * progress log lines go to stderr. A stuck step becomes needs_user_action with
+ * `stuck_at` plus a screenshot and page text in --download-dir.
  */
 
 const fs = require("fs");
@@ -337,6 +351,10 @@ async function clickButton(page, candidates, timeout = 1800) {
   return false;
 }
 
+/**
+ * Poll every 1.5s until the page leaves Google sign-in; true when it does,
+ * false at timeoutMs. Clicks the matching account tile at most once a minute.
+ */
 async function waitForHumanLogin(page, email, timeoutMs) {
   const start = Date.now();
   let lastUrl = "";
@@ -403,6 +421,7 @@ async function acceptUserDataPolicy(page) {
   await clickButton(page, [/Continue/i], 1800);
 }
 
+// Configured means the page no longer shows "Google Auth Platform not configured yet".
 async function googleAuthConfigured(page) {
   const body = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
   return !/Google Auth Platform not configured yet/i.test(body);
@@ -413,6 +432,11 @@ async function requireGoogleAuthConfigured(page) {
   throw new StepError("branding.verify", "Google Auth Platform is still not configured.");
 }
 
+/**
+ * Fill the OAuth consent screen: app name, support email, audience, contact
+ * email, user-data policy, Create. Returns early when already configured;
+ * throws StepError("branding.verify") if it is still unconfigured after.
+ */
 async function setupConsent(page, project, email, clientName, audience, timeoutMs) {
   const overview = `https://console.cloud.google.com/auth/overview?project=${encodeURIComponent(project)}`;
   await gotoPage(page, overview, "OAuth overview");
@@ -484,6 +508,10 @@ async function clickScopeRow(root, scope) {
   return clickLocator(root.getByText(exact), scope, 1200);
 }
 
+/**
+ * Add the Gmail read and modify scopes, save, and reload to verify. Skips
+ * when both are already listed; throws StepError when any is missing after.
+ */
 async function addScopes(page, project) {
   log("adding Gmail OAuth scopes");
   const scopesUrl = `https://console.cloud.google.com/auth/scopes?project=${encodeURIComponent(project)}`;
@@ -527,6 +555,11 @@ async function addScopes(page, project) {
   return verified;
 }
 
+/**
+ * Add the test users not already on the OAuth audience page, save, reload,
+ * and verify. A user counts as present when the page text contains the
+ * address (case-insensitive); any still missing after save throws StepError.
+ */
 async function addTestUsers(page, project, email, testUsers, timeoutMs) {
   const audienceUrl = `https://console.cloud.google.com/auth/audience?project=${encodeURIComponent(project)}`;
   await gotoPage(page, audienceUrl, "OAuth audience");
@@ -610,6 +643,8 @@ async function addTestUsers(page, project, email, testUsers, timeoutMs) {
   };
 }
 
+// A scope counts as present when the page text shows its full URL or its
+// "..."-shortened form (the console abbreviates the googleapis.com prefix).
 async function verifyScopesOnCurrentPage(page) {
   const body = await page.locator("body").innerText({ timeout: 8000 }).catch(() => "");
   const normalized = compactText(body);
@@ -653,6 +688,11 @@ function validateDownloadedClientSecret(filePath) {
   }
 }
 
+/**
+ * Click Download JSON and save the file into downloadDir. Returns null when no
+ * download button is visible; throws StepError when nothing downloads within
+ * 15s or the file lacks an installed-app client_id and client_secret.
+ */
 async function downloadClientJson(page, downloadDir, stuckAt) {
   const downloadPromise = page.waitForEvent("download", { timeout: 15000 }).catch(() => null);
   const clickedDownload = await clickFirst(page, [/Download JSON/i, /^Download$/i, /Download/i], 3000);
@@ -710,6 +750,10 @@ async function tryDownloadExistingClient(page, clientName, downloadDir) {
   return null;
 }
 
+/**
+ * Return a downloaded Desktop client secret: reuse the client named clientName
+ * when its JSON can be re-downloaded, else create a new Desktop app client.
+ */
 async function createClient(page, project, email, clientName, downloadDir, timeoutMs) {
   const clients = `https://console.cloud.google.com/auth/clients?project=${encodeURIComponent(project)}`;
   const legacyClient = `https://console.cloud.google.com/apis/credentials/oauthclient?project=${encodeURIComponent(project)}`;
@@ -771,6 +815,7 @@ async function debugSnapshot(page, downloadDir) {
   };
 }
 
+// Turn a stuck step into a needs_user_action payload with debug files attached.
 async function failurePayload(error, page, downloadDir, project, clientName) {
   const debug = await debugSnapshot(page, downloadDir);
   let currentUrl = "";
@@ -792,6 +837,7 @@ async function failurePayload(error, page, downloadDir, project, clientName) {
   };
 }
 
+// Parse flags, launch Chrome on the persistent profile, run the mode, print the payload.
 async function main() {
   const args = parseArgs(process.argv);
   const mode = args.mode || "setup";

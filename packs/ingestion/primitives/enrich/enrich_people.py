@@ -48,15 +48,19 @@ run. The three steps declare `manifest = ""`: the stage has ONE manifest.json,
 written by the store's run template, embedding each step's typed payload as its
 `summary`.
 
-1. enrich_prepare_queue: routes rows with LinkedIn URLs/public identifiers and
-   profile gaps, then splits them by the local profile cache into
+1. enrich_prepare_queue: reads the input people CSV, routes rows with LinkedIn
+   URLs/public identifiers and profile gaps (`profile_transforms.route_row`),
+   then splits them by the local profile cache
+   (`profile_cache.classify_rapidapi_cache_status`) into
    `rapidapi_cache_hits.csv`, `rapidapi_cache_misses.csv`, and
-   `rapidapi_recent_failures.csv`. Rows without LinkedIn, and complete-looking
-   rows, are COUNTED (`unresolved_rows` / `skipped_rows`) but not written to a
-   file of their own — they come out of step 3 in `people.csv` carrying
-   `enrichment_status=skipped`.
-2. enrich_linkedin_profiles: hydrates the hits and fetches the misses into
-   `provider_enriched.csv`.
+   `rapidapi_recent_failures.csv` (a cached failed lookup checked inside
+   `--failure-retry-hours`, default 24h). Rows without LinkedIn, and
+   complete-looking rows, are COUNTED (`unresolved_rows` / `skipped_rows`) but
+   not written to a file of their own — they come out of step 3 in `people.csv`
+   carrying `enrichment_status=skipped`.
+2. enrich_linkedin_profiles: hydrates the hits from the cache (no spend) and
+   fetches the misses through `RapidApiClient.get_profile` (up to 64 workers,
+   300 requests/minute by default) into `provider_enriched.csv`.
 3. enrich_merge_people: merges profile data back into the input rows and writes
    canonical `people.csv` — every input row, each carrying the shared schema's
    `enrichment_status` (`enriched` / `failed` / `skipped`) and, for a failure,
@@ -66,8 +70,8 @@ Spend gate: cache hits never need approval. If enrich_prepare_queue finds
 RapidAPI cache misses (paid fetches) and `--approve-spend` was not passed, `run`
 writes a `needs_approval` manifest with the miss count + credit estimate and
 exits nonzero-but-clean (code 20) BEFORE any client is constructed and before
-any fetch. With `--approve-spend` it proceeds (and still fails clearly if no
-RAPIDAPI_* key is set). `estimated_credits` is a FLOOR (one credit per miss);
+any fetch. With `--approve-spend` it proceeds (and still fails clearly if
+POWERSET_API_KEY is not set). `estimated_credits` is a FLOOR (one credit per miss);
 `estimated_credits_max` is the worst case where every miss exhausts its retry
 attempts, each of which RapidAPI bills.
 
@@ -310,6 +314,12 @@ class EnrichQueuePrepare(Node):
         }
 
     def execute(self) -> PrepareQueueSummary:
+        """Route every input row, then classify the `linkedin_provider` rows
+        against the profile cache: `hit` (usable profile on the row or in the
+        cache), `recent_failure` (cached failed lookup inside the retry window;
+        not refetched), else `miss` (a paid fetch). `needs_resolution` rows (no
+        LinkedIn, but an email, phone, Twitter handle or name) and `skip_*` rows
+        are only counted."""
         cfg = self.cfg
         rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(cfg.input_csv)]
         if cfg.limit:
@@ -436,6 +446,10 @@ class EnrichLinkedInProfiles(Node):
         }
 
     def execute(self) -> EnrichLinkedInSummary:
+        """Build one provider row per hit and miss, in input order. Hits are read
+        from the cache; misses call `get_profile` from a pool of `max_workers`
+        threads whose request starts are throttled to `max_rpm`. Fails when there
+        are misses and no POWERSET_API_KEY."""
         cfg = self.cfg
         hit_rows = CsvIO.read_dict_rows(self.cache_hits_csv)
         miss_rows = CsvIO.read_dict_rows(self.cache_misses_csv)
@@ -471,6 +485,11 @@ class EnrichLinkedInProfiles(Node):
         )
 
         def enrich_one(row: dict[str, str]) -> tuple[dict[str, Any], bool, int, str]:
+            """One row -> (provider row, was_cache_hit, attempts, retry_outcome).
+
+            A hit uses the successful payload embedded in the row, else the cache
+            file; if neither is usable the row gets status 0 "cache entry
+            unusable". A miss goes through `client.get_profile` (paid)."""
             public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
             linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
             if not public_identifier and linkedin_url:
@@ -625,6 +644,10 @@ class EnrichedPeopleMerge(Node):
         }
 
     def execute(self) -> EnrichMergeSummary:
+        """Fold provider rows and recent failures back onto the input rows by
+        `_people_row_key`. A provider row replaces its input row (stamped
+        enriched or failed); a recent-failure row is stamped failed with the
+        cached reason; every other row is stamped skipped. Row count in = out."""
         cfg = self.cfg
         original_rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(cfg.input_csv)]
         by_key: dict[str, dict[str, Any]] = {}
@@ -698,7 +721,7 @@ class EnrichPeople(Node):
     Cache hits never need approval. A run that would fetch RapidAPI cache misses
     without `cfg.approve_spend` stops at a `needs_approval` manifest before any
     client is constructed and before any fetch; with approval it proceeds (and
-    fails clearly if no RAPIDAPI_* key).
+    fails clearly if POWERSET_API_KEY is not set).
 
     It declares the stage BOUNDARY input (the fan-in merge's people.csv) and no
     outputs: the three step nodes declare the files, and `people.csv` in
@@ -734,7 +757,12 @@ class EnrichPeople(Node):
         }
 
     def execute(self) -> EnrichManifest:
-        prepare = self._step("prepare_queue", EnrichQueuePrepare(self.cfg))
+        """prepare_queue -> spend gate -> enrich_linkedin -> merge_people.
+
+        Stops at the first step that does not complete. With misses > 0: no
+        `approve_spend` returns `needs_approval` (misses to misses x retry
+        attempts credits); approved but no POWERSET_API_KEY returns `failed`."""
+        prepare =self._step("prepare_queue", EnrichQueuePrepare(self.cfg))
         if prepare.get("status") != STATUS_COMPLETED:
             return self._build(status="failed", error=self._step_error("prepare_queue", prepare))
         paid = int(self.counts.get("paid_call_count") or 0)

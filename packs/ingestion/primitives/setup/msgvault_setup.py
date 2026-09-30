@@ -12,6 +12,24 @@ Flow: parse argv -> build the subcommand's frozen request from the namespace
 (the one place paths are expanded and names validated) -> run it -> emit its
 JSON payload -> map payload status to an exit code.
 
+What `$import-gmail` runs through this entry, in order:
+  1. `status`: read-only report of the msgvault binary, `~/.msgvault/config.toml`
+     client_secrets, `~/.msgvault/msgvault.db`, stored accounts
+     (`msgvault list-accounts`), Codex MCP, the gcloud account/project, and the
+     owner + test-user emails in `~/.msgvault/local-msg-vault-state.json`.
+  2. `browser-setup --email <owner>`: install msgvault; when a valid client
+     secret is already configured, skip Chrome. Otherwise log gcloud in as the
+     owner, choose/create a `local-msg-vault-*` project, enable the Gmail API,
+     `init-db`, register the MCP server, create the Desktop OAuth client in
+     Chrome, copy its secret to `~/.msgvault/client_secret.json`, and point
+     config.toml at it. Writes the state file.
+  3. `auth-check --email ...`: per account, not stored -> missing token; stored
+     -> `msgvault verify` (no mail downloaded) decides healthy / re-authorize /
+     transient error.
+  4. `add-test-users` for addresses Google must allow, then `add-account` (with
+     `--force-auth` for expired tokens) per account auth-check listed in
+     `accounts_to_authorize`, then `auth-check` again.
+
 Usage (run from the repo root):
 
     uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py status

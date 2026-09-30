@@ -107,6 +107,8 @@ def wacli_pinned_current() -> bool:
 
 
 def wacli_version(timeout: int = 30) -> dict[str, Any]:
+    """Run `wacli --version` once to prove the resolved binary works; fails
+    when none is installed or it prints nothing / exits non-zero."""
     exe = wacli_bin()
     if not exe:
         raise PrimitiveFailed("wacli is not installed")
@@ -128,6 +130,7 @@ def wacli_asset_name() -> str | None:
 
 
 def wacli_download_url() -> str | None:
+    """Release URL for this OS and chip at the pinned tag; None when no asset exists."""
     asset = wacli_asset_name()
     return f"{WACLI_RELEASE_BASE}/{WACLI_PINNED_VERSION}/{asset}" if asset else None
 
@@ -236,6 +239,8 @@ def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
 
 
 def wacli_json(store: Path, args: list[str], *, timeout: int = 300) -> dict[str, Any]:
+    """Run `wacli --store <store> --json <args>` and return its parsed JSON;
+    a non-zero exit raises `PrimitiveFailed`."""
     cmd = [wacli_bin() or "wacli", "--store", str(store), "--json", *args]
     result = runtime.run_command(cmd, timeout=timeout)
     if result.returncode != 0:

@@ -1,5 +1,16 @@
 """msgvault sync for Gmail discovery: last-sync inference and account sync.
 
+What sync_msgvault_account does for one account:
+  1. Window start: the explicit --sync-after date, else the resume marker from
+     infer_msgvault_sync_after (sources.last_sync_at, else the newest stored
+     message date), else none (full sync).
+  2. Run `msgvault [--home <dir>] sync-full <email> [--after] [--before]
+     [--query] [--noresume] [--limit] [--no-attachments]` into msgvault.db.
+     --noresume is added for --fresh or an explicit window.
+  3. Return a status dict (completed / failed / skipped when the msgvault
+     binary is missing); an expired or revoked token adds error_code
+     gmail_reauthorization_required and the re-authorize command.
+
 Changelog:
   2026-09-23 (typed rows): added `MsgvaultSyncPayload` — the ONE parse of a
     msgvault sync summary (the JSON a `msgvault sync-full` run prints, or the dict
@@ -120,6 +131,7 @@ def parse_msgvault_sync_date(value: Any) -> str:
 
 
 def sqlite_table_columns(con: sqlite3.Connection, table: str) -> set[str]:
+    """Column names of `table` (empty set when the table is missing)."""
     try:
         return {str(row[1]) for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
     except sqlite3.Error:
@@ -199,11 +211,14 @@ def msgvault_sync_supports_no_attachments() -> bool:
 
 
 def msgvault_reauthorization_required(payload: dict[str, Any], stderr: str) -> bool:
+    """True when stderr or the payload mentions an expired/revoked grant or a
+    missing token (MSGVAULT_REAUTH_ERROR_MARKERS, case-insensitive)."""
     error_text = "\n".join((stderr, json.dumps(payload, default=str))).lower()
     return any(marker in error_text for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
 
 
 def msgvault_reauthorize_command(email: str) -> str:
+    """The msgvault_setup.py `add-account --force-auth` command for `email`."""
     return (
         "uv run --project . python "
         "packs/ingestion/primitives/setup/msgvault_setup.py "
@@ -222,6 +237,11 @@ def sync_msgvault_account(
     limit: int = 0,
     no_attachments: bool = False,
 ) -> dict[str, Any]:
+    """Run `msgvault sync-full` for one account and return its status dict.
+
+    Window start = `sync_after_override`, else the inferred resume marker. The
+    sync query is always passed when set. Status is completed (exit 0), failed,
+    or skipped when the msgvault binary is not on PATH."""
     # An explicit window (from the onboarding date picker) overrides the
     # resume-inferred --after. With a window we also pass --noresume so the
     # full range is rescanned deterministically; already-stored messages are

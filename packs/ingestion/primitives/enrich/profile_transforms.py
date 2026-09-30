@@ -64,18 +64,21 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     stable_person_id_from_key,
 )
 
-# Longest provider error text kept on a people row. The full text stays in the
-# stage's raw_provider_responses/ payloads; this column is a human-readable hint.
+# Longest provider error text kept on a people row. The fuller text stays in
+# provider_enriched.csv's `rapidapi_error`; this column is a human-readable hint.
 MAX_ENRICHMENT_ERROR_CHARS = 300
 
 
 def generate_person_id(public_identifier: str, fallback: str = "") -> str:
+    """The LinkedIn person id when there is a public identifier, else a stable
+    id hashed from `person:{fallback}` (name, email or phone)."""
     if public_identifier:
         return generate_linkedin_person_id(public_identifier)
     return stable_person_id_from_key(f"person:{fallback}")
 
 
 def count_items(value: Any) -> int:
+    """Length of a list, or of a JSON-encoded list string; 0 otherwise."""
     if isinstance(value, list):
         return len(value)
     if isinstance(value, str) and value.strip():
@@ -88,10 +91,13 @@ def count_items(value: Any) -> int:
 
 
 def profile_richness(experiences: Any, education: Any) -> int:
+    """Number of work-experience plus education entries."""
     return count_items(experiences) + count_items(education)
 
 
 def _explicit_current_value(exp: dict[str, Any]) -> bool | None:
+    """The first of `is_current_position` / `is_current` / `current` read as a
+    bool (true/1/yes/y, false/0/no/n); None when none of them says."""
     for key in ("is_current_position", "is_current", "current"):
         if key not in exp:
             continue
@@ -108,6 +114,8 @@ def _explicit_current_value(exp: dict[str, Any]) -> bool | None:
 
 
 def current_position(experiences: list[dict[str, Any]]) -> tuple[str, str, str]:
+    """(title, company, "") of the current job: the first experience flagged
+    current, or with no flag and no end date; else the first experience listed."""
     first_exp: dict[str, Any] | None = None
     for exp in experiences or []:
         if not isinstance(exp, dict):
@@ -135,6 +143,9 @@ def normalize_rapidapi(
     linkedin_url: str,
     company_lookup: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    """A raw RapidAPI payload -> the shared profile fields (name, headline,
+    summary, location, picture, work_experiences, education, current
+    title/company). `{}` when the payload is missing or not a success."""
     if not isinstance(data, dict):
         return {}
     profile = normalize_linkedin_profile(data)
@@ -166,6 +177,9 @@ def normalize_rapidapi(
 
 
 def row_has_profile_gaps(row: dict[str, str]) -> bool:
+    """True when the row lacks a name (full, or first + last), a headline,
+    both current company and title, or any work/education entry. A
+    Connections.csv row has no headline, so every connection has gaps."""
     if not row.get("full_name") and not (row.get("first_name") and row.get("last_name")):
         return True
     if not row.get("headline"):
@@ -178,6 +192,12 @@ def row_has_profile_gaps(row: dict[str, str]) -> bool:
 
 
 def route_row(row: dict[str, str], force: bool = False) -> tuple[str, str]:
+    """(route, reason) for one people row; first rule wins:
+
+    1. LinkedIn URL or identifier, and `force` or profile gaps: `linkedin_provider`.
+    2. LinkedIn URL or identifier, no gaps: `skip_complete`.
+    3. No LinkedIn but an email, phone, Twitter handle or full name: `needs_resolution`.
+    4. Otherwise: `skip_no_identifier`."""
     linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
     public_identifier = row.get("public_identifier") or extract_public_identifier(linkedin_url)
     if linkedin_url or public_identifier:
@@ -190,6 +210,12 @@ def route_row(row: dict[str, str], force: bool = False) -> tuple[str, str]:
 
 
 def merge_provider_profile(base: dict[str, Any], rapid: dict[str, Any], rapid_raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Overlay a normalized provider profile onto a people row and stamp it.
+
+    Non-empty provider values overwrite name, headline, summary, location,
+    picture and current title/company; work history and education come from the
+    provider when present, else the row's own value stays. With no provider
+    profile the row keeps its values. The row is stamped enriched or failed."""
     # Read the provider outcome BEFORE normalizing: the rapidapi_* status columns
     # live on the provider_enriched row, not in the shared people schema, so
     # normalize_people_row is about to drop them.
@@ -225,6 +251,8 @@ def merge_provider_profile(base: dict[str, Any], rapid: dict[str, Any], rapid_ra
 
 
 def confirmed_people_row(row: dict[str, Any]) -> bool:
+    """True when the row has a LinkedIn URL and identifier and its
+    `rapidapi_response` normalizes to a successful profile."""
     linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
     public_identifier = str(row.get("public_identifier") or extract_public_identifier(linkedin_url) or "").strip()
     if not linkedin_url or not public_identifier:
