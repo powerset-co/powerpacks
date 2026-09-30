@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { must } from "@/lib/must"
+import { RESULT, logbookStatus } from "@/testing/logbook-fixture"
 import { DETAIL, PAYLOAD } from "@/testing/people-fixture"
 import { uploadResponse, uploadStatus } from "@/testing/upload-fixture"
 
@@ -44,6 +45,7 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
   if (url.endsWith("/tags")) return Promise.resolve(tagsResponse(init))
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
   if (url.endsWith("/upload")) return Promise.resolve(uploadResponse(uploadStatus()))
+  if (url.endsWith("/logbook")) return Promise.resolve(respond(logbookStatus()))
   return Promise.resolve(respond(PAYLOAD))
 }
 
@@ -136,7 +138,9 @@ describe("PeoplePage", () => {
     fireEvent.click(within(bar).getByRole("button", { name: "Share S" }))
     await waitFor(() => expect(screen.getByText("Marked 3 people for sharing.")).toBeTruthy())
     expect(screen.getByText("No one needs confirmation.")).toBeTruthy()
-    expect(fetch.mock.calls.filter(([url]) => !url.endsWith("/upload"))).toHaveLength(2)
+    expect(
+      fetch.mock.calls.filter(([url]) => !url.endsWith("/upload") && !url.endsWith("/logbook")),
+    ).toHaveLength(2)
   })
 
   it("opens the drawer on a row click and closes it on the next", async () => {
@@ -179,5 +183,114 @@ describe("PeoplePage", () => {
     await waitFor(() =>
       expect(must(container.querySelector("[data-drawer]")).getAttribute("data-open")).toBe("false"),
     )
+  })
+})
+
+const DONE_TOAST =
+  "Saved 12 messages in 3 files to .powerpacks/logbook. Gmail isn't set up on this computer. " +
+  "iMessage couldn't be read."
+
+/** The logbook's routes: the POST answers `started`, every later status read answers `after`. */
+function serveLogbook(started: Response, after = logbookStatus()) {
+  const posts: unknown[] = []
+  let posted = false
+  const fetch = vi.fn((url: string, init?: RequestInit) => {
+    if (!url.endsWith("/logbook")) return serve(url, init)
+    if (init?.method !== "POST") return Promise.resolve(respond(posted ? after : logbookStatus()))
+    posted = true
+    posts.push(JSON.parse(typeof init.body === "string" ? init.body : "null"))
+    return Promise.resolve(started)
+  })
+  return { fetch, posts }
+}
+
+describe("PeoplePage logbook", () => {
+  it("keeps the last download available when reopening People", async () => {
+    const done = logbookStatus({ status: "completed", people: ["p2"], result: RESULT })
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.endsWith("/logbook") ? Promise.resolve(respond(done)) : serve(url, init),
+    )
+    vi.stubGlobal("fetch", fetch)
+    renderPage()
+
+    const download = await screen.findByRole("link", { name: "Download logbook" })
+    expect(download.getAttribute("href")).toBe("/api/people/logbook/download")
+    expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0)
+  })
+
+  it("builds the selection's logbook and keeps the selection and rows", async () => {
+    const done = logbookStatus({ status: "completed", people: ["p1", "p2", "p3"], result: RESULT })
+    const route = serveLogbook(
+      respond(logbookStatus({ status: "building", people: ["p1", "p2", "p3"] })),
+      done,
+    )
+    vi.stubGlobal("fetch", route.fetch)
+    const { container } = renderPage()
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
+    fireEvent.click(within(bar).getByRole("button", { name: "Build logbook" }))
+
+    await waitFor(() => expect(within(bar).getByRole("button", { name: "Building logbook…" })).toBeTruthy())
+    expect(within(bar).getByRole("button", { name: "Building logbook…" }).hasAttribute("disabled")).toBe(true)
+    // The selection in table order.
+    expect(route.posts).toEqual([{ people: ["p2", "p1", "p3"] }])
+    expect(
+      screen.getByText(/^Building a logbook for 3 people\. Raw Gmail, iMessage and WhatsApp/),
+    ).toBeTruthy()
+
+    await waitFor(() => expect(screen.getByText(DONE_TOAST)).toBeTruthy(), { timeout: 3000 })
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy()
+    expect(within(bar).getByText("3 selected")).toBeTruthy()
+    expect(within(bar).getByRole("button", { name: "Build logbook" }).hasAttribute("disabled")).toBe(false)
+    expect(container.querySelectorAll(".row")).toHaveLength(3)
+    expect(route.fetch.mock.calls.filter(([url]) => url.endsWith("/tags"))).toHaveLength(0)
+  })
+
+  it("builds the open person's logbook from the drawer and keeps it open", async () => {
+    const done = logbookStatus({ status: "completed", people: ["p2"], result: RESULT })
+    const route = serveLogbook(respond(done), done)
+    vi.stubGlobal("fetch", route.fetch)
+    const { container } = renderPage()
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    fireEvent.click(must(container.querySelector<HTMLElement>(".row")))
+    const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
+    fireEvent.click(within(drawer).getByRole("button", { name: "Build logbook" }))
+
+    await waitFor(() => expect(screen.getByText(DONE_TOAST)).toBeTruthy())
+    expect(route.posts).toEqual([{ people: ["p2"] }])
+    expect(drawer.getAttribute("data-open")).toBe("true")
+    expect(container.querySelector("[data-drawer] h2")?.textContent).toBe("Casey Delta")
+  })
+
+  it("says why a build was refused and keeps the selection", async () => {
+    const refused = new Response(JSON.stringify({ error: "A logbook is already being built." }), {
+      status: 409,
+    })
+    vi.stubGlobal("fetch", serveLogbook(refused).fetch)
+    const { container } = renderPage()
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
+    fireEvent.click(within(bar).getByRole("button", { name: "Build logbook" }))
+
+    await waitFor(() =>
+      expect(screen.getByText("Couldn't build the logbook. A logbook is already being built.")).toBeTruthy(),
+    )
+    expect(within(bar).getByText("3 selected")).toBeTruthy()
+    expect(within(bar).getByRole("button", { name: "Build logbook" }).hasAttribute("disabled")).toBe(false)
+  })
+
+  it("reports a build that failed while it ran", async () => {
+    const failed = logbookStatus({ status: "failed", people: ["p2"], error: "disk full" })
+    vi.stubGlobal("fetch", serveLogbook(respond(failed), failed).fetch)
+    const { container } = renderPage()
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    fireEvent.click(must(container.querySelector<HTMLElement>(".row")))
+    const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
+    fireEvent.click(within(drawer).getByRole("button", { name: "Build logbook" }))
+
+    await waitFor(() => expect(screen.getByText("Couldn't build the logbook. disk full")).toBeTruthy())
+    expect(drawer.getAttribute("data-open")).toBe("true")
   })
 })

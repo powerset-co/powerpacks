@@ -1,5 +1,6 @@
 // The page's words for machine values, ported 1:1 from the legacy people.js.
 
+import type { ChannelCoverage, LogbookResult } from "@/lib/api/logbook"
 import type { LastUpload, UploadPlan } from "@/lib/api/upload"
 import { CHANNELS } from "@/lib/channels"
 import { parseDate, plural } from "@/lib/copy"
@@ -190,4 +191,36 @@ export function lastUploadLine(last: LastUpload | null): string {
 /** The page toast when an upload finishes while the dialog is closed. */
 export function sharedToast(count: number): string {
   return `Shared ${plural(count, "person")}.`
+}
+
+// The Build logbook action on the bar and in the drawer, and its toasts.
+export const LOGBOOK = {
+  build: "Build logbook",
+  building: "Building logbook…",
+  explainer: "Raw Gmail, iMessage and WhatsApp messages, including groups, saved on this computer.",
+  download: "Download",
+} as const
+
+/** Why a channel added nothing: its store is not on this computer, or could not be read. */
+function channelGap({ channel, status }: ChannelCoverage): string | null {
+  const title = sentence(channel)
+  if (status === "missing") return `${title} isn't set up on this computer.`
+  if (status === "unreadable") {
+    return `${title} couldn't be read.`
+  }
+  return null
+}
+
+/** "Building a logbook for 3 people. Raw Gmail, … saved on this computer." */
+export function logbookStartedToast(count: number): string {
+  return `Building a logbook for ${plural(count, "person")}. ${LOGBOOK.explainer}`
+}
+
+/** "Saved 1,204 messages in 38 files to .powerpacks/logbook." then each channel it could not read. */
+export function logbookDoneToast(result: LogbookResult): string {
+  const saved = result.messages
+    ? `Saved ${plural(result.messages, "message")} in ${plural(result.files, "file")} to ${result.root}.`
+    : "No messages found on this computer."
+  const gaps = result.channels.map(channelGap).filter((gap) => gap !== null)
+  return [saved, ...gaps].join(" ")
 }

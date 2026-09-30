@@ -1,6 +1,7 @@
 import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import { LOGBOOK } from "@/lib/people/copy"
 import type { TagAction } from "@/lib/people/facets"
 import type { Person } from "@/types/people"
 
@@ -9,7 +10,10 @@ interface DrawerActionsProps {
   saving: boolean
   // Saving, or the drawer is switching away from this person.
   disabled: boolean
+  // A logbook build is running; one runs at a time.
+  building: boolean
   onAction: (action: TagAction) => void
+  onLogbook: () => void
 }
 
 const PRESSED = "flex-1 min-h-9 aria-pressed:shadow-[inset_0_0_0_1px_var(--line-strong)]"
@@ -20,7 +24,8 @@ function Check({ on, risen }: { on: boolean; risen: boolean }) {
 }
 
 // Share and Keep private reflect the owner's own tags; Undo (toast, z) takes a choice back.
-export function DrawerActions({ row, saving, disabled, onAction }: DrawerActionsProps) {
+// Build logbook saves this person's raw messages locally and changes nothing on the row.
+export function DrawerActions({ row, saving, disabled, building, onAction, onLogbook }: DrawerActionsProps) {
   const shares = row.tags.includes("share")
   const keepsPrivate = row.tags.includes("private")
   const [opened] = useState({ shares, keepsPrivate })
@@ -47,6 +52,16 @@ export function DrawerActions({ row, saving, disabled, onAction }: DrawerActions
         >
           <Check on={keepsPrivate} risen={!opened.keepsPrivate} />
           Keep private
+        </Button>
+      </div>
+      <div className="drawer-actions">
+        <Button
+          className="flex-1 min-h-9"
+          title={LOGBOOK.explainer}
+          disabled={building || disabled}
+          onClick={onLogbook}
+        >
+          {building ? LOGBOOK.building : LOGBOOK.build}
         </Button>
       </div>
     </>

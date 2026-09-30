@@ -10,7 +10,8 @@ const HIDE_ERROR_AFTER_MS = 8000
 
 export interface ToastAction {
   label: string
-  kbd: string
+  // The page shortcut that does the same, when there is one.
+  kbd?: string
   onClick: () => void
 }
 
@@ -50,7 +51,7 @@ export function Toast({ toast, onDismiss, className }: ToastProps) {
             className,
           )}
         >
-          <span>{shown.message}</span>
+          <span className="min-w-0 break-words">{shown.message}</span>
           {shown.action ? <ToastButton action={shown.action} /> : null}
         </div>
       ) : null}
@@ -63,9 +64,12 @@ function ToastButton({ action }: { action: ToastAction }) {
     <button
       type="button"
       onClick={action.onClick}
-      className="inline-flex cursor-pointer items-center gap-1 rounded-[5px] border border-current bg-transparent px-2 py-1 text-inherit disabled:cursor-wait disabled:opacity-60"
+      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-[5px] border border-current bg-transparent px-2 py-1 text-inherit disabled:cursor-wait disabled:opacity-60"
     >
-      {action.label} <Kbd className="border-current bg-transparent text-inherit opacity-70">{action.kbd}</Kbd>
+      {action.label}
+      {action.kbd ? (
+        <Kbd className="border-current bg-transparent text-inherit opacity-70">{action.kbd}</Kbd>
+      ) : null}
     </button>
   )
 }

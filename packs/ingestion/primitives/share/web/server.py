@@ -10,18 +10,24 @@ under those parents and re-decides their share rows through
 `labels.share_decision` from `person_labels`, in one transaction.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
+GET `/api/people/logbook` reads the Logbook build; POST `/api/people/logbook` builds
+the raw local archive for the selected parents; GET `/api/people/logbook/download`
+zips what that build wrote.
 
 Changelog:
   2026-09-26: created.
   2026-09-26: serves the React build from web/dist; legacy page and vendor/ removed.
   2026-09-26: the page and its assets moved to packs/shared/web/app.py.
+  2026-09-30: the Logbook build, status and download routes.
 """
 
 from __future__ import annotations
 
 import gzip
 import json
+import shutil
 import sys
+import tempfile
 import urllib.parse
 from dataclasses import asdict
 from http import HTTPStatus
@@ -38,6 +44,8 @@ from packs.ingestion.primitives.share.labels import label_row_from_export, share
 from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
+from packs.ingestion.primitives.logbook.logbook_common import LOGBOOK_ROOT
+from packs.ingestion.primitives.share.web.logbook import PeopleLogbook
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 from packs.shared.web.app import AppRoutes
@@ -47,6 +55,8 @@ API_PREFIX = "/api/people/"
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_TAGS_REQUEST_BYTES = 4 * 1024 * 1024
 GZIP_MIN_BYTES = 8 * 1024
+# Archives below this stay in memory while zipping; larger ones spill to a temp file.
+ARCHIVE_SPOOL_BYTES = 32 * 1024 * 1024
 
 TagChanges = dict[str, frozenset[str]]
 
@@ -109,11 +119,13 @@ def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> dict[str, t
 class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
-    def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple], upload: ShareUpload) -> None:
+    def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple], upload: ShareUpload,
+                 logbook: PeopleLogbook) -> None:
         self.db = db
         self.people = people
         self.load = load
         self.upload = upload
+        self.logbook = logbook
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
@@ -121,6 +133,10 @@ class ShareRoutes:
             self._send_json(handler, people_payload(self.load()))
         elif parsed.path == f"{API_PREFIX}upload":
             self._send_json(handler, self.upload.status())
+        elif parsed.path == f"{API_PREFIX}logbook":
+            self._send_json(handler, self.logbook.status())
+        elif parsed.path == f"{API_PREFIX}logbook/download":
+            self._send_archive(handler)
         elif parsed.path == f"{API_PREFIX}person":
             detail = self.people.detail((query.get("id") or [""])[0])
             if detail is None:
@@ -141,7 +157,8 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
+        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
+                               f"{API_PREFIX}logbook"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         host = (handler.headers.get("Host") or "").strip()
@@ -150,6 +167,9 @@ class ShareRoutes:
         # The page's own origin only: same scheme, host and port, and that host is this machine.
         if origin and (origin != f"{scheme}://{host}" or hostname not in LOCAL_HOSTS):
             self._send(handler, b"cross-origin request rejected", "text/plain", status=HTTPStatus.FORBIDDEN)
+            return True
+        if parsed.path == f"{API_PREFIX}logbook":
+            self._start_logbook(handler)
             return True
         if parsed.path in {f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
             length = int(handler.headers.get("Content-Length") or 0)
@@ -185,6 +205,49 @@ class ShareRoutes:
             for parent_id, rows in decided.items()]})
         return True
 
+    def _start_logbook(self, handler: BaseHTTPRequestHandler) -> None:
+        """Build the logbook for `{"people": [parent_id, ...]}`, the page's selection."""
+        length = int(handler.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_TAGS_REQUEST_BYTES:
+            self._send_json(handler, {"error": "request body must be 1 byte to 4 MiB"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            request = json.loads(handler.rfile.read(length))
+        except json.JSONDecodeError:
+            request = None
+        people = request.get("people") if isinstance(request, dict) else None
+        if not isinstance(people, list) or not people or not all(isinstance(value, str) for value in people):
+            self._send_json(handler, {"error": "people must be a non-empty list of parent ids"},
+                            status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            status = self.logbook.start(people)
+        except LookupError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except RuntimeError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
+        else:
+            self._send_json(handler, status)
+
+    def _send_archive(self, handler: BaseHTTPRequestHandler) -> None:
+        """The last completed build's entries as one zip; no path comes from the request."""
+        with tempfile.SpooledTemporaryFile(max_size=ARCHIVE_SPOOL_BYTES) as archive:
+            try:
+                self.logbook.write_archive(archive)
+            except RuntimeError as exc:
+                self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
+                return
+            size = archive.tell()
+            archive.seek(0)
+            handler.send_response(HTTPStatus.OK)
+            handler.send_header("Content-Type", "application/zip")
+            handler.send_header("Content-Disposition", 'attachment; filename="logbook.zip"')
+            handler.send_header("Content-Length", str(size))
+            handler.send_header("Cache-Control", "no-store")
+            handler.send_header("X-Content-Type-Options", "nosniff")
+            handler.end_headers()
+            shutil.copyfileobj(archive, handler.wfile)
+
     @staticmethod
     def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str = "text/html; charset=utf-8",
               status: int = HTTPStatus.OK, *, cache: str = "no-store") -> None:
@@ -208,7 +271,8 @@ class ShareRoutes:
 
 
 def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV, *,
-                 upload_db: Path | None = None, upload_dir: Path | None = None) -> ShareRoutes:
+                 upload_db: Path | None = None, upload_dir: Path | None = None,
+                 logbook_root: Path = LOGBOOK_ROOT, logbook_stores: dict[str, Path] | None = None) -> ShareRoutes:
     """The routes over one store, rows re-read whenever the store file changes."""
     people = SharePeople(db)
     cache: dict[str, Any] = {}
@@ -222,7 +286,7 @@ def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV, *,
 
     upload = ShareUpload(db.db_path, people_csv, index_db=upload_db or DEFAULT_DB,
                          out_dir=upload_dir or DEFAULT_OUT_DIR)
-    return ShareRoutes(db, people, load, upload)
+    return ShareRoutes(db, people, load, upload, PeopleLogbook(db, root=logbook_root, stores=logbook_stores))
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:

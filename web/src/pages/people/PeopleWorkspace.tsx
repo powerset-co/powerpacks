@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { Toast } from "@/components/shared"
+import { Button } from "@/components/ui/button"
+import { LOGBOOK_DOWNLOAD_URL } from "@/lib/api/logbook"
 import { useSelection } from "@/hooks/useSelection"
 import { nextOpenIndex } from "@/lib/advance"
 import type { FacetKey, FacetSet, QuickFilter, TagAction } from "@/lib/people/facets"
@@ -15,6 +17,7 @@ import { DecisionTabs } from "./head/DecisionTabs"
 import { useDecisions } from "./hooks/useDecisions"
 import { useDrawer } from "./hooks/useDrawer"
 import { useFilters } from "./hooks/useFilters"
+import { useLogbook } from "./hooks/useLogbook"
 import { usePeopleShortcuts } from "./hooks/usePeopleShortcuts"
 import { PeopleShell } from "./PeopleShell"
 import { FacetRail } from "./rail/FacetRail"
@@ -50,6 +53,8 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
     [clearSelection, openId, refresh],
   )
   const decisions = useDecisions(byId, onWritten)
+  // Builds leave the selection, the drawer and the rows as they are.
+  const logbook = useLogbook(decisions.showToast)
 
   // Quick labeling: a label on the open person moves the drawer to whoever is next
   // (lib/advance.ts) once the list reflects the write; nothing cycles.
@@ -169,7 +174,16 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
             totals={totals}
             total={rows.length}
             onTab={setTab}
-            action={<ShareUpload onToast={(message) => decisions.showToast({ message })} />}
+            action={
+              <>
+                {logbook.result?.files ? (
+                  <Button asChild title={logbook.result.root}>
+                    <a href={LOGBOOK_DOWNLOAD_URL}>Download logbook</a>
+                  </Button>
+                ) : null}
+                <ShareUpload onToast={(message) => decisions.showToast({ message })} />
+              </>
+            }
           />
           <QuickFilters filters={view.filters} counts={quickCounts} onPick={pickQuick} />
           <FilterBar
@@ -215,8 +229,12 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
             open={openId !== null}
             detail={drawer.detail}
             saving={decisions.saving}
+            building={logbook.building}
             onAction={(action) => {
               if (openId) void label(action, [openId])
+            }}
+            onLogbook={() => {
+              if (openId) void logbook.build([openId])
             }}
             onClose={drawer.close}
             onRetry={refresh}
@@ -225,7 +243,9 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
             label={barLabel}
             selection={selection.selected.size > 0}
             saving={decisions.saving}
+            building={logbook.building}
             onAction={(action) => void label(action, targets)}
+            onLogbook={() => void logbook.build(targets)}
             onClear={selection.selected.size ? clearSelection : closeDrawer}
           />
           <Toast
