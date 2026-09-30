@@ -39,6 +39,8 @@ Changelog:
 - 2026-09-30: Step 1 is one command, `bin/bootstrap`, and one rule: do what its
   last line says. The clone, release pin, installer, tool check and .env moved
   into the script so any model can run it and the user only has to approve.
+- 2026-09-30: Codex skills install to `~/.agents/skills`; `~/.codex/skills` is
+  Codex's deprecated location and the installer cleans our skills out of it.
 -->
 
 One sentence installs everything:
@@ -86,7 +88,7 @@ and tell the user which tool to use instead, in a few lines:
 Save this SKILL.md into the current harness's skills directory, creating the folder:
 
 - Claude Code: `~/.claude/skills/install-powerpacks/SKILL.md`
-- Codex: `~/.codex/skills/install-powerpacks/SKILL.md`
+- Codex: `~/.agents/skills/install-powerpacks/SKILL.md`
 - Pi / other: the harness's personal skills directory, same layout.
 
 That is the whole "install the skill" step. Do NOT clone anything yet — the full

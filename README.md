@@ -274,11 +274,11 @@ codex exec "Clone https://github.com/powerset-co/powerpacks if needed, then cd i
 
 # Manual equivalent from a local checkout:
 bin/update-codex                           # pull, sync agent files, reinstall Codex skills/profile
-./install.sh codex                          # default: ~/.codex/skills/
+./install.sh codex                          # default: ~/.agents/skills/
 ./install.sh codex /custom/skills/dir       # explicit target
 ```
 
-The Codex adapter installs each skill entrypoint under `~/.codex/skills/<skill>/`
+The Codex adapter installs each skill entrypoint under `~/.agents/skills/<skill>/`
 and stores one shared support bundle at `~/.codex/powerpacks`. Each installed
 skill links `powerpacks/` to that shared bundle, so adding a skill does not copy
 the full pack tree again.
@@ -375,7 +375,7 @@ Quick checks that each layer works — run from the repo root after
 
 ```bash
 # 1. Skill files actually copied to the host
-ls ~/.codex/skills/                # or ~/.claude/skills/, ~/.pi/agent/skills/
+ls ~/.agents/skills/               # or ~/.claude/skills/, ~/.pi/agent/skills/
 
 # 2. Powerpacks unit tests
 python3 -m unittest discover -s tests

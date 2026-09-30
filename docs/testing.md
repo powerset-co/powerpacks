@@ -8,7 +8,7 @@ Use these checks before handing Powerpacks to users.
 scripts/test-search check
 ```
 
-This installs the current skills into `~/.codex/skills`, runs lint, runs unit
+This installs the current skills into `~/.agents/skills`, runs lint, runs unit
 tests, and dry-runs selected pipeline-eval cases without invoking expansion or
 retrieval APIs. It also dry-runs the company-search harness.
 

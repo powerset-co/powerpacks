@@ -42,7 +42,7 @@ jobs:
           grep -q '^DONE: ' bootstrap.log
       - name: Verify installed skills
         run: |
-          for dir in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
+          for dir in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
             for skill in setup search deep-context import-gmail powerset; do
               test -f "$dir/$skill/SKILL.md" || { echo "FAIL: missing $dir/$skill/SKILL.md"; exit 1; }
             done
