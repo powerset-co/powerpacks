@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.0...powerpacks-v3.8.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* drop the blanket ask-before-spend rule from AGENTS.md ([#627](https://github.com/powerset-co/powerpacks/issues/627)) ([855b418](https://github.com/powerset-co/powerpacks/commit/855b41879d19166ac9de823c4e26b06b77c241de))
+
 ## [3.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.7.1...powerpacks-v3.8.0) (2026-09-30)
 
 
