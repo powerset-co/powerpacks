@@ -72,7 +72,7 @@ class LabelBadgeTests(unittest.TestCase):
 
     def test_the_number_of_labels_is_capped_on_every_profile_surface(self) -> None:
         parent = _parent(labels=_labels(is_founder=0.9, is_professional=0.9))
-        for markup in (rendering.render_worth_card(parent), rendering.render_person_detail(parent)):
+        for markup in (rendering.render_worth_card(parent),):
             self.assertIn("class='person-label'", markup)
             self.assertLess(markup.index("<h2>"), markup.index("class='person-label'"))
         rows = rendering.decision_rows_html([parent], "yes")

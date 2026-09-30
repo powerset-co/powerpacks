@@ -321,11 +321,9 @@ class DeepContextHttpContractTests(unittest.TestCase):
     def test_get_route_inventory_and_content_types(self) -> None:
         html_routes: dict[str, bytes | None] = {
             "/": b"<!doctype html>",
-            "/directory?q=Jordan&worth=maybe": b"data-directory",
             f"/api/dossier?slug={self.SLUG}": b"Synthetic collaborator",
             "/api/worth-card?debug=1&index=0&exclude=not-this-person": b"worth",
             "/api/linkedin-card?debug=1&index=0&exclude=not-this-person": b"LinkedIn",
-            f"/api/person?slug={self.SLUG}": b"Jordan Bravo",
         }
         for path, marker in html_routes.items():
             with self.subTest(path=path):
@@ -356,6 +354,36 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertIn(b"data-phrase='Review complete, continue'", body)
         self.assertNotIn(b"proceed with enrichment", body)
 
+    def test_default_page_follows_current_stage_and_preserves_explicit_stage(self) -> None:
+        def assert_stage(expected: str) -> None:
+            status, payload = self.json_request("GET", "/api/status")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["stage"], expected)
+            status, _, body, _ = self.request("GET", "/")
+            self.assertEqual(status, 200)
+            self.assertIn(f"data-stage='{expected}'".encode(), body)
+
+        assert_stage("worth")
+        self.db.decide_worth("parent-jordan-bravo", "yes")
+        assert_stage("enrich")
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE row_key=?",
+                (json.dumps({"verdict": "needs_review", "confidence": 0.5}), self.PUB),
+            )
+        assert_stage("linkedin")
+        status, _, body, _ = self.request("GET", "/?stage=worth&view=yes")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-stage='worth'", body)
+        self.db.decide_identity(self.PUB, "verify")
+        assert_stage("done")
+        status, _, body, _ = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-phrase='Review complete, continue'", body)
+        status, _, body, _ = self.request("GET", "/?stage=enrich")
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-stage='enrich'", body)
+
     def test_rendered_markup_covers_every_javascript_dispatch_contract(self) -> None:
         # Keep these selectors pinned to reconcile_review.js:217, 418-420,
         # 543-608, 754-777, 922-975, 1024, 1093-1103, and 1297-1325.
@@ -365,7 +393,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "linkedin": "/?stage=linkedin",
             "linkedin_card": "/api/linkedin-card",
             "enrich": "/?stage=enrich",
-            "directory": f"/directory?person={self.SLUG}",
         }.items():
             status, _, body, _ = self.request("GET", path)
             self.assertEqual(status, 200)
@@ -375,8 +402,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "data-tab": "worth",
             "data-decide": "linkedin_card",
             "data-linkedin-panel": "linkedin",
-            "data-directory-tab": "directory",
-            "data-directory-search": "directory",
             "data-menu-toggle": "linkedin_card",
             "data-person-menu": "linkedin_card",
             "data-feedback-general": "linkedin_card",
@@ -384,9 +409,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "data-scroll-cue": "linkedin_card",
             "data-worth-search": "worth",
             "data-search-list": "worth",
-            "data-retarget-panel": "directory",
-            "data-retarget-items": "directory",
-            "data-feedback-alert": "directory",
             "data-open-guidance": "linkedin_card",
             "data-retarget-form": "linkedin_card",
             "enrich-state": "enrich",
@@ -547,7 +569,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             rich_card,
         )
         self.assertIn("class='worth-search-count'", surfaces["worth"])
-        self.assertIn("class='worth-search-count'", surfaces["directory"])
 
         # Scratch mutation proof: the inventory gate catches the exact D1-1
         # data-decide -> data-decision regression without changing the tree.
@@ -938,7 +959,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
         for key in (
             "progress",
             "next_stage",
-            "state_token",
         ):
             self.assertIn(key, payload)
 

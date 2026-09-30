@@ -52,7 +52,7 @@ async function post(path, values) {
 // FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
 // then a "Got it, thanks!" beat before it closes. Posts to /feedback where
 // the server folds in everything it knows (incl. retarget guidance).
-// Module scope: the directory person pane AND the review cards both open it.
+// Module scope: the review cards open it.
 const SEND_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
   + " stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
   + "<path d='m22 2-7 20-4-9-9-4Z'/><path d='M22 2 11 13'/></svg>";
@@ -93,7 +93,7 @@ function offerSignIn(pop) {
 
 function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
   closeFeedbackPopover();
-  const host = anchor.closest(".person-detail, .identity-card") || document.body;
+  const host = anchor.closest(".identity-card") || document.body;
   const pop = document.createElement("div");
   pop.className = "feedback-popover";
   if (contextLabel) {
@@ -586,11 +586,8 @@ document.addEventListener("toggle", (event) => {
   }
 }, true);
 
-// The review cards' "…" menu (general feedback). The directory pane binds its
-// own delegation scoped to the detail pane, so directory clicks are excluded
-// here — one popover, never opened twice.
+// The review cards' "…" menu (general feedback): one popover, never opened twice.
 document.addEventListener("click", (event) => {
-  if (event.target.closest("[data-directory-detail]")) return;
   const toggle = event.target.closest("[data-menu-toggle]");
   if (toggle) {
     event.preventDefault();
@@ -845,7 +842,7 @@ document.addEventListener("click", async (event) => {
         worth: ["People Reviewed", "/?stage=enrich"],
         enrich: ["Contacts Enriched", "/?stage=linkedin"],
         // Finish transforms THIS screen into the go-back handoff state —
-        // never a surprise jump to the directory.
+        // never a surprise jump elsewhere.
         linkedin: ["", "/?stage=linkedin"],
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
@@ -857,17 +854,15 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-// Guided retargets from a review card. The directory pane binds its own submit
-// handler (it also refreshes the sidebar queue panel), so directory forms are
-// excluded here; this document-level handler covers the LinkedIn review cards,
-// which are swapped in as fragments after every decision. LINEAR review:
+// Guided retargets from a review card. This document-level handler covers the
+// LinkedIn review cards, swapped in as fragments after every decision. LINEAR review:
 // queueing removes the person from the queue (the server excludes active
 // re-research), so on success the panel advances straight to the next card —
 // results apply automatically in the background, and only a failed job brings
 // the person back.
 document.addEventListener("submit", async (event) => {
   const form = event.target.closest("[data-retarget-form]");
-  if (!form || form.closest("[data-directory-detail]")) return;
+  if (!form) return;
   event.preventDefault();
   const textarea = form.querySelector("textarea[name='guidance']");
   const guidance = (textarea?.value || "").trim();
@@ -924,7 +919,7 @@ document.addEventListener("submit", async (event) => {
       leaveAndReload("Queued for re-research — moving on");
       return;
     }
-    // Directory-adjacent or non-panel surfaces keep the inline note.
+    // Non-panel surfaces keep the inline note.
     const note = form.querySelector("[data-retarget-note]");
     if (note) {
       note.textContent = "Queued — results apply automatically in the background";
@@ -1121,7 +1116,7 @@ async function syncFileState() {
         && movesForward && observedTransition) {
       if (preserveDraft) return;
       leaveAndNavigate("Contacts Enriched", state.stage === "done"
-        ? "/directory" : `/?stage=${encodeURIComponent(state.stage)}`);
+        ? "/?stage=done" : `/?stage=${encodeURIComponent(state.stage)}`);
       return;
     }
     if (state.state_token && state.state_token !== reviewStateToken) {
@@ -1132,362 +1127,6 @@ async function syncFileState() {
     // The local observer may be restarting; the next poll will retry.
   }
 }
-
-// --- directory browse view (/directory) --------------------------------------
-// Read-only reference surface: the sidebar's Yes/No worth tabs (default Yes)
-// and search input filter an A-Z list rendered in chunks from the embedded
-// island (scrolling appends more; the count shows "N of M" within the active
-// tab; Enter opens the first match), and clicking a name fetches that person's
-// pane from /api/person. Nothing here ever writes.
-function setupDirectory() {
-  const list = document.querySelector("[data-directory-list]");
-  const detail = document.querySelector("[data-directory-detail]");
-  const island = document.querySelector("script[data-directory-people]");
-  if (!list || !detail || !island) return;
-  let people = [];
-  try { people = JSON.parse(island.textContent || "[]"); } catch { people = []; }
-  const CHUNK = 150;
-  const tabs = Array.from(document.querySelectorAll("[data-directory-tab]"));
-  const box = document.querySelector("[data-directory-search]");
-  const input = box?.querySelector("input");
-  const count = box?.querySelector("[data-search-count]");
-  let activeTab = tabs.find((tab) => tab.classList.contains("active"))?.dataset.directoryTab || "";
-  let activeSlug = new URLSearchParams(window.location.search).get("person") || "";
-  // A ?person= deep link lands on that person's own tab, so the server-rendered
-  // pane always has its sidebar entry visible.
-  const selected = people.find((entry) => entry.slug === activeSlug);
-  if (selected && tabs.length) {
-    const worth = selected.worth || "maybe";
-    if (worth !== activeTab && tabs.some((tab) => tab.dataset.directoryTab === worth)) {
-      activeTab = worth;
-      tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.directoryTab === worth));
-    }
-  }
-  let filtered = [];
-  let rendered = 0;
-
-  function entryButton(entry) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "directory-item";
-    item.dataset.slug = entry.slug || "";
-    item.textContent = entry.name || entry.slug || "";
-    if (entry.slug === activeSlug) item.classList.add("active");
-    return item;
-  }
-
-  function renderMore() {
-    filtered.slice(rendered, rendered + CHUNK).forEach((entry) => list.append(entryButton(entry)));
-    rendered = Math.min(filtered.length, rendered + CHUNK);
-  }
-
-  function fillViewport() {
-    while (rendered < filtered.length && list.scrollHeight <= list.clientHeight + 200) renderMore();
-  }
-
-  function refreshList() {
-    const scope = tabs.length && activeTab
-      ? people.filter((entry) => (entry.worth || "maybe") === activeTab)
-      : people;
-    const query = (input?.value || "").trim().toLowerCase();
-    filtered = query
-      ? scope.filter((entry) => (entry.name || "").toLowerCase().includes(query))
-      : scope;
-    if (count) {
-      count.hidden = !query;
-      if (query) count.textContent = `${filtered.length} of ${scope.length}`;
-    }
-    list.textContent = "";
-    rendered = 0;
-    renderMore();
-    fillViewport();
-    list.scrollTop = 0;
-  }
-
-  async function loadPerson(slug, { keepScroll = false } = {}) {
-    let response;
-    try {
-      response = await fetch(`/api/person?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
-    } catch {
-      announce("Could not load person", true);
-      return false;
-    }
-    if (!response.ok) {
-      announce("Could not load person", true);
-      return false;
-    }
-    const scrollTop = detail.scrollTop;
-    detail.innerHTML = await response.text();
-    wireDynamicContent(detail);
-    detail.scrollTop = keepScroll ? scrollTop : 0;
-    return true;
-  }
-
-  async function selectPerson(slug) {
-    if (!slug || slug === activeSlug) return;
-    if (!(await loadPerson(slug))) return;
-    activeSlug = slug;
-    list.querySelectorAll(".directory-item").forEach((item) => {
-      item.classList.toggle("active", item.dataset.slug === slug);
-    });
-    window.history.replaceState(null, "", `/directory?person=${encodeURIComponent(slug)}`);
-  }
-
-  function bumpDirectoryTab(worth, delta) {
-    const span = document.querySelector(`[data-directory-tab='${worth}'] span`);
-    if (!span) return;
-    const current = parseInt(span.textContent || "0", 10);
-    if (!Number.isNaN(current)) span.textContent = String(Math.max(0, current + delta));
-  }
-
-  // Move-to-Yes/No on the person pane: the /worth post, island entry, tab
-  // counts, sidebar list, and advance-to-next all happen here — after the
-  // feedback popover settles, so the pane never swaps under an open form.
-  async function applyWorth({ pub, worth, slug }) {
-    const prevIndex = filtered.findIndex((item) => item.slug === slug);
-    try {
-      await post("/worth", { pub, worth, parent_slug: slug });
-    } catch (error) {
-      detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = false; });
-      announce(error.message, true);
-      return;
-    }
-    const entry = people.find((item) => item.slug === slug);
-    if (entry) {
-      bumpDirectoryTab(entry.worth || "maybe", -1);
-      entry.worth = worth;
-      bumpDirectoryTab(worth, 1);
-    }
-    // Keep the sidebar where it was: the decided person leaves this tab, so
-    // the same index now holds the next person — advance straight to them.
-    // refreshList only renders the first chunk; render until the old scroll
-    // offset exists again or the restore silently clamps to the top chunk.
-    const listScroll = list.scrollTop;
-    refreshList();
-    while (rendered < filtered.length && list.scrollHeight < listScroll + list.clientHeight) {
-      renderMore();
-    }
-    list.scrollTop = listScroll;
-    announce(`Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"}`);
-    const next = (prevIndex >= 0 && filtered.length)
-      ? filtered[Math.min(prevIndex, filtered.length - 1)] : null;
-    if (next && next.slug !== slug) {
-      await selectPerson(next.slug);
-    } else {
-      await loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
-    }
-  }
-
-  // Two-step decide: clicking Yes/No opens the optional-why form on the person
-  // being decided; the move itself waits until the form settles (send or skip),
-  // so the label, the pane, and the feedback all refer to the same person.
-  detail.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-dir-worth]");
-    if (!button || button.disabled) return;
-    event.preventDefault();
-    const worth = button.dataset.dirWorth || "";
-    const slug = button.dataset.parent || activeSlug;
-    const pub = button.dataset.pub || "";
-    const entry = people.find((item) => item.slug === slug);
-    const anchor = detail.querySelector(".person-detail-actions")
-      || detail.querySelector(".person-detail");
-    if (!anchor) {
-      void applyWorth({ pub, worth, slug });
-      return;
-    }
-    detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = true; });
-    feedbackPopover({
-      anchor,
-      contextLabel: `Move ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
-      pub,
-      slug,
-      action: worth === "yes" ? "worth_yes" : "worth_no",
-      onDone: () => void applyWorth({ pub, worth, slug }),
-    });
-  });
-
-  // "…" overflow menu: general feedback that isn't a worth decision or a
-  // retarget (wrong/missing info). Same popover, action "general", no move.
-  detail.addEventListener("click", (event) => {
-    const toggle = event.target.closest("[data-menu-toggle]");
-    if (toggle) {
-      event.preventDefault();
-      const items = toggle.parentElement.querySelector(".person-menu-items");
-      if (items) items.hidden = !items.hidden;
-      return;
-    }
-    const general = event.target.closest("[data-feedback-general]");
-    if (!general) return;
-    event.preventDefault();
-    general.closest(".person-menu-items")?.setAttribute("hidden", "");
-    const slug = general.dataset.parent || activeSlug;
-    const entry = people.find((item) => item.slug === slug);
-    const anchor = detail.querySelector(".person-detail-actions")
-      || detail.querySelector(".person-detail");
-    if (!anchor) return;
-    feedbackPopover({
-      anchor,
-      contextLabel: `Feedback on ${entry?.name || "this person"} — wrong or missing info?`,
-      pub: general.dataset.pub || "",
-      slug,
-      action: "general",
-    });
-  });
-
-  document.addEventListener("click", (event) => {
-    if (event.target.closest("[data-person-menu]")) return;
-    detail.querySelectorAll(".person-menu-items:not([hidden])")
-      .forEach((el) => { el.hidden = true; });
-  });
-
-  // Auto-filed feedback (retarget guidance) has no popover; when its
-  // fire-and-forget post fails, the panel says so instead of staying silent.
-  function renderFeedbackAlert(alert) {
-    if (!retargetPanel) return false;
-    let box = retargetPanel.querySelector("[data-feedback-alert]");
-    if (!alert || !alert.status) {
-      box?.remove();
-      return false;
-    }
-    if (!box) {
-      box = document.createElement("div");
-      box.dataset.feedbackAlert = "";
-      box.className = "retarget-feedback-alert";
-      retargetPanel.append(box);
-    }
-    box.textContent = "";
-    const line = document.createElement("small");
-    line.textContent = `Feedback not sent: ${alert.error || alert.status}`;
-    box.append(line);
-    if (alert.status === "needs_auth") box.append(signInButton(""));
-    if (alert.error !== renderFeedbackAlert.lastError) {
-      renderFeedbackAlert.lastError = alert.error;
-      announce(alert.error || "Feedback could not be sent", true);
-    }
-    return true;
-  }
-
-
-  // Guided retargets: submit guidance from the person pane, watch the queue in
-  // the sidebar panel. This page has no SSE by design, so the panel polls only
-  // while an item is active and goes quiet when the queue drains.
-  const retargetPanel = document.querySelector("[data-retarget-panel]");
-  const retargetItems = document.querySelector("[data-retarget-items]");
-  const RETARGET_ACTIVE = ["queued", "researching", "judging", "hydrating"];
-  let retargetTimer = null;
-  const retargetSeen = {};
-
-  function retargetRow(item) {
-    const row = document.createElement("li");
-    row.className = `retarget-item retarget-${item.state}`;
-    const name = document.createElement("button");
-    name.type = "button";
-    name.className = "retarget-name";
-    name.textContent = item.name || item.slug;
-    name.addEventListener("click", () => void selectPerson(item.slug));
-    const chip = document.createElement("span");
-    chip.className = "retarget-chip";
-    chip.textContent = (item.state || "").replace("_", " ");
-    row.append(name, chip);
-    if (item.detail) {
-      const line = document.createElement("small");
-      line.textContent = item.detail;
-      row.append(line);
-    }
-    return row;
-  }
-
-  async function refreshRetargets() {
-    if (!retargetPanel || !retargetItems) return;
-    let data;
-    try {
-      const response = await fetch("/api/retargets", { cache: "no-store" });
-      if (!response.ok) return;
-      data = await response.json();
-    } catch { return; }
-    const items = data.items || [];
-    const hasAlert = renderFeedbackAlert(data.feedback_alert);
-    retargetPanel.hidden = !items.length && !hasAlert;
-    retargetItems.textContent = "";
-    items.forEach((item) => retargetItems.append(retargetRow(item)));
-    // A just-finished item announces itself and refreshes the open pane.
-    items.forEach((item) => {
-      const prev = retargetSeen[item.row_key];
-      if (prev && RETARGET_ACTIVE.includes(prev) && !RETARGET_ACTIVE.includes(item.state)) {
-        if (item.state === "applied") announce(`Retargeted ${item.name}`);
-        else announce(`${item.name}: ${item.detail || item.state}`, item.state === "failed");
-        if (item.slug === activeSlug) void loadPerson(item.slug, { keepScroll: true });
-      }
-      retargetSeen[item.row_key] = item.state;
-    });
-    const active = items.some((item) => RETARGET_ACTIVE.includes(item.state));
-    if (active && !retargetTimer) retargetTimer = setInterval(refreshRetargets, 3000);
-    if (!active && retargetTimer) { clearInterval(retargetTimer); retargetTimer = null; }
-  }
-
-  detail.addEventListener("submit", async (event) => {
-    const form = event.target.closest("[data-retarget-form]");
-    if (!form) return;
-    event.preventDefault();
-    const textarea = form.querySelector("textarea[name='guidance']");
-    const guidance = (textarea?.value || "").trim();
-    if (!guidance) return;
-    const button = form.querySelector("button[type='submit']");
-    if (button) button.disabled = true;
-    try {
-      await post("/retarget", { pub: form.dataset.pub || "",
-                                parent_slug: form.dataset.parent || "", guidance });
-      if (textarea) textarea.value = "";
-      announce("Queued for re-research");
-      void refreshRetargets();
-    } catch (error) {
-      announce(error.message, true);
-    } finally {
-      if (button) button.disabled = false;
-    }
-  });
-
-  void refreshRetargets();
-
-  list.addEventListener("click", (event) => {
-    const item = event.target.closest(".directory-item");
-    if (item) void selectPerson(item.dataset.slug || "");
-  });
-  list.addEventListener("scroll", () => {
-    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 400) renderMore();
-  }, { passive: true });
-
-  tabs.forEach((tab) => tab.addEventListener("click", () => {
-    if (tab.dataset.directoryTab === activeTab) return;
-    activeTab = tab.dataset.directoryTab || "";
-    tabs.forEach((item) => item.classList.toggle("active", item === tab));
-    refreshList();
-  }));
-
-  if (input) {
-    input.addEventListener("input", refreshList);
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        if (filtered.length) void selectPerson(filtered[0].slug || "");
-      } else if (event.key === "Escape") {
-        input.value = "";
-        refreshList();
-      }
-    });
-  }
-
-  refreshList();
-  if (activeSlug) {
-    // The server already rendered this person's pane; make sure their sidebar
-    // entry exists (render up to it) and is visible.
-    const at = filtered.findIndex((entry) => entry.slug === activeSlug);
-    while (at >= rendered && rendered < filtered.length) renderMore();
-    list.querySelector(".directory-item.active")?.scrollIntoView({ block: "center" });
-  }
-}
-
-if (document.body.dataset.stage === "directory") setupDirectory();
 
 maybeAutoComplete(document);
 

@@ -1,6 +1,7 @@
 """Command-line parsing and dispatch for the review UI.
 
 Changelog:
+- 2026-09-30: the directory stage is gone; bare `serve` opens the current review stage.
 - 2026-09-30: serve no longer counts LinkedIn parents at startup (minutes on a
   large store, read by nobody); `status --wait` polls every five seconds.
 - 2026-09-26: the searches-only server serves the React shell at /people; its
@@ -56,7 +57,9 @@ _NO_PEOPLE = json.dumps({
 def _url(host: str, port: int, stage: str, run_id: str = "") -> str:
     if stage == "searches" and run_id:
         return f"http://{host}:{port}/searches/run?run_id={urllib.parse.quote(run_id)}"
-    route = stage if stage in {"directory", "people", "searches"} else f"?stage={stage}"
+    if not stage:
+        return f"http://{host}:{port}/"  # the current review stage
+    route = stage if stage in {"people", "searches"} else f"?stage={stage}"
     return f"http://{host}:{port}/{route}"
 
 
@@ -76,7 +79,7 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
             parsed = urllib.parse.urlparse(self.path)
             if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed) or searches_json.get(self, parsed):
                 return
-            if parsed.path in {"/", "/directory"}:
+            if parsed.path == "/":
                 self.send_response(HTTPStatus.FOUND)
                 self.send_header("Location", "/searches")
                 self.end_headers()
@@ -126,7 +129,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     except (OSError, json.JSONDecodeError):
         live = {}
     has_store = CANONICAL_DB.is_file()
-    stage = args.stage or ("directory" if has_store else "searches")
+    stage = args.stage or ("" if has_store else "searches")
     url = _url(args.host, args.port, stage, args.run)
     if live.get("primitive") == "reconcile_review_web":
         _announce("reused", url, stage=stage)
@@ -180,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "directory", "people", "searches"))
+    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "people", "searches"))
     serve.add_argument("--run", default="", help="with --stage searches: open this saved search")
     serve.add_argument("--open", action="store_true")
     status.add_argument("--wait", action="store_true")

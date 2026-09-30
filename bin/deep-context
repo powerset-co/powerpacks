@@ -82,10 +82,10 @@ review_url() {
     echo "http://127.0.0.1:$port/searches/run?run_id=$run"
   elif [[ "$stage" == "people" || "$stage" == "searches" ]]; then
     echo "http://127.0.0.1:$port/$stage"
-  elif [[ -n "$stage" && "$stage" != "directory" ]]; then
+  elif [[ -n "$stage" ]]; then
     echo "http://127.0.0.1:$port/?stage=$stage"
   else
-    echo "http://127.0.0.1:$port/directory"
+    echo "http://127.0.0.1:$port/"
   fi
 }
 
@@ -168,8 +168,7 @@ usage: bin/deep-context <command> [args]
                is accepted for compat but is a
                no-op — restart is always unconditional.
                Add a stage word to land there directly
-               (review linkedin | worth | enrich | people | searches; default: the read-only
-               people directory, A-Z dossiers + LinkedIn);
+               (review linkedin | worth | enrich | people | searches; default: the current stage);
                pass --stage worth|enrich|linkedin for the staged workflow
   stop         stop the review UI server (free)
   review-status  read canonical SQLite and print the exact next workflow action
@@ -307,8 +306,8 @@ case "$cmd" in
     #      so the first /healthz 200 can only be the new server, and
     #      the helper's stale-server guard refuses to open anything that was
     #      already answering at its first probe.
-    # `review linkedin` / `review worth` / `review enrich` / `review directory`
-    # / `review people` / `review searches` is sugar for the server's --stage
+    # `review linkedin` / `review worth` / `review enrich` / `review people`
+    # / `review searches` is sugar for the server's --stage
     # flag: open the UI at that page (`people` is your network with the share
     # decision per person, `searches` the saved deep-search runs; `review
     # searches --run <slug>` opens one run). This is the ONE local server: the
@@ -325,7 +324,7 @@ case "$cmd" in
         review_args+=("$arg"); review_run="$arg"
       else
         case "$arg" in
-          worth|enrich|linkedin|directory|people|searches) review_args+=(--stage "$arg"); review_stage="$arg" ;;
+          worth|enrich|linkedin|people|searches) review_args+=(--stage "$arg"); review_stage="$arg" ;;
           --force-restart) ;;  # compat no-op: restart is always unconditional
           --stage=*) review_args+=("$arg"); review_stage="${arg#--stage=}" ;;
           --run=*) review_args+=("$arg"); review_run="${arg#--run=}" ;;

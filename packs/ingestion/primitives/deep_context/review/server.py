@@ -1,6 +1,9 @@
 """Frozen Deep Context HTTP transport over canonical SQLite state.
 
 Changelog:
+- 2026-09-30: /directory and /api/person are gone (People is the browse surface);
+  the bare root opens the store's current stage; a worth decision answers with
+  its counts instead of the full workflow state.
 - 2026-09-25: a worth decision re-reads its one row instead of every worth row.
 - 2026-09-26: the React app's shell page and assets (AppRoutes) answer before People's data routes.
 - 2026-09-26: AppRoutes answers first (the shell now owns /searches and /searches/run); the
@@ -23,7 +26,7 @@ from typing import Any, Callable, Protocol
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
-    linkedin_parents,
+    linkedin_progress,
     linkedin_queue,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -32,7 +35,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue, worth_row
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_row
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
     ParentViewRow,
@@ -61,7 +64,6 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     _primary_candidate,
     _step,
     _value,
-    directory_page_html,
     decision_rows_html,
     linkedin_finished_body,
     markdown_to_html,
@@ -70,7 +72,6 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     render_decision_tabs,
     render_enrichment,
     render_linkedin_card,
-    render_person_detail,
     render_worth_card,
     worth_pending_entries,
     worth_search_html,
@@ -81,6 +82,7 @@ from packs.ingestion.primitives.accounts.api import AccountsApi
 from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
 from packs.shared.web.app import AppRoutes
+from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     STAGES,
     GuidanceViewRow,
@@ -254,7 +256,8 @@ def make_handler(
     def full_page(params: dict[str, list[str]]) -> bytes:
         state = api.snapshot()
         progress = state.progress
-        view = _phase_view(params)
+        # No stage in the URL: land on the stage the store is at.
+        view = _phase_view(params) or STAGE_BY_ACTION[state.next_action]
         preview = _value(params, "preview") == "1"
         enrichment = api.enrichment(state)
         if (view == "worth" and _value(params, "view", "review") == "review"
@@ -451,14 +454,6 @@ def make_handler(
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/linkedin-card":
                 return self.send_bytes(linkedin_body(params).encode())
-            if parsed.path == "/api/person":
-                parent = person_detail(db, _value(params, "slug").lower())
-                if not parent:
-                    return self.send_bytes(b"not found", "text/plain", 404)
-                return self.send_bytes(render_person_detail(parent).encode())
-            if parsed.path == "/directory":
-                next_action = api.snapshot().next_action
-                return self.send_bytes(directory_page_html(linkedin_parents(db), params, next_action=next_action))
             if parsed.path == "/api/avatar":
                 try:
                     row_key = api.resolve_row_key(_value(params, "pub"))
@@ -657,11 +652,12 @@ def make_handler(
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
                 # The decision write is what the UI waits on — this response
-                # carries exactly the fields the client reads (progress +
-                # state_token). The enrichment plan, review manifest, and full
-                # counts are stage-view queries; building them here made every
-                # click pay ~1.4s for payload nobody consumed.
-                state = api.snapshot()
+                # carries exactly the counts the page repaints (its tabs and
+                # the two step badges). The full workflow state is a stage-view
+                # query; rebuilding it here cost ~1.7s per click on a 7k-parent
+                # store, and the worth page never reads its token.
+                worth = worth_counts(db)
+                linkedin = linkedin_progress(db)
                 notify()
                 wake_agent()
                 return self.send_json(
@@ -673,9 +669,13 @@ def make_handler(
                         "source": row.source,
                         "reason": row.machine.reason,
                         "rejected": row.effective == "no",
-                        "progress": asdict(state.progress),
-                        "next_stage": "enrich" if state.progress.worth_pending == 0 else "worth",
-                        "state_token": state.state_token,
+                        "progress": {
+                            "worth_pending": worth.pending,
+                            "worth_yes": worth.yes,
+                            "worth_no": worth.no,
+                            "linkedin_pending": linkedin.pending,
+                        },
+                        "next_stage": "enrich" if worth.pending == 0 else "worth",
                     }
                 )
             decision = _value(form, "decision")
