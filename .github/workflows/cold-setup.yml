@@ -33,9 +33,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Bootstrap (the one command the install skill runs)
         # A fresh runner has neither agent, so bootstrap installs for both.
-        run: POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | tee bootstrap.log && grep -q '^DONE: ' bootstrap.log
+        run: |
+          POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | tee bootstrap.log
+          grep -q '^DONE: ' bootstrap.log
       - name: Bootstrap again is a no-op
-        run: POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | grep -q '^DONE: '
+        run: |
+          POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | tee bootstrap.log
+          grep -q '^DONE: ' bootstrap.log
       - name: Verify installed skills
         run: |
           for dir in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
