@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.2...powerpacks-v3.8.3) (2026-09-30)
+
+
+### Bug Fixes
+
+* **deep-context:** hydrate LinkedIn cards in seconds, not a minute ([#631](https://github.com/powerset-co/powerpacks/issues/631)) ([06539b8](https://github.com/powerset-co/powerpacks/commit/06539b8423b9668398be6385769c434c112cf532))
+
 ## [3.8.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.1...powerpacks-v3.8.2) (2026-09-30)
 
 
