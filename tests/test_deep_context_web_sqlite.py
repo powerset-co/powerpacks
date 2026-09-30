@@ -384,8 +384,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         for path, marker in (
             ("/api/worth-card", b"Casey Delta"),
             ("/api/linkedin-card", b"Jordan Bravo"),
-            ("/api/person?slug=jordan-bravo", b"Synthetic collaborator"),
-            ("/directory", b"data-directory"),
         ):
             with self.subTest(path=path):
                 code, content_type, body = self.request("GET", path)
@@ -1410,7 +1408,7 @@ class SynthesisPendingWebTests(unittest.TestCase):
         self.assertEqual((payload["next_action"], payload["status"], payload["waited_seconds"]), ("synthesize", "ok", 0))
 
     def test_every_stage_says_synthesis_has_not_run(self) -> None:
-        for path in ("/?stage=worth", "/api/worth-card", "/?stage=enrich", "/?stage=linkedin", "/?stage=done", "/directory"):
+        for path in ("/?stage=worth", "/api/worth-card", "/?stage=enrich", "/?stage=linkedin", "/?stage=done"):
             with self.subTest(path=path):
                 page = self.page(path)
                 self.assertIn("Synthesis has not run", page)

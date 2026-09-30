@@ -1,6 +1,7 @@
 """Presentation-only HTML for SQLite-hydrated Deep Context rows.
 
 Changelog:
+  2026-09-30: the directory page and its person pane are gone; People is the browse surface.
   2026-09-25: label badges show the title only; the percentage is gone.
 """
 
@@ -337,57 +338,6 @@ def linkedin_finished_body(progress: StageProgress, *, linkedin_complete: bool,
         auto_continue=auto_continue,
         go_back=Markup(GO_BACK_HTML),
     )
-
-
-def render_person_detail(parent: ParentViewRow) -> str:
-    candidate = _primary_candidate(parent)
-    dossier = markdown_to_html(parent.dossier_body)
-    key = parent.worth_row.key
-    effective = parent.worth_row.effective.lower()
-    targets = ("no",) if effective == "yes" else (("yes",) if effective == "no" else ("yes", "no"))
-    menu_key = candidate.row_key if candidate else key
-    return _render(
-        "person_detail.html.j2",
-        parent=parent,
-        candidate=candidate,
-        targets=targets,
-        menu_key=menu_key,
-        dossier=Markup(dossier),
-    )
-
-
-def directory_page_html(parents: list[ParentViewRow], params: dict[str, list[str]],
-                        *, next_action: str) -> bytes:
-    entries = [
-        {"slug": parent.slug, "name": parent.name,
-         "worth": parent.worth_row.effective.lower()}
-        for parent in sorted(parents, key=lambda parent: parent.name.lower())
-        if parent.slug
-    ]
-    selected = _value(params, "person").lower()
-    parent: ParentViewRow | None = next(
-        (item for item in parents if item.slug.lower() == selected), None
-    )
-    detail = render_person_detail(parent) if parent else _empty_state(f"{len(entries)} people")
-    payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
-    counts = {
-        decision: sum(entry["worth"] == decision for entry in entries)
-        for decision in ("yes", "maybe", "no")
-    }
-    tabs = tuple(
-        (decision, counts[decision])
-        for decision in ("yes", "maybe", "no")
-        if decision != "maybe" or counts[decision]
-    )
-    banner = {"synthesize": SYNTHESIZE_HTML, "realize": GO_BACK_HTML}.get(next_action, "")
-    content = _render(
-        "directory.html.j2",
-        banner=Markup(banner),
-        tabs=tabs,
-        detail=Markup(detail),
-        payload=Markup(payload),
-    )
-    return page_html("Directory", "directory", content)
 
 
 def page_html(title: str, stage: str, content: str, *, preview: bool = False,
