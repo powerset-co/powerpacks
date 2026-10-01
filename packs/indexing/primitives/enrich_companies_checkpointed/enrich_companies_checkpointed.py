@@ -22,6 +22,7 @@ import shutil
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -225,10 +226,20 @@ def company_slug(row: dict[str, Any]) -> str:
     return match.group(1).strip().rstrip("/").lower() if match else ""
 
 
+def company_uuid(row: dict[str, Any]) -> str:
+    value = clean(row.get("company_urn") or row.get("id"))
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return ""
+
+
 def company_index_keys(row: dict[str, Any]) -> list[str]:
-    """Reuse-match keys for a company row, strongest first: LinkedIn slug, then
-    normalized name. A row is reused if any key hits the precomputed artifact."""
+    """Lookup keys: canonical UUID, then legacy slug and name."""
     keys: list[str] = []
+    canonical = company_uuid(row)
+    if canonical:
+        keys.append(f"uuid:{canonical}")
     slug = company_slug(row)
     if slug:
         keys.append(f"slug:{slug}")
@@ -239,10 +250,12 @@ def company_index_keys(row: dict[str, Any]) -> list[str]:
 
 
 def lookup_artifact_row(artifact: dict[str, dict[str, Any]], row: dict[str, Any]) -> dict[str, Any] | None:
-    """Find the precomputed artifact row for a company by slug, then by name."""
+    """Find the precomputed artifact row by canonical UUID, slug, then name."""
     for key in company_index_keys(row):
         hit = artifact.get(key)
         if hit:
+            if key.startswith("name:") and company_slug(row) and company_slug(hit) and company_slug(row) != company_slug(hit):
+                continue
             return hit
     return None
 
@@ -444,14 +457,29 @@ def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
     if not artifact_path.exists():
         raise SystemExit(f"missing company artifact: {artifact_path}")
     index: dict[str, dict[str, Any]] = {}
+    conflicts: set[str] = set()
     for row in read_jsonl(artifact_path):
-        for key in company_index_keys(row):
-            index.setdefault(key, row)
+        keys = company_index_keys(row)
+        if company_uuid(row):
+            keys = keys[:1]
+        for key in keys:
+            if key in conflicts:
+                continue
+            if key in index and index[key] != row:
+                if key.startswith("uuid:"):
+                    raise ValueError(f"Conflicting canonical company artifact: {key}")
+                index.pop(key)
+                conflicts.add(key)
+            else:
+                index[key] = row
     return index
 
 
 def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[str, Any]:
     merged = dict(local)
+    for key in ALEPH_COMPANY_FIELDS:
+        if key not in CLASSIFICATION_FIELDS and key != "company_urn" and key in enriched and enriched[key] is not None:
+            merged[key] = enriched[key]
     # The combined prompt returns "confidence" not "confidence_score"; normalise.
     if "confidence" in enriched and "confidence_score" not in enriched:
         enriched["confidence_score"] = enriched.pop("confidence")

@@ -216,6 +216,7 @@ class UploadPlan:
     tags_put: tuple[TagRow, ...]
     tags_delete: tuple[TagRow, ...]
     cloud_id_by_person: dict[str, str] = field(default_factory=dict)
+    entity_aliases: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def counts(self) -> dict[str, Any]:
         return {

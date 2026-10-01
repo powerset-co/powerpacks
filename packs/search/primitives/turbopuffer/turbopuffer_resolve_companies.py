@@ -536,7 +536,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             for row in soft_rows:
                 row["source"] = row.get("source") or "soft_filter"
             rows.extend(soft_rows)
-    if filters is not None and not names and not semantic_queries:
+    if filters is not None and not existing and not names and not semantic_queries:
         rows.extend(await filter_only_company_rows(filters, page_size=args.page_size, max_results=args.max_companies))
 
     rows = dedupe_rows(rows)

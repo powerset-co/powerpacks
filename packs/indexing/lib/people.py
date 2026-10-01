@@ -28,15 +28,16 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract
+from packs.indexing.lib.artifacts import stable_company_uuid
 from packs.indexing.lib.io import write_csv as _write_csv, write_jsonl as _write_jsonl
 from packs.ingestion.schemas.company_identity import extract_company_public_identifier
 from packs.shared.csv_io import CsvIO
 
 try:  # pragma: no cover - exercised by direct script execution paths
-    from .identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key
+    from .identity import canonical_person_key, position_uuid, stable_person_id_from_key
     from .location_normalization import normalize_location_fields
 except ImportError:  # pragma: no cover
-    from identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key  # type: ignore
+    from identity import canonical_person_key, position_uuid, stable_person_id_from_key  # type: ignore
     from location_normalization import normalize_location_fields  # type: ignore
 
 from packs.ingestion.schemas.people_schema import (
@@ -372,7 +373,7 @@ def _position_to_profile(exp: dict[str, Any], index: int) -> dict[str, Any]:
     start = _exp_start(exp)
     end = _exp_end(exp)
     company_name = _company_name(exp)
-    company_id = stable_company_id(_company_key(exp)) if _company_key(exp) else ""
+    company_id = stable_company_uuid(exp) if _company_key(exp) else ""
     profile = {
         "id": _string(exp.get("id") or exp.get("position_id") or exp.get("urn")) or f"position-{index}",
         "position_title": title or None,
@@ -523,7 +524,7 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         for idx, exp in enumerate(exp for exp in experiences if isinstance(exp, dict)):
             title = _title(exp)
             company_key = _company_key(exp)
-            company_id = stable_company_id(company_key) if company_key else ""
+            company_id = stable_company_uuid(exp) if company_key else ""
             company_name = _company_name(exp)
             description = _first(exp, ("description", "summary"))
             dense_text = " ".join(part for part in [title, company_name, description] if part)

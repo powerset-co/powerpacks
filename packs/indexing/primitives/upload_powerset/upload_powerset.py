@@ -285,6 +285,7 @@ class UploadPowerset:
         }
         company_ids_by_person = local_index.entity_ids_by_person(con, "companies", shared_ids)
         school_ids_by_person = local_index.entity_ids_by_person(con, "schools", shared_ids)
+        aliases = postgres.fetch_entity_aliases(cur, local_index.referenced_alias_ids(con, shared_ids))
         namespace_names = self._namespace_names
         present_entity_ids = {}
         for logical, by_person in (("companies", company_ids_by_person), ("schools", school_ids_by_person)):
@@ -292,7 +293,8 @@ class UploadPowerset:
             UploadManifest.read(self.manifest_path).at(stage).write(self.manifest_path)
             present_entity_ids[logical] = turbopuffer_writer.fetch_present_ids(
                 self._namespace(logical),
-                sorted({entity_id for ids in by_person.values() for entity_id in ids}),
+                sorted({aliases[logical].get(entity_id, entity_id)
+                        for ids in by_person.values() for entity_id in ids}),
             )
         cloud = CloudState(
             cloud_id_by_person=cloud_id_by_person,
@@ -311,6 +313,7 @@ class UploadPowerset:
             namespace_names=namespace_names,
             company_ids_by_person=company_ids_by_person,
             school_ids_by_person=school_ids_by_person,
+            entity_aliases=aliases,
         )
 
     def _apply(self, con: Any, cur: Any, plan: UploadPlan,
@@ -318,7 +321,7 @@ class UploadPowerset:
         changed = plan.persons_upsert if changed is None else changed
         newly_owned = set(next(ns.upsert_ids for ns in plan.namespaces if ns.logical == "people"))
         UploadManifest.read(self.manifest_path).at(Stage.WRITING_PEOPLE).write(self.manifest_path)
-        profiles = local_index.person_profiles(con, tuple(sorted(set(changed) | newly_owned)))
+        profiles = local_index.person_profiles(con, tuple(sorted(set(changed) | newly_owned)), plan.entity_aliases)
         persons_upserted = postgres.upsert_persons(cur, profiles)
         sources_inserted = postgres.upsert_sources(cur, plan.operator_id, plan.sources_insert)
         sources_deleted = postgres.delete_sources(cur, plan.operator_id, plan.sources_delete)
@@ -347,7 +350,7 @@ class UploadPowerset:
             namespace = NAMESPACE_BY_LOGICAL[namespace_plan.logical]
             docs_upserted[namespace_plan.logical] = 0
             for rows in local_index.namespace_row_chunks(con, namespace_plan.logical, namespace_plan.upsert_ids,
-                                                         local_allowed, plan.operator_id, live):
+                                                         local_allowed, plan.operator_id, live, plan.entity_aliases):
                 if namespace.person_grain:
                     for row in rows:
                         key = namespace.doc_key
@@ -367,7 +370,7 @@ class UploadPowerset:
                         local_rows = local_index.namespace_rows(
                             con, namespace_plan.logical,
                             tuple(local_by_cloud.get(person_id, person_id) for person_id in chunk),
-                            local_allowed, plan.operator_id, live)
+                            local_allowed, plan.operator_id, live, plan.entity_aliases)
                         key = namespace.doc_key
                         by_person: dict[str, list[dict[str, Any]]] = {}
                         for row in local_rows:

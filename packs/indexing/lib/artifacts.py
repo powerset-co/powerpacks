@@ -9,7 +9,7 @@ from typing import Any
 
 import snowballstemmer
 
-from packs.ingestion.schemas.company_identity import resolve_company_identity
+from packs.ingestion.schemas.company_identity import extract_rapidapi_company_id, resolve_company_identity
 from packs.ingestion.schemas.people_schema import parse_jsonish
 from packs.indexing.lib.identity import (
     canonical_person_key,
@@ -109,6 +109,9 @@ def stable_person_uuid(row: dict[str, Any]) -> str:
 
 
 def company_canonical_key(data: dict[str, Any]) -> str:
+    reviewed = _clean(data.get("canonical_company_id"))
+    if reviewed:
+        return f"canonical:{reviewed}"
     company_key = _clean(data.get("company_key"))
     if company_key.startswith("linkedin_company:"):
         return company_key
@@ -120,11 +123,9 @@ def company_canonical_key(data: dict[str, Any]) -> str:
     if identity.get("company_public_identifier"):
         return f"linkedin_company:{identity['company_public_identifier']}"
     if company_key.startswith("rapidapi:"):
-        return company_key
-    for field in ("rapidapi_company_id", "company_id", "companyId"):
-        value = _clean(data.get(field))
-        if value and not value.lower().startswith("urn:harmonic:"):
-            return f"rapidapi:{value}"
+        provider_id = extract_rapidapi_company_id({"company_id": company_key.removeprefix("rapidapi:")})
+        if provider_id:
+            return f"rapidapi:{provider_id}"
     if identity.get("rapidapi_company_id"):
         return f"rapidapi:{identity['rapidapi_company_id']}"
     name = _key_text(data.get("company_name") or data.get("company") or data.get("organization") or data.get("name"))
@@ -132,6 +133,10 @@ def company_canonical_key(data: dict[str, Any]) -> str:
 
 
 def stable_company_uuid(data: dict[str, Any]) -> str:
+    reviewed = _clean(data.get("canonical_company_id"))
+    if reviewed:
+        import uuid
+        return str(uuid.UUID(reviewed))
     return company_uuid(company_canonical_key(data))
 
 
@@ -164,7 +169,7 @@ def stable_summary_uuid(person_id: str) -> str:
 
 def _company_from_experience(exp: dict[str, Any]) -> dict[str, Any]:
     identity = resolve_company_identity(exp)
-    key_data = identity if (identity.get("rapidapi_company_id") or identity.get("company_public_identifier")) else exp
+    key_data = exp if exp.get("canonical_company_id") else identity if (identity.get("rapidapi_company_id") or identity.get("company_public_identifier")) else exp
     name = identity.get("company_name") or _first(exp, "company_name", "company", "organization", "name")
     description = _first(exp, "description", "summary")
     semantic_text = " ".join(part for part in [name, description, _first(exp, "industry", "sector")] if part)

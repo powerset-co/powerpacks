@@ -15,8 +15,7 @@ from pathlib import Path
 from typing import Any
 
 _COMPANY_KEYS = ("company", "organization", "employer")
-_RAPIDAPI_ID_FIELDS = ("company_id", "companyId", "company_urn", "companyUrn")
-_LOOKUP_RAPIDAPI_ID_FIELDS = ("rapidapi_company_id", "company_id", "companyId")
+_RAPIDAPI_ID_FIELDS = ("rapidapi_company_id", "company_id", "companyId", "company_urn", "companyUrn")
 _LINKEDIN_URL_FIELDS = (
     "linkedin_url",
     "company_linkedin_url",
@@ -123,17 +122,14 @@ def extract_rapidapi_company_id(exp_or_company: dict[str, Any]) -> str:
     for value in candidates:
         text = _clean_string(value)
         if text and not _is_harmonic_urn(text):
+            if re.fullmatch(r"-?\d+", text) and int(text) <= 0:
+                continue
             return text
     return ""
 
 
 def _metadata_from_row(row: dict[str, Any]) -> dict[str, str]:
-    rapidapi_id = ""
-    for field in _LOOKUP_RAPIDAPI_ID_FIELDS:
-        value = _clean_string(row.get(field))
-        if value and not _is_harmonic_urn(value):
-            rapidapi_id = value
-            break
+    rapidapi_id = extract_rapidapi_company_id(row)
 
     url = _first_string(row, _LINKEDIN_URL_FIELDS)
     slug = _first_string(row, _SLUG_FIELDS).lower()
