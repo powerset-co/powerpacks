@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.10.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.2...powerpacks-v3.10.3) (2026-10-01)
+
+
+### Bug Fixes
+
+* continue enrichment after profile fetch failures ([#656](https://github.com/powerset-co/powerpacks/issues/656)) ([1b3a4b3](https://github.com/powerset-co/powerpacks/commit/1b3a4b33e1a532025b2140662801a6639b9b9ca0))
+
 ## [3.10.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.1...powerpacks-v3.10.2) (2026-10-01)
 
 
