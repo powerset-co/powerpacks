@@ -340,7 +340,7 @@ class ReviewVisualTests(unittest.TestCase):
             expect(page.locator(".handoff-copy")).to_be_visible()
             self._shot(page, "linkedin-finished")
             page.goto(self.base + "/?stage=done")
-            expect(page.get_by_role("heading", name="All set")).to_be_visible()
+            expect(page.get_by_role("heading", name="All set", exact=True)).to_be_visible()
             self._shot(page, "done")
 
             context.close()
