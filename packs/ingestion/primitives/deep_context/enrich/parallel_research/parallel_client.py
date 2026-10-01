@@ -23,6 +23,9 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research import con
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import ResearchRunParams
 
 
+MAX_READ_FAILURES = 3
+
+
 class ParallelClient:
     """Submit and consume one typed Parallel task-group event stream."""
 
@@ -53,17 +56,18 @@ class ParallelClient:
         resume = (
             receipt.get("provider_contract") == contract
             and bool(previous)
-            and all(previous.get(key) == value for key, value in requested.items())
+            and all(previous[key] == requested[key] for key in previous.keys() & requested.keys())
         )
         group_id = receipt["task_group_id"] if resume else str(
             self._client.task_group.create(
                 metadata={"source": "powerpacks", "submitted_at": now_iso()}
             ).task_group_id
         )
-        if not resume:
+        if not resume or previous.keys() != (previous | requested).keys():
             write_json(manifest_path, {
                 "source": "powerpacks", "submitted_at": now_iso(),
-                "task_group_id": group_id, "inputs": requested, "provider_contract": contract,
+                "task_group_id": group_id, "inputs": previous | requested if resume else requested,
+                "provider_contract": contract,
             })
         errors: list[str] = []
         finished_runs: set[str] = set()
@@ -105,9 +109,10 @@ class ParallelClient:
 
         # Retry reads only. Recover an ambiguous add_runs POST by listing the
         # same group's handles on the next invocation.
-        def read_runs() -> set[str]:
+        def read_runs(*, retire_failed: bool = False) -> set[str]:
             handles: set[str] = set()
             cursor = None
+            failures = 0
             while True:
                 try:
                     options = {"last_event_id": cursor} if cursor else {}
@@ -116,15 +121,25 @@ class ParallelClient:
                         timeout=params.stream_timeout + 30, **options,
                     ) as runs:
                         for event in runs:
+                            if isinstance(event, TaskRunEvent) and retire_failed:
+                                if event.run.status in ("failed", "cancelled"):
+                                    finished_runs.add(event.run.run_id)
+                                elif not event.run.is_active and event.run.status != "completed":
+                                    raise ValueError(f"Unknown provider run status: {event.run.status}")
                             accept_run(event)
                             if isinstance(event, TaskRunEvent):
-                                handles.add(str((event.run.metadata or {}).get("handle") or event.run.run_id))
+                                if event.run.is_active or event.run.status == "completed":
+                                    handles.add(str((event.run.metadata or {}).get("handle") or event.run.run_id))
                                 cursor = event.event_id
+                            failures = 0
                     return handles
                 except (httpx.TransportError, APIConnectionError):
+                    failures += 1
+                    if failures >= MAX_READ_FAILURES:
+                        raise
                     time.sleep(1)
 
-        existing = read_runs() if resume else set()
+        existing = read_runs(retire_failed=True) if resume else set()
         missing = [item for handle, item in requested.items() if handle not in existing]
         for start in range(0, len(missing), params.batch_size):
             self._client.task_group.add_runs(
@@ -133,6 +148,7 @@ class ParallelClient:
             )
 
         cursor = None
+        failures = 0
         while True:
             terminal = False
             try:
@@ -152,14 +168,20 @@ class ParallelClient:
                         if terminal:
                             break
             except (httpx.TransportError, APIConnectionError):
-                pass
+                failures += 1
+                if failures >= MAX_READ_FAILURES:
+                    raise
             if terminal and not (resume and missing):
                 break
             try:
                 status = self._client.task_group.retrieve(group_id).status
             except (httpx.TransportError, APIConnectionError):
+                failures += 1
+                if failures >= MAX_READ_FAILURES:
+                    raise
                 time.sleep(1)
                 continue
+            failures = 0
             on_status(status)
             if not status.is_active:
                 break

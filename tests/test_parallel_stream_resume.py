@@ -135,3 +135,60 @@ class ParallelStreamResumeTests(unittest.TestCase):
         self.assertEqual(errors, ())
         self.assertEqual(received, ["casey"])
         self.assertEqual(group.events.call_count, 2)
+
+    def test_growing_queue_reuses_group_and_adds_only_new_handle(self):
+        self._assert_receipt_reuses_group(grow=True)
+
+    def test_failed_run_is_retried_once_without_replaying_old_error(self):
+        self._assert_receipt_reuses_group(grow=False)
+
+    def _assert_receipt_reuses_group(self, *, grow, active=False):
+        from packs.ingestion.primitives.common.jsonio import write_json
+        import json
+        def input_for(handle):
+            return {"input": {}, "metadata": {"handle": handle}, "processor": "core2x"}
+        def run_for(handle, run_id, state):
+            return TaskRunEvent.model_validate({"type": "task_run.state", "run": {
+                "interaction_id": run_id, "run_id": run_id, "processor": "core2x",
+                "is_active": state == "running", "status": state, "metadata": {"handle": handle},
+            }, "output": {"type": "json", "content": {}, "basis": []} if state == "completed" else None})
+        original = input_for("jordan")
+        write_json(self.params.output_dir / "manifest.json", {
+            "task_group_id": "prior", "inputs": {"jordan": original},
+            "provider_contract": {"task_spec": parallel_client.config.TASK_SPEC, "beta_header": ""},
+        })
+        requested = [original, input_for("casey")] if grow else [original]
+        old = run_for("jordan", "old", "running" if active else "completed" if grow else "failed")
+        new = run_for("casey" if grow else "jordan", "new", "completed")
+        final = TaskGroupStatus(is_active=False, num_task_runs=2, task_run_status_counts={"completed": 2})
+        def add(group_id, **kwargs):
+            receipt = json.loads((self.params.output_dir / "manifest.json").read_text())
+            self.assertEqual(set(receipt["inputs"]), {item["metadata"]["handle"] for item in requested})
+        group = SimpleNamespace(create=Mock(), add_runs=Mock(side_effect=add),
+            get_runs=Mock(side_effect=[Events([old]), Events([old, new])]),
+            events=Mock(return_value=Events([TaskGroupStatusEvent(type="task_group_status", event_id="done", status=final)])),
+            retrieve=Mock(return_value=SimpleNamespace(status=final)))
+        with patch.object(parallel_client, "Parallel", return_value=SimpleNamespace(task_group=group)):
+            errors = parallel_client.ParallelClient("fixture", "https://parallel.test", "").execute(
+                requested, self.params, lambda _: None, lambda *_: None)
+        self.assertEqual(errors, ())
+        group.create.assert_not_called()
+        self.assertEqual(group.add_runs.call_args.kwargs["inputs"], [requested[-1]])
+
+    def test_growing_queue_preserves_active_paid_run(self):
+        self._assert_receipt_reuses_group(grow=True, active=True)
+
+    def test_read_outage_exits_after_three_failures_with_receipt(self):
+        group = SimpleNamespace(create=Mock(return_value=SimpleNamespace(task_group_id="paid")),
+            add_runs=Mock(), events=Mock(return_value=Events([TaskGroupStatusEvent(
+                type="task_group_status", event_id="done", status=TaskGroupStatus(
+                    is_active=False, num_task_runs=1, task_run_status_counts={"completed": 1}))])),
+            get_runs=Mock(side_effect=httpx.RemoteProtocolError("offline")))
+        inputs = [{"input": {}, "metadata": {"handle": "jordan"}, "processor": "core2x"}]
+        with patch.object(parallel_client.time, "sleep"), patch.object(parallel_client, "Parallel", return_value=SimpleNamespace(task_group=group)):
+            with self.assertRaises(httpx.RemoteProtocolError):
+                parallel_client.ParallelClient("fixture", "https://parallel.test", "").execute(
+                    inputs, self.params, lambda _: None, lambda *_: None)
+        self.assertEqual(group.get_runs.call_count, 3)
+        group.add_runs.assert_called_once()
+        self.assertTrue((self.params.output_dir / "manifest.json").exists())
