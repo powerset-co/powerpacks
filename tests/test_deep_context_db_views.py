@@ -656,6 +656,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(detail.candidates[0].full_name, "Jordan Detail")
         self.assertEqual(detail.candidates[0].match_emails, ("casey@example.com",))
         self.assertEqual(detail.candidates[0].match_phones, ("+15550100",))
+        self.assertEqual((detail.emails, detail.phones), (("casey@example.com",), ("+15550100",)))
         self.assertEqual(detail.sources, ("gmail",))
         self.assertEqual(detail.source_channels, ("gmail_msgvault", "linkedin_csv"))
 

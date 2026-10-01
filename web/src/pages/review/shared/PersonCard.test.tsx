@@ -98,9 +98,8 @@ describe("PersonCard", () => {
       location: "",
       experiences: [],
       education: [],
-      contacts: "",
     })
-    const { container, facts } = renderCard(reviewPerson({ sources: [], labels: [] }), bare)
+    const { container, facts } = renderCard(reviewPerson({ sources: [], labels: [], contacts: "" }), bare)
     expect(facts()).toEqual([])
     expect(container.querySelector(".eyebrow-row")).toBeNull()
     expect(container.querySelector(".person-labels")).toBeNull()
@@ -110,7 +109,8 @@ describe("PersonCard", () => {
     const { container, facts } = renderCard(reviewPerson({ name: "" }), null)
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("This person")
     expect(container.querySelector(".avatar")?.textContent).toBe("?")
-    expect(facts()).toEqual([])
+    // The contact is the person's, so a card with no candidate still shows it.
+    expect(facts()).toEqual([["Contact", "jordan@example.com · +15550100"]])
   })
 
   it("draws the person alone on a person-only card: the parent's name, the contact, the dossier", () => {

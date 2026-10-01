@@ -263,6 +263,8 @@ def _parent_row(
         person_ids=worth.person_ids,
         sources=tuple(labels[value] for value in source_channels if value in labels),
         source_channels=source_channels,
+        emails=tuple(_json(row["emails_json"], [])),
+        phones=tuple(_json(row["phones_json"], [])),
         worth_row=worth,
         worth=WorthSummary(worth.effective, worth.source),
         machine_worth=worth.machine,
@@ -318,7 +320,8 @@ def _decision_page(
     """One page of a worth pile (yes/no), in the full table's name order."""
     rows = db.query(
         WORTH_CTE + """
-SELECT w.*, '[]' AS sources_json, '' AS dossier_path, '' AS dossier_body
+SELECT w.*, '[]' AS sources_json, '[]' AS emails_json, '[]' AS phones_json,
+       '' AS dossier_path, '' AS dossier_body
 FROM worth w
 """ + _DECISION_FILTER + """
 ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id

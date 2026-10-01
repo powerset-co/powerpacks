@@ -76,6 +76,8 @@ export interface ReviewPerson {
   labels: string[]
   /** The key POST /worth takes as `pub`. */
   worth_key: string
+  /** Every merged record's emails and phones, de-duplicated and joined with " · "; "" on a pile row. */
+  contacts: string
 }
 
 /** One LinkedIn (or researched) profile a parent might be. */
@@ -91,8 +93,6 @@ export interface ReviewCandidate {
   education: string[]
   /** A researched profile: no LinkedIn, no avatar. */
   synthetic: boolean
-  /** Matched emails and phones, already de-duplicated and joined with " · ". */
-  contacts: string
   /** The profile's picture; "" when it has none or is a researched profile. */
   avatar_url: string
 }

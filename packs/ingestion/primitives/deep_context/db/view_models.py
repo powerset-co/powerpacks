@@ -158,6 +158,9 @@ class ParentViewRow:
     person_ids: tuple[str, ...]
     sources: tuple[str, ...]
     source_channels: tuple[str, ...]
+    # Every merged record's, the owner's excluded.
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
     worth_row: WorthRow
     worth: WorthSummary
     machine_worth: WorthMachineRow
