@@ -15,6 +15,11 @@ PROMPTS = {
         "JUDGE_SYSTEM",
         "8858fe4e50af4998a9baf10dc16bb1049922bc47dd6c3dfa0f08b4184adcd05d",
     ),
+    "merge_names": (
+        "packs.ingestion.primitives.deep_context.merge_candidates.judge",
+        "NAMES_QUESTION",
+        "e33403b5e9050e8f1ea9f4f4ff498742ab71b00c3942bcfa3dc64163768faa8b",
+    ),
     "contact_research_instructions": (
         "packs.ingestion.primitives.deep_context.enrich.parallel_research.config",
         "RESEARCH_INSTRUCTIONS",

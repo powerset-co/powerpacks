@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from itertools import combinations
@@ -21,7 +22,7 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import SETTLING_
 from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 from packs.ingestion.primitives.deep_context.shared.common import slugify
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
-from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components, names_compatible
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import GATE_NAME_SIM, connected_components, jaro_winkler
 
 
 DATA_MIGRATION_VERSION = 1
@@ -221,6 +222,20 @@ def _repair_merged_parents(db: Db) -> MergeRepairReport:
 HISTORICAL_MERGE_MIGRATION = 3
 
 
+def _given_names_differ(first: str, second: str) -> bool:
+    """Spelling only: the merge judge rejoins a nickname pair this separates."""
+    left = re.findall(r"[^\W\d_]+", first.casefold())
+    right = re.findall(r"[^\W\d_]+", second.casefold())
+    if len(left) < 2 or len(right) < 2 or sorted(left) == sorted(right):
+        return False
+    a, b = left[0], right[0]
+    return not (
+        a == b
+        or (min(len(a), len(b)) == 1 and a[0] == b[0])
+        or jaro_winkler(a, b) >= GATE_NAME_SIM
+    )
+
+
 def _repair_historical_merges(db: Db, histories: dict[str, FactHistory]) -> MergeRepairReport:
     """Restore separate original evidence; corrected merging can reassess it.
 
@@ -238,7 +253,7 @@ def _repair_historical_merges(db: Db, histories: dict[str, FactHistory]) -> Merg
         children = db.query('SELECT person_id,display_name FROM people WHERE parent_id=?', (parent,))
         owners = {row['person_id']: mint_parent_id((row['person_id'],)) for row in children}
         originals = {row['subject_key'] for row in db.query('SELECT subject_key FROM facts WHERE parent_id=? AND person_id IS NULL', (parent,))}
-        incompatible = any(not names_compatible(a['display_name'], b['display_name']) for a, b in combinations(children, 2))
+        incompatible = any(_given_names_differ(a['display_name'], b['display_name']) for a, b in combinations(children, 2))
         if not incompatible and len(originals.intersection(owners.values())) < 2:
             continue
         if any(person not in histories or not histories[person].records for person in owners):
