@@ -24,8 +24,7 @@ Changelog:
   2026-09-30: created beside the Jinja page, which still serves `/`. `_index`,
     `_excluded`, `_failed_notes`, `IN_FLIGHT_RETARGET_STATES`, `_submitted_row`
     (`parent_hit`), `_decision_progress` (`review_progress`) and the two queue selections
-    are copies of server.py's, and `_label_titles` is the scoring half of rendering.py's
-    `_label_badges`. Delete those originals when the Jinja page goes.
+    are copies of server.py's. Delete those originals when the Jinja page goes.
 """
 
 from __future__ import annotations
@@ -51,14 +50,13 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_status import Rec
 from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
 from packs.ingestion.primitives.deep_context.review.models import EnrichmentView, GuidanceViewRow
 from packs.ingestion.primitives.deep_context.review.rendering import (
-    _LABEL_THRESHOLD,
-    _LABEL_TITLES,
     WorthPendingEntry,
     _candidate_contacts,
     _nonempty,
     _phase_view,
     _primary_candidate,
     _value,
+    label_titles,
     worth_pending_entries,
 )
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import SqliteReviewAdapter
@@ -190,7 +188,7 @@ class ReviewPerson:
             slug=parent.slug,
             name=parent.name,
             sources=parent.sources,
-            labels=_label_titles(parent),
+            labels=label_titles(parent),
             worth_key=parent.worth_row.key,
         )
 
@@ -602,28 +600,6 @@ class ReviewApi:
             worth_no=worth.no,
             linkedin_pending=linkedin_pending,
         )
-
-
-def _label_titles(parent: ParentViewRow) -> tuple[str, ...]:
-    """Every label badge title that clears the threshold, strongest first."""
-
-    def strongest_first(item: tuple[str, float]) -> float:
-        return -item[1]
-
-    labels = dict(parent.labels)
-    scores: dict[str, float] = {}
-    for key, title in _LABEL_TITLES:
-        if key in labels:
-            scores[title] = max(scores.get(title, 0.0), float(labels[key]))
-
-    relationship = str(labels.get("relationship_kind") or "")
-    if relationship and relationship != "unknown" and "relationship_kind_p" in labels:
-        title = relationship.replace("_", " ").capitalize()
-        scores[title] = max(scores.get(title, 0.0), float(labels["relationship_kind_p"]))
-
-    return tuple(
-        title for title, score in sorted(scores.items(), key=strongest_first) if score >= _LABEL_THRESHOLD
-    )
 
 
 def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:
