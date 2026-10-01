@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -393,6 +394,35 @@ class DeepContextHttpContractTests(unittest.TestCase):
         status, _, body, _ = self.request("GET", "/?stage=enrich")
         self.assertEqual(status, 200)
         self.assertIn(b"data-stage='enrich'", body)
+
+    def test_stage_completion_shows_indeterminate_progress_until_navigation(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is not installed")
+        source = (Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/deep_context/review/reconcile_review.js").read_text()
+        function = source.split("function leaveAndNavigate(", 1)[1].split("\nfunction swapCardContent", 1)[0]
+        program = """
+            import assert from 'node:assert/strict';
+            let completingStage = false, navigate;
+            const title = {textContent:''};
+            const stage = {innerHTML:'', querySelector: () => title};
+            const window = {location:{href:'/worth'}, setTimeout: fn => {navigate = fn;}};
+        """ + "function leaveAndNavigate(" + function + """
+            leaveAndNavigate('People Reviewed', '/?stage=enrich');
+            assert.equal(completingStage, true);
+            assert.equal(title.textContent, 'People Reviewed');
+            assert.match(stage.innerHTML, /Preparing Next Stage/);
+            assert.match(stage.innerHTML, /role=['\"]progressbar['\"]/);
+            assert.doesNotMatch(stage.innerHTML, /aria-valuenow/);
+            const waiting = stage.innerHTML;
+            assert.equal(window.location.href, '/worth');
+            navigate();
+            assert.equal(window.location.href, '/?stage=enrich');
+            assert.equal(stage.innerHTML, waiting, 'Loading the destination must retain the completion screen');
+        """
+        result = subprocess.run([node, "--input-type=module", "-e", program],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rendered_markup_covers_every_javascript_dispatch_contract(self) -> None:
         # Keep these selectors pinned to reconcile_review.js:217, 418-420,
