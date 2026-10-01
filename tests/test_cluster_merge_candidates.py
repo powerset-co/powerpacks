@@ -164,6 +164,8 @@ class TestSlamDunkVerdict(unittest.TestCase):
             ("Jordan Bravo", "Bravo Jordan"),
             ("Jordan Bravo", "jordan  BRAVO"),
             ("Jordan O'Bravo", "Jordan O\u2019Bravo"),
+            ("\u00c9mile Bravo", "E\u0301mile Bravo"),     # one accent, composed and decomposed
+            ("Jordan Bravo Jr", "Bravo, Jordan Jr."),     # the same suffix on both sides
         ):
             with self.subTest(first=first, second=second):
                 self.assertEqual(slam_dunk_verdict(person(first), person(second)).reason, SAME_FULL_NAME)
@@ -183,8 +185,12 @@ class TestSlamDunkVerdict(unittest.TestCase):
     def test_names_that_do_not_settle_it_go_to_the_judge(self):
         for first, second in (
             ("Jordan Alex Bravo", "Jordan Blake Bravo"),   # two different middle names
-            ("Jordan Bravo", "Jordan Bravo Jr"),           # a suffix is a different last word
+            ("Jordan Ann Bravo", "Jordan Anna Bravo"),     # one middle name only begins the other
+            ("Jordan Bravo", "Jordan Bravo Jr"),           # a suffix on one side is another person
             ("Jordan Bravo", "Jordan Bravo, Sr."),
+            ("Bravo, Jordan", "Bravo, Jordan Jr."),
+            ("Jordan Bravo Jr", "Jordan Bravo Sr"),
+            ("Jordan Bravo", "Jordan Bravo III"),
             ("Jordan", "Jordan"),                          # one-word names
             ("Jordan B", "Jordan B"),                      # an initial is not a last name
             ("J Bravo", "J Bravo"),
@@ -287,6 +293,10 @@ class TestPairGeneration(unittest.TestCase):
         ):
             with self.subTest(first=first, second=second):
                 self.assertFalse(names_can_match(name_words(first.lower()), name_words(second.lower())))
+
+    def test_one_word_name_meets_a_full_name_only_through_a_shared_handle_or_identifier(self):
+        # "Jordan" alone could be any Jordan: nothing proposes the pair, so nothing is asked.
+        self.assertEqual(generate_pairs([person("Jordan"), person("Jordan Bravo")]), [])
 
     def test_shared_email_handle_under_two_different_names_is_not_a_pair(self):
         people = [

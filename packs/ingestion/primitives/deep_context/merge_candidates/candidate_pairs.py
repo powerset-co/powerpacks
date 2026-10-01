@@ -17,8 +17,8 @@ Two names are the same name when they are the same words in any order, or the
 same first and last name where a middle name is missing on one side or agrees
 on both. The same name is a merge without the pair judge; the judge module
 then asks whether the facts keep the two records apart. Two different middle
-names, a suffix on one side (Jr, Sr, III) and one-word names are not the same
-name.
+names, a generation suffix on one side (Jr, Sr, III) and one-word names are
+not the same name.
 
 A bucket only proposes a pair. The pair is kept when the two records share a
 phone or a whole email address, or when one name can be a form of the other:
@@ -26,7 +26,9 @@ the same name, a one-word name that is the other's first or last name, or a
 first and a last name that each equal, begin or nearly spell the other's
 ("J Bravo", "Jordan B", "Jon Bravo"). A shared first name, a shared last name
 or a shared email handle alone is not kept: "Jordan Bravo" and "Jordan Delta"
-at jordan@ two domains are two people.
+at jordan@ two domains are two people. No bucket joins a one-word name to a
+full name, so "Jordan" meets "Jordan Bravo" only through a shared email handle,
+phone or email: "Jordan" alone could be any Jordan.
 
 Jaro-Winkler follows Winkler's Census record-linkage definition. Its prefix
 weighting is a better fit than Levenshtein distance for given-name spelling
@@ -41,6 +43,7 @@ from __future__ import annotations
 
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from itertools import combinations
 from typing import TypeVar
@@ -60,6 +63,8 @@ JUDGE_SLAM_DUNK = "slam_dunk"
 SAME_FULL_NAME = "same full name"
 SAME_FIRST_AND_LAST_NAME = "same first and last name, middle names do not differ"
 SAME_NAME_REASONS = frozenset({SAME_FULL_NAME, SAME_FIRST_AND_LAST_NAME})
+# A father and a son: a name carrying one of these is not the same name as one without it.
+GENERATION_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 # Below a shared phone or email (0.99), so those join first.
 SAME_NAME_CONFIDENCE = 0.95
 T = TypeVar("T")
@@ -128,8 +133,10 @@ def email_localparts(emails: tuple[str, ...]) -> frozenset[str]:
 
 def name_words(name_key: str) -> tuple[str, ...]:
     """The words of a name, given name first: "bravo, jordan" reads as jordan bravo."""
-    family, comma, given = name_key.partition(",")
-    ordered = f"{given} {family}" if comma else name_key
+    # Composed and decomposed accents are one spelling.
+    composed = unicodedata.normalize("NFC", name_key)
+    family, comma, given = composed.partition(",")
+    ordered = f"{given} {family}" if comma else composed
     return tuple(re.findall(r"[^\W\d_]+", ordered.casefold()))
 
 
@@ -139,16 +146,22 @@ def _is_full_name(words: tuple[str, ...]) -> bool:
 
 
 def _middle_names_agree(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
+    """Missing on one side, or word for word equal or an initial of the other."""
     if not first or not second:
         return True
     if len(first) != len(second):
         return False
-    return all(left.startswith(right) or right.startswith(left) for left, right in zip(first, second))
+    return all(
+        left == right or (1 in (len(left), len(right)) and left[0] == right[0])
+        for left, right in zip(first, second)
+    )
 
 
 def same_name_reason(first: tuple[str, ...], second: tuple[str, ...]) -> str | None:
     """Why two names' words are one contact's name, or None when the names do not settle it."""
     if not _is_full_name(first) or not _is_full_name(second):
+        return None
+    if GENERATION_SUFFIXES & set(first) != GENERATION_SUFFIXES & set(second):
         return None
     if sorted(first) == sorted(second):
         return SAME_FULL_NAME

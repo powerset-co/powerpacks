@@ -35,7 +35,9 @@ Each step takes what the one before left.
 | 5 | everything else that was paired: a short or variant form of the name ("Jordan" / "Jordan Bravo", "J Bravo", "Jordan B", "Jon" / "John"), or a shared phone or email under two names | the JEV pair judge at p(yes) ≥ 0.5, then JEV on the two names alone | about $0.0001 a pair |
 
 A shared first name, a shared last name or a shared email handle alone is not
-a pair (step 2). A stored "two people" between two parents outranks steps 3
+a pair (step 2). A one-word name meets a full name only through a shared email
+handle, phone or email. A generation suffix on one side (Jr, Sr, III) is not
+the same name. A stored "two people" between two parents outranks steps 3
 and 4.
 
 The step 4 bar was set on 127 same-name pairs from two real installs, each
