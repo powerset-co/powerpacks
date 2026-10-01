@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.4...powerpacks-v3.8.5) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deep-context:** load one LinkedIn card per click, not the queue ([#637](https://github.com/powerset-co/powerpacks/issues/637)) ([cb8b7bd](https://github.com/powerset-co/powerpacks/commit/cb8b7bd020815d759dab21f05209326bf8e01e99))
+
 ## [3.8.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.3...powerpacks-v3.8.4) (2026-09-30)
 
 
