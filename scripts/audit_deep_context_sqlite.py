@@ -379,6 +379,12 @@ def _static_asset_read(
     if relative.endswith("/synthesis/prompting.py"):
         expression = ast.unparse(call.func.value) if isinstance(call.func, ast.Attribute) else ""
         return method == "read_text" and "fact_schema.json" in expression and "__file__" in expression
+    if relative.endswith("/enrich/identity_reconcile/jev_judge.py"):
+        expression = ast.unparse(call.func.value) if isinstance(call.func, ast.Attribute) else ""
+        return method in DIRECT_FILE_READ_METHODS and expression in {
+            "Path(__file__).with_name('jev_model.json')",
+            "Path(__file__).with_name('jev_questions.json')",
+        }
     if "/jev_worth/" in relative:
         # The frozen mapping/questions JSON next to the module, same pattern as
         # synthesis/prompting.py's fact_schema.json above.
@@ -405,6 +411,31 @@ def _allowed_file_read(
         return True
     called = _name(call.func)
     scope = _scope(call, parents)
+    if (
+        relative == "packs/ingestion/primitives/deep_context/manifests/enrichment_receipt.py"
+        and scope == "EnrichmentReceipt.write"
+        and called == "self.path.read_text"
+    ):
+        return any(
+            isinstance(node, ast.If)
+            and _scope(node, parents) == "EnrichmentReceipt.__post_init__"
+            and ast.unparse(node.test) == "self.path.name != 'manifest.json'"
+            and any(isinstance(statement, ast.Raise) for statement in node.body)
+            for node in ast.walk(tree)
+        )
+    # This receipt identifies an external paid group; research results still
+    # hydrate from SQLite. Allow only its fixed manifest path in the submitter.
+    if (
+        relative == "packs/ingestion/primitives/deep_context/enrich/parallel_research/parallel_client.py"
+        and scope == "ParallelClient.execute"
+        and called == "manifest_path.read_text"
+    ):
+        return any(
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "manifest_path" for target in node.targets)
+            and ast.unparse(node.value) == "params.output_dir / 'manifest.json'"
+            for node in ast.walk(tree)
+        )
     if (relative, scope) in TYPED_ARTIFACT_READ_BOUNDARIES:
         return True
     if (relative, scope) in JEV_ARTIFACT_READ_BOUNDARIES:

@@ -57,7 +57,11 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
 
     def on_status(status: TaskGroupStatus) -> None:
         if params.on_progress:
-            params.on_progress(_progress_counts(total, status))
+            counts = (
+                _progress_counts(total, status) if status.num_task_runs == total
+                else ReceiptCounts(total, len(completed), total - len(completed), 0)
+            )
+            params.on_progress(counts)
         print(f"[deep-research] poll status {status.task_run_status_counts}", file=sys.stderr, flush=True)
 
     def on_result(handle: str, output: TaskRunJsonOutput) -> None:

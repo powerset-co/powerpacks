@@ -55,7 +55,6 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
 from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     load_cached_verdicts,
     pair_sig,
-    person_sig,
     survey_pairs,
 )
 from packs.search.primitives.llm_rerank_candidates.jev.client import (
@@ -122,8 +121,8 @@ class TestIdentifierPhones(unittest.TestCase):
 
 
 class TestSlamDunkVerdict(unittest.TestCase):
-    def test_identical_name_plus_shared_phone_merges_in_code(self):
-        a = person("Jordan Bravo", extra_phones=["9145550466"])
+    def test_identical_name_plus_shared_contact_phone_merges_in_code(self):
+        a = person("Jordan Bravo", phones=["9145550466"])
         b = person("Jordan Bravo", phones=["9145550466"])
         verdict = slam_dunk_verdict(a, b)
         self.assertIsNotNone(verdict)
@@ -131,9 +130,9 @@ class TestSlamDunkVerdict(unittest.TestCase):
         self.assertGreaterEqual(verdict.confidence, 0.99)
         self.assertIn("slam dunk", verdict.reason)
 
-    def test_identical_name_plus_shared_email_merges_in_code(self):
+    def test_identical_name_plus_shared_contact_email_merges_in_code(self):
         a = person("Jordan Bravo", emails=["jordan@example.com"])
-        b = person("Jordan Bravo", extra_emails=["jordan@example.com"])
+        b = person("Jordan Bravo", emails=["jordan@example.com"])
         self.assertTrue(slam_dunk_verdict(a, b).same_person)
 
     def test_different_names_go_to_the_judge(self):
@@ -154,7 +153,7 @@ class TestSharedIdentifierNote(unittest.TestCase):
         note = shared_identifier_note(a, b)
         self.assertIn("SHARED IDENTIFIERS", note)
         self.assertIn("+1 (914) 555-0466", note)
-        self.assertIn("A: owned message evidence", note)
+        self.assertIn("A: attributed by message extraction", note)
         self.assertIn("B: contact record", note)
 
     def test_no_overlap_renders_nothing(self):
@@ -162,16 +161,10 @@ class TestSharedIdentifierNote(unittest.TestCase):
         b = person("Casey Delta", phones=["3105550100"])
         self.assertEqual(shared_identifier_note(a, b), "")
 
-    def test_shared_email_handle_across_domains_is_named(self):
+    def test_shared_email_handle_across_domains_is_not_an_identifier(self):
         a = person("Kai Bravo", emails=["kbravo@example.com"])
         b = person("K Bravo", extra_emails=["kbravo@example.org"])
-        note = shared_identifier_note(a, b)
-        self.assertIn("SHARED IDENTIFIERS", note)
-        self.assertIn(
-            "- email handle kbravo is identical on BOTH records; only the domains differ "
-            "(A: example.com; B: example.org)",
-            note,
-        )
+        self.assertEqual(shared_identifier_note(a, b), "")
 
     def test_shared_full_email_is_not_repeated_as_a_handle(self):
         a = person("Kai Bravo", emails=["kbravo@example.com"])
@@ -217,10 +210,6 @@ class TestPairGeneration(unittest.TestCase):
             self.assertEqual(generate_pairs(people), [])
         self.assertTrue(any("201 members (cap 200)" in str(call) for call in stderr.write.call_args_list))
 
-    def test_person_sig_changes_when_an_owned_phone_appears(self):
-        before = person_sig(person("Jordan Bravo"))
-        after = person_sig(person("Jordan Bravo", extra_phones=["9145550466"]))
-        self.assertNotEqual(before, after)
 
 
 class TestOwnedIdentifierLoading(unittest.TestCase):
@@ -305,9 +294,10 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
 
 
 class TestJudgeSystemRule(unittest.TestCase):
-    def test_prompt_states_the_shared_phone_rule(self):
-        self.assertIn("SHARED PHONE NUMBER", JUDGE_SYSTEM)
-        self.assertIn("0.99", JUDGE_SYSTEM)
+    def test_prompt_requires_owned_identifiers_instead_of_assuming_ownership(self):
+        self.assertIn("treat overlap as neutral", JUDGE_SYSTEM)
+        self.assertIn("Check who actually owns it", JUDGE_SYSTEM)
+        self.assertNotIn("confidence ~0.99", JUDGE_SYSTEM)
 
     def test_pair_signature_bytes_stay_pinned(self):
         first = person(
@@ -317,7 +307,7 @@ class TestJudgeSystemRule(unittest.TestCase):
             "Jordan Bravo", extra_emails=["jordan@example.com"],
             extra_phones=["9145550466"],
         )
-        self.assertEqual(pair_sig(first, second), "996774661b3e1d0b")
+        self.assertEqual(pair_sig(first, second), "042d17c53630d5f8")
 
 
 class TestCacheAndArtifacts(unittest.TestCase):
@@ -439,7 +429,7 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertFalse(output.with_name("merge-verdicts.csv").exists())
             cached = canonical_snapshot(db).merge_verdicts
             self.assertEqual(len(cached), 1)
-            self.assertEqual(cached[0].signature, "5891307a843e8091")
+            self.assertEqual(cached[0].signature, "a253570e50514c08")
             self.assertEqual(cached[0].accepted, 1)
             self.assertEqual(payload.pairs_slam_dunk, 1)
 

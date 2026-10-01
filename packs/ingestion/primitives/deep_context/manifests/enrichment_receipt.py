@@ -1,7 +1,8 @@
-"""Typed boundary for the fixed, display-only enrichment receipt."""
+"""Write enrichment progress while retaining its Parallel provider receipt."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from packs.ingestion.primitives.imports.common import write_manifest
 
 @dataclass(frozen=True)
 class EnrichmentReceipt:
-    """Write one fresh display-only enrichment receipt."""
+    """Write fresh progress and retain the provider receipt."""
 
     path: Path
 
@@ -21,6 +22,10 @@ class EnrichmentReceipt:
 
     def write(self, payload: dict[str, Any]) -> dict[str, Any]:
         body = dict(payload)
+        if self.path.exists():
+            existing = json.loads(self.path.read_text())
+            if "parallel" in existing:
+                body["parallel"] = existing["parallel"]
         body.pop("updated_at", None)
         body.pop("created_at", None)
         body.pop("artifacts", None)

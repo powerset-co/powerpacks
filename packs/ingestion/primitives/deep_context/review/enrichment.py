@@ -5,9 +5,10 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
+from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
+from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, unassembled_research
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
@@ -29,6 +30,8 @@ from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentCounts,
     EnrichmentView,
 )
+
+ESTIMATED_JUDGMENT_INPUT_TOKENS = 2000
 
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
@@ -63,6 +66,13 @@ def enrichment_view(
         processor=DEFAULT_PROCESSOR,
         fingerprint=state.selection,
     )
+    remaining_judgments = state.progress.enrichment_pending - len(plan.eligible)
+    # Budget two JEV requests and one possible Sol comparison per candidate.
+    judgment_count = remaining_judgments + len(plan.pending)
+    judgment_estimate = estimate_cost_usd(ESTIMATED_JUDGMENT_INPUT_TOKENS * judgment_count,
+        1500 * judgment_count, "gpt-6.1-sol")
+    jev_estimate = 2 * judgment_count * ESTIMATED_JUDGMENT_INPUT_TOKENS * INPUT_PRICE_PER_MILLION / 1_000_000
+    estimate = plan.estimated_usd + judgment_estimate + jev_estimate
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), plan.deduped_total
     # While the local thread runs, live progress IS the plan: every projected
@@ -77,7 +87,7 @@ def enrichment_view(
             duplicate_handles=plan.duplicate_handles,
             processor=plan.processor,
             cost_per_person_usd=plan.cost_per_person_usd,
-            estimated_usd=plan.estimated_usd,
+            estimated_usd=estimate,
             selection=current_selection,
             request_fingerprint=plan.request_fingerprint,
             stage="enrich",
@@ -87,9 +97,9 @@ def enrichment_view(
             approvable=False,
         )
     # The remaining chain prepares profiles, assembles no-match cards, and
-    # judges real candidates. The estimate covers Parallel research only.
+    # resolves identity disagreements.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
-    if not total and (judge_candidates(db) or unassembled_research(db)):
+    if not total and remaining_judgments:
         status, route_state = "not_started", "profile_prep_pending"
     elif not total:
         status, route_state = "completed", "done"
@@ -110,14 +120,14 @@ def enrichment_view(
         duplicate_handles=plan.duplicate_handles,
         processor=plan.processor,
         cost_per_person_usd=plan.cost_per_person_usd,
-        estimated_usd=plan.estimated_usd,
+        estimated_usd=estimate,
         selection=current_selection,
         request_fingerprint=plan.request_fingerprint,
         stage="enrich",
         status=status,
         counts=EnrichmentCounts(total, plan.reused_completed, pending),
         state=route_state,
-        approvable=bool(pending),
+        approvable=bool(pending or judgment_estimate),
     )
     # A just-failed run's error rides in memory (the pipeline thread's last
     # write); after a restart it is gone and the button returns.
@@ -199,8 +209,7 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
     )
     if enrichment.status == ReceiptStatus.RUNNING:
         return enrichment
-    # A completed plan is done unless its cached research still needs the free
-    # local chain, which the $0 continue launches.
+    # Cached research can still need profile hydration and identity judgments.
     if enrichment.status == "completed" and enrichment.state != "profile_prep_pending":
         return enrichment
     if (

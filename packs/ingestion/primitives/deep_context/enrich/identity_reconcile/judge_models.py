@@ -137,6 +137,19 @@ class IdentityVerdict:
 
 
 @dataclass(frozen=True)
+class StoredJudgment:
+    """A verdict already paid for, with the exact judge input it answered.
+
+    The fingerprint is what makes the verdict reusable rather than merely
+    present: it identifies the evidence, prompt, model and effort the judge was
+    shown. Equal fingerprint means asking again would ask the same question.
+    """
+
+    verdict: IdentityVerdict
+    fingerprint: str
+
+
+@dataclass(frozen=True)
 class IdentityUsage:
     input_tokens: int = 0
     output_tokens: int = 0

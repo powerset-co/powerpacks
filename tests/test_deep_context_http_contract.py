@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -41,6 +42,11 @@ from packs.ingestion.primitives.deep_context.db.identity_invariants import (
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     approved_identities,
+)
+from packs.ingestion.primitives.deep_context.db.identity_queries import links
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
+    RelationshipDecision,
+    finish_reviews,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -72,6 +78,16 @@ class DeepContextHttpContractTests(unittest.TestCase):
     PUB = "jordan-bravo"
     SLUG = "jordan-bravo-p"
     PERSON_ID = "person-jordan-bravo"
+
+    def test_decision_table_exposes_total_for_virtual_scroll(self) -> None:
+        parent = person_detail(self.db, self.SLUG)
+        html = render_decision_table([parent], "yes", total=100)
+        self.assertIn("class='decision-list'", html)
+        self.assertIn("data-total='100'", html)
+        self.assertNotIn("Show more", html)
+        status, _, body, _ = self.request("GET", "/searches/assets/virtual-table.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"class VirtualTable", body)
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -371,6 +387,12 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE row_key=?",
                 (json.dumps({"verdict": "needs_review", "confidence": 0.5}), self.PUB),
             )
+        assert_stage("enrich")
+        result = finish_reviews(self.db, [RelationshipDecision.from_payload("parent-jordan-bravo", "fixture-question", {"candidates": [{
+            "url": row.machine_proposed_url or row.linkedin_url, "verdict": "review",
+            "reason": "Owner can identify contact", "confidence": .5}
+            for row in links(self.db, parent_id="parent-jordan-bravo") if not row.decision_action and row.linkedin_url]})])
+        self.assertEqual(result["review_parent_ids"], ["parent-jordan-bravo"])
         assert_stage("linkedin")
         status, _, body, _ = self.request("GET", "/?stage=worth&view=yes")
         self.assertEqual(status, 200)
@@ -383,6 +405,35 @@ class DeepContextHttpContractTests(unittest.TestCase):
         status, _, body, _ = self.request("GET", "/?stage=enrich")
         self.assertEqual(status, 200)
         self.assertIn(b"data-stage='enrich'", body)
+
+    def test_stage_completion_shows_indeterminate_progress_until_navigation(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is not installed")
+        source = (Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/deep_context/review/reconcile_review.js").read_text()
+        function = source.split("function leaveAndNavigate(", 1)[1].split("\nfunction swapCardContent", 1)[0]
+        program = """
+            import assert from 'node:assert/strict';
+            let completingStage = false, navigate;
+            const title = {textContent:''};
+            const stage = {innerHTML:'', querySelector: () => title};
+            const window = {location:{href:'/worth'}, setTimeout: fn => {navigate = fn;}};
+        """ + "function leaveAndNavigate(" + function + """
+            leaveAndNavigate('People Reviewed', '/?stage=enrich');
+            assert.equal(completingStage, true);
+            assert.equal(title.textContent, 'People Reviewed');
+            assert.match(stage.innerHTML, /Preparing Next Stage/);
+            assert.match(stage.innerHTML, /role=['\"]progressbar['\"]/);
+            assert.doesNotMatch(stage.innerHTML, /aria-valuenow/);
+            const waiting = stage.innerHTML;
+            assert.equal(window.location.href, '/worth');
+            navigate();
+            assert.equal(window.location.href, '/?stage=enrich');
+            assert.equal(stage.innerHTML, waiting, 'Loading the destination must retain the completion screen');
+        """
+        result = subprocess.run([node, "--input-type=module", "-e", program],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rendered_markup_covers_every_javascript_dispatch_contract(self) -> None:
         # Keep these selectors pinned to reconcile_review.js:217, 418-420,
@@ -470,8 +521,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                     [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
                     "yes",
                 ),
-                # total > page size so the Show More button (data-table-more /
-                # data-offset / data-remaining) is part of the rendered contract
+                # The virtual scroll viewport retains the full decision count.
                 render_decision_table(
                     [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
                     "yes",

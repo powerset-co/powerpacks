@@ -72,8 +72,13 @@ class IdentityInvariantAudit:
         """Check identity uniqueness, family settlement, and parent ownership."""
         issues = _schema_issues(self.db)
         approved = self.db.query(
-            f"SELECT parent_id, count(*) AS approved FROM links "
-            f"WHERE {_EFFECTIVELY_APPROVED} GROUP BY parent_id HAVING count(*) > 1"
+            f"""SELECT parent_id, count(DISTINCT identity) AS approved FROM (
+              SELECT parent_id, COALESCE(NULLIF(CASE
+                WHEN decision_action='retarget' THEN replacement_url
+                WHEN decision_action IS NULL AND machine_action='retarget' THEN machine_proposed_url
+                ELSE linkedin_url END, ''), row_key) AS identity
+              FROM links WHERE {_EFFECTIVELY_APPROVED}
+            ) GROUP BY parent_id HAVING count(DISTINCT identity)>1"""
         )
         issues.extend(
             IdentityInvariantIssue(

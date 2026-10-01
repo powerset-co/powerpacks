@@ -19,7 +19,12 @@ from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    linkedin_queue, review_questions_pending, unassembled_research,
+)
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
+    RelationshipDecision, cache_relationship_judgment, finish_reviews,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -33,6 +38,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
     PrefetchProfiles,
     review_queue_links,
@@ -168,6 +174,136 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.assertEqual(prefetched.status, "completed")
         self.assertFalse((self.research_dir / "manifest.json").exists())
 
+
+
+    def test_ambiguous_research_is_skipped_without_reopening_enrichment(self) -> None:
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        self.db.decide_identity("parent-1", "detach")
+        human = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-1", candidate_exists=False,
+            row_key="candidate:email:casey@example.com", handle="casey-delta",
+            source_person_ids=("person-a",), display_name="Casey Delta",
+        )
+        self._write_no_linkedin_result()
+        research = [tuple(row) for row in query(self.db, "SELECT * FROM research ORDER BY handle")]
+        self.assertFalse(unassembled_research(self.db))
+        result = AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(result.to_payload()["skipped_ambiguous_parents"], 1)
+        self.assertEqual(result.counts.built, 0)
+        self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), human)
+        self.assertEqual([tuple(row) for row in query(self.db, "SELECT * FROM research ORDER BY handle")], research)
+
+    def test_ambiguous_research_does_not_block_single_parent_assembly(self) -> None:
+        self._write_no_linkedin_result()
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-1", candidate_exists=False,
+            row_key="candidate:email:casey@example.com", handle="casey-delta",
+            source_person_ids=("person-a",), display_name="Casey Delta",
+        )
+        self._write_no_linkedin_result()
+        self.assertFalse(unassembled_research(self.db))
+        self.db.project_rows((
+            ParentRow("parent-2", "parent-worth:parent-2", "Jordan Delta"),
+            PersonRow("person-b", "parent-2", display_name="Jordan Delta"),
+            ArtifactRow("facts:parent-2", "facts", "parent-2", "/facts/parent-2.jsonl", "fixture", "projected"),
+            FactRow("parent-2", "parent-2", "facts:parent-2", machine_worth="yes", facts_json="{}"),
+        ))
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-2", candidate_exists=False,
+            row_key="candidate:email:delta@example.com", handle="jordan-delta",
+            source_person_ids=("person-b",), display_name="Jordan Delta",
+        )
+        self._write_no_linkedin_result()
+        self.assertTrue(unassembled_research(self.db))
+        result = AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual((result.counts.built, result.to_payload()["skipped_ambiguous_parents"]), (1, 1))
+        self.assertEqual([row[0] for row in query(self.db, "SELECT candidate_key FROM synthetic_profiles")], ["parent-2"])
+        self.assertFalse(unassembled_research(self.db))
+
+    def test_unassembled_research_does_not_load_full_synthetic_fallback(self):
+        from packs.ingestion.primitives.deep_context.db import identity_views
+        self._write_no_linkedin_result()
+        with mock.patch.object(identity_views, "synthetic_fallback", side_effect=AssertionError("full cards loaded")):
+            self.assertEqual(unassembled_research(self.db), 1)
+
+    def test_approved_real_identity_prunes_redundant_machine_synthetic(self):
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        self.db.project_rows((LinkRow(
+            "real-jordan", "parent-1", "jordan-bravo", "pub",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            source=WriterSource.RECONCILE.value,
+        ), IdentityMachineProjection(
+            "real-jordan", machine_action="verify", machine_approved="auto",
+            machine_judgment="confirmed", source=WriterSource.RECONCILE.value,
+        )))
+        self.assertEqual(unassembled_research(self.db), 0)
+        result = AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(result.counts.built, 0)
+        self.assertEqual(result.counts.pruned_stale_machine_rows, 1)
+        self.assertFalse(query(self.db, "SELECT 1 FROM synthetic_profiles"))
+
+    def test_human_real_winner_does_not_create_synthetic_review(self):
+        self._write_no_linkedin_result()
+        self.db.project_rows((LinkRow(
+            "real-jordan", "parent-1", "jordan-bravo", "pub",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            source=WriterSource.RECONCILE.value,
+        ),))
+        self.db.decide_identity("real-jordan", "verify", approved="yes")
+        self.assertEqual(unassembled_research(self.db), 0)
+        self.assertEqual(AssembleSyntheticProfile(db=self.db).run().counts.built, 0)
+
+    def test_real_winner_preserves_existing_human_synthetic_decision(self):
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        self.db.decide_identity("parent-1", "detach", approved="yes")
+        human = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+        self.db.project_rows((LinkRow(
+            "real-jordan", "parent-1", "jordan-bravo", "pub",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            source=WriterSource.RECONCILE.value,
+        ), IdentityMachineProjection(
+            "real-jordan", machine_action="verify", machine_approved="auto",
+            machine_judgment="confirmed", source=WriterSource.RECONCILE.value,
+        )))
+        self.assertEqual(AssembleSyntheticProfile(db=self.db).run().counts.built, 0)
+        self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), human)
+
+    def test_ambiguous_real_identity_keeps_synthetic_review(self):
+        self._write_no_linkedin_result()
+        self.db.project_rows((LinkRow(
+            "real-jordan", "parent-1", "jordan-bravo", "pub",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            source=WriterSource.RECONCILE.value,
+        ), IdentityMachineProjection(
+            "real-jordan", machine_action="verify", machine_approved=None,
+            machine_judgment="needs_review", source=WriterSource.RECONCILE.value,
+        )))
+        self.assertEqual(AssembleSyntheticProfile(db=self.db).run().counts.built, 1)
+
+    def test_unassembled_research_counts_each_eligible_parent(self) -> None:
+        self._write_no_linkedin_result()
+        self.db.project_rows((
+            ParentRow("parent-2", "parent-worth:parent-2", "Jordan Delta"),
+            PersonRow("person-b", "parent-2", display_name="Jordan Delta"),
+            ArtifactRow("facts:parent-2", "facts", "parent-2", "/facts/parent-2.jsonl", "fixture", "projected"),
+            FactRow("parent-2", "parent-2", "facts:parent-2", machine_worth="yes", facts_json="{}"),
+        ))
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-2", candidate_exists=False,
+            row_key="candidate:email:delta@example.com", handle="jordan-delta",
+            source_person_ids=("person-b",), display_name="Jordan Delta",
+        )
+        self._write_no_linkedin_result()
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            self.assertEqual(unassembled_research(self.db), 2)
+        self.assertLessEqual(reads.call_count, 2)
+        AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(unassembled_research(self.db), 0)
+
     def test_empty_profile_completes_but_provider_error_blocks_review(self) -> None:
         self.db.project_rows((LinkRow(
             "jordan-bravo", "parent-1", "jordan-bravo", "pub",
@@ -212,15 +348,12 @@ class SyntheticPrefetchTest(unittest.TestCase):
             self.db,
             "SELECT machine_approved, decision_approved FROM links WHERE kind='synthetic'",
         )[0]
-        candidate = next(
-            item
-            for parent in linkedin_queue(self.db)
-            for item in parent.candidates
-            if item.synthetic
-        )
+        parent_id = query(self.db, "SELECT parent_id FROM links WHERE kind='synthetic'")[0][0]
+        candidate = next(item for item in person_detail(self.db, parent_id).candidates if item.synthetic)
         self.assertEqual(profile["basis"][0]["confidence"], "high")
         self.assertEqual(tuple(link), (None, None))
-        self.assertTrue(candidate.pending)
+        self.assertFalse(candidate.pending)
+        self.assertFalse(any(item.synthetic for parent in linkedin_queue(self.db) for item in parent.candidates))
         self.assertEqual((candidate.action, candidate.approved), ("", ""))
 
     def test_stale_undecided_synthetic_is_pruned_from_sqlite(self) -> None:

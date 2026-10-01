@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
@@ -242,6 +243,7 @@ def _candidate_row(row: sqlite3.Row) -> CandidateViewRow:
         new_url=decision.new_url,
         new_public_identifier=decision.new_public_identifier,
         pending=bool(row["is_pending"]),
+        human_question=row["human_question"] or "",
     )
 
 
@@ -285,7 +287,7 @@ def _hydrate_parents(
     return [_parent_row(row, tuple(candidates_by_id[row["parent_id"]])) for row in parent_rows]
 
 
-def _all_parents(db: Db) -> list[ParentViewRow]:
+def _all_parents(db: Db, parent_ids: Sequence[str] | None = None) -> list[ParentViewRow]:
     rows = db.query(
         LINKEDIN_CTE
         + PARENT_SELECT.format(
@@ -298,6 +300,9 @@ def _all_parents(db: Db) -> list[ParentViewRow]:
             )"""
         )
     )
+    if parent_ids is not None:
+        selected = set(parent_ids)
+        rows = [row for row in rows if row["parent_id"] in selected]
     return _hydrate_parents(db, rows, pending_only=False)
 
 
@@ -313,10 +318,16 @@ def _decision_page(
 ) -> list[ParentViewRow]:
     """One page of a worth pile (yes/no), in the full table's name order."""
     rows = db.query(
-        WORTH_CTE + PARENT_SELECT.format(where=_DECISION_FILTER) + " LIMIT ? OFFSET ?",
+        WORTH_CTE + """
+SELECT w.*, '[]' AS sources_json, '' AS dossier_path, '' AS dossier_body
+FROM worth w
+""" + _DECISION_FILTER + """
+ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
+LIMIT ? OFFSET ?
+""",
         (decision, limit, offset),
     )
-    return _hydrate_parents(db, rows, pending_only=False)
+    return [_parent_row(row) for row in rows]
 
 
 def _linkedin_queue(db: Db) -> list[ParentViewRow]:

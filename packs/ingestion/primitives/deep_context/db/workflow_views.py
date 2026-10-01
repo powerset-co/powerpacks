@@ -11,17 +11,19 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 
-from packs.ingestion.primitives.deep_context.db._view_rows import (
-    _linkedin_progress,
-)
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
     WORTH_GATE_REJECTED,
 )
-from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue, judge_candidates, unassembled_research
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    enrichment_pending,
+    unassembled_research,
+    workflow_identity_counts,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_rows
+from packs.ingestion.primitives.deep_context.db.view_models import WorthCounts
+from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,7 @@ class WorkflowState:
     state_token: str
 
 
-def _stage_progress(db: Db) -> StageProgress:
+def _stage_progress(db: Db, *, worth: WorthCounts) -> StageProgress:
     synthesize_pending = db.query(
         """
 SELECT count(DISTINCT a.parent_id) AS n FROM artifacts a
@@ -68,12 +70,19 @@ WHERE a.kind='source_bundle' AND a.status='projected'
   AND NOT EXISTS(SELECT 1 FROM facts f WHERE f.parent_id=a.parent_id)
 """
     )[0]["n"]
-    worth = worth_counts(db)
-    linkedin = _linkedin_progress(db)
-    lookup_ready = db.query(
+    linkedin, review_questions, judge_candidates = workflow_identity_counts(db)
+    total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
+    counts = db.query(
         WORTH_CTE
-        + f"""
-SELECT count(*) AS n FROM worth w
+        + f""", linkedin_csv_parents AS (
+  SELECT DISTINCT pe.parent_id FROM people pe JOIN person_sources ps USING(person_id)
+  WHERE ps.source='linkedin_csv'
+), kept_parents AS (
+  SELECT DISTINCT parent_id FROM links
+  WHERE decision_approved='yes' AND decision_action NOT IN ('detach', 'exclude')
+)
+SELECT (
+SELECT count(*) FROM worth w
 WHERE {WORTH_GATE_ACCEPTED}
   AND (
     EXISTS(SELECT 1 FROM links l WHERE l.parent_id=w.parent_id AND l.raw_import=1)
@@ -91,19 +100,8 @@ WHERE {WORTH_GATE_ACCEPTED}
       )
     )
   )
-"""
-    )[0]["n"]
-    total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
-    rejected = db.query(
-        WORTH_CTE
-        + f""", linkedin_csv_parents AS (
-  SELECT DISTINCT pe.parent_id FROM people pe JOIN person_sources ps USING(person_id)
-  WHERE ps.source='linkedin_csv'
-), kept_parents AS (
-  SELECT DISTINCT parent_id FROM links
-  WHERE decision_approved='yes' AND decision_action NOT IN ('detach', 'exclude')
-)
-SELECT count(DISTINCT parent_id) AS n FROM (
+) AS lookup_ready, (
+SELECT count(DISTINCT parent_id) FROM (
   SELECT w.parent_id FROM worth w
   WHERE {WORTH_GATE_REJECTED}
     AND (
@@ -129,8 +127,9 @@ SELECT count(DISTINCT parent_id) AS n FROM (
       WHERE real.parent_id=p.parent_id AND real.kind!='synthetic'
     )
 )
+) AS rejected
 """
-    )[0]["n"]
+    )[0]
     return StageProgress(
         total=int(total),
         synthesize_pending=int(synthesize_pending),
@@ -138,26 +137,29 @@ SELECT count(DISTINCT parent_id) AS n FROM (
         worth_pending=worth.pending,
         worth_yes=worth.yes,
         worth_no=worth.no,
-        lookup_ready=int(lookup_ready),
+        lookup_ready=int(counts["lookup_ready"]),
         linkedin_total=linkedin.total,
         linkedin_pending=linkedin.pending,
         linkedin_done=linkedin.done,
-        rejected=int(rejected),
-        enrichment_pending=int(unassembled_research(db)) + len(judge_candidates(db)) + len(enrichment_queue(db)),
+        rejected=int(counts["rejected"]),
+        enrichment_pending=unassembled_research(db) + review_questions + judge_candidates + enrichment_pending(db),
     )
 
 
-def _review_selection(db: Db) -> ReviewSelection:
-    rows = worth_rows(db)
+def _review_selection(db: Db) -> tuple[ReviewSelection, WorthCounts]:
+    rows = db.query(WORTH_CTE + """
+SELECT w.parent_id, w.effective_worth, w.human_worth, w.human_worth_at, w.has_synthetic
+FROM worth w
+""")
     decisions = sorted(
-        ({"person_id": row.key, "decision": row.effective} for row in rows),
+        ({"person_id": f"{PARENT_WORTH_PREFIX}{row['parent_id']}", "decision": row["effective_worth"]} for row in rows),
         key=lambda row: row["person_id"],
     )
     revision = max(
-        (row.human.updated_at for row in rows if row.human),
+        (row["human_worth_at"] or "" for row in rows if row["human_worth"]),
         default="",
     )
-    return ReviewSelection(
+    selection = ReviewSelection(
         fingerprint=hashlib.sha256(json.dumps(decisions, separators=(",", ":")).encode()).hexdigest(),
         total=len(decisions),
         yes=sum(row["decision"] == "yes" for row in decisions),
@@ -166,11 +168,18 @@ def _review_selection(db: Db) -> ReviewSelection:
         review_revision=revision,
     )
 
+    return selection, WorthCounts(
+        selection.total,
+        sum(row["effective_worth"] == "maybe" and not row["has_synthetic"] for row in rows),
+        selection.yes,
+        selection.no,
+    )
+
 
 def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState:
     """Apply the ordered queue predicates and return one deterministic state token."""
-    progress = _stage_progress(db)
-    selection = _review_selection(db)
+    selection, worth = _review_selection(db)
+    progress = _stage_progress(db, worth=worth)
     enrichment_pending = progress.enrichment_pending
     rules = (
         (bool(progress.synthesize_pending), "synthesize"),

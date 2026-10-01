@@ -18,6 +18,15 @@ messages -> dossiers -> review uncertain people -> lookup Added -> LinkedIn Yes/
 All paths are fixed and overwritten in place. Do not add run ids, ledgers, or a
 second status stream.
 
+The approved enrichment chain uses two JEV evidence assessments and the frozen
+identity model for undecided LinkedIns. GPT-6.1 Sol compares disagreements and
+competing profiles using saved research and the parent dossier. There is no
+review cap: unresolved worthwhile identities become questions; unsupported
+associations are declined without removing contacts or Worth decisions. Human
+decisions remain authoritative. Completed judgments resume from SQLite. `bin/deep-context finish-reviews --dry-run` previews an interrupted final
+pass; `--approve-spend` resumes it. Prompt/model changes do not rejudge saved
+verdicts or questions automatically.
+
 ## Route the request first
 
 Use the narrow path when the user names one:
@@ -29,9 +38,9 @@ Use the narrow path when the user names one:
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
-  `bin/deep-context review`; bare `review` opens the read-only A-Z directory
-  (Yes/No tabs, search, full dossier + LinkedIn pane). A stage word opens the
-  staged workflow there directly: `$deep-context review linkedin` ->
+  `bin/deep-context review`; bare `review` opens the current review stage.
+  `bin/deep-context review people` opens the People list. A stage word opens the
+  staged workflow directly: `$deep-context review linkedin` ->
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
   the server's `--stage` flag. `review <stage>` (and bare `review`) restarts
   the review server, then prints the staged UI URL once `/healthz` answers.
@@ -401,22 +410,23 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
   cached chain so imported or cached installs still get their follow-ups.
 - **The user clicks Approve $X.XX** → that click IS the spend approval: the
   app runs the approved Parallel pass with exactly that budget cap.
-- **Research completes** → the app chains the free follow-ups automatically:
-  `assemble-synthetic` (no-LinkedIn cards) and `profile-prefetch --fetch`
-  (cache-first LinkedIn profiles; pennies only for cache misses).
+- **Research completes** → the app hydrates missing LinkedIn profiles, runs JEV
+  identity checks, and uses GPT-6.1 Sol to resolve remaining disagreements.
+  Completed paid results are reused. It then assembles synthetic profiles for
+  people without an accepted LinkedIn.
 
 The agent runs NONE of these steps while the app owns them. Files remain the
 durable provider outputs, but the writer projects every downstream payload into
-SQLite before success. One process-local flag prevents duplicate submission;
-the fixed enrichment manifest is display-only progress and cannot resume or
-block a later server process.
+SQLite before success. One process-local flag prevents duplicate submission.
+The fixed enrichment manifest contains display progress and a `parallel`
+provider receipt so a later process can recover already-submitted research.
 The manual commands remain available for headless/broken-UI recovery only.
 
-The pipeline is the sole enrichment-manifest writer. Parallel's SDK stream
-reports status through the pipeline callback; the pipeline writes the one
-whole-run count vocabulary plus timing/errors. Review reads that file only to
-display selection-matching progress. Selection, reuse, and synthetic assembly
-query SQLite, so stale rows cannot reappear.
+The pipeline writes progress while preserving the provider receipt; the
+Parallel client writes the receipt while preserving progress. Parallel's SDK
+stream reports status through the pipeline callback. Review reads the manifest
+only to display selection-matching progress. Selection, completed-result reuse,
+and synthetic assembly query SQLite.
 
 When you report lookup progress to the user, phrase it as "Parallel tasked with
 N net-new lookups" and use the enrichment manifest's running/completed counts. Do not call
@@ -433,10 +443,10 @@ For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
 decision. The correction panel accepts a replacement URL or a terminal Skip;
 Skip writes a detach decision, rejects the shown/proposed LinkedIn, and leaves
-the person out of the index for now. A synthetic result has the same two
-outcomes for indexing: paste the LinkedIn URL to create an approved retarget,
-or Skip it. “Use this profile” keeps synthetic research locally; it does not
-approve a synthetic identity for indexing or upload.
+the person out of the index for now. Synthetic profiles remain local without
+requiring LinkedIn review. They are not automatically approved for indexing or
+upload. Existing human decisions, including synthetic profiles retargeted to a
+real LinkedIn, remain authoritative.
 
 Continue through the wait loop. Continue to realization only when
 `bin/deep-context review-status --wait` returns `next_action == "realize"`.

@@ -23,7 +23,7 @@ WITH eligible_links AS (
     WHERE cp.row_key=l.row_key AND pe.is_owner=0
   )
 ), ranked_facts AS (
-  SELECT f.*,
+  SELECT f.subject_key, f.parent_id,
          row_number() OVER (
            PARTITION BY f.parent_id
            -- Merges can leave several child facts on one parent. The most
@@ -59,7 +59,8 @@ WITH eligible_links AS (
            WHERE l.parent_id=p.parent_id AND l.kind='synthetic'
          ) AS has_synthetic
   FROM parents p
-  JOIN ranked_facts r ON r.parent_id=p.parent_id AND r.worth_rank=1
+  JOIN ranked_facts ranked ON ranked.parent_id=p.parent_id AND ranked.worth_rank=1
+  JOIN facts r ON r.subject_key=ranked.subject_key
   -- Empty, ghost-only, and owner-only families cannot enter review; an owner
   -- person never hides a real non-owner member of the same family.
   WHERE EXISTS (
@@ -79,25 +80,15 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
 
 PENDING_CANDIDATE = """
 (
-  (l.kind='synthetic' OR COALESCE(l.linkedin_url, '')!=''
+  l.kind!='synthetic'
+  AND (COALESCE(l.linkedin_url, '')!=''
    OR COALESCE(l.machine_proposed_url, '')!=''
    OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key
               AND r.status='complete' AND json_extract(r.result_json, '$.content.linkedin_url') IS NOT NULL))
-  AND (
-  (l.kind='synthetic' AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no'))
-  OR
-  (l.kind!='synthetic'
-   AND (l.paid_profile=1 OR l.candidate_origin=1 OR COALESCE(l.linkedin_url, '')!='')
-   AND l.decision_action IS NULL
-   AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
-   AND l.authoritative_detach=0
-   AND NOT (
-     l.candidate_origin=1
-     AND l.machine_action='retarget'
-     AND l.machine_proposed_url IS NOT NULL
-     AND COALESCE(l.machine_approved, '') IN ('auto', 'yes')
-   ))
-  )
+  AND (l.paid_profile=1 OR l.candidate_origin=1 OR COALESCE(l.linkedin_url, '')!='')
+  AND l.decision_action IS NULL
+  AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
+  AND l.authoritative_detach=0
 )
 """
 
@@ -130,7 +121,7 @@ LINKEDIN_CTE = (
     + PENDING_CANDIDATE
     + f""" AS is_pending
   FROM eligible_links l
-), identity_scope AS (
+), identity_scope AS MATERIALIZED (
   SELECT p.parent_id
   FROM parents p
   JOIN worth w USING(parent_id)
@@ -157,25 +148,14 @@ LINKEDIN_CTE = (
         )
       )
     )
-    -- A rejected synthetic-only family has no alternate identity to review;
-    -- serving it again would create an endless pending card.
-    AND NOT (
-      NOT EXISTS (
-        SELECT 1 FROM candidate_policy real
-        WHERE real.parent_id=p.parent_id AND real.kind!='synthetic'
-      )
-      AND EXISTS (
-        SELECT 1 FROM candidate_policy rejected
-        WHERE rejected.parent_id=p.parent_id AND rejected.kind='synthetic'
-          AND rejected.decision_action='detach'
-          AND rejected.decision_approved IN ('yes', 'no')
-      )
-    )
     -- Parent existence alone cannot invent a card: require an actionable
     -- candidate, recorded decision, or observed candidate-person origin.
     AND EXISTS (
       SELECT 1 FROM candidate_policy c
       WHERE c.parent_id=p.parent_id
+        AND (c.kind!='synthetic' OR (
+          c.decision_action='retarget' AND COALESCE(c.replacement_url, '')!=''
+        ))
         AND (c.kind='synthetic' OR COALESCE(c.linkedin_url, '')!=''
              OR COALESCE(c.machine_proposed_url, '')!=''
              OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=c.row_key
@@ -249,6 +229,7 @@ SELECT c.*,
        sp.profile_json AS synthetic_profile_json,
        pa.payload_json AS profile_artifact_json,
        r.result_json AS research_json,
+       json_extract(c.judgment_payload_json, '$.relationship_decision.human_question') AS human_question,
        -- CROSS JOIN pins the join order candidate -> person -> identifiers.
        -- Left to itself the planner walks identifiers_by_value(kind) for every
        -- candidate row, which is quadratic in the store (a 5k-candidate queue

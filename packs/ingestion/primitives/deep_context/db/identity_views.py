@@ -28,8 +28,10 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_GATE_ACCEPTED,
 )
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_HUMAN_DECISION_SQL,
     AFFIRMATIVE_MACHINE_ACTIONS,
     AFFIRMATIVE_MACHINE_APPROVALS,
+    AFFIRMATIVE_MACHINE_DECISION_SQL,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentifierKind,
@@ -38,8 +40,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
     ResearchHandle,
 )
-from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import VERDICTS, stored_judgments
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows, stored_judgments
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import VERDICTS
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -51,6 +53,75 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentViewRow,
     SyntheticFallbackRow,
 )
+
+
+_JUDGE_CANDIDATE_SELECT = """
+SELECT l.row_key FROM eligible_links l JOIN identity_scope s USING(parent_id)
+WHERE l.kind!='synthetic' AND l.decision_action IS NULL
+  AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
+  AND (COALESCE(l.linkedin_url, '')!='' OR COALESCE(l.machine_proposed_url, '')!=''
+       OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
+"""
+
+_REVIEW_QUESTIONS_PENDING_SELECT = """
+SELECT count(*) FROM pending_parents p WHERE EXISTS (
+  SELECT 1 FROM eligible_links candidate WHERE candidate.parent_id=p.parent_id
+    AND candidate.kind!='synthetic'
+    AND (COALESCE(candidate.linkedin_url, '')!='' OR COALESCE(candidate.machine_proposed_url, '')!='')
+) AND NOT EXISTS (
+  SELECT 1 FROM links l WHERE l.parent_id=p.parent_id
+    AND json_extract(l.judgment_payload_json, '$.relationship_decision') IS NOT NULL
+)
+"""
+
+_ENRICHMENT_QUEUE_FROM = f"""
+FROM worth w
+LEFT JOIN eligible_links l ON l.row_key=(
+  SELECT choice.row_key FROM eligible_links choice
+  WHERE choice.parent_id=w.parent_id AND choice.kind!='synthetic'
+  ORDER BY choice.candidate_origin DESC, choice.row_key LIMIT 1
+)
+WHERE {WORTH_GATE_ACCEPTED}
+  AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=w.parent_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links known
+    WHERE known.parent_id=w.parent_id AND known.kind!='synthetic'
+      AND (COALESCE(known.linkedin_url, '')!=''
+           OR COALESCE(known.machine_proposed_url, '')!=''
+           OR COALESCE(known.replacement_url, '')!='')
+  )
+  AND w.parent_id NOT IN (
+    SELECT done.parent_id FROM research done
+    WHERE done.status IN ('complete', 'no_match')
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links decided WHERE decided.parent_id=w.parent_id
+      AND decided.decision_approved IN ('yes', 'no')
+  )
+"""
+
+_SYNTHETIC_FALLBACK_FROM = f"""
+FROM research r
+JOIN parents p ON p.parent_id=r.parent_id
+JOIN worth w USING(parent_id)
+LEFT JOIN links l ON l.row_key=r.candidate_key
+LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
+WHERE {WORTH_GATE_ACCEPTED}
+  AND EXISTS (
+  SELECT 1 FROM people member
+  WHERE member.parent_id=r.parent_id
+    AND member.is_owner=0
+    AND member.is_ghost=0
+)
+  AND (l.row_key IS NULL OR scoped.row_key IS NOT NULL)
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links real
+    WHERE real.parent_id=r.parent_id AND real.kind!='synthetic'
+      AND CASE WHEN real.decision_action IS NOT NULL THEN
+        {AFFIRMATIVE_HUMAN_DECISION_SQL} AND real.decision_approved='yes'
+      ELSE {AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix='real.')} END
+  )
+"""
 
 
 def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
@@ -168,31 +239,9 @@ SELECT l.row_key, w.parent_id, w.display_slug, w.display_name,
           WHERE pe.parent_id=w.parent_id AND pe.is_owner=0 AND i.kind='phone'
           ORDER BY value
         )) AS phones_json
-FROM worth w
-LEFT JOIN eligible_links l ON l.row_key=(
-  SELECT choice.row_key FROM eligible_links choice
-  WHERE choice.parent_id=w.parent_id AND choice.kind!='synthetic'
-  ORDER BY choice.candidate_origin DESC, choice.row_key LIMIT 1
-)
-WHERE {WORTH_GATE_ACCEPTED}
-  AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=w.parent_id)
-  AND NOT EXISTS (
-    SELECT 1 FROM eligible_links known
-    WHERE known.parent_id=w.parent_id AND known.kind!='synthetic'
-      AND (COALESCE(known.linkedin_url, '')!=''
-           OR COALESCE(known.machine_proposed_url, '')!=''
-           OR COALESCE(known.replacement_url, '')!='')
-  )
-  -- An uncorrelated set: research has no parent_id index, so a per-parent
-  -- NOT EXISTS scans the table once for every worth-Yes parent.
-  AND w.parent_id NOT IN (
-    SELECT done.parent_id FROM research done
-    WHERE done.status IN ('complete', 'no_match')
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM eligible_links decided WHERE decided.parent_id=w.parent_id
-      AND decided.decision_approved IN ('yes', 'no')
-  )
+"""
+        + _ENRICHMENT_QUEUE_FROM
+        + """
 ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
 """,
     )
@@ -215,22 +264,39 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
     ]
 
 
+def enrichment_pending(db: Db) -> int:
+    return int(db.query(WORTH_CTE + "SELECT count(*) " + _ENRICHMENT_QUEUE_FROM)[0][0])
+
+
+def workflow_identity_counts(db: Db) -> tuple[LinkedInProgress, int, int]:
+    row = db.query(
+        LINKEDIN_CTE + ", judge_candidates AS (" + _JUDGE_CANDIDATE_SELECT + ")" + """
+SELECT (SELECT count(*) FROM identity_scope) AS total,
+       (SELECT count(*) FROM pending_parents) AS pending,
+       (""" + _REVIEW_QUESTIONS_PENDING_SELECT + """) AS questions,
+       (SELECT json_group_array(row_key) FROM judge_candidates) AS candidate_keys
+"""
+    )[0]
+    keys = _json(row["candidate_keys"], [])
+    judged = sum(stored.verdict.value in VERDICTS
+                 for stored in stored_judgments(db, row_keys=keys).values())
+    total, pending = int(row["total"]), int(row["pending"])
+    return LinkedInProgress(total, pending, total - pending), int(row["questions"]), len(keys) - judged
+
+
+def _judge_candidate_keys(db: Db) -> tuple[str, ...]:
+    """Real mapped LinkedIns without human or valid machine decisions."""
+    keys = {row["row_key"] for row in db.query(
+        LINKEDIN_CTE + _JUDGE_CANDIDATE_SELECT
+    )}
+    judged = {key for key, stored in stored_judgments(db, row_keys=tuple(keys)).items()
+              if stored.verdict.value in VERDICTS}
+    return tuple(sorted(keys - judged))
+
+
 def judge_candidates(db: Db) -> list[LinkSnapshotRow]:
     """Real mapped LinkedIns without human or valid machine decisions."""
-    judged = {key for key, stored in stored_judgments(db).items()
-              if stored.verdict.value in VERDICTS}
-    keys = {row["row_key"] for row in db.query(
-        LINKEDIN_CTE + """
-SELECT l.row_key FROM eligible_links l JOIN identity_scope s USING(parent_id)
-WHERE l.kind!='synthetic' AND l.decision_action IS NULL
-  AND (COALESCE(l.linkedin_url, '')!='' OR COALESCE(l.machine_proposed_url, '')!=''
-       OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
-"""
-    )}
-    return [
-        row for row in links(db)
-            if row.row_key in keys and row.row_key not in judged
-    ]
+    return list(links(db, row_keys=_judge_candidate_keys(db)))
 
 
 def research_candidate_urls(db: Db) -> dict[str, str]:
@@ -240,15 +306,23 @@ def research_candidate_urls(db: Db) -> dict[str, str]:
     )}
 
 
-def unassembled_research(db: Db) -> bool:
-    """Usable no-match research without its synthetic review card."""
-    for row in synthetic_fallback(db):
-        if db.query("SELECT 1 FROM synthetic_profiles WHERE public_identifier=?", (row.parent_id,)):
-            continue
-        result = ResearchResult.from_json(row.result_json)
-        if result and result.usable and (not result.linkedin_url or row.research_link_rejected):
-            return True
-    return False
+def unassembled_research(db: Db) -> int:
+    """Count usable, unambiguous no-match parents without synthetic review cards."""
+    rows = db.query(
+        WORTH_CTE + """
+SELECT r.parent_id, r.result_json,
+       (l.machine_action='retarget'
+        AND COALESCE(l.machine_judgment, '')!='confirmed') AS research_link_rejected
+""" + _SYNTHETIC_FALLBACK_FROM + """
+  AND r.parent_id NOT IN (SELECT public_identifier FROM synthetic_profiles)
+"""
+    )
+    counts: dict[str, int] = {}
+    for row in rows:
+        result = ResearchResult.from_json(row["result_json"])
+        if result and result.usable and (not result.linkedin_url or row["research_link_rejected"]):
+            counts[row["parent_id"]] = counts.get(row["parent_id"], 0) + 1
+    return sum(count == 1 for count in counts.values())
 
 
 def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
@@ -259,7 +333,7 @@ def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
     """
     rows = db.query(
         WORTH_CTE
-        + f""", research_people AS (
+        + """, research_people AS (
   SELECT r.handle, r.candidate_key, cp.person_id
   FROM research r JOIN candidate_people cp ON cp.row_key=r.candidate_key
   JOIN people pe ON pe.person_id=cp.person_id
@@ -288,19 +362,9 @@ SELECT r.parent_id, r.artifact_key, r.result_json, p.display_name,
         JOIN eligible_links sl ON sl.row_key=sp.candidate_key
         WHERE sp.public_identifier=r.parent_id
         LIMIT 1) AS existing_approved
-FROM research r
-JOIN parents p ON p.parent_id=r.parent_id
-JOIN worth w USING(parent_id)
-LEFT JOIN links l ON l.row_key=r.candidate_key
-LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
-WHERE {WORTH_GATE_ACCEPTED}
-  AND EXISTS (
-  SELECT 1 FROM people member
-  WHERE member.parent_id=r.parent_id
-    AND member.is_owner=0
-    AND member.is_ghost=0
-)
-  AND (l.row_key IS NULL OR scoped.row_key IS NOT NULL)
+"""
+        + _SYNTHETIC_FALLBACK_FROM
+        + """
 ORDER BY r.parent_id, r.handle, r.candidate_key
 """
     )
@@ -318,11 +382,11 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
     ]
 
 
-def linkedin_parents(db: Db) -> list[ParentViewRow]:
-    return _all_parents(db)
+def linkedin_parents(db: Db, *, parent_ids: Sequence[str] | None = None) -> list[ParentViewRow]:
+    return _all_parents(db, parent_ids=parent_ids)
 
 
-def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 100) -> list[ParentViewRow]:
+def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 10) -> list[ParentViewRow]:
     """One LIMIT/OFFSET page of one worth pile (yes/no) for the review tables."""
     return _decision_page(db, decision, offset, limit)
 
@@ -343,3 +407,15 @@ def linkedin_queue_parent(db: Db, parent_id: str) -> ParentViewRow:
 
 def linkedin_progress(db: Db) -> LinkedInProgress:
     return _linkedin_progress(db)
+
+
+def pending_parent_ids(db: Db) -> frozenset[str]:
+    """Parents with unresolved LinkedIn candidates eligible for human review."""
+    return frozenset(row["parent_id"] for row in db.query(
+        LINKEDIN_CTE + "SELECT parent_id FROM pending_parents"
+    ))
+
+
+def review_questions_pending(db: Db) -> int:
+    """Unresolved parents whose review questions have not been selected yet."""
+    return int(db.query(LINKEDIN_CTE + _REVIEW_QUESTIONS_PENDING_SELECT)[0][0])

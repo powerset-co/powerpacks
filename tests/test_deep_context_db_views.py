@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -20,14 +21,20 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
     WriterSource,
 )
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
+    RelationshipDecision,
+    finish_reviews,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
+    approved_identities,
     enrichment_queue,
     judge_candidates,
     linkedin_parents,
     linkedin_progress,
     linkedin_queue,
+    review_questions_pending,
     synthetic_fallback,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -495,21 +502,15 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
 
         queue = {parent.parent_id: parent for parent in linkedin_queue(self.db)}
-        self.assertEqual(
-            set(queue),
-            {
-                "review",
-                "synthetic",
-            },
-        )
+        self.assertEqual(set(queue), {"review"})
         self.assertEqual(
             [candidate.row_key for candidate in queue["review"].candidates],
             ["paid-reject"],
         )
-        self.assertTrue(queue["synthetic"].candidates[0].pending)
+        self.assertNotIn("synthetic", queue)
         self.assertEqual(
             asdict(linkedin_progress(self.db)),
-            {"total": 4, "pending": 2, "done": 2},
+            {"total": 3, "pending": 1, "done": 2},
         )
 
     def test_raw_sibling_does_not_hide_attached_link(self) -> None:
@@ -533,7 +534,7 @@ class DeepContextDbViewTests(unittest.TestCase):
                            judgment_fingerprint="failed-input", judgment_payload_json="{}")
         self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-empty"])
 
-    def test_human_kept_identity_rescues_only_machine_worth_no(self):
+    def test_human_synthetic_keep_stays_local_without_linkedin_progress(self):
         people = self.add_parent("keepish", "no")
         self.add_candidate(
             "keepish",
@@ -562,8 +563,10 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
         self.assertEqual(
             asdict(linkedin_progress(self.db)),
-            {"total": 1, "pending": 0, "done": 1},
+            {"total": 0, "pending": 0, "done": 0},
         )
+        decision = self.db.query("SELECT decision_action,decision_approved FROM links WHERE row_key='synthetic:kept'")[0]
+        self.assertEqual(tuple(decision), ("verify", "yes"))
 
     def test_settle_derives_every_sibling_and_replaces_the_prior_winner(self):
         people = self.add_parent("family", "yes", "maybe")
@@ -764,42 +767,44 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(missing.candidates[0].full_name, "")
         self.assertFalse(missing.candidates[0].has_profile)
 
-    def test_workflow_is_only_the_four_ordered_queue_predicates(self) -> None:
-        people = self.add_parent("state", "maybe")
-        self.add_candidate(
-            "state",
-            "jordan-state",
-            person_ids=people,
-            paid_profile=1,
-            linkedin_url="https://www.linkedin.com/in/jordan-state",
-            machine_judgment="wrong_person",
-            machine_confidence=0.9,
-            judgment_payload_json=json.dumps({"recommend_deep_research": True}),
-        )
-        self.assertEqual(workflow_state(self.db).next_action, "review_people")
-
-        self.db.decide_worth("state", "yes", decided_at="2026-08-05T00:30:00Z")
-        self.assertEqual(workflow_state(self.db).next_action, "enrich")
-        self.db.project_rows((ResearchRow("state", "state", "no_match", "jordan-state"),))
-        self.assertEqual(workflow_state(self.db).next_action, "enrich")
-
-        self.add_candidate(
-            "state",
-            "synthetic:state",
-            person_ids=people,
-            kind="synthetic",
-            machine_action="verify",
-            machine_approved="auto",
-        )
-        project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:state", "synthetic:state", "{}"))
-        with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE links SET judgment_payload_json=? WHERE row_key='jordan-state'",
-                (json.dumps({"verdict": "wrong_person", "confidence": 0.9}),),
-            )
-        self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
-        self.db.decide_identity("synthetic:state", "verify")
+    def test_synthetic_only_parent_stays_local_without_identity_review(self) -> None:
+        people = self.add_parent("synthetic-review", "yes")
+        key = "synthetic:review"
+        self.add_candidate("synthetic-review", key, person_ids=people, kind="synthetic")
+        project_synthetic_profile(self.db, SyntheticProfileRow(key, key, "{}"))
+        self.db.project_rows((ResearchRow("synthetic-review", "synthetic-review", "no_match", key),))
+        before = [tuple(row) for row in self.db.query("SELECT * FROM links")]
+        self.assertEqual(linkedin_queue(self.db), [])
+        self.assertEqual(asdict(linkedin_progress(self.db)), {"total": 0, "pending": 0, "done": 0})
+        self.assertEqual(review_questions_pending(self.db), 0)
         self.assertEqual(workflow_state(self.db).next_action, "realize")
+        self.assertEqual(approved_identities(self.db), [])
+        self.assertEqual(len(person_detail(self.db, "synthetic-review").candidates), 1)
+        self.assertEqual([tuple(row) for row in self.db.query("SELECT * FROM links")], before)
+        self.assertEqual(self.db.query("SELECT profile_json FROM synthetic_profiles")[0][0], "{}")
+
+    def test_mixed_parent_reviews_real_candidate_only(self) -> None:
+        people = self.add_parent("mixed-synthetic", "yes")
+        self.add_candidate("mixed-synthetic", "synthetic:local", person_ids=people, kind="synthetic")
+        project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:local", "synthetic:local", "{}"))
+        self.add_candidate("mixed-synthetic", "jordan-real", person_ids=people,
+                           linkedin_url="https://www.linkedin.com/in/jordan-real")
+        queue = linkedin_queue(self.db)
+        self.assertEqual([row.parent_id for row in queue], ["mixed-synthetic"])
+        self.assertEqual([row.row_key for row in queue[0].candidates], ["jordan-real"])
+
+    def test_historical_synthetic_retarget_remains_a_real_accepted_identity(self) -> None:
+        people = self.add_parent("retargeted-synthetic", "yes")
+        key = "synthetic:retargeted"
+        self.add_candidate("retargeted-synthetic", key, person_ids=people, kind="synthetic")
+        project_synthetic_profile(self.db, SyntheticProfileRow(key, key, "{}"))
+        url = "https://www.linkedin.com/in/jordan-real"
+        self.db.decide_identity(key, "retarget", replacement_url=url, replacement_public_identifier="jordan-real")
+        before = [tuple(row) for row in self.db.query("SELECT * FROM links")]
+        self.assertEqual(linkedin_queue(self.db), [])
+        self.assertEqual(asdict(linkedin_progress(self.db)), {"total": 1, "pending": 0, "done": 1})
+        self.assertEqual([row.linkedin_url for row in approved_identities(self.db)], [url])
+        self.assertEqual([tuple(row) for row in self.db.query("SELECT * FROM links")], before)
 
     def test_collected_parent_without_facts_queues_synthesize(self) -> None:
         self.add_factsless_parent("linkedin-only")
@@ -832,6 +837,93 @@ class DeepContextDbViewTests(unittest.TestCase):
         state = workflow_state(self.db)
         self.assertEqual(state.next_action, "review_people")
         self.assertEqual(state.progress.synthesize_pending, 0)
+
+    def test_workflow_reuses_selection_for_worth_counts(self):
+        self.add_parent("yes", "yes")
+        self.add_parent("no", "no")
+        self.add_parent("maybe", "maybe")
+        people = self.add_parent("synthetic", "maybe")
+        self.add_candidate("synthetic", "synthetic-link", person_ids=people, kind="synthetic")
+        expected = worth_counts(self.db)
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            state = workflow_state(self.db)
+        self.assertEqual((state.progress.worth_total, state.progress.worth_pending,
+                          state.progress.worth_yes, state.progress.worth_no),
+                         (expected.total, expected.pending, expected.yes, expected.no))
+        self.assertEqual((state.selection.maybe, state.progress.worth_pending), (2, 1))
+        statements = [call.args[0] for call in reads.call_args_list]
+        self.assertFalse(any("sum(w.effective_worth='maybe'" in sql for sql in statements))
+        self.assertTrue(any("AS lookup_ready" in sql and "AS rejected" in sql for sql in statements))
+
+    def test_workflow_counts_materialize_identity_scope_once(self):
+        self.add_parent("fixture", "yes")
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            workflow_state(self.db)
+        sql = next(call.args[0] for call in reads.call_args_list if "AS candidate_keys" in call.args[0])
+        plan = self.db.query("EXPLAIN QUERY PLAN " + sql)
+        self.assertEqual(sum(row["detail"] == "MATERIALIZE identity_scope" for row in plan), 1)
+
+    def test_workflow_counts_do_not_load_candidate_or_contact_snapshots(self):
+        people = self.add_parent("fixture", "yes")
+        self.add_candidate("fixture", "fixture-link", person_ids=people,
+                           linkedin_url="https://linkedin.com/in/jordan-fixture", candidate_origin=1)
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            self.assertGreater(workflow_state(self.db).progress.enrichment_pending, 0)
+        statements = [call.args[0] for call in reads.call_args_list]
+        self.assertFalse(any(sql.startswith("SELECT * FROM links") for sql in statements))
+        self.assertFalse(any("AS emails_json" in sql for sql in statements))
+        self.assertFalse(any("SELECT * FROM worth" in sql for sql in statements))
+        self.assertEqual(sum("candidate_policy AS" in sql for sql in statements), 1)
+
+    def test_enrichment_queue_excludes_only_terminal_research_parents(self):
+        for status in ("pending", "running", "complete", "no_match", "failed"):
+            self.add_parent(status, "yes")
+            self.db.project_rows((ResearchRow(f"research:{status}", status, status),))
+        self.add_parent("no-research", "yes")
+        self.assertEqual({row.parent_id for row in enrichment_queue(self.db)},
+                         {"pending", "running", "failed", "no-research"})
+
+    def test_enrichment_queue_scopes_identifiers_and_scans_research_once(self):
+        self.add_parent("fixture", "yes")
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            enrichment_queue(self.db)
+        sql = reads.call_args_list[0].args[0]
+        plan = self.db.query("EXPLAIN QUERY PLAN " + sql)
+        details = [row["detail"] for row in plan]
+        self.assertFalse(any("identifiers_by_value (kind=?)" in detail for detail in details))
+        research_scans = [row for row in plan if row["detail"] == "SCAN done"]
+        self.assertEqual(len(research_scans), 1)
+        parents = {row["id"]: row["detail"] for row in plan}
+        self.assertIn("LIST SUBQUERY", parents[research_scans[0]["parent"]])
+
+    def test_decision_page_does_not_hydrate_profiles_or_read_dossiers(self):
+        from packs.ingestion.primitives.deep_context.db import _view_rows
+        people = self.add_parent("alpha", "yes")
+        self.add_candidate("alpha", "alpha-profile", person_ids=people, paid_profile=1,
+            linkedin_url="https://www.linkedin.com/in/alpha-profile")
+        with (
+            mock.patch.object(_view_rows, "_hydrate_parents", side_effect=AssertionError("collapsed page hydrated profiles")),
+            mock.patch.object(self.db, "query", wraps=self.db.query) as reads,
+        ):
+            rows = decision_parents(self.db, "yes")
+        self.assertEqual(len(reads.call_args_list), 1)
+        self.assertNotIn("FROM artifacts", reads.call_args.args[0])
+        self.assertEqual((rows[0].candidates, rows[0].dossier_body, rows[0].dossier_path), ((), "", ""))
+
+    def test_decision_page_defaults_to_ten_and_preserves_labels_and_order(self):
+        for number in range(12):
+            self.add_parent(f"contact-{number:02}", "yes")
+            with self.db.transaction() as conn:
+                conn.execute("UPDATE facts SET facts_json=? WHERE parent_id=?",
+                    (json.dumps({"labels": {"Product": number / 12}}), f"contact-{number:02}"))
+        first = decision_parents(self.db, "yes")
+        second = decision_parents(self.db, "yes", offset=10)
+        self.assertEqual(len(first), 10)
+        self.assertEqual([row.parent_id for row in first + second],
+            [f"contact-{number:02}" for number in range(12)])
+        self.assertEqual(first[3].labels, (("Product", 0.25),))
+        self.assertEqual(worth_counts(self.db).yes, 12)
+
 
 if __name__ == "__main__":
     unittest.main()

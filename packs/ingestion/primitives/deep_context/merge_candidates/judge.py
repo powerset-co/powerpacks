@@ -8,6 +8,7 @@ yields no verdict, so the pair is judged again on the next run; the failure is
 counted and reported on stderr. Transient errors are retried inside the client.
 
 Changelog:
+- 2026-10-01: shared email handles are absent from the shared identifier note.
 - 2026-09-25: requests are built and judged MERGE_JUDGE_CHUNK pairs at a time.
 - 2026-09-25: JEV replaces the OpenAI pair judge; a pair merges at
   p(yes) >= 0.5. The SHARED IDENTIFIERS note also names an email handle that
@@ -26,7 +27,6 @@ from pathlib import Path
 import httpx
 
 from packs.ingestion.primitives.common.contact_fields import format_phone_digits
-from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import email_localparts
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergeDecision,
     MergeJudgeResult,
@@ -50,7 +50,7 @@ JUDGE_LLM = "llm"
 # Pairs whose requests exist at once: a 21k-pair survey builds one chunk of
 # rendered evidence at a time, not every request up front.
 MERGE_JUDGE_CHUNK = 500
-MERGE_REQUEST_VERSION = "deep-context-merge-judge-v1-20260925"
+MERGE_REQUEST_VERSION = "deep-context-merge-judge-v2-20261001"
 MERGE_QUESTION_VERSION = "deep-context-merge-questions-v1-20260925"
 SAME_PERSON_CUTOFF = 0.5
 TONE_CUTOFF = 0.5
@@ -78,18 +78,12 @@ QUESTIONS: dict[str, dict] = {
 }
 
 
-def _domains(person: MergePerson, handle: str) -> str:
-    return ", ".join(sorted(
-        email.split("@", 1)[1] for email in person.all_emails if email.split("@", 1)[0] == handle
-    ))
-
-
 def shared_identifier_note(first: MergePerson, second: MergePerson) -> str:
     def phone_provenance(person: MergePerson, digits: str) -> str:
-        return "contact record" if digits in set(person.phone_digits) else "owned message evidence"
+        return "contact record" if digits in set(person.phone_digits) else "attributed by message extraction"
 
     def email_provenance(person: MergePerson, email: str) -> str:
-        return "contact record" if email in set(person.emails) else "owned message evidence"
+        return "contact record" if email in set(person.emails) else "attributed by message extraction"
 
     emails = sorted(first.all_emails & second.all_emails)
     lines = [f"- phone {format_phone_digits(digits)} is in BOTH records "
@@ -98,10 +92,6 @@ def shared_identifier_note(first: MergePerson, second: MergePerson) -> str:
     lines += [f"- email {email} is in BOTH records "
               f"(A: {email_provenance(first, email)}; B: {email_provenance(second, email)})"
               for email in emails]
-    handles = email_localparts(first.all_emails) & email_localparts(second.all_emails)
-    lines += [f"- email handle {handle} is identical on BOTH records; only the domains differ "
-              f"(A: {_domains(first, handle)}; B: {_domains(second, handle)})"
-              for handle in sorted(handles - email_localparts(emails))]
     if not lines:
         return ""
     return ("SHARED IDENTIFIERS (computed by code from normalized values — literally identical "

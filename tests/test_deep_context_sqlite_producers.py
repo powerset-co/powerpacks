@@ -86,29 +86,21 @@ class SqliteProducerTests(unittest.TestCase):
     def test_machine_settlement_never_overwrites_a_human_decision(self) -> None:
         self.db.decide_identity("alice", "verify", source=ReviewSource.REVIEW.value)
 
+        before = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
         self.assertEqual(upsert_retargets(self.db, [retarget_proposal()]), 0)
 
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
+        self.assertEqual(row, before)
         self.assertEqual(row["decision_action"], "verify")
         self.assertIsNone(row["machine_proposed_url"])
 
     def test_machine_settlement_reads_identity_tables_once_per_batch(self) -> None:
         proposal = retarget_proposal()
-        with (
-            mock.patch.object(
-                identity_settlement,
-                "review_rows",
-                wraps=identity_settlement.review_rows,
-            ) as reviews,
-            mock.patch.object(
-                identity_settlement,
-                "links",
-                wraps=identity_settlement.links,
-            ) as links,
-        ):
+        with mock.patch.object(
+            identity_settlement, "links", wraps=identity_settlement.links,
+        ) as links:
             upsert_retargets(self.db, [proposal, replace(proposal)])
-        reviews.assert_called_once_with(self.db)
-        links.assert_called_once()
+        links.assert_called_once_with(self.db, row_keys=("alice", "alice"))
 
     def test_retarget_and_downstream_baton_are_sqlite_derived(self) -> None:
         upsert_retargets(

@@ -38,6 +38,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_row
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
@@ -73,6 +74,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     markdown_to_html,
     page_html,
     render_decision_table,
+    render_decision_details,
     render_decision_tabs,
     render_enrichment,
     render_linkedin_card,
@@ -170,7 +172,7 @@ def make_handler(
         on_finish=wake_agent,
     )
     api = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
-    if api.snapshot().progress.total == 0:
+    if not parents(db, limit=1):
         raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
     retargets_enabled = bool(run_jobs or guided_retargets)
     # The React app (People and Searches: `review people`, `review searches`), their JSON
@@ -212,8 +214,7 @@ def make_handler(
             raise StoreError("stale or mismatched person card")
         return row_key, parent, candidate
 
-    def worth_body(params: dict[str, list[str]]) -> str | None:
-        queue = worth_queue(db)
+    def worth_body(params: dict[str, list[str]], queue: list[WorthRow]) -> str | None:
         pick = _value(params, "pick").strip().lower()
         excluded = _excluded(params)
         if pick:
@@ -297,8 +298,9 @@ def make_handler(
             tab = tab if tab in {"review", "yes", "no"} else "review"
             tabs = render_decision_tabs(progress, tab, preview=preview)
             if tab == "review":
-                body = worth_body(params) or ""
-                pending = worth_pending_entries(worth_queue(db))
+                queue = worth_queue(db)
+                body = worth_body(params, queue) or ""
+                pending = worth_pending_entries(queue)
                 search = worth_search_html("review", pending) if pending else ""
             else:
                 # One LIMIT/OFFSET page, not the whole pile — the table grows
@@ -468,6 +470,11 @@ def make_handler(
                     return self.send_bytes(b"offset must be an integer", "text/plain", 400)
                 rows = decision_rows_html(decision_parents(db, view, offset=offset), view)
                 return self.send_bytes(rows.encode())
+            if parsed.path == "/api/worth-details":
+                parent = person_detail(db, _value(params, "slug"))
+                if parent is None:
+                    return self.send_bytes(b"gone", "text/plain", 404)
+                return self.send_bytes(render_decision_details(parent).encode())
             if parsed.path == "/api/dossier":
                 parent = person_detail(db, _value(params, "slug"))
                 # Row-detail requests pass skip=1: the expanded decision row
@@ -480,7 +487,7 @@ def make_handler(
                 )
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/worth-card":
-                body = worth_body(params)
+                body = worth_body(params, worth_queue(db))
                 if body is None:
                     return self.send_bytes(b"gone", "text/plain; charset=utf-8", 404)
                 return self.send_bytes(body.encode())

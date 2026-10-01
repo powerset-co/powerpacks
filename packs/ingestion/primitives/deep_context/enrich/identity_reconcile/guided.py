@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.common import (
     DEEP_RESEARCH_DIR,
@@ -36,10 +36,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research import dri
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchRunParams,
 )
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
-    DossierEvidence,
-    owner_background,
-)
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, owner_background
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     GuidanceOutcome,
@@ -68,7 +65,7 @@ class GuidedResearch:
     db: Db
     research_dir: Path = DEEP_RESEARCH_DIR
     profile_cache_dir: Path = PROFILE_CACHE_DIR
-    model: str = DEFAULT_MODEL
+    model: str = DEFAULT_IDENTITY_MODEL
     reasoning_effort: str = "medium"
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
 
@@ -243,8 +240,8 @@ class GuidedResearch:
         # gets searched, not whether the result is accepted; see
         # apply_provider_result for the judge gate that still applies.
         return build_queue_row(
+            DossierEvidence.from_db(self.db, row.person_ids),
             row,
-            evidence=DossierEvidence.from_db(self.db, row.person_ids),
             owner_context=owner_background(self.db),
             guidance=request.guidance,
         )

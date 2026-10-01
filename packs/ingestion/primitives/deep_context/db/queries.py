@@ -123,12 +123,15 @@ def owner_path(db: Db) -> str | None:
     return str(rows[0]["path"]) if rows else None
 
 
-def parents(db: Db, *, parent_id: str | None = None) -> tuple[ParentSnapshotRow, ...]:
+def parents(db: Db, *, parent_id: str | None = None, limit: int | None = None) -> tuple[ParentSnapshotRow, ...]:
     where = " WHERE parent_id=?" if parent_id is not None else ""
     params = (parent_id,) if parent_id is not None else ()
+    page = " LIMIT ?" if limit is not None else ""
+    if limit is not None:
+        params += (limit,)
     return typed_rows(
         db,
-        f"SELECT * FROM parents{where} ORDER BY parent_id",
+        f"SELECT * FROM parents{where} ORDER BY parent_id{page}",
         ParentSnapshotRow,
         params,
     )
@@ -213,6 +216,7 @@ def artifacts(
     person_id: str | None = None,
     candidate_key: str | None = None,
     candidate_keys: Sequence[str] | None = None,
+    parent_ids: Sequence[str] | None = None,
     status: str | None = None,
     parent_owned: bool | None = None,
 ) -> tuple[ArtifactRow, ...]:
@@ -234,6 +238,9 @@ def artifacts(
             return ()
         clauses.append(f"candidate_key IN {ID_SET}")
         params.append(id_set(selected))
+    if parent_ids is not None:
+        clauses.append(f"parent_id IN {ID_SET}")
+        params.append(id_set(parent_ids))
     if parent_owned is not None:
         clauses.append("person_id IS NULL" if parent_owned else "person_id IS NOT NULL")
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""

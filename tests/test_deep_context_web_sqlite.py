@@ -164,6 +164,17 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             patcher.start()
             cls.addClassCleanup(patcher.stop)
 
+    def finish_questions(self):
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import RelationshipDecision, finish_reviews
+        from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids
+        from packs.ingestion.primitives.deep_context.db.identity_queries import links
+        finish_reviews(self.db, tuple(RelationshipDecision.from_payload(parent, f"question:{parent}",
+            {"candidates": [{"url": url, "verdict": "review", "reason": "Owner can identify colleague", "confidence": .5}
+                for url in sorted({row.machine_proposed_url or row.linkedin_url for row in links(self.db, parent_id=parent)
+                    if not row.decision_action and row.kind != "synthetic"} - {None, ""})]})
+            for parent in pending_parent_ids(self.db)))
+        return {"status": "completed"}
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -405,6 +416,27 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual((status, content_type), (200, "image/png"))
         self.assertTrue(body.startswith(b"\x89PNG"))
 
+    def test_collapsed_worth_row_loads_profile_only_when_expanded(self) -> None:
+        status, _, body = self.request("GET", "/?stage=worth&view=yes&preview=1")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Jordan Bravo", body)
+        self.assertNotIn(b"Synthetic collaborator", body)
+        self.assertNotIn(b"/api/avatar?", body)
+        status, _, body = self.request("GET", "/api/worth-details?slug=jordan-bravo")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Synthetic collaborator", body)
+        self.assertIn(b"https://www.linkedin.com/in/jordan-bravo", body)
+
+    def test_avatar_uses_profile_picture_only_when_present(self) -> None:
+        parent = person_detail(self.db, "jordan-bravo")
+        self.assertIsNotNone(parent)
+        candidate = replace(parent.candidates[0], profile_pic_url="")
+        card = review_server.render_worth_card(replace(parent, candidates=(candidate,)))
+        self.assertNotIn("<img", card)
+        candidate = replace(candidate, profile_pic_url="https://example.com/photo.png")
+        card = review_server.render_worth_card(replace(parent, candidates=(candidate,)))
+        self.assertIn("src='https://example.com/photo.png'", card)
+
     def test_worth_and_identity_clicks_commit_domain_transactions(self) -> None:
         self.assertEqual(
             [row.key for row in worth_queue(self.db)],
@@ -445,6 +477,45 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(tuple(row), ("verify", "yes"))
         self.assertEqual(linkedin_queue(self.db), [])
 
+    def test_enrichment_estimate_includes_judgments_created_by_new_research(self) -> None:
+        from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
+        from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, review_questions_pending
+        self.db.decide_worth("worth-parent", "yes")
+        plan = select_research(self.db, processor="core2x")
+        self.assertEqual(len(plan.pending), 1)
+        existing = len(judge_candidates(self.db)) + review_questions_pending(self.db)
+        from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
+        required = plan.estimated_usd + 2 * (existing + 1) * 2000 * INPUT_PRICE_PER_MILLION / 1_000_000 + estimate_cost_usd(2000 * (existing + 1),
+            1500 * (existing + 1), "gpt-6.1-sol")
+        self.assertGreaterEqual(self.adapter().enrichment().estimated_usd, required)
+
+    def test_enrichment_preview_does_not_repeat_workflow_identity_queries(self) -> None:
+        adapter = self.adapter()
+        state = adapter.snapshot()
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            adapter.enrichment(state)
+        statements = [call.args[0] for call in reads.call_args_list]
+        self.assertFalse(any("candidate_policy AS" in sql for sql in statements))
+        self.assertFalse(any("research_link_rejected" in sql for sql in statements))
+
+    def test_worth_page_reads_pending_queue_once(self) -> None:
+        with mock.patch.object(review_server, "worth_queue", wraps=worth_queue) as reads:
+            status, _, _ = self.request("GET", "/?stage=worth")
+        self.assertEqual(status, 200)
+        self.assertEqual(reads.call_count, 1)
+
+    def test_unassembled_saved_research_requires_paid_question_estimate(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        self.db.decide_identity("jordan-bravo", "verify")
+        self.db.project_rows((ResearchRow(
+            "casey-delta", "worth-parent", ResearchStatus.NO_MATCH.value,
+            candidate_key="candidate:email:casey@example.com",
+            result_json=guided_result("").output.model_dump_json(exclude_none=True),
+        ),))
+        preview = self.adapter().enrichment()
+        self.assertEqual(preview.would_submit, 0)
+        self.assertGreater(preview.estimated_usd, 0)
+        self.assertTrue(preview.approvable)
     def _seed_linkedin_queue(self) -> None:
         for slug, name in (("riley-stone", "Riley Stone"), ("avery-quinn", "Avery Quinn")):
             self._seed_parent(
@@ -522,13 +593,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         preview = adapter.enrichment(state)
         self.assertEqual(preview.would_submit, 0)
         self.assertEqual(preview.reused_completed, 0)
-        self.assertEqual(preview.estimated_usd, 0.0)
+        self.assertGreater(preview.estimated_usd, 0.0)
         # A fully-reused plan needs no spend, but its cached research still
         # needs the free local chain (synthetic assembly, profile prefetch).
         # The stage reads complete and the button is a $0 continue, not an
         # "Approve $0.00" prompt.
         self.assertEqual((preview.status, preview.state), ("not_started", "profile_prep_pending"))
-        self.assertFalse(preview.approvable)
+        self.assertTrue(preview.approvable)
 
     def test_workflow_http_snapshot_is_derived_once(self) -> None:
         with mock.patch.object(
@@ -539,6 +610,28 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             payload = self.adapter().workflow_status()
         self.assertEqual(payload["next_action"], "review_people")
         self.assertEqual(workflow_state.call_count, 1)
+
+    def test_review_startup_binds_without_calculating_workflow_queues(self) -> None:
+        server = mock.Mock(server_address=("127.0.0.1", 8765))
+        server.serve_forever.side_effect = KeyboardInterrupt
+        with (
+            mock.patch.object(review_cli, "CANONICAL_DB", self.db.db_path),
+            mock.patch.object(review_cli, "load_env"),
+            mock.patch.object(review_cli.urllib.request, "urlopen", side_effect=OSError),
+            mock.patch.object(review_cli, "open_existing_db", return_value=self.db),
+            mock.patch.object(review_server, "GuidedRetargetWorker"),
+            mock.patch.object(review_cli, "ThreadingHTTPServer", return_value=server) as bind,
+            mock.patch.object(review_cli, "_announce"),
+            mock.patch.object(self.db, "query", wraps=self.db.query) as query,
+        ):
+            review_cli.main(["serve"])
+        bind.assert_called_once()
+        self.assertEqual(query.call_count, 1, "Startup must check existence, not calculate review or research queues")
+
+    def test_empty_review_store_still_refuses_startup(self) -> None:
+        empty = Db(self.root / "empty.sqlite")
+        with self.assertRaisesRegex(ValueError, "database is empty"):
+            review_server.make_handler(db=empty)
 
     def test_enrichment_get_never_launches_job(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
@@ -561,6 +654,51 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         start.assert_not_called()
 
+    def test_identity_selection_prevents_pending_synthetic_for_accepted_real_profile(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        self.cache_enrichment_result(self.adapter())
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE research SET result_json=json_set(result_json, '$.content.location_city', 'Oakland') "
+                "WHERE parent_id='worth-parent'",
+            )
+        enrichment_pipeline.AssembleSyntheticProfile(db=self.db).run()
+        self.assertTrue(self.db.query(
+            "SELECT 1 FROM links WHERE parent_id='worth-parent' AND kind='synthetic'",
+        ))
+
+        def accept_real_profile():
+            self.db.project_rows((IdentityMachineProjection(
+                "candidate:email:casey@example.com",
+                machine_action="retarget", machine_approved="yes",
+                machine_judgment="confirmed", machine_confidence=.95,
+                machine_proposed_url="https://www.linkedin.com/in/casey-delta",
+                machine_proposed_public_identifier="casey-delta",
+                source=WriterSource.DEEP_RESEARCH.value,
+            ),))
+            return {"status": "completed"}
+
+        pipeline = enrichment_pipeline.EnrichmentPipeline(
+            self.db, on_change=lambda: None, on_finish=lambda: None,
+        )
+        with (
+            mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as research,
+            mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as profiles,
+            mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as selection,
+        ):
+            research.return_value.run.return_value = ResearchOutcome(
+                ReceiptStatus.REUSED, ReceiptCounts(1, 1, 0, 0), None, 0.0, 0,
+            )
+            profiles.return_value.run.return_value.status = "completed"
+            judge.return_value.judge_errors = 0
+            selection.return_value.run.side_effect = accept_real_profile
+            pipeline._run(0.0, lambda _: None)
+        self.assertEqual(self.db.query(
+            "SELECT row_key FROM links WHERE parent_id='worth-parent' AND kind='synthetic'",
+        ), [])
+        self.assertNotIn("worth-parent", {row.parent_id for row in linkedin_queue_order(self.db)})
+
     def test_cached_enrichment_launches_only_after_explicit_approval(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         with self.db.transaction() as conn:
@@ -582,6 +720,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as reconcile,
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as prefetch,
             mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as mapped_judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
         ):
             reconcile.return_value.run.return_value = ResearchOutcome(
                 ReceiptStatus.REUSED,
@@ -592,6 +731,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
+            relationships.return_value.run.side_effect = self.finish_questions
             mapped_judge.return_value.judge_errors = 0
             judge_phases = []
 
@@ -604,15 +744,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             status, _, raw = self.request("GET", "/?stage=enrich")
             self.assertEqual(status, 200)
             page = raw.decode()
-            # Cached research is not a $0.00 spend approval: the button is a
-            self.assertIn("Prepare profiles and judge LinkedIns", page)
-            self.assertNotIn("Approve $", page)
+            # Cached research can still need a paid Sol identity decision.
+            self.assertIn("Approve $", page)
             self.assertEqual(reconcile.call_count, 0)
             status, payload = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(status, 200)
             # The POST response is built from a fresh read after the pipeline
             # thread is spawned, so it carries the then-current stage — not
-            # the one-shot approval block. The accepted $0 continue is proven
+            # the one-shot approval block. The accepted continuation is proven
             # by the receipt the job writes and the reconcile call below.
             self.assertIs(payload["ok"], True)
             self.assertIsInstance(payload["enrichment"], dict)
@@ -628,7 +767,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             page = raw.decode()
             self.assertNotIn("Prepare profiles and judge LinkedIns", page)
         self.assertEqual(reconcile.call_count, 1)
-        self.assertEqual(reconcile.call_args.kwargs["budget"], 0.0)
+        self.assertGreaterEqual(reconcile.call_args.kwargs["budget"], 0.0)
         self.assertIs(reconcile.call_args.kwargs["approve"], True)
 
     def test_failed_or_blocked_research_stops_the_enrichment_chain(self) -> None:
@@ -686,10 +825,12 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             mock.patch.object(enrichment_pipeline, "AssembleSyntheticProfile"),
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as prefetch,
             mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as mapped_judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
         ):
             reconcile.return_value.run.side_effect = reconcile_run
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
+            relationships.return_value.run.side_effect = self.finish_questions
             mapped_judge.return_value.judge_errors = 0
             first_status, first = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(first_status, 200)
@@ -734,10 +875,12 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             mock.patch.object(enrichment_pipeline, "AssembleSyntheticProfile"),
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as prefetch,
             mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as mapped_judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
         ):
             reconcile.return_value.run.side_effect = reconcile_run
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
+            relationships.return_value.run.side_effect = self.finish_questions
             mapped_judge.return_value.judge_errors = 0
 
             status, _ = self.json_request("POST", "/approve-enrichment", {})
@@ -1488,6 +1631,26 @@ class SynthesisPendingWebTests(unittest.TestCase):
                 self.assertIn("bin/deep-context dry", page)
                 for claim in ("Decisions ready", "Contacts enriched", "Review complete", "All set", "✓"):
                     self.assertNotIn(claim, page)
+
+
+class DeepContextLinkedInPageTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Db(Path(self.tmp.name) / "deep-context.sqlite")
+        for number, name in enumerate(("Casey Delta", "Jordan Bravo", "Morgan Echo")):
+            seed_identity(self.db, parent_id=f"parent-{number}", person_id=f"person-{number}",
+                row_key=f"candidate-{number}", name=name, machine_worth="yes",
+                display_slug=f"contact-{number}", linkedin_url=f"https://www.linkedin.com/in/contact-{number}",
+                link_updates={"paid_profile": 1})
+
+    def test_fact_ranking_carries_keys_and_keeps_selected_fact_payload(self):
+        from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
+        ranked = self.db.query(WORTH_CTE + "SELECT * FROM ranked_facts")
+        self.assertEqual(set(ranked[0].keys()), {"subject_key", "parent_id", "worth_rank"})
+        worth = self.db.query(WORTH_CTE + "SELECT parent_id, machine_facts_json FROM worth ORDER BY parent_id")
+        facts = self.db.query("SELECT parent_id, facts_json FROM facts ORDER BY parent_id")
+        self.assertEqual([tuple(row) for row in worth], [tuple(row) for row in facts])
 
 
 if __name__ == "__main__":

@@ -534,6 +534,7 @@ class IdentityInvariantTest(unittest.TestCase):
                     "family",
                     "candidate-a",
                     "pub",
+                    linkedin_url="https://www.linkedin.com/in/jordan-bravo",
                     machine_action="verify",
                     machine_approved="auto",
                     source=WriterSource.RECONCILE.value,
@@ -544,6 +545,7 @@ class IdentityInvariantTest(unittest.TestCase):
                     "candidate-b",
                     "pub",
                     machine_action="retarget",
+                    machine_proposed_url="https://www.linkedin.com/in/casey-bravo",
                     machine_approved="auto",
                     source=WriterSource.RECONCILE.value,
                 ),
@@ -556,6 +558,14 @@ class IdentityInvariantTest(unittest.TestCase):
         )
 
         self.assertEqual([row["machine_approved"] for row in approvals], [None, None])
+        self.assert_invariants(db)
+
+    def test_duplicate_url_is_one_approved_identity(self) -> None:
+        db = _seed_two_parent_db(self.base / "same-url.sqlite")
+        _merge(db, "parent-a", "parent-b")
+        with db.transaction() as conn:
+            conn.execute("UPDATE links SET linkedin_url='https://www.linkedin.com/in/jordan-bravo', "
+                         "machine_action='verify', machine_approved='auto'")
         self.assert_invariants(db)
 
     def test_identity_policy_directly_clears_automatic_winner_conflicts(self) -> None:

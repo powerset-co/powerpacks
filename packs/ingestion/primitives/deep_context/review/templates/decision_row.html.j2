@@ -18,16 +18,10 @@
     </div>
   </summary>
   <div class='decision-row-detail'>
-    <div class='decision-expanded-profile'><h2>{{ name }}</h2>{{ label_badges(parent) }}</div>
     <dl class='row-facts'>
-      {%- set contacts = candidate_contacts(primary_candidate(parent)) if primary_candidate(parent) else '' %}
-      {%- if contacts %}
-      <div><dt>Contact</dt><dd>{{ contacts }}</dd></div>
-      {%- endif %}
       <div><dt>Why {{ 'yes' if target == 'no' else 'no' }}</dt><dd>{{ reason }}</dd></div>
     </dl>
-    <h4 class='dossier-heading'>Who they are</h4>
-    <dl class='row-facts dossier-text' data-slug='{{ parent.slug }}' aria-busy='true'></dl>
+    <div class='dossier-text' aria-busy='true'></div>
     <button class='scroll-cue' type='button' data-scroll-cue aria-label='Scroll down' hidden>&#8964;</button>
   </div>
 </details>

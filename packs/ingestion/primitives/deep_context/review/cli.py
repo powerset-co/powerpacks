@@ -19,7 +19,6 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
-from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,7 +29,6 @@ from packs.ingestion.primitives.deep_context.shared.common import (
 )
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
-from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.search.primitives.deep_search.results_web import server as results_web
 from packs.search.primitives.deep_search.results_web.api import search_api
 from packs.ingestion.primitives.accounts.api import AccountsApi
@@ -145,7 +143,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             run_jobs=True,
             db=db,
         )
-        extra = {"progress": asdict(workflow_state(db).progress)}
+        extra = {}
     else:
         handler = searches_only_handler()
         extra = {"note": "no deep-context store yet; serving the searches alone"}

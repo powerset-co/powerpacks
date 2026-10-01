@@ -169,8 +169,8 @@ def slam_dunk_verdict(
 ) -> MergeDecision | None:
     if not first.name_key or first.name_key != second.name_key:
         return None
-    phones = sorted(first.all_phones & second.all_phones)
-    emails = sorted(first.all_emails & second.all_emails)
+    phones = sorted(set(first.phone_digits) & set(second.phone_digits))
+    emails = sorted(set(first.emails) & set(second.emails))
     if not phones and not emails:
         return None
     shared = ", ".join([format_phone_digits(digits) for digits in phones] + emails)
@@ -198,3 +198,22 @@ def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[
     for node in nodes:
         groups.setdefault(find(node), []).append(node)
     return [group for group in groups.values() if len(group) > 1]
+
+
+def accepted_edges(verdicts: list[tuple[str, str, bool, float]]) -> list[tuple[str, str]]:
+    """Join strongest pairs first without overriding a different-person verdict."""
+    groups = {node: {node} for left, right, _, _ in verdicts for node in (left, right)}
+    rejected = [(left, right) for left, right, same, _ in verdicts if not same]
+    accepted = []
+    for left, right, same, _ in sorted(
+        verdicts, key=lambda row: (-row[3], min(row[:2]), max(row[:2])),
+    ):
+        if not same:
+            continue
+        joined = groups[left] | groups[right]
+        if any(a in joined and b in joined for a, b in rejected):
+            continue
+        accepted.append(tuple(sorted((left, right))))
+        for node in joined:
+            groups[node] = joined
+    return accepted

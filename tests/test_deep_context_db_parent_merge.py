@@ -219,7 +219,7 @@ class IncrementalParentMergeTests(unittest.TestCase):
             self.db,
             "SELECT row_key, machine_approved FROM links WHERE row_key LIKE 'machine-%'",
         )
-        self.assertEqual({row["machine_approved"] for row in machine}, {None})
+        self.assertEqual({row["machine_approved"] for row in machine}, {"auto"})
 
     def test_merge_accepts_an_already_owned_transaction_boundary(self) -> None:
         transaction = self.db.transaction

@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
 from packs.ingestion.primitives.deep_context.shared.common import (
     DEEP_RESEARCH_DIR,
     PROFILE_CACHE_DIR,
@@ -54,7 +54,7 @@ class GuidedRetargetWorker:
         on_change: Callable[[], None] | None = None,
         research_dir: Path = DEEP_RESEARCH_DIR,
         profile_cache_dir: Path = PROFILE_CACHE_DIR,
-        model: str = DEFAULT_MODEL,
+        model: str = DEFAULT_IDENTITY_MODEL,
         reasoning_effort: str = "medium",
         confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
     ) -> None:

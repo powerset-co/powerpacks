@@ -356,7 +356,7 @@ class EnrichPeopleTests(unittest.TestCase):
 
     def test_failed_profile_is_cached_with_last_checked_at(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=(200, {"success": False, "message": "not found"}, "")):
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=(200, {"success": False, "message": "This profile can't be accessed. Not valid LinkedIn profile"}, "")):
                 result = rapidapi_client.RapidApiClient("key").get_profile("jane-example", "https://www.linkedin.com/in/jane-example", cache_dir=Path(tmp))
             cached = json.loads((Path(tmp) / "jane-example.json").read_text(encoding="utf-8"))
             self.assertIn("last_checked_at", cached)
@@ -590,8 +590,9 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(status, "miss")
             self.assertNotEqual(reason, "recent provider failure")
 
-    def test_provider_success_false_is_a_permanent_failure(self):
-        self.assertTrue(rapidapi_client.RapidApiClient.is_permanent_failure(200, {"success": False}))
+    def test_only_inaccessible_provider_failure_is_permanent(self):
+        self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(200, {"success": False}))
+        self.assertTrue(rapidapi_client.RapidApiClient.is_permanent_failure(200, {"success": False, "error": "This profile can't be accessed. Not valid LinkedIn profile"}))
         self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(200, {"success": True}))
         self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(429, {"success": False}))
         self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(0, {"success": False}))

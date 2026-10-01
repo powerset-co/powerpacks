@@ -22,7 +22,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     emit,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import synthetic_fallback
-from packs.ingestion.primitives.deep_context.db.identity_queries import synthetic_profiles
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, synthetic_profiles
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     CandidatePeopleProjection,
@@ -46,6 +46,7 @@ class SyntheticAssemblyCounts:
     preserved_user_rows: int
     skipped_with_linkedin: int
     skipped_unusable: int
+    skipped_ambiguous_parents: int
     pruned_stale_machine_rows: int
     total_rows: int
 
@@ -65,6 +66,7 @@ class SyntheticAssemblyResult:
             "preserved_user_rows": self.counts.preserved_user_rows,
             "skipped_with_linkedin": self.counts.skipped_with_linkedin,
             "skipped_unusable": self.counts.skipped_unusable,
+            "skipped_ambiguous_parents": self.counts.skipped_ambiguous_parents,
             "pruned_stale_machine_rows": self.counts.pruned_stale_machine_rows,
             "total_rows": self.counts.total_rows,
             "duration_seconds": self.duration_seconds,
@@ -83,6 +85,7 @@ class AssembleSyntheticProfile:
         preserved_user_rows = 0
         skipped_with_linkedin = 0
         skipped_unusable = 0
+        skipped_ambiguous_parents = 0
         groups: dict[str, list[tuple[ResearchResult, SyntheticFallbackRow]]] = {}
         for source in synthetic_fallback(self.db):
             result = ResearchResult.from_json(source.result_json)
@@ -97,10 +100,12 @@ class AssembleSyntheticProfile:
 
         active_keys = tuple(sorted(groups))
         pruned_stale_machine_rows = self.db.prune_synthetic_candidates(active_keys)
+        existing_keys = {row.row_key for row in links(self.db, parent_ids=active_keys)}
         rows: list[LinkRow | CandidatePeopleProjection | SyntheticProfileRow] = []
         for parent_id, items in sorted(groups.items()):
             if len(items) != 1:
-                raise ValueError(f"parent has multiple research profiles: {parent_id}")
+                skipped_ambiguous_parents += 1
+                continue
             result, source = items[0]
             if source.existing_approved.lower() in USER_DECIDED:
                 preserved_user_rows += 1
@@ -112,8 +117,8 @@ class AssembleSyntheticProfile:
                 if str(person_id).strip()
             }))
             updated_at = now_iso()
-            rows.extend((
-                LinkRow(
+            if parent_id not in existing_keys:
+                rows.append(LinkRow(
                     row_key=parent_id,
                     parent_id=parent_id,
                     public_identifier=parent_id,
@@ -121,7 +126,8 @@ class AssembleSyntheticProfile:
                     display_name=result.person.full_name or source.display_name or None,
                     source=WriterSource.DEEP_RESEARCH.value,
                     updated_at=updated_at,
-                ),
+                ))
+            rows.extend((
                 CandidatePeopleProjection(
                     parent_id,
                     tuple(
@@ -149,6 +155,7 @@ class AssembleSyntheticProfile:
                 preserved_user_rows=preserved_user_rows,
                 skipped_with_linkedin=skipped_with_linkedin,
                 skipped_unusable=skipped_unusable,
+                skipped_ambiguous_parents=skipped_ambiguous_parents,
                 pruned_stale_machine_rows=pruned_stale_machine_rows,
                 total_rows=len(synthetic_profiles(self.db)),
             ),

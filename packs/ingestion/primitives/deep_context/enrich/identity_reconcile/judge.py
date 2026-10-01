@@ -36,6 +36,7 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 SYSTEM_PROMPT = load_prompt("linkedin_reconcile_system")
 RECONCILE_SCHEMA: dict[str, Any] = json.loads(load_prompt("linkedin_reconcile_schema"))
+RESEARCH_PROFILE_SOURCE = "research"
 
 
 def prefer_cached_profile(
@@ -49,7 +50,11 @@ def prefer_cached_profile(
             reason=research_profile.reason,
             _present=cached_profile._present | {"reason"},
         )
-    return research_profile
+    return replace(
+        research_profile,
+        source=RESEARCH_PROFILE_SOURCE,
+        _present=research_profile._present | {"source"},
+    )
 
 
 def _bullets(items: tuple[str, ...] | list[str], empty: str) -> str:
@@ -96,7 +101,12 @@ def identity_judge_prompt(
     contact_ids = ", ".join(evidence.emails + evidence.phones)
     if contact_ids:
         fields.append(f"my address-book contact handles for them: {contact_ids}")
-        fields.append("(a work-email DOMAIN matching the profile's employer is strong identity proof)")
+        fields.append(
+            "(a work-email domain is strong evidence only when an independent source ties that "
+            "employer to the proposed person; copied contact facts are not corroboration)"
+            if profile.source == RESEARCH_PROFILE_SOURCE else
+            "(a work-email DOMAIN matching the profile's employer is strong identity proof)"
+        )
     if evidence.self_linkedin_url:
         same = (
             extract_public_identifier(evidence.self_linkedin_url).lower()
@@ -116,8 +126,14 @@ def identity_judge_prompt(
         + f"\n  me to them:\n{_bullets(evidence.from_me, '(none)')}"
         + f"\n  them to me:\n{_bullets(evidence.from_them, '(none)')}"
     )
+    if evidence.dossier:
+        contact += f"\n\nFULL DOSSIER FACTS (synthesized from messages):\n{evidence.dossier}"
+    profile_label = (
+        "RESEARCH-DERIVED CANDIDATE CLAIMS (not fetched LinkedIn profile evidence)"
+        if profile.source == RESEARCH_PROFILE_SOURCE else "LINKEDIN"
+    )
     linked = (
-        f"\n\nLINKEDIN: {profile.linkedin_url or '(none)'}"
+        f"\n\n{profile_label}: {profile.linkedin_url or '(none)'}"
         f"\n  name: {profile.full_name or '(unknown)'}"
         f"\n  headline: {profile.headline or '(none)'}"
         f"\n  location: {profile.location or '(unknown)'}"
@@ -128,8 +144,12 @@ def identity_judge_prompt(
     if origin == IdentityOrigin.RESEARCH:
         speculative = (
             "\n\nThis is a speculative web-research proposal. A shared name alone is not "
-            "corroboration; require employer, school, location, topic, domain, or equivalent evidence."
+            "corroboration; require employer, school, location, topic, domain, or equivalent evidence. "
+            "Missing information is not a contradiction. "
+            "Interview or referral context does not prove employment; evaluate the dates."
         )
+        if profile.reason:
+            speculative += f"\nCached research claims (not independently verified): {profile.reason}"
     return contact + linked + speculative + "\n\nIs this the same human?"
 
 

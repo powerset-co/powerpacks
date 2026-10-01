@@ -17,6 +17,7 @@ from packs.indexing.lib.openai_usage_tiers import (
 
 # Default model for company enrichment — matches prod combined_enrichment.py.
 DEFAULT_MODEL = "gpt-5.2"
+DEFAULT_IDENTITY_MODEL = "gpt-6-luna"
 # Role enrichment model — gpt-5.2 has structured output bugs with the
 # 180-item role_ids enum (picks random values like investment_banker for
 # Instructor). gpt-5.1 classifies correctly.
@@ -39,6 +40,7 @@ DEFAULT_CHECKPOINT_EVERY = int(_profile.get("paid_checkpoint_every", 512))
 
 # Known pricing per 1K tokens (USD).
 CHAT_MODEL_PRICES_PER_1K_USD: dict[str, dict[str, float]] = {
+    "gpt-6.1-sol": {"input": 0.00200, "output": 0.01000},
     "gpt-6-luna": {"input": 0.00010, "output": 0.00050},
     "gpt-5.6-luna": {"input": 0.00100, "output": 0.00600},
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},

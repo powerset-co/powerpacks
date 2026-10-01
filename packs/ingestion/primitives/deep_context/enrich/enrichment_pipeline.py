@@ -1,8 +1,8 @@
 """Run the approved enrichment stages once in the review-server process.
 
 The process-local flag prevents double submission while this server is alive.
-The fixed enrichment manifest is display-only progress; SQLite artifacts and
-the freshly selected research plan own eligibility, reuse, and resume.
+The fixed enrichment manifest holds progress and the Parallel provider receipt.
+SQLite artifacts and the freshly selected plan own eligibility and result reuse.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.coordinat
     ReconcileDeepResearch,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import judge_mapped_candidates
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
 from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
@@ -125,14 +125,16 @@ class EnrichmentPipeline:
                 f"{f': {profiles.note}' if profiles.note else ''}"
             )
         judged = judge_mapped_candidates(
-            self.db, model=DEFAULT_MODEL, effort="medium",
-            confirm_threshold=self.confirm_threshold,
+            self.db,
             heartbeat=lambda done, total: on_progress(EnrichmentProgress(
                 "judging_retargets", ReceiptCounts.create(total=total, completed=done), done, total,
             )),
         )
         if judged.judge_errors:
             raise RuntimeError(f"identity judge returned no verdict for {judged.judge_errors} candidate(s)")
+        reviews = ReviewRelationships(db=self.db, approve_spend=True).run()
+        if reviews["status"] != "completed":
+            raise RuntimeError(f"review questions stopped with status {reviews['status']}")
         AssembleSyntheticProfile(db=self.db).run()
 
     def start(self, total: int, budget: float, request_fingerprint: str) -> bool:

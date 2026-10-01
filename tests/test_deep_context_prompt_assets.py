@@ -13,7 +13,7 @@ PROMPTS = {
     "identity_merge_system": (
         "packs.ingestion.primitives.deep_context.merge_candidates.judge",
         "JUDGE_SYSTEM",
-        "554da2eedb13aa14aa5529a389881fb4639a90865603a49690de0027c05e0112",
+        "2161270f43453f61421df576a9c675cde291af619723607e94856d24d06a8fbe",
     ),
     "contact_research_instructions": (
         "packs.ingestion.primitives.deep_context.enrich.parallel_research.config",
@@ -23,7 +23,7 @@ PROMPTS = {
     "linkedin_reconcile_system": (
         "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge",
         "SYSTEM_PROMPT",
-        "c8fb85e39ebf22e18d1c63ad54fc71912f6473aac1a793747cc460a07e6d2903",
+        "37e9ed25e485f1a3c5b3165c576621e331215fa0c465d127e0f5e706edd88e06",
     ),
     "person_synthesis_system": (
         "packs.ingestion.primitives.deep_context.synthesis.prompting",

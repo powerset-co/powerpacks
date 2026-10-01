@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import json
+import sys
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import (
@@ -53,6 +54,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     sources as source_rows,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.merge_repair import repair_merged_parents
 from packs.ingestion.primitives.deep_context.db.queries import imported_people as stored_people_rows
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.imports.merge_people import merge_group
@@ -239,6 +241,10 @@ def _components(
 
 def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int:
     """Get or create imported people, incrementally joining prior families."""
+    repair = repair_merged_parents(db)
+    if repair.repaired or repair.unresolved:
+        print(f'[deep-context] repaired {len(repair.repaired)} merged parents; '
+              f'{len(repair.unresolved)} unresolved', file=sys.stderr)
     if not imported:
         return 0
     current = {row.id: row for row in stored_people_rows(db)}

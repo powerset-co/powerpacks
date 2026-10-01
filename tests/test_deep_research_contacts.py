@@ -267,7 +267,7 @@ class ProviderTests(unittest.TestCase):
                     {"input": {}, "metadata": {"handle": "jordan-bravo"}, "processor": "core2x"},
                     {"input": {}, "metadata": {"handle": "casey-delta"}, "processor": "core2x"},
                 ],
-                SimpleNamespace(batch_size=500, stream_timeout=60),
+                SimpleNamespace(batch_size=500, stream_timeout=60, output_dir=Path(tempfile.mkdtemp())),
                 lambda _: None,
                 lambda handle, output: received.append((handle, output)),
             )
@@ -315,6 +315,28 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(set(submitted["input"]), {"dossier"})
             self.assertEqual(submitted["metadata"], {"handle": "jordan-a"})
             self.assertNotIn("jordan-a", json.dumps(submitted["input"]))
+
+    def test_resume_progress_counts_only_current_requests(self) -> None:
+        class ResumeClient(StubParallelClient):
+            def execute(self, inputs, _params, on_status, on_result):
+                on_status(status(completed=56))
+                on_result(str(inputs[0]["metadata"]["handle"]), provider_output())
+                on_status(status(completed=56))
+                return ()
+
+        progress = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch.object(parallel_client, "ParallelClient", ResumeClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
+            ):
+                result = driver.run_research(ResearchRunParams(
+                    output_dir=root / "research", rows=(research_queue_row(),),
+                    db=seed_db(root), on_progress=progress.append,
+                ))
+        self.assertTrue(result.complete)
+        self.assertEqual([counts.completed for counts in progress], [0, 0, 1, 1])
 
     def test_each_streamed_success_is_durable_before_later_error(self) -> None:
         class PartialClient(StubParallelClient):

@@ -21,6 +21,9 @@ from unittest import mock
 
 from parallel.types import TaskGroupStatus, TaskRunJsonOutput
 
+from packs.ingestion.primitives.deep_context.db.identity_queries import stored_judgments
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import StoredJudgment
+
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection as profile_projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
@@ -110,6 +113,13 @@ def profile_db(root: Path) -> Db:
     return db
 
 
+def stub_mapped_identity_judge(answer):
+    def results(tasks, **kwargs):
+        return [IdentityJudgeResult(IdentityVerdict.from_payload(answer), IdentityUsage(), '', 'fixture-jev')
+                for task in tasks]
+    return mock.patch.object(judging.jev_judge, 'judge_batch', side_effect=results)
+
+
 class MappedCandidateJudgeTests(unittest.TestCase):
     def test_research_only_person_stays_reviewable_after_uncertain_verdict(self) -> None:
         from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
@@ -132,8 +142,8 @@ class MappedCandidateJudgeTests(unittest.TestCase):
             db.project_rows((projection.research_artifact_projection(
                 ResearchRunParams(output_dir=Path(temp), rows=(row,), db=db), row, result, path, data
             ),))
-            with stub_identity_judge({"verdict": "needs_review", "confidence": 0.6, "reason": "uncertain"}):
-                self.assertEqual(judging.judge_mapped_candidates(db, model="fixture-model", effort="medium").judge_calls, 1)
+            with stub_mapped_identity_judge({"verdict": "needs_review", "confidence": 0.6, "reason": "uncertain"}):
+                self.assertEqual(judging.judge_mapped_candidates(db).judge_calls, 1)
             self.assertEqual([candidate.row_key for parent in linkedin_queue(db)
                               for candidate in parent.candidates], [row.row_key])
 
@@ -166,26 +176,26 @@ class MappedCandidateJudgeTests(unittest.TestCase):
             self.assertEqual([item.parent_id for item in linkedin_queue(db)], ["parent-1"])
             prefetch = PrefetchProfiles(db=db, profile_cache_dir=Path(temp)).run()
             self.assertGreater(prefetch.queue_links, 0)
-            with stub_identity_judge({"verdict": "confirmed", "confidence": 0.94, "reason": "same work"}):
-                judged = judging.judge_mapped_candidates(db, model="fixture-model", effort="medium")
+            with stub_mapped_identity_judge({"verdict": "confirmed", "confidence": 0.94, "reason": "same work"}):
+                judged = judging.judge_mapped_candidates(db)
             self.assertEqual(judged.judge_calls, 1)
             self.assertEqual(db.query("SELECT machine_proposed_url FROM links WHERE row_key=?", (row.row_key,))[0][0],
                              "https://www.linkedin.com/in/jordan-researched")
-            self.assertEqual(judging.judge_mapped_candidates(db, model="fixture-model", effort="medium").judge_calls, 0)
+            self.assertEqual(judging.judge_mapped_candidates(db).judge_calls, 0)
 
     def test_attached_verdict_is_persisted_once_and_human_choice_wins(self) -> None:
         with TemporaryDirectory() as temp:
             db = profile_db(Path(temp))
             answer = {"verdict": "confirmed", "confidence": 0.94, "reason": "same work"}
-            with stub_identity_judge(answer):
-                first = judging.judge_mapped_candidates(db, model="fixture-model", effort="medium")
-                second = judging.judge_mapped_candidates(db, model="different-model", effort="high")
+            with stub_mapped_identity_judge(answer):
+                first = judging.judge_mapped_candidates(db)
+                second = judging.judge_mapped_candidates(db)
             self.assertEqual((first.judge_calls, second.judge_calls), (1, 0))
             row = db.query("SELECT machine_action, machine_approved FROM links WHERE row_key='jordan-bravo'")[0]
             self.assertEqual(tuple(row), ("verify", "auto"))
             db.decide_identity("jordan-bravo", "detach")
-            with stub_identity_judge(answer):
-                after_human = judging.judge_mapped_candidates(db, model="another-model", effort="high")
+            with stub_mapped_identity_judge(answer):
+                after_human = judging.judge_mapped_candidates(db)
             self.assertEqual(after_human.judge_calls, 0)
 
     def test_malformed_machine_verdict_is_retried(self) -> None:
@@ -193,8 +203,8 @@ class MappedCandidateJudgeTests(unittest.TestCase):
             db = profile_db(Path(temp))
             with db.transaction() as conn:
                 conn.execute("UPDATE links SET judgment_fingerprint='failed', judgment_payload_json='{}'")
-            with stub_identity_judge({"verdict": "needs_review", "confidence": 0.6, "reason": "uncertain"}):
-                outcome = judging.judge_mapped_candidates(db, model="fixture-model", effort="medium")
+            with stub_mapped_identity_judge({"verdict": "needs_review", "confidence": 0.6, "reason": "uncertain"}):
+                outcome = judging.judge_mapped_candidates(db)
             self.assertEqual(outcome.judge_calls, 1)
 
     def test_each_valid_verdict_skips_even_without_fingerprint(self) -> None:
@@ -207,7 +217,7 @@ class MappedCandidateJudgeTests(unittest.TestCase):
                         (json.dumps({"verdict": verdict, "confidence": 0.7}),),
                     )
                 self.assertEqual(judging.judge_mapped_candidates(
-                    db, model="fixture-model", effort="medium"
+                    db
                 ).judge_calls, 0)
 
 
@@ -381,7 +391,7 @@ class LinkedinViewTests(unittest.TestCase):
             judge.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
             ),
-            "300c5f06c68bb77b1bdd75f7c8458731713a7a2c52a11ef36aa975c519d90100",
+            "012e36347158045a6644624a1b2fa7c7ad356e8e57ebb4aea8e63f2dd6c1c864",
         )
 
     def test_failed_cache_is_not_judgeable(self):
@@ -1084,7 +1094,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
 
     def test_exact_fingerprint_reuses_existing_retarget_verdict(self):
         initial = self.proposal(None)
-        stored = judgment_policy.StoredJudgment(
+        stored = StoredJudgment(
             IdentityVerdict.from_payload({
                 "verdict": "confirmed",
                 "confidence": 0.9,
@@ -1124,7 +1134,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         IdentityPolicy.effective_decision already ranks human over machine.
         """
         initial = self.proposal(None)
-        stored = judgment_policy.StoredJudgment(
+        stored = StoredJudgment(
             IdentityVerdict.from_payload({
                 "verdict": "wrong_person",
                 "confidence": 0.9,
@@ -1299,7 +1309,7 @@ class IdentityVerdictReuseTests(unittest.TestCase):
     """A verdict already bought for this exact input is not bought again."""
 
     def _stored(self, value: str = "confirmed", fingerprint: str = "fp-1"):
-        return judgment_policy.StoredJudgment(
+        return StoredJudgment(
             IdentityVerdict.from_payload({"verdict": value, "confidence": 0.9}),
             fingerprint,
         )
@@ -1335,7 +1345,7 @@ class IdentityVerdictReuseTests(unittest.TestCase):
                     ("fp-1", '{"verdict":"confirmed","confidence":"high"}'),
                 )
 
-            self.assertEqual(judgment_policy.stored_judgments(db), {})
+            self.assertEqual(stored_judgments(db), {})
 
     def test_force_pays_even_on_an_exact_match(self):
         self.assertFalse(
