@@ -51,6 +51,9 @@ export const STAGE_DONE: Readonly<Record<Exclude<ReviewView, "done">, string>> =
   linkedin: "",
 }
 
+/** Under the stage check while the next screen loads. */
+export const PREPARING_NEXT = "Preparing Next Stage"
+
 export const SYNTHESIS = {
   title: "Synthesis has not run",
   body: "Collected messages have no facts yet. Go back to Codex and run:",

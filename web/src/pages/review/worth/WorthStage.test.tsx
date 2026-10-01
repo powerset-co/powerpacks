@@ -3,11 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { motionMedia, pageProgress } from "@/testing/review-fixture"
 
+import { stubListLayout } from "./list-layout"
 import { renderWorth, rowNamed, where, worthServer, type WorthServer } from "./worth-fixture"
 
 let server: WorthServer
 
 beforeEach(() => {
+  stubListLayout()
   server = worthServer({ yes: [rowNamed("Avery Fox")] })
   vi.stubGlobal("fetch", server.fetch)
   vi.stubGlobal("matchMedia", motionMedia())
@@ -75,9 +77,11 @@ describe("WorthStage: the tab's content", () => {
     expect(server.reads("/api/review/worth-table")).toEqual([])
   })
 
-  it.each(["yes", "no"] as const)("is the decided pile's table on %s, with no typeahead", async (tab) => {
+  it.each(["yes", "no"] as const)("is the decided pile's list on %s, with no typeahead", async (tab) => {
     const { container } = renderWorth(tab, server, { progress: PAGE })
-    await waitFor(() => expect(container.querySelector(".worth-panel > .decision-table")).toBeTruthy())
+    await waitFor(() =>
+      expect(container.querySelector(".worth-panel > .decision-list > .decision-table")).toBeTruthy(),
+    )
     expect(container.querySelector(".decision-table")?.getAttribute("data-view")).toBe(tab)
     expect(screen.queryByRole("searchbox")).toBeNull()
     expect(server.reads("/api/review/worth-table")).toEqual([`/api/review/worth-table?view=${tab}&offset=0`])

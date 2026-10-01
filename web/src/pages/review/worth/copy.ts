@@ -1,6 +1,6 @@
 // The worth screen's own words (templates/worth_card.html.j2, decision_tabs.html.j2,
-// decision_row.html.j2, worth_search.html.j2, rendering.py `render_decision_table`). Words the
-// other screens share are in lib/review/copy.ts.
+// decision_row.html.j2, decision_details.html.j2, worth_search.html.j2, rendering.py
+// `render_decision_table`). Words the other screens share are in lib/review/copy.ts.
 
 import { TOAST } from "@/lib/review/copy"
 import type { WorthTab } from "@/types/review"
@@ -36,6 +36,10 @@ export function flipLabel(name: string, to: Pile): string {
   return `Mark ${name} ${ANSWER[to]}`
 }
 
-export function showMoreRows(left: number): string {
-  return `Show more (${left} left)`
+/** A decided pile's scrolling list, named for a screen reader: "Yes decisions". */
+export function listLabel(pile: Pile): string {
+  return `${ANSWER[pile]} decisions`
 }
+
+/** Under the rows while the next page of the pile is read. */
+export const LOADING_ROWS = "Loading…"

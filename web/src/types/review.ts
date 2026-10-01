@@ -106,9 +106,16 @@ export interface QueuePosition {
   total: number
 }
 
+/** A person with the profile shown beside them: a worth card, and what an opened pile row
+ *  reads (GET /api/review/worth-details?slug=). */
+export interface WorthDetails {
+  person: ReviewPerson
+  candidate: ReviewCandidate | null
+}
+
 /** GET /api/review/worth-card: the next undecided person, or why there is none. */
 export interface WorthCardPayload {
-  card: { person: ReviewPerson; candidate: ReviewCandidate | null } | null
+  card: WorthDetails | null
   /** No card because synthesis has not run (the handoff panel), not because the queue is done. */
   synthesize_pending: boolean
   queue: QueuePosition | null
@@ -120,10 +127,10 @@ export interface WorthPendingEntry {
   name: string
 }
 
-/** One row of a decided pile. */
+/** One row of a decided pile. A pile page is light: the row's person carries no sources, and
+ *  its profile is read from worth-details when the row is opened. */
 export interface DecisionRow {
   person: ReviewPerson
-  candidate: ReviewCandidate | null
   /** Why it sits in this pile: the human's note or call, else the machine's reason. */
   reason: string
 }

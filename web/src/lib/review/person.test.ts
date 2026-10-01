@@ -4,16 +4,7 @@ import { reviewCandidate, reviewPerson, syntheticCandidate } from "@/testing/rev
 
 import { initials } from "@/components/shared"
 
-import {
-  avatarKey,
-  avatarName,
-  displayName,
-  foldFacts,
-  foldLabels,
-  labelTooltip,
-  profileUrl,
-  summaryOf,
-} from "./person"
+import { avatarName, displayName, foldFacts, foldLabels, labelTooltip, profileUrl, summaryOf } from "./person"
 
 describe("displayName", () => {
   const person = reviewPerson({ name: "Jordan B" })
@@ -71,13 +62,6 @@ describe("the avatar", () => {
     expect(drawn("Jordan")).toBe("J")
     expect(drawn("+15550100")).toBe("1")
     expect(drawn("…")).toBe("?")
-  })
-
-  it("asks for a fetched candidate's picture only", () => {
-    expect(avatarKey(reviewCandidate())).toBe("jordan-bravo-1")
-    expect(avatarKey(syntheticCandidate())).toBe("")
-    expect(avatarKey(reviewCandidate({ row_key: "" }))).toBe("")
-    expect(avatarKey(null)).toBe("")
   })
 })
 

@@ -21,6 +21,7 @@ import type {
   WorthCardPayload,
   WorthPendingEntry,
   WorthResult,
+  WorthDetails,
   WorthTablePayload,
 } from "@/types/review"
 
@@ -165,7 +166,12 @@ export function worthPending(): WorthPendingEntry[] {
 }
 
 export function decisionRow(overrides: Partial<DecisionRow> = {}): DecisionRow {
-  return { person: reviewPerson(), candidate: reviewCandidate(), reason: "You said yes", ...overrides }
+  return { person: reviewPerson({ sources: [] }), reason: "You said yes", ...overrides }
+}
+
+/** What an opened pile row reads: the person with their sources, and the profile beside them. */
+export function worthDetails(overrides: Partial<WorthDetails> = {}): WorthDetails {
+  return { person: reviewPerson(), candidate: reviewCandidate(), ...overrides }
 }
 
 export function worthTable(overrides: Partial<WorthTablePayload> = {}): WorthTablePayload {
@@ -175,9 +181,10 @@ export function worthTable(overrides: Partial<WorthTablePayload> = {}): WorthTab
     name: "Casey Delta",
     worth_key: "worth-casey",
     labels: [],
+    sources: [],
   })
   return {
-    rows: [decisionRow({ person: casey, candidate: null, reason: "Worth adding" }), decisionRow()],
+    rows: [decisionRow({ person: casey, reason: "Worth adding" }), decisionRow()],
     total: 2,
     ...overrides,
   }

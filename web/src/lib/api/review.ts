@@ -17,6 +17,7 @@ import type {
   WorthCardPayload,
   WorthPendingEntry,
   WorthResult,
+  WorthDetails,
   WorthTablePayload,
 } from "@/types/review"
 
@@ -129,6 +130,12 @@ export async function fetchWorthPending(signal?: AbortSignal): Promise<WorthPend
     signal,
   )
   return payload.pending
+}
+
+/** The person and profile an opened pile row shows. A parent that is gone throws a
+ *  `ReviewError` that is `gone`. */
+export function fetchWorthDetails(slug: string, signal?: AbortSignal): Promise<WorthDetails> {
+  return get<WorthDetails>(`${API}worth-details${query({ slug })}`, "Could not load details", signal)
 }
 
 /** One page of a decided pile, from `offset`. */
@@ -250,9 +257,4 @@ function isReviewEvent(payload: unknown): payload is ReviewEvent {
 export async function fetchDossier(slug: string, signal?: AbortSignal): Promise<string | null> {
   const response = await fetch(`/api/dossier${query({ slug, skip: "1" })}`, { signal })
   return response.ok ? response.text() : null
-}
-
-/** A candidate's picture (404 when there is none). */
-export function avatarUrl(rowKey: string): string {
-  return `/api/avatar${query({ pub: rowKey })}`
 }

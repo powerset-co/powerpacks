@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { decisionProgress } from "@/testing/review-fixture"
 
 import { panelOf } from "./panel"
-import { otherPile, pileCount, tabCounts } from "./piles"
+import { otherPile, tabCounts } from "./piles"
 import { personNamed } from "./worth-fixture"
 
 describe("tabCounts", () => {
@@ -33,11 +33,6 @@ describe("tabCounts", () => {
 describe("piles", () => {
   it("flips a pile to the other", () => {
     expect([otherPile("yes"), otherPile("no")]).toEqual(["no", "yes"])
-  })
-
-  it("reads a pile's size from the server's counts", () => {
-    const progress = decisionProgress({ worth_yes: 5, worth_no: 2 })
-    expect([pileCount(progress, "yes"), pileCount(progress, "no")]).toEqual([5, 2])
   })
 })
 

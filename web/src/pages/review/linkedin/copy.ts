@@ -2,8 +2,9 @@
 // linkedin_finished.html.j2, the `option`, `person_menu` and `guidance_form` macros, and the
 // feedback popover in reconcile_review.js). Words other stages share live in lib/review/copy.ts.
 
-/** "Is this the right profile? Or Skip?": the Skip in the middle is the link. */
-export const QUESTION = { before: "Is this the right profile? Or ", after: "?" } as const
+/** "Is this the right profile? Or Skip?": the Skip in the middle is the link. A candidate with a
+ *  question of its own (what the judge wants settled) asks that instead. */
+export const QUESTION = { usual: "Is this the right profile?", or: " Or ", after: "?" } as const
 
 export const DECISION = {
   no: "No",

@@ -79,6 +79,7 @@ function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) 
         <PersonCard person={person} candidate={first} personOnly={several} />
         {several ? (
           <>
+            {first.question ? <div className="question">{first.question}</div> : null}
             <div className="linkedin-options-intro">{OPTIONS_INTRO}</div>
             <ul className="linkedin-options">
               {candidates.map((candidate) => (
@@ -97,7 +98,8 @@ function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) 
       <div className="identity-decision">
         {several ? null : (
           <div className="question">
-            {QUESTION.before}
+            {first.question || QUESTION.usual}
+            {QUESTION.or}
             <button type="button" className="skip-link" disabled={locked} onClick={skip}>
               {DECISION.skip}
             </button>

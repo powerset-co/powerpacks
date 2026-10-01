@@ -44,13 +44,6 @@ export function avatarName(person: ReviewPerson, candidate: ReviewCandidate | nu
   return words(person.name)
 }
 
-/** The candidate whose picture the avatar asks for: a fetched profile. A researched one has
- *  no picture. */
-export function avatarKey(candidate: ReviewCandidate | null): string {
-  if (!candidate || candidate.synthetic) return ""
-  return candidate.row_key
-}
-
 export interface Folded {
   shown: string[]
   rest: string[]
