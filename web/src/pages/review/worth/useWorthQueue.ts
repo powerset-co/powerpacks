@@ -35,7 +35,7 @@ function readPanel(card: WorthCardQuery, signal?: AbortSignal): Promise<QueuePan
 }
 
 /** A card read that answers null when the server or the network refuses, so a decision can
- *  wait on it beside its fade (the old `fetchText`). */
+ *  wait on it beside its fade. */
 function readAhead(card: WorthCardQuery): Promise<QueuePanel | null> {
   return readPanel(card).catch(() => null)
 }
@@ -50,8 +50,7 @@ function readPicked(key: string): Promise<Picked> {
 }
 
 /**
- * The review tab's card queue (reconcile_review.js `decideWorthCard`, `prefetchWorthCard`,
- * `jumpToWorthCard`, `carouselNav`).
+ * The review tab's card queue.
  *
  *   mount       read the card for the URL's `index` / `debug`
  *   show        put a card on screen and read the one after it ahead, leaving out the card

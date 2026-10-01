@@ -1,4 +1,4 @@
-"""Persisted JEV labels reach every review profile surface."""
+"""Which label badges a person shows, and that labels saved with the facts reach the view."""
 
 from __future__ import annotations
 
@@ -14,79 +14,46 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     WorthRow,
     WorthSummary,
 )
-from packs.ingestion.primitives.deep_context.review import rendering
+from packs.ingestion.primitives.deep_context.review.label_titles import label_titles
 from deep_context_sqlite_test_helpers import seed_identity
 
 
-def _labels(**values: float | str) -> tuple[tuple[str, float | str], ...]:
-    return tuple(sorted(values.items()))
-
-
-def _parent(
-    name: str = "Jordan Bravo",
-    *,
-    labels: tuple[tuple[str, float | str], ...] = (),
-    machine_reason: str = "",
-) -> ParentViewRow:
-    machine = WorthMachineRow("yes", machine_reason, "llm")
-    worth = WorthRow("parent-worth:jordan", "jordan", "jordan", (), name, machine, None, "yes", "llm")
+def _parent(**labels: float | str) -> ParentViewRow:
+    machine = WorthMachineRow("yes", "", "llm")
+    worth = WorthRow("parent-worth:jordan", "jordan", "jordan", (), "Jordan Bravo", machine, None, "yes", "llm")
     return ParentViewRow(
-        "parent-jordan", "jordan", "", "", name, ("person-a",), (), (),
-        worth, WorthSummary("yes", "llm"), machine, (), labels,
+        "parent-jordan", "jordan", "", "", "Jordan Bravo", ("person-a",), (), (),
+        worth, WorthSummary("yes", "llm"), machine, (), tuple(sorted(labels.items())),
     )
 
 
-class LabelBadgeTests(unittest.TestCase):
-    def test_badges_limit_three_and_reveal_remaining_on_focus(self) -> None:
-        parent = _parent(labels=_labels(
-            is_founder=0.9, is_professional=0.9, is_investor=0.86, is_classmate=0.85,
-        ))
-        markup = rendering._label_badges(parent)
-        self.assertEqual(markup.count("class='person-label'"), 3)
-        self.assertIn("tabindex=", markup)
-        self.assertIn("role=", markup)
-        self.assertIn("Work-related", markup)
-        self.assertIn(">+1<", markup)
-        self.assertEqual(rendering._label_badges(_parent()), "")
+class LabelTitleTests(unittest.TestCase):
+    def test_titles_are_the_labels_over_85_percent_strongest_first(self) -> None:
+        parent = _parent(
+            is_founder=0.99, is_investor=0.86, is_classmate=0.85, is_family=0.95, is_client=0.84, is_personal=0.24,
+        )
+        self.assertEqual(label_titles(parent), ("Founder", "Family", "Investor", "Classmate"))
+        self.assertEqual(label_titles(_parent()), ())
 
-    def test_badges_hide_scores_below_85_percent(self) -> None:
-        parent = _parent(labels=_labels(
-            relationship_kind="unknown", relationship_kind_p=0.95,
-            evidence_incomplete=0.88, real_relationship=0.35,
-            is_personal=0.24, is_founder=0.04,
-        ))
-        markup = rendering._label_badges(parent)
-        visible = markup.split("class='person-label-more'")[0]
-        self.assertEqual(visible.count("class='person-label'"), 1)
-        self.assertIn("Limited context", visible)
-        self.assertNotIn("%", visible)
-        for hidden in ("Direct contact", "Personal", "Founder", "Unknown"):
-            self.assertNotIn(hidden, markup)
-        self.assertNotIn("class='person-label-more'", markup)
+    def test_relationship_kind_is_a_title_unless_unknown(self) -> None:
+        known = _parent(relationship_kind="college_friend", relationship_kind_p=0.97, is_founder=0.9)
+        self.assertEqual(label_titles(known), ("College friend", "Founder"))
+        for hidden in (
+            _parent(relationship_kind="unknown", relationship_kind_p=0.95),
+            _parent(relationship_kind="college_friend", relationship_kind_p=0.5),
+            _parent(relationship_kind="college_friend"),
+        ):
+            self.assertEqual(label_titles(hidden), ())
 
-    def test_badges_escape_label_values(self) -> None:
-        parent = _parent(labels=_labels(
-            relationship_kind="<script>alert(1)</script>", relationship_kind_p=0.95,
-        ))
-        self.assertNotIn("<script>", rendering._label_badges(parent))
+    def test_two_labels_with_one_title_show_once_at_the_stronger_score(self) -> None:
+        # is_professional and work_signal are both "Work-related"; either may be the stronger.
+        for scores in ({"is_professional": 0.5, "work_signal": 0.9}, {"is_professional": 0.9, "work_signal": 0.5}):
+            with self.subTest(scores=scores):
+                parent = _parent(**scores, is_founder=0.88, evidence_incomplete=0.87)
+                self.assertEqual(label_titles(parent), ("Work-related", "Founder", "Limited context"))
 
-    def test_the_number_of_labels_is_capped_on_every_profile_surface(self) -> None:
-        parent = _parent(labels=_labels(is_founder=0.9, is_professional=0.9))
-        for markup in (rendering.render_worth_card(parent), rendering.render_decision_details(parent)):
-            self.assertIn("class='person-label'", markup)
-            self.assertLess(markup.index("<h2>"), markup.index("class='person-label'"))
-        rows = rendering.decision_rows_html([parent], "yes")
-        self.assertIn("person-name-line", rows)
-        self.assertIn("class='person-label'", rows)
-
-    def test_yes_no_rows_omit_percentages_but_keep_the_machine_reason(self) -> None:
-        parent = _parent(labels=_labels(is_founder=0.9), machine_reason="Limited relationship evidence")
-        rows = rendering.decision_rows_html([parent], "yes")
-        self.assertIn("Founder", rows)
-        self.assertNotIn("90%", rows)
-        summary = rows.split("</summary>")[0]
-        self.assertNotIn("Limited relationship evidence", summary)
-        self.assertIn("Limited relationship evidence", rows)
+    def test_titles_never_carry_the_score(self) -> None:
+        self.assertEqual(label_titles(_parent(is_founder=0.9)), ("Founder",))
 
 
 class PersistedLabelTests(unittest.TestCase):

@@ -12,9 +12,9 @@ export interface WorthStageProps {
   tab: WorthTab
 }
 
-// The worth stage (server.py `full_page`, the worth branch): the tabs with their counts, then
-// the tab's content. Review is the card queue with its typeahead; Yes and No are the decided
-// piles' tables. A decision counts on the tabs the moment it is clicked.
+// The worth stage: the tabs with their counts, then the tab's content. Review is the card
+// queue with its typeahead; Yes and No are the decided piles' tables. A decision counts on the
+// tabs the moment it is clicked.
 export function WorthStage({ tab }: WorthStageProps) {
   const moves = usePileMoves()
   return (

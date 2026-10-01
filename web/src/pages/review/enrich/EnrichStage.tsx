@@ -20,8 +20,8 @@ export interface EnrichStageProps {
   job: EnrichmentJob | null
 }
 
-// The Enrich stage: one panel in one of five states (templates/enrichment.html.j2). Approve is
-// the app's one spend gate: it posts once and the answer's panel replaces this one in place.
+// The Enrich stage: one panel in one of five states. Approve is the app's one spend gate: it
+// posts once and the answer's panel replaces this one in place.
 // Continue marks the stage complete and runs the stage check to LinkedIn.
 export function EnrichStage({ enrichment, job }: EnrichStageProps) {
   const review = useReview()

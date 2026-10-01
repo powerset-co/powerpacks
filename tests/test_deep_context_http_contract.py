@@ -1,25 +1,22 @@
-"""Frozen HTTP contract for the Deep Context browser application.
+"""The review server's HTTP contract: its own routes, and the writes the Review page makes.
 
-These are characterization tests for the transport boundary.  The SQLite
-rewrite may replace every implementation behind ``make_handler``; the existing
-browser must continue to receive these routes, fields, status codes, content
-types, and response shapes unchanged.
+These exercise the real handler in-process over one synthetic parent. What each
+/api/review/ read returns is pinned in test_deep_context_review_api.py; this file holds
+the server's plain routes (status, events, dossier, health), the form writes (/worth,
+/complete, /retarget, /feedback, /auth/login) with their refusals, and the searches-only
+server that runs before a store exists.
 """
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
-import re
 import shutil
-import subprocess
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
-from dataclasses import replace
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -43,31 +40,13 @@ from packs.ingestion.primitives.deep_context.db.identity_invariants import (
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     approved_identities,
 )
-from packs.ingestion.primitives.deep_context.db.identity_queries import links
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
-    RelationshipDecision,
-    finish_reviews,
-)
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.review import api as review_api
+from packs.ingestion.primitives.deep_context.review import auth_login
 from packs.ingestion.primitives.deep_context.review import cli as review_cli
 from packs.ingestion.primitives.deep_context.review import server as review_server
-from packs.ingestion.primitives.deep_context.review.models import (
-    EnrichmentApproval,
-    FeedbackSubmission,
-)
-from packs.ingestion.primitives.deep_context.review.rendering import (
-    GO_BACK_HTML,
-    REVIEW_JS,
-    linkedin_finished_body,
-    render_decision_table,
-    render_enrichment,
-    render_linkedin_card,
-)
-from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
-    SqliteReviewAdapter,
-)
+from packs.ingestion.primitives.deep_context.review.models import FeedbackSubmission
 from deep_context_sqlite_test_helpers import replace_candidate_people
 from http_handler_test_helpers import InProcessHttpClient
 
@@ -79,21 +58,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
     SLUG = "jordan-bravo-p"
     PERSON_ID = "person-jordan-bravo"
 
-    def test_decision_table_exposes_total_for_virtual_scroll(self) -> None:
-        parent = person_detail(self.db, self.SLUG)
-        html = render_decision_table([parent], "yes", total=100)
-        self.assertIn("class='decision-list'", html)
-        self.assertIn("data-total='100'", html)
-        self.assertNotIn("Show more", html)
-        status, _, body, _ = self.request("GET", "/searches/assets/virtual-table.js")
-        self.assertEqual(status, 200)
-        self.assertIn(b"class VirtualTable", body)
-
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         for name in (
-            "avatars",
             "cache",
             "dossiers",
             "facts",
@@ -165,13 +133,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        avatar_name = hashlib.sha256(self.PUB.encode()).hexdigest()[:24] + ".image"
-        (self.root / "avatars" / avatar_name).write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
 
         parent_id = "parent-jordan-bravo"
         fact_path = self.root / "facts" / f"{self.PERSON_ID}.jsonl"
         dossier_path = self.root / "parents" / f"{self.SLUG}.md"
-        avatar_path = self.root / "avatars" / avatar_name
         self.db = Db(self.root / "deep-context.sqlite")
         self.db.project_rows(
             (
@@ -234,19 +199,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
                     "body": dossier_path.read_text(encoding="utf-8"),
                 }),
             ),
-            ArtifactRow(
-                f"avatar:{self.PUB}",
-                ArtifactKind.AVATAR.value,
-                parent_id,
-                str(avatar_path.resolve()),
-                hashlib.sha256(avatar_path.read_bytes()).hexdigest(),
-                ProjectionStatus.PROJECTED.value,
-                candidate_key=self.PUB,
-                payload_json=json.dumps({
-                    "content_type": "image/png",
-                    "base64": base64.b64encode(avatar_path.read_bytes()).decode("ascii"),
-                }),
-            ),
         ):
             self.db.project_rows((artifact,))
         self.db.project_rows(
@@ -285,7 +237,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
         )
         self.http = InProcessHttpClient(handler)
         dossier_path.unlink()
-        avatar_path.unlink()
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -300,9 +251,13 @@ class DeepContextHttpContractTests(unittest.TestCase):
         return self.http.request(method, path, fields, headers)
 
     def json_request(
-        self, method: str, path: str, fields: dict[str, str] | None = None
+        self,
+        method: str,
+        path: str,
+        fields: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, object]]:
-        status, content_type, body, _ = self.request(method, path, fields)
+        status, content_type, body, _ = self.request(method, path, fields, headers)
         self.assertEqual(content_type, "application/json; charset=utf-8")
         return status, json.loads(body)
 
@@ -325,319 +280,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
         status, _, _, _ = self.request("GET", "/share")
         self.assertEqual(status, 404)
 
-    def test_stage_transition_opts_in_before_external_styles_load(self) -> None:
-        for stage in ("worth", "enrich", "linkedin"):
-            with self.subTest(stage=stage):
-                status, _, body, _ = self.request("GET", f"/?stage={stage}")
-                self.assertEqual(status, 200)
-                early_head = body.split(b"<link", 1)[0]
-                self.assertIn(b"@view-transition { navigation: auto; }", early_head)
-                self.assertIn(b"prefers-reduced-motion: no-preference", early_head)
-
-    def test_get_route_inventory_and_content_types(self) -> None:
-        html_routes: dict[str, bytes | None] = {
-            "/": b"<!doctype html>",
-            f"/api/dossier?slug={self.SLUG}": b"Synthetic collaborator",
-            "/api/worth-card?debug=1&index=0&exclude=not-this-person": b"worth",
-            "/api/linkedin-card?debug=1&index=0&exclude=not-this-person": b"LinkedIn",
-        }
-        for path, marker in html_routes.items():
-            with self.subTest(path=path):
-                status, content_type, body, headers = self.request("GET", path)
-                self.assertEqual(status, 200)
-                self.assertEqual(content_type, "text/html; charset=utf-8")
-                if marker is not None:
-                    self.assertIn(marker.lower(), body.lower())
-                self.assertEqual(headers["cache-control"], "no-store")
-                self.assertEqual(headers["x-content-type-options"], "nosniff")
-
-        status, content_type, body, _ = self.request("GET", "/healthz")
-        self.assertEqual((status, content_type, body), (200, "text/plain", b"ok"))
-
-        for path, content_type in (
-            ("/assets/reconcile-review.css", "text/css; charset=utf-8"),
-            ("/assets/reconcile-review.js", "text/javascript; charset=utf-8"),
-        ):
-            with self.subTest(path=path):
-                status, actual, body, headers = self.request("GET", path)
-                self.assertEqual((status, actual), (200, content_type))
-                self.assertTrue(body)
-                self.assertEqual(headers["cache-control"], "no-cache")
-
-    def test_completed_review_handoff_continues_without_repeating_enrichment(self) -> None:
-        status, _, body, _ = self.request("GET", "/?stage=done")
-        self.assertEqual(status, 200)
-        self.assertIn(b"data-phrase='Review complete, continue'", body)
-        self.assertNotIn(b"proceed with enrichment", body)
-
-    def test_default_page_follows_current_stage_and_preserves_explicit_stage(self) -> None:
-        def assert_stage(expected: str) -> None:
-            status, payload = self.json_request("GET", "/api/status")
-            self.assertEqual(status, 200)
-            self.assertEqual(payload["stage"], expected)
-            status, _, body, _ = self.request("GET", "/")
-            self.assertEqual(status, 200)
-            self.assertIn(f"data-stage='{expected}'".encode(), body)
-
-        assert_stage("worth")
-        self.db.decide_worth("parent-jordan-bravo", "yes")
-        assert_stage("enrich")
-        with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE row_key=?",
-                (json.dumps({"verdict": "needs_review", "confidence": 0.5}), self.PUB),
-            )
-        assert_stage("enrich")
-        result = finish_reviews(self.db, [RelationshipDecision.from_payload("parent-jordan-bravo", "fixture-question", {"candidates": [{
-            "url": row.machine_proposed_url or row.linkedin_url, "verdict": "review",
-            "reason": "Owner can identify contact", "confidence": .5}
-            for row in links(self.db, parent_id="parent-jordan-bravo") if not row.decision_action and row.linkedin_url]})])
-        self.assertEqual(result["review_parent_ids"], ["parent-jordan-bravo"])
-        assert_stage("linkedin")
-        status, _, body, _ = self.request("GET", "/?stage=worth&view=yes")
-        self.assertEqual(status, 200)
-        self.assertIn(b"data-stage='worth'", body)
-        self.db.decide_identity(self.PUB, "verify")
-        assert_stage("done")
-        status, _, body, _ = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        self.assertIn(b"data-phrase='Review complete, continue'", body)
-        status, _, body, _ = self.request("GET", "/?stage=enrich")
-        self.assertEqual(status, 200)
-        self.assertIn(b"data-stage='enrich'", body)
-
-    def test_stage_completion_shows_indeterminate_progress_until_navigation(self) -> None:
-        node = shutil.which("node")
-        if not node:
-            self.skipTest("Node is not installed")
-        source = (Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/deep_context/review/reconcile_review.js").read_text()
-        function = source.split("function leaveAndNavigate(", 1)[1].split("\nfunction swapCardContent", 1)[0]
-        program = """
-            import assert from 'node:assert/strict';
-            let completingStage = false, navigate;
-            const title = {textContent:''};
-            const stage = {innerHTML:'', querySelector: () => title};
-            const window = {location:{href:'/worth'}, setTimeout: fn => {navigate = fn;}};
-        """ + "function leaveAndNavigate(" + function + """
-            leaveAndNavigate('People Reviewed', '/?stage=enrich');
-            assert.equal(completingStage, true);
-            assert.equal(title.textContent, 'People Reviewed');
-            assert.match(stage.innerHTML, /Preparing Next Stage/);
-            assert.match(stage.innerHTML, /role=['\"]progressbar['\"]/);
-            assert.doesNotMatch(stage.innerHTML, /aria-valuenow/);
-            const waiting = stage.innerHTML;
-            assert.equal(window.location.href, '/worth');
-            navigate();
-            assert.equal(window.location.href, '/?stage=enrich');
-            assert.equal(stage.innerHTML, waiting, 'Loading the destination must retain the completion screen');
-        """
-        result = subprocess.run([node, "--input-type=module", "-e", program],
-                                capture_output=True, text=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_rendered_markup_covers_every_javascript_dispatch_contract(self) -> None:
-        # Keep these selectors pinned to reconcile_review.js:217, 418-420,
-        # 543-608, 754-777, 922-975, 1024, 1093-1103, and 1297-1325.
-        surfaces = {}
-        for name, path in {
-            "worth": "/?stage=worth",
-            "linkedin": "/?stage=linkedin",
-            "linkedin_card": "/api/linkedin-card",
-            "enrich": "/?stage=enrich",
-        }.items():
-            status, _, body, _ = self.request("GET", path)
-            self.assertEqual(status, 200)
-            surfaces[name] = body.decode()
-
-        contracts = {
-            "data-tab": "worth",
-            "data-decide": "linkedin_card",
-            "data-linkedin-panel": "linkedin",
-            "data-menu-toggle": "linkedin_card",
-            "data-person-menu": "linkedin_card",
-            "data-feedback-general": "linkedin_card",
-            "identity-scroll-shell": "linkedin_card",
-            "data-scroll-cue": "linkedin_card",
-            "data-worth-search": "worth",
-            "data-search-list": "worth",
-            "data-open-guidance": "linkedin_card",
-            "data-retarget-form": "linkedin_card",
-            "enrich-state": "enrich",
-            "data-slug": "linkedin_card",
-        }
-        for selector, surface in contracts.items():
-            with self.subTest(selector=selector, surface=surface):
-                self.assertIn(selector, surfaces[surface])
-
-        parent = person_detail(self.db, self.SLUG)
-        self.assertIsNotNone(parent)
-        assert parent is not None
-        candidate = replace(
-            parent.candidates[0],
-            experiences=("Role one", "Role two", "Role three", "Role four"),
-        )
-        rich_parent = replace(parent, candidates=(candidate,))
-        rich_card = render_linkedin_card(
-            rich_parent,
-            rich_parent.candidates,
-            failure_note="synthetic provider outage",
-        )
-        base_enrichment = SqliteReviewAdapter(self.db).enrichment()
-        running = render_enrichment(
-            replace(
-                base_enrichment,
-                status="running",
-                state="running",
-                counts=replace(
-                    base_enrichment.counts,
-                    total=4,
-                    completed=1,
-                    pending=3,
-                ),
-            )
-        )
-        approval = render_enrichment(
-            replace(
-                base_enrichment,
-                status="needs_approval",
-                state="needs_approval",
-                estimated_usd=0.04,
-                would_submit=3,
-            )
-        )
-        # The approval button carries the estimate as its label; the old
-        # "Parallel estimate:" / cost-detail paragraph was removed.
-        self.assertIn("Approve $0.04", approval)
-        self.assertIn("data-approve-enrichment", approval)
-        self.assertIn("Ready to Enrich", approval)
-        self.assertIn("Enriching Contacts", running)
-        progress = SqliteReviewAdapter(self.db).snapshot().progress
-        extra_markup = "".join(
-            (
-                rich_card,
-                running,
-                approval,
-                render_decision_table(
-                    [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
-                    "yes",
-                ),
-                # The virtual scroll viewport retains the full decision count.
-                render_decision_table(
-                    [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
-                    "yes",
-                    total=2,
-                ),
-                linkedin_finished_body(progress, linkedin_complete=True),
-                linkedin_finished_body(progress, linkedin_complete=False, auto_continue=True),
-                GO_BACK_HTML,
-            )
-        )
-        for path in (
-            "/api/worth-card?debug=1&index=0",
-            "/api/linkedin-card?debug=1&index=0",
-        ):
-            status, _, body, _ = self.request("GET", path)
-            self.assertEqual(status, 200)
-            extra_markup += body.decode()
-
-        javascript = REVIEW_JS.read_text(encoding="utf-8")
-
-        def kebab(value: str) -> str:
-            return re.sub(r"(?<!^)(?=[A-Z])", "-", value).lower()
-
-        inventory: set[str] = set()
-        selector_calls = re.findall(
-            r"(?:querySelector(?:All)?|closest|matches)\(\s*([\"'`])(.+?)\1",
-            javascript,
-            re.DOTALL,
-        )
-        for _, selector in selector_calls:
-            inventory.update(re.findall(r"data-[a-z0-9-]+", selector))
-            inventory.update(f".{name}" for name in re.findall(r"\.([A-Za-z_][\w-]*)", selector))
-            inventory.update(f"#{name}" for name in re.findall(r"#([A-Za-z_][\w-]*)", selector))
-        inventory.update(
-            f"#{element_id}"
-            for _, element_id in re.findall(
-                r"getElementById\(\s*([\"'])(.+?)\1", javascript
-            )
-        )
-        inventory.update(
-            f"data-{kebab(field)}"
-            for field in re.findall(r"\.dataset\.([A-Za-z_$][\w$]*)", javascript)
-        )
-        inventory.update(
-            attribute
-            for _, attribute in re.findall(
-                r"(?:hasAttribute|getAttribute)\(\s*([\"'])(data-[a-z0-9-]+)\1",
-                javascript,
-            )
-        )
-
-        # These selectors are created by reconcile_review.js itself, not emitted
-        # by the server-side renderer.
-        javascript_created = {
-            ".directory-item",
-            "data-cue-wired",
-            ".feedback-login",
-            ".feedback-popover",
-            ".feedback-send",
-            ".feedback-skip",
-            "data-expanded",
-            "data-guidance-button",
-            "data-guidance-label",
-            "data-guidance-placeholder",
-            "data-loaded",
-            "data-mode",
-            "data-wired",
-        }
-        markup = "".join(surfaces.values()) + extra_markup
-
-        def missing_tokens(rendered: str) -> set[str]:
-            rendered_classes = {
-                name
-                for value in re.findall(r"class=['\"]([^'\"]*)", rendered)
-                for name in value.split()
-            }
-            rendered_ids = set(re.findall(r"id=['\"]([^'\"]+)", rendered))
-            return {
-                token
-                for token in inventory - javascript_created
-                if (
-                    (token.startswith(".") and token[1:] not in rendered_classes)
-                    or (token.startswith("#") and token[1:] not in rendered_ids)
-                    or (not token.startswith((".", "#")) and token not in rendered)
-                )
-            }
-
-        self.assertEqual(missing_tokens(markup), set())
-        self.assertIn("data-show-more", rich_card)
-        self.assertIn("data-more-item", rich_card)
-        self.assertIn("class='enrich-progress'", running)
-        self.assertIn("class='enrich-progress-fill'", running)
-        self.assertIn(
-            "class='reresearch-failed'>Re-research failed: synthetic provider outage",
-            rich_card,
-        )
-        self.assertIn("class='worth-search-count'", surfaces["worth"])
-
-        # Scratch mutation proof: the inventory gate catches the exact D1-1
-        # data-decide -> data-decision regression without changing the tree.
-        renamed = markup.replace("data-decide", "data-decision")
-        self.assertIn("data-decide", missing_tokens(renamed))
-        renamed_approval = markup.replace(
-            "data-approve-enrichment", "data-start-enrichment"
-        )
-        self.assertIn(
-            "data-approve-enrichment",
-            missing_tokens(renamed_approval),
-        )
-
-    def test_enrichment_view_is_not_gated_by_pending_worth_rows(self) -> None:
-        status, content_type, body, _ = self.request("GET", "/?stage=enrich&preview=1")
-        self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
-        self.assertIn(b"Enrich Contacts", body)
-        self.assertNotIn(b"Review in progress", body)
-
     def test_json_get_shapes_and_query_fields(self) -> None:
         status, payload = self.json_request("GET", "/api/status")
         self.assertEqual(status, 200)
@@ -659,52 +301,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertIs(payload["enabled"], True)
         self.assertEqual(payload["items"], [])
 
-    def test_get_not_found_and_field_errors(self) -> None:
-        cases = (
-            ("/missing", 404, "text/plain", b"not found"),
-            ("/api/person?slug=missing", 404, "text/plain", b"not found"),
-            ("/api/avatar?pub=missing", 404, "text/plain", b"not found"),
-            ("/api/worth-card?pick=missing", 404, "text/plain; charset=utf-8", b"gone"),
-        )
-        for path, expected_status, expected_type, expected_body in cases:
-            with self.subTest(path=path):
-                status, content_type, body, _ = self.request("GET", path)
-                self.assertEqual((status, content_type, body), (expected_status, expected_type, expected_body))
-
-    def test_avatar_contract_uses_local_bytes_and_private_cache(self) -> None:
-        status, content_type, body, headers = self.request("GET", f"/api/avatar?pub={self.PUB}")
-        self.assertEqual(status, 200)
-        self.assertEqual(content_type, "image/png")
-        self.assertTrue(body.startswith(b"\x89PNG"))
-        self.assertEqual(headers["cache-control"], "private, max-age=86400")
-
-    def test_avatar_rejects_an_ambiguous_public_identifier_cleanly(self) -> None:
-        self.db.project_rows(
-            tuple(
-                LinkRow(
-                    f"ambiguous-row-{index}",
-                    "parent-jordan-bravo",
-                    "ambiguous-public-identifier",
-                    RowKind.PUB.value,
-                    f"https://www.linkedin.com/in/ambiguous-row-{index}",
-                    f"Ambiguous {index}",
-                    source=WriterSource.RECONCILE.value,
-                )
-                for index in (1, 2)
-            )
-        )
-
-        status, content_type, body, _ = self.request(
-            "GET", "/api/avatar?pub=ambiguous-public-identifier"
-        )
-
-        self.assertEqual(status, 400)
-        self.assertEqual(content_type, "text/plain; charset=utf-8")
-        self.assertEqual(
-            body,
-            b"ambiguous identity candidate: ambiguous-public-identifier",
-        )
-
     def test_sse_route_headers_and_initial_event(self) -> None:
         response = self.http.read_until("/api/events", b"data: ")
         self.assertIn(b"HTTP/1.0 200 OK", response)
@@ -713,76 +309,186 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertIn(b"retry: 2000", response)
         self.assertIn(b"data: ", response)
 
-    def test_post_route_inventory_validation_and_local_origin_guard(self) -> None:
-        status, content_type, body, _ = self.request("POST", "/decide", {}, {"Origin": "https://example.test"})
-        self.assertEqual((status, content_type, body), (403, "text/plain", b"cross-origin request rejected"))
+    def test_plain_get_routes_and_content_types(self) -> None:
+        status, content_type, body, _ = self.request("GET", "/healthz")
+        self.assertEqual((status, content_type, body), (200, "text/plain", b"ok"))
 
+        # The dossier is an HTML fragment read from the store (its file on disk is gone);
+        # skip=1 drops the name heading the card already shows.
+        fragments = {
+            f"/api/dossier?slug={self.SLUG}": (
+                b"<h3>Jordan Bravo</h3>\n<h4>Relationship</h4>\n<p>Synthetic collaborator.</p>\n"
+            ),
+            f"/api/dossier?slug={self.SLUG}&skip=1": b"<h4>Relationship</h4>\n<p>Synthetic collaborator.</p>\n",
+            "/api/dossier?slug=nobody&skip=1": b"",
+        }
+        for path, fragment in fragments.items():
+            with self.subTest(path=path):
+                status, content_type, body, headers = self.request("GET", path)
+                self.assertEqual((status, content_type, body), (200, "text/html; charset=utf-8", fragment))
+                self.assertEqual(headers["cache-control"], "no-store")
+                self.assertEqual(headers["x-content-type-options"], "nosniff")
+
+        for path in ("/missing", "/api/person?slug=missing"):
+            with self.subTest(path=path):
+                status, content_type, body, _ = self.request("GET", path)
+                self.assertEqual((status, content_type, body), (404, "text/plain", b"not found"))
+        status, content_type, body, _ = self.request("POST", "/missing", {})
+        self.assertEqual((status, content_type, body), (404, "text/plain", b"not found"))
+
+    def test_form_writes_refuse_a_bad_form_and_write_nothing(self) -> None:
+        feedback = {"comment": "hello", "action": "general"}
+        guidance = {"guidance": "Find the synthetic operator"}
         cases = (
-            ("/missing", {}, 404, b"not found"),
-            ("/decide", {}, 400, b"bad request"),
-            ("/worth", {"worth": "maybe"}, 400, b"worth must be yes, no, or restore"),
-            ("/complete", {}, 409, b"unknown review stage: "),
-            ("/retarget", {"guidance": ""}, 400, b"guidance must be 1-2000 characters"),
-            ("/feedback", {"comment": "", "action": "general"}, 400, b"comment must be 1-4000 characters"),
-            ("/feedback", {"comment": "hello", "action": "unknown"}, 400, b"unknown feedback action"),
-        )
-        for path, fields, expected_status, marker in cases:
-            with self.subTest(path=path, fields=fields):
-                status, content_type, body, _ = self.request("POST", path, fields)
-                self.assertEqual(status, expected_status)
-                self.assertTrue(content_type.startswith("text/plain"))
-                self.assertEqual(body, marker)
-
-        status, content_type, body, _ = self.request("POST", "/approve-enrichment")
-        self.assertEqual(status, 409)
-        self.assertTrue(content_type.startswith("text/plain"))
-        self.assertEqual(body, b"enrichment job execution is disabled")
-
-    def test_disabled_jobs_reject_computed_enrichment_approval(self) -> None:
-        base = SqliteReviewAdapter(self.db).enrichment()
-        enrichment = replace(
-            base,
-            status="needs_approval",
-            approval=EnrichmentApproval(
-                status="approved",
-                approved_at="2026-08-06T00:00:00Z",
-                approved_budget_usd=0.05,
-                estimated_usd=0.05,
-                would_submit=1,
+            ("/worth", {"worth": "maybe"}, 400, "worth must be yes, no, or restore"),
+            ("/worth", {"worth": "yes"}, 404, "person not found"),
+            ("/worth", {"worth": "yes", "parent_slug": "nobody"}, 404, "person not found"),
+            (
+                "/worth",
+                {"worth": "yes", "parent_slug": self.SLUG, "pub": "parent-worth:someone-else"},
+                404,
+                "worth row not found",
+            ),
+            ("/complete", {}, 409, "unknown review stage: "),
+            ("/complete", {"stage": "done"}, 409, "unknown review stage: done"),
+            ("/retarget", {"guidance": ""}, 400, "guidance must be 1-2000 characters"),
+            ("/retarget", {"guidance": "x" * 2001}, 400, "guidance must be 1-2000 characters"),
+            ("/retarget", {**guidance, "pub": "nobody"}, 404, "review row not found"),
+            ("/retarget", {**guidance, "parent_slug": "nobody"}, 404, "person not found"),
+            (
+                "/retarget",
+                {**guidance, "pub": self.PUB, "parent_slug": "someone-else"},
+                400,
+                "stale or mismatched person card",
+            ),
+            ("/feedback", {"comment": "", "action": "general"}, 400, "comment must be 1-4000 characters"),
+            ("/feedback", {"comment": "x" * 4001, "action": "general"}, 400, "comment must be 1-4000 characters"),
+            ("/feedback", {"comment": "hello", "action": "unknown"}, 400, "unknown feedback action"),
+            ("/feedback", {**feedback, "pub": "nobody"}, 404, "review row not found"),
+            ("/feedback", {**feedback, "pub": "parent-worth:nobody"}, 404, "review row not found"),
+            # The worth key is the parent's id, not its slug.
+            ("/feedback", {**feedback, "pub": f"parent-worth:{self.SLUG}"}, 404, "review row not found"),
+            ("/feedback", {**feedback, "parent_slug": "nobody"}, 404, "person not found"),
+            (
+                "/feedback",
+                {**feedback, "pub": self.PUB, "parent_slug": "someone-else"},
+                400,
+                "stale or mismatched person card",
             ),
         )
-        with mock.patch.object(
-            review_server.SqliteReviewAdapter,
-            "approve_enrichment",
-            return_value=enrichment,
-        ):
-            status, content_type, body, _ = self.request(
-                "POST", "/approve-enrichment", {}
+        with mock.patch.object(review_api, "submit_directory_feedback", side_effect=AssertionError("refused first")):
+            for path, fields, expected_status, error in cases:
+                with self.subTest(path=path, fields=fields):
+                    self.assertEqual(self.json_request("POST", path, fields), (expected_status, {"error": error}))
+        self.assertEqual(
+            [tuple(row) for row in self.db.query("SELECT human_worth FROM parents")], [(None,)]
+        )
+        self.assertEqual(self.db.query("SELECT * FROM guidance"), [])
+
+    def test_worth_writes_the_call_and_answers_with_the_counts(self) -> None:
+        key = "parent-worth:parent-jordan-bravo"
+        notifier = mock.Mock()
+        self.http = InProcessHttpClient(
+            review_server.make_handler(
+                confirm_threshold=0.7, guided_retargets=self.queue, db=self.db, agent_notifier=notifier
             )
+        )
+        answer = self.json_request(
+            "POST", "/worth", {"pub": key, "worth": "yes", "parent_slug": self.SLUG, "note": "  Synthetic worth note "}
+        )
+        notifier.assert_called_once_with()
+        self.assertEqual(
+            answer,
+            (
+                200,
+                {
+                    "ok": True,
+                    "pub": key,
+                    "effective": "yes",
+                    "progress": {"worth_pending": 0, "worth_yes": 1, "worth_no": 0, "linkedin_pending": 1},
+                    "next_stage": "enrich",
+                },
+            ),
+        )
+        saved = self.db.query("SELECT human_worth, human_worth_note FROM parents")[0]
+        self.assertEqual(tuple(saved), ("yes", "Synthetic worth note"))
 
-        self.assertEqual(status, 409)
-        self.assertTrue(content_type.startswith("text/plain"))
-        self.assertEqual(body, b"enrichment job execution is disabled")
+        # Restore takes the call back: the person is pending again, by slug alone.
+        status, restored = self.json_request("POST", "/worth", {"worth": "restore", "parent_slug": self.SLUG})
+        self.assertEqual((status, restored["effective"], restored["next_stage"]), (200, "maybe", "worth"))
+        self.assertEqual(restored["progress"]["worth_pending"], 1)
+        self.assertIsNone(self.db.query("SELECT human_worth FROM parents")[0]["human_worth"])
 
-    def test_complete_accepts_stage_and_returns_manifest_progress(self) -> None:
-        status, payload = self.json_request("POST", "/complete", {"stage": "worth"})
-        self.assertEqual(status, 200)
+    def test_complete_wakes_the_agent_and_answers_with_the_manifest(self) -> None:
+        notifier = mock.Mock()
+        handler = review_server.make_handler(
+            confirm_threshold=0.7, guided_retargets=self.queue, db=self.db, agent_notifier=notifier
+        )
+        status, content_type, body, _ = InProcessHttpClient(handler).request("POST", "/complete", {"stage": "worth"})
+        payload = json.loads(body)
+        self.assertEqual((status, content_type), (200, "application/json; charset=utf-8"))
         self.assertEqual(set(payload), {"ok", "manifest", "progress"})
         self.assertIs(payload["ok"], True)
-        self.assertEqual(payload["manifest"]["stage"], "worth")
-        self.assertEqual(payload["manifest"]["status"], "completed")
+        self.assertEqual((payload["manifest"]["stage"], payload["manifest"]["status"]), ("worth", "completed"))
+        self.assertEqual(payload["progress"]["worth_pending"], 1)
+        notifier.assert_called_once_with()
+
+    def test_retarget_hands_the_worker_the_posted_candidate(self) -> None:
+        worker = mock.Mock()
+        worker.submit.return_value.as_dict.return_value = {"state": "queued"}
+        http = InProcessHttpClient(
+            review_server.make_handler(confirm_threshold=0.7, guided_retargets=worker, db=self.db)
+        )
+        form = {"guidance": "  Find the synthetic operator  ", "pub": self.PUB, "parent_slug": self.SLUG}
+        with mock.patch.object(review_api, "build_feedback_request", side_effect=SystemExit("disabled")):
+            status, _, body, _ = http.request("POST", "/retarget", form)
+        self.assertEqual(
+            (status, json.loads(body)), (200, {"ok": True, "item": {"state": "queued"}, "estimated_cost_usd": 0.06})
+        )
+        request = worker.submit.call_args.args[0]
+        self.assertEqual(
+            (request.slug, request.row_key, request.name, request.guidance, request.person_ids, request.linkedin_url),
+            (
+                self.SLUG,
+                self.PUB,
+                "Jordan Bravo",
+                "Find the synthetic operator",
+                (self.PERSON_ID,),
+                f"https://www.linkedin.com/in/{self.PUB}",
+            ),
+        )
+
+    def test_retarget_is_refused_on_a_server_that_runs_no_jobs(self) -> None:
+        http = InProcessHttpClient(review_server.make_handler(confirm_threshold=0.7, db=self.db))
+        status, _, body, _ = http.request("POST", "/retarget", {"guidance": "Find them", "pub": self.PUB})
+        self.assertEqual((status, json.loads(body)), (503, {"error": "in-app jobs are disabled on this server"}))
+        status, _, body, _ = http.request("GET", "/api/retargets")
+        self.assertIs(json.loads(body)["enabled"], False)
+        self.assertEqual(self.db.query("SELECT * FROM guidance"), [])
+
+    def test_feedback_answers_with_powersets_reply_and_a_502_unless_submitted(self) -> None:
+        signed_out = FeedbackSubmission.from_payload({"status": "needs_auth", "error": "run `$powerset login`"})
+        with mock.patch.object(review_api, "submit_directory_feedback", return_value=signed_out) as submit:
+            # No `pub`: the feedback is about the parent and its first candidate.
+            answer = self.json_request(
+                "POST", "/feedback", {"comment": "Synthetic correction", "action": "general", "parent_slug": self.SLUG}
+            )
+        self.assertEqual(answer, (502, {"ok": False, "status": "needs_auth", "error": "run `$powerset login`"}))
+        request = submit.call_args.args[0]
+        self.assertEqual(
+            (request.metadata["parent_slug"], request.metadata["public_identifier"]), (self.SLUG, self.PUB)
+        )
 
     def test_auth_login_form_route_json_shape(self) -> None:
-        with mock.patch.object(review_server, "start_auth_login", return_value="login_started"):
-            status, payload = self.json_request("POST", "/auth/login", {})
-        self.assertEqual(status, 200)
-        self.assertEqual(payload, {"ok": True, "status": "login_started"})
+        for state in ("login_started", "already_running"):
+            with mock.patch.object(auth_login, "start_auth_login", return_value=state):
+                self.assertEqual(self.json_request("POST", "/auth/login", {}), (200, {"ok": True, "status": state}))
 
     def test_feedback_accepts_comment_action_pub_and_parent_slug(self) -> None:
         submitted = FeedbackSubmission.from_payload(
             {"status": "submitted", "feedback_id": "feedback-synthetic"}
         )
-        with mock.patch.object(review_server, "submit_directory_feedback", return_value=submitted):
+        with mock.patch.object(review_api, "submit_directory_feedback", return_value=submitted):
             status, payload = self.json_request(
                 "POST",
                 "/feedback",
@@ -804,7 +510,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
             {"status": "submitted", "feedback_id": "feedback-worth"}
         )
         with mock.patch.object(
-            review_server, "submit_directory_feedback", return_value=submitted
+            review_api, "submit_directory_feedback", return_value=submitted
         ) as submit:
             status, payload = self.json_request(
                 "POST",
@@ -827,7 +533,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertNotIn("public_identifier", request.metadata)
 
     def test_retarget_accepts_guidance_pub_and_parent_slug(self) -> None:
-        with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
+        with mock.patch.object(review_api, "build_feedback_request", side_effect=SystemExit("disabled")):
             status, payload = self.json_request(
                 "POST",
                 "/retarget",
@@ -877,13 +583,13 @@ class DeepContextHttpContractTests(unittest.TestCase):
         )
 
         with mock.patch.object(
-            review_server,
+            review_api,
             "build_feedback_request",
             side_effect=SystemExit("disabled"),
         ):
             status, first = self.json_request(
                 "POST",
-                "/decide",
+                "/api/review/decide",
                 {
                     "pub": self.PUB,
                     "decision": "keep",
@@ -964,54 +670,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             ),
             (alternate, self.PERSON_ID, replacement_url),
         )
-
-    def test_decide_accepts_decision_new_url_parent_slug_and_note(self) -> None:
-        with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
-            status, payload = self.json_request(
-                "POST",
-                "/decide",
-                {
-                    "pub": self.PUB,
-                    "decision": "fix",
-                    "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
-                    "parent_slug": self.SLUG,
-                    "note": "Synthetic correction",
-                },
-            )
-        self.assertEqual(status, 200)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["pub"], self.PUB)
-        self.assertEqual(payload["action"], "retarget")
-        self.assertEqual(payload["new_url"], "https://www.linkedin.com/in/jordan-bravo-correct")
-        note = self.db.query(
-            "SELECT decision_note FROM links WHERE row_key=?", (self.PUB,)
-        )[0]["decision_note"]
-        self.assertEqual(note, "Synthetic correction")
-        for key in ("progress", "resolved_pubs", "next"):
-            self.assertIn(key, payload)
-
-    def test_worth_accepts_worth_pub_parent_slug_and_note(self) -> None:
-        with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
-            status, payload = self.json_request(
-                "POST",
-                "/worth",
-                {
-                    "pub": "parent-worth:parent-jordan-bravo",
-                    "worth": "yes",
-                    "parent_slug": self.SLUG,
-                    "note": "Synthetic worth note",
-                },
-            )
-        self.assertEqual(status, 200)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["effective"], "yes")
-        self.assertEqual(payload["source"], "user")
-        for key in (
-            "progress",
-            "next_stage",
-        ):
-            self.assertIn(key, payload)
-
 
 class SearchesOnlyServerTests(unittest.TestCase):
     """Before a deep-context store exists the same server serves the searches alone."""

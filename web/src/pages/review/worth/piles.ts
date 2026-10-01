@@ -1,5 +1,5 @@
 // The worth screen's piles: the pending queue (Review) and the two decided piles (Yes, No),
-// and the counts their tabs show while decisions save (reconcile_review.js `bumpTabCount`).
+// and the counts their tabs show while decisions save.
 
 import type { DecisionProgress, WorthTab } from "@/types/review"
 

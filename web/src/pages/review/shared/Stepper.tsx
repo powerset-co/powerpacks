@@ -13,8 +13,8 @@ interface StepperProps {
   view: ReviewView
 }
 
-// templates/step.html.j2: three linked steps with a line between. A step opens its stage as a
-// deliberately opened screen (`preview=1`).
+// Three linked steps with a line between. A step opens its stage as a deliberately opened
+// screen (`preview=1`).
 export function Stepper({ steps, view }: StepperProps) {
   return (
     <nav className="stepper" aria-label={STEPPER_LABEL}>

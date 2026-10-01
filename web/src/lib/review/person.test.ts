@@ -54,7 +54,7 @@ describe("the avatar", () => {
     expect(avatarName(reviewPerson({ name: "Jordan B" }), null)).toBe("Jordan B")
   })
 
-  it("draws the old page's initials: first and last run of letters or digits", () => {
+  it("draws initials from the first and last run of letters or digits", () => {
     const drawn = (name: string) => initials(avatarName(reviewPerson({ name }), null))
     expect(drawn("Jordan O'Bravo")).toBe("JB")
     expect(drawn("Casey-Lee Delta")).toBe("CD")

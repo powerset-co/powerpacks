@@ -1,5 +1,5 @@
-// What the running panel shows, the count line and the bar (rendering.py `render_enrichment`),
-// and what a running job's event does to them (reconcile_review.js `renderJobProgress`).
+// What the running panel shows, the count line and the bar, and what a running job's event
+// does to them.
 
 import type { EnrichmentJob } from "@/lib/review/sync"
 import type { EnrichmentPanel } from "@/types/review"

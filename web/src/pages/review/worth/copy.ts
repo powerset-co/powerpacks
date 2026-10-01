@@ -1,6 +1,5 @@
-// The worth screen's own words (templates/worth_card.html.j2, decision_tabs.html.j2,
-// decision_row.html.j2, decision_details.html.j2, worth_search.html.j2, rendering.py
-// `render_decision_table`). Words the other screens share are in lib/review/copy.ts.
+// The worth screen's own words: the card, the tabs, a pile's rows and their details, and the
+// search box. Words the other screens share are in lib/review/copy.ts.
 
 import { TOAST } from "@/lib/review/copy"
 import type { WorthTab } from "@/types/review"

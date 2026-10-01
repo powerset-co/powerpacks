@@ -11,10 +11,9 @@ interface DecisionCardProps {
   children: ReactNode
 }
 
-// reconcile_review.js `swapCardContent`: a decision card keeps its frame mounted while its
-// contents swap. `swapping` fades the contents out (and takes no clicks); a new `cardKey`
-// remounts them and, from the first swap on, they rise in. The first card just appears with
-// the stage.
+// A decision card keeps its frame mounted while its contents swap. `swapping` fades the
+// contents out (and takes no clicks); a new `cardKey` remounts them and, from the first swap
+// on, they rise in. The first card just appears with the stage.
 export function DecisionCard({ cardKey, swapping, className, children }: DecisionCardProps) {
   const [shown, setShown] = useState(cardKey)
   const [swapped, setSwapped] = useState(false)

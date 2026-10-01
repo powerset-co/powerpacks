@@ -20,15 +20,14 @@ export interface Shown {
   payload: LinkedinCardPayload
   phase: CardPhase
   /** The screen opened on this payload (the stage's own read, not a card that followed a
-   *  click). Only then does Finish press itself, as the old page did once per document load. */
+   *  click). Only then does Finish press itself: once per load of the screen. */
   opening: boolean
 }
 
 /**
- * The LinkedIn queue, one card at a time (reconcile_review.js `decideLinkedinCard`, the retarget
- * submit handler and `carouselNav`). The stage reads its first card on mount. A decision's
- * answer carries the next card, read after the write, so a decided person never comes back; a
- * queued re-research reads the next card itself, leaving that person out.
+ * The LinkedIn queue, one card at a time. The stage reads its first card on mount. A
+ * decision's answer carries the next card, read after the write, so a decided person never
+ * comes back; a queued re-research reads the next card itself, leaving that person out.
  */
 export function useLinkedinQueue() {
   const { debug, index, fadeMs, toast, toastError, applyProgress, transition, leaveAndReload } = useReview()
@@ -62,8 +61,9 @@ export function useLinkedinQueue() {
       return
     }
 
-    applyProgress(response.progress)
-    if (response.progress.linkedin_pending === 0) {
+    const pending = response.next.pending
+    applyProgress({ linkedin_pending: pending })
+    if (pending === 0) {
       // The last decision: the check, then the screen loads again on the finished state.
       transition(STAGE_DONE.linkedin, "linkedin")
       return

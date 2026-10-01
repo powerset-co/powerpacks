@@ -1,6 +1,13 @@
 """Command-line parsing and dispatch for the review UI.
 
+`serve` starts the one local server (or reuses the live one) and prints the URL to open:
+`/` for the review at its current stage, `/?stage=worth|enrich|linkedin|done` for one
+stage, `/people`, `/searches`. Before a deep-context store exists it serves the searches
+alone, and `/` goes to `/searches`. `status` prints what the agent should do next.
+
 Changelog:
+- 2026-10-01: the review is the React page at `/`; before a store exists `/` still
+  redirects to /searches, ahead of the shell.
 - 2026-09-30: the directory stage is gone; bare `serve` opens the current review stage.
 - 2026-09-30: serve no longer counts LinkedIn parents at startup (minutes on a
   large store, read by nobody); `status --wait` polls every five seconds.
@@ -75,13 +82,15 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
     class Handler(viewer):
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed) or searches_json.get(self, parsed):
-                return
+            # No store, no review: `/` is the searches, before the shell can claim it.
             if parsed.path == "/":
                 self.send_response(HTTPStatus.FOUND)
                 self.send_header("Location", "/searches")
                 self.end_headers()
-            elif parsed.path == "/api/people/rows":
+                return
+            if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed) or searches_json.get(self, parsed):
+                return
+            if parsed.path == "/api/people/rows":
                 self.send_response(HTTPStatus.NOT_FOUND)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(_NO_PEOPLE)))

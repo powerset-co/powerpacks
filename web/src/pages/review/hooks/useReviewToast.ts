@@ -4,8 +4,8 @@ import type { ToastMessage } from "@/components/shared"
 import { TOAST_ERROR_MS, TOAST_MS } from "@/lib/review/timing"
 
 /**
- * The page's one toast on the old page's clock: a message for 1.8 s, an error for 6 s, a new
- * one replacing the old. The shared `Toast` draws it; its own (longer) timer never gets to fire.
+ * The page's one toast on its own clock: a message for 1.8 s, an error for 6 s, a new one
+ * replacing the last. The shared `Toast` draws it; its own (longer) timer never gets to fire.
  */
 export function useReviewToast() {
   const [toast, setToast] = useState<ToastMessage | null>(null)

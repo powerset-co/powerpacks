@@ -12,14 +12,14 @@ export interface Review {
   debug: boolean
   /** The queue position the URL asked for (`index`), 0 without one. */
   index: number
-  /** A card's fade-out wait: 100 ms, 0 under reduced motion. */
+  /** A card's fade-out wait: 50 ms, 0 under reduced motion. */
   fadeMs: number
   /** A message for 1.8 s; a new one replaces the old. */
   toast: (message: string) => void
   /** An error for 6 s. */
   toastError: (message: string) => void
   /** Repaints the step badges and the tab counts from a click response; no refetch. */
-  applyProgress: (progress: DecisionProgress) => void
+  applyProgress: (progress: Partial<DecisionProgress>) => void
   /** The stage check: the stage becomes a check mark over `message` for 650 ms, then
    *  `stage`'s screen loads. Marks a stage-complete action in flight until it does. */
   transition: (message: string, stage: ReviewView) => void

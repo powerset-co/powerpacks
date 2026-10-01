@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { must } from "@/lib/must"
 import {
   decideResult,
-  decisionProgress,
   errorResponse,
   jsonResponse,
   linkedinCard,
@@ -95,28 +94,6 @@ describe("LinkedinStage: the card", () => {
     expect(server.gets("/api/dossier")).toEqual(["/api/dossier?slug=jordan-bravo&skip=1"])
   })
 
-  it("asks the judge's own question in place of the usual one", async () => {
-    const asked = reviewCandidate({ question: "Is this the Jordan who ran Example Labs?" })
-    const { container } = await open(
-      linkedinCard({ card: { person: reviewPerson(), candidates: [asked], failure_note: "" } }),
-    )
-    expect(container.querySelector(".question")?.textContent).toBe(
-      "Is this the Jordan who ran Example Labs? Or Skip?",
-    )
-    expect(labels(".question")).toEqual(["Skip"])
-  })
-
-  it("puts the first candidate's question above several options, and nothing when it has none", async () => {
-    const asked = reviewCandidate({ question: "Which Jordan worked at Acme?" })
-    const first = await open(severalCard([asked, syntheticCandidate()]))
-    const question = first.container.querySelector(".question")
-    expect(question?.textContent).toBe("Which Jordan worked at Acme?")
-    expect(question?.nextElementSibling?.className).toBe("linkedin-options-intro")
-    cleanup()
-    const second = await open(severalCard([reviewCandidate(), syntheticCandidate()]))
-    expect(second.container.querySelector(".question")).toBeNull()
-  })
-
   it("draws several candidates as the person alone and one option each (L2)", async () => {
     const candidates = [
       reviewCandidate(),
@@ -195,7 +172,7 @@ describe("LinkedinStage: a decision", () => {
     await waitFor(() => expect(name()).toBe("Casey Delta"))
     expect(article().className).toBe("decision-card identity-card entering")
     expect(live().length).toBeGreaterThan(0)
-    expect(review.applyProgress).toHaveBeenCalledWith(decisionProgress({ linkedin_pending: 3 }))
+    expect(review.applyProgress).toHaveBeenCalledWith({ linkedin_pending: 3 })
     expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
     expect(review.transition).not.toHaveBeenCalled()
     // The next card came with the answer: the queue was read once, when the stage opened.
@@ -286,12 +263,11 @@ describe("LinkedinStage: a decision", () => {
       finished: linkedinFinished({ linkedin_complete: true, auto_continue: false }),
       pending: 0,
     })
-    const progress = decisionProgress({ linkedin_pending: 0 })
-    server.answer(`POST ${DECIDE}`, decideResult({ progress, next }))
+    server.answer(`POST ${DECIDE}`, decideResult({ next }))
     const { review } = await open()
     fireEvent.click(button("Use this profile"))
     await waitFor(() => expect(review.transition).toHaveBeenCalledExactlyOnceWith("", "linkedin"))
-    expect(review.applyProgress).toHaveBeenCalledWith(progress)
+    expect(review.applyProgress).toHaveBeenCalledWith({ linkedin_pending: 0 })
     // The check replaces the stage: the card stays faded and no toast is said.
     expect([name(), fading()]).toEqual(["Jordan Bravo", true])
     expect(review.toast).not.toHaveBeenCalled()
@@ -301,15 +277,14 @@ describe("LinkedinStage: a decision", () => {
   it("shows the finished state the answer carries while re-research is still out, without pressing Finish", async () => {
     const finished = linkedinFinished({ retargets_in_flight: 1, auto_continue: true })
     const next = linkedinCard({ card: null, finished, pending: 1 })
-    const progress = decisionProgress({ linkedin_pending: 1 })
-    server.answer(`POST ${DECIDE}`, decideResult({ progress, next }))
+    server.answer(`POST ${DECIDE}`, decideResult({ next }))
     const { review } = await open()
     fireEvent.click(button("Use this profile"))
     expect(await screen.findByRole("heading", { name: "LinkedIn Profiles Checked" })).toBeTruthy()
     expect(screen.queryByRole("article")).toBeNull()
     expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
     expect(review.transition).not.toHaveBeenCalled()
-    // Finish presses itself only on the screen's own load, as the old page did.
+    // Finish presses itself only on the screen's own load.
     await act(() => Promise.resolve())
     expect(server.posts("/complete")).toEqual([])
     expect(button("Finish").disabled).toBe(false)

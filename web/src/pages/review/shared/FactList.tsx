@@ -7,8 +7,8 @@ interface FactListProps {
   items: readonly string[]
 }
 
-// The `fact_list` macro: a Work / Education list showing three entries, the rest behind
-// "+ show N more" / "show fewer".
+// A Work / Education list showing three entries, the rest behind "+ show N more" / "show
+// fewer".
 export function FactList({ items }: FactListProps) {
   const [expanded, setExpanded] = useState(false)
   const { shown, rest } = foldFacts(items)

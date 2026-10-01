@@ -1,6 +1,6 @@
 // The worth suites' review server and the stage rendered against it (worth-harness.tsx). The
 // server keeps the three piles (pending, yes, no) and answers the worth routes from them, as
-// api.py and server.py do: the card queue with `pick` / `exclude` / `index` / `debug`, the
+// the review server does: the card queue with `pick` / `exclude` / `index` / `debug`, the
 // pending names, a decided pile's pages, an opened row's details, the dossier, and POST
 // /worth, which moves the person.
 
@@ -53,7 +53,7 @@ export function gate() {
   return { opened, open: () => open() }
 }
 
-/** A refusal as server.py sends it on POST /worth: plain text with its status code. */
+/** A refusal as POST /worth sends it: plain text with its status code. */
 export function refusal(text: string, status = 400): Response {
   return new Response(text, { status })
 }
@@ -222,7 +222,7 @@ export function spiedReview(server: WorthServer, overrides: Partial<Review> = {}
 /** The worth stage on `tab`, against `server`. */
 export function renderWorth(tab: WorthTab, server: WorthServer, overrides: Partial<Review> = {}) {
   const spied = spiedReview(server, overrides)
-  const path = `/review?stage=worth&view=${tab}`
+  const path = `/?stage=worth&view=${tab}`
   const view = render(<WorthHarness tab={tab} review={spied.review} path={path} />)
   return { ...view, ...spied }
 }

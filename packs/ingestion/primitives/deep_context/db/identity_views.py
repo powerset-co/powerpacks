@@ -3,6 +3,7 @@
 Changelog:
 - 2026-09-30: `enrichment_queue` reads research once and identifiers through the person;
   it runs on every review page load and status poll.
+- 2026-10-01: `linkedin_parent_pending` tells the server's queue whether a decided parent has left.
 - 2026-09-30: `linkedin_queue_order` + `linkedin_queue_parent` load one review card;
   `linkedin_queue` stays for callers that want every card.
 - 2026-09-25: approved families read through `_family_rows`, one JSON-bound id set.
@@ -19,6 +20,8 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _json,
     _linkedin_progress,
     _linkedin_queue,
+    _linkedin_candidate_shown,
+    _linkedin_parent_pending,
     _linkedin_queue_order,
     _linkedin_queue_parent,
 )
@@ -398,6 +401,16 @@ def linkedin_queue(db: Db) -> list[ParentViewRow]:
 def linkedin_queue_order(db: Db) -> list[LinkedInQueueRow]:
     """The queue's parents in card order — ids and slugs only."""
     return _linkedin_queue_order(db)
+
+
+def linkedin_candidate_shown(db: Db, row_key: str) -> bool:
+    """Whether an identity row is a candidate some card shows (an owner-only row is not)."""
+    return _linkedin_candidate_shown(db, row_key)
+
+
+def linkedin_parent_pending(db: Db, parent_id: str) -> bool:
+    """Whether a queued parent still has a candidate to check."""
+    return _linkedin_parent_pending(db, parent_id)
 
 
 def linkedin_queue_parent(db: Db, parent_id: str) -> ParentViewRow:

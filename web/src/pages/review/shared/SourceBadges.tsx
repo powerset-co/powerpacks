@@ -5,9 +5,8 @@ interface SourceBadgesProps {
   sources: readonly string[]
 }
 
-// The `source_badges` macro: a dot and the channel's name per source. The dot's colour is the
-// old page's (base.css `.source-<name> i`); a source with no channel shows its own name and a
-// muted dot.
+// A dot and the channel's name per source. The dot's colour is the source's own (base.css
+// `.source-<name> i`); a source with no channel shows its own name and a muted dot.
 export function SourceBadges({ sources }: SourceBadgesProps) {
   return (
     <>

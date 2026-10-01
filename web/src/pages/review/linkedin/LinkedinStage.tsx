@@ -10,9 +10,9 @@ import { FinishedPanel } from "./FinishedPanel"
 import { LinkedinCard } from "./LinkedinCard"
 import { useLinkedinQueue } from "./useLinkedinQueue"
 
-// The LinkedIn stage (server.py `linkedin_body`, the linkedin branch of `full_page`): the
-// queue's card in its swap panel, or what stands in for it once the queue is empty. It takes
-// no props: its cards come from its own reads, and the screen's settings from `useReview()`.
+// The LinkedIn stage: the queue's card in its swap panel, or what stands in for it once the
+// queue is empty. It takes no props: its cards come from its own reads, and the screen's
+// settings from `useReview()`.
 export function LinkedinStage() {
   const { shown, failure, decide, retarget, browse } = useLinkedinQueue()
   return (
@@ -46,8 +46,8 @@ function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
     return (
       <>
         {queue ? <CarouselNav queue={queue} onIndex={onBrowse} /> : null}
-        {/* A carousel card is a frame of its own, as the old page replaced it whole: browsing
-            (and the first decision, which leaves the carousel) never plays the swap. */}
+        {/* A carousel card is a frame of its own, replaced whole: browsing (and the first
+            decision, which leaves the carousel) never plays the swap. */}
         <LinkedinCard
           key={queue ? queue.index : "queue"}
           card={card}

@@ -16,8 +16,8 @@ export interface WorthNames {
   forget: (key: string) => void
 }
 
-/** The typeahead's names (reconcile_review.js `worthPendingNames`): read once when the review
- *  tab opens, then pruned here as decisions settle. */
+/** The typeahead's names: read once when the review tab opens, then pruned here as decisions
+ *  settle. */
 export function useWorthNames(): WorthNames {
   const { toastError } = useReview()
   const [read, setRead] = useState<readonly WorthPendingEntry[]>([])

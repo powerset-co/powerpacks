@@ -9,14 +9,14 @@ interface DossierProps {
   className?: string
 }
 
-// The lazy dossier (reconcile_review.js `loadDossier`): mounting it asks for the person's
-// dossier once. "Loading…" until the answer; the server's HTML; "No details found" when the
-// server has none; "Could not load details" when the request fails.
+// The lazy dossier: mounting it asks for the person's dossier once. "Loading…" until the
+// answer; the server's HTML; "No details found" when the server has none; "Could not load
+// details" when the request fails.
 export function Dossier({ slug, className }: DossierProps) {
   const dossier = useDossier(slug)
   const classes = cn("dossier-text", className)
   if (dossier.status === "ready") {
-    // The server rendered the person's own markdown file; the old page injected it the same way.
+    // The HTML is this machine's own server rendering the person's own markdown file.
     return <div className={classes} dangerouslySetInnerHTML={{ __html: dossier.html }} />
   }
   return (

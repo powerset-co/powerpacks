@@ -1,5 +1,5 @@
-// What a person card shows of a parent and one candidate (templates/_components.html.j2:
-// the `profile`, `avatar` and `fact_list` macros; rendering.py `_label_badges`).
+// What a person card shows of a parent and one candidate: the name, the profile link, the
+// summary, the avatar's initials, and the folded fact and label lists.
 
 import { UNNAMED } from "@/lib/review/copy"
 import type { ReviewCandidate, ReviewPerson } from "@/types/review"
@@ -35,8 +35,8 @@ export function summaryOf(candidate: ReviewCandidate): string {
 
 /**
  * The name whose initials the avatar draws: the candidate's, else the parent's, cut to its
- * runs of letters and digits. The old page took its initials from those runs (rendering.py
- * `_initials`), so "Jordan O'Bravo" draws JB; the shared Avatar splits on spaces alone.
+ * runs of letters and digits. Initials come from the first and last run, so "Jordan O'Bravo"
+ * draws JB; the shared Avatar splits on spaces alone.
  */
 export function avatarName(person: ReviewPerson, candidate: ReviewCandidate | null): string {
   const words = (name: string) => (name.match(/[A-Za-z0-9]+/g) ?? []).join(" ")

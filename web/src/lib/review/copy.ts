@@ -1,4 +1,4 @@
-// The review page's words, as the old page wrote them (templates/*.html.j2, reconcile_review.js).
+// The review page's words that more than one screen shows; a stage's own live beside the stage.
 
 import type { ReviewView } from "@/types/review"
 
@@ -86,5 +86,5 @@ export function copyFailed(phrase: string): string {
 /** A POST that failed without a body. */
 export const SAVE_FAILED = "Could not save"
 
-/** The screen's own load failed (the old page was a document: the browser said so). */
+/** The screen's own load failed. */
 export const LOAD_FAILED = "Could not load the review"

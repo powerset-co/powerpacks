@@ -35,7 +35,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db, DbMaintenance
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.merge_candidates import judge
 from packs.ingestion.primitives.deep_context.merge_candidates.models import MergePairCandidate, MergePerson
-from packs.ingestion.primitives.deep_context.review import server as review_server
+from packs.ingestion.primitives.deep_context.review import api as review_api
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 
 # One id bound once must clear SQLite's 32,766-variable limit; bound twice, half that.
@@ -344,9 +344,9 @@ class WorthRowTests(unittest.TestCase):
             self.assertEqual(row.key, f"parent-worth:{parent_id}")
             read.assert_called_once()
             self.assertEqual(read.call_args.kwargs.get("parent_id"), parent_id)
-        # The server binds the one-row read, not the whole worth table.
-        self.assertIs(review_server.worth_row, worth_views.worth_row)
-        self.assertFalse(hasattr(review_server, "worth_rows"))
+        # The /worth route binds the one-row read, not the whole worth table.
+        self.assertIs(review_api.worth_row, worth_views.worth_row)
+        self.assertFalse(hasattr(review_api, "worth_rows"))
 
 
 if __name__ == "__main__":

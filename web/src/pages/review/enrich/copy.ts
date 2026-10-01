@@ -1,4 +1,4 @@
-// The Enrich stage's words (templates/enrichment.html.j2, reconcile_review.js `renderJobProgress`).
+// The Enrich stage's words: the panel's title in each state, Continue, and the running counts.
 
 import type { EnrichmentMode } from "@/types/review"
 

@@ -43,26 +43,26 @@ describe("WorthStage: the tabs", () => {
   it("links each tab to its screen", () => {
     renderWorth("review", server, { progress: PAGE })
     expect(tabs().map((tab) => tab.getAttribute("href"))).toEqual([
-      "/review?stage=worth&view=review",
-      "/review?stage=worth&view=yes",
-      "/review?stage=worth&view=no",
+      "/?stage=worth&view=review",
+      "/?stage=worth&view=yes",
+      "/?stage=worth&view=no",
     ])
   })
 
   it("keeps a deliberately opened screen one: the links carry preview=1", () => {
     renderWorth("review", server, { progress: PAGE, preview: true })
     expect(tabs().map((tab) => tab.getAttribute("href"))).toEqual([
-      "/review?stage=worth&view=review&preview=1",
-      "/review?stage=worth&view=yes&preview=1",
-      "/review?stage=worth&view=no&preview=1",
+      "/?stage=worth&view=review&preview=1",
+      "/?stage=worth&view=yes&preview=1",
+      "/?stage=worth&view=no&preview=1",
     ])
   })
 
   it("opens a tab in place: the address changes, the document does not load", () => {
     renderWorth("review", server, { progress: PAGE })
-    expect(where()).toBe("/review?stage=worth&view=review")
+    expect(where()).toBe("/?stage=worth&view=review")
     fireEvent.click(screen.getByRole("link", { name: /^Yes/ }))
-    expect(where()).toBe("/review?stage=worth&view=yes")
+    expect(where()).toBe("/?stage=worth&view=yes")
   })
 })
 

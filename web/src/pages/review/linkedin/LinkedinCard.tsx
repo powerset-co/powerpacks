@@ -28,7 +28,7 @@ interface LinkedinCardProps {
   onRetarget: (request: RetargetRequest) => void
 }
 
-// templates/linkedin_card.html.j2: one person and the profile (or profiles) they might be.
+// One person and the profile (or profiles) they might be.
 // The frame stays while its contents swap; a new person's contents start over.
 export function LinkedinCard(props: LinkedinCardProps) {
   const { card, phase } = props
@@ -79,7 +79,6 @@ function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) 
         <PersonCard person={person} candidate={first} personOnly={several} />
         {several ? (
           <>
-            {first.question ? <div className="question">{first.question}</div> : null}
             <div className="linkedin-options-intro">{OPTIONS_INTRO}</div>
             <ul className="linkedin-options">
               {candidates.map((candidate) => (
@@ -98,7 +97,7 @@ function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) 
       <div className="identity-decision">
         {several ? null : (
           <div className="question">
-            {first.question || QUESTION.usual}
+            {QUESTION.usual}
             {QUESTION.or}
             <button type="button" className="skip-link" disabled={locked} onClick={skip}>
               {DECISION.skip}

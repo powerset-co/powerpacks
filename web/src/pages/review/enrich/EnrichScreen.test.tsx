@@ -76,10 +76,10 @@ async function openEnrich(enrichment = enrichmentPanel()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/review?stage=enrich"]}>
+      <MemoryRouter initialEntries={["/?stage=enrich"]}>
         <Routes>
           <Route
-            path="/review"
+            path="/"
             element={
               <>
                 <ReviewPage />
@@ -160,7 +160,7 @@ describe("the Enrich screen: live progress (E3, E4)", () => {
     await waitFor(() => expect(document.querySelector("[data-stage-probe='linkedin']")).toBeTruthy(), {
       timeout: 2000,
     })
-    expect(where()).toBe("/review?stage=linkedin")
+    expect(where()).toBe("/?stage=linkedin")
   })
 })
 
@@ -235,6 +235,6 @@ describe("the Enrich screen: Continue (E5)", () => {
     await waitFor(() => expect(document.querySelector("[data-stage-probe='linkedin']")).toBeTruthy(), {
       timeout: 2000,
     })
-    expect(where()).toBe("/review?stage=linkedin")
+    expect(where()).toBe("/?stage=linkedin")
   })
 })

@@ -22,7 +22,7 @@ interface WorthCardProps {
   onDecide: (worth: Pile, note: string) => void
 }
 
-// templates/worth_card.html.j2: the person (scrolling inside the card), the optional note box,
+// One pending person's card: the person (scrolling inside the card), the optional note box,
 // and No / Yes.
 export function WorthCard({ person, candidate, cardKey, swapping, onDecide }: WorthCardProps) {
   return (

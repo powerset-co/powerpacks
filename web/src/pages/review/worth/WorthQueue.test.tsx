@@ -302,7 +302,7 @@ describe("WorthQueue: a decision", () => {
     await openQueue({ fadeMs: 150 })
     fireEvent.click(answer("Yes"))
     await wait(60)
-    // The next card was read long ago; only the fade keeps the old one.
+    // The next card was read long ago; only the fade keeps the decided one.
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Casey Delta")
     expect(frame().classList.contains("swapping")).toBe(true)
     await shows("Jordan Bravo")
@@ -705,7 +705,7 @@ describe("WorthQueue: the debug carousel", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Casey Delta")
   })
 
-  it("moves on to the plain next card after a decision, as the old page did", async () => {
+  it("moves on to the plain next card after a decision", async () => {
     const { container, toast } = await openQueue({ debug: true }, "Casey Delta")
     fireEvent.click(answer("Yes"))
     await shows("Jordan Bravo")

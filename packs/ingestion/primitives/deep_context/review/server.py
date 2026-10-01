@@ -1,146 +1,66 @@
-"""Frozen Deep Context HTTP transport over canonical SQLite state.
+"""The local review server's handler: the mounts, and the reads that are not the page's JSON.
+
+Flow: `make_handler` builds one handler class over the canonical SQLite store. Each
+request goes to the first mount that claims it:
+
+GET   AppRoutes (the React shell at `/`, `/people`, `/searches`, ... and its assets),
+      AccountsApi, TasksApi, ReviewApi (`/api/review/...`), then this module's own:
+        /healthz         liveness, for the launcher
+        /api/status      the store's stage, next action and state token
+        /api/events      SSE: one message per change, with the running enrichment's receipt
+        /api/enrichment  the enrichment plan and its state (bin/deep-context reads it)
+        /api/retargets   re-research jobs and whether they can run (bin/deep-context reads it)
+        /api/dossier     ?slug=: the person's dossier as an HTML fragment; &skip=1 is the
+                         body a review card shows (no name, Contact or Network worth)
+      then the Searches JSON routes, People's data routes and the legacy search routes.
+POST  People, Searches, Accounts, Tasks, then ReviewApi (every write the review page makes).
+
+Anything unclaimed is a 404.
 
 Changelog:
-- 2026-09-30: a LinkedIn decision loads the next card alone and answers with counts —
-  no whole-queue hydration, no workflow state.
-- 2026-09-30: /directory and /api/person are gone (People is the browse surface);
-  the bare root opens the store's current stage; a worth decision answers with
-  its counts instead of the full workflow state.
-- 2026-09-25: a worth decision re-reads its one row instead of every worth row.
-- 2026-09-26: the React app's shell page and assets (AppRoutes) answer before People's data routes.
-- 2026-09-26: AppRoutes answers first (the shell now owns /searches and /searches/run); the
+- 2026-10-01: the LinkedIn queue is held in memory (linkedin_queue.py): loaded when Enrich
+  finishes and when a re-research changes, not derived on every click.
+- 2026-10-01: the Jinja review page is gone. `/` is the React shell (AppRoutes); the HTML
+  routes (/api/worth-card, /api/linkedin-card, /api/worth-table, /api/worth-details,
+  /assets/reconcile-review.*), /api/avatar, /decide and /approve-enrichment are deleted;
+  /worth, /complete, /retarget, /feedback and /auth/login moved to review/api.py.
+- 2026-09-30: /directory and /api/person are gone (People is the browse surface).
+- 2026-09-26: the React app's shell page and assets (AppRoutes) answer first; the
   Searches JSON routes (search_api) answer before the legacy search routes.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
-import threading
 import time
 import urllib.parse
-from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler
-from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
-from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.identity_views import (
-    decision_parents,
-    linkedin_progress,
-    linkedin_queue_order,
-    linkedin_queue_parent,
-)
-from packs.ingestion.primitives.deep_context.db.models import (
-    PARENT_WORTH_PREFIX,
-    RESEARCH_CONFIRM_THRESHOLD,
-)
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.accounts.api import AccountsApi
+from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.queries import parents
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_row
-from packs.ingestion.primitives.deep_context.db.view_models import (
-    CandidateViewRow,
-    ParentViewRow,
-    WorthRow,
-)
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import (
     EnrichmentPipeline,
 )
-from packs.ingestion.primitives.deep_context.review.api import ReviewApi
-from packs.ingestion.primitives.deep_context.review.feedback import (
-    FEEDBACK_ACTIONS,
-    build_feedback_request,
-    feedback_alert,
-    post_feedback_quietly,
-    submit_directory_feedback,
+from packs.ingestion.primitives.deep_context.review.api import (
+    ESTIMATED_COST_USD,
+    GuidedRetargets,
+    ReviewApi,
 )
+from packs.ingestion.primitives.deep_context.review.dossier_html import markdown_to_html
+from packs.ingestion.primitives.deep_context.review.feedback import feedback_alert
 from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidanceOutcome
-from packs.ingestion.primitives.deep_context.review.rendering import (
-    GO_BACK_HTML,
-    REVIEW_CSS,
-    REVIEW_JS,
-    SYNTHESIZE_HTML,
-    _carousel_nav,
-    _phase_view,
-    _primary_candidate,
-    _step,
-    _value,
-    decision_rows_html,
-    linkedin_finished_body,
-    markdown_to_html,
-    page_html,
-    render_decision_table,
-    render_decision_details,
-    render_decision_tabs,
-    render_enrichment,
-    render_linkedin_card,
-    render_worth_card,
-    worth_pending_entries,
-    worth_search_html,
-)
+from packs.ingestion.primitives.deep_context.review.linkedin_queue import LinkedinQueue
+from packs.ingestion.primitives.deep_context.review.sqlite_adapter import SqliteReviewAdapter
+from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.ingestion.primitives.share.web.server import share_routes
 from packs.search.primitives.deep_search.results_web.api import search_api
-from packs.ingestion.primitives.accounts.api import AccountsApi
-from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
 from packs.shared.web.app import AppRoutes
-from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
-from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
-    STAGES,
-    GuidanceViewRow,
-    SqliteReviewAdapter,
-)
-
-
-ESTIMATED_COST_USD = 0.06
-# Non-terminal wire-level progress codes (GuidanceOutcome.state / GuidanceViewRow.state) —
-# not the coarse persisted GuidanceState set in identity_reconcile/guidance.py.
-IN_FLIGHT_RETARGET_STATES = {"queued", "researching", "judging", "hydrating"}
-AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
-_auth_proc: subprocess.Popen[bytes] | None = None
-
-
-class GuidedRetargets(Protocol):
-    def resume(self) -> int: ...
-
-    def submit(self, request: GuidanceRequest) -> GuidanceOutcome: ...
-
-
-def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:
-    latest: dict[str, GuidanceViewRow] = {}
-    for item in items:
-        slug = item.slug.lower()
-        if slug and slug not in latest:
-            latest[slug] = item
-    return {slug: item.detail or "the job did not finish" for slug, item in latest.items() if item.state == "failed"}
-
-
-def _index(params: dict[str, list[str]], size: int) -> int:
-    try:
-        return max(0, int(_value(params, "index", "0"))) % size
-    except ValueError:
-        return 0
-
-
-def _excluded(params: dict[str, list[str]]) -> set[str]:
-    values = _value(params, "exclude").split(",")
-    return {value.strip().lower() for value in values if value.strip()}
-
-
-def start_auth_login() -> str:
-    global _auth_proc
-    if _auth_proc is not None and _auth_proc.poll() is None:
-        return "already_running"
-    _auth_proc = subprocess.Popen(
-        [sys.executable, str(AUTH_SCRIPT), "login"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return "login_started"
 
 
 def make_handler(
@@ -151,7 +71,7 @@ def make_handler(
     run_jobs: bool = False,
     guided_retargets: GuidedRetargets | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    """Build the frozen handler over an explicit supported Deep Context database."""
+    """Build the handler over an explicit supported Deep Context database."""
     sequence = 0
 
     def notify() -> None:
@@ -165,19 +85,29 @@ def make_handler(
             except Exception:
                 pass
 
+    # Who is pending a LinkedIn check, kept in memory: known once Enrich finishes, changed
+    # after that only by a decision (which takes its parent out) or a re-research.
+    linkedin = LinkedinQueue(db)
+
+    def enrichment_finished() -> None:
+        linkedin.load()
+        wake_agent()
+
+    def retarget_changed() -> None:
+        linkedin.load()
+        notify()
+
     enrichment_jobs = EnrichmentPipeline(
         db,
         confirm_threshold,
         on_change=notify,
-        on_finish=wake_agent,
+        on_finish=enrichment_finished,
     )
-    api = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
+    adapter = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
     if not parents(db, limit=1):
         raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
-    retargets_enabled = bool(run_jobs or guided_retargets)
-    # The React app (People and Searches: `review people`, `review searches`), their JSON
-    # routes and the legacy search routes (assets, tags, feedback) ride this server: one
-    # origin, one launcher. The app's pages shadow the legacy /searches and /searches/run.
+    # The React app (Review, People, Searches, Accounts, Tasks), its JSON routes and the
+    # legacy search routes (assets, tags, feedback) ride this server: one origin, one launcher.
     app = AppRoutes()
     share = share_routes(db)
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
@@ -186,190 +116,18 @@ def make_handler(
     tasks = TasksApi()
 
     if guided_retargets is None and run_jobs:
-        guided_retargets = GuidedRetargetWorker(db, on_change=notify)
+        guided_retargets = GuidedRetargetWorker(db, on_change=retarget_changed)
         guided_retargets.resume()
-    spawn_enrichment = enrichment_jobs.start
-    # The React Review page's JSON routes (/api/review/...), beside the Jinja page.
-    review_json = ReviewApi(
+    review = ReviewApi(
         db=db,
-        adapter=api,
-        start_enrichment=spawn_enrichment,
+        adapter=adapter,
+        start_enrichment=enrichment_jobs.start,
         notify=notify,
         wake_agent=wake_agent,
         run_jobs=run_jobs,
+        guided_retargets=guided_retargets,
+        linkedin=linkedin,
     )
-
-    def parent_hit(
-        submitted_key: str,
-        slug: str = "",
-    ) -> tuple[str, ParentViewRow, CandidateViewRow] | None:
-        resolved = api.resolve_candidate(submitted_key)
-        if not resolved:
-            return None
-        row_key, parent = resolved
-        candidate = api.candidate(parent, row_key)
-        if not candidate:
-            return None
-        if slug and parent.slug != slug:
-            raise StoreError("stale or mismatched person card")
-        return row_key, parent, candidate
-
-    def worth_body(params: dict[str, list[str]], queue: list[WorthRow]) -> str | None:
-        pick = _value(params, "pick").strip().lower()
-        excluded = _excluded(params)
-        if pick:
-            queue = [p for p in queue if p.key.lower() == pick]
-            if not queue:
-                return None
-        queue = [p for p in queue if p.key.lower() not in excluded]
-        queue.sort(key=lambda p: p.name.lower())
-        if not queue:
-            return SYNTHESIZE_HTML if api.snapshot().progress.synthesize_pending else ""
-        index = _index(params, len(queue))
-        selected = queue[index]
-        parent = person_detail(db, selected.parent_id)
-        if parent is None:
-            return None
-        card = render_worth_card(parent)
-        if _value(params, "debug") == "1":
-            return (
-                f"<div class='carousel-shell' data-queue-index='{index}' "
-                f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
-            )
-        return card
-
-    def review_progress(linkedin_pending: int) -> dict[str, int]:
-        """The counts a decision click repaints: the worth tabs and the two step badges."""
-        worth = worth_counts(db)
-        return {
-            "worth_pending": worth.pending,
-            "worth_yes": worth.yes,
-            "worth_no": worth.no,
-            "linkedin_pending": linkedin_pending,
-        }
-
-    def linkedin_body(params: dict[str, list[str]]) -> tuple[str, int]:
-        """The LinkedIn panel's HTML and how many parents are still pending."""
-        excluded = _excluded(params)
-        # Re-research is read before the queue's order: a result that lands between
-        # the two reads has either left the order or is still excluded here.
-        retargets = api.retargets()
-        inflight = {item.slug.lower() for item in retargets if item.state in IN_FLIGHT_RETARGET_STATES}
-        order = linkedin_queue_order(db)
-        queue = [row for row in order if row.slug.lower() not in excluded | inflight]
-        if not queue:
-            state = api.snapshot()
-            progress = state.progress
-            completed = not progress.linkedin_pending
-            finished = linkedin_finished_body(
-                progress,
-                linkedin_complete=completed,
-                retargets_in_flight=len(inflight),
-                auto_continue=not completed,
-            )
-            return finished, len(order)
-        index = _index(params, len(queue))
-        # Only the card on screen is hydrated; the queue itself is ids and slugs.
-        parent = linkedin_queue_parent(db, queue[index].parent_id)
-        card = render_linkedin_card(
-            parent,
-            parent.candidates,
-            failure_note=_failed_notes(retargets).get(parent.slug, ""),
-        )
-        if _value(params, "debug") == "1":
-            card = (
-                f"<div class='linkedin-stage' data-queue-index='{index}' "
-                f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
-            )
-        return card, len(order)
-
-    def full_page(params: dict[str, list[str]]) -> bytes:
-        state = api.snapshot()
-        progress = state.progress
-        # No stage in the URL: land on the stage the store is at.
-        view = _phase_view(params) or STAGE_BY_ACTION[state.next_action]
-        preview = _value(params, "preview") == "1"
-        enrichment = api.enrichment(state)
-        if (view == "worth" and _value(params, "view", "review") == "review"
-                and not progress.worth_pending and not progress.synthesize_pending):
-            view = "enrich"
-        if view == "worth":
-            tab = _value(params, "view", "review").lower()
-            tab = tab if tab in {"review", "yes", "no"} else "review"
-            tabs = render_decision_tabs(progress, tab, preview=preview)
-            if tab == "review":
-                queue = worth_queue(db)
-                body = worth_body(params, queue) or ""
-                pending = worth_pending_entries(queue)
-                search = worth_search_html("review", pending) if pending else ""
-            else:
-                # One LIMIT/OFFSET page, not the whole pile — the table grows
-                # by appending pages through /api/worth-table.
-                total = progress.worth_yes if tab == "yes" else progress.worth_no
-                page = decision_parents(db, tab)
-                body = render_decision_table(page, tab, total=total)
-                search = ""
-            content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
-        elif view == "enrich":
-            content = (
-                SYNTHESIZE_HTML
-                if progress.synthesize_pending and enrichment.status == "completed"
-                else render_enrichment(enrichment)
-            )
-        elif view == "linkedin":
-            body, _ = linkedin_body(params)
-            content = (
-                "<div class='linkedin-stage'><div class='linkedin-panel' "
-                f"data-linkedin-panel>{body}</div></div>"
-            )
-        elif progress.synthesize_pending:
-            content = SYNTHESIZE_HTML
-        else:
-            content = (
-                "<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
-                f"<p>{progress.linkedin_done} identities checked · {progress.rejected} rejected</p>"
-                f"{GO_BACK_HTML}</div>"
-            )
-        active = {"worth": 0, "enrich": 1, "linkedin": 2, "done": 2}[view]
-        # Strict sequence: no step is complete while synthesis is pending.
-        synthesized = not progress.synthesize_pending
-        specs = (
-            (
-                1,
-                "Review Decisions",
-                active == 0,
-                synthesized and not progress.worth_pending,
-                progress.worth_pending,
-                "/?stage=worth&preview=1",
-            ),
-            (
-                2,
-                "Enrich Contacts",
-                active == 1,
-                synthesized and enrichment.status == "completed",
-                enrichment.counts.pending,
-                "/?stage=enrich&preview=1",
-            ),
-            (
-                3,
-                "Check LinkedIn",
-                active == 2,
-                synthesized and not progress.linkedin_pending,
-                progress.linkedin_pending,
-                "/?stage=linkedin&preview=1",
-            ),
-        )
-        steps = "<i class='step-line'></i>".join(_step(*spec) for spec in specs)
-        return page_html(
-            {"worth": "Add People", "enrich": "Enrich Contacts", "linkedin": "Check LinkedIn", "done": "All Set"}[view],
-            view,
-            content,
-            preview=preview,
-            external_updates=view in {"enrich", "done"},
-            state_token=state.state_token,
-            enrichment_status=enrichment.status,
-            stepper=steps,
-        )
 
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(
@@ -393,10 +151,9 @@ def make_handler(
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            params = urllib.parse.parse_qs(parsed.query)
             if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
                 return None
-            if review_json.get(self, parsed):
+            if review.get(self, parsed):
                 return None
             if parsed.path == "/healthz":
                 return self.send_bytes(b"ok", "text/plain")
@@ -424,8 +181,8 @@ def make_handler(
                             time.sleep(1)
                         current = sequence
                         # The enrichment pipeline's last receipt payload rides
-                        # along so the client's renderJobProgress updates the
-                        # bar in place; None between jobs (mutate-only events).
+                        # along so the page updates the bar in place; None
+                        # between jobs (mutate-only events).
                         job = enrichment_jobs.last_job if sequence != seen else None
                         self.wfile.write(
                             (
@@ -439,316 +196,38 @@ def make_handler(
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
             if parsed.path == "/api/status":
-                return self.send_json(api.status())
+                return self.send_json(adapter.status())
             if parsed.path == "/api/enrichment":
-                return self.send_json(
-                    api.enrichment().as_dict()
-                )
+                return self.send_json(adapter.enrichment().as_dict())
             if parsed.path == "/api/retargets":
                 return self.send_json(
                     {
-                        "items": [item.as_dict() for item in api.retargets()],
-                        "enabled": retargets_enabled,
+                        "items": [item.as_dict() for item in adapter.retargets()],
+                        "enabled": guided_retargets is not None,
                         "estimated_cost_usd": ESTIMATED_COST_USD,
                         "feedback_alert": feedback_alert().as_dict(),
                     }
                 )
-            assets = {
-                "/assets/reconcile-review.css": (REVIEW_CSS, "text/css; charset=utf-8"),
-                "/assets/reconcile-review.js": (REVIEW_JS, "text/javascript; charset=utf-8"),
-            }
-            if parsed.path in assets:
-                path, kind = assets[parsed.path]
-                return self.send_bytes(path.read_bytes(), kind, cache="no-cache")
-            if parsed.path == "/api/worth-table":
-                view = _value(params, "view").lower()
-                if view not in {"yes", "no"}:
-                    return self.send_bytes(b"view must be yes or no", "text/plain", 400)
-                try:
-                    offset = max(0, int(_value(params, "offset", "0")))
-                except ValueError:
-                    return self.send_bytes(b"offset must be an integer", "text/plain", 400)
-                rows = decision_rows_html(decision_parents(db, view, offset=offset), view)
-                return self.send_bytes(rows.encode())
-            if parsed.path == "/api/worth-details":
-                parent = person_detail(db, _value(params, "slug"))
-                if parent is None:
-                    return self.send_bytes(b"gone", "text/plain", 404)
-                return self.send_bytes(render_decision_details(parent).encode())
             if parsed.path == "/api/dossier":
-                parent = person_detail(db, _value(params, "slug"))
-                # Row-detail requests pass skip=1: the expanded decision row
-                # already pins name (summary line) and Contact/Why above the
-                # markdown, so the body starts at Summary.
-                skip = _value(params, "skip") == "1"
+                query = dict(urllib.parse.parse_qsl(parsed.query))
+                parent = person_detail(db, query.get("slug", ""))
+                # The review cards pass skip=1: the body starts at Summary.
                 body = markdown_to_html(
                     parent.dossier_body if parent else "",
-                    skip_name_and_contact=skip,
+                    for_review_card=query.get("skip") == "1",
                 )
                 return self.send_bytes(body.encode())
-            if parsed.path == "/api/worth-card":
-                body = worth_body(params, worth_queue(db))
-                if body is None:
-                    return self.send_bytes(b"gone", "text/plain; charset=utf-8", 404)
-                return self.send_bytes(body.encode())
-            if parsed.path == "/api/linkedin-card":
-                body, _ = linkedin_body(params)
-                return self.send_bytes(body.encode())
-            if parsed.path == "/api/avatar":
-                try:
-                    row_key = api.resolve_row_key(_value(params, "pub"))
-                except StoreError as exc:
-                    return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                avatar: tuple[bytes, str] | None = api.avatar(row_key) if row_key else None
-                if not avatar:
-                    return self.send_bytes(b"not found", "text/plain", 404)
-                return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
             if searches_json.get(self, parsed) or share.get(self, parsed) or searches.get(self, parsed):
                 return None
-            if parsed.path != "/":
-                return self.send_bytes(b"not found", "text/plain", 404)
-            return self.send_bytes(full_page(params))
+            return self.send_bytes(b"not found", "text/plain", 404)
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if share.post(self, parsed) or searches.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed):
                 return None
-            if review_json.post(self, parsed):
+            if review.post(self, parsed):
                 return None
-            routes = {"/decide", "/worth", "/complete", "/approve-enrichment", "/retarget", "/feedback", "/auth/login"}
-            if parsed.path not in routes:
-                return self.send_bytes(b"not found", "text/plain", 404)
-            origin = (self.headers.get("Origin") or "").strip()
-            if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in {
-                "127.0.0.1",
-                "localhost",
-                "::1",
-            }:
-                return self.send_bytes(b"cross-origin request rejected", "text/plain", 403)
-            length = min(int(self.headers.get("Content-Length", "0")), 32_768)
-            form = urllib.parse.parse_qs(self.rfile.read(length).decode())
-            pub = _value(form, "pub")
-            if parsed.path == "/auth/login":
-                return self.send_json({"ok": True, "status": start_auth_login()})
-            if parsed.path == "/approve-enrichment":
-                try:
-                    enrichment = api.approve_enrichment()
-                except (KeyError, StoreError, ValueError) as exc:
-                    return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
-                approval = enrichment.approval
-                if not approval:
-                    return self.send_json({"ok": True, "enrichment": enrichment.as_dict()})
-                if not run_jobs:
-                    return self.send_bytes(
-                        b"enrichment job execution is disabled",
-                        "text/plain; charset=utf-8",
-                        409,
-                    )
-                try:
-                    budget = float(approval.approved_budget_usd)
-                except (TypeError, ValueError) as exc:
-                    return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
-                total_count = enrichment.counts.total
-                launched = spawn_enrichment(
-                    total_count,
-                    budget,
-                    enrichment.request_fingerprint,
-                )
-                if not launched:
-                    return self.send_json(
-                        {
-                            "ok": True,
-                            "enrichment": api.enrichment().as_dict(),
-                        }
-                    )
-                wake_agent()
-                # The running panel rides in the response: the client swaps it
-                # in place — no page reload, no vanish between states.
-                running = render_enrichment(api.enrichment())
-                return self.send_json(
-                    {"ok": True, "enrichment": api.enrichment().as_dict(), "panel": running}
-                )
-            if parsed.path == "/complete":
-                stage = _value(form, "stage").strip().lower()
-                if stage not in STAGES:
-                    error = StoreError(f"unknown review stage: {stage}")
-                    return self.send_bytes(str(error).encode(), "text/plain; charset=utf-8", 409)
-                state = api.snapshot()
-                manifest = {**api.manifest(stage, state=state).as_dict(), "status": "completed"}
-                notify()
-                wake_agent()
-                return self.send_json(
-                    {
-                        "ok": True,
-                        "manifest": manifest,
-                        "progress": asdict(state.progress),
-                    }
-                )
-            if parsed.path == "/feedback":
-                comment = _value(form, "comment").strip()
-                action = _value(form, "action").strip()
-                if not comment or len(comment) > 4000:
-                    return self.send_bytes(b"comment must be 1-4000 characters", "text/plain", 400)
-                if action not in FEEDBACK_ACTIONS:
-                    return self.send_bytes(b"unknown feedback action", "text/plain", 400)
-                slug = _value(form, "parent_slug").strip()
-                if pub.startswith(PARENT_WORTH_PREFIX):
-                    parent = person_detail(db, pub.removeprefix(PARENT_WORTH_PREFIX))
-                    worth_key = parent.worth_row.key if parent else ""
-                    if worth_key != pub:
-                        return self.send_bytes(b"review row not found", "text/plain", 404)
-                    candidate = None
-                else:
-                    try:
-                        hit: tuple[str, ParentViewRow, CandidateViewRow] | None = parent_hit(pub, slug) if pub else None
-                    except StoreError as exc:
-                        return self.send_bytes(str(exc).encode(), "text/plain", 400)
-                    if pub and not hit:
-                        return self.send_bytes(b"review row not found", "text/plain", 404)
-                    parent = hit[1] if hit else person_detail(db, slug)
-                    candidate: CandidateViewRow | None = (
-                        hit[2] if hit else _primary_candidate(parent) if parent else None
-                    )
-                if not parent:
-                    return self.send_bytes(b"person not found", "text/plain", 404)
-                feedback = submit_directory_feedback(
-                    build_feedback_request(
-                        parent, candidate, action=action, comment=comment, retarget_items=api.retargets()
-                    )
-                )
-                status = 200 if feedback.status == "submitted" else 502
-                return self.send_json(
-                    {"ok": status == 200, **feedback.as_dict()},
-                    status,
-                )
-            if parsed.path == "/retarget":
-                guidance = _value(form, "guidance").strip()
-                slug = _value(form, "parent_slug").strip()
-                if not guidance or len(guidance) > 2000:
-                    return self.send_bytes(b"guidance must be 1-2000 characters", "text/plain", 400)
-                if not retargets_enabled:
-                    return self.send_bytes(b"in-app jobs are disabled on this server", "text/plain", 503)
-                if pub:
-                    try:
-                        hit = parent_hit(pub, slug)
-                    except StoreError as exc:
-                        return self.send_bytes(str(exc).encode(), "text/plain", 400)
-                    if not hit:
-                        return self.send_bytes(b"review row not found", "text/plain", 404)
-                    row_key, parent, candidate = hit
-                else:
-                    parent = person_detail(db, slug)
-                    if not parent:
-                        return self.send_bytes(b"person not found", "text/plain", 404)
-                    if not parent.person_ids:
-                        return self.send_bytes(b"person has no research key", "text/plain", 400)
-                    row_key = parent.person_ids[0]
-                    candidate = None
-                request = GuidanceRequest(
-                    slug=parent.slug or slug,
-                    row_key=row_key,
-                    name=parent.name,
-                    guidance=guidance,
-                    person_ids=parent.person_ids,
-                    linkedin_url=candidate.url if candidate else "",
-                    submitted_at=now_iso(),
-                    match_emails=candidate.match_emails if candidate else (),
-                    match_phones=candidate.match_phones if candidate else (),
-                )
-                try:
-                    item = guided_retargets.submit(request)
-                except (ValueError, StoreError) as exc:
-                    return self.send_bytes(str(exc).encode(), "text/plain", 409)
-                try:
-                    feedback = build_feedback_request(
-                        parent, candidate, action="retarget", comment=guidance, retarget_items=[item]
-                    )
-                    threading.Thread(target=post_feedback_quietly, args=(feedback,), daemon=True).start()
-                except SystemExit:
-                    pass
-                notify()
-                wake_agent()
-                return self.send_json(
-                    {
-                        "ok": True,
-                        "item": item.as_dict(),
-                        "estimated_cost_usd": ESTIMATED_COST_USD,
-                    }
-                )
-            if parsed.path == "/worth":
-                value = _value(form, "worth").strip().lower()
-                if value not in {"yes", "no", "restore"}:
-                    return self.send_bytes(b"worth must be yes, no, or restore", "text/plain", 400)
-                slug = _value(form, "parent_slug").strip()
-                parent: ParentViewRow | None = person_detail(db, slug) if slug else None
-                if not parent:
-                    return self.send_bytes(b"person not found", "text/plain", 404)
-                key = parent.worth_row.key
-                if not key or (pub and pub != key):
-                    return self.send_bytes(b"worth row not found", "text/plain", 404)
-                try:
-                    api.set_worth(key, value, _value(form, "note").strip()[:2000])
-                except StoreError as exc:
-                    return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row: WorthRow | None = worth_row(db, key)
-                if row is None:
-                    return self.send_bytes(b"written worth row is missing", "text/plain", 409)
-                # The decision write is what the UI waits on — this response
-                # carries exactly the counts the page repaints. The full workflow
-                # state is a stage-view query; rebuilding it here cost ~1.7s per
-                # click on a 7k-parent store, and the worth page never reads its token.
-                progress = review_progress(linkedin_progress(db).pending)
-                notify()
-                wake_agent()
-                return self.send_json(
-                    {
-                        "ok": True,
-                        "pub": pub,
-                        "network_worth": "" if value == "restore" else value,
-                        "effective": row.effective,
-                        "source": row.source,
-                        "reason": row.machine.reason,
-                        "rejected": row.effective == "no",
-                        "progress": progress,
-                        "next_stage": "enrich" if progress["worth_pending"] == 0 else "worth",
-                    }
-                )
-            decision = _value(form, "decision")
-            new_url = _value(form, "new_url")
-            slug = _value(form, "parent_slug")
-            note = _value(form, "note").strip()[:2000]
-            if not pub or decision not in {"keep", "detach", "fix", "reset", "exclude"}:
-                return self.send_bytes(b"bad request", "text/plain", 400)
-            try:
-                hit = parent_hit(pub, slug)
-            except StoreError as exc:
-                return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-            if not hit:
-                return self.send_bytes(f"review row not found: {pub}".encode(), "text/plain; charset=utf-8", 404)
-            row_key, _parent, _candidate = hit
-            try:
-                result = api.decide(row_key, decision, new_url, note)
-            except StoreError as exc:
-                return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-            notify()
-            wake_agent()
-            # The next card rides in the response, rendered AFTER the write
-            # committed: one round trip, no race, no client-side prefetch. The
-            # same read of the queue's order gives the pending count; the
-            # LinkedIn page never reads a state token.
-            next_html, linkedin_pending = linkedin_body({"exclude": [slug or _parent.slug]})
-            return self.send_json(
-                {
-                    "ok": True,
-                    "pub": row_key,
-                    "action": result.action,
-                    "approved": result.approved,
-                    "new_url": result.new_url,
-                    "progress": review_progress(linkedin_pending),
-                    "resolved_pubs": list(result.resolved_pubs),
-                    "next": next_html,
-                }
-            )
+            return self.send_bytes(b"not found", "text/plain", 404)
 
         def log_message(self, fmt: str, *args: Any) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)

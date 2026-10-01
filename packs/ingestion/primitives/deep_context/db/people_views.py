@@ -12,7 +12,6 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
 from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_SELECT, WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
-    AvatarPayload,
     ParentLookupRow,
     ParentViewRow,
     PersonLookupRow,
@@ -229,20 +228,3 @@ def person_detail(db: Db, slug_or_parent_id: str) -> ParentViewRow | None:
             dossier_body=(str(payload.get("body") or "") if isinstance(payload, dict) else ""),
         )
     return hydrated[0]
-
-
-def avatar_payload(db: Db, row_key: str) -> AvatarPayload | None:
-    """Projected image bytes and content type for one LinkedIn candidate."""
-    rows = db.query(
-        "SELECT a.payload_json FROM links l JOIN artifacts a ON a.candidate_key=l.row_key "
-        "WHERE a.kind='avatar' AND a.status='projected' AND l.row_key=? "
-        "ORDER BY a.projected_at DESC, a.artifact_key LIMIT 1",
-        (row_key,),
-    )
-    payload = _json(rows[0]["payload_json"], {}) if rows else {}
-    if not isinstance(payload, dict) or not payload.get("base64"):
-        return None
-    return AvatarPayload(
-        base64=str(payload["base64"]),
-        content_type=str(payload.get("content_type") or "application/octet-stream"),
-    )

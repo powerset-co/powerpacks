@@ -14,8 +14,8 @@ interface WorthQueueProps {
   moves: PileMoves
 }
 
-// The review tab (server.py `full_page`, `worth_body`): the typeahead over the pending people
-// (outside the panel, so a card swap never touches it), then the panel with one person's card.
+// The review tab: the typeahead over the pending people (outside the panel, so a card swap
+// never touches it), then the panel with one person's card.
 export function WorthQueue({ moves }: WorthQueueProps) {
   const names = useWorthNames()
   const queue = useWorthQueue({ moves, forget: names.forget })

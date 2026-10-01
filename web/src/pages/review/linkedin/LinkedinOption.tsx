@@ -33,9 +33,9 @@ interface LinkedinOptionProps {
   onUse: () => void
 }
 
-// The `option` macro: one of several profiles a person might be. A LinkedIn option is
-// identity evidence only (headline, Work, Education); the contact and the dossier belong to
-// the person above. A researched option shows its research summary in place of a headline.
+// One of several profiles a person might be. A LinkedIn option is identity evidence only
+// (headline, Work, Education); the contact and the dossier belong to the person above. A
+// researched option shows its research summary in place of a headline.
 export function LinkedinOption({ person, candidate, disabled, onUse }: LinkedinOptionProps) {
   const kind = optionKind(candidate)
   const headline = kind === "researched" ? "" : summaryOf(candidate)

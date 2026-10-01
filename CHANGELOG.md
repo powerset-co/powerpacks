@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.9.1...powerpacks-v3.10.0) (2026-10-01)
+
+
+### Features
+
+* **deep-context:** one review page at /, LinkedIn queue in memory ([#648](https://github.com/powerset-co/powerpacks/issues/648)) ([6002d8e](https://github.com/powerset-co/powerpacks/commit/6002d8e16602271ff374e62b0c3ec21168f394d9))
+
+
+### Bug Fixes
+
+* invalidate bootstrapped Harmonic profiles ([#646](https://github.com/powerset-co/powerpacks/issues/646)) ([f8308d6](https://github.com/powerset-co/powerpacks/commit/f8308d6143d980e4dab2d0e57f2d692fc374b04b))
+
 ## [3.9.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.9.0...powerpacks-v3.9.1) (2026-10-01)
 
 

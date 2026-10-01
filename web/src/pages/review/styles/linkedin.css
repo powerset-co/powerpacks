@@ -1,7 +1,7 @@
-/* The LinkedIn stage's look, ported from deep_context/review/reconcile_review.css: the stage
-   and its swap panel, the question and its Skip link, the profile options, the guidance box,
-   the failed re-research note, the person menu and the feedback popover. Loaded after
-   base.css (LinkedinStage imports it), under the same .review-page root. */
+/* The LinkedIn stage's look: the stage and its swap panel, the question and its Skip link,
+   the profile options, the guidance box, the failed re-research note, the person menu and the
+   feedback popover. Loaded after base.css (LinkedinStage imports it), under the same
+   .review-page root. */
 
 /* The debug carousel's arrows sit against the stage. */
 .review-page .linkedin-stage {
@@ -30,8 +30,7 @@
   color: var(--muted);
   font: inherit;
   font-weight: 700;
-  /* A button kept the browser's own spacing on the old page; preflight makes it inherit the
-     question's. */
+  /* The link keeps normal letter spacing; preflight would have it inherit the question's. */
   letter-spacing: normal;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -114,7 +113,7 @@
 .review-page .linkedin-option .linkedin-label {
   margin-top: 0;
 }
-/* A list inside the options list took the browser's second-level bullet on the old page. */
+/* A list inside the options list draws the second-level bullet, as a nested list does. */
 .review-page .linkedin-option .fact-list {
   list-style: circle;
 }
@@ -167,7 +166,7 @@
   width: 100%;
   min-height: 48px;
   max-height: 140px;
-  /* The browser's own textarea padding, which the old page kept and preflight removes. */
+  /* The browser's own textarea padding, which preflight removes. */
   padding: revert;
   resize: none;
   border: 0;
@@ -402,7 +401,7 @@
   font-size: 13px;
 }
 
-/* The old page left this box's placeholder and focus ring to the browser. Preflight gives the
+/* This box's placeholder and focus ring are the browser's own. Preflight gives the
    placeholder Tailwind's grey and index.css gives every field the app's ring: both go back. */
 .review-page .retarget-form textarea::placeholder {
   color: revert;
@@ -457,8 +456,9 @@
 }
 
 @media (max-width: 620px) {
-  /* On the old page the small-screen `.details dl > div` rule came after the option's and
-     won; base.css loads before this file, so the option's facts stack here by name. */
+  /* An option's facts stack on a small screen, as the card's do (base.css `.details dl > div`).
+     base.css loads before this file, so the option's two-column rule above would win over
+     that one: the stack is restated here by name. */
   .review-page .linkedin-option dl > div {
     grid-template-columns: 1fr;
     gap: 3px;
