@@ -17,11 +17,14 @@ interface PersonCardProps {
   /** The person alone (a card with several candidates): the parent's name, the contact and the
    *  dossier; the LinkedIn link and facts belong to each option. */
   personOnly?: boolean
+  /** Load the dossier under the facts. A holder that draws it under its own heading (an
+   *  opened decision row) turns it off. */
+  dossier?: boolean
 }
 
 // The `profile` macro: avatar, source badges, name, label badges and "View LinkedIn", then the
 // facts (Contact, Summary, Location, Work, Education) and the person's dossier.
-export function PersonCard({ person, candidate, personOnly = false }: PersonCardProps) {
+export function PersonCard({ person, candidate, personOnly = false, dossier = true }: PersonCardProps) {
   const url = profileUrl(candidate, personOnly)
   const facts = personOnly ? null : candidate
   const summary = facts ? summaryOf(facts) : ""
@@ -61,7 +64,7 @@ export function PersonCard({ person, candidate, personOnly = false }: PersonCard
             </Fact>
           ) : null}
         </dl>
-        <Dossier slug={person.slug} />
+        {dossier ? <Dossier slug={person.slug} /> : null}
       </section>
     </>
   )

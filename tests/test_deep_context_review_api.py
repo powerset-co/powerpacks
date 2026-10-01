@@ -21,6 +21,8 @@ from unittest import mock
 
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.deep_context.db import _view_rows as view_rows
+from packs.ingestion.primitives.deep_context.db.identity_queries import links
+from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -39,6 +41,10 @@ from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import WorthHumanRow, WorthMachineRow
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
+    RelationshipDecision,
+    finish_reviews,
+)
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import ResearchOutcome
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
@@ -64,7 +70,7 @@ from packs.ingestion.primitives.deep_context.review.api import (
     ReviewPerson,
     ReviewStep,
     ReviewView,
-    WorthCard,
+    WorthDetails,
     WorthCardPayload,
     WorthTab,
     WorthTablePayload,
@@ -224,28 +230,35 @@ class ReviewStore:
     def reach_enrich(self) -> None:
         self.db.decide_worth("worth-parent", "no", note="Synthetic note")
 
+    def finish_questions(self) -> dict[str, str]:
+        """What the enrichment pipeline's last step leaves: every pending LinkedIn handed to the reviewer."""
+        decisions = []
+        for parent_id in sorted(pending_parent_ids(self.db)):
+            undecided = [
+                row for row in links(self.db, parent_id=parent_id) if not row.decision_action and row.kind != "synthetic"
+            ]
+            urls = sorted({row.machine_proposed_url or row.linkedin_url for row in undecided} - {None, ""})
+            choices = [
+                {"url": url, "verdict": "review", "reason": "Owner can identify colleague", "confidence": 0.5}
+                for url in urls
+            ]
+            decisions.append(RelationshipDecision.from_payload(parent_id, f"question:{parent_id}", {"candidates": choices}))
+        finish_reviews(self.db, tuple(decisions))
+        return {"status": "completed"}
+
     def reach_linkedin(self) -> None:
         self.reach_enrich()
-        with self.db.transaction() as conn:
-            for row in conn.execute("SELECT row_key,parent_id,linkedin_url FROM links WHERE kind='pub'").fetchall():
-                payload = {
-                    "verdict": "needs_review", "confidence": 0.5,
-                    "relationship_decision": {
-                        "parent_id": row["parent_id"], "fingerprint": "fixture",
-                        "candidates": [{"url": row["linkedin_url"], "verdict": "review",
-                                        "reason": "Synthetic fixture needs human review", "confidence": 0.5}],
-                    },
-                }
-                conn.execute(
-                    "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE row_key=?",
-                    (json.dumps(payload), row["row_key"]),
-                )
+        self.finish_questions()
 
     def reach_done(self) -> None:
         self.reach_linkedin()
         self.db.decide_identity("jordan-bravo", "verify")
 
-    def links(self) -> list[dict]:
+    def estimate(self) -> float:
+        """The spend the Enrich panel asks to approve right now."""
+        return SqliteReviewAdapter(self.db, 0.7).enrichment().estimated_usd
+
+    def link_rows(self) -> list[dict]:
         """Every identity row, without the two clock columns."""
         rows = query(self.db, "SELECT * FROM links ORDER BY row_key")
         return [{key: row[key] for key in row.keys() if key not in {"decided_at", "updated_at"}} for row in rows]
@@ -549,9 +562,10 @@ class WorthRoutesTests(ReviewApiFixture):
         self.assertIn(f"<h2>{candidate['name']}</h2>", old)
         self.assertEqual(candidate["contacts"], "casey-delta@example.com · +15550100")
         self.assertIn(f"<dd>{candidate['contacts']}</dd>", old)
-        self.assertNotIn("/api/avatar?pub=", old)
-        self.assertIn("<span>CD</span>", old)
-        self.assertEqual((candidate["url"], candidate["synthetic"]), ("", False))
+        # No profile picture: initials only, on both.
+        self.assertNotIn("<img", old)
+        self.assertEqual((candidate["url"], candidate["synthetic"], candidate["avatar_url"]), ("", False, ""))
+        self.assertEqual(candidate["question"], "")
 
     def test_worth_card_without_a_candidate_has_a_null_candidate(self) -> None:
         seed_identity(
@@ -599,10 +613,18 @@ class WorthRoutesTests(ReviewApiFixture):
                 )
                 tabs = dict(re.findall(r"data-tab='(\w+)'\s+href='[^']*'>\w+<span>(\d+)</span>", old))
                 self.assertEqual(table["total"], int(tabs[pile]))
+                self.assertEqual(table["total"], int(re.search(r"data-total='(\d+)'", old).group(1)))
                 self.assertEqual(table["total"], len(rows))
+                # A pile page is names, labels and reasons: no profile, picture, contact or source.
                 for row in rows:
-                    if row["candidate"] and row["candidate"]["contacts"]:
-                        self.assertIn(f"<dd>{row['candidate']['contacts']}</dd>", old)
+                    self.assertEqual(set(row), {"person", "reason"})
+                    self.assertEqual(row["person"]["sources"], [])
+                for absent in ("<img", "<dt>Contact</dt>", "class='source ", "View LinkedIn"):
+                    self.assertNotIn(absent, old)
+                self.assertEqual(
+                    [row["person"]["labels"] for row in rows],
+                    [jinja_labels(drawn) for drawn in old.split("<details class='decision-row'")[1:]],
+                )
 
         yes = self.payload("/api/review/worth-table?view=YES")["rows"]
         self.assertEqual(yes[0]["person"]["labels"], CASEY_TITLES)
@@ -622,6 +644,44 @@ class WorthRoutesTests(ReviewApiFixture):
                     [row["person"]["name"] for row in table["rows"]], re.findall(r"<strong>(.*?)</strong>", old)
                 )
                 self.assertEqual(table["total"], 3)
+
+    def test_worth_details_is_the_profile_an_opened_jinja_row_loads(self) -> None:
+        replace_person_sources(
+            self.db,
+            "worth-parent-person",
+            tuple(PersonSourceRow("worth-parent-person", source) for source in ("imessage", "gmail_msgvault")),
+        )
+        self.db.decide_worth("worth-parent", "yes")
+        for slug in ("casey-delta", "jordan-bravo", "worth-parent"):
+            with self.subTest(slug=slug):
+                details = self.payload(f"/api/review/worth-details?slug={slug}")
+                status, old = self.jinja("GET", f"/api/worth-details?slug={slug}")
+                self.assertEqual(status, 200)
+                person, candidate = details["person"], details["candidate"]
+                self.assertIn(f"<h2>{candidate['name']}</h2>", old)
+                self.assertEqual(person["sources"], re.findall(r"<span class='source source-(\w+)'>", old))
+                self.assertEqual(person["labels"], jinja_labels(old))
+                self.assertEqual(re.findall(r"<dt>Contact</dt><dd>(.*?)</dd>", old), [candidate["contacts"]][: bool(candidate["contacts"])])
+                self.assertEqual(re.findall(r"class='linkedin-label' href='(.*?)'", old), [candidate["url"]][: bool(candidate["url"])])
+                self.assertEqual(re.findall(r"<img src='(.*?)'", old), [candidate["avatar_url"]][: bool(candidate["avatar_url"])])
+                # The row's "Who they are" is the dossier route's body, skip=1.
+                _, dossier = self.jinja("GET", f"/api/dossier?slug={slug}&skip=1")
+                self.assertIn("Synthetic collaborator", dossier)
+                self.assertTrue(old.endswith(f"<div class='row-facts'>{dossier}</div>"))
+
+        casey = self.payload("/api/review/worth-details?slug=casey-delta")
+        self.assertEqual(casey, self.payload("/api/review/worth-details?slug=worth-parent"))
+        self.assertEqual(casey["person"]["sources"], ["gmail", "imessage"])
+        self.assertEqual(casey["person"]["labels"], CASEY_TITLES)
+        self.assertEqual(casey["candidate"]["contacts"], "casey-delta@example.com · +15550100")
+        jordan = self.payload("/api/review/worth-details?slug=jordan-bravo")
+        self.assertEqual(jordan["candidate"]["url"], "https://www.linkedin.com/in/jordan-bravo")
+
+    def test_worth_details_is_gone_with_its_parent(self) -> None:
+        for query_string in ("", "?slug=nobody"):
+            with self.subTest(query=query_string):
+                self.assertEqual(self.get_json(f"/api/review/worth-details{query_string}"), (404, {"error": "gone"}))
+                self.assertEqual(self.jinja("GET", f"/api/worth-details{query_string}"), (404, "gone"))
 
     def test_worth_table_refuses_a_bad_view_or_offset(self) -> None:
         for query_string in ("", "?view=maybe", "?view=review", "?view=yes&offset=x"):
@@ -694,6 +754,17 @@ class LinkedinRoutesTests(ReviewApiFixture):
         )
         failed = re.search(r"<div class='reresearch-failed'>Re-research failed: (.*?)</div>", old)
         self.assertEqual(card["failure_note"], html.unescape(failed.group(1)) if failed else "")
+        self.assertEqual(
+            set(re.findall(r"<img src='(.*?)'", old)),
+            {candidate["avatar_url"] for candidate in card["candidates"]} - {""},
+        )
+        question = card["candidates"][0]["question"]
+        single = re.search(r"<div class='question'>(.*?) Or <button", old)
+        if single:
+            self.assertEqual(html.unescape(single.group(1)), question or "Is this the right profile?")
+        else:
+            asked = re.findall(r"<div class='question'>(.*?)</div>", old)
+            self.assertEqual([html.unescape(text) for text in asked], [question][: bool(question)])
         position = re.search(r"data-queue-index='(\d+)' data-queue-total='(\d+)'", old)
         self.assertEqual(
             payload["queue"],
@@ -854,6 +925,8 @@ class LinkedinRoutesTests(ReviewApiFixture):
                 "education": ("BS — Example University",),
                 "synthetic": False,
                 "contacts": "jordan@example.com · +14155550100 · +14155550101",
+                "avatar_url": "",
+                "question": "",
             },
         )
         researched = ReviewCandidate.from_row(replace(base, synthetic=True, url="https://example.com/researched"))
@@ -873,6 +946,63 @@ class LinkedinRoutesTests(ReviewApiFixture):
         labelled = person_detail(self.db, "worth-parent")
         self.assertEqual(list(ReviewPerson.from_parent(labelled).labels), jinja_labels(render_worth_card(labelled)))
         self.assertEqual(ReviewPerson.from_parent(parent).labels, ())
+
+
+    def test_candidate_picture_and_question_are_the_ones_the_jinja_cards_show(self) -> None:
+        parent = person_detail(self.db, "linkedin-parent")
+        plain = parent.candidates[0]
+        picture, question = "https://example.com/photo.png", "Which Jordan ran Bravo Robotics?"
+        asked = replace(plain, profile_pic_url=picture, human_question=question)
+        cases = (
+            (plain, "", ""),
+            (asked, picture, question),
+            # A researched profile never shows a picture.
+            (replace(asked, synthetic=True), "", question),
+        )
+        for candidate, avatar_url, expected_question in cases:
+            with self.subTest(picture=candidate.profile_pic_url, synthetic=candidate.synthetic):
+                payload = ReviewCandidate.from_row(candidate)
+                self.assertEqual((payload.avatar_url, payload.question), (avatar_url, expected_question))
+                alone = replace(parent, candidates=(candidate,))
+                single = render_linkedin_card(alone, alone.candidates)
+                for old in (render_worth_card(alone), single):
+                    self.assertEqual(re.findall(r"<img src='(.*?)'", old), [payload.avatar_url][: bool(payload.avatar_url)])
+                drawn = re.search(r"<div class='question'>(.*?) Or <button", single).group(1)
+                self.assertEqual(html.unescape(drawn), payload.question or "Is this the right profile?")
+
+                # Several candidates: the first one's question sits above the options, or nothing does.
+                several = replace(parent, candidates=(candidate, replace(plain, row_key="jordan-bravo-alt")))
+                drawn = re.findall(r"<div class='question'>(.*?)</div>", render_linkedin_card(several, several.candidates))
+                self.assertEqual([html.unescape(text) for text in drawn], [payload.question][: bool(payload.question)])
+
+    def test_linkedin_card_asks_the_stored_question(self) -> None:
+        question = "Which Jordan ran Bravo Robotics?"
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE links SET judgment_payload_json=? WHERE row_key='jordan-bravo'",
+                (json.dumps({"relationship_decision": {"human_question": question}}),),
+            )
+        card = self.assert_card_parity("")["card"]
+        self.assertEqual([candidate["question"] for candidate in card["candidates"]], [question])
+
+        self.db.project_rows(
+            (
+                LinkRow(
+                    "jordan-bravo-alt",
+                    "linkedin-parent",
+                    "jordan-bravo-alt",
+                    RowKind.PUB.value,
+                    "https://www.linkedin.com/in/jordan-bravo-alt",
+                    "Jordan B. Bravo",
+                    machine_action="verify",
+                    machine_confidence=0.5,
+                    paid_profile=1,
+                    source=WriterSource.RECONCILE.value,
+                ),
+            )
+        )
+        card = self.assert_card_parity("")["card"]
+        self.assertEqual([candidate["question"] for candidate in card["candidates"]], [question, ""])
 
 
 class DecideTests(ReviewApiFixture):
@@ -897,8 +1027,8 @@ class DecideTests(ReviewApiFixture):
                 self.assertEqual(written["action"], action)
                 for key in ("ok", "pub", "action", "approved", "new_url", "progress", "resolved_pubs"):
                     self.assertEqual(written[key], old[key], key)
-                self.assertEqual(new_store.links(), old_store.links())
-                decided = next(row for row in new_store.links() if row["row_key"] == "jordan-bravo")
+                self.assertEqual(new_store.link_rows(), old_store.link_rows())
+                decided = next(row for row in new_store.link_rows() if row["row_key"] == "jordan-bravo")
                 self.assertEqual(decided["decision_action"], action)
 
                 # The same one-shot reset, through both routes.
@@ -906,7 +1036,7 @@ class DecideTests(ReviewApiFixture):
                 old_store.http.request("POST", "/decide", reset)
                 status, _ = self.post_json("/api/review/decide", reset, http=new_store.http)
                 self.assertEqual(status, 200)
-                self.assertEqual(new_store.links(), old_store.links())
+                self.assertEqual(new_store.link_rows(), old_store.link_rows())
 
     def test_decide_answers_with_the_next_card_and_the_counts(self) -> None:
         self.store.seed_linkedin_queue()
@@ -998,12 +1128,12 @@ class DecideTests(ReviewApiFixture):
             ),
             ({"pub": "jordan-bravo", "decision": "fix", "new_url": ""}, 400, "fix needs a LinkedIn URL"),
         )
-        before = self.store.links()
+        before = self.store.link_rows()
         for fields, expected_status, text in cases:
             with self.subTest(fields=fields):
                 self.assertEqual(self.post_json("/api/review/decide", fields), (expected_status, {"error": text}))
                 self.assertEqual(self.jinja("POST", "/decide", fields), (expected_status, text))
-        self.assertEqual(self.store.links(), before)
+        self.assertEqual(self.store.link_rows(), before)
 
     def test_decide_refuses_a_row_no_card_ever_showed(self) -> None:
         # The owner's own identity row resolves, but it is nobody's candidate.
@@ -1053,7 +1183,7 @@ class DecideTests(ReviewApiFixture):
         self.assertEqual(self.jinja("POST", "/decide", fields), (400, payload["error"]))
 
     def test_posts_refuse_another_origin_and_accept_this_machine(self) -> None:
-        before = self.store.links()
+        before = self.store.link_rows()
         fields = {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
         for path in ("/api/review/decide", "/api/review/approve-enrichment"):
             with self.subTest(path=path), mock.patch.object(
@@ -1061,7 +1191,7 @@ class DecideTests(ReviewApiFixture):
             ):
                 status, payload = self.post_json(path, fields, headers={"Origin": "https://example.test"})
                 self.assertEqual((status, payload), (403, {"error": "cross-origin request rejected"}))
-        self.assertEqual(self.store.links(), before)
+        self.assertEqual(self.store.link_rows(), before)
 
         for origin in ("http://127.0.0.1:8765", "http://localhost:5173"):
             with self.subTest(origin=origin):
@@ -1093,13 +1223,23 @@ class EnrichmentPanelTests(ReviewApiFixture):
                 replace(base, status="needs_approval", state="needs_approval", estimated_usd=2.85, would_submit=57),
                 EnrichmentPanel("approval", approval_label="Approve $2.85"),
             ),
+            # Nothing to research, but the judgments cost: still an approval of that estimate.
             (
-                replace(base, status="not_started", state="profile_prep_pending", would_submit=0, estimated_usd=0),
+                replace(base, status="not_started", state="profile_prep_pending", would_submit=0, estimated_usd=0.02),
+                EnrichmentPanel("approval", approval_label="Approve $0.02"),
+            ),
+            # Under half a cent rounds to $0.00, which is the free continue.
+            (
+                replace(base, status="not_started", state="profile_prep_pending", would_submit=0, estimated_usd=0.004),
                 EnrichmentPanel("approval", approval_label="Prepare profiles and judge LinkedIns"),
+            ),
+            (
+                replace(base, status="not_started", state="profile_prep_pending", would_submit=3, estimated_usd=0.004),
+                EnrichmentPanel("approval", approval_label="Approve $0.00"),
             ),
             # Cached research that still needs the free local chain is a $0 continue.
             (
-                replace(base, status="completed", state="profile_prep_pending", would_submit=0, estimated_usd=0),
+                replace(base, status="completed", state="profile_prep_pending", would_submit=0, estimated_usd=0.0),
                 EnrichmentPanel("approval", approval_label="Prepare profiles and judge LinkedIns"),
             ),
             (replace(base, status="completed", state="done"), EnrichmentPanel("completed")),
@@ -1111,7 +1251,7 @@ class EnrichmentPanelTests(ReviewApiFixture):
         )
         self.assertEqual({panel.mode for _, panel in cases}, set(get_args(EnrichmentMode)))
         for view, expected in cases:
-            with self.subTest(status=view.status, state=view.state):
+            with self.subTest(status=view.status, state=view.state, estimate=view.estimated_usd):
                 panel = EnrichmentPanel.from_view(view)
                 self.assertEqual(panel, expected)
                 old = render_enrichment(view)
@@ -1128,11 +1268,24 @@ class EnrichmentPanelTests(ReviewApiFixture):
         self.db.decide_worth("worth-parent", "yes")
         page = self.payload("/api/review/page")
         self.assertEqual(page["view"], "enrich")
+        _, old = self.jinja("GET", "/?stage=enrich")
+        asked = re.search(r"data-approve-enrichment>(Approve \$\d+\.\d\d)</button>", old).group(1)
+        self.assertEqual(asked, f"Approve ${self.store.estimate():.2f}")
         self.assertEqual(
             page["enrichment"],
-            {"mode": "approval", "completed": 0, "total": 0, "approval_label": "Approve $0.08", "error": ""},
+            {"mode": "approval", "completed": 0, "total": 0, "approval_label": asked, "error": ""},
         )
         self.assertEqual((page["steps"][1]["complete"], page["steps"][1]["count"]), (False, 1))
+
+    def test_judgments_alone_are_an_approval_of_their_estimate(self) -> None:
+        # Nothing to research (Casey is a no), but Jordan's LinkedIn still has to be judged.
+        self.store.reach_enrich()
+        estimate = self.store.estimate()
+        self.assertGreater(round(estimate, 2), 0)
+        panel = self.payload("/api/review/page")["enrichment"]
+        _, old = self.jinja("GET", "/?stage=enrich")
+        self.assertEqual((panel["mode"], panel["approval_label"]), ("approval", f"Approve ${estimate:.2f}"))
+        self.assertIn(f"data-approve-enrichment>{panel['approval_label']}</button>", old)
 
 
 class ApproveEnrichmentTests(ReviewApiFixture):
@@ -1159,6 +1312,7 @@ class ApproveEnrichmentTests(ReviewApiFixture):
 
     def test_running_enrichment_approval_is_idempotent(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
+        estimate = self.store.estimate()
         entered, release = threading.Event(), threading.Event()
 
         def reconcile_run() -> ResearchOutcome:
@@ -1177,7 +1331,7 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
             mapped_judge.return_value.judge_errors = 0
-            relationships.return_value.run.return_value = {"status": "completed"}
+            relationships.return_value.run.side_effect = self.store.finish_questions
             running = {"mode": "running", "completed": 0, "total": 1, "approval_label": "", "error": ""}
             # This reconcile blocks, so the first answer is deterministically the running panel.
             self.assertEqual(
@@ -1191,11 +1345,13 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             release.set()
             self.wait_for_enrichment_job("applied")
             self.assertEqual(reconcile.return_value.run.call_count, 1)
-            self.assertEqual(reconcile.call_args.kwargs["budget"], 0.08)
+            # The pipeline hands research the approved estimate, to the cent.
+            self.assertEqual(reconcile.call_args.kwargs["budget"], round(estimate, 2))
             self.assertIs(reconcile.call_args.kwargs["approve"], True)
 
     def test_approval_starts_the_pipeline_the_jinja_route_starts(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
+        estimate = self.store.estimate()
         calls = []
         for path in ("/approve-enrichment", "/api/review/approve-enrichment"):
             with mock.patch.object(enrichment_pipeline.EnrichmentPipeline, "start", return_value=False) as start:
@@ -1204,14 +1360,18 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             start.assert_called_once()
             calls.append(start.call_args)
         self.assertEqual(calls[0], calls[1])
-        self.assertEqual(calls[1].args[:2], (1, 0.079004))
+        self.assertEqual(calls[1].args[:2], (1, estimate))
         # Not launched: the panel is the store's, still waiting for the approval.
         self.assertEqual(
             json.loads(body),
             {
                 "ok": True,
                 "enrichment": {
-                    "mode": "approval", "completed": 0, "total": 0, "approval_label": "Approve $0.08", "error": "",
+                    "mode": "approval",
+                    "completed": 0,
+                    "total": 0,
+                    "approval_label": f"Approve ${estimate:.2f}",
+                    "error": "",
                 },
             },
         )
@@ -1289,6 +1449,7 @@ class TypeScriptPinTests(ReviewApiFixture):
             "ReviewPerson": ReviewPerson,
             "ReviewCandidate": ReviewCandidate,
             "QueuePosition": QueuePosition,
+            "WorthDetails": WorthDetails,
             "WorthCardPayload": WorthCardPayload,
             "WorthPendingEntry": WorthPendingEntry,
             "DecisionRow": DecisionRow,
@@ -1301,7 +1462,6 @@ class TypeScriptPinTests(ReviewApiFixture):
         for interface, shape in shapes.items():
             with self.subTest(interface=interface):
                 self.assertEqual(ts_fields(interface), field_names(shape))
-        self.assertEqual(ts_inline_fields("WorthCardPayload", "card"), field_names(WorthCard))
         self.assertEqual(ts_inline_fields("LinkedinCardPayload", "card"), field_names(LinkedinCard))
 
     def test_vocabularies_match_the_unions(self) -> None:
@@ -1331,7 +1491,7 @@ class TypeScriptPinTests(ReviewApiFixture):
 
         worth = self.payload("/api/review/worth-card?debug=1")
         self.assertEqual(set(worth), fields("WorthCardPayload"))
-        self.assertEqual(set(worth["card"]), set(ts_inline_fields("WorthCardPayload", "card")))
+        self.assertEqual(set(worth["card"]), fields("WorthDetails"))
         self.assertEqual(set(worth["card"]["person"]), fields("ReviewPerson"))
         self.assertEqual(set(worth["card"]["candidate"]), fields("ReviewCandidate"))
         self.assertEqual(set(worth["queue"]), fields("QueuePosition"))
@@ -1344,7 +1504,11 @@ class TypeScriptPinTests(ReviewApiFixture):
         self.assertEqual(set(table), fields("WorthTablePayload"))
         self.assertEqual(set(table["rows"][0]), fields("DecisionRow"))
         self.assertEqual(set(table["rows"][0]["person"]), fields("ReviewPerson"))
-        self.assertIsNone(table["rows"][0]["candidate"])
+
+        details = self.payload("/api/review/worth-details?slug=jordan-bravo")
+        self.assertEqual(set(details), fields("WorthDetails"))
+        self.assertEqual(set(details["person"]), fields("ReviewPerson"))
+        self.assertEqual(set(details["candidate"]), fields("ReviewCandidate"))
 
         linkedin = self.payload("/api/review/linkedin-card?debug=1")
         self.assertEqual(set(linkedin), fields("LinkedinCardPayload"))

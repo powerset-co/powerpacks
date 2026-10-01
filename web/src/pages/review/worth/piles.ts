@@ -20,11 +20,6 @@ export interface PileMove {
 
 export type TabCounts = Readonly<Record<WorthTab, number>>
 
-/** A decided pile's size as the server counts it. */
-export function pileCount(progress: DecisionProgress, pile: Pile): number {
-  return pile === "yes" ? progress.worth_yes : progress.worth_no
-}
-
 /** The tabs' counts: the server's, with every move still saving applied. Never below 0. */
 export function tabCounts(progress: DecisionProgress, moves: readonly PileMove[]): TabCounts {
   const counts = { review: progress.worth_pending, yes: progress.worth_yes, no: progress.worth_no }

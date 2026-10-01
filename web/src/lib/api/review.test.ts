@@ -9,6 +9,7 @@ import {
   jsonResponse,
   reviewPage,
   reviewStatus,
+  worthDetails,
   runningEvent,
   worthCard,
   worthPending,
@@ -17,7 +18,6 @@ import {
 
 import {
   approveEnrichment,
-  avatarUrl,
   completeStage,
   fetchDossier,
   fetchLinkedinCard,
@@ -25,6 +25,7 @@ import {
   fetchStatus,
   fetchWorthCard,
   fetchWorthPending,
+  fetchWorthDetails,
   fetchWorthTable,
   openSignIn,
   postDecide,
@@ -111,6 +112,14 @@ describe("the review reads", () => {
     fetchMock.mockClear()
     await fetchLinkedinCard({ exclude: ["jordan-bravo"] })
     expect(sent().url).toBe("/api/review/linkedin-card?exclude=jordan-bravo")
+  })
+
+  it("reads an opened row's details by slug, and says when the parent is gone", async () => {
+    answer(jsonResponse(worthDetails()))
+    expect((await fetchWorthDetails("jordan bravo")).person.slug).toBe("jordan-bravo")
+    expect(sent().url).toBe("/api/review/worth-details?slug=jordan+bravo")
+    answer(errorResponse("gone", 404))
+    expect((await refused(fetchWorthDetails("jordan-bravo"))).gone).toBe(true)
   })
 
   it("reads the status", async () => {
@@ -278,11 +287,5 @@ describe("watchEvents", () => {
     FakeEventSource.opened[0]?.emit("not json")
     FakeEventSource.opened[0]?.emit("[1]")
     expect(onEvent.mock.calls).toEqual([[null], [null]])
-  })
-})
-
-describe("avatarUrl", () => {
-  it("asks for the candidate's picture by row key", () => {
-    expect(avatarUrl("jordan bravo/1")).toBe("/api/avatar?pub=jordan+bravo%2F1")
   })
 })

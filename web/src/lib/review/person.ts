@@ -33,17 +33,15 @@ export function summaryOf(candidate: ReviewCandidate): string {
   return candidate.headline === NO_HEADLINE ? "" : candidate.headline
 }
 
-/** The name whose initials the avatar draws: the candidate's, else the parent's. */
+/**
+ * The name whose initials the avatar draws: the candidate's, else the parent's, cut to its
+ * runs of letters and digits. The old page took its initials from those runs (rendering.py
+ * `_initials`), so "Jordan O'Bravo" draws JB; the shared Avatar splits on spaces alone.
+ */
 export function avatarName(person: ReviewPerson, candidate: ReviewCandidate | null): string {
-  if (candidate?.name) return candidate.name
-  return person.name
-}
-
-/** The candidate whose picture the avatar asks for: a fetched profile. A researched one has
- *  no picture. */
-export function avatarKey(candidate: ReviewCandidate | null): string {
-  if (!candidate || candidate.synthetic || !candidate.url) return ""
-  return candidate.row_key
+  const words = (name: string) => (name.match(/[A-Za-z0-9]+/g) ?? []).join(" ")
+  if (candidate?.name) return words(candidate.name)
+  return words(person.name)
 }
 
 export interface Folded {

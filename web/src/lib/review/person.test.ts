@@ -2,16 +2,9 @@ import { describe, expect, it } from "vitest"
 
 import { reviewCandidate, reviewPerson, syntheticCandidate } from "@/testing/review-fixture"
 
-import {
-  avatarKey,
-  avatarName,
-  displayName,
-  foldFacts,
-  foldLabels,
-  labelTooltip,
-  profileUrl,
-  summaryOf,
-} from "./person"
+import { initials } from "@/components/shared"
+
+import { avatarName, displayName, foldFacts, foldLabels, labelTooltip, profileUrl, summaryOf } from "./person"
 
 describe("displayName", () => {
   const person = reviewPerson({ name: "Jordan B" })
@@ -61,12 +54,14 @@ describe("the avatar", () => {
     expect(avatarName(reviewPerson({ name: "Jordan B" }), null)).toBe("Jordan B")
   })
 
-  it("asks for a fetched candidate's picture only", () => {
-    expect(avatarKey(reviewCandidate())).toBe("jordan-bravo-1")
-    expect(avatarKey(syntheticCandidate())).toBe("")
-    expect(avatarKey(reviewCandidate({ row_key: "candidate:email:casey@example.com", url: "" }))).toBe("")
-    expect(avatarKey(reviewCandidate({ row_key: "" }))).toBe("")
-    expect(avatarKey(null)).toBe("")
+  it("draws the old page's initials: first and last run of letters or digits", () => {
+    const drawn = (name: string) => initials(avatarName(reviewPerson({ name }), null))
+    expect(drawn("Jordan O'Bravo")).toBe("JB")
+    expect(drawn("Casey-Lee Delta")).toBe("CD")
+    expect(drawn("jordan.bravo@example.com")).toBe("JC")
+    expect(drawn("Jordan")).toBe("J")
+    expect(drawn("+15550100")).toBe("1")
+    expect(drawn("…")).toBe("?")
   })
 })
 

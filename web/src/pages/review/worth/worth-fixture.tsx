@@ -1,7 +1,8 @@
-// The worth suites' review server and the stage rendered against it (worth-harness.tsx). The server keeps the
-// three piles (pending, yes, no) and answers the worth routes from them, as api.py and
-// server.py do: the card queue with `pick` / `exclude` / `index` / `debug`, the pending names,
-// a decided pile's pages, the dossier, and POST /worth, which moves the person.
+// The worth suites' review server and the stage rendered against it (worth-harness.tsx). The
+// server keeps the three piles (pending, yes, no) and answers the worth routes from them, as
+// api.py and server.py do: the card queue with `pick` / `exclude` / `index` / `debug`, the
+// pending names, a decided pile's pages, an opened row's details, the dossier, and POST
+// /worth, which moves the person.
 
 import { render } from "@testing-library/react"
 import { vi } from "vitest"
@@ -15,6 +16,7 @@ import {
   reviewCandidate,
   reviewPerson,
   worthCard,
+  worthDetails,
   worthResult,
 } from "@/testing/review-fixture"
 import type { DecisionProgress, DecisionRow, ReviewPerson, WorthTab } from "@/types/review"
@@ -37,10 +39,9 @@ export function personNamed(name: string, overrides: Partial<ReviewPerson> = {})
   })
 }
 
+/** A decided pile's row as a page carries it: the person without sources, and the reason. */
 export function rowNamed(name: string, overrides: Partial<DecisionRow> = {}): DecisionRow {
-  const person = personNamed(name)
-  const candidate = reviewCandidate({ row_key: `${person.slug}-1`, name })
-  return decisionRow({ person, candidate, ...overrides })
+  return decisionRow({ person: personNamed(name, { sources: [] }), ...overrides })
 }
 
 /** A promise a test opens when it wants a held answer to go out. */
@@ -109,6 +110,16 @@ export function worthServer(start: Partial<Piles> = {}) {
     return jsonResponse({ rows: pile.slice(offset, offset + piles.pageSize), total: pile.length })
   }
 
+  /** GET /api/review/worth-details: a decided person with their sources and their profile. */
+  function readDetails(query: URLSearchParams): Response {
+    const slug = query.get("slug")
+    const row = [...piles.yes, ...piles.no].find((other) => other.person.slug === slug)
+    if (!row) return errorResponse("gone", 404)
+    const person = { ...row.person, sources: ["gmail", "imessage"] }
+    const candidate = reviewCandidate({ row_key: `${person.slug}-1`, name: person.name })
+    return jsonResponse(worthDetails({ person, candidate }))
+  }
+
   /** POST /worth: the person leaves their pile for the one named. */
   function save(form: URLSearchParams): Response {
     const pub = form.get("pub") ?? ""
@@ -132,6 +143,7 @@ export function worthServer(start: Partial<Piles> = {}) {
     return jsonResponse({ pending: names })
   })
   const table = vi.fn((query: URLSearchParams): Answer => readTable(query))
+  const details = vi.fn((query: URLSearchParams): Answer => readDetails(query))
   const worth = vi.fn((form: URLSearchParams): Answer => save(form))
   const dossier = vi.fn((_query: URLSearchParams): Answer => new Response("<p>Met at Acme.</p>"))
 
@@ -142,6 +154,7 @@ export function worthServer(start: Partial<Piles> = {}) {
       "/api/review/worth-card": () => card(searchParams),
       "/api/review/worth-pending": () => pending(),
       "/api/review/worth-table": () => table(searchParams),
+      "/api/review/worth-details": () => details(searchParams),
       "/api/dossier": () => dossier(searchParams),
       "/worth": () => worth(form),
     }
@@ -171,6 +184,7 @@ export function worthServer(start: Partial<Piles> = {}) {
     card,
     pending,
     table,
+    details,
     worth,
     dossier,
     fetch,

@@ -64,7 +64,26 @@ describe("PersonCard", () => {
     const { container } = renderCard(reviewPerson(), reviewCandidate())
     const avatar = container.querySelector(".profile-card > .avatar")
     expect(avatar?.textContent).toBe("JB")
-    expect(avatar?.querySelector("img")?.getAttribute("src")).toBe("/api/avatar?pub=jordan-bravo-1")
+    expect(avatar?.querySelector("img")?.getAttribute("src")).toBe(
+      "https://media.example.com/jordan-bravo.jpg",
+    )
+  })
+
+  it("draws initials alone for a profile with no picture", () => {
+    const { container } = renderCard(reviewPerson(), reviewCandidate({ avatar_url: "" }))
+    expect(container.querySelector(".avatar img")).toBeNull()
+    expect(container.querySelector(".avatar")?.textContent).toBe("JB")
+  })
+
+  it("leaves the dossier to a holder that draws it itself", () => {
+    const { container } = render(
+      <ReviewHarness review={fakeReview()}>
+        <PersonCard person={reviewPerson()} candidate={reviewCandidate()} dossier={false} />
+      </ReviewHarness>,
+    )
+    expect(container.querySelector(".dossier-text")).toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(container.querySelectorAll(".details dt")).toHaveLength(5)
   })
 
   it("draws no picture and no link for a researched profile", () => {
@@ -100,7 +119,9 @@ describe("PersonCard", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Jordan B")
     expect(screen.queryByRole("link")).toBeNull()
     expect(facts()).toEqual([["Contact", "jordan@example.com · +15550100"]])
-    expect(container.querySelector(".avatar img")?.getAttribute("src")).toBe("/api/avatar?pub=jordan-bravo-1")
+    expect(container.querySelector(".avatar img")?.getAttribute("src")).toBe(
+      "https://media.example.com/jordan-bravo.jpg",
+    )
     expect(container.querySelector(".details .dossier-text")).toBeTruthy()
   })
 

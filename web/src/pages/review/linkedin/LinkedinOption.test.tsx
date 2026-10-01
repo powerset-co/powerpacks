@@ -45,7 +45,9 @@ describe("LinkedinOption (L2)", () => {
       ["Work", "Founder, Example LabsEngineer, Acme"],
       ["Education", "Example University"],
     ])
-    expect(option.querySelector(".avatar img")?.getAttribute("src")).toBe("/api/avatar?pub=jordan-bravo-1")
+    expect(option.querySelector(".avatar img")?.getAttribute("src")).toBe(
+      "https://media.example.com/jordan-bravo.jpg",
+    )
   })
 
   it("draws a researched profile: no link, no picture, its research summary as a fact", () => {

@@ -1,5 +1,5 @@
 /* The worth stage's look, ported from deep_context/review/reconcile_review.css: the tabs, the
-   typeahead, the card's note box, and the Yes / No tables with their rows. The card itself is
+   typeahead, the card's note box, and the Yes / No lists with their rows. The card itself is
    in base.css. Every rule sits under .review-page, as there. */
 
 .review-page .worth-stage {
@@ -122,15 +122,27 @@
   font-size: 11px;
 }
 
+/* A decided pile scrolls inside its own box; only the rows near its viewport are mounted. */
+.review-page .decision-list {
+  height: 100%;
+  max-height: 65dvh;
+  min-height: 0;
+  display: block;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
 .review-page .decision-row {
   border-bottom: 1px solid var(--border);
 }
-.review-page .decision-row:last-child {
-  border-bottom: 0;
-}
-.review-page .table-more {
-  display: block;
-  margin: 14px auto 4px;
+.review-page .decision-loading {
+  margin: 0;
+  padding: 12px;
+  text-align: center;
+  color: var(--muted);
 }
 .review-page .decision-row-summary {
   min-height: 60px;
@@ -246,8 +258,8 @@
   opacity: 0;
   transform: translateY(-5px);
   transition:
-    opacity 160ms ease,
-    transform 160ms ease;
+    opacity 100ms ease,
+    transform 100ms ease;
   pointer-events: none;
 }
 
@@ -289,20 +301,13 @@
 .review-page .person-name-line .person-labels {
   margin: 0;
 }
-.review-page .decision-expanded-profile {
-  margin: 12px 0 18px;
-}
-.review-page .decision-expanded-profile h2 {
-  margin: 0;
-  font-size: 24px;
-}
-/* An open row shows its labels under the name in the detail, so the summary's copy hides. */
+/* An open row shows its labels under the name in its profile card, so the summary's copy hides. */
 .review-page .decision-row[open] .person-name-line .person-labels {
   display: none;
 }
 
 /* The locked one-screen layout (base.css): the stage and its panel fill the height the
-   stepper leaves, and the panel is the scroll container, so a long table scrolls inside it. */
+   stepper leaves, and a decided pile's list scrolls inside that. */
 @media (min-width: 621px) and (min-height: 600px) {
   .review-page[data-stage="worth"] .worth-stage,
   .review-page[data-stage="worth"] .worth-panel {

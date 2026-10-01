@@ -25,4 +25,12 @@ describe("EmptyPanel and StageCheck", () => {
     rerender(<StageCheck message="" />)
     expect(container.querySelector("h2")?.textContent).toBe("")
   })
+
+  it("says the next stage is being prepared, under a moving bar", () => {
+    const { container } = render(<StageCheck message="Contacts Enriched" />)
+    expect(container.querySelector(".stage-complete > p")?.textContent).toBe("Preparing Next Stage")
+    const bar = screen.getByRole("progressbar", { name: "Preparing Next Stage" })
+    expect(bar.className).toBe("enrich-progress indeterminate")
+    expect(bar.firstElementChild?.className).toBe("enrich-progress-fill")
+  })
 })

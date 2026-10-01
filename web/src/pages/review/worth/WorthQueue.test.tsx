@@ -99,7 +99,9 @@ describe("WorthQueue: the card", () => {
     expect(screen.getByRole("link", { name: "View LinkedIn" }).getAttribute("href")).toBe(
       "https://www.linkedin.com/in/jordan-bravo",
     )
-    expect(person.querySelector(".avatar img")?.getAttribute("src")).toBe("/api/avatar?pub=casey-delta-1")
+    expect(person.querySelector(".avatar img")?.getAttribute("src")).toBe(
+      "https://media.example.com/jordan-bravo.jpg",
+    )
     expect([...person.querySelectorAll(".details > dl dt")].map((term) => term.textContent)).toEqual([
       "Contact",
       "Summary",

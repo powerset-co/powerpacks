@@ -1,46 +1,56 @@
-import { useState } from "react"
-
-import { FACT, SCROLL_DOWN, UNNAMED } from "@/lib/review/copy"
+import { DOSSIER, SCROLL_DOWN, UNNAMED } from "@/lib/review/copy"
 import { cn } from "@/lib/utils"
 import type { DecisionRow } from "@/types/review"
 
 import { useScrollCue } from "../hooks/useScrollCue"
-import { Dossier } from "../shared/Dossier"
 import { LabelBadges } from "../shared/LabelBadges"
+import { PersonCard } from "../shared/PersonCard"
 import { ReviewAvatar } from "../shared/ReviewAvatar"
 import { ANSWER, flipLabel, WHO_THEY_ARE, whyHeading } from "./copy"
 import { otherPile, type Pile } from "./piles"
+import type { RowDetails } from "./useOpenedRows"
 
 interface PileRowProps {
   row: DecisionRow
   /** The pile the row sits in. */
   pile: Pile
+  /** The row's place in the pile; the list measures the row by it. */
+  index: number
+  /** The list's measuring ref: an opened row is taller, and the rows below it move. */
+  measure: (row: HTMLDetailsElement | null) => void
+  open: boolean
+  /** What the row read when it first opened; undefined until then. */
+  details: RowDetails | undefined
   /** Its flip is saving: the row is fading and its button is off. */
   leaving: boolean
+  onToggle: (open: boolean) => void
   /** Move the person to the other pile. */
   onFlip: () => void
 }
 
-// templates/decision_row.html.j2: a collapsed row (caret, avatar, name, labels, the flip
-// button) that opens to the person's contact, why they are in this pile, and their dossier.
-// The dossier is asked for the first time the row opens and kept from then on.
-export function PileRow({ row, pile, leaving, onFlip }: PileRowProps) {
-  const { person, candidate, reason } = row
-  const [opened, setOpened] = useState(false)
+// templates/decision_row.html.j2: a collapsed row (caret, initials, name, labels, the flip
+// button) that opens to why the person is in this pile and, once read, who they are. A pile's
+// row carries no profile, so its avatar is the person's initials.
+export function PileRow(props: PileRowProps) {
+  const { row, pile, index, measure, open, details, leaving, onToggle, onFlip } = props
+  const { person, reason } = row
   const { scroller, more, scrollDown, refresh } = useScrollCue<HTMLDivElement>()
   const name = person.name || UNNAMED
   const to = otherPile(pile)
   return (
     <details
+      ref={measure}
+      data-index={index}
       className={cn("decision-row", leaving && "leaving")}
+      open={open}
       onToggle={(event) => {
-        if (event.currentTarget.open) setOpened(true)
+        onToggle(event.currentTarget.open)
         refresh()
       }}
     >
       <summary className="decision-row-summary">
         <span className="decision-row-caret" aria-hidden="true" />
-        <ReviewAvatar person={person} candidate={candidate} />
+        <ReviewAvatar person={person} candidate={null} />
         <div className="decision-row-main">
           <div className="person-name-line">
             <strong>{name}</strong>
@@ -64,24 +74,13 @@ export function PileRow({ row, pile, leaving, onFlip }: PileRowProps) {
         </div>
       </summary>
       <div className="decision-row-detail" ref={scroller}>
-        <div className="decision-expanded-profile">
-          <h2>{name}</h2>
-          <LabelBadges labels={person.labels} />
-        </div>
         <dl className="row-facts">
-          {candidate?.contacts ? (
-            <div>
-              <dt>{FACT.contact}</dt>
-              <dd>{candidate.contacts}</dd>
-            </div>
-          ) : null}
           <div>
             <dt>{whyHeading(pile)}</dt>
             <dd>{reason}</dd>
           </div>
         </dl>
-        <h4 className="dossier-heading">{WHO_THEY_ARE}</h4>
-        {opened ? <Dossier slug={person.slug} className="row-facts" /> : null}
+        <Details details={details} />
         <button
           className="scroll-cue"
           type="button"
@@ -93,5 +92,27 @@ export function PileRow({ row, pile, leaving, onFlip }: PileRowProps) {
         </button>
       </div>
     </details>
+  )
+}
+
+// templates/decision_details.html.j2, as `loadDossier` puts it in the row: "Loading…" until
+// the details are read, then the person's profile card, "Who they are" and the dossier; "No
+// details found" when the server has none, "Could not load details" when the read fails.
+function Details({ details }: Pick<PileRowProps, "details">) {
+  if (details?.status !== "ready") {
+    const waiting = details === undefined || details.status === "loading"
+    return (
+      <div className="dossier-text" aria-busy={waiting || undefined}>
+        {details ? DOSSIER[details.status] : null}
+      </div>
+    )
+  }
+  return (
+    <div className="dossier-text">
+      <PersonCard person={details.person} candidate={details.candidate} dossier={false} />
+      <h4 className="dossier-heading">{WHO_THEY_ARE}</h4>
+      {/* The server rendered the person's own markdown file; the old page injected it the same way. */}
+      <div className="row-facts" dangerouslySetInnerHTML={{ __html: details.dossier }} />
+    </div>
   )
 }

@@ -8,7 +8,10 @@ GET  /api/review/page?stage=&view=                        the screen to draw, th
 GET  /api/review/worth-card?pick=&exclude=&index=&debug=  the next undecided person;
                                                           404 when `pick` is no longer pending
 GET  /api/review/worth-pending                            the typeahead's names
-GET  /api/review/worth-table?view=yes|no&offset=N         one page of a decided pile
+GET  /api/review/worth-table?view=yes|no&offset=N         one page of a decided pile: names,
+                                                          labels and reasons, no profiles
+GET  /api/review/worth-details?slug=                      the person and profile an opened
+                                                          pile row shows; 404 when gone
 GET  /api/review/linkedin-card?exclude=&index=&debug=     the next LinkedIn card, or the
                                                           finished state
 POST /api/review/decide              form pub, decision, new_url, parent_slug, note: one
@@ -25,6 +28,9 @@ Changelog:
     `_excluded`, `_failed_notes`, `IN_FLIGHT_RETARGET_STATES`, `_submitted_row`
     (`parent_hit`), `_decision_progress` (`review_progress`) and the two queue selections
     are copies of server.py's. Delete those originals when the Jinja page goes.
+  2026-10-01: follows #635's review page. The approve label counts the judgment estimate;
+    candidates carry `avatar_url` and `question`; a pile page no longer hydrates profiles,
+    so `worth-details` serves the one an opened row shows.
 """
 
 from __future__ import annotations
@@ -142,7 +148,7 @@ class EnrichmentPanel:
             return cls("running", completed=min(total, max(0, enrichment.counts.completed)), total=total)
 
         if enrichment.status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
-            # Cached research can still need paid profile and identity work.
+            # The estimate covers research and both judgment passes; one that rounds to $0.00 is the free continue.
             label = (
                 f"Approve ${enrichment.estimated_usd:.2f}"
                 if enrichment.would_submit or round(enrichment.estimated_usd, 2) > 0
@@ -204,6 +210,8 @@ class ReviewCandidate:
     education: tuple[str, ...]
     synthetic: bool
     contacts: str
+    avatar_url: str
+    question: str
 
     @classmethod
     def from_row(cls, candidate: CandidateViewRow) -> ReviewCandidate:
@@ -218,6 +226,9 @@ class ReviewCandidate:
             education=_nonempty(candidate.education),
             synthetic=candidate.synthetic,
             contacts=_candidate_contacts(candidate),
+            # A researched profile shows initials only.
+            avatar_url="" if candidate.synthetic else candidate.profile_pic_url,
+            question=candidate.human_question,
         )
 
     @classmethod
@@ -233,14 +244,16 @@ class QueuePosition:
 
 
 @dataclass(frozen=True)
-class WorthCard:
+class WorthDetails:
+    """A person with the profile shown beside them: a worth card, an opened pile row."""
+
     person: ReviewPerson
     candidate: ReviewCandidate | None
 
 
 @dataclass(frozen=True)
 class WorthCardPayload:
-    card: WorthCard | None
+    card: WorthDetails | None
     synthesize_pending: bool
     queue: QueuePosition | None
 
@@ -253,12 +266,11 @@ class WorthPending:
 @dataclass(frozen=True)
 class DecisionRow:
     person: ReviewPerson
-    candidate: ReviewCandidate | None
     reason: str
 
     @classmethod
     def from_parent(cls, parent: ParentViewRow, pile: WorthPile) -> DecisionRow:
-        return cls(ReviewPerson.from_parent(parent), ReviewCandidate.primary(parent), cls._reason(parent, pile))
+        return cls(ReviewPerson.from_parent(parent), cls._reason(parent, pile))
 
     @staticmethod
     def _reason(parent: ParentViewRow, pile: WorthPile) -> str:
@@ -323,7 +335,14 @@ class ApproveResult:
 
 
 Payload = (
-    ReviewPage | WorthCardPayload | WorthPending | WorthTablePayload | LinkedinCardPayload | DecideResult | ApproveResult
+    ReviewPage
+    | WorthCardPayload
+    | WorthPending
+    | WorthTablePayload
+    | WorthDetails
+    | LinkedinCardPayload
+    | DecideResult
+    | ApproveResult
 )
 
 
@@ -360,6 +379,7 @@ class ReviewApi:
             "worth-card": self._worth_card,
             "worth-pending": self._worth_pending,
             "worth-table": self._worth_table,
+            "worth-details": self._worth_details,
             "linkedin-card": self._linkedin_card,
         }
         self._post_routes: dict[str, Callable[[Params], Payload]] = {
@@ -466,7 +486,7 @@ class ReviewApi:
             raise _Refusal(HTTPStatus.NOT_FOUND, "gone")
 
         return WorthCardPayload(
-            card=WorthCard(ReviewPerson.from_parent(parent), ReviewCandidate.primary(parent)),
+            card=WorthDetails(ReviewPerson.from_parent(parent), ReviewCandidate.primary(parent)),
             synthesize_pending=False,
             queue=_debug_position(params, index, len(queue)),
         )
@@ -484,13 +504,21 @@ class ReviewApi:
         except ValueError as error:
             raise _Refusal(HTTPStatus.BAD_REQUEST, "offset must be an integer") from error
 
-        # One LIMIT/OFFSET page, sorted by name within the page.
+        # One LIMIT/OFFSET page, sorted by name within the page. A page carries no
+        # candidates or sources: an opened row reads them from worth-details.
         parents = sorted(decision_parents(self.db, pile, offset=offset), key=lambda parent: parent.name.lower())
         counts = worth_counts(self.db)
         return WorthTablePayload(
             rows=tuple(DecisionRow.from_parent(parent, pile) for parent in parents),
             total=counts.yes if pile == "yes" else counts.no,
         )
+
+    def _worth_details(self, params: Params) -> WorthDetails:
+        parent = person_detail(self.db, _value(params, "slug"))
+        if parent is None:
+            raise _Refusal(HTTPStatus.NOT_FOUND, "gone")
+
+        return WorthDetails(ReviewPerson.from_parent(parent), ReviewCandidate.primary(parent))
 
     def _linkedin_card(self, params: Params) -> LinkedinCardPayload:
         excluded = _excluded(params)
