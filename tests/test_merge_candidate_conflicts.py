@@ -159,16 +159,16 @@ class MergeConflictTests(unittest.TestCase):
     def test_extracted_shared_office_phone_cannot_skip_the_judge(self):
         from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict
         from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo',
+        first = MergePerson('a', 'a', 'Jordan B', 'jordan b',
                             extra_phones=('15550100100',),
                             evidence=DossierEvidence(from_them=('That is our shared office number.',)))
-        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',))
+        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_phones=('15550100100',))
         self.assertIsNone(slam_dunk_verdict(first, second))
 
     def test_extracted_shared_email_cannot_skip_the_judge(self):
         from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict
-        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', extra_emails=('office@example.com',))
-        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', extra_emails=('office@example.com',))
+        first = MergePerson('a', 'a', 'Jordan B', 'jordan b', extra_emails=('office@example.com',))
+        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_emails=('office@example.com',))
         self.assertIsNone(slam_dunk_verdict(first, second))
 
     def test_shared_direct_contact_email_remains_free(self):

@@ -20,6 +20,11 @@ PROMPTS = {
         "NAMES_QUESTION",
         "e33403b5e9050e8f1ea9f4f4ff498742ab71b00c3942bcfa3dc64163768faa8b",
     ),
+    "merge_keep_apart": (
+        "packs.ingestion.primitives.deep_context.merge_candidates.judge",
+        "KEEP_APART_QUESTION",
+        "7f5407c30132643b2c45bc78b5fdeccd358d731490ccdc828bdf828ec3f90b53",
+    ),
     "contact_research_instructions": (
         "packs.ingestion.primitives.deep_context.enrich.parallel_research.config",
         "RESEARCH_INSTRUCTIONS",

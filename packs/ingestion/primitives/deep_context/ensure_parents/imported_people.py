@@ -24,7 +24,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import (
     emails_from_row,
-    is_role_address,
+    is_shared_mailbox,
     normalize_email,
     normalize_phone,
     phones_from_row,
@@ -199,9 +199,7 @@ def _is_shared_mailbox(person: ImportedPerson) -> bool:
     A LinkedIn found for the address by a lookup does not make it a person.
     """
     return (
-        bool(person.emails)
-        and all(is_role_address(email) for email in person.emails)
-        and not person.phones
+        is_shared_mailbox(person.emails, person.phones)
         and SourceChannel.LINKEDIN not in person.source_channels
     )
 

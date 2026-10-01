@@ -17,6 +17,8 @@ Changelog:
   merges, raw bundles, facts, human decisions and Parallel results onto the cold
   parents by identifier; migrate-sqlite is no longer routed.
 - 2026-10-01: a pair the merge judge calls one person is also asked whether its two names can be one contact's.
+- 2026-10-01: the same name merges unless JEV finds the facts keep the two records apart; a shared first name,
+  last name or email handle alone is no longer compared; shared mailboxes are left out.
 - 2026-09-25: the merge pair judge is JEV, not OpenAI; the merge cutoff is p(yes) ≥ 0.5.
 - 2026-09-25: the page listens to the event stream, it does not poll; the
   unwritten review/manifest.json is no longer advertised.
@@ -174,7 +176,7 @@ browser button and cannot be blocked by the Done page.
 | Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are always included. | `raw/<parent_id>.json`, SQLite projection, receipt |
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, except that a notable imported LinkedIn headline (CEO or any chief officer, founder, president, chair, partner, managing director) is Yes. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
-| Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs with JEV (one request per pair, merge at p(yes) ≥ 0.5 when JEV also answers that the two names can be one contact's), caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
+| Duplicate resolution | Pairs parents that share a phone or email or whose names can be forms of one name. The same name merges unless JEV finds the facts keep the two records apart; the rest go to the JEV pair judge (one request per pair, merge at p(yes) ≥ 0.5 when JEV also answers that the two names can be one contact's). Caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
 | LinkedIn judging | After cache-first profile preparation, enrichment judges mapped attached and researched links lacking a decision. Existing human and valid machine decisions are kept. | SQLite identity verdicts |
 | People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
 | Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
@@ -198,8 +200,8 @@ bin/deep-context dry
 bin/deep-context synthesize
 bin/deep-context compose
 bin/deep-context validate
-bin/deep-context cluster --dry-run # free slam-dunk count + ambiguous-pair estimate
-bin/deep-context cluster           # settle slam dunks, then JEV-judge the remainder
+bin/deep-context cluster --dry-run # free merge count + JEV estimate
+bin/deep-context cluster           # merge on names and identifiers, then JEV-judge the remainder
 bin/deep-context parents
 bin/deep-context review worth
 ```

@@ -292,9 +292,12 @@ bin/deep-context validate
 ### 4. Duplicate people
 
 Identity resolves cheapest evidence first so one human is one review and one
-dossier. The cluster stage applies identical-name plus shared-phone/email slam
-dunks locally, reuses cached decisions, and sends only the ambiguous remainder
-to the JEV pair judge (about $0.0001 per pair). Preview the complete stage first:
+dossier. The cluster stage merges an identical name with a shared phone or
+email locally, merges the same name unless JEV finds the facts keep the two
+records apart, reuses cached decisions, and sends only the remainder (a short
+or variant form of a name, or a shared phone or email under two names) to the
+JEV pair judge (about $0.0001 per pair). A shared first name, last name or
+email handle alone is not compared. Preview the complete stage first:
 
 ```bash
 bin/deep-context cluster --dry-run
@@ -310,8 +313,8 @@ bin/deep-context parents
 ```
 
 `parents` is free and idempotent — run it after clustering so the canonical
-layer always matches the accepted merges. Report `pairs_slam_dunk` (settled
-locally), `pairs_reused`, and `pairs_judged`.
+layer always matches the accepted merges. Report `pairs_slam_dunk` (merged on
+the name or a shared identifier), `pairs_reused`, and `pairs_judged`.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
 with message context before any paid identity lookup. A candidate merged into an

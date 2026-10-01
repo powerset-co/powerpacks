@@ -296,3 +296,9 @@ def is_role_address(email: str) -> bool:
         return True
     joined = re.sub(r"[.\-_]", "", local)
     return len(joined) > _SHORT_ROLE_LENGTH and joined in ROLE_ADDRESS_WORDS
+
+
+def is_shared_mailbox(emails: Iterable[str], phones: Iterable[str]) -> bool:
+    """True for a contact reachable only at role addresses: a mailbox, not a person."""
+    addresses = tuple(emails)
+    return bool(addresses) and not tuple(phones) and all(is_role_address(email) for email in addresses)
