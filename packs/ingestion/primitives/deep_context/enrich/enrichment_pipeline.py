@@ -19,7 +19,8 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.coordinat
     ReconcileDeepResearch,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import judge_mapped_candidates
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
 from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
@@ -125,7 +126,7 @@ class EnrichmentPipeline:
                 f"{f': {profiles.note}' if profiles.note else ''}"
             )
         judged = judge_mapped_candidates(
-            self.db, model=DEFAULT_MODEL, effort="medium",
+            self.db, model=DEFAULT_IDENTITY_MODEL, effort="medium",
             confirm_threshold=self.confirm_threshold,
             heartbeat=lambda done, total: on_progress(EnrichmentProgress(
                 "judging_retargets", ReceiptCounts.create(total=total, completed=done), done, total,
@@ -134,6 +135,9 @@ class EnrichmentPipeline:
         if judged.judge_errors:
             raise RuntimeError(f"identity judge returned no verdict for {judged.judge_errors} candidate(s)")
         AssembleSyntheticProfile(db=self.db).run()
+        reviews = ReviewRelationships(db=self.db, approve_spend=True).run()
+        if reviews["status"] != "completed":
+            raise RuntimeError(f"review questions stopped with status {reviews['status']}")
 
     def start(self, total: int, budget: float, request_fingerprint: str) -> bool:
         if not self._running.acquire(blocking=False):

@@ -17,6 +17,7 @@ from packs.indexing.lib.openai_usage_tiers import (
 
 # Default model for company enrichment — matches prod combined_enrichment.py.
 DEFAULT_MODEL = "gpt-5.2"
+DEFAULT_IDENTITY_MODEL = "gpt-6-luna"
 # Role enrichment model — gpt-5.2 has structured output bugs with the
 # 180-item role_ids enum (picks random values like investment_banker for
 # Instructor). gpt-5.1 classifies correctly.

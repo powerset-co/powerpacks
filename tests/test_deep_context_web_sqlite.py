@@ -159,6 +159,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             patcher.start()
             cls.addClassCleanup(patcher.stop)
 
+    def finish_questions(self):
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import RelationshipDecision, finish_reviews
+        from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids
+        finish_reviews(self.db, tuple(RelationshipDecision(parent, "Shared work context.", True,
+            "Is this your colleague?", 2, f"question:{parent}") for parent in pending_parent_ids(self.db)))
+        return {"status": "completed"}
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -449,13 +456,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         preview = adapter.enrichment(state)
         self.assertEqual(preview.would_submit, 0)
         self.assertEqual(preview.reused_completed, 0)
-        self.assertEqual(preview.estimated_usd, 0.0)
+        self.assertGreater(preview.estimated_usd, 0.0)
         # A fully-reused plan needs no spend, but its cached research still
         # needs the free local chain (synthetic assembly, profile prefetch).
         # The stage reads complete and the button is a $0 continue, not an
         # "Approve $0.00" prompt.
         self.assertEqual((preview.status, preview.state), ("not_started", "profile_prep_pending"))
-        self.assertFalse(preview.approvable)
+        self.assertTrue(preview.approvable)
 
     def test_workflow_http_snapshot_is_derived_once(self) -> None:
         with mock.patch.object(
@@ -509,6 +516,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as reconcile,
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as prefetch,
             mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as mapped_judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
         ):
             reconcile.return_value.run.return_value = ResearchOutcome(
                 ReceiptStatus.REUSED,
@@ -519,6 +527,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
+            relationships.return_value.run.side_effect = self.finish_questions
             mapped_judge.return_value.judge_errors = 0
             judge_phases = []
 
@@ -555,7 +564,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             page = raw.decode()
             self.assertNotIn("Prepare profiles and judge LinkedIns", page)
         self.assertEqual(reconcile.call_count, 1)
-        self.assertEqual(reconcile.call_args.kwargs["budget"], 0.0)
+        self.assertGreaterEqual(reconcile.call_args.kwargs["budget"], 0.0)
         self.assertIs(reconcile.call_args.kwargs["approve"], True)
 
     def test_failed_or_blocked_research_stops_the_enrichment_chain(self) -> None:
@@ -613,10 +622,12 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             mock.patch.object(enrichment_pipeline, "AssembleSyntheticProfile"),
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as prefetch,
             mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as mapped_judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
         ):
             reconcile.return_value.run.side_effect = reconcile_run
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
+            relationships.return_value.run.side_effect = self.finish_questions
             mapped_judge.return_value.judge_errors = 0
             first_status, first = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(first_status, 200)
@@ -661,10 +672,12 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             mock.patch.object(enrichment_pipeline, "AssembleSyntheticProfile"),
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as prefetch,
             mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as mapped_judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
         ):
             reconcile.return_value.run.side_effect = reconcile_run
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
+            relationships.return_value.run.side_effect = self.finish_questions
             mapped_judge.return_value.judge_errors = 0
 
             status, _ = self.json_request("POST", "/approve-enrichment", {})

@@ -322,3 +322,20 @@ def linkedin_queue(db: Db) -> list[ParentViewRow]:
 
 def linkedin_progress(db: Db) -> LinkedInProgress:
     return _linkedin_progress(db)
+
+
+def pending_parent_ids(db: Db) -> frozenset[str]:
+    """Parents with unresolved LinkedIn candidates eligible for human review."""
+    return frozenset(row["parent_id"] for row in db.query(
+        LINKEDIN_CTE + "SELECT parent_id FROM pending_parents"
+    ))
+
+
+def review_questions_pending(db: Db) -> int:
+    """Unresolved parents whose review questions have not been selected yet."""
+    return int(db.query(LINKEDIN_CTE + """
+SELECT count(*) FROM pending_parents p WHERE NOT EXISTS (
+  SELECT 1 FROM links l WHERE l.parent_id=p.parent_id
+    AND json_extract(l.judgment_payload_json, '$.relationship_decision') IS NOT NULL
+)
+""")[0][0])

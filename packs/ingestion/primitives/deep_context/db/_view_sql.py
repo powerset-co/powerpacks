@@ -82,7 +82,7 @@ PENDING_CANDIDATE = """
    OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key
               AND r.status='complete' AND json_extract(r.result_json, '$.content.linkedin_url') IS NOT NULL))
   AND (
-  (l.kind='synthetic' AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no'))
+  (l.kind='synthetic' AND COALESCE(l.decision_approved, l.machine_approved, '') NOT IN ('auto', 'yes', 'no'))
   OR
   (l.kind!='synthetic'
    AND (l.paid_profile=1 OR l.candidate_origin=1 OR COALESCE(l.linkedin_url, '')!='')
@@ -238,6 +238,7 @@ SELECT c.*,
        sp.profile_json AS synthetic_profile_json,
        pa.payload_json AS profile_artifact_json,
        r.result_json AS research_json,
+       json_extract(c.judgment_payload_json, '$.relationship_decision.human_question') AS human_question,
        -- CROSS JOIN pins the join order candidate -> person -> identifiers.
        -- Left to itself the planner walks identifiers_by_value(kind) for every
        -- candidate row, which is quadratic in the store (a 5k-candidate queue

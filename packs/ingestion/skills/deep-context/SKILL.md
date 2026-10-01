@@ -18,6 +18,14 @@ messages -> dossiers -> review uncertain people -> lookup Added -> LinkedIn Yes/
 All paths are fixed and overwritten in place. Do not add run ids, ledgers, or a
 second status stream.
 
+The approved enrichment chain uses GPT-6 Luna for undecided LinkedIn identities,
+then selects at most 100 useful questions the owner can answer. Existing human
+and machine verdicts are retained. Other uncertain LinkedIns are detached; the
+contacts and their Worth decisions remain local. Question judgments resume from
+SQLite. `bin/deep-context finish-reviews --dry-run` previews an interrupted final
+pass; `--approve-spend` resumes it. Prompt/model changes do not rejudge saved
+verdicts or questions automatically.
+
 ## Route the request first
 
 Use the narrow path when the user names one:

@@ -5,9 +5,11 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
+from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
+from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, unassembled_research
+from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, unassembled_research, review_questions_pending
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
@@ -63,6 +65,12 @@ def enrichment_view(
         processor=DEFAULT_PROCESSOR,
         fingerprint=state.selection,
     )
+    judge_count = len(judge_candidates(db))
+    question_count = review_questions_pending(db)
+    # Budget both judgment passes conservatively before identities are confirmed.
+    judgment_estimate = estimate_cost_usd(2000 * (judge_count + question_count),
+        1500 * (judge_count + question_count), DEFAULT_IDENTITY_MODEL)
+    estimate = plan.estimated_usd + judgment_estimate
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), plan.deduped_total
     # While the local thread runs, live progress IS the plan: every projected
@@ -77,7 +85,7 @@ def enrichment_view(
             duplicate_handles=plan.duplicate_handles,
             processor=plan.processor,
             cost_per_person_usd=plan.cost_per_person_usd,
-            estimated_usd=plan.estimated_usd,
+            estimated_usd=estimate,
             selection=current_selection,
             request_fingerprint=plan.request_fingerprint,
             stage="enrich",
@@ -87,9 +95,9 @@ def enrichment_view(
             approvable=False,
         )
     # The remaining chain prepares profiles, assembles no-match cards, and
-    # judges real candidates. The estimate covers Parallel research only.
+    # judges identities, and prioritizes remaining review questions.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
-    if not total and (judge_candidates(db) or unassembled_research(db)):
+    if not total and (judge_count or unassembled_research(db) or question_count):
         status, route_state = "not_started", "profile_prep_pending"
     elif not total:
         status, route_state = "completed", "done"
@@ -110,14 +118,14 @@ def enrichment_view(
         duplicate_handles=plan.duplicate_handles,
         processor=plan.processor,
         cost_per_person_usd=plan.cost_per_person_usd,
-        estimated_usd=plan.estimated_usd,
+        estimated_usd=estimate,
         selection=current_selection,
         request_fingerprint=plan.request_fingerprint,
         stage="enrich",
         status=status,
         counts=EnrichmentCounts(total, plan.reused_completed, pending),
         state=route_state,
-        approvable=bool(pending),
+        approvable=bool(pending or judgment_estimate),
     )
     # A just-failed run's error rides in memory (the pipeline thread's last
     # write); after a restart it is gone and the button returns.

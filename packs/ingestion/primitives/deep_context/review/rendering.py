@@ -288,11 +288,11 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
             total=total, percent=percent, label=label,
         )
     if status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
-        # The estimate covers Parallel research; profile hydration and judging
-        # can also call providers during this enrichment pass.
+        # The estimate includes research and both judgment passes; hydration
+        # may also call the configured profile provider.
         label = (
             f"Approve ${enrichment.estimated_usd:.2f}"
-            if enrichment.would_submit
+            if enrichment.would_submit or round(enrichment.estimated_usd, 2) > 0
             else "Prepare profiles and judge LinkedIns"
         )
         return _render(

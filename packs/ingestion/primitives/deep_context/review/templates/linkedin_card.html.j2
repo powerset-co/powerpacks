@@ -5,6 +5,7 @@
   {% set body -%}
   {% if failure_note %}<div class='reresearch-failed'>Re-research failed: {{ failure_note }}</div>{% endif %}
   {{ ui.profile(parent, candidates[0], true, person_only=true) }}
+  {% if candidates[0].human_question %}<div class='question'>{{ candidates[0].human_question }}</div>{% endif %}
   <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
   <ul class='linkedin-options'>
     {%- for candidate in candidates %}
@@ -34,7 +35,7 @@
   {%- endset %}
   {{ ui.scroll_region(body) }}
   <div class='identity-decision'>
-    <div class='question'>Is this the right profile? Or <button type='button' class='skip-link' data-skip-link>Skip</button>?</div>
+    <div class='question'>{{ candidate.human_question or "Is this the right profile?" }} Or <button type='button' class='skip-link' data-skip-link>Skip</button>?</div>
     <div class='binary-actions'>
       <button class='button button-outline' data-open-guidance
               aria-expanded='false'>No</button>
