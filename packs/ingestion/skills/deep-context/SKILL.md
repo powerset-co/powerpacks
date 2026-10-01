@@ -410,22 +410,23 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
   cached chain so imported or cached installs still get their follow-ups.
 - **The user clicks Approve $X.XX** → that click IS the spend approval: the
   app runs the approved Parallel pass with exactly that budget cap.
-- **Research completes** → the app chains the free follow-ups automatically:
-  `assemble-synthetic` (no-LinkedIn cards) and `profile-prefetch --fetch`
-  (cache-first LinkedIn profiles; pennies only for cache misses).
+- **Research completes** → the app hydrates missing LinkedIn profiles, runs JEV
+  identity checks, and uses GPT-6.1 Sol to resolve remaining disagreements.
+  Completed paid results are reused. It then assembles synthetic profiles for
+  people without an accepted LinkedIn.
 
 The agent runs NONE of these steps while the app owns them. Files remain the
 durable provider outputs, but the writer projects every downstream payload into
-SQLite before success. One process-local flag prevents duplicate submission;
-the fixed enrichment manifest is display-only progress and cannot resume or
-block a later server process.
+SQLite before success. One process-local flag prevents duplicate submission.
+The fixed enrichment manifest contains display progress and a `parallel`
+provider receipt so a later process can recover already-submitted research.
 The manual commands remain available for headless/broken-UI recovery only.
 
-The pipeline is the sole enrichment-manifest writer. Parallel's SDK stream
-reports status through the pipeline callback; the pipeline writes the one
-whole-run count vocabulary plus timing/errors. Review reads that file only to
-display selection-matching progress. Selection, reuse, and synthetic assembly
-query SQLite, so stale rows cannot reappear.
+The pipeline writes progress while preserving the provider receipt; the
+Parallel client writes the receipt while preserving progress. Parallel's SDK
+stream reports status through the pipeline callback. Review reads the manifest
+only to display selection-matching progress. Selection, completed-result reuse,
+and synthetic assembly query SQLite.
 
 When you report lookup progress to the user, phrase it as "Parallel tasked with
 N net-new lookups" and use the enrichment manifest's running/completed counts. Do not call
