@@ -270,12 +270,6 @@ function applyProgress(progress) {
   updateStepCount(steps[2], progress.linkedin_pending);
 }
 
-// Local mutation responses already carry the authoritative token. Status polling
-// is reserved for external agent/provider handoffs; never re-poll after our own save.
-function adoptMutationState(response) {
-  if (response?.state_token) reviewStateToken = response.state_token;
-}
-
 // --- decision-table pagination ------------------------------------------------
 // The Yes/No tables render one server page; this appends the next page in
 // place. Rows are click-delegated, so appended rows need no rewiring.
@@ -325,7 +319,6 @@ async function decideDecisionRow(button, row) {
                        parent_slug: button.dataset.parent || "" }),
       delay(170),
     ]);
-    adoptMutationState(response);
     row.remove();
     applyProgress(response.progress);
     announce(worth === "yes" ? "Added" : "Rejected");
@@ -382,14 +375,12 @@ async function decideWorthCard(button, card) {
     if (!panel || nextHtml === null) {
       // Could not swap in the next card: fall back to the serialized save+reload.
       const response = await postPromise;
-      adoptMutationState(response);
       leaveAndReload("Saved");
       return;
     }
     // The last card has no next: its frame holds until the check replaces it.
     if (nextHtml.trim()) swapCardContent(panel, nextHtml);
     postPromise.then((response) => {
-      adoptMutationState(response);
       applyProgress(response.progress);
       pruneWorthPending(pub); // the settled decision leaves the typeahead's queue
       announce(worth === "yes" ? "Added" : "Rejected");
@@ -406,7 +397,6 @@ async function decideWorthCard(button, card) {
   } catch (error) {
     try {
       const response = await postPromise; // next-card fetch failed; save may still land
-      adoptMutationState(response);
       applyProgress(response.progress);
       leaveAndReload("Saved");
     } catch (postError) {
@@ -641,7 +631,6 @@ async function decideLinkedinCard(card, values, message) {
       post("/decide", values),
       delay(reduceMotion ? 0 : 170),
     ]);
-    adoptMutationState(response);
     applyProgress(response.progress);
     if (Number(response.progress?.linkedin_pending) === 0) {
       // Last decision: the check, then the page load paints the finished
@@ -1031,7 +1020,7 @@ function wireDynamicContent(root) {
 
 wireDynamicContent(document);
 
-let reviewStateToken = document.body.dataset.stateToken || "";
+const reviewStateToken = document.body.dataset.stateToken || "";
 // True from the moment a stage-complete button is clicked: the freshness
 // observer must not reload the page out from under the pending POST +
 // navigation (projected queue/job updates rotate the state token in exactly
