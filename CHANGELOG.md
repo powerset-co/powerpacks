@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.5...powerpacks-v3.8.6) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deep-context:** halve the review page load and status poll ([#639](https://github.com/powerset-co/powerpacks/issues/639)) ([4c3e0a6](https://github.com/powerset-co/powerpacks/commit/4c3e0a6426c782e053ef676cf9c51896f316823c))
+
 ## [3.8.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.4...powerpacks-v3.8.5) (2026-10-01)
 
 
