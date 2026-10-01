@@ -8,6 +8,8 @@ of a candidate a card draws.
 
 Changelog:
   2026-10-01: split out of api.py, which keeps the routes.
+  2026-10-01: `contacts` is the person's (every merged record's emails and phones), not the
+    first candidate's: a phone that arrived on another record was missing from the card.
 """
 
 from __future__ import annotations
@@ -133,6 +135,7 @@ class ReviewPerson:
     sources: tuple[str, ...]
     labels: tuple[str, ...]
     worth_key: str
+    contacts: str
 
     @classmethod
     def from_parent(cls, parent: ParentViewRow) -> ReviewPerson:
@@ -143,6 +146,7 @@ class ReviewPerson:
             sources=parent.sources,
             labels=label_titles(parent),
             worth_key=parent.worth_row.key,
+            contacts=_contacts(parent.emails, parent.phones),
         )
 
 
@@ -156,7 +160,6 @@ class ReviewCandidate:
     experiences: tuple[str, ...]
     education: tuple[str, ...]
     synthetic: bool
-    contacts: str
     avatar_url: str
 
     @classmethod
@@ -171,7 +174,6 @@ class ReviewCandidate:
             experiences=_nonempty(candidate.experiences),
             education=_nonempty(candidate.education),
             synthetic=candidate.synthetic,
-            contacts=_candidate_contacts(candidate),
             # A researched profile shows initials only.
             avatar_url="" if candidate.synthetic else candidate.profile_pic_url,
         )
@@ -338,21 +340,22 @@ def _nonempty(items: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(item for item in items if item.strip())
 
 
-def _candidate_contacts(candidate: CandidateViewRow) -> str:
+def _contacts(emails: tuple[str, ...], phones: tuple[str, ...]) -> str:
+    """A person's emails then phones, as the card's Contact line."""
+
     # The same phone arrives as E.164 and bare-local; collapse to one entry
     # per number, preferring whichever display came first.
     def phone_key(value: str) -> str:
         digits = "".join(ch for ch in value if ch.isdigit())
         return digits[-10:] if len(digits) > 10 else digits
 
-    emails = [value for value in candidate.match_emails if value]
-    phones: list[str] = []
+    shown: list[str] = []
     seen: set[str] = set()
-    for value in candidate.match_phones:
+    for value in phones:
         if not value:
             continue
         key = phone_key(value)
         if key not in seen:
             seen.add(key)
-            phones.append(value)
-    return " · ".join([*dict.fromkeys(emails), *phones])
+            shown.append(value)
+    return " · ".join([*dict.fromkeys(value for value in emails if value), *shown])

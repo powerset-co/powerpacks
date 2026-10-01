@@ -97,12 +97,12 @@ export function caseyCard(overrides: Partial<LinkedinCardPayload> = {}): Linkedi
     name: "Casey Delta",
     worth_key: "worth-casey",
     labels: [],
+    contacts: "casey@example.com",
   })
   const candidate = reviewCandidate({
     row_key: "casey-delta-1",
     name: "Casey Delta",
     url: "https://www.linkedin.com/in/casey-delta",
-    contacts: "casey@example.com",
   })
   return linkedinCard({
     card: { person, candidates: [candidate], failure_note: "" },

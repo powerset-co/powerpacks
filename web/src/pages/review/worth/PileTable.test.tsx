@@ -509,7 +509,7 @@ describe("PileTable: an opened row", () => {
 
   it("says Why no on the No pile, and draws a person with no profile from the parent alone", async () => {
     await openPile("no")
-    const person = personNamed("Morgan Hale", { sources: ["whatsapp"] })
+    const person = personNamed("Morgan Hale", { sources: ["whatsapp"], contacts: "+15550100" })
     server.details.mockImplementationOnce(() => jsonResponse(worthDetails({ person, candidate: null })))
     await toggle("Morgan Hale")
     expect(facts(detail("Morgan Hale"), ":scope > dl.row-facts")).toEqual([["Why no", "Not worth adding"]])
@@ -517,7 +517,7 @@ describe("PileTable: an opened row", () => {
     await waitFor(() => expect(loaded.querySelector(".profile-card h2")?.textContent).toBe("Morgan Hale"))
     expect([...loaded.querySelectorAll(".source")].map((badge) => badge.textContent)).toEqual(["WhatsApp"])
     expect(loaded.querySelector(".avatar img")).toBeNull()
-    expect(facts(loaded, "section.details > dl")).toEqual([])
+    expect(facts(loaded, "section.details > dl")).toEqual([["Contact", "+15550100"]])
     expect(loaded.querySelector("a.linkedin-label")).toBeNull()
   })
 

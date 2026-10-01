@@ -51,7 +51,7 @@ export function PersonCard({ person, candidate, personOnly = false, dossier = tr
       </div>
       <section className="details">
         <dl>
-          {candidate?.contacts ? <Fact label={FACT.contact}>{candidate.contacts}</Fact> : null}
+          {person.contacts ? <Fact label={FACT.contact}>{person.contacts}</Fact> : null}
           {summary ? <Fact label={FACT.summary}>{summary}</Fact> : null}
           {facts?.location ? <Fact label={FACT.location}>{facts.location}</Fact> : null}
           {facts?.experiences.length ? (

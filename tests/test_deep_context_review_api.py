@@ -166,7 +166,15 @@ def field_names(shape: type) -> tuple[str, ...]:
     return tuple(field.name for field in dataclasses.fields(shape))
 
 
-def person(parent_id: str, slug: str, name: str, *, sources: tuple[str, ...] = (), labels: tuple[str, ...] = ()) -> dict:
+def person(
+    parent_id: str,
+    slug: str,
+    name: str,
+    *,
+    sources: tuple[str, ...] = (),
+    labels: tuple[str, ...] = (),
+    contacts: str = "",
+) -> dict:
     """A `ReviewPerson` as JSON."""
     return {
         "parent_id": parent_id,
@@ -175,10 +183,11 @@ def person(parent_id: str, slug: str, name: str, *, sources: tuple[str, ...] = (
         "sources": list(sources),
         "labels": list(labels),
         "worth_key": f"parent-worth:{parent_id}",
+        "contacts": contacts,
     }
 
 
-def candidate(row_key: str, name: str, *, url: str = "", contacts: str = "") -> dict:
+def candidate(row_key: str, name: str, *, url: str = "") -> dict:
     """A `ReviewCandidate` as JSON: a profile nobody has fetched yet."""
     return {
         "row_key": row_key,
@@ -189,7 +198,6 @@ def candidate(row_key: str, name: str, *, url: str = "", contacts: str = "") -> 
         "experiences": [],
         "education": [],
         "synthetic": False,
-        "contacts": contacts,
         "avatar_url": "",
     }
 
@@ -220,10 +228,14 @@ def progress(pending: int, yes: int, no: int, linkedin: int, done: int = 0, reje
     }
 
 
-CASEY = person("worth-parent", "casey-delta", "Casey Delta", labels=tuple(CASEY_TITLES))
-CASEY_CANDIDATE = candidate(
-    "candidate:email:casey-delta@example.com", "Casey Delta", contacts="casey-delta@example.com · +15550100"
+CASEY = person(
+    "worth-parent",
+    "casey-delta",
+    "Casey Delta",
+    labels=tuple(CASEY_TITLES),
+    contacts="casey-delta@example.com · +15550100",
 )
+CASEY_CANDIDATE = candidate("candidate:email:casey-delta@example.com", "Casey Delta")
 JORDAN = person("linkedin-parent", "jordan-bravo", "Jordan Bravo")
 JORDAN_CANDIDATE = candidate("jordan-bravo", "Jordan Bravo", url="https://www.linkedin.com/in/jordan-bravo")
 COMPLETED_PANEL = {"mode": "completed", "completed": 0, "total": 0, "approval_label": "", "error": ""}
@@ -697,10 +709,10 @@ class WorthRoutesTests(ReviewApiFixture):
         self.db.decide_worth("worth-parent", "yes", note="Synthetic note")
         self.db.decide_worth("morgan-parent", "no")
         self.db.decide_worth("avery-parent", "no", note="Synthetic refusal")
-        # A pile page carries no profile and no sources: an opened row reads worth-details.
+        # A pile page carries no profile, sources or contacts: an opened row reads worth-details.
         yes = {
             "rows": [
-                {"person": CASEY, "reason": "Synthetic note"},
+                {"person": {**CASEY, "contacts": ""}, "reason": "Synthetic note"},
                 {"person": JORDAN, "reason": "fixture"},
                 {"person": person("riley-parent", "riley-stone", "Riley Stone"), "reason": "fixture"},
                 {"person": person("sam-parent", "sam-tango", "Sam Tango"), "reason": "fixture"},
@@ -923,6 +935,28 @@ class LinkedinRoutesTests(ReviewApiFixture):
             },
         )
 
+    def test_contact_is_the_persons_across_every_merged_record(self) -> None:
+        # The LinkedIn came from the record with the email; the phone arrived on another.
+        replace_person_identifiers(
+            self.db,
+            "linkedin-parent-person",
+            (PersonIdentifierRow("linkedin-parent-person", "email", "jordan@example.com"),),
+        )
+        self.db.project_rows((PersonRow("jordan-phone-person", "linkedin-parent", display_name="Jordan Bravo"),))
+        replace_person_identifiers(
+            self.db,
+            "jordan-phone-person",
+            (
+                PersonIdentifierRow("jordan-phone-person", "phone", "+14155550101"),
+                PersonIdentifierRow("jordan-phone-person", "phone", "4155550101"),
+            ),
+        )
+        card = self.payload("/api/review/linkedin-card")["card"]
+        self.assertEqual(card["person"]["contacts"], "jordan@example.com · +14155550101")
+        self.assertNotIn("contacts", card["candidates"][0])
+        opened = self.payload("/api/review/worth-details?slug=jordan-bravo")
+        self.assertEqual(opened["person"]["contacts"], "jordan@example.com · +14155550101")
+
     def test_candidate_is_shaped_for_the_card(self) -> None:
         parent = person_detail(self.db, "linkedin-parent")
         fetched = replace(
@@ -931,8 +965,6 @@ class LinkedinRoutesTests(ReviewApiFixture):
             location="Example City",
             experiences=("Founder @ Bravo Robotics", " ", "Engineer @ Example Labs"),
             education=("BS — Example University", ""),
-            match_emails=("jordan@example.com", "jordan@example.com"),
-            match_phones=("+14155550100", "4155550100", "+14155550101"),
             profile_pic_url="https://example.com/photo.png",
         )
         self.assertEqual(
@@ -943,11 +975,10 @@ class LinkedinRoutesTests(ReviewApiFixture):
                 "url": "https://www.linkedin.com/in/jordan-bravo",
                 "headline": "Synthetic operator",
                 "location": "Example City",
-                # Blank entries are dropped; a repeated email and one phone in two spellings are one each.
+                # Blank entries are dropped.
                 "experiences": ("Founder @ Bravo Robotics", "Engineer @ Example Labs"),
                 "education": ("BS — Example University",),
                 "synthetic": False,
-                "contacts": "jordan@example.com · +14155550100 · +14155550101",
                 "avatar_url": "https://example.com/photo.png",
             },
         )

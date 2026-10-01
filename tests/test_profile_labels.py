@@ -22,7 +22,7 @@ def _parent(**labels: float | str) -> ParentViewRow:
     machine = WorthMachineRow("yes", "", "llm")
     worth = WorthRow("parent-worth:jordan", "jordan", "jordan", (), "Jordan Bravo", machine, None, "yes", "llm")
     return ParentViewRow(
-        "parent-jordan", "jordan", "", "", "Jordan Bravo", ("person-a",), (), (),
+        "parent-jordan", "jordan", "", "", "Jordan Bravo", ("person-a",), (), (), (), (),
         worth, WorthSummary("yes", "llm"), machine, (), tuple(sorted(labels.items())),
     )
 

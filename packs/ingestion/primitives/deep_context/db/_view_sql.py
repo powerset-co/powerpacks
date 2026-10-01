@@ -1,6 +1,8 @@
 """SQL relations shared by the Deep Context review projections.
 
 Changelog:
+- 2026-10-01: `PARENT_SELECT` carries the person's emails and phones across every merged
+  record (the review card's Contact line), beside their sources.
 - 2026-09-30: `LINKEDIN_QUEUE_ORDER_SELECT` names the queue's parents in `PARENT_ORDER`
   without loading a card.
 - 2026-09-30: `CANDIDATE_SELECT` pins its identifier lookups to the candidate's
@@ -200,6 +202,17 @@ SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
          SELECT DISTINCT ps.source FROM people pe JOIN person_sources ps USING(person_id)
          WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 ORDER BY ps.source
        )) AS sources_json,
+       -- The person's contacts are every merged record's, like their sources.
+       (SELECT json_group_array(value) FROM (
+         SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
+         FROM people pe CROSS JOIN person_identifiers pi ON pi.person_id=pe.person_id
+         WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pi.kind='email' ORDER BY value
+       )) AS emails_json,
+       (SELECT json_group_array(value) FROM (
+         SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
+         FROM people pe CROSS JOIN person_identifiers pi ON pi.person_id=pe.person_id
+         WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pi.kind='phone' ORDER BY value
+       )) AS phones_json,
        a.path AS dossier_path,
        COALESCE(json_extract(a.payload_json, '$.body'), '') AS dossier_body
 FROM parents p

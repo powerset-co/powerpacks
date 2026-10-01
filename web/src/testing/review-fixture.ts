@@ -35,6 +35,7 @@ export function reviewPerson(overrides: Partial<ReviewPerson> = {}): ReviewPerso
     sources: ["gmail", "imessage"],
     labels: ["Founder", "Close friend"],
     worth_key: "worth-jordan",
+    contacts: "jordan@example.com · +15550100",
     ...overrides,
   }
 }
@@ -49,7 +50,6 @@ export function reviewCandidate(overrides: Partial<ReviewCandidate> = {}): Revie
     experiences: ["Founder, Example Labs", "Engineer, Acme"],
     education: ["Example University"],
     synthetic: false,
-    contacts: "jordan@example.com · +15550100",
     avatar_url: "https://media.example.com/jordan-bravo.jpg",
     ...overrides,
   }
