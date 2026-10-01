@@ -43,6 +43,9 @@ from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs im
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_SYSTEM,
+    NAMES_CUTOFF,
+    NAMES_QUESTION,
+    NAMES_REASON,
     SAME_PERSON_CUTOFF,
     TONE_CUTOFF,
     decision_from_answers,
@@ -434,7 +437,8 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertEqual(payload.pairs_slam_dunk, 1)
 
 
-def scripted_answers(*, p_yes: float = 0.9, fail_on: str | None = None):
+def scripted_answers(*, p_yes: float = 0.9, names: float = 0.9, fail_on: str | None = None,
+                     fail_names: bool = False):
     """Fake answer_requests where judge.py binds it; fail on dossiers naming fail_on."""
     calls: list[dict] = []
 
@@ -442,17 +446,21 @@ def scripted_answers(*, p_yes: float = 0.9, fail_on: str | None = None):
                               request_version, question_version):
         ((digest, request),) = requests.items()
         calls.append(request)
-        if fail_on and fail_on in request["state"]["dossier"]:
+        about_names = "same_name" in request["questions"]
+        if fail_names and about_names:
+            raise RuntimeError("Jev HTTP 503; names remain unjudged")
+        if fail_on and not about_names and fail_on in request["state"]["dossier"]:
             raise RuntimeError("Jev HTTP 503; candidate remains unscored")
+        answers = {"same_name": {"type": "noul", "noul": names}} if about_names else {
+            "same_person": {
+                "type": "choice",
+                "probabilities": {"yes": p_yes, "no": round(1 - p_yes, 6)},
+            },
+            "tone_consistent": {"type": "noul", "noul": 0.8},
+        }
         response = {
             "model": MODEL_ID,
-            "answers": {
-                "same_person": {
-                    "type": "choice",
-                    "probabilities": {"yes": p_yes, "no": round(1 - p_yes, 6)},
-                },
-                "tone_consistent": {"type": "noul", "noul": 0.8},
-            },
+            "answers": answers,
             "usage": {"input_tokens": 1000, "output_tokens": 10},
         }
         return {digest: AnsweredRequest(
@@ -515,7 +523,8 @@ class TestJevJudge(unittest.TestCase):
                     mock.patch("sys.stderr") as stderr:
                 payload = node.run()
 
-            self.assertEqual(len(failing.calls), 2)
+            # Two judge requests, then the names of the one pair judged the same person.
+            self.assertEqual(len(failing.calls), 3)
             cached = canonical_snapshot(node.db).merge_verdicts
             self.assertEqual([(row.person_a, row.person_b) for row in cached], [("c", "d")])
             self.assertEqual(payload.errors, 1)
@@ -528,7 +537,8 @@ class TestJevJudge(unittest.TestCase):
             with mock.patch.object(judge, "answer_requests", second):
                 payload = node.run()
 
-            self.assertEqual(len(second.calls), 1)
+            # One judge request, then the names of both pairs (the fake has no cache).
+            self.assertEqual(len(second.calls), 3)
             self.assertEqual(payload.pairs_reused, 1)
             self.assertEqual(payload.pairs_judged, 1)
             self.assertEqual(payload.errors, 0)
@@ -553,25 +563,93 @@ class TestJevJudge(unittest.TestCase):
             self.assertIn("CONTACT A", request["state"]["dossier"])
             self.assertIn("SHARED IDENTIFIERS", request["state"]["dossier"])
 
-    def test_p_yes_is_preserved_but_incompatible_names_prevent_acceptance(self):
+    def test_request_for_the_names_carries_only_the_two_names(self):
         with tempfile.TemporaryDirectory() as directory:
             node = self._node(Path(directory))
-            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.9)):
+            fake = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", fake):
+                node.run()
+
+            asked = [request for request in fake.calls if "same_name" in request["questions"]]
+            self.assertEqual(sorted(request["state"]["dossier"] for request in asked),
+                             ["A: Jordan Alpha\nB: Casey Bravo", "A: Riley Charlie\nB: Morgan Delta"])
+            self.assertEqual(asked[0]["questions"], {"same_name": {"type": "noul", "instructions": NAMES_QUESTION}})
+
+    def test_judged_the_same_person_under_two_different_names_is_two_people(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.9, names=0.05)):
                 payload = node.run()
             rows = canonical_snapshot(node.db).merge_verdicts
             self.assertEqual({(row.judge, row.same_person, row.confidence, row.reason, row.accepted)
-                              for row in rows}, {("llm", 1, 0.9, "", 0)})
+                              for row in rows}, {("llm", 0, 0.05, NAMES_REASON, 0)})
+            self.assertEqual(payload.candidate_pairs, 0)
             self.assertEqual(payload.model, MODEL_ID)
-            self.assertEqual(payload.tokens, {"input_tokens": 2000, "output_tokens": 20})
-            self.assertAlmostEqual(payload.estimated_cost_usd, 2000 * INPUT_PRICE_PER_MILLION / 1_000_000)
+            self.assertEqual(payload.tokens, {"input_tokens": 4000, "output_tokens": 40})
+            self.assertAlmostEqual(payload.estimated_cost_usd, 4000 * INPUT_PRICE_PER_MILLION / 1_000_000)
 
             Path(directory, "below").mkdir()
             node = self._node(Path(directory) / "below")
-            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.49)):
+            below = scripted_answers(p_yes=0.49)
+            with mock.patch.object(judge, "answer_requests", below):
                 node.run()
             rows = canonical_snapshot(node.db).merge_verdicts
             self.assertEqual({(row.same_person, row.confidence, row.accepted) for row in rows},
                              {(0, 0.49, 0)})
+            self.assertEqual([request for request in below.calls if "same_name" in request["questions"]], [])
+
+    def test_judged_the_same_person_under_names_one_contact_can_have_merges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.9, names=NAMES_CUTOFF)):
+                payload = node.run()
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual({(row.same_person, row.confidence, row.reason, row.accepted) for row in rows},
+                             {(1, 0.9, "", 1)})
+            self.assertEqual(payload.candidate_pairs, 2)
+
+    def test_verdict_cached_before_the_names_question_is_asked_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            people = {person.person_id: person for person in merge_people(node.db)}
+            node.db.replace_merge_verdicts(tuple(
+                MergeVerdictRow(a, b, people[a].slug, people[b].slug, pair_sig(people[a], people[b]),
+                                "llm", True, 0.9, True, "", True, "2026-09-30T00:00:00Z")
+                for a, b in (("a", "b"), ("c", "d"))
+            ))
+            fake = scripted_answers(names=0.05)
+            with mock.patch.object(judge, "answer_requests", fake):
+                payload = node.run()
+
+            self.assertEqual(payload.pairs_reused, 2)
+            self.assertEqual([set(request["questions"]) for request in fake.calls], [{"same_name"}, {"same_name"}])
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual({(row.same_person, row.accepted, row.reason) for row in rows}, {(0, 0, NAMES_REASON)})
+
+            # Decided: the next run has nothing left to ask.
+            again = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", again):
+                node.run()
+            self.assertEqual(again.calls, [])
+
+    def test_failed_names_request_writes_no_verdict_and_is_asked_next_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(fail_names=True)), \
+                    mock.patch("sys.stderr") as stderr:
+                payload = node.run()
+
+            self.assertEqual(canonical_snapshot(node.db).merge_verdicts, ())
+            self.assertEqual(payload.errors, 2)
+            self.assertEqual(payload.candidate_pairs, 0)
+            self.assertIn("names request(s) failed", "".join(
+                str(call.args[0]) for call in stderr.write.call_args_list
+            ))
+
+            with mock.patch.object(judge, "answer_requests", scripted_answers()):
+                payload = node.run()
+            self.assertEqual(payload.errors, 0)
+            self.assertEqual({row.accepted for row in canonical_snapshot(node.db).merge_verdicts}, {1})
 
     def test_cluster_has_no_confidence_override(self):
         with self.assertRaises(SystemExit):

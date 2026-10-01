@@ -230,7 +230,7 @@ fingerprint is rejected.
 | Surface | Provider | Cache key | Gate |
 |---|---|---|---|
 | Fact synthesis | OpenAI (`gpt-5.2`) | `input_evidence_fingerprint` + `SYNTHESIS_VERSION` | estimate → run |
-| Merge pair judge | JEV (`jev-1.13.0`, TypeSafe) | judged pair + evidence; exact request under `jev/` | dry-run estimate before cluster |
+| Merge pair judge | JEV (`jev-1.13.0`, TypeSafe) | judged pair + evidence, then the two names alone for a pair judged the same person; exact request under `jev/` | dry-run estimate before cluster |
 | Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | `needs_approval` + explicit approve |
 | Profile hydration | RapidAPI | public identifier | cache-first everywhere |
 | LinkedIn evidence judge | OpenAI | `judgment_fingerprint` | sticky verdicts, re-judge only on new evidence |

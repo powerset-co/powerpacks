@@ -136,7 +136,7 @@ def verdict_rows(verdicts: list[MergePairVerdict]) -> tuple[MergeVerdictRow, ...
     selected = set(accepted_edges([
         (v.first.person_id, v.second.person_id, v.decision.same_person, v.decision.confidence)
         for v in verdicts
-    ], names={person.person_id: (person.name,) for v in verdicts for person in (v.first, v.second)}))
+    ]))
     rows = []
     for verdict in verdicts:
         first, second = verdict.first, verdict.second
@@ -170,7 +170,7 @@ def _confirmed(
     edges = accepted_edges([
         (v.first.person_id, v.second.person_id, v.decision.same_person, v.decision.confidence)
         for v in verdicts
-    ], names={person.person_id: (person.name,) for person in people})
+    ])
     selected = set(edges)
     rows: list[ConfirmedMergeRow] = []
     for verdict in verdicts:

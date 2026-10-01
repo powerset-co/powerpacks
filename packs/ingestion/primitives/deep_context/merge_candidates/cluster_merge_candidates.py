@@ -2,6 +2,8 @@
 """Detect and judge same-person pairs from canonical SQLite evidence.
 
 Changelog:
+- 2026-10-01: a pair judged the same person is also asked whether its two
+  names can be one contact's; different names are two people.
 - 2026-09-25: the merge cutoff is the one constant SAME_PERSON_CUTOFF; the
   --confidence override is gone (below the cutoff it could accept nothing).
 - 2026-09-25: the ambiguous remainder goes to JEV (one request per pair, cached
@@ -32,6 +34,7 @@ from packs.ingestion.primitives.deep_context.jev_worth.runner import estimate as
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_LLM,
     SAME_PERSON_CUTOFF,
+    check_names,
     judge_pairs,
     judge_request,
 )
@@ -145,6 +148,11 @@ class ClusterMergeCandidates(Node):
                 concurrency=self.concurrency,
             )
             verdicts.extend(judged)
+        # Cached verdicts too: one judged before the names question has not been asked it.
+        verdicts, names_usage, names_errors = check_names(
+            verdicts, output_dir=self.output_dir, concurrency=self.concurrency,
+        )
+        usage = usage + names_usage
         confirmed, clusters = render_results(
             out_csv=self.out_csv,
             out_md=self.out_md,
@@ -162,7 +170,7 @@ class ClusterMergeCandidates(Node):
             pairs_total=len(survey.pairs),
             pairs_slam_dunk=len(survey.slam),
             pairs_judged=len(to_judge) - errors,
-            errors=errors,
+            errors=errors + names_errors,
             pairs_reused=len(survey.reused),
             candidate_pairs=len(confirmed),
             clusters=len(clusters),

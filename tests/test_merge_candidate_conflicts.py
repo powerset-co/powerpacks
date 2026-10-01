@@ -13,59 +13,22 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import _c
 
 
 class MergeConflictTests(unittest.TestCase):
-    def test_different_names_cannot_merge_through_shared_phone(self):
-        a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo')
-        b = MergePerson('b', 'b', 'Casey Delta', 'casey delta')
-        verdict = MergePairVerdict(a, b, 'ab', MergeDecision(True, .98, True, 'shared phone; name change', 'llm'))
-        self.assertFalse(verdict_rows([verdict])[0].accepted)
-        self.assertEqual(_confirmed([a, b], [verdict])[1], [])
-
-    def test_corrupted_contact_cannot_bridge_incompatible_names(self):
-        edges = accepted_edges([('a', 'b', True, .99), ('b', 'c', True, .92)],
-                               names={'a': ('Jordan Bravo',), 'b': ('Jordan B',), 'c': ('Casey Delta',)})
-        self.assertEqual(edges, [('a', 'b')])
-
-    def test_surname_change_with_same_given_name_remains_judge_eligible(self):
-        a = MergePerson('a', 'a', 'Casey Bravo', 'casey bravo')
-        b = MergePerson('b', 'b', 'Casey Morgan Delta', 'casey morgan delta')
-        verdict = MergePairVerdict(a, b, 'ab', MergeDecision(True, .98, True, 'same person role and employer', 'llm'))
-        self.assertTrue(verdict_rows([verdict])[0].accepted)
-
-    def test_old_positive_receipt_cannot_join_incompatible_names(self):
-        people = [SimpleNamespace(person_id=key, parent_id=key, display_name=name)
-                  for key, name in [('a', 'Jordan Bravo'), ('b', 'Casey Bravo')]]
-        verdict = SimpleNamespace(person_a='a', person_b='b', same_person=True,
-                                  accepted=True, confidence=.98)
-        with patch.object(build_parents, 'person_rows', return_value=people), patch.object(
-            build_parents, 'merge_verdicts', return_value=[verdict],
-        ):
-            self.assertEqual(build_parents._accepted_components(None), ())
-
-    def test_name_order_and_short_forms_remain_compatible(self):
-        from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import names_compatible
-        for first, second in [('Bravo, Jordan', 'Jordan Bravo'), ('J Bravo', 'Jordan Bravo'),
-                              ('Robert Bravo', 'Bob Bravo'), ('Casey B', 'Casey Bravo'),
-                              ('Nicholas Bravo', 'Nick Bravo'), ('Nikolay Bravo', 'Nick Bravo'),
-                              ('Abdulaziz Bravo', 'Aziz Bravo'), ('Bravo', 'Casey Bravo')]:
-            self.assertTrue(names_compatible(first, second))
-
-    def test_shared_surname_cannot_make_unrelated_given_names_compatible(self):
-        from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import names_compatible
-        for first, second in [('Jordan Bravo', 'Casey Bravo'), ('Casey Bravo', 'Jordan Bravo')]:
+    def test_repair_separates_only_given_names_that_spell_differently(self):
+        from packs.ingestion.primitives.deep_context.db.merge_repair import _given_names_differ
+        for first, second in [('Jordan Bravo', 'Casey Bravo'), ('Casey Bravo', 'Jordan Bravo'),
+                              ('Jordan Bravo', 'Casey Delta')]:
             with self.subTest(first=first, second=second):
-                self.assertFalse(names_compatible(first, second))
+                self.assertTrue(_given_names_differ(first, second))
+        for first, second in [('Bravo, Jordan', 'Jordan Bravo'), ('J Bravo', 'Jordan Bravo'),
+                              ('Casey B', 'Casey Bravo'), ('Bravo', 'Casey Bravo'),
+                              ('Ann Bravo', 'Annmay Bravo'), ('Ann', 'Annmay Bravo'),
+                              ('Casey Bravo', 'Casey Morgan Delta')]:
+            with self.subTest(first=first, second=second):
+                self.assertFalse(_given_names_differ(first, second))
 
-    def test_given_name_prefix_remains_judge_eligible(self):
-        from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import names_compatible
-        for first, second in [('Ann Bravo', 'Annmay Bravo'), ('Ann', 'Annmay Bravo')]:
-            self.assertTrue(names_compatible(first, second))
-
-    def test_shared_surname_positive_receipt_cannot_join_distinct_given_names(self):
-        a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo')
-        b = MergePerson('b', 'b', 'Casey Bravo', 'casey bravo')
-        verdict = MergePairVerdict(a, b, 'ab', MergeDecision(True, .98, True, 'shared family phone', 'llm'))
-        self.assertFalse(verdict_rows([verdict])[0].accepted)
-        self.assertEqual(_confirmed([a, b], [verdict])[1], [])
+    def test_a_pair_decided_two_people_blocks_a_bridge_between_them(self):
+        edges = accepted_edges([('a', 'b', True, .99), ('b', 'c', True, .92), ('a', 'c', False, .05)])
+        self.assertEqual(edges, [('a', 'b')])
 
     def test_hub_does_not_override_negative_leaf_pair(self):
         people = [MergePerson(key, key, key, key) for key in ('a', 'b', 'c')]

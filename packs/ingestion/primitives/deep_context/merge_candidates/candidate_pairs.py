@@ -35,7 +35,6 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
 GATE_NAME_SIM = 0.85
 MAX_BLOCKING_BUCKET = 200
 JUDGE_SLAM_DUNK = "slam_dunk"
-_GIVEN_NAME_NICKNAMES = {("abdulaziz", "aziz"), ("bob", "robert"), ("nicholas", "nick"), ("nick", "nikolay")}
 T = TypeVar("T")
 
 
@@ -201,25 +200,8 @@ def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[
     return [group for group in groups.values() if len(group) > 1]
 
 
-def names_compatible(first: str, second: str) -> bool:
-    """Require compatible given names when both full names are available."""
-    left = re.findall(r"[^\W\d_]+", first.casefold())
-    right = re.findall(r"[^\W\d_]+", second.casefold())
-    if len(left) < 2 or len(right) < 2 or sorted(left) == sorted(right):
-        return True
-    a, b = left[0], right[0]
-    return (
-        a == b
-        or (min(len(a), len(b)) == 1 and a[0] == b[0])
-        or tuple(sorted((a, b))) in _GIVEN_NAME_NICKNAMES
-        or jaro_winkler(a, b) >= GATE_NAME_SIM
-    )
-
-
 def accepted_edges(
     verdicts: list[tuple[str, str, bool, float]],
-    *,
-    names: dict[str, tuple[str, ...]] | None = None,
 ) -> list[tuple[str, str]]:
     """Join strongest pairs without overriding different-person evidence."""
     groups = {node: {node} for left, right, _, _ in verdicts for node in (left, right)}
@@ -232,10 +214,6 @@ def accepted_edges(
             continue
         joined = groups[left] | groups[right]
         if any(a in joined and b in joined for a, b in rejected):
-            continue
-        if names and any(not names_compatible(a, b)
-                         for left, right in combinations(joined, 2)
-                         for a in names[left] for b in names[right]):
             continue
         accepted.append(tuple(sorted((left, right))))
         for node in joined:

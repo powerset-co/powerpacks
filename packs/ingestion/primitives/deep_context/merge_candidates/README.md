@@ -26,8 +26,11 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 
 - `deep_cluster`: paid — one JEV request per uncached ambiguous pair (about
   $0.0001 each; answers cache under `deep-context/jev/`, verdicts per judged
-  pair in SQLite, so re-runs do not re-bill). A pair merges at p(yes) ≥ 0.5.
-  Free `--dry-run` prices the exact requests.
+  pair in SQLite, so re-runs do not re-bill). A pair merges at p(yes) ≥ 0.5
+  when JEV also answers that its two names can be one contact's (one more
+  request per pair judged the same person, the two names only, about $0.00002).
+  Different names are stored as two people. Free `--dry-run` prices the pair
+  requests.
 - `deep_parents`: free.
 
 ## Invariant
@@ -40,4 +43,6 @@ them.
 
 ## Changelog
 
+- 2026-10-01: JEV answers whether a judged pair's two names can be one
+  contact's; the spelling check and its hand-written nickname list are gone.
 - 2026-09-25: JEV replaces the OpenAI pair judge; merge cutoff is p(yes) ≥ 0.5.
