@@ -125,6 +125,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_identity_research_claims \
   tests.test_deep_research_contacts \
   tests.test_parallel_stream_resume \
+  tests.test_profile_transient_failure \
   tests.test_email_context \
   tests.test_identity_evidence_identifiers \
   tests.test_ingestion_jsonio \

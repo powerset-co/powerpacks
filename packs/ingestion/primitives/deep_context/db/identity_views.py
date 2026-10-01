@@ -28,8 +28,10 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_GATE_ACCEPTED,
 )
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_HUMAN_DECISION_SQL,
     AFFIRMATIVE_MACHINE_ACTIONS,
     AFFIRMATIVE_MACHINE_APPROVALS,
+    AFFIRMATIVE_MACHINE_DECISION_SQL,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentifierKind,
@@ -112,6 +114,13 @@ WHERE {WORTH_GATE_ACCEPTED}
     AND member.is_ghost=0
 )
   AND (l.row_key IS NULL OR scoped.row_key IS NOT NULL)
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links real
+    WHERE real.parent_id=r.parent_id AND real.kind!='synthetic'
+      AND CASE WHEN real.decision_action IS NOT NULL THEN
+        {AFFIRMATIVE_HUMAN_DECISION_SQL} AND real.decision_approved='yes'
+      ELSE {AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix='real.')} END
+  )
 """
 
 

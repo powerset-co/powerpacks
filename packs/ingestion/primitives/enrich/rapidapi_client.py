@@ -30,8 +30,8 @@ resolution reads POWERSET_API_KEY from the environment, seeded from the repo
 - `RapidApiClient.http_json(...)` — one JSON-over-HTTP call; returns
   (status, payload, error-text).
 - Cache writes: a success is always cached. A failure is cached ONLY when
-  `is_permanent_failure` says so (404/410, or an HTTP 200 the provider marked
-  `success: false`). A permanent failure over an entry we already paid for
+  `is_permanent_failure` says so (404/410, or an HTTP 200 explicitly reporting
+  an inaccessible profile). A permanent failure over an entry we already paid for
   keeps the paid body and only bumps `last_checked_at` — recorded evidence is
   never destroyed. Cache format and readers live in `profile_cache.py`.
 - `RETRYABLE_STATUS_CODES` / `PERMANENT_FAILURE_STATUS_CODES` /
@@ -116,8 +116,7 @@ RETRYABLE_STATUS_CODES = frozenset({0, 429, 500, 502, 503, 504})
 # 5xx — is transient and must NOT be written to the failure cache: a cached
 # failure suppresses retries for DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS, which
 # turns a rate-limit storm into a day of unenrichable contacts. A provider
-# `success: false` body on an HTTP 200 counts as permanent too (see
-# `is_permanent_failure`) — that is the provider saying the profile is not there.
+# explicit inaccessible-profile message on HTTP 200 is permanent too.
 PERMANENT_FAILURE_STATUS_CODES = frozenset({404, 410})
 
 
@@ -216,6 +215,16 @@ class RapidApiClient:
         memo_key = str(cache_path) if cache_path else pub_key
         cached = read_usable_cached_profile(cache_path)
         record_exists = bool(cache_path and cache_path.exists())
+        record = read_json(cache_path, None) if record_exists else None
+        recorded_profile = (
+            record.get("normalized_profile") or normalize_linkedin_profile(record.get("raw_response") or {})
+            if isinstance(record, dict) else {}
+        )
+        recorded_transient = (
+            recorded_profile.get("success") is False
+            and not self.is_permanent_failure(int((record or {}).get("status_code") or 200), recorded_profile)
+        )
+        fresh = fresh or recorded_transient
         answered = self._definitive_this_run.get(memo_key, "")
 
         def from_record(state: str, detail: str = "") -> dict[str, Any]:
@@ -246,7 +255,7 @@ class RapidApiClient:
             # unknown pub is ERROR, never a verdict.
             if cached and profile_has_content(cached):
                 return from_record(PROFILE_CONTENT, "no Powerset API key; serving cached profile")
-            if record_exists:
+            if record_exists and not recorded_transient:
                 return from_record(PROFILE_EMPTY, "no Powerset API key; serving recorded empty state")
             return {"state": PROFILE_ERROR, "normalized_profile": {}, "data": None,
                     "from_cache": False, "fetched": False, "status_code": 0,
@@ -275,7 +284,7 @@ class RapidApiClient:
         detail = f"fetch failed ({result.get('error') or base['status_code']})"
         if cached and profile_has_content(cached):
             return from_record(PROFILE_CONTENT, f"{detail}; serving cached profile")
-        if record_exists:
+        if record_exists and not recorded_transient:
             return from_record(PROFILE_EMPTY, f"{detail}; serving recorded empty state")
         return {"state": PROFILE_ERROR, "normalized_profile": normalized, "data": result.get("data"),
                 "from_cache": False, "fetched": True, "detail": detail, **{k: base[k] for k in ("status_code", "attempts")}}
@@ -365,13 +374,16 @@ class RapidApiClient:
     def is_permanent_failure(status: int, normalized: dict[str, Any]) -> bool:
         """True when a non-success result will not change on a later retry, i.e.
         it is safe to remember as a cached failure. That is HTTP 404/410, or an
-        HTTP 200 whose body the provider marked `success: false` (no such
-        profile). Transient statuses — 0 (network/timeout/unparseable body), 429,
+        HTTP 200 explicitly reporting an inaccessible profile. Transient statuses
+        — 0 (network/timeout/unparseable body), 429,
         and 5xx — are never permanent, so they leave the cache untouched and the
         next run retries instead of silently dropping the person."""
         if status in PERMANENT_FAILURE_STATUS_CODES:
             return True
-        return status == 200 and normalized.get("success") is False
+        return (
+            status == 200 and normalized.get("success") is False
+            and normalized.get("error") == "This profile can't be accessed. Not valid LinkedIn profile"
+        )
 
 
 def hydrate_profiles(
