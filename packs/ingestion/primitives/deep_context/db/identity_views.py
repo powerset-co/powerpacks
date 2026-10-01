@@ -1,6 +1,10 @@
 """LinkedIn review, enrichment, and identity receipt projections.
 
 Changelog:
+- 2026-09-30: `enrichment_queue` reads research once and identifiers through the person;
+  it runs on every review page load and status poll.
+- 2026-09-30: `linkedin_queue_order` + `linkedin_queue_parent` load one review card;
+  `linkedin_queue` stays for callers that want every card.
 - 2026-09-25: approved families read through `_family_rows`, one JSON-bound id set.
 """
 
@@ -14,8 +18,9 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _decision_page,
     _json,
     _linkedin_progress,
-    _linkedin_page,
     _linkedin_queue,
+    _linkedin_queue_order,
+    _linkedin_queue_parent,
 )
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     LINKEDIN_CTE,
@@ -42,6 +47,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
     EnrichmentQueueRow,
     LinkedInProgress,
+    LinkedInQueueRow,
     ParentViewRow,
     SyntheticFallbackRow,
 )
@@ -205,6 +211,8 @@ def enrichment_queue(db: Db) -> list[EnrichmentQueueRow]:
         + f"""
 SELECT l.row_key, w.parent_id, w.display_slug, w.display_name,
        l.candidate_origin,
+       -- CROSS JOIN pins the identifier lookups to the family's people; left to
+       -- itself the planner walks identifiers_by_value(kind) for every row.
        (SELECT json_group_array(person_id) FROM (
           SELECT person_id FROM people
           WHERE parent_id=w.parent_id AND is_owner=0 AND is_ghost=0
@@ -212,13 +220,13 @@ SELECT l.row_key, w.parent_id, w.display_slug, w.display_name,
         )) AS person_ids_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
-          FROM people pe CROSS JOIN person_identifiers i USING(person_id)
+          FROM people pe CROSS JOIN person_identifiers i ON i.person_id=pe.person_id
           WHERE pe.parent_id=w.parent_id AND pe.is_owner=0 AND i.kind='email'
           ORDER BY value
         )) AS emails_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
-          FROM people pe CROSS JOIN person_identifiers i USING(person_id)
+          FROM people pe CROSS JOIN person_identifiers i ON i.person_id=pe.person_id
           WHERE pe.parent_id=w.parent_id AND pe.is_owner=0 AND i.kind='phone'
           ORDER BY value
         )) AS phones_json
@@ -378,8 +386,14 @@ def linkedin_queue(db: Db) -> list[ParentViewRow]:
     return _linkedin_queue(db)
 
 
-def linkedin_page(db: Db, *, index: int = 0, excluded: Sequence[str] = ()) -> tuple[int, int, ParentViewRow | None]:
-    return _linkedin_page(db, index=index, excluded=excluded)
+def linkedin_queue_order(db: Db) -> list[LinkedInQueueRow]:
+    """The queue's parents in card order — ids and slugs only."""
+    return _linkedin_queue_order(db)
+
+
+def linkedin_queue_parent(db: Db, parent_id: str) -> ParentViewRow:
+    """One queued parent with its pending candidates: the card `linkedin_queue` would hold."""
+    return _linkedin_queue_parent(db, parent_id)
 
 
 def linkedin_progress(db: Db) -> LinkedInProgress:

@@ -1,4 +1,9 @@
-"""Select the canonical SQLite enrichment queue for provider research."""
+"""Select the canonical SQLite enrichment queue for provider research.
+
+Changelog:
+- 2026-09-30: `build_queue` reads dossier evidence once per batch of queue rows,
+  not once per row; `build_queue_row` takes the row's evidence.
+"""
 
 from __future__ import annotations
 

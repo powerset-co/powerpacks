@@ -17,6 +17,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 # WorthRow <-> _view_sql.WORTH_SELECT
 # CandidateViewRow <-> _view_sql.CANDIDATE_SELECT
 # ParentViewRow <-> _view_sql.PARENT_SELECT
+# LinkedInQueueRow <-> _view_sql.LINKEDIN_QUEUE_ORDER_SELECT
 # EnrichmentQueueRow <-> identity_views.enrichment_queue SELECT
 # SyntheticFallbackRow <-> identity_views.synthetic_fallback SELECT
 
@@ -91,6 +92,14 @@ class LinkedInProgress:
     total: int
     pending: int
     done: int
+
+
+@dataclass(frozen=True)
+class LinkedInQueueRow:
+    """One pending parent's place in the LinkedIn queue, without its card."""
+
+    parent_id: str
+    slug: str
 
 
 @dataclass(frozen=True)

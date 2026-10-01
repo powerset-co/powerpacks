@@ -1,6 +1,8 @@
 """Frozen Deep Context HTTP transport over canonical SQLite state.
 
 Changelog:
+- 2026-09-30: a LinkedIn decision loads the next card alone and answers with counts —
+  no whole-queue hydration, no workflow state.
 - 2026-09-30: /directory and /api/person are gone (People is the browse surface);
   the bare root opens the store's current stage; a worth decision answers with
   its counts instead of the full workflow state.
@@ -27,7 +29,8 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
     linkedin_progress,
-    linkedin_page,
+    linkedin_queue_order,
+    linkedin_queue_parent,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     PARENT_WORTH_PREFIX,
@@ -225,35 +228,50 @@ def make_handler(
             )
         return card
 
-    def linkedin_body(params: dict[str, list[str]]) -> str:
+    def review_progress(linkedin_pending: int) -> dict[str, int]:
+        """The counts a decision click repaints: the worth tabs and the two step badges."""
+        worth = worth_counts(db)
+        return {
+            "worth_pending": worth.pending,
+            "worth_yes": worth.yes,
+            "worth_no": worth.no,
+            "linkedin_pending": linkedin_pending,
+        }
+
+    def linkedin_body(params: dict[str, list[str]]) -> tuple[str, int]:
+        """The LinkedIn panel's HTML and how many parents are still pending."""
         excluded = _excluded(params)
-        inflight = {item.slug.lower() for item in api.retargets() if item.state in IN_FLIGHT_RETARGET_STATES}
-        try:
-            requested_index = int(_value(params, "index", "0"))
-        except ValueError:
-            requested_index = 0
-        total, index, parent = linkedin_page(db, index=requested_index, excluded=tuple(excluded | inflight))
-        if parent is None:
+        # Re-research is read before the queue's order: a result that lands between
+        # the two reads has either left the order or is still excluded here.
+        retargets = api.retargets()
+        inflight = {item.slug.lower() for item in retargets if item.state in IN_FLIGHT_RETARGET_STATES}
+        order = linkedin_queue_order(db)
+        queue = [row for row in order if row.slug.lower() not in excluded | inflight]
+        if not queue:
             state = api.snapshot()
             progress = state.progress
             completed = not progress.linkedin_pending
-            return linkedin_finished_body(
+            finished = linkedin_finished_body(
                 progress,
                 linkedin_complete=completed,
                 retargets_in_flight=len(inflight),
                 auto_continue=not completed,
             )
+            return finished, len(order)
+        index = _index(params, len(queue))
+        # Only the card on screen is hydrated; the queue itself is ids and slugs.
+        parent = linkedin_queue_parent(db, queue[index].parent_id)
         card = render_linkedin_card(
             parent,
             parent.candidates,
-            failure_note=_failed_notes(api.retargets()).get(parent.slug, ""),
+            failure_note=_failed_notes(retargets).get(parent.slug, ""),
         )
-        return (
-            f"<div class='linkedin-stage' data-queue-index='{index}' "
-            f"data-queue-total='{total}'>{_carousel_nav()}{card}</div>"
-            if _value(params, "debug") == "1"
-            else card
-        )
+        if _value(params, "debug") == "1":
+            card = (
+                f"<div class='linkedin-stage' data-queue-index='{index}' "
+                f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
+            )
+        return card, len(order)
 
     def full_page(params: dict[str, list[str]]) -> bytes:
         state = api.snapshot()
@@ -289,9 +307,10 @@ def make_handler(
                 else render_enrichment(enrichment)
             )
         elif view == "linkedin":
+            body, _ = linkedin_body(params)
             content = (
                 "<div class='linkedin-stage'><div class='linkedin-panel' "
-                f"data-linkedin-panel>{linkedin_body(params)}</div></div>"
+                f"data-linkedin-panel>{body}</div></div>"
             )
         elif progress.synthesize_pending:
             content = SYNTHESIZE_HTML
@@ -446,6 +465,9 @@ def make_handler(
                 return self.send_bytes(render_decision_details(parent).encode())
             if parsed.path == "/api/dossier":
                 parent = person_detail(db, _value(params, "slug"))
+                # Row-detail requests pass skip=1: the expanded decision row
+                # already pins name (summary line) and Contact/Why above the
+                # markdown, so the body starts at Summary.
                 skip = _value(params, "skip") == "1"
                 body = markdown_to_html(
                     parent.dossier_body if parent else "",
@@ -458,7 +480,8 @@ def make_handler(
                     return self.send_bytes(b"gone", "text/plain; charset=utf-8", 404)
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/linkedin-card":
-                return self.send_bytes(linkedin_body(params).encode())
+                body, _ = linkedin_body(params)
+                return self.send_bytes(body.encode())
             if parsed.path == "/api/avatar":
                 try:
                     row_key = api.resolve_row_key(_value(params, "pub"))
@@ -657,12 +680,10 @@ def make_handler(
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
                 # The decision write is what the UI waits on — this response
-                # carries exactly the counts the page repaints (its tabs and
-                # the two step badges). The full workflow state is a stage-view
-                # query; rebuilding it here cost ~1.7s per click on a 7k-parent
-                # store, and the worth page never reads its token.
-                worth = worth_counts(db)
-                linkedin = linkedin_progress(db)
+                # carries exactly the counts the page repaints. The full workflow
+                # state is a stage-view query; rebuilding it here cost ~1.7s per
+                # click on a 7k-parent store, and the worth page never reads its token.
+                progress = review_progress(linkedin_progress(db).pending)
                 notify()
                 wake_agent()
                 return self.send_json(
@@ -674,13 +695,8 @@ def make_handler(
                         "source": row.source,
                         "reason": row.machine.reason,
                         "rejected": row.effective == "no",
-                        "progress": {
-                            "worth_pending": worth.pending,
-                            "worth_yes": worth.yes,
-                            "worth_no": worth.no,
-                            "linkedin_pending": linkedin.pending,
-                        },
-                        "next_stage": "enrich" if worth.pending == 0 else "worth",
+                        "progress": progress,
+                        "next_stage": "enrich" if progress["worth_pending"] == 0 else "worth",
                     }
                 )
             decision = _value(form, "decision")
@@ -700,13 +716,13 @@ def make_handler(
                 result = api.decide(row_key, decision, new_url, note)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-            state = api.snapshot()
-            progress = state.progress
             notify()
             wake_agent()
             # The next card rides in the response, rendered AFTER the write
-            # committed: one round trip, no race, no client-side prefetch.
-            next_html = linkedin_body({"exclude": [slug or _parent.slug]})
+            # committed: one round trip, no race, no client-side prefetch. The
+            # same read of the queue's order gives the pending count; the
+            # LinkedIn page never reads a state token.
+            next_html, linkedin_pending = linkedin_body({"exclude": [slug or _parent.slug]})
             return self.send_json(
                 {
                     "ok": True,
@@ -714,9 +730,8 @@ def make_handler(
                     "action": result.action,
                     "approved": result.approved,
                     "new_url": result.new_url,
-                    "progress": asdict(progress),
+                    "progress": review_progress(linkedin_pending),
                     "resolved_pubs": list(result.resolved_pubs),
-                    "state_token": state.state_token,
                     "next": next_html,
                 }
             )

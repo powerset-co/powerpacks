@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.8.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.5...powerpacks-v3.8.6) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deep-context:** halve the review page load and status poll ([#639](https://github.com/powerset-co/powerpacks/issues/639)) ([4c3e0a6](https://github.com/powerset-co/powerpacks/commit/4c3e0a6426c782e053ef676cf9c51896f316823c))
+
+## [3.8.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.4...powerpacks-v3.8.5) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deep-context:** load one LinkedIn card per click, not the queue ([#637](https://github.com/powerset-co/powerpacks/issues/637)) ([cb8b7bd](https://github.com/powerset-co/powerpacks/commit/cb8b7bd020815d759dab21f05209326bf8e01e99))
+
+## [3.8.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.3...powerpacks-v3.8.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* **deep-context:** delete the directory page; a worth click answers in 0.4s ([#633](https://github.com/powerset-co/powerpacks/issues/633)) ([fd05614](https://github.com/powerset-co/powerpacks/commit/fd056149a7fd3288641bcc921dd061a25a172298))
+
 ## [3.8.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.2...powerpacks-v3.8.3) (2026-09-30)
 
 

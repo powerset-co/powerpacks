@@ -1,6 +1,8 @@
 """Private row shapers shared by the named review queries.
 
 Changelog:
+- 2026-09-30: `_linkedin_queue_order` and `_linkedin_queue_parent` serve one review card
+  without hydrating the whole queue.
 - 2026-09-25: candidate hydration binds its parent ids as one JSON array; `_worth_rows` can select one parent.
 - 2026-09-25: the worth Yes/No tables list every row with that effective worth;
   the links predicate that hid unresearched people is gone.
@@ -17,6 +19,7 @@ from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     CANDIDATE_SELECT,
     LINKEDIN_CTE,
+    LINKEDIN_QUEUE_ORDER_SELECT,
     PARENT_SELECT,
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
@@ -36,6 +39,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateProfile,
     CandidateViewRow,
     LinkedInProgress,
+    LinkedInQueueRow,
     ParentViewRow,
     WorthCounts,
     WorthHumanRow,
@@ -333,32 +337,16 @@ def _linkedin_queue(db: Db) -> list[ParentViewRow]:
     return _hydrate_parents(db, rows, pending_only=True)
 
 
-def _linkedin_page(
-    db: Db,
-    *,
-    index: int = 0,
-    excluded: Sequence[str] = (),
-) -> tuple[int, int, ParentViewRow | None]:
-    excluded_slugs = {slug.lower() for slug in excluded}
-    pending = db.query(LINKEDIN_CTE + """
-SELECT p.parent_id, p.display_slug
-FROM parents p JOIN pending_parents pending USING(parent_id)
-ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
-""")
-    rows = [
-        row for row in pending
-        if ResearchHandle.for_parent(row["parent_id"], row["display_slug"]).lower() not in excluded_slugs
+def _linkedin_queue_order(db: Db) -> list[LinkedInQueueRow]:
+    return [
+        LinkedInQueueRow(row["parent_id"], ResearchHandle.for_parent(row["parent_id"], row["display_slug"]))
+        for row in db.query(LINKEDIN_CTE + LINKEDIN_QUEUE_ORDER_SELECT)
     ]
-    total = len(rows)
-    if not total:
-        return 0, 0, None
-    index = max(0, index) % total
-    selected = db.query(
-        WORTH_CTE + PARENT_SELECT.format(where="WHERE p.parent_id=?"),
-        (rows[index]["parent_id"],),
-    )
-    parent = _hydrate_parents(db, selected, pending_only=True)[0]
-    return total, index, parent
+
+
+def _linkedin_queue_parent(db: Db, parent_id: str) -> ParentViewRow:
+    rows = db.query(LINKEDIN_CTE + PARENT_SELECT.format(where="WHERE p.parent_id=?"), (parent_id,))
+    return _hydrate_parents(db, rows, pending_only=True)[0]
 
 
 def _linkedin_progress(db: Db) -> LinkedInProgress:

@@ -987,7 +987,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "SELECT decision_note FROM links WHERE row_key=?", (self.PUB,)
         )[0]["decision_note"]
         self.assertEqual(note, "Synthetic correction")
-        for key in ("progress", "resolved_pubs", "state_token"):
+        for key in ("progress", "resolved_pubs", "next"):
             self.assertIn(key, payload)
 
     def test_worth_accepts_worth_pub_parent_slug_and_note(self) -> None:

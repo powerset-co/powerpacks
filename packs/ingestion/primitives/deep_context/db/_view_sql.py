@@ -1,6 +1,8 @@
 """SQL relations shared by the Deep Context review projections.
 
 Changelog:
+- 2026-09-30: `LINKEDIN_QUEUE_ORDER_SELECT` names the queue's parents in `PARENT_ORDER`
+  without loading a card.
 - 2026-09-30: `CANDIDATE_SELECT` pins its identifier lookups to the candidate's
   person; the planner's kind-first order was quadratic in the store.
 - 2026-09-25: `CANDIDATE_SELECT` takes its parent ids as one JSON-bound set, not placeholders.
@@ -207,6 +209,9 @@ LINKEDIN_CTE = (
 )
 
 
+PARENT_ORDER = "ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id"
+
+
 PARENT_SELECT = """
 SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
        w.machine_worth, w.machine_worth_reason, w.machine_source, w.effective_worth,
@@ -227,8 +232,14 @@ LEFT JOIN artifacts a ON a.artifact_key=(
   LIMIT 1
 )
 {where}
-ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
-"""
+""" + PARENT_ORDER + "\n"
+
+
+LINKEDIN_QUEUE_ORDER_SELECT = """
+SELECT p.parent_id, p.display_slug
+FROM parents p
+WHERE p.parent_id IN (SELECT parent_id FROM pending_parents)
+""" + PARENT_ORDER + "\n"
 
 
 CANDIDATE_SELECT = """
