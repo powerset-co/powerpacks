@@ -273,7 +273,7 @@ class ProviderTests(unittest.TestCase):
             )
         self.assertEqual(received[0][0], "jordan-bravo")
         self.assertEqual(received[0][1].basis[0].confidence, "high")
-        self.assertEqual(execution, ("run-2: failed: no result",))
+        self.assertEqual(execution, ("casey-delta (run-2): failed: no result",))
         task_group.get_runs.assert_called_once_with(
             "group-1",
             include_output=True,
@@ -356,6 +356,27 @@ class ProviderTests(unittest.TestCase):
             self.assertFalse(result.complete)
             self.assertTrue(result.usable)
             self.assertEqual([row.artifact_key for row in artifacts(db, kind="research")], ["research:jordan-a"])
+            pending, reused = queue.filter_already_done(rows, artifacts(db, kind="research"))
+            self.assertEqual(reused, 1)
+            self.assertEqual([row.handle for row in pending], ["jordan-b"])
+
+    def test_stream_exception_keeps_completed_count_and_reusable_results(self) -> None:
+        class PartialClient(StubParallelClient):
+            def execute(self, inputs, _params, on_status, on_result):
+                on_result(str(inputs[0]["metadata"]["handle"]), provider_output())
+                raise ConnectionError("stream disconnected")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = seed_db(root)
+            rows = (research_queue_row("jordan-a"), research_queue_row("jordan-b"))
+            with (
+                mock.patch.object(parallel_client, "ParallelClient", PartialClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
+            ):
+                result = driver.run_research(ResearchRunParams(output_dir=root / "research", rows=rows, db=db))
+            self.assertEqual(result.completed, 1)
+            self.assertIn("stream disconnected", result.errors[0])
             pending, reused = queue.filter_already_done(rows, artifacts(db, kind="research"))
             self.assertEqual(reused, 1)
             self.assertEqual([row.handle for row in pending], ["jordan-b"])

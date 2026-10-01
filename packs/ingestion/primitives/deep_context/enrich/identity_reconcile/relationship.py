@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -145,6 +146,7 @@ class ReviewRelationships:
         if self.dry_run or (missing and not self.approve_spend):
             return {"status": "dry_run" if self.dry_run else "needs_approval", **payload}
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        errors = []
         if chosen:
             try:
                 completed, errors = asyncio.run(self._judge(chosen))
@@ -152,36 +154,43 @@ class ReviewRelationships:
                 payload.update(status="failed", error=str(exc))
                 return write_manifest(self.out_dir.name, payload, import_dir=self.out_dir.parent)
             records.update(completed)
-            if errors:
-                payload.update(status="failed", error=f"{len(errors)} relationship judgments failed: {errors[0]}",
-                    remaining=sum(task.parent_id not in records for task in tasks))
-                return write_manifest(self.out_dir.name, payload, import_dir=self.out_dir.parent)
         remaining = sum(task.parent_id not in records for task in tasks)
-        if remaining:
-            payload.update(status="incomplete", remaining=remaining)
-        else:
-            result = finish_reviews(self.db, tuple(records[task.parent_id] for task in tasks))
-            payload.update(status="completed", remaining=0, reviews=result)
+        result = finish_reviews(self.db, tuple(records[task.parent_id] for task in tasks if task.parent_id in records))
+        payload.update(status="failed" if errors else "incomplete" if remaining else "completed",
+            remaining=remaining, reviews=result)
+        if errors:
+            payload.update(errors=errors, error=f"{len(errors)} relationship judgments failed")
+            for error in errors:
+                print(f"[relationships] {error['parent_id']}: {error['error']}", file=sys.stderr)
         return write_manifest(self.out_dir.name, payload, import_dir=self.out_dir.parent)
 
-    async def _judge(self, tasks: list[_RelationshipTask]) -> tuple[dict[str, RelationshipDecision], list[Exception]]:
+    async def _judge(self, tasks: list[_RelationshipTask]) -> tuple[dict[str, RelationshipDecision], list[dict[str, str]]]:
         async with OpenAIResponsesCaller(self.config) as caller:
-            async def one(task: _RelationshipTask) -> RelationshipDecision:
-                result = await caller.call(system_prompt=SYSTEM_PROMPT, user_prompt=task.prompt,
-                    schema=SCHEMA, schema_name="relationship", context=task.parent_id)
-                jsonschema.validate(result.payload, SCHEMA)
-                decision = RelationshipDecision.from_payload(task.parent_id, task.fingerprint, result.payload)
-                expected_urls = {candidate["url"] for candidate in json.loads(task.prompt)["candidates"]}
-                if {candidate.url for candidate in decision.candidates} != expected_urls:
-                    raise ValueError("identity decision must return exactly the supplied URLs")
+            async def one(task: _RelationshipTask) -> RelationshipDecision | Exception:
+                try:
+                    result = await caller.call(system_prompt=SYSTEM_PROMPT, user_prompt=task.prompt,
+                        schema=SCHEMA, schema_name="relationship", context=task.parent_id)
+                    jsonschema.validate(result.payload, SCHEMA)
+                    decision = RelationshipDecision.from_payload(task.parent_id, task.fingerprint, result.payload)
+                    expected_urls = {candidate["url"] for candidate in json.loads(task.prompt)["candidates"]}
+                    if {candidate.url for candidate in decision.candidates} != expected_urls:
+                        raise ValueError("identity decision must return exactly the supplied URLs")
+                except Exception as exc:
+                    return exc
                 with self.decisions_path.open("a") as target:
                     target.write(json.dumps({"judgment": asdict(decision), "model": self.config.model,
                         "effort": self.config.effort, "usage": result.usage.as_dict()}, ensure_ascii=False) + "\n")
                 cache_relationship_judgment(self.db, decision)
                 return decision
-            results = await asyncio.gather(*(one(task) for task in tasks), return_exceptions=True)
-        errors = [result for result in results if isinstance(result, Exception)]
-        return {result.parent_id: result for result in results if isinstance(result, RelationshipDecision)}, errors
+            results = await asyncio.gather(*(one(task) for task in tasks))
+        completed = {}
+        errors = []
+        for task, result in zip(tasks, results):
+            if isinstance(result, Exception):
+                errors.append({"parent_id": task.parent_id, "error": str(result)})
+                continue
+            completed[result.parent_id] = result
+        return completed, errors
 
 
 def main(argv: list[str] | None = None) -> int:

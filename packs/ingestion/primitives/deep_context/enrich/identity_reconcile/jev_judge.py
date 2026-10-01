@@ -9,6 +9,9 @@ import asyncio
 import hashlib
 import json
 import math
+import os
+
+import httpx
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -19,7 +22,8 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
 )
 from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 from packs.ingestion.primitives.deep_context.shared.common import load_env
-from packs.search.primitives.llm_rerank_candidates.jev.client import answer_requests, request_digest
+from packs.ingestion.primitives.imports.common import write_manifest
+from packs.search.primitives.llm_rerank_candidates.jev.client import answer_requests, request_digest, TIMEOUT_SECONDS
 from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
 
 _MODEL_BYTES = Path(__file__).with_name('jev_model.json').read_bytes()
@@ -110,41 +114,75 @@ def judge_batch(
 
     async def run() -> list[IdentityJudgeResult]:
         results = []
-        for start in range(0, len(tasks), _CHUNK_SIZE):
-            batch = [
-                _requests(task, urls, day)
-                for task, urls in zip(tasks[start:start + _CHUNK_SIZE],
-                                      imported_urls[start:start + _CHUNK_SIZE], strict=True)
-            ]
-            replies = {}
-            for name in _QUESTIONS:
-                requests = {request_digest(pair[name]): pair[name] for pair in batch}
-                replies[name] = await answer_requests(
-                    requests, output_dir=output_dir / name, api_key=None, client=None,
-                    concurrency=_CONCURRENCY, request_version='identity-association-v1',
-                    question_version='identity-association-v1',
-                )
-            for pair in batch:
-                answers = {name: replies[name][request_digest(request)] for name, request in pair.items()}
-                probability = _probability(answers['network'].response['answers'],
-                                           answers['association'].response['answers'])
-                classification, reason = _classify(probability,
-                    answers['network'].response['answers'], answers['association'].response['answers'])
-                verdict = IdentityVerdict.from_payload({
-                    'verdict': classification, 'confidence': probability, 'reason': reason,
-                    'judge': MODEL_ID, 'match_probability': probability,
-                    'answers': {name: reply.response['answers'] for name, reply in answers.items()},
-                })
-                fingerprint = hashlib.sha256(json.dumps({
-                    'model': _MODEL_DIGEST,
-                    'requests': {name: request_digest(request) for name, request in pair.items()},
-                }, sort_keys=True).encode()).hexdigest()
-                usage = IdentityUsage(input_tokens=sum(
-                    reply.response['usage']['input_tokens'] for reply in answers.values() if not reply.cached
-                ))
-                results.append(IdentityJudgeResult(verdict, usage, '', fingerprint))
-                if on_done:
-                    on_done(len(results), len(tasks))
+        semaphore = asyncio.Semaphore(_CONCURRENCY)
+        client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS) if os.environ.get('TYPESAFE_API_KEY') else None
+
+        async def answer(name: str, digest: str, request: dict):
+            async with semaphore:
+                try:
+                    replies = await answer_requests(
+                        {digest: request}, output_dir=output_dir / name, api_key=None, client=client,
+                        concurrency=1, request_version='identity-association-v1',
+                        question_version='identity-association-v1',
+                    )
+                    return replies[digest]
+                except Exception as exc:
+                    return exc
+
+        try:
+            for start in range(0, len(tasks), _CHUNK_SIZE):
+                batch = [
+                    _requests(task, urls, day)
+                    for task, urls in zip(tasks[start:start + _CHUNK_SIZE],
+                                          imported_urls[start:start + _CHUNK_SIZE], strict=True)
+                ]
+                replies = {}
+                for name in _QUESTIONS:
+                    requests = {request_digest(pair[name]): pair[name] for pair in batch}
+                    rows = await asyncio.gather(*(answer(name, digest, request)
+                                                 for digest, request in requests.items()))
+                    replies[name] = dict(zip(requests, rows, strict=True))
+                for pair in batch:
+                    answers = {name: replies[name][request_digest(request)] for name, request in pair.items()}
+                    errors = [f'{name}: {reply}' for name, reply in answers.items() if isinstance(reply, Exception)]
+                    if errors:
+                        usage = IdentityUsage(input_tokens=sum(
+                            reply.response['usage']['input_tokens'] for reply in answers.values()
+                            if not isinstance(reply, Exception) and not reply.cached
+                        ))
+                        results.append(IdentityJudgeResult(None, usage, '; '.join(errors), ''))
+                        if on_done:
+                            on_done(len(results), len(tasks))
+                        continue
+                    probability = _probability(answers['network'].response['answers'],
+                                               answers['association'].response['answers'])
+                    classification, reason = _classify(probability,
+                        answers['network'].response['answers'], answers['association'].response['answers'])
+                    verdict = IdentityVerdict.from_payload({
+                        'verdict': classification, 'confidence': probability, 'reason': reason,
+                        'judge': MODEL_ID, 'match_probability': probability,
+                        'answers': {name: reply.response['answers'] for name, reply in answers.items()},
+                    })
+                    fingerprint = hashlib.sha256(json.dumps({
+                        'model': _MODEL_DIGEST,
+                        'requests': {name: request_digest(request) for name, request in pair.items()},
+                    }, sort_keys=True).encode()).hexdigest()
+                    usage = IdentityUsage(input_tokens=sum(
+                        reply.response['usage']['input_tokens'] for reply in answers.values() if not reply.cached
+                    ))
+                    results.append(IdentityJudgeResult(verdict, usage, '', fingerprint))
+                    if on_done:
+                        on_done(len(results), len(tasks))
+        finally:
+            if client is not None:
+                await client.aclose()
+        errors = [{'linkedin_url': task.linkedin.linkedin_url, 'error': result.error}
+                  for task, result in zip(tasks, results, strict=True) if result.error]
+        write_manifest(output_dir.name, {
+            'status': 'partial' if errors else 'completed',
+            'counts': {'judged': len(results) - len(errors), 'errors': len(errors)},
+            'errors': errors,
+        }, import_dir=output_dir.parent)
         return results
 
     return asyncio.run(run())

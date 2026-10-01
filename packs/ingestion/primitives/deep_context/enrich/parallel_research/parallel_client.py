@@ -87,7 +87,7 @@ class ParallelClient:
             if handle not in requested:
                 return
             if run.status != "completed":
-                errors.append(f"{run.run_id}: {run.status}: {run.error or 'no result'}"[:300])
+                errors.append(f"{handle} ({run.run_id}): {run.status}: {run.error or 'no result'}"[:300])
             else:
                 output = event.output
                 if output is None:
@@ -100,13 +100,13 @@ class ParallelClient:
                         raise
                     except Exception as exc:
                         errors.append(
-                            f"{run.run_id}: result: {type(exc).__name__}: {exc}"[:300]
+                            f"{handle} ({run.run_id}): result: {type(exc).__name__}: {exc}"[:300]
                         )
                         return
                 if isinstance(output, TaskRunJsonOutput):
                     on_result(handle, output)
                 else:
-                    errors.append(f"{run.run_id}: completed without JSON output")
+                    errors.append(f"{handle} ({run.run_id}): completed without JSON output")
             finished_runs.add(run.run_id)
 
         # Retry reads only. Recover an ambiguous add_runs POST by listing the
