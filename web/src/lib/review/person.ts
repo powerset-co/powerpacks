@@ -42,7 +42,7 @@ export function avatarName(person: ReviewPerson, candidate: ReviewCandidate | nu
 /** The candidate whose picture the avatar asks for: a fetched profile. A researched one has
  *  no picture. */
 export function avatarKey(candidate: ReviewCandidate | null): string {
-  if (!candidate || candidate.synthetic) return ""
+  if (!candidate || candidate.synthetic || !candidate.url) return ""
   return candidate.row_key
 }
 

@@ -142,10 +142,10 @@ class EnrichmentPanel:
             return cls("running", completed=min(total, max(0, enrichment.counts.completed)), total=total)
 
         if enrichment.status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
-            # The estimate covers Parallel research; nothing to submit is the $0 continue.
+            # Cached research can still need paid profile and identity work.
             label = (
                 f"Approve ${enrichment.estimated_usd:.2f}"
-                if enrichment.would_submit
+                if enrichment.would_submit or round(enrichment.estimated_usd, 2) > 0
                 else "Prepare profiles and judge LinkedIns"
             )
             return cls("approval", approval_label=label)

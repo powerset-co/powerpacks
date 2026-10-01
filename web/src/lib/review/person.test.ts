@@ -64,6 +64,7 @@ describe("the avatar", () => {
   it("asks for a fetched candidate's picture only", () => {
     expect(avatarKey(reviewCandidate())).toBe("jordan-bravo-1")
     expect(avatarKey(syntheticCandidate())).toBe("")
+    expect(avatarKey(reviewCandidate({ row_key: "candidate:email:casey@example.com", url: "" }))).toBe("")
     expect(avatarKey(reviewCandidate({ row_key: "" }))).toBe("")
     expect(avatarKey(null)).toBe("")
   })
