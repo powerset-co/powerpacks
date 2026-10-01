@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Thin runner for the post-session reflect primitive.
+#
+# The harness runs `bin/reflect hook end` as its SessionEnd hook via `sh -c`
+# with a minimal env and parses stdout as JSON, so this execs the venv
+# interpreter directly (no uv: it may be off PATH and can write to stdout).
+# A missing venv prints `{}` and exits 0 — the hook never breaks the host.
+#
+# Usage:
+#   bin/reflect report <transcript>
+#   bin/reflect hook end
+#   bin/reflect narrate <dir>
+#   bin/reflect latest
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON="$ROOT/.venv/bin/python"
+
+if [[ ! -x "$PYTHON" ]]; then
+  echo '{}'
+  echo "reflect: $PYTHON missing (run bin/setup-python)" >&2
+  exit 0
+fi
+
+exec "$PYTHON" "$ROOT/packs/powerset/primitives/reflect/reflect.py" "$@"
