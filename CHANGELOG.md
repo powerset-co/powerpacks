@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.9.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.9.0...powerpacks-v3.9.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* align React review with identity enrichment ([#644](https://github.com/powerset-co/powerpacks/issues/644)) ([2db9d6d](https://github.com/powerset-co/powerpacks/commit/2db9d6dfa7788077884dcfef7766e79212d6472e))
+* **deep-context:** bring the React review page level with the old page ([#645](https://github.com/powerset-co/powerpacks/issues/645)) ([adb93c1](https://github.com/powerset-co/powerpacks/commit/adb93c178b74608162a1611602d8c7ac1f23635e))
+* **deep-context:** repair merges and resolve identity reviews ([#635](https://github.com/powerset-co/powerpacks/issues/635)) ([c7f057a](https://github.com/powerset-co/powerpacks/commit/c7f057a42bb820620aa54ed898cae663028c3ba6))
+
 ## [3.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.6...powerpacks-v3.9.0) (2026-10-01)
 
 
