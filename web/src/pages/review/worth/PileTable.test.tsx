@@ -602,6 +602,34 @@ describe("PileTable: a flip", () => {
     expect(rowNames()).toContain(named(9))
   })
 
+  it("keeps a page read and a flip apart, so a page never starts at a row count the flip changed", async () => {
+    serve(worthServer({ pending: [], yes: pileOf(45), pageSize: 20 }))
+    await openPile()
+    const page = holdPage()
+    layout.scrollTo(list(), 800)
+    await waitFor(() => expect(loading().hidden).toBe(false))
+
+    // A row is flipped while that page is on its way: its save waits for the page to land.
+    const save = server.holdSave()
+    fireEvent.click(flipButton(named(15)))
+    await settle()
+    expect(row(named(15)).className).toBe("decision-row leaving")
+    expect(server.saves()).toEqual([])
+    page.open()
+    await waitFor(() => expect(server.saves()).toHaveLength(1))
+    await waitFor(() => expect(list().scrollHeight).toBe(40 * ROW_PX))
+
+    // While the save is out, the end of the rows is in reach but no page is read.
+    layout.scrollTo(list(), 2000)
+    await settle()
+    expect(server.reads(TABLE)).toHaveLength(2)
+
+    // Saved: the row left the pile on the server, and the next page starts at the 39 held.
+    save.open()
+    await waitFor(() => expect(total()).toBe("44"))
+    await waitFor(() => expect(server.reads(TABLE)[2]).toBe(`${TABLE}?view=yes&offset=39`))
+  })
+
   // P0.3
   it("posts exactly once however often the flip is pressed", async () => {
     await openPile()

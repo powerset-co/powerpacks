@@ -35,13 +35,16 @@ function without({ rows, total }: PileRows, slug: string): PileRows {
  * One decided pile's rows (reconcile_review.js `appendDecisionPage`, `decideDecisionRow`).
  *
  *   mount   read the first page and the pile's size
- *   more    read the page after the rows held and append it; one read at a time, and none
- *           once every row is held
- *   flip    fade the row, count the move, POST /worth; the answer removes the row and
- *           corrects the counts, a refusal brings the row and its counts back
+ *   more    read the page after the rows held and append it; one read at a time, none
+ *           while a flip is saving, and none once every row is held
+ *   flip    fade the row, count the move, let a page on its way land, POST /worth; the
+ *           answer removes the row and corrects the counts, a refusal brings the row and
+ *           its counts back
  *
  * A flipped row has left the pile on the server too, so the next page starts at the number
- * of rows still held. A stage that left the screen does nothing more (useLeftScreen).
+ * of rows still held. A page read and a save never overlap: a page asked for at one row
+ * count and read by the server after a flip would skip a person. A stage that left the
+ * screen does nothing more (useLeftScreen).
  */
 export function usePileTable(pile: Pile, moves: PileMoves) {
   const review = useReview()
@@ -50,8 +53,11 @@ export function usePileTable(pile: Pile, moves: PileMoves) {
   const [failure, setFailure] = useState<string | null>(null)
   /** The next page is on its way: the list says so. */
   const [reading, setReading] = useState(false)
-  /** The same, for the callers that ask again before the list has drawn it. */
-  const busy = useRef(false)
+  /** The page on its way, for the callers that ask again before the list has drawn it and
+   *  for a flip that must let it land first. */
+  const read = useRef<Promise<void> | null>(null)
+  /** Flips whose save has not answered yet. */
+  const saving = useRef(0)
   /** Slugs whose flip is saving: their rows are fading and take no clicks. */
   const [leaving, setLeaving] = useState(EMPTY)
   const left = useLeftScreen()
@@ -64,17 +70,21 @@ export function usePileTable(pile: Pile, moves: PileMoves) {
     return () => gone.abort()
   }, [pile])
 
-  async function more() {
-    if (busy.current || !table || table.rows.length >= table.total) return
-    busy.current = true
-    setReading(true)
+  async function readPage(offset: number) {
     try {
-      const page = await fetchWorthTable(pile, table.rows.length)
+      const page = await fetchWorthTable(pile, offset)
       setTable((before) => before && appended(before, page.rows))
     } catch (error) {
       if (!left()) review.toastError(errorText(error))
     }
-    busy.current = false
+  }
+
+  async function more() {
+    if (read.current || saving.current > 0 || !table || table.rows.length >= table.total) return
+    setReading(true)
+    read.current = readPage(table.rows.length)
+    await read.current
+    read.current = null
     setReading(false)
   }
 
@@ -84,8 +94,12 @@ export function usePileTable(pile: Pile, moves: PileMoves) {
     const move: PileMove = { from: pile, to }
     setLeaving((slugs) => toggled(slugs, slug, true))
     moves.begin(move)
+    saving.current += 1
     const fade = wait(review.fadeMs)
+    // A page on its way was asked for by the rows as they are: it lands before the pile changes.
+    await read.current
     const saved = await saveWorth({ pub: key, worth: to, parent_slug: slug })
+    saving.current -= 1
     // A refusal brings the row back at once; a saved row finishes its fade first.
     if (saved.ok) await fade
     if (left()) return

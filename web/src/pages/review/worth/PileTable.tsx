@@ -73,7 +73,8 @@ interface PileListProps {
  * between two spacers that stand in for the rest. Rows are measured (an opened row is
  * taller) and keyed by slug. The next page is read whenever the viewport is near the end of
  * the rows: on scroll, on resize, and a frame after the rows change (the first page, each
- * page after it, a flipped row leaving).
+ * page after it, a flipped row leaving) or a flip's save answers (no page is read while one
+ * is out).
  */
 function PileList({ pile, table, reading, leaving, onMore, onFlip }: PileListProps) {
   const { rows, total } = table
@@ -107,7 +108,7 @@ function PileList({ pile, table, reading, leaving, onMore, onFlip }: PileListPro
   useEffect(() => {
     const frame = requestAnimationFrame(() => latest.current())
     return () => cancelAnimationFrame(frame)
-  }, [rows])
+  }, [rows, leaving])
 
   return (
     <div
