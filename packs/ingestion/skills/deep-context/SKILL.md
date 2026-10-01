@@ -37,9 +37,9 @@ Use the narrow path when the user names one:
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
-  `bin/deep-context review`; bare `review` opens the read-only A-Z directory
-  (Yes/No tabs, search, full dossier + LinkedIn pane). A stage word opens the
-  staged workflow there directly: `$deep-context review linkedin` ->
+  `bin/deep-context review`; bare `review` opens the current review stage.
+  `bin/deep-context review people` opens the People list. A stage word opens the
+  staged workflow directly: `$deep-context review linkedin` ->
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
   the server's `--stage` flag. `review <stage>` (and bare `review`) restarts
   the review server, then prints the staged UI URL once `/healthz` answers.
