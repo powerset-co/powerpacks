@@ -23,7 +23,7 @@ class RelationshipTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.db = Db(self.root / "context.sqlite")
         self.parent("jordan")
-        self.response = OpenAIResponse({"candidates": [{"url": "https://linkedin.com/in/jordan-bravo",
+        self.response = OpenAIResponse({"candidates": [{"url": "https://www.linkedin.com/in/jordan-bravo",
             "verdict": "review", "reason": "Two plausible histories", "confidence": 0.5}]}, OpenAIUsage(100, 50))
 
     def parent(self, parent):
@@ -83,7 +83,7 @@ class RelationshipTest(unittest.TestCase):
             new_callable=AsyncMock, return_value=self.response) as call:
             self.stage(approve_spend=True).run()
         candidates = json.loads(call.call_args.kwargs["user_prompt"])["candidates"]
-        self.assertEqual(candidates[0]["url"], "https://linkedin.com/in/jordan-bravo")
+        self.assertEqual(candidates[0]["url"], "https://www.linkedin.com/in/jordan-bravo")
         self.assertEqual(candidates[0]["identity_reason"], "Two different Jordan profiles.")
 
     def test_partial_failure_reuses_success_and_limit_does_not_finish_unjudged(self):
@@ -91,7 +91,7 @@ class RelationshipTest(unittest.TestCase):
         async def partial(**kwargs):
             if kwargs["context"] == "casey" and not self.db.query("SELECT judgment_payload_json FROM links WHERE parent_id='jordan'")[0][0]:
                 raise RuntimeError("fixture provider failure")
-            return OpenAIResponse({"candidates": [{"url": f"https://linkedin.com/in/{kwargs["context"]}-bravo",
+            return OpenAIResponse({"candidates": [{"url": f"https://www.linkedin.com/in/{kwargs["context"]}-bravo",
                 "verdict": "review", "reason": "Two plausible histories", "confidence": .5}]}, OpenAIUsage(100, 50))
         target = "packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call"
         with patch(target, new_callable=AsyncMock, side_effect=partial):
@@ -106,7 +106,7 @@ class RelationshipTest(unittest.TestCase):
     def test_limit_leaves_all_identity_decisions_pending(self):
         self.parent("casey")
         with patch("packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call",
-                   new_callable=AsyncMock, return_value=OpenAIResponse({"candidates": [{"url": "https://linkedin.com/in/casey-bravo", "verdict": "review", "reason": "Unresolved", "confidence": .5}]}, OpenAIUsage(100, 50))):
+                   new_callable=AsyncMock, return_value=OpenAIResponse({"candidates": [{"url": "https://www.linkedin.com/in/casey-bravo", "verdict": "review", "reason": "Unresolved", "confidence": .5}]}, OpenAIUsage(100, 50))):
             result = self.stage(approve_spend=True, limit=1).run()
         self.assertEqual((result["status"], result["remaining"]), ("incomplete", 1))
         self.assertTrue(all(row["machine_approved"] is None for row in self.db.query("SELECT machine_approved FROM links")))
