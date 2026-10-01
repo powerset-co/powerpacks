@@ -1,8 +1,13 @@
-"""Select the canonical SQLite enrichment queue for provider research."""
+"""Select the canonical SQLite enrichment queue for provider research.
+
+Changelog:
+- 2026-09-30: `build_queue` reads dossier evidence once per batch of queue rows,
+  not once per row; `build_queue_row` takes the row's evidence.
+"""
 
 from __future__ import annotations
 
-from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.deep_context.db import context_queries, queries
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, ProjectionStatus
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
@@ -27,10 +32,15 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
     ResearchSelection,
 )
 
+# Queue rows whose dossier evidence is read together. A family's evidence carries
+# its message bundle, so the whole queue is never held at once.
+EVIDENCE_BATCH = 200
+
+
 def build_queue_row(
-    db: Db,
     row: EnrichmentQueueRow,
     *,
+    evidence: DossierEvidence,
     owner_context: str,
     guidance: str = "",
 ) -> ResearchQueueRow:
@@ -57,7 +67,7 @@ def build_queue_row(
         handle=row.parent_slug,
         source_person_ids=row.person_ids,
         display_name=row.name,
-        bio=DossierEvidence.from_db(db, row.person_ids).research_bio(),
+        bio=evidence.research_bio(),
         known_info=context,
         primary_email=email,
         phone_e164=phone,
@@ -72,15 +82,23 @@ def build_queue(
     guidance: str = "",
 ) -> list[ResearchQueueRow]:
     owner_context = owner_background(db)
-    return [
-        build_queue_row(
-            db,
-            row,
-            owner_context=owner_context,
-            guidance=guidance,
+    queue: list[ResearchQueueRow] = []
+    for start in range(0, len(subset), EVIDENCE_BATCH):
+        batch = subset[start:start + EVIDENCE_BATCH]
+        # One read covers the batch's families; each row elects its own packet from it.
+        rows = context_queries.dossier_evidence_rows(
+            db, [person_id for row in batch for person_id in row.person_ids],
         )
-        for row in subset
-    ]
+        queue.extend(
+            build_queue_row(
+                row,
+                evidence=DossierEvidence.from_rows(row.person_ids, rows),
+                owner_context=owner_context,
+                guidance=guidance,
+            )
+            for row in batch
+        )
+    return queue
 
 
 def select_research(
