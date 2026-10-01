@@ -47,6 +47,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import (
     EnrichmentPipeline,
 )
+from packs.ingestion.primitives.deep_context.review.api import ReviewApi
 from packs.ingestion.primitives.deep_context.review.feedback import (
     FEEDBACK_ACTIONS,
     build_feedback_request,
@@ -186,6 +187,15 @@ def make_handler(
         guided_retargets = GuidedRetargetWorker(db, on_change=notify)
         guided_retargets.resume()
     spawn_enrichment = enrichment_jobs.start
+    # The React Review page's JSON routes (/api/review/...), beside the Jinja page.
+    review_json = ReviewApi(
+        db=db,
+        adapter=api,
+        start_enrichment=spawn_enrichment,
+        notify=notify,
+        wake_agent=wake_agent,
+        run_jobs=run_jobs,
+    )
 
     def parent_hit(
         submitted_key: str,
@@ -384,6 +394,8 @@ def make_handler(
             params = urllib.parse.parse_qs(parsed.query)
             if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
                 return None
+            if review_json.get(self, parsed):
+                return None
             if parsed.path == "/healthz":
                 return self.send_bytes(b"ok", "text/plain")
             if parsed.path == "/api/events":
@@ -493,6 +505,8 @@ def make_handler(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if share.post(self, parsed) or searches.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed):
+                return None
+            if review_json.post(self, parsed):
                 return None
             routes = {"/decide", "/worth", "/complete", "/approve-enrichment", "/retarget", "/feedback", "/auth/login"}
             if parsed.path not in routes:

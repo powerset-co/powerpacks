@@ -1,0 +1,799 @@
+/* The review page's shared look, ported from deep_context/review/reconcile_review.css: the
+   shell, top bar, stepper, stage, cards, the person card and its facts, buttons, empty
+   states, the scroll cue, the handoff copy, the carousel and the transitions. The worth,
+   enrich and linkedin blocks live beside this file (worth.css, enrich.css, linkedin.css).
+
+   Every rule sits under .review-page, the page's root, so nothing reaches another page. The
+   old file's `body[data-stage="x"]` is `.review-page[data-stage="x"]` here. Colours are the
+   app's tokens (styles/index.css), which hold the old page's values. */
+
+.review-page {
+  /* The old page's own top bar; the locked-height layout below subtracts it. */
+  --topbar-height: 64px;
+  min-height: 100dvh;
+  /* The old page set no size on body: its rules assume the browser's 16px and normal leading. */
+  font-size: 16px;
+  line-height: normal;
+}
+
+/* Browser defaults the old page leaned on and Tailwind's preflight removes. */
+.review-page :where(h1, h2, h3, h4, h5, h6) {
+  font-weight: bold;
+}
+
+.review-page .topbar {
+  height: var(--topbar-height);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-page .brand {
+  justify-self: start;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-decoration: none;
+}
+
+.review-page .topbar-title {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.review-page .review-main {
+  width: min(100% - 40px, 760px);
+  margin: 0 auto;
+  padding: 32px 0 96px;
+}
+
+.review-page .stepper {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content 1fr max-content;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 24px;
+}
+
+.review-page .step {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.review-page .step:hover {
+  color: var(--foreground);
+}
+
+.review-page .step > span {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--background);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-page .step small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.review-page .step.active {
+  color: var(--foreground);
+}
+.review-page .step.active > span {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: white;
+}
+.review-page .step.complete > span {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.review-page .step.complete {
+  color: var(--foreground);
+}
+
+.review-page .step-line {
+  height: 1px;
+  background: var(--border);
+}
+
+/* The card frame. It is the feedback popover's positioning host too, hence relative. */
+.review-page .decision-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  padding: clamp(22px, 5vw, 38px);
+}
+
+.review-page .profile-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.review-page .profile-copy {
+  flex: 1;
+  min-width: 0;
+}
+.review-page .profile-copy h2 {
+  margin: 0;
+  font-size: 25px;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+}
+.review-page .profile-copy p {
+  margin: 7px 0 3px;
+  color: var(--foreground);
+  font-size: 15px;
+}
+.review-page .profile-copy > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.review-page .eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px; /* space between badges and the name */
+}
+
+.review-page .source {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.review-page .source i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.review-page .source-gmail i {
+  background: #ea4335;
+}
+.review-page .source-imessage i {
+  background: #34c759;
+}
+.review-page .source-whatsapp i {
+  background: #25d366;
+}
+
+/* The shared Avatar inside the old page's circle: .avatar sets the size (76px; 58px inside a
+   card and on small screens; a stage may size it for its rows), the Avatar fills it. */
+.review-page .avatar {
+  width: 76px;
+  height: 76px;
+  flex: 0 0 76px;
+  display: grid;
+  font-size: 23px;
+}
+.review-page .avatar > span {
+  width: 100%;
+  height: 100%;
+  border-color: var(--input);
+  color: var(--foreground);
+  font-size: inherit;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+
+.review-page .binary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px 0 2px;
+}
+
+.review-page .button {
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 20px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 750;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease;
+}
+
+.review-page .button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+.review-page .button-primary {
+  background: var(--primary-action);
+  color: white;
+}
+.review-page .button-primary:hover {
+  background: var(--primary-hover);
+}
+.review-page .button-outline {
+  border-color: var(--input);
+  background: transparent;
+  color: var(--foreground);
+}
+.review-page .button-outline:hover {
+  border-color: var(--muted);
+  background: var(--secondary);
+}
+.review-page .button-ghost {
+  min-height: 44px;
+  padding: 0 14px;
+  background: transparent;
+  color: var(--muted);
+}
+.review-page .button-ghost:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.review-page .details {
+  margin-top: 22px;
+  border-top: 1px solid var(--border);
+}
+
+.review-page .details dl {
+  margin: 0 0 16px;
+}
+.review-page .details dl > div {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 16px;
+  padding: 8px 0;
+}
+.review-page .details dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.review-page .details dd {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The dossier: the server's markdown as HTML. Inside a card it keeps the facts list's bottom
+   margin (the old page drew it as a second dl there). */
+.review-page .dossier-text {
+  margin: 0;
+}
+.review-page .details .dossier-text {
+  margin: 0 0 16px;
+}
+/* Its markup is plain HTML that the old page left to the browser's defaults; preflight
+   removes those, so they are restored here. */
+.review-page .dossier-text :where(h3) {
+  margin: 1em 0;
+  font-size: 1.17em;
+}
+.review-page .dossier-text :where(h4) {
+  margin: 1.33em 0;
+  font-size: 1em;
+}
+.review-page .dossier-text :where(h5) {
+  margin: 1.67em 0;
+  font-size: 0.83em;
+}
+.review-page .dossier-text :where(h6) {
+  margin: 2.33em 0;
+  font-size: 0.67em;
+}
+.review-page .dossier-text :where(ul, ol) {
+  margin: 1em 0;
+  padding-left: 40px;
+}
+.review-page .dossier-text :where(ul) {
+  list-style: disc;
+}
+.review-page .dossier-text :where(ol) {
+  list-style: decimal;
+}
+.review-page .dossier-text :where(li) :where(ul, ol) {
+  margin: 0;
+}
+.review-page .dossier-text :where(li ul) {
+  list-style: circle;
+}
+.review-page .dossier-text :where(blockquote) {
+  margin: 1em 40px;
+}
+.review-page .dossier-text :where(a) {
+  color: LinkText;
+  text-decoration: underline;
+}
+.review-page .dossier-text :where(table) {
+  border-collapse: separate;
+  border-spacing: 2px;
+}
+.review-page .dossier-text :where(th, td) {
+  padding: 1px;
+}
+.review-page .dossier-text :where(th) {
+  font-weight: bold;
+}
+.review-page .dossier-text p {
+  margin: 0 0 6px;
+}
+.review-page .dossier-text p:last-child {
+  margin-bottom: 0;
+}
+.review-page .dossier-text strong {
+  color: var(--foreground);
+}
+
+/* Work / Education bullet lists inside dd cells. */
+.review-page .fact-list {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+.review-page .fact-list li + li {
+  margin-top: 4px;
+}
+.review-page .show-more {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.review-page .show-more:hover {
+  text-decoration: underline;
+}
+
+/* Debug-only queue carousel (?debug=1): arrows flanking the card. */
+.review-page .carousel-shell {
+  position: relative;
+}
+.review-page .carousel-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 6;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.review-page .carousel-nav:hover {
+  background: var(--secondary);
+}
+.review-page .carousel-prev {
+  left: 10px;
+}
+.review-page .carousel-next {
+  right: 10px;
+}
+
+.review-page .identity-scroll {
+  min-width: 0;
+}
+
+.review-page .identity-scroll-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.review-page .scroll-cue {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  transform: translateX(-50%);
+  border: 1px solid var(--input);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.review-page .scroll-cue:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.review-page .scroll-cue svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.review-page .carousel-nav svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.review-page .linkedin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 12px;
+  color: #6ba7e4;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.review-page input {
+  min-width: 0;
+  height: 48px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 13px;
+}
+.review-page input::placeholder {
+  color: var(--muted);
+}
+
+.review-page .empty-state {
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 42px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  text-align: center;
+}
+
+.review-page .empty-mark {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--primary);
+  border-radius: 50%;
+  color: var(--primary);
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.review-page .empty-state h2 {
+  margin: 22px 0 0;
+  font-size: 25px;
+}
+.review-page .empty-state p {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+.review-page .empty-state .handoff-note {
+  margin: 26px 0 0;
+  color: var(--foreground);
+  font-weight: 700;
+}
+.review-page .handoff-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+}
+.review-page .handoff-copy code {
+  color: var(--foreground);
+  font-size: 13px;
+}
+.review-page .handoff-copy .button {
+  margin: 0;
+  min-width: 0;
+  padding: 6px 14px;
+}
+
+/* The stage leaving before its data is read again. */
+.review-page .stage.leaving {
+  transform: translateY(-5px);
+  opacity: 0;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+/* Each screen fades in as it loads (the stage is keyed by the load). */
+.review-page .stage {
+  animation: stage-enter 180ms ease-out;
+}
+.review-page .stage-complete {
+  height: 100%;
+}
+.review-page .stage-complete .empty-mark {
+  animation: completion-check 200ms ease-out;
+}
+@keyframes stage-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes completion-check {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Card decisions keep the frame mounted; only its contents swap. */
+.review-page .decision-card.swapping {
+  pointer-events: none;
+}
+.review-page .decision-card.swapping > * {
+  opacity: 0;
+  transform: translateY(-5px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+.review-page .decision-card.entering > * {
+  animation: card-content-enter 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes card-content-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Relationship labels share the same layout on all profile previews. */
+.review-page .person-labels {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+.review-page .person-label,
+.review-page .person-label-more {
+  display: inline-block;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.review-page .person-label-more {
+  position: relative;
+  cursor: help;
+}
+.review-page .person-label-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: min(300px, 70vw);
+  padding: 10px 12px;
+  white-space: normal;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px #0002;
+}
+.review-page .person-label-more:hover .person-label-tooltip,
+.review-page .person-label-more:focus .person-label-tooltip {
+  display: block;
+}
+
+/* A window tall and wide enough locks the page to one screen: the stage fills what the top
+   bar and stepper leave, and a card scrolls inside itself. */
+@media (min-width: 621px) and (min-height: 600px) {
+  .review-page .review-main {
+    height: calc(90dvh - var(--topbar-height));
+    margin: 5dvh auto;
+    padding: 12px 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .review-page .stepper {
+    gap: 10px;
+    margin: 0 0 28px;
+  }
+
+  .review-page .step > span {
+    width: 26px;
+    height: 26px;
+  }
+
+  .review-page .stage,
+  .review-page[data-stage="worth"] .identity-card,
+  .review-page[data-stage="linkedin"] .identity-card,
+  .review-page[data-stage="worth"] .identity-scroll-shell,
+  .review-page[data-stage="linkedin"] .identity-scroll-shell,
+  .review-page[data-stage="worth"] .identity-scroll,
+  .review-page[data-stage="linkedin"] .identity-scroll {
+    min-height: 0;
+  }
+
+  .review-page[data-stage="enrich"] .empty-state,
+  .review-page[data-stage="done"] .empty-state {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .review-page[data-stage="worth"] .identity-card,
+  .review-page[data-stage="linkedin"] .identity-card {
+    height: 100%;
+    padding: 18px 22px;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .review-page[data-stage="worth"] .identity-card .avatar,
+  .review-page[data-stage="linkedin"] .identity-card .avatar {
+    width: 58px;
+    height: 58px;
+    flex-basis: 58px;
+    font-size: 18px;
+  }
+
+  .review-page[data-stage="worth"] .identity-scroll,
+  .review-page[data-stage="linkedin"] .identity-scroll {
+    height: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    touch-action: pan-y;
+    padding-right: 4px;
+  }
+
+  .review-page[data-stage="worth"] .details,
+  .review-page[data-stage="linkedin"] .details {
+    margin-top: 14px;
+  }
+
+  .review-page[data-stage="worth"] .carousel-shell {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .review-page[data-stage="worth"] .carousel-shell > :last-child {
+    flex: 1;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .review-page {
+    --topbar-height: 56px;
+  }
+  .review-page .topbar {
+    padding: 0 18px;
+  }
+  .review-page .review-main {
+    width: min(100% - 28px, 760px);
+    padding: 34px 0 112px;
+  }
+  .review-page .stepper {
+    gap: 8px;
+    margin: 26px 0 28px;
+  }
+  .review-page .step {
+    gap: 7px;
+    font-size: 11px;
+  }
+  .review-page .step > span {
+    width: 26px;
+    height: 26px;
+  }
+  .review-page .step-line {
+    min-width: 10px;
+  }
+  .review-page .decision-card {
+    padding: 22px 18px 20px;
+  }
+  .review-page .avatar {
+    width: 58px;
+    height: 58px;
+    flex-basis: 58px;
+    font-size: 18px;
+  }
+  .review-page .eyebrow-row {
+    gap: 5px;
+  }
+  .review-page .binary-actions {
+    position: static;
+    margin: 12px 0 0;
+    padding: 12px 0 2px;
+    border-top: 0;
+    background: transparent;
+  }
+  .review-page .details dl > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
+
+@media (max-width: 430px) {
+  .review-page .brand {
+    width: 24px;
+    overflow: hidden;
+    font-size: 0;
+  }
+  .review-page .brand::before {
+    content: "P";
+    font-size: 12px;
+  }
+}

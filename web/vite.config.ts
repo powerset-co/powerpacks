@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react-swc"
 import { defineConfig } from "vitest/config"
 
 const PYTHON_SERVER = process.env.PYTHON_SERVER ?? "http://127.0.0.1:8765"
+// The paths the Python server answers: /api, and the form routes the review page posts to.
+const PYTHON_ROUTES = ["/api", "/worth", "/decide", "/complete", "/retarget", "/feedback", "/auth"]
 
 export default defineConfig({
   base: "./",
@@ -11,9 +13,7 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, "./src") },
   },
   server: {
-    proxy: {
-      "/api": PYTHON_SERVER,
-    },
+    proxy: Object.fromEntries(PYTHON_ROUTES.map((route) => [route, PYTHON_SERVER])),
   },
   build: {
     outDir: "dist",
