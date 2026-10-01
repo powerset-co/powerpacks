@@ -227,10 +227,19 @@ class ReviewStore:
     def reach_linkedin(self) -> None:
         self.reach_enrich()
         with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE kind='pub'",
-                (json.dumps({"verdict": "needs_review", "confidence": 0.5}),),
-            )
+            for row in conn.execute("SELECT row_key,parent_id,linkedin_url FROM links WHERE kind='pub'").fetchall():
+                payload = {
+                    "verdict": "needs_review", "confidence": 0.5,
+                    "relationship_decision": {
+                        "parent_id": row["parent_id"], "fingerprint": "fixture",
+                        "candidates": [{"url": row["linkedin_url"], "verdict": "review",
+                                        "reason": "Synthetic fixture needs human review", "confidence": 0.5}],
+                    },
+                }
+                conn.execute(
+                    "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE row_key=?",
+                    (json.dumps(payload), row["row_key"]),
+                )
 
     def reach_done(self) -> None:
         self.reach_linkedin()
@@ -540,7 +549,8 @@ class WorthRoutesTests(ReviewApiFixture):
         self.assertIn(f"<h2>{candidate['name']}</h2>", old)
         self.assertEqual(candidate["contacts"], "casey-delta@example.com · +15550100")
         self.assertIn(f"<dd>{candidate['contacts']}</dd>", old)
-        self.assertIn(f"/api/avatar?pub={candidate['row_key'].replace(':', '%3A').replace('@', '%40')}", old)
+        self.assertNotIn("/api/avatar?pub=", old)
+        self.assertIn("<span>CD</span>", old)
         self.assertEqual((candidate["url"], candidate["synthetic"]), ("", False))
 
     def test_worth_card_without_a_candidate_has_a_null_candidate(self) -> None:
@@ -1084,12 +1094,12 @@ class EnrichmentPanelTests(ReviewApiFixture):
                 EnrichmentPanel("approval", approval_label="Approve $2.85"),
             ),
             (
-                replace(base, status="not_started", state="profile_prep_pending", would_submit=0),
+                replace(base, status="not_started", state="profile_prep_pending", would_submit=0, estimated_usd=0),
                 EnrichmentPanel("approval", approval_label="Prepare profiles and judge LinkedIns"),
             ),
             # Cached research that still needs the free local chain is a $0 continue.
             (
-                replace(base, status="completed", state="profile_prep_pending", would_submit=0),
+                replace(base, status="completed", state="profile_prep_pending", would_submit=0, estimated_usd=0),
                 EnrichmentPanel("approval", approval_label="Prepare profiles and judge LinkedIns"),
             ),
             (replace(base, status="completed", state="done"), EnrichmentPanel("completed")),
@@ -1120,7 +1130,7 @@ class EnrichmentPanelTests(ReviewApiFixture):
         self.assertEqual(page["view"], "enrich")
         self.assertEqual(
             page["enrichment"],
-            {"mode": "approval", "completed": 0, "total": 0, "approval_label": "Approve $0.05", "error": ""},
+            {"mode": "approval", "completed": 0, "total": 0, "approval_label": "Approve $0.08", "error": ""},
         )
         self.assertEqual((page["steps"][1]["complete"], page["steps"][1]["count"]), (False, 1))
 
@@ -1161,11 +1171,13 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             mock.patch.object(enrichment_pipeline, "AssembleSyntheticProfile"),
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as prefetch,
             mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as mapped_judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
         ):
             reconcile.return_value.run.side_effect = reconcile_run
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
             mapped_judge.return_value.judge_errors = 0
+            relationships.return_value.run.return_value = {"status": "completed"}
             running = {"mode": "running", "completed": 0, "total": 1, "approval_label": "", "error": ""}
             # This reconcile blocks, so the first answer is deterministically the running panel.
             self.assertEqual(
@@ -1179,7 +1191,7 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             release.set()
             self.wait_for_enrichment_job("applied")
             self.assertEqual(reconcile.return_value.run.call_count, 1)
-            self.assertEqual(reconcile.call_args.kwargs["budget"], 0.05)
+            self.assertEqual(reconcile.call_args.kwargs["budget"], 0.08)
             self.assertIs(reconcile.call_args.kwargs["approve"], True)
 
     def test_approval_starts_the_pipeline_the_jinja_route_starts(self) -> None:
@@ -1192,14 +1204,14 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             start.assert_called_once()
             calls.append(start.call_args)
         self.assertEqual(calls[0], calls[1])
-        self.assertEqual(calls[1].args[:2], (1, 0.05))
+        self.assertEqual(calls[1].args[:2], (1, 0.079004))
         # Not launched: the panel is the store's, still waiting for the approval.
         self.assertEqual(
             json.loads(body),
             {
                 "ok": True,
                 "enrichment": {
-                    "mode": "approval", "completed": 0, "total": 0, "approval_label": "Approve $0.05", "error": "",
+                    "mode": "approval", "completed": 0, "total": 0, "approval_label": "Approve $0.08", "error": "",
                 },
             },
         )
@@ -1332,7 +1344,7 @@ class TypeScriptPinTests(ReviewApiFixture):
         self.assertEqual(set(table), fields("WorthTablePayload"))
         self.assertEqual(set(table["rows"][0]), fields("DecisionRow"))
         self.assertEqual(set(table["rows"][0]["person"]), fields("ReviewPerson"))
-        self.assertEqual(set(table["rows"][0]["candidate"]), fields("ReviewCandidate"))
+        self.assertIsNone(table["rows"][0]["candidate"])
 
         linkedin = self.payload("/api/review/linkedin-card?debug=1")
         self.assertEqual(set(linkedin), fields("LinkedinCardPayload"))

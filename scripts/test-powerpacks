@@ -110,6 +110,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_reconcile_cli_db \
   tests.test_deep_context_restart_sqlite \
   tests.test_deep_context_review_rendering \
+  tests.test_deep_context_review_api \
   tests.test_deep_context_sqlite_invariants \
   tests.test_deep_context_sqlite_producers \
   tests.test_deep_context_export_people \
