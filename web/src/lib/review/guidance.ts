@@ -1,6 +1,6 @@
-// The LinkedIn card's one guidance box, two routes (reconcile_review.js submit handler): a
-// LinkedIn profile URL applies directly through the FREE decide; any other text is research
-// guidance for the PAID re-research. Never the other way round.
+// The LinkedIn card's one guidance box, two routes: a LinkedIn profile URL applies directly
+// through the FREE decide; any other text is research guidance for the PAID re-research.
+// Never the other way round.
 
 export const LINKEDIN_URL_RE = /(?:https?:\/\/)?(?:[a-z]+\.)?linkedin\.com\/in\/[A-Za-z0-9._-]+/i
 

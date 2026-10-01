@@ -9,8 +9,7 @@ interface CarouselNavProps {
   onIndex: (index: number) => void
 }
 
-// templates/carousel_nav.html.j2 (`?debug=1`): Previous and Next around the card, wrapping
-// at both ends.
+// The debug carousel (`?debug=1`): Previous and Next around the card, wrapping at both ends.
 export function CarouselNav({ queue, onIndex }: CarouselNavProps) {
   const go = (direction: CarouselDirection) => onIndex(carouselIndex(queue, direction))
   return (

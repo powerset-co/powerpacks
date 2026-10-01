@@ -22,9 +22,9 @@ describe("Stepper", () => {
   it("draws three linked steps with a line between, each opening its stage as a preview", () => {
     const steps = renderStepper(reviewSteps(), "worth")
     expect(steps.map((step) => step.getAttribute("href"))).toEqual([
-      "/review?stage=worth&preview=1",
-      "/review?stage=enrich&preview=1",
-      "/review?stage=linkedin&preview=1",
+      "/?stage=worth&preview=1",
+      "/?stage=enrich&preview=1",
+      "/?stage=linkedin&preview=1",
     ])
     const nav = screen.getByRole("navigation", { name: "Progress" })
     expect(nav.querySelectorAll(".step-line")).toHaveLength(2)

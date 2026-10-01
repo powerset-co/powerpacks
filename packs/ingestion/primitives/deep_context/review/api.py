@@ -1,7 +1,6 @@
-"""The Review page's JSON routes: the data the Jinja review page renders into HTML.
+"""The Review page's routes: its reads under /api/review/ and every write it makes.
 
-Flow: `server.make_handler` builds one `ReviewApi` and asks it before the legacy
-routes. Every route lives under `/api/review/`; an unknown path there is a JSON 404.
+Flow: `server.make_handler` builds one `ReviewApi` and asks it before its own routes.
 
 GET  /api/review/page?stage=&view=                        the screen to draw, the stepper,
                                                           the counts, the Enrich panel
@@ -17,333 +16,128 @@ GET  /api/review/linkedin-card?exclude=&index=&debug=     the next LinkedIn card
 POST /api/review/decide              form pub, decision, new_url, parent_slug, note: one
                                      LinkedIn decision; answers with the next card
 POST /api/review/approve-enrichment  approve the estimate and start the pipeline
+POST /worth                          form pub, worth=yes|no|restore, parent_slug, note
+POST /complete                       form stage=worth|enrich|linkedin: wakes the agent
+POST /retarget                       form pub, parent_slug, guidance: PAID re-research
+POST /feedback                       form pub, parent_slug, comment, action: files it with
+                                     Powerset; the body is Powerset's reply, 502 unless submitted
+POST /auth/login                     opens the Powerset sign-in on this machine
 
-The queue rules (exclude, in-flight re-research, index, pick, sort) stay here; the page
-only draws what it is given. An error is `{"error": text}` with the legacy status code.
-The payload dataclasses are field for field with web/src/types/review.ts
-(tests/test_deep_context_review_api.py pins the two).
+Any other path under /api/review/ is a JSON 404. The queue rules (exclude, in-flight
+re-research, index, pick, sort) live here; the page only draws what it is given. Bodies
+are form-encoded, a POST from another origin is refused, and an error is
+`{"error": text}`. What each route answers with is a dataclass in payloads.py.
 
 Changelog:
-  2026-09-30: created beside the Jinja page, which still serves `/`. `_index`,
-    `_excluded`, `_failed_notes`, `IN_FLIGHT_RETARGET_STATES`, `_submitted_row`
-    (`parent_hit`), `_decision_progress` (`review_progress`) and the two queue selections
-    are copies of server.py's. Delete those originals when the Jinja page goes.
+  2026-09-30: created beside the Jinja page.
   2026-10-01: follows #635's review page. The approve label counts the judgment estimate;
-    candidates carry `avatar_url` and `question`; a pile page no longer hydrates profiles,
-    so `worth-details` serves the one an opened row shows.
+    candidates carry `avatar_url`; a pile page no longer hydrates profiles, so
+    `worth-details` serves the one an opened row shows.
+  2026-10-01: the Jinja page is gone and this is the review page's one home. /worth,
+    /complete, /retarget, /feedback and /auth/login moved here from server.py with their
+    lookups (one `_submitted_row`, one `_decision_progress`); their errors are now
+    `{"error": text}`, and /worth answers with the fields the page reads. The request
+    helpers and the candidate shaping moved here from rendering.py. The judge's stored
+    question is no longer served: the card always asks the usual one.
+  2026-10-01: this module is the routes alone. The payload shapes moved to payloads.py
+    and the Powerset sign-in to auth_login.py.
+  2026-10-01: the LinkedIn routes read the server's queue (linkedin_queue.py) instead of
+    deriving who is pending on every click, a decision no longer recounts the worth piles
+    or loads its parent's full record, and its answer carries no `progress` (the next
+    card's `pending` is the count).
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import urllib.parse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from typing import Callable, Literal, get_args
+from typing import Callable, Protocol, get_args
 
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
-    linkedin_queue_order,
+    linkedin_candidate_shown,
     linkedin_queue_parent,
+    resolve_identity_key,
 )
+from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.view_models import CandidateViewRow, ParentViewRow
-from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue
-from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
-from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
-from packs.ingestion.primitives.deep_context.review.models import EnrichmentView, GuidanceViewRow
-from packs.ingestion.primitives.deep_context.review.rendering import (
+from packs.ingestion.primitives.deep_context.db.view_models import CandidateViewRow, ParentViewRow, WorthRow
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_row
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidanceOutcome
+from packs.ingestion.primitives.deep_context.review import auth_login
+from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION, STAGES
+from packs.ingestion.primitives.deep_context.review.linkedin_queue import LinkedinQueue
+from packs.ingestion.primitives.deep_context.review.feedback import (
+    FEEDBACK_ACTIONS,
+    build_feedback_request,
+    post_feedback_quietly,
+    submit_directory_feedback,
+)
+from packs.ingestion.primitives.deep_context.review.models import FeedbackSubmission, GuidanceViewRow
+from packs.ingestion.primitives.deep_context.review.payloads import (
+    EXTERNAL_UPDATE_VIEWS,
+    TITLES,
+    ApproveResult,
+    CompleteResult,
+    DecideResult,
+    DecisionProgress,
+    DecisionRow,
+    EnrichmentPanel,
+    LinkedinCard,
+    LinkedinCardPayload,
+    LinkedinDecision,
+    LinkedinFinished,
+    PageProgress,
+    Payload,
+    QueuePosition,
+    RetargetResult,
+    ReviewCandidate,
+    ReviewPage,
+    ReviewPerson,
+    ReviewStep,
+    ReviewView,
+    SignInResult,
+    WorthCall,
+    WorthCardPayload,
+    WorthDetails,
+    WorthPending,
     WorthPendingEntry,
-    _candidate_contacts,
-    _nonempty,
-    _phase_view,
-    _primary_candidate,
-    _value,
-    label_titles,
-    worth_pending_entries,
+    WorthPile,
+    WorthResult,
+    WorthTab,
+    WorthTablePayload,
+    primary_candidate,
 )
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import SqliteReviewAdapter
 from packs.ingestion.primitives.share.web.server import LOCAL_HOSTS
 
 API_PREFIX = "/api/review/"
+FEEDBACK_PATH = "/feedback"
 MAX_FORM_BYTES = 32_768
 MAX_NOTE_CHARS = 2000
-MAX_REASON_CHARS = 140
-# Non-terminal wire-level progress codes (GuidanceViewRow.state).
+MAX_GUIDANCE_CHARS = 2000
+MAX_COMMENT_CHARS = 4000
+# What one re-research is expected to cost; the agent's launcher reads it from /api/retargets.
+ESTIMATED_COST_USD = 0.06
+# Non-terminal wire-level progress codes (GuidanceOutcome.state / GuidanceViewRow.state) —
+# not the coarse persisted GuidanceState set in identity_reconcile/guidance.py.
 IN_FLIGHT_RETARGET_STATES = frozenset({"queued", "researching", "judging", "hydrating"})
-
-ReviewView = Literal["worth", "enrich", "linkedin", "done"]
-WorthTab = Literal["review", "yes", "no"]
-WorthPile = Literal["yes", "no"]
-EnrichmentMode = Literal["running", "approval", "completed", "failed", "preparing"]
-LinkedinDecision = Literal["keep", "detach", "fix", "exclude", "reset"]
-
-TITLES: dict[ReviewView, str] = {
-    "worth": "Add People",
-    "enrich": "Enrich Contacts",
-    "linkedin": "Check LinkedIn",
-    "done": "All Set",
-}
-# The screens that watch /api/events and re-read /api/status.
-EXTERNAL_UPDATE_VIEWS: frozenset[ReviewView] = frozenset({"enrich", "done"})
-
 Params = dict[str, list[str]]
 
 
-@dataclass(frozen=True)
-class DecisionProgress:
-    """The counts a decision click repaints: the worth tabs and the step badges."""
+class GuidedRetargets(Protocol):
+    """The re-research worker, as the routes use it."""
 
-    worth_pending: int
-    worth_yes: int
-    worth_no: int
-    linkedin_pending: int
+    def resume(self) -> int: ...
 
-
-@dataclass(frozen=True)
-class PageProgress(DecisionProgress):
-    linkedin_done: int
-    rejected: int
-    synthesize_pending: int
-
-    @classmethod
-    def from_stage(cls, progress: StageProgress) -> PageProgress:
-        return cls(
-            worth_pending=progress.worth_pending,
-            worth_yes=progress.worth_yes,
-            worth_no=progress.worth_no,
-            linkedin_pending=progress.linkedin_pending,
-            linkedin_done=progress.linkedin_done,
-            rejected=progress.rejected,
-            synthesize_pending=progress.synthesize_pending,
-        )
-
-
-@dataclass(frozen=True)
-class ReviewStep:
-    number: Literal[1, 2, 3]
-    label: str
-    stage: Literal["worth", "enrich", "linkedin"]
-    complete: bool
-    count: int
-
-
-@dataclass(frozen=True)
-class EnrichmentPanel:
-    """The Enrich screen's one panel; the branches are rendering.py `render_enrichment`'s."""
-
-    mode: EnrichmentMode
-    completed: int = 0
-    total: int = 0
-    approval_label: str = ""
-    error: str = ""
-
-    @classmethod
-    def from_view(cls, enrichment: EnrichmentView) -> EnrichmentPanel:
-        if enrichment.status == ReceiptStatus.RUNNING:
-            total = max(0, enrichment.counts.total)
-            return cls("running", completed=min(total, max(0, enrichment.counts.completed)), total=total)
-
-        if enrichment.status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
-            # The estimate covers research and both judgment passes; one that rounds to $0.00 is the free continue.
-            label = (
-                f"Approve ${enrichment.estimated_usd:.2f}"
-                if enrichment.would_submit or round(enrichment.estimated_usd, 2) > 0
-                else "Prepare profiles and judge LinkedIns"
-            )
-            return cls("approval", approval_label=label)
-
-        if enrichment.status == "completed":
-            return cls("completed")
-
-        if enrichment.status == ReceiptStatus.FAILED:
-            return cls("failed", error=enrichment.error or "")
-
-        return cls("preparing")
-
-
-@dataclass(frozen=True)
-class ReviewPage:
-    view: ReviewView
-    tab: WorthTab | Literal[""]
-    title: str
-    steps: tuple[ReviewStep, ReviewStep, ReviewStep]
-    progress: PageProgress
-    enrichment: EnrichmentPanel
-    state_token: str
-    needs_synthesis: bool
-    external_updates: bool
-
-
-@dataclass(frozen=True)
-class ReviewPerson:
-    parent_id: str
-    slug: str
-    name: str
-    sources: tuple[str, ...]
-    labels: tuple[str, ...]
-    worth_key: str
-
-    @classmethod
-    def from_parent(cls, parent: ParentViewRow) -> ReviewPerson:
-        return cls(
-            parent_id=parent.parent_id,
-            slug=parent.slug,
-            name=parent.name,
-            sources=parent.sources,
-            labels=label_titles(parent),
-            worth_key=parent.worth_row.key,
-        )
-
-
-@dataclass(frozen=True)
-class ReviewCandidate:
-    row_key: str
-    name: str
-    url: str
-    headline: str
-    location: str
-    experiences: tuple[str, ...]
-    education: tuple[str, ...]
-    synthetic: bool
-    contacts: str
-    avatar_url: str
-    question: str
-
-    @classmethod
-    def from_row(cls, candidate: CandidateViewRow) -> ReviewCandidate:
-        return cls(
-            row_key=candidate.row_key,
-            name=candidate.full_name,
-            # A researched profile never links out: the cards show it has no LinkedIn.
-            url="" if candidate.synthetic else candidate.url,
-            headline=candidate.headline,
-            location=candidate.location,
-            experiences=_nonempty(candidate.experiences),
-            education=_nonempty(candidate.education),
-            synthetic=candidate.synthetic,
-            contacts=_candidate_contacts(candidate),
-            # A researched profile shows initials only.
-            avatar_url="" if candidate.synthetic else candidate.profile_pic_url,
-            question=candidate.human_question,
-        )
-
-    @classmethod
-    def primary(cls, parent: ParentViewRow) -> ReviewCandidate | None:
-        candidate = _primary_candidate(parent)
-        return cls.from_row(candidate) if candidate else None
-
-
-@dataclass(frozen=True)
-class QueuePosition:
-    index: int
-    total: int
-
-
-@dataclass(frozen=True)
-class WorthDetails:
-    """A person with the profile shown beside them: a worth card, an opened pile row."""
-
-    person: ReviewPerson
-    candidate: ReviewCandidate | None
-
-
-@dataclass(frozen=True)
-class WorthCardPayload:
-    card: WorthDetails | None
-    synthesize_pending: bool
-    queue: QueuePosition | None
-
-
-@dataclass(frozen=True)
-class WorthPending:
-    pending: tuple[WorthPendingEntry, ...]
-
-
-@dataclass(frozen=True)
-class DecisionRow:
-    person: ReviewPerson
-    reason: str
-
-    @classmethod
-    def from_parent(cls, parent: ParentViewRow, pile: WorthPile) -> DecisionRow:
-        return cls(ReviewPerson.from_parent(parent), cls._reason(parent, pile))
-
-    @staticmethod
-    def _reason(parent: ParentViewRow, pile: WorthPile) -> str:
-        """Why the parent sits in this pile (templates/decision_row.html.j2)."""
-        worth = parent.worth_row
-        if worth.human:
-            return worth.human.note or f"You said {worth.effective}"
-
-        machine = worth.machine.reason or ""
-        if not machine:
-            return "Worth adding" if pile == "yes" else "Not worth adding"
-
-        return machine[:MAX_REASON_CHARS] + ("…" if len(machine) > MAX_REASON_CHARS else "")
-
-
-@dataclass(frozen=True)
-class WorthTablePayload:
-    rows: tuple[DecisionRow, ...]
-    total: int
-
-
-@dataclass(frozen=True)
-class LinkedinFinished:
-    synthesize_pending: bool
-    linkedin_done: int
-    linkedin_complete: bool
-    retargets_in_flight: int
-    auto_continue: bool
-
-
-@dataclass(frozen=True)
-class LinkedinCard:
-    person: ReviewPerson
-    candidates: tuple[ReviewCandidate, ...]
-    failure_note: str
-
-
-@dataclass(frozen=True)
-class LinkedinCardPayload:
-    card: LinkedinCard | None
-    finished: LinkedinFinished | None
-    pending: int
-    queue: QueuePosition | None
-
-
-@dataclass(frozen=True)
-class DecideResult:
-    ok: bool
-    pub: str
-    action: str
-    approved: str
-    new_url: str
-    progress: DecisionProgress
-    resolved_pubs: tuple[str, ...]
-    next: LinkedinCardPayload
-
-
-@dataclass(frozen=True)
-class ApproveResult:
-    ok: bool
-    enrichment: EnrichmentPanel
-
-
-Payload = (
-    ReviewPage
-    | WorthCardPayload
-    | WorthPending
-    | WorthTablePayload
-    | WorthDetails
-    | LinkedinCardPayload
-    | DecideResult
-    | ApproveResult
-)
+    def submit(self, request: GuidanceRequest) -> GuidanceOutcome: ...
 
 
 class _Refusal(Exception):
@@ -356,7 +150,7 @@ class _Refusal(Exception):
 
 
 class ReviewApi:
-    """The Review page's JSON GET and POST routes, mountable in any stdlib handler."""
+    """The Review page's reads and writes, mountable in any stdlib handler."""
 
     def __init__(
         self,
@@ -367,13 +161,18 @@ class ReviewApi:
         notify: Callable[[], None],
         wake_agent: Callable[[], None],
         run_jobs: bool,
+        guided_retargets: GuidedRetargets | None,
+        linkedin: LinkedinQueue,
     ) -> None:
         self.db = db
         self.adapter = adapter
+        self.linkedin = linkedin
         self.start_enrichment = start_enrichment
         self.notify = notify
         self.wake_agent = wake_agent
         self.run_jobs = run_jobs
+        # None on a server that runs no jobs: /retarget is refused there.
+        self.guided_retargets = guided_retargets
         self._get_routes: dict[str, Callable[[Params], Payload]] = {
             "page": self._page,
             "worth-card": self._worth_card,
@@ -383,8 +182,12 @@ class ReviewApi:
             "linkedin-card": self._linkedin_card,
         }
         self._post_routes: dict[str, Callable[[Params], Payload]] = {
-            "decide": self._decide,
-            "approve-enrichment": self._approve_enrichment,
+            f"{API_PREFIX}decide": self._decide,
+            f"{API_PREFIX}approve-enrichment": self._approve_enrichment,
+            "/worth": self._worth,
+            "/complete": self._complete,
+            "/retarget": self._retarget,
+            "/auth/login": self._sign_in,
         }
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
@@ -400,11 +203,12 @@ class ReviewApi:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if not parsed.path.startswith(API_PREFIX):
-            return False
+        feedback = parsed.path == FEEDBACK_PATH
+        route = self._post_routes.get(parsed.path)
+        if route is None and not feedback:
+            if not parsed.path.startswith(API_PREFIX):
+                return False
 
-        route = self._post_routes.get(parsed.path[len(API_PREFIX):])
-        if route is None:
             _send_error(handler, HTTPStatus.NOT_FOUND, "not found")
             return True
 
@@ -414,7 +218,11 @@ class ReviewApi:
             return True
 
         length = min(int(handler.headers.get("Content-Length", "0")), MAX_FORM_BYTES)
-        _answer(handler, route, urllib.parse.parse_qs(handler.rfile.read(length).decode()))
+        form = urllib.parse.parse_qs(handler.rfile.read(length).decode())
+        if route is None:
+            self._answer_feedback(handler, form)
+        else:
+            _answer(handler, route, form)
         return True
 
     def _page(self, params: Params) -> ReviewPage:
@@ -492,7 +300,8 @@ class ReviewApi:
         )
 
     def _worth_pending(self, _params: Params) -> WorthPending:
-        return WorthPending(tuple(worth_pending_entries(worth_queue(self.db))))
+        queue = sorted(worth_queue(self.db), key=lambda row: row.name.lower())
+        return WorthPending(tuple(WorthPendingEntry(row.key, row.name) for row in queue))
 
     def _worth_table(self, params: Params) -> WorthTablePayload:
         pile = _value(params, "view").lower()
@@ -526,23 +335,24 @@ class ReviewApi:
         # the two reads has either left the order or is still excluded here.
         retargets = self.adapter.retargets()
         inflight = {item.slug.lower() for item in retargets if item.state in IN_FLIGHT_RETARGET_STATES}
-        order = linkedin_queue_order(self.db)
-        queue = [row for row in order if row.slug.lower() not in excluded | inflight]
-        if not queue:
-            progress = self.adapter.snapshot().progress
-            completed = not progress.linkedin_pending
-            finished = LinkedinFinished(
-                synthesize_pending=bool(progress.synthesize_pending),
-                linkedin_done=progress.linkedin_done,
-                linkedin_complete=completed,
-                retargets_in_flight=len(inflight),
-                auto_continue=not completed,
-            )
-            return LinkedinCardPayload(card=None, finished=finished, pending=len(order), queue=None)
+        while True:
+            order = self.linkedin.rows()
+            queue = [row for row in order if row.slug.lower() not in excluded | inflight]
+            if not queue:
+                return LinkedinCardPayload(
+                    card=None, finished=self._linkedin_finished(len(inflight)), pending=len(order), queue=None
+                )
 
-        index = _index(params, len(queue))
-        # Only the card on screen is hydrated; the queue itself is ids and slugs.
-        parent = linkedin_queue_parent(self.db, queue[index].parent_id)
+            index = _index(params, len(queue))
+            # Only the card on screen is hydrated; the queue itself is ids and slugs.
+            parent = linkedin_queue_parent(self.db, queue[index].parent_id)
+            if parent.candidates:
+                break
+
+            # Settled since the queue was read (a re-research, another process): it leaves,
+            # unless the store has made it pending again since this read.
+            self.linkedin.settle(parent.parent_id)
+
         card = LinkedinCard(
             person=ReviewPerson.from_parent(parent),
             candidates=tuple(ReviewCandidate.from_row(candidate) for candidate in parent.candidates),
@@ -552,6 +362,17 @@ class ReviewApi:
             card=card, finished=None, pending=len(order), queue=_debug_position(params, index, len(queue))
         )
 
+    def _linkedin_finished(self, retargets_in_flight: int) -> LinkedinFinished:
+        progress = self.adapter.snapshot().progress
+        completed = not progress.linkedin_pending
+        return LinkedinFinished(
+            synthesize_pending=bool(progress.synthesize_pending),
+            linkedin_done=progress.linkedin_done,
+            linkedin_complete=completed,
+            retargets_in_flight=retargets_in_flight,
+            auto_continue=not completed,
+        )
+
     def _decide(self, form: Params) -> DecideResult:
         pub = _value(form, "pub")
         decision = _value(form, "decision")
@@ -559,28 +380,52 @@ class ReviewApi:
         if not pub or decision not in get_args(LinkedinDecision):
             raise _Refusal(HTTPStatus.BAD_REQUEST, "bad request")
 
-        row_key, parent = self._submitted_row(pub, slug)
+        row_key, parent_id, parent_slug = self._decided_row(pub, slug)
         note = _value(form, "note").strip()[:MAX_NOTE_CHARS]
         try:
             result = self.adapter.decide(row_key, decision, _value(form, "new_url"), note)
         except StoreError as error:
             raise _Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
 
+        self.linkedin.settle(parent_id)
         self.notify()
         self.wake_agent()
         # The next card is read AFTER the write committed: one round trip, and the
-        # decided parent is never served back.
-        following = self._linkedin_card({"exclude": [slug or parent.slug]})
+        # decided parent is never served back. Its `pending` is the count the page repaints.
+        following = self._linkedin_card({"exclude": [slug or parent_slug]})
         return DecideResult(
             ok=True,
             pub=row_key,
             action=result.action,
             approved=result.approved,
             new_url=result.new_url,
-            progress=self._decision_progress(following.pending),
             resolved_pubs=result.resolved_pubs,
             next=following,
         )
+
+    def _decided_row(self, pub: str, slug: str) -> tuple[str, str, str]:
+        """The identity row a LinkedIn card posted: its key, its parent and the parent's slug.
+
+        A queued parent is named by the queue; any other row takes the full lookup, which
+        also refuses a row no card shows.
+        """
+        try:
+            resolved = resolve_identity_key(self.db, pub)
+        except StoreError as error:
+            raise _Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
+
+        queued_slug = self.linkedin.slug(resolved[1]) if resolved else None
+        if resolved and queued_slug is not None and linkedin_candidate_shown(self.db, resolved[0]):
+            if slug and queued_slug != slug:
+                raise _Refusal(HTTPStatus.BAD_REQUEST, "stale or mismatched person card")
+            return resolved[0], resolved[1], queued_slug
+
+        hit = self._submitted_row(pub, slug)
+        if not hit:
+            raise _Refusal(HTTPStatus.NOT_FOUND, f"review row not found: {pub}")
+
+        row_key, parent, _ = hit
+        return row_key, parent.parent_id, parent.slug
 
     def _approve_enrichment(self, _form: Params) -> ApproveResult:
         try:
@@ -605,20 +450,184 @@ class ReviewApi:
         # The panel is re-read after the start, so the page swaps in the running bar.
         return ApproveResult(ok=True, enrichment=EnrichmentPanel.from_view(self.adapter.enrichment()))
 
-    def _submitted_row(self, pub: str, slug: str) -> tuple[str, ParentViewRow]:
-        """The identity row a card posted, and its parent."""
+    def _worth(self, form: Params) -> WorthResult:
+        pub = _value(form, "pub")
+        value = _value(form, "worth").strip().lower()
+        if value not in get_args(WorthCall):
+            raise _Refusal(HTTPStatus.BAD_REQUEST, "worth must be yes, no, or restore")
+
+        slug = _value(form, "parent_slug").strip()
+        parent = person_detail(self.db, slug) if slug else None
+        if not parent:
+            raise _Refusal(HTTPStatus.NOT_FOUND, "person not found")
+
+        key = parent.worth_row.key
+        if pub and pub != key:
+            raise _Refusal(HTTPStatus.NOT_FOUND, "worth row not found")
+
+        try:
+            self.adapter.set_worth(key, value, _value(form, "note").strip()[:MAX_NOTE_CHARS])
+        except StoreError as error:
+            raise _Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
+
+        row: WorthRow | None = worth_row(self.db, key)
+        if row is None:
+            raise _Refusal(HTTPStatus.CONFLICT, "written worth row is missing")
+
+        # The write is what the page waits on, so the answer is the counts it repaints
+        # and nothing more: the full workflow state costs seconds on a large store.
+        # A worth decision can move a person in or out of the LinkedIn queue.
+        self.linkedin.forget()
+        progress = self._decision_progress(len(self.linkedin.rows()))
+        self.notify()
+        self.wake_agent()
+        return WorthResult(
+            ok=True,
+            pub=pub,
+            effective=row.effective,
+            progress=progress,
+            next_stage="enrich" if progress.worth_pending == 0 else "worth",
+        )
+
+    def _complete(self, form: Params) -> CompleteResult:
+        stage = _value(form, "stage").strip().lower()
+        if stage not in STAGES:
+            raise _Refusal(HTTPStatus.CONFLICT, f"unknown review stage: {stage}")
+
+        state = self.adapter.snapshot()
+        manifest = {**self.adapter.manifest(stage, state=state).as_dict(), "status": "completed"}
+        self.notify()
+        self.wake_agent()
+        return CompleteResult(ok=True, manifest=manifest, progress=state.progress)
+
+    def _retarget(self, form: Params) -> RetargetResult:
+        pub = _value(form, "pub")
+        guidance = _value(form, "guidance").strip()
+        slug = _value(form, "parent_slug").strip()
+        if not guidance or len(guidance) > MAX_GUIDANCE_CHARS:
+            raise _Refusal(HTTPStatus.BAD_REQUEST, "guidance must be 1-2000 characters")
+
+        if self.guided_retargets is None:
+            raise _Refusal(HTTPStatus.SERVICE_UNAVAILABLE, "in-app jobs are disabled on this server")
+
+        row_key, parent, candidate = self._retarget_subject(pub, slug)
+        request = GuidanceRequest(
+            slug=parent.slug or slug,
+            row_key=row_key,
+            name=parent.name,
+            guidance=guidance,
+            person_ids=parent.person_ids,
+            linkedin_url=candidate.url if candidate else "",
+            submitted_at=now_iso(),
+            match_emails=candidate.match_emails if candidate else (),
+            match_phones=candidate.match_phones if candidate else (),
+        )
+        try:
+            item = self.guided_retargets.submit(request)
+        except (ValueError, StoreError) as error:
+            raise _Refusal(HTTPStatus.CONFLICT, str(error)) from error
+
+        try:
+            feedback = build_feedback_request(
+                parent, candidate, action="retarget", comment=guidance, retarget_items=[item]
+            )
+            threading.Thread(target=post_feedback_quietly, args=(feedback,), daemon=True).start()
+        except SystemExit:
+            pass
+
+        self.notify()
+        self.wake_agent()
+        return RetargetResult(ok=True, item=item.as_dict(), estimated_cost_usd=ESTIMATED_COST_USD)
+
+    def _retarget_subject(self, pub: str, slug: str) -> tuple[str, ParentViewRow, CandidateViewRow | None]:
+        """Who to re-research: the posted candidate's parent, else the parent itself by its first person."""
+        if pub:
+            hit = self._submitted_row(pub, slug)
+            if not hit:
+                raise _Refusal(HTTPStatus.NOT_FOUND, "review row not found")
+
+            return hit
+
+        parent = person_detail(self.db, slug)
+        if not parent:
+            raise _Refusal(HTTPStatus.NOT_FOUND, "person not found")
+
+        if not parent.person_ids:
+            raise _Refusal(HTTPStatus.BAD_REQUEST, "person has no research key")
+
+        return parent.person_ids[0], parent, None
+
+    def _answer_feedback(self, handler: BaseHTTPRequestHandler, form: Params) -> None:
+        """Powerset's reply is the body, whatever keys it carries; unless it says `submitted`, a 502."""
+        try:
+            feedback = self._feedback(form)
+        except _Refusal as refusal:
+            _send_error(handler, refusal.status, refusal.text)
+            return
+
+        submitted = feedback.status == "submitted"
+        status = HTTPStatus.OK if submitted else HTTPStatus.BAD_GATEWAY
+        _send_json(handler, {"ok": submitted, **feedback.as_dict()}, status)
+
+    def _feedback(self, form: Params) -> FeedbackSubmission:
+        comment = _value(form, "comment").strip()
+        action = _value(form, "action").strip()
+        if not comment or len(comment) > MAX_COMMENT_CHARS:
+            raise _Refusal(HTTPStatus.BAD_REQUEST, "comment must be 1-4000 characters")
+
+        if action not in FEEDBACK_ACTIONS:
+            raise _Refusal(HTTPStatus.BAD_REQUEST, "unknown feedback action")
+
+        parent, candidate = self._feedback_subject(_value(form, "pub"), _value(form, "parent_slug").strip())
+        request = build_feedback_request(
+            parent, candidate, action=action, comment=comment, retarget_items=self.adapter.retargets()
+        )
+        return submit_directory_feedback(request)
+
+    def _feedback_subject(self, pub: str, slug: str) -> tuple[ParentViewRow, CandidateViewRow | None]:
+        """Who the feedback is about: a worth row's parent, a posted candidate, else the parent by slug."""
+        if pub.startswith(PARENT_WORTH_PREFIX):
+            parent = person_detail(self.db, pub.removeprefix(PARENT_WORTH_PREFIX))
+            if not parent or parent.worth_row.key != pub:
+                raise _Refusal(HTTPStatus.NOT_FOUND, "review row not found")
+
+            return parent, None
+
+        if pub:
+            hit = self._submitted_row(pub, slug)
+            if not hit:
+                raise _Refusal(HTTPStatus.NOT_FOUND, "review row not found")
+
+            return hit[1], hit[2]
+
+        parent = person_detail(self.db, slug)
+        if not parent:
+            raise _Refusal(HTTPStatus.NOT_FOUND, "person not found")
+
+        return parent, primary_candidate(parent)
+
+    def _sign_in(self, _form: Params) -> SignInResult:
+        return SignInResult(ok=True, status=auth_login.start_auth_login())
+
+    def _submitted_row(self, pub: str, slug: str) -> tuple[str, ParentViewRow, CandidateViewRow] | None:
+        """The identity row a card posted, with its parent and candidate; None when no card shows it."""
         try:
             resolved = self.adapter.resolve_candidate(pub)
         except StoreError as error:
             raise _Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
 
-        if not resolved or not self.adapter.candidate(resolved[1], resolved[0]):
-            raise _Refusal(HTTPStatus.NOT_FOUND, f"review row not found: {pub}")
+        if not resolved:
+            return None
 
-        if slug and resolved[1].slug != slug:
+        row_key, parent = resolved
+        candidate = self.adapter.candidate(parent, row_key)
+        if not candidate:
+            return None
+
+        if slug and parent.slug != slug:
             raise _Refusal(HTTPStatus.BAD_REQUEST, "stale or mismatched person card")
 
-        return resolved
+        return row_key, parent, candidate
 
     def _decision_progress(self, linkedin_pending: int) -> DecisionProgress:
         worth = worth_counts(self.db)
@@ -628,6 +637,16 @@ class ReviewApi:
             worth_no=worth.no,
             linkedin_pending=linkedin_pending,
         )
+
+
+def _value(params: Params, key: str, default: str = "") -> str:
+    return str((params.get(key) or [default])[0])
+
+
+def _phase_view(params: Params) -> str:
+    """The stage the URL asks for, or "" when it asks for none."""
+    requested = _value(params, "stage").lower()
+    return requested if requested in get_args(ReviewView) else ""
 
 
 def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:

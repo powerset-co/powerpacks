@@ -11,8 +11,8 @@ interface PersonMenuProps {
   onFeedback: () => void
 }
 
-// The `person_menu` macro: the "⋯" in the card's corner and its one item. A click anywhere
-// else on the page shuts an open menu.
+// The person menu: the "⋯" in the card's corner and its one item. A click anywhere else on
+// the page shuts an open menu.
 export function PersonMenu({ anchor, disabled, onFeedback }: PersonMenuProps) {
   const [open, setOpen] = useState(false)
   const toggle = useRef<HTMLButtonElement>(null)

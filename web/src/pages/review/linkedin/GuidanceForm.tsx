@@ -23,8 +23,8 @@ interface GuidanceFormProps {
   onRetarget: (guidance: string) => void
 }
 
-// The `guidance_form` macro: one collapsed box, two routes. A pasted LinkedIn URL applies
-// directly; a description of the right person goes to re-research. `routeGuidance` decides.
+// The guidance box: one collapsed box, two routes. A pasted LinkedIn URL applies directly; a
+// description of the right person goes to re-research. `routeGuidance` decides.
 export function GuidanceForm({
   open,
   onToggle,

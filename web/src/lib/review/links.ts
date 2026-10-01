@@ -1,9 +1,9 @@
-// The review page's URLs. The query keeps the old page's names: `stage`, `view` (the worth
-// tab), `preview`, `debug`, `index`.
+// The review page's URLs. The query names are `stage`, `view` (the worth tab), `preview`,
+// `debug` and `index`.
 
 import type { ReviewView, WorthTab } from "@/types/review"
 
-export const REVIEW_PATH = "/review"
+export const REVIEW_PATH = "/"
 
 /** What the address bar asks for. `stage` and `view` go to the server as written: it decides
  *  the screen (GET /api/review/page). */

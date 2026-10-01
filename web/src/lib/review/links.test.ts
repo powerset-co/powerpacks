@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { readScreenQuery, stageHref, stepHref, tabHref } from "./links"
 
 describe("the page's URLs", () => {
-  it("reads the old page's query names", () => {
+  it("reads the query names", () => {
     expect(readScreenQuery("?stage=worth&view=yes&preview=1&debug=1&index=3")).toEqual({
       stage: "worth",
       view: "yes",
@@ -20,15 +20,15 @@ describe("the page's URLs", () => {
   })
 
   it("links a step as a deliberately opened stage", () => {
-    expect(stepHref("enrich")).toBe("/review?stage=enrich&preview=1")
+    expect(stepHref("enrich")).toBe("/?stage=enrich&preview=1")
   })
 
   it("opens a stage transition's screen without preview", () => {
-    expect(stageHref("linkedin")).toBe("/review?stage=linkedin")
+    expect(stageHref("linkedin")).toBe("/?stage=linkedin")
   })
 
   it("keeps preview on the worth tabs", () => {
-    expect(tabHref("yes", false)).toBe("/review?stage=worth&view=yes")
-    expect(tabHref("no", true)).toBe("/review?stage=worth&view=no&preview=1")
+    expect(tabHref("yes", false)).toBe("/?stage=worth&view=yes")
+    expect(tabHref("no", true)).toBe("/?stage=worth&view=no&preview=1")
   })
 })

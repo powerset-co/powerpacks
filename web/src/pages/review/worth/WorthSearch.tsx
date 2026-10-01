@@ -24,9 +24,9 @@ function matching(names: readonly WorthPendingEntry[], needle: string): WorthPen
   return names.filter((entry) => entry.name.toLowerCase().includes(needle)).slice(0, LISTED)
 }
 
-// templates/worth_search.html.j2 + reconcile_review.js `wireWorthTypeahead`: type part of a
-// pending person's name, pick them from the list. The arrows move the highlight, Enter picks
-// it, Escape clears the box, and leaving the box closes the list.
+// The typeahead over the pending people: type part of a name, pick the person from the list.
+// The arrows move the highlight, Enter picks it, Escape clears the box, and leaving the box
+// closes the list.
 export function WorthSearch({ names, onPick }: WorthSearchProps) {
   const [text, setText] = useState("")
   /** The box is in use; the list shows once it holds something to look for. */

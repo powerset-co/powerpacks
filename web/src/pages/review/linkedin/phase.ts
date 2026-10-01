@@ -1,5 +1,4 @@
-// What the LinkedIn card on screen is waiting for, and what each wait does to it
-// (reconcile_review.js `decideLinkedinCard` and the retarget submit handler).
+// What the LinkedIn card on screen is waiting for, and what each wait does to it.
 
 export type CardPhase =
   /** Nothing is out. */

@@ -1,5 +1,5 @@
-// The feedback popover's two glyphs (reconcile_review.js SEND_ICON, CHECK_ICON). Decorative:
-// the send button carries the label.
+// The feedback popover's two glyphs, send and check. Decorative: the send button carries the
+// label.
 
 const STROKED = {
   viewBox: "0 0 24 24",

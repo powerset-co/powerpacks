@@ -409,7 +409,7 @@ the root keeps `__init__.py` and nothing else.
 | `synthesis/` | synthesize_person_context.py, compose_dossier.py, validate_dossiers.py, facts.py, models.py, rendering.py |
 | `merge_candidates/` | cluster_merge_candidates.py, build_parents.py, rendering.py |
 | `enrich/` | judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
-| `review/` | web server/rendering/assets, guided_retarget.py, reconcile_review_web.py, restart_review.py |
+| `review/` | web server and JSON routes (the page is `web/src/pages/review`), guided_retarget.py, reconcile_review_web.py, restart_review.py |
 | `realize/` | apply_retargets.py, persist_review_identities.py |
 | `migration/` | seed.py (the whole-graph importer, its graph machinery and the proof tool were deleted 2026-09-25) |
 | `shared/` | common.py, check_readiness.py, readiness_models.py, build_owner.py, lookup_person.py, dossier_evidence.py |

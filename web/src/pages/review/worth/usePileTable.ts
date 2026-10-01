@@ -32,7 +32,7 @@ function without({ rows, total }: PileRows, slug: string): PileRows {
 }
 
 /**
- * One decided pile's rows (reconcile_review.js `appendDecisionPage`, `decideDecisionRow`).
+ * One decided pile's rows.
  *
  *   mount   read the first page and the pile's size
  *   more    read the page after the rows held and append it; one read at a time, none

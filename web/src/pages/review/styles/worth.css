@@ -1,6 +1,6 @@
-/* The worth stage's look, ported from deep_context/review/reconcile_review.css: the tabs, the
-   typeahead, the card's note box, and the Yes / No lists with their rows. The card itself is
-   in base.css. Every rule sits under .review-page, as there. */
+/* The worth stage's look: the tabs, the typeahead, the card's note box, and the Yes / No
+   lists with their rows. The card itself is in base.css. Every rule sits under .review-page,
+   as there. */
 
 .review-page .worth-stage {
   min-height: 0;

@@ -7,9 +7,9 @@ interface StageCheckProps {
   message: string
 }
 
-// reconcile_review.js `leaveAndNavigate`: the check between stages, with a moving bar while the
-// next screen is prepared. It replaces the stage and stays until that screen loads. The bar's
-// look is the Enrich bar's (styles/enrich.css `.enrich-progress.indeterminate`).
+// The check between stages, with a moving bar while the next screen is prepared. It replaces
+// the stage and stays until that screen loads. The bar's look is the Enrich bar's
+// (styles/enrich.css `.enrich-progress.indeterminate`).
 export function StageCheck({ message }: StageCheckProps) {
   return (
     <EmptyPanel mark title={message} className="stage-complete">

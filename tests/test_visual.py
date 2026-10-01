@@ -1,7 +1,9 @@
-"""Visual regression for the People and Searches pages on synthetic fixtures.
+"""Visual regression for the People, Searches and Review pages on synthetic fixtures.
 
-Both pages are served by one handler composed as review/server.py composes it (the
-app shell, the Searches JSON routes, the People routes, the legacy search routes).
+People and Searches are served by one handler composed as review/server.py composes it (the
+app shell, the Searches JSON routes, the People routes, the legacy search routes). Review is
+served by review/server.py itself over the review API suite's synthetic store, with paid calls
+refused.
 Each state is screenshotted in Chrome with reduced motion and compared to
 `tests/visual/<page>/<state>.png`. A pixel counts as changed when any channel moves
 by more than 24; a state fails when more than 0.4% of its pixels changed.
@@ -15,6 +17,7 @@ Changelog:
   2026-09-26: drawer sections open through their heading toggles (DetailsSection folds, no <details>).
   2026-09-26: created for the TypeScript port (People).
   2026-09-26: renamed from test_people_visual.py; Searches states added; one handler for both.
+  2026-10-01: Review states added (the page at `/`).
 """
 
 from __future__ import annotations
@@ -27,17 +30,23 @@ import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
+from packs.ingestion.primitives.deep_context.review import server as review_server
+from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesCaller
+from packs.ingestion.primitives.enrich.rapidapi_client import RapidApiClient
 from packs.ingestion.primitives.share.web.server import ShareRoutes, share_routes
 from packs.search.primitives.deep_search.results_web.api import search_api
 from packs.search.primitives.deep_search.results_web.server import _send, search_routes
 from packs.shared.web.app import AppRoutes
+from test_deep_context_review_api import ReviewStore, refuse_paid_call
 from test_local_searches_browser import _results_root
 from test_share_web import ShareWebFixture
 
 VISUAL = Path(__file__).resolve().parent / "visual"
 VIEWPORT = {"width": 1440, "height": 900}
 NARROW = {"width": 1100, "height": 800}
+PHONE = {"width": 420, "height": 800}
 CHANNEL_TOLERANCE = 24
 CHANGED_PIXELS_ALLOWED = 0.004
 SEARCHES_NOW = "2026-09-26T12:00:00Z"
@@ -84,6 +93,22 @@ def _handler(share: ShareRoutes, results_root: Path) -> type[BaseHTTPRequestHand
     return Handler
 
 
+def _settled(baseline: Path, page, *, update: bool) -> str:
+    """Screenshot one state and compare it; the failure line, or "" when it matches."""
+    page.wait_for_timeout(120)
+    baseline.parent.mkdir(parents=True, exist_ok=True)
+    if update or not baseline.exists():
+        page.screenshot(path=str(baseline))
+        return ""
+    actual = baseline.with_name(f"{baseline.stem}.actual.png")
+    page.screenshot(path=str(actual))
+    changed = _compare(baseline, actual)
+    if changed > CHANGED_PIXELS_ALLOWED:
+        return f"{baseline.parent.name}/{baseline.stem}: {changed:.2%} of pixels changed"
+    actual.unlink()
+    return ""
+
+
 class VisualTests(ShareWebFixture):
     """Every People and Searches state the app must keep pixel-for-pixel (system fonts, one machine)."""
 
@@ -108,19 +133,9 @@ class VisualTests(ShareWebFixture):
         self.errors: list[str] = []
 
     def _shot(self, page, name: str) -> None:
-        page.wait_for_timeout(120)
-        baseline = VISUAL / f"{name}.png"
-        baseline.parent.mkdir(parents=True, exist_ok=True)
-        if self.update or not baseline.exists():
-            page.screenshot(path=str(baseline))
-            return
-        actual = baseline.with_name(f"{baseline.stem}.actual.png")
-        page.screenshot(path=str(actual))
-        changed = _compare(baseline, actual)
-        if changed > CHANGED_PIXELS_ALLOWED:
-            self.failures.append(f"{name}: {changed:.2%} of pixels changed")
-        else:
-            actual.unlink()
+        failure = _settled(VISUAL / f"{name}.png", page, update=self.update)
+        if failure:
+            self.failures.append(failure)
 
     def test_states_match_the_baselines(self) -> None:
         from playwright.sync_api import sync_playwright
@@ -240,6 +255,98 @@ class VisualTests(ShareWebFixture):
         page.mouse.move(0, 0)
         self._shot(page, "searches/narrow")
         context.close()
+
+
+class ReviewVisualTests(unittest.TestCase):
+    """Every Review screen the page must keep pixel-for-pixel, walked in stage order on one store."""
+
+    def setUp(self) -> None:
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+            import PIL  # noqa: F401
+        except ImportError:
+            self.skipTest("Playwright and Pillow are dev-only")
+        for patcher in (
+            mock.patch.object(RapidApiClient, "get_profile", refuse_paid_call),
+            mock.patch.object(OpenAIResponsesCaller, "__init__", refuse_paid_call),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        self.store = ReviewStore(Path(root.name))
+        self.store.seed_worth_queue()
+        self.store.seed_linkedin_queue()
+        handler = review_server.make_handler(
+            confirm_threshold=0.7, run_jobs=False, guided_retargets=mock.Mock(), db=self.store.db
+        )
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.update = os.environ.get("UPDATE_VISUAL") == "1"
+        self.failures: list[str] = []
+        self.errors: list[str] = []
+
+    def _shot(self, page, name: str) -> None:
+        failure = _settled(VISUAL / "review" / f"{name}.png", page, update=self.update)
+        if failure:
+            self.failures.append(failure)
+
+    def test_states_match_the_baselines(self) -> None:
+        from playwright.sync_api import expect, sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+            context = browser.new_context(viewport=VIEWPORT, reduced_motion="reduce")
+            page = context.new_page()
+            page.on("pageerror", lambda error: self.errors.append(str(error)))
+
+            page.goto(self.base + "/?stage=worth")
+            expect(page.locator(".worth-card h2")).to_have_text("Avery Quinn")
+            expect(page.locator(".worth-card .dossier-text")).to_contain_text("Synthetic collaborator")
+            self._shot(page, "worth-card")
+
+            page.locator(".decision-tab[data-tab='yes']").click()
+            expect(page.locator(".decision-row")).to_have_count(3)
+            self._shot(page, "worth-yes-pile")
+            page.locator(".decision-row summary").first.click()
+            expect(page.locator(".decision-row[open] .dossier-text")).to_contain_text("Synthetic collaborator")
+            self._shot(page, "worth-yes-row-open")
+
+            page.set_viewport_size(PHONE)
+            page.goto(self.base + "/?stage=worth")
+            expect(page.locator(".worth-card .dossier-text")).to_contain_text("Synthetic collaborator")
+            self._shot(page, "worth-card-phone")
+            page.set_viewport_size(VIEWPORT)
+
+            page.goto(self.base + "/?stage=enrich&preview=1")
+            expect(page.locator(".enrich-state .button")).to_contain_text("Approve $")
+            self._shot(page, "enrich-approval")
+
+            self.store.reach_linkedin()
+            page.goto(self.base + "/?stage=linkedin")
+            expect(page.locator(".identity-card h2")).to_have_text("Jordan Bravo")
+            expect(page.locator(".identity-card .dossier-text")).to_contain_text("Synthetic collaborator")
+            self._shot(page, "linkedin-card")
+            page.locator(".identity-card .binary-actions .button-outline").click()
+            expect(page.locator(".retarget-form textarea")).to_be_focused()
+            self._shot(page, "linkedin-guidance-open")
+
+            for row_key in ("jordan-bravo", "riley-stone", "sam-tango"):
+                self.store.db.decide_identity(row_key, "verify")
+            page.goto(self.base + "/?stage=linkedin")
+            expect(page.locator(".handoff-copy")).to_be_visible()
+            self._shot(page, "linkedin-finished")
+            page.goto(self.base + "/?stage=done")
+            expect(page.get_by_role("heading", name="All set", exact=True)).to_be_visible()
+            self._shot(page, "done")
+
+            context.close()
+            browser.close()
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.failures, [])
 
 
 if __name__ == "__main__":

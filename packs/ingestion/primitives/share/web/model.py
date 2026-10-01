@@ -32,7 +32,7 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
     ImportedPerson,
     stored_imported_people,
 )
-from packs.ingestion.primitives.deep_context.review.rendering import markdown_to_html
+from packs.ingestion.primitives.deep_context.review.dossier_html import markdown_to_html
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags

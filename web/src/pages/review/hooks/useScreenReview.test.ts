@@ -65,7 +65,7 @@ describe("useScreenReview", () => {
     act(() => void vi.advanceTimersByTime(649))
     expect(open).not.toHaveBeenCalled()
     act(() => void vi.advanceTimersByTime(1))
-    expect(open).toHaveBeenCalledWith("/review?stage=enrich")
+    expect(open).toHaveBeenCalledWith("/?stage=enrich")
     // The check stays until the next screen loads (this one unmounts then).
     expect(result.current.check).toBe("People Reviewed")
   })
@@ -77,7 +77,7 @@ describe("useScreenReview", () => {
     act(() => void vi.advanceTimersByTime(649))
     expect(open).not.toHaveBeenCalled()
     act(() => void vi.advanceTimersByTime(1))
-    expect(open).toHaveBeenCalledWith("/review?stage=linkedin")
+    expect(open).toHaveBeenCalledWith("/?stage=linkedin")
   })
 
   it("says the message, fades the stage out for 100 ms, then reloads", () => {

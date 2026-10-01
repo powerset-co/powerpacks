@@ -17,10 +17,10 @@ export interface Screen {
 }
 
 /**
- * The screen for the address bar. Every navigation is a fresh read, as each was a document
- * load on the old page: a link to the URL already open reads again, and so do back and
- * forward (the query is keyed by the history entry and never cached). The screen on show
- * stays until the next one's answer lands.
+ * The screen for the address bar. Every navigation is a fresh read, as a document load would
+ * be: a link to the URL already open reads again, and so do back and forward (the query is
+ * keyed by the history entry and never cached). The screen on show stays until the next
+ * one's answer lands.
  */
 export function useScreen() {
   const location = useLocation()
@@ -51,7 +51,7 @@ export function useScreen() {
 
   const { refetch } = query
   const reload = useCallback(() => void refetch(), [refetch])
-  // Opening the URL already open replaces its history entry, as a document load of it did.
+  // Opening the URL already open replaces its history entry, as a document load of it would.
   const here = location.pathname + location.search
   const open = useCallback(
     (href: string) => void navigate(href, { replace: href === here }),

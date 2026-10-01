@@ -23,14 +23,14 @@ function Where() {
 // The worth stage as a test sees it: inside a `Review` whose counts move as the page's do
 // (`applyProgress` repaints them), beside a probe that shows the address its links opened.
 export function WorthHarness({ tab, review, path }: WorthHarnessProps) {
-  const [applied, setApplied] = useState<DecisionProgress | null>(null)
+  const [applied, setApplied] = useState<Partial<DecisionProgress>>({})
   const live = useMemo(
     (): Review => ({
       ...review,
       progress: { ...review.progress, ...applied },
       applyProgress: (progress) => {
         review.applyProgress(progress)
-        setApplied(progress)
+        setApplied((before) => ({ ...before, ...progress }))
       },
     }),
     [review, applied],

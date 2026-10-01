@@ -144,7 +144,6 @@ class CandidateViewRow:
     new_url: str
     new_public_identifier: str
     pending: bool
-    human_question: str = ""
 
 
 @dataclass(frozen=True)
@@ -195,12 +194,6 @@ class ParentLookupRow:
     phones: tuple[str, ...]
     parent_id: str
     children: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class AvatarPayload:
-    base64: str
-    content_type: str
 
 
 @dataclass(frozen=True)

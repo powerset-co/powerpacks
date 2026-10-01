@@ -84,7 +84,7 @@ describe("GuidanceForm: one box, two routes (P0.1)", () => {
 })
 
 describe("GuidanceForm", () => {
-  it("draws the box as the old page did", () => {
+  it("draws the box open, with its summary, its field and Retarget", () => {
     const { container } = renderForm()
     const box = must(container.querySelector("details"))
     expect(box.className).toBe("retarget-guidance")

@@ -62,7 +62,7 @@ describe("routeGuidance", () => {
     expect(routeGuidance(text)).toEqual({ kind: "nothing" })
   })
 
-  it("is the old page's pattern, unchanged", () => {
+  it("keeps the profile URL pattern unchanged", () => {
     expect(LINKEDIN_URL_RE.source).toBe(
       String.raw`(?:https?:\/\/)?(?:[a-z]+\.)?linkedin\.com\/in\/[A-Za-z0-9._-]+`,
     )

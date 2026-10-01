@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config"
 
 const PYTHON_SERVER = process.env.PYTHON_SERVER ?? "http://127.0.0.1:8765"
 // The paths the Python server answers: /api, and the form routes the review page posts to.
-const PYTHON_ROUTES = ["/api", "/worth", "/decide", "/complete", "/retarget", "/feedback", "/auth"]
+const PYTHON_ROUTES = ["/api", "/worth", "/complete", "/retarget", "/feedback", "/auth"]
 
 export default defineConfig({
   base: "./",

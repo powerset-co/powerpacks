@@ -1,9 +1,8 @@
-// The LinkedIn stage's own words, as the old page wrote them (templates/linkedin_card.html.j2,
-// linkedin_finished.html.j2, the `option`, `person_menu` and `guidance_form` macros, and the
-// feedback popover in reconcile_review.js). Words other stages share live in lib/review/copy.ts.
+// The LinkedIn stage's own words: the card and its options, the person menu, the guidance box,
+// the feedback popover and the finished panel. Words other stages share live in
+// lib/review/copy.ts.
 
-/** "Is this the right profile? Or Skip?": the Skip in the middle is the link. A candidate with a
- *  question of its own (what the judge wants settled) asks that instead. */
+/** "Is this the right profile? Or Skip?": the Skip in the middle is the link. */
 export const QUESTION = { usual: "Is this the right profile?", or: " Or ", after: "?" } as const
 
 export const DECISION = {

@@ -1,8 +1,8 @@
 """The local UI's React app: the shell page and its two built assets.
 
 Flow: the review server (and the People test server) asks `AppRoutes.get` first.
-GET `/people`, `/searches` or `/searches/run` (any query) -> `app.html`, a `#root` mount whose asset URLs are absolute so
-any nested route resolves them; GET `/app/assets/app.js|app.css` -> the build in
+GET `/` (the review flow), `/people`, `/searches`, `/searches/run`, `/accounts` or `/tasks` (any
+query) -> `app.html`, a `#root` mount whose asset URLs are absolute so any nested route resolves them; GET `/app/assets/app.js|app.css` -> the build in
 the repo's `web/dist/` (see `web/README.md`). Everything else falls through.
 
 Changelog:
@@ -10,6 +10,7 @@ Changelog:
   2026-09-26: the shell also answers /searches and /searches/run (the Searches page).
   2026-09-28: the shell also answers /accounts and /tasks (Accounts, Scheduled tasks).
   2026-09-30: the shell also answers /review (the Review page).
+  2026-10-01: the Review page is `/`; /review is gone with the Jinja page it stood beside.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 APP_HTML = Path(__file__).resolve().parent / "app.html"
 ASSET_PREFIX = "/app/assets/"
 # The paths the React router owns; the server answers each with the shell page.
-PAGE_PATHS = frozenset({"/people", "/searches", "/searches/run", "/accounts", "/tasks", "/review"})
+PAGE_PATHS = frozenset({"/", "/people", "/searches", "/searches/run", "/accounts", "/tasks"})
 ASSETS = {
     "app.js": (WEB_DIST / "app.js", "text/javascript; charset=utf-8"),
     "app.css": (WEB_DIST / "app.css", "text/css; charset=utf-8"),

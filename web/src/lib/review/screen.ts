@@ -1,4 +1,4 @@
-// What a loaded screen shows in place of its stage (server.py `full_page`).
+// What a loaded screen shows in place of its stage.
 
 import type { ReviewPage } from "@/types/review"
 

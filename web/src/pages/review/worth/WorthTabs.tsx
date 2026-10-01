@@ -16,8 +16,8 @@ interface WorthTabsProps {
   counts: TabCounts
 }
 
-// templates/decision_tabs.html.j2: Review / Yes / No with their counts. A tab opens its
-// screen; a deliberately opened screen (`preview=1`) stays one.
+// Review / Yes / No with their counts. A tab opens its screen; a deliberately opened screen
+// (`preview=1`) stays one.
 export function WorthTabs({ active, counts }: WorthTabsProps) {
   const { preview } = useReview()
   return (

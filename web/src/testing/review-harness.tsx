@@ -14,7 +14,7 @@ interface ReviewHarnessProps {
 
 // What a review stage or shared component needs around it in a test: a query client (no
 // retries), a router, and the page's `Review`.
-export function ReviewHarness({ review, path = "/review", children }: ReviewHarnessProps) {
+export function ReviewHarness({ review, path = "/", children }: ReviewHarnessProps) {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }))
   return (
     <QueryClientProvider client={client}>

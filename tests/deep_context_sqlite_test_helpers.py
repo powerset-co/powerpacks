@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import csv
 import hashlib
 import json
@@ -166,7 +165,6 @@ def seed_identity(
     candidate_people: bool = False,
     artifact_root: Path | None = None,
     dossier_body: str = "",
-    avatar_bytes: bytes = b"",
     labels: dict | None = None,
 ) -> None:
     """Seed one facts-backed parent family through the public typed store door.
@@ -249,22 +247,6 @@ def seed_identity(
             hashlib.sha256(dossier.read_bytes()).hexdigest(),
             ProjectionStatus.PROJECTED.value,
             payload_json=json.dumps({"body": dossier_body}),
-        ))
-    if artifact_root and avatar_bytes:
-        avatar = artifact_root / f"{slug}.image"
-        avatar.write_bytes(avatar_bytes)
-        rows.append(ArtifactRow(
-            f"avatar:{row_key}",
-            ArtifactKind.AVATAR.value,
-            parent_id,
-            str(avatar),
-            hashlib.sha256(avatar_bytes).hexdigest(),
-            ProjectionStatus.PROJECTED.value,
-            candidate_key=row_key,
-            payload_json=json.dumps({
-                "content_type": "image/png",
-                "base64": base64.b64encode(avatar_bytes).decode("ascii"),
-            }),
         ))
     db.project_rows(tuple(rows))
     if candidate_people:

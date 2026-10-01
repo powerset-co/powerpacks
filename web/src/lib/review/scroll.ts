@@ -1,4 +1,4 @@
-// The scroll cue's two rules (reconcile_review.js `refreshScrollCues`, `wireScrollShell`).
+// The scroll cue's two rules: when it shows, and how far one press scrolls.
 
 /** Slack around both ends, so a sub-pixel remainder never shows the cue. */
 const SLACK_PX = 4

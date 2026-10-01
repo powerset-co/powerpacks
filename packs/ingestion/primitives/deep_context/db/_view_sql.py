@@ -229,7 +229,6 @@ SELECT c.*,
        sp.profile_json AS synthetic_profile_json,
        pa.payload_json AS profile_artifact_json,
        r.result_json AS research_json,
-       json_extract(c.judgment_payload_json, '$.relationship_decision.human_question') AS human_question,
        -- CROSS JOIN pins the join order candidate -> person -> identifiers.
        -- Left to itself the planner walks identifiers_by_value(kind) for every
        -- candidate row, which is quadratic in the store (a 5k-candidate queue

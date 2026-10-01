@@ -1,13 +1,13 @@
-"""The Review page's JSON routes, and their parity with the Jinja page they mirror.
+"""The Review page's routes over a synthetic store: what each returns, what each writes.
 
-Every parity test asks the old route and the new one about the same seeded store:
-the JSON must name the screen, steps, people, labels, contacts and reasons the HTML shows.
+The expected values are literal: they were frozen from the routes when the Jinja page they
+mirrored was deleted (2026-10-01), so a change in what a route returns fails here.
+The last class pins the payload dataclasses (review/payloads.py) to web/src/types/review.ts.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import html
 import json
 import re
 import tempfile
@@ -38,7 +38,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.view_models import WorthHumanRow, WorthMachineRow
+from packs.ingestion.primitives.deep_context.db.view_models import (
+    LinkedInQueueRow,
+    WorthHumanRow,
+    WorthMachineRow,
+)
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
@@ -50,9 +54,14 @@ from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.review import api as review_api
+from packs.ingestion.primitives.deep_context.review import auth_login
+from packs.ingestion.primitives.deep_context.review import linkedin_queue
 from packs.ingestion.primitives.deep_context.review import server as review_server
 from packs.ingestion.primitives.deep_context.review import sqlite_adapter as review_adapter
-from packs.ingestion.primitives.deep_context.review.api import (
+from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
+from packs.ingestion.primitives.deep_context.review.models import EnrichmentApproval, GuidanceViewRow
+from packs.ingestion.primitives.deep_context.review.payloads import (
+    TITLES,
     ApproveResult,
     DecideResult,
     DecisionProgress,
@@ -70,19 +79,12 @@ from packs.ingestion.primitives.deep_context.review.api import (
     ReviewPerson,
     ReviewStep,
     ReviewView,
-    WorthDetails,
     WorthCardPayload,
+    WorthDetails,
+    WorthPendingEntry,
+    WorthResult,
     WorthTab,
     WorthTablePayload,
-)
-from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
-from packs.ingestion.primitives.deep_context.review.models import EnrichmentApproval, GuidanceViewRow
-from packs.ingestion.primitives.deep_context.review.rendering import (
-    WorthPendingEntry,
-    decision_rows_html,
-    render_enrichment,
-    render_linkedin_card,
-    render_worth_card,
 )
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import SqliteReviewAdapter
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesCaller
@@ -98,15 +100,6 @@ from http_handler_test_helpers import InProcessHttpClient
 
 REVIEW_TYPES = Path(__file__).resolve().parents[1] / "web" / "src" / "types" / "review.ts"
 JSON_TYPE = "application/json; charset=utf-8"
-STAGES = ("", "worth", "enrich", "linkedin", "done")
-# The panel heading the Jinja page draws for each mode (templates/enrichment.html.j2).
-ENRICH_HEADINGS = {
-    "running": "Enriching Contacts",
-    "approval": "Ready to Enrich",
-    "completed": "Contacts Enriched",
-    "failed": "Enrichment Paused",
-    "preparing": "Preparing Enrichment",
-}
 CASEY_LABELS = {
     "is_family": 0.95,
     "is_close_friend": 0.9,
@@ -117,10 +110,29 @@ CASEY_LABELS = {
     "relationship_kind_p": 0.97,
 }
 CASEY_TITLES = ["Founder", "College friend", "Family", "Close friend", "Investor"]
-STEP_RE = re.compile(
-    r"<a class='step(?: (\w+))?' href='/\?stage=(\w+)&amp;preview=1'>\s*<span>(.*?)</span>\s*"
-    r"<div>([^<]*)(?:<small>(\d+) left</small>)?</div>"
+# Each screen's title, and whether it watches the server (/api/events, /api/status).
+SCREENS = {
+    "worth": ("Add People", False),
+    "enrich": ("Enrich Contacts", True),
+    "linkedin": ("Check LinkedIn", False),
+    "done": ("All Set", True),
+}
+# The columns a LinkedIn decision writes on its identity row.
+DECISION_COLUMNS = (
+    "decision_action",
+    "decision_approved",
+    "decision_source",
+    "decision_note",
+    "replacement_url",
+    "replacement_public_identifier",
 )
+NOT_FINISHED = {
+    "synthesize_pending": False,
+    "linkedin_done": 0,
+    "linkedin_complete": False,
+    "retargets_in_flight": 0,
+    "auto_continue": True,
+}
 
 
 def ts_fields(interface: str) -> tuple[str, ...]:
@@ -154,15 +166,67 @@ def field_names(shape: type) -> tuple[str, ...]:
     return tuple(field.name for field in dataclasses.fields(shape))
 
 
-def jinja_labels(fragment: str) -> list[str]:
-    """Every label title one Jinja `person-labels` block shows: the badges, then the tooltip's."""
-    block = fragment.split("<span class='person-labels'>", 1)
-    if len(block) == 1:
-        return []
-    first = block[1].split("</span></span></span>", 1)[0] + "</span>"
-    shown = re.findall(r"<span class='person-label'>(.*?)</span>", first)
-    tooltip = re.search(r"role='tooltip'>(.*?)</span>", first)
-    return [html.unescape(title) for title in shown + (tooltip.group(1).split(" · ") if tooltip else [])]
+def person(parent_id: str, slug: str, name: str, *, sources: tuple[str, ...] = (), labels: tuple[str, ...] = ()) -> dict:
+    """A `ReviewPerson` as JSON."""
+    return {
+        "parent_id": parent_id,
+        "slug": slug,
+        "name": name,
+        "sources": list(sources),
+        "labels": list(labels),
+        "worth_key": f"parent-worth:{parent_id}",
+    }
+
+
+def candidate(row_key: str, name: str, *, url: str = "", contacts: str = "") -> dict:
+    """A `ReviewCandidate` as JSON: a profile nobody has fetched yet."""
+    return {
+        "row_key": row_key,
+        "name": name,
+        "url": url,
+        "headline": "",
+        "location": "",
+        "experiences": [],
+        "education": [],
+        "synthetic": False,
+        "contacts": contacts,
+        "avatar_url": "",
+    }
+
+
+def steps(worth: tuple[bool, int], enrich: tuple[bool, int], linkedin: tuple[bool, int]) -> list[dict]:
+    """The stepper as JSON, from each step's (complete, count)."""
+    drawn = (
+        (1, "Review Decisions", "worth", worth),
+        (2, "Enrich Contacts", "enrich", enrich),
+        (3, "Check LinkedIn", "linkedin", linkedin),
+    )
+    return [
+        {"number": number, "label": label, "stage": stage, "complete": complete, "count": count}
+        for number, label, stage, (complete, count) in drawn
+    ]
+
+
+def progress(pending: int, yes: int, no: int, linkedin: int, done: int = 0, rejected: int = 0, unsynthesized: int = 0) -> dict:
+    """`PageProgress` as JSON."""
+    return {
+        "worth_pending": pending,
+        "worth_yes": yes,
+        "worth_no": no,
+        "linkedin_pending": linkedin,
+        "linkedin_done": done,
+        "rejected": rejected,
+        "synthesize_pending": unsynthesized,
+    }
+
+
+CASEY = person("worth-parent", "casey-delta", "Casey Delta", labels=tuple(CASEY_TITLES))
+CASEY_CANDIDATE = candidate(
+    "candidate:email:casey-delta@example.com", "Casey Delta", contacts="casey-delta@example.com · +15550100"
+)
+JORDAN = person("linkedin-parent", "jordan-bravo", "Jordan Bravo")
+JORDAN_CANDIDATE = candidate("jordan-bravo", "Jordan Bravo", url="https://www.linkedin.com/in/jordan-bravo")
+COMPLETED_PANEL = {"mode": "completed", "completed": 0, "total": 0, "approval_label": "", "error": ""}
 
 
 def refuse_paid_call(*_args: object, **_kwargs: object) -> None:
@@ -227,6 +291,26 @@ class ReviewStore:
         self.seed("riley-parent", "riley-stone", "Riley Stone", "yes")
         self.seed("sam-parent", "sam-tango", "Sam Tango", "yes")
 
+    def add_second_candidate(self) -> None:
+        """A second LinkedIn the Jordan parent might be."""
+        self.db.project_rows(
+            (
+                LinkRow(
+                    "jordan-bravo-alt",
+                    "linkedin-parent",
+                    "jordan-bravo-alt",
+                    RowKind.PUB.value,
+                    "https://www.linkedin.com/in/jordan-bravo-alt",
+                    "Jordan B. Bravo",
+                    machine_action="verify",
+                    machine_confidence=0.5,
+                    paid_profile=1,
+                    source=WriterSource.RECONCILE.value,
+                ),
+            )
+        )
+        replace_candidate_people(self.db, "jordan-bravo-alt", ())
+
     def reach_enrich(self) -> None:
         self.db.decide_worth("worth-parent", "no", note="Synthetic note")
 
@@ -258,10 +342,13 @@ class ReviewStore:
         """The spend the Enrich panel asks to approve right now."""
         return SqliteReviewAdapter(self.db, 0.7).enrichment().estimated_usd
 
-    def link_rows(self) -> list[dict]:
-        """Every identity row, without the two clock columns."""
+    def link_rows(self) -> dict[str, dict]:
+        """Every identity row by key, without the two clock columns."""
         rows = query(self.db, "SELECT * FROM links ORDER BY row_key")
-        return [{key: row[key] for key in row.keys() if key not in {"decided_at", "updated_at"}} for row in rows]
+        return {
+            row["row_key"]: {key: row[key] for key in row.keys() if key not in {"decided_at", "updated_at"}}
+            for row in rows
+        }
 
 
 class ReviewApiFixture(unittest.TestCase):
@@ -309,11 +396,6 @@ class ReviewApiFixture(unittest.TestCase):
         self.assertEqual(content_type, JSON_TYPE, body)
         return status, json.loads(body)
 
-    def jinja(self, method: str, path: str, fields: dict[str, str] | None = None) -> tuple[int, str]:
-        """The old route's status and body, as text."""
-        status, _, body, _ = self.http.request(method, path, fields)
-        return status, body.decode()
-
     def payload(self, path: str) -> dict:
         status, payload = self.get_json(path)
         self.assertEqual(status, 200, payload)
@@ -321,106 +403,107 @@ class ReviewApiFixture(unittest.TestCase):
 
 
 class ReviewPageTests(ReviewApiFixture):
-    def assert_page_parity(self, query_string: str) -> dict:
-        """The page payload says what the Jinja page at the same query draws."""
-        page = self.payload(f"/api/review/page{query_string}")
-        status, old = self.jinja("GET", f"/{query_string}")
-        self.assertEqual(status, 200)
-        view = page["view"]
-        self.assertEqual(view, re.search(r"data-stage='(\w+)'", old).group(1))
-        self.assertEqual(page["title"], re.search(r"<h1 class='topbar-title'>(.*?)</h1>", old).group(1))
-        self.assertEqual(page["state_token"], re.search(r"data-state-token='(.*?)'", old).group(1))
-        self.assertEqual(
-            str(page["external_updates"]).lower(), re.search(r"data-external-updates='(\w+)'", old).group(1)
-        )
-
-        drawn = STEP_RE.findall(old)
-        self.assertEqual(len(drawn), 3)
-        for step, (_, stage, marker, label, count) in zip(page["steps"], drawn, strict=True):
-            self.assertEqual((step["stage"], step["label"], step["count"]), (stage, label, int(count or 0)))
-            checked = step["complete"] and step["count"] == 0
-            self.assertEqual(marker, "✓" if checked else str(step["number"]))
-
-        if view == "worth":
-            tabs = dict(re.findall(r"data-tab='(\w+)'\s+href='[^']*'>\w+<span>(\d+)</span>", old))
-            progress = page["progress"]
-            self.assertEqual(
-                {key: int(count) for key, count in tabs.items()},
-                {"review": progress["worth_pending"], "yes": progress["worth_yes"], "no": progress["worth_no"]},
-            )
-            self.assertEqual(page["tab"], re.search(r"decision-tab active' data-tab='(\w+)'", old).group(1))
-        else:
-            self.assertEqual(page["tab"], "")
-        if view == "enrich":
-            self.assertIn(f"<h2>{ENRICH_HEADINGS[page['enrichment']['mode']]}</h2>", old)
-            self.assertIn(page["enrichment"]["approval_label"], old)
-        if view == "done":
-            progress = page["progress"]
-            self.assertIn(f"{progress['linkedin_done']} identities checked · {progress['rejected']} rejected", old)
-        return page
-
-    def test_page_matches_the_jinja_page_at_every_stage_of_the_store(self) -> None:
+    def test_page_is_the_screen_for_the_query_at_every_stage_of_the_store(self) -> None:
+        approval = {
+            "mode": "approval",
+            "completed": 0,
+            "total": 0,
+            "approval_label": f"Approve ${self.store.estimate():.2f}",
+            "error": "",
+        }
+        # With a person still to review, the worth stage is the worth screen.
+        pending = {
+            "?stage=worth": ("worth", "review"),
+            "?stage=worth&view=review": ("worth", "review"),
+        }
+        # With none, the review tab opens Enrich; the piles and an unknown tab stay worth.
+        emptied = {
+            "?stage=worth": ("enrich", ""),
+            "?stage=worth&view=review": ("enrich", ""),
+        }
+        asked = {
+            "?stage=enrich": ("enrich", ""),
+            "?stage=linkedin": ("linkedin", ""),
+            "?stage=done": ("done", ""),
+            "?stage=LINKEDIN": ("linkedin", ""),
+            "?stage=worth&view=yes": ("worth", "yes"),
+            "?stage=worth&view=no": ("worth", "no"),
+            "?stage=worth&view=bogus": ("worth", "review"),
+            "?stage=worth&view=YES": ("worth", "yes"),
+            "?stage=worth&view=REVIEW": ("worth", "review"),
+        }
         # Each driver moves the store one stage on; the page with no stage lands there.
-        drivers = (
-            ("worth", lambda: None),
-            ("enrich", self.store.reach_enrich),
-            ("linkedin", self.store.reach_linkedin),
-            ("done", self.store.reach_done),
+        stores = (
+            (
+                "worth", lambda: None, ("worth", "review"), pending,
+                steps((False, 1), (False, 0), (False, 1)), progress(1, 1, 0, 1), approval,
+            ),
+            (
+                "enrich", self.store.reach_enrich, ("enrich", ""), emptied,
+                steps((True, 0), (False, 0), (False, 1)), progress(0, 1, 1, 1, rejected=1), approval,
+            ),
+            (
+                "linkedin", self.store.reach_linkedin, ("linkedin", ""), emptied,
+                steps((True, 0), (True, 0), (False, 1)), progress(0, 1, 1, 1, rejected=1), COMPLETED_PANEL,
+            ),
+            (
+                "done", self.store.reach_done, ("done", ""), emptied,
+                steps((True, 0), (True, 0), (True, 0)), progress(0, 1, 1, 0, done=1, rejected=1), COMPLETED_PANEL,
+            ),
         )
-        for current, drive in drivers:
+        for current, drive, landing, worth_stage, stepper, counts, panel in stores:
             drive()
-            for stage in STAGES:
-                with self.subTest(store=current, stage=stage):
-                    page = self.assert_page_parity(f"?stage={stage}" if stage else "")
-                    if not stage:
-                        self.assertEqual(page["view"], current)
-            for tab in ("review", "yes", "no", "bogus", "YES", "REVIEW"):
-                with self.subTest(store=current, tab=tab):
-                    self.assert_page_parity(f"?stage=worth&view={tab}")
+            _, status = self.get_json("/api/status")
+            self.assertEqual(status["stage"], current)
+            # No stage, or one that is not a stage, lands on the store's.
+            for query_string, (view, tab) in {"": landing, "?stage=bogus": landing, **worth_stage, **asked}.items():
+                with self.subTest(store=current, query=query_string):
+                    title, watched = SCREENS[view]
+                    self.assertEqual(
+                        self.payload(f"/api/review/page{query_string}"),
+                        {
+                            "view": view,
+                            "tab": tab,
+                            "title": title,
+                            "steps": stepper,
+                            "progress": counts,
+                            "enrichment": panel,
+                            # The token the page compares with /api/status to see a change.
+                            "state_token": status["state_token"],
+                            "needs_synthesis": False,
+                            "external_updates": watched,
+                        },
+                    )
 
-    def test_an_emptied_worth_queue_opens_enrich_but_its_piles_stay_reachable(self) -> None:
-        self.store.reach_enrich()
-        self.assertEqual(self.payload("/api/review/page?stage=worth")["view"], "enrich")
-        self.assertEqual(self.payload("/api/review/page?stage=worth&view=review")["view"], "enrich")
-        piles = self.payload("/api/review/page?stage=worth&view=no")
-        self.assertEqual((piles["view"], piles["tab"], piles["title"]), ("worth", "no", "Add People"))
+    def test_enrich_is_not_gated_by_people_still_to_review(self) -> None:
+        page = self.payload("/api/review/page?stage=enrich")
+        self.assertEqual((page["view"], page["progress"]["worth_pending"]), ("enrich", 1))
+        self.assertEqual(page["enrichment"]["mode"], "approval")
 
-    def test_page_names_the_screen_and_its_counts(self) -> None:
-        page = self.payload("/api/review/page")
-        self.assertEqual((page["view"], page["tab"], page["title"]), ("worth", "review", "Add People"))
-        self.assertIs(page["external_updates"], False)
-        self.assertEqual(
-            page["progress"],
-            {
-                "worth_pending": 1,
-                "worth_yes": 1,
-                "worth_no": 0,
-                "linkedin_pending": 1,
-                "linkedin_done": 0,
-                "rejected": 0,
-                "synthesize_pending": 0,
-            },
-        )
-        self.assertEqual(
-            [(step["number"], step["label"], step["stage"]) for step in page["steps"]],
-            [(1, "Review Decisions", "worth"), (2, "Enrich Contacts", "enrich"), (3, "Check LinkedIn", "linkedin")],
-        )
-        for stage, watched in (("enrich", True), ("done", True), ("linkedin", False)):
-            self.assertIs(self.payload(f"/api/review/page?stage={stage}")["external_updates"], watched)
-
-    def test_page_shell_and_unknown_api_paths(self) -> None:
-        status, content_type, body, _ = self.http.request("GET", "/review?stage=worth&preview=1")
-        self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
-        self.assertIn(b"/app/assets/app.js", body)
-
+    def test_unknown_api_paths_are_a_json_404(self) -> None:
         for method in ("GET", "POST"):
             with self.subTest(method=method):
                 status, content_type, body, _ = self.http.request(method, "/api/review/missing", {})
                 self.assertEqual((status, content_type), (404, JSON_TYPE))
                 self.assertEqual(json.loads(body), {"error": "not found"})
         # A GET route is not a POST route, and the reverse.
-        self.assertEqual(self.post_json("/api/review/page")[0], 404)
-        self.assertEqual(self.get_json("/api/review/decide")[0], 404)
+        self.assertEqual(self.post_json("/api/review/page"), (404, {"error": "not found"}))
+        self.assertEqual(self.get_json("/api/review/decide"), (404, {"error": "not found"}))
+        # The Jinja page's routes are gone, not redirected.
+        for method, path in (
+            ("GET", "/api/worth-card"),
+            ("GET", "/api/linkedin-card"),
+            ("GET", "/api/worth-table?view=yes"),
+            ("GET", "/api/worth-details?slug=jordan-bravo"),
+            ("GET", "/api/avatar?pub=jordan-bravo"),
+            ("GET", "/assets/reconcile-review.js"),
+            ("GET", "/assets/reconcile-review.css"),
+            ("POST", "/decide"),
+            ("POST", "/approve-enrichment"),
+        ):
+            with self.subTest(gone=path):
+                status, content_type, body, _ = self.http.request(method, path, {})
+                self.assertEqual((status, content_type, body), (404, "text/plain", b"not found"))
 
 
 class SynthesisPendingTests(unittest.TestCase):
@@ -452,81 +535,95 @@ class SynthesisPendingTests(unittest.TestCase):
         return json.loads(body)
 
     def test_every_route_says_synthesis_is_pending(self) -> None:
-        for stage in STAGES:
+        # Enrich and Done say it on the page; the two queues say it on their card reads.
+        screens = {
+            "": ("worth", "review", False),
+            "worth": ("worth", "review", False),
+            "enrich": ("enrich", "", True),
+            "linkedin": ("linkedin", "", False),
+            "done": ("done", "", True),
+        }
+        for stage, (view, tab, needs_synthesis) in screens.items():
             with self.subTest(stage=stage):
                 page = self.payload(f"/api/review/page?stage={stage}")
-                self.assertEqual(page["progress"]["synthesize_pending"], 1)
-                self.assertEqual([step["complete"] for step in page["steps"]], [False, False, False])
-                _, _, old, _ = self.http.request("GET", f"/?stage={stage}")
-                self.assertEqual(page["view"], re.search(rb"data-stage='(\w+)'", old).group(1).decode())
-                self.assertNotIn("✓".encode(), old)
-                # Enrich and Done say it on the page; the two queues say it on their card reads.
-                if page["view"] in ("enrich", "done"):
-                    self.assertIs(page["needs_synthesis"], b"Synthesis has not run" in old)
-                else:
-                    self.assertIs(page["needs_synthesis"], False)
+                page.pop("state_token")
+                title, watched = SCREENS[view]
+                self.assertEqual(
+                    page,
+                    {
+                        "view": view,
+                        "tab": tab,
+                        "title": title,
+                        "steps": steps((False, 0), (False, 0), (False, 0)),
+                        "progress": progress(0, 0, 0, 0, unsynthesized=1),
+                        "enrichment": COMPLETED_PANEL,
+                        "needs_synthesis": needs_synthesis,
+                        "external_updates": watched,
+                    },
+                )
 
         self.assertEqual(
             self.payload("/api/review/worth-card"), {"card": None, "synthesize_pending": True, "queue": None}
         )
-        finished = self.payload("/api/review/linkedin-card")
-        self.assertIsNone(finished["card"])
-        self.assertIs(finished["finished"]["synthesize_pending"], True)
+        self.assertEqual(self.payload("/api/review/worth-pending"), {"pending": []})
+        self.assertEqual(
+            self.payload("/api/review/linkedin-card"),
+            {
+                "card": None,
+                "finished": {
+                    "synthesize_pending": True,
+                    "linkedin_done": 0,
+                    "linkedin_complete": True,
+                    "retargets_in_flight": 0,
+                    "auto_continue": False,
+                },
+                "pending": 0,
+                "queue": None,
+            },
+        )
+        status = self.payload("/api/status")
+        self.assertEqual((status["stage"], status["next_action"]), ("worth", "synthesize"))
 
 
 class WorthRoutesTests(ReviewApiFixture):
-    def test_worth_card_picks_the_person_the_jinja_route_picks(self) -> None:
+    def test_worth_card_picks_by_index_exclude_and_pick(self) -> None:
         self.store.seed_worth_queue()
-        keys = [row.key for row in worth_queue(self.db)]
-        self.assertEqual(len(keys), 3)
-        queries = (
-            "",
-            "?index=1",
-            "?index=2",
-            "?index=7",
-            "?index=-3",
-            "?index=x",
-            "?debug=1",
-            "?debug=1&index=2",
-            f"?exclude={keys[0]}",
-            f"?exclude={keys[0]},{keys[1].upper()}",
-            f"?exclude={keys[0]}&index=1&debug=1",
-            f"?pick={keys[2]}",
-            f"?pick={keys[1].upper()}&debug=1",
-            f"?pick={keys[1]}&exclude={keys[1]}",
-            f"?exclude={','.join(keys)}",
-        )
-        picked = set()
-        for query_string in queries:
+        avery, casey, morgan = (f"parent-worth:{name}-parent" for name in ("avery", "worth", "morgan"))
+        # The queue is in name order: Avery Quinn, Casey Delta, Morgan Echo.
+        self.assertEqual([row.key for row in worth_queue(self.db)], [avery, casey, morgan])
+        picks = {
+            "": ("avery-quinn", None),
+            "?index=1": ("casey-delta", None),
+            "?index=2": ("morgan-echo", None),
+            # Past the end wraps; below zero and not-a-number are the first card.
+            "?index=7": ("casey-delta", None),
+            "?index=-3": ("avery-quinn", None),
+            "?index=x": ("avery-quinn", None),
+            "?debug=1": ("avery-quinn", {"index": 0, "total": 3}),
+            "?debug=1&index=2": ("morgan-echo", {"index": 2, "total": 3}),
+            f"?exclude={avery}": ("casey-delta", None),
+            f"?exclude={avery},{casey.upper()}": ("morgan-echo", None),
+            f"?exclude={avery}&index=1&debug=1": ("morgan-echo", {"index": 1, "total": 2}),
+            f"?pick={morgan}": ("morgan-echo", None),
+            f"?pick={casey.upper()}&debug=1": ("casey-delta", {"index": 0, "total": 1}),
+            # A pick that is also excluded, and a queue with everyone excluded: no card.
+            f"?pick={casey}&exclude={casey}": (None, None),
+            f"?exclude={avery},{casey},{morgan}": (None, None),
+        }
+        for query_string, (slug, position) in picks.items():
             with self.subTest(query=query_string):
                 payload = self.payload(f"/api/review/worth-card{query_string}")
-                status, old = self.jinja("GET", f"/api/worth-card{query_string}")
-                self.assertEqual(status, 200)
-                self.assertIs(payload["synthesize_pending"], False)
-                shown = re.search(r"data-pub='(.*?)' data-parent='(.*?)'>No</button>", old)
-                if shown is None:
-                    self.assertEqual((old, payload["card"], payload["queue"]), ("", None, None))
-                    continue
-                person = payload["card"]["person"]
-                self.assertEqual((person["worth_key"], person["slug"]), shown.groups())
-                picked.add(person["slug"])
-                position = re.search(r"data-queue-index='(\d+)' data-queue-total='(\d+)'", old)
-                self.assertEqual(
-                    payload["queue"],
-                    {"index": int(position.group(1)), "total": int(position.group(2))} if position else None,
-                )
-        self.assertEqual(picked, {"casey-delta", "morgan-echo", "avery-quinn"})
+                card = payload["card"]
+                self.assertEqual(card["person"]["slug"] if card else None, slug)
+                self.assertEqual((payload["queue"], payload["synthesize_pending"]), (position, False))
 
-    def test_worth_card_orders_names_the_way_the_jinja_route_does(self) -> None:
+    def test_worth_card_orders_names_without_regard_to_case_or_accent_folding(self) -> None:
         # SQLite's lower() folds ASCII only; the queue is ordered by Python's.
         self.store.seed("emile-parent", "emile-foxtrot", "Émile Foxtrot", "maybe")
         self.store.seed("elodie-parent", "elodie-golf", "élodie Golf", "maybe")
-        names = []
-        for index in range(3):
-            card = self.payload(f"/api/review/worth-card?index={index}")["card"]
-            _, old = self.jinja("GET", f"/api/worth-card?index={index}")
-            self.assertIn(f"data-parent='{card['person']['slug']}'", old)
-            names.append(card["person"]["name"])
+        names = [
+            self.payload(f"/api/review/worth-card?index={index}")["card"]["person"]["name"] for index in range(3)
+        ]
         self.assertEqual(names, ["Casey Delta", "élodie Golf", "Émile Foxtrot"])
 
     def test_worth_card_is_gone_once_its_pick_is_decided(self) -> None:
@@ -535,13 +632,12 @@ class WorthRoutesTests(ReviewApiFixture):
         for pick in ("missing", key):
             with self.subTest(pick=pick):
                 self.assertEqual(self.get_json(f"/api/review/worth-card?pick={pick}"), (404, {"error": "gone"}))
-                self.assertEqual(self.jinja("GET", f"/api/worth-card?pick={pick}"), (404, "gone"))
 
     def test_worth_card_is_gone_when_its_parent_left_the_store(self) -> None:
         with mock.patch.object(review_api, "person_detail", return_value=None):
             self.assertEqual(self.get_json("/api/review/worth-card"), (404, {"error": "gone"}))
 
-    def test_worth_card_carries_what_the_jinja_card_shows(self) -> None:
+    def test_worth_card_carries_the_person_and_the_first_candidate(self) -> None:
         replace_person_sources(
             self.db,
             "worth-parent-person",
@@ -550,22 +646,22 @@ class WorthRoutesTests(ReviewApiFixture):
                 for source in ("whatsapp", "gmail_msgvault", "linkedin_csv")
             ),
         )
-        card = self.payload("/api/review/worth-card")["card"]
-        _, old = self.jinja("GET", "/api/worth-card")
-        person, candidate = card["person"], card["candidate"]
-        # Message sources only, in the badges' order.
-        self.assertEqual(person["sources"], ["gmail", "whatsapp"])
-        self.assertEqual(person["sources"], re.findall(r"<span class='source source-(\w+)'>", old))
-        self.assertEqual(person["labels"], CASEY_TITLES)
-        self.assertEqual(person["labels"], jinja_labels(old))
-        self.assertEqual((person["parent_id"], person["name"]), ("worth-parent", "Casey Delta"))
-        self.assertIn(f"<h2>{candidate['name']}</h2>", old)
-        self.assertEqual(candidate["contacts"], "casey-delta@example.com · +15550100")
-        self.assertIn(f"<dd>{candidate['contacts']}</dd>", old)
-        # No profile picture: initials only, on both.
-        self.assertNotIn("<img", old)
-        self.assertEqual((candidate["url"], candidate["synthetic"], candidate["avatar_url"]), ("", False, ""))
-        self.assertEqual(candidate["question"], "")
+        self.assertEqual(
+            self.payload("/api/review/worth-card"),
+            {
+                # Message sources only, in the badges' order; every label over the threshold.
+                "card": {"person": {**CASEY, "sources": ["gmail", "whatsapp"]}, "candidate": CASEY_CANDIDATE},
+                "synthesize_pending": False,
+                "queue": None,
+            },
+        )
+
+    def test_last_worth_card_leaves_no_card_and_no_synthesis_handoff(self) -> None:
+        key = worth_queue(self.db)[0].key
+        self.assertEqual(
+            self.payload(f"/api/review/worth-card?exclude={key}"),
+            {"card": None, "synthesize_pending": False, "queue": None},
+        )
 
     def test_worth_card_without_a_candidate_has_a_null_candidate(self) -> None:
         seed_identity(
@@ -579,145 +675,137 @@ class WorthRoutesTests(ReviewApiFixture):
             include_link=False,
         )
         card = self.payload("/api/review/worth-card?pick=parent-worth:bare-parent")["card"]
-        self.assertEqual(card["person"]["name"], "Aaron Bare")
-        self.assertIsNone(card["candidate"])
+        self.assertEqual(card, {"person": person("bare-parent", "aaron-bare", "Aaron Bare"), "candidate": None})
 
-    def test_worth_pending_is_the_typeahead_list_the_jinja_page_embeds(self) -> None:
+    def test_worth_pending_is_the_queue_in_name_order(self) -> None:
         self.store.seed_worth_queue()
-        pending = self.payload("/api/review/worth-pending")["pending"]
-        _, old = self.jinja("GET", "/?stage=worth")
-        embedded = re.search(r"<script type='application/json' data-worth-pending>(.*?)</script>", old)
-        self.assertEqual(pending, json.loads(embedded.group(1)))
-        self.assertEqual([entry["name"] for entry in pending], ["Avery Quinn", "Casey Delta", "Morgan Echo"])
+        self.assertEqual(
+            self.payload("/api/review/worth-pending"),
+            {
+                "pending": [
+                    {"key": "parent-worth:avery-parent", "name": "Avery Quinn"},
+                    {"key": "parent-worth:worth-parent", "name": "Casey Delta"},
+                    {"key": "parent-worth:morgan-parent", "name": "Morgan Echo"},
+                ]
+            },
+        )
 
-    def test_worth_table_is_the_pile_the_jinja_table_shows(self) -> None:
+    def test_worth_table_is_one_pile_with_names_labels_and_reasons(self) -> None:
         self.store.seed_worth_queue()
         self.store.seed_linkedin_queue()
+        replace_person_sources(self.db, "worth-parent-person", (PersonSourceRow("worth-parent-person", "imessage"),))
         self.db.decide_worth("worth-parent", "yes", note="Synthetic note")
         self.db.decide_worth("morgan-parent", "no")
         self.db.decide_worth("avery-parent", "no", note="Synthetic refusal")
-        for pile in ("yes", "no"):
-            with self.subTest(pile=pile):
-                table = self.payload(f"/api/review/worth-table?view={pile}")
-                _, old = self.jinja("GET", f"/?stage=worth&view={pile}")
-                rows = table["rows"]
-                self.assertEqual(
-                    [row["person"]["name"] for row in rows], re.findall(r"<strong>(.*?)</strong>", old)
-                )
-                self.assertEqual(
-                    [row["reason"] for row in rows], re.findall(r"<dt>Why (?:yes|no)</dt><dd>(.*?)</dd>", old)
-                )
-                self.assertEqual(
-                    [(row["person"]["worth_key"], row["person"]["slug"]) for row in rows],
-                    re.findall(r"data-pub='(.*?)'\s+data-parent='(.*?)' aria-label", old),
-                )
-                tabs = dict(re.findall(r"data-tab='(\w+)'\s+href='[^']*'>\w+<span>(\d+)</span>", old))
-                self.assertEqual(table["total"], int(tabs[pile]))
-                self.assertEqual(table["total"], int(re.search(r"data-total='(\d+)'", old).group(1)))
-                self.assertEqual(table["total"], len(rows))
-                # A pile page is names, labels and reasons: no profile, picture, contact or source.
-                for row in rows:
-                    self.assertEqual(set(row), {"person", "reason"})
-                    self.assertEqual(row["person"]["sources"], [])
-                for absent in ("<img", "<dt>Contact</dt>", "class='source ", "View LinkedIn"):
-                    self.assertNotIn(absent, old)
-                self.assertEqual(
-                    [row["person"]["labels"] for row in rows],
-                    [jinja_labels(drawn) for drawn in old.split("<details class='decision-row'")[1:]],
-                )
+        # A pile page carries no profile and no sources: an opened row reads worth-details.
+        yes = {
+            "rows": [
+                {"person": CASEY, "reason": "Synthetic note"},
+                {"person": JORDAN, "reason": "fixture"},
+                {"person": person("riley-parent", "riley-stone", "Riley Stone"), "reason": "fixture"},
+                {"person": person("sam-parent", "sam-tango", "Sam Tango"), "reason": "fixture"},
+            ],
+            "total": 4,
+        }
+        no = {
+            "rows": [
+                {"person": person("avery-parent", "avery-quinn", "Avery Quinn"), "reason": "Synthetic refusal"},
+                {"person": person("morgan-parent", "morgan-echo", "Morgan Echo"), "reason": "You said no"},
+            ],
+            "total": 2,
+        }
+        for view, table in (("yes", yes), ("YES", yes), ("no", no)):
+            with self.subTest(view=view):
+                self.assertEqual(self.payload(f"/api/review/worth-table?view={view}"), table)
 
-        yes = self.payload("/api/review/worth-table?view=YES")["rows"]
-        self.assertEqual(yes[0]["person"]["labels"], CASEY_TITLES)
-        self.assertEqual(
-            [row["reason"] for row in yes], ["Synthetic note", "fixture", "fixture", "fixture"]
-        )
-        no = self.payload("/api/review/worth-table?view=no")["rows"]
-        self.assertEqual([row["reason"] for row in no], ["Synthetic refusal", "You said no"])
-
-    def test_worth_table_pages_by_offset_like_the_jinja_route(self) -> None:
+    def test_worth_table_pages_by_offset(self) -> None:
         self.store.seed_linkedin_queue()
-        for offset in ("0", "1", "2", "9", "-4"):
+        pages = {
+            "0": ["Jordan Bravo", "Riley Stone", "Sam Tango"],
+            "1": ["Riley Stone", "Sam Tango"],
+            "2": ["Sam Tango"],
+            "9": [],
+            "-4": ["Jordan Bravo", "Riley Stone", "Sam Tango"],
+        }
+        for offset, names in pages.items():
             with self.subTest(offset=offset):
                 table = self.payload(f"/api/review/worth-table?view=yes&offset={offset}")
-                _, old = self.jinja("GET", f"/api/worth-table?view=yes&offset={offset}")
-                self.assertEqual(
-                    [row["person"]["name"] for row in table["rows"]], re.findall(r"<strong>(.*?)</strong>", old)
-                )
+                self.assertEqual([row["person"]["name"] for row in table["rows"]], names)
                 self.assertEqual(table["total"], 3)
 
-    def test_worth_details_is_the_profile_an_opened_jinja_row_loads(self) -> None:
+    def test_worth_table_reads_one_light_page(self) -> None:
+        self.store.seed_linkedin_queue()
+        with mock.patch.object(view_rows, "_hydrate_parents", wraps=view_rows._hydrate_parents) as hydrate:
+            self.payload("/api/review/worth-table?view=yes")
+        hydrate.assert_not_called()
+
+    def test_worth_details_is_the_profile_an_opened_row_shows(self) -> None:
         replace_person_sources(
             self.db,
             "worth-parent-person",
             tuple(PersonSourceRow("worth-parent-person", source) for source in ("imessage", "gmail_msgvault")),
         )
         self.db.decide_worth("worth-parent", "yes")
-        for slug in ("casey-delta", "jordan-bravo", "worth-parent"):
-            with self.subTest(slug=slug):
-                details = self.payload(f"/api/review/worth-details?slug={slug}")
-                status, old = self.jinja("GET", f"/api/worth-details?slug={slug}")
-                self.assertEqual(status, 200)
-                person, candidate = details["person"], details["candidate"]
-                self.assertIn(f"<h2>{candidate['name']}</h2>", old)
-                self.assertEqual(person["sources"], re.findall(r"<span class='source source-(\w+)'>", old))
-                self.assertEqual(person["labels"], jinja_labels(old))
-                self.assertEqual(re.findall(r"<dt>Contact</dt><dd>(.*?)</dd>", old), [candidate["contacts"]][: bool(candidate["contacts"])])
-                self.assertEqual(re.findall(r"class='linkedin-label' href='(.*?)'", old), [candidate["url"]][: bool(candidate["url"])])
-                self.assertEqual(re.findall(r"<img src='(.*?)'", old), [candidate["avatar_url"]][: bool(candidate["avatar_url"])])
-                # The row's "Who they are" is the dossier route's body, skip=1.
-                _, dossier = self.jinja("GET", f"/api/dossier?slug={slug}&skip=1")
-                self.assertIn("Synthetic collaborator", dossier)
-                self.assertTrue(old.endswith(f"<div class='row-facts'>{dossier}</div>"))
-
-        casey = self.payload("/api/review/worth-details?slug=casey-delta")
-        self.assertEqual(casey, self.payload("/api/review/worth-details?slug=worth-parent"))
-        self.assertEqual(casey["person"]["sources"], ["gmail", "imessage"])
-        self.assertEqual(casey["person"]["labels"], CASEY_TITLES)
-        self.assertEqual(casey["candidate"]["contacts"], "casey-delta@example.com · +15550100")
-        jordan = self.payload("/api/review/worth-details?slug=jordan-bravo")
-        self.assertEqual(jordan["candidate"]["url"], "https://www.linkedin.com/in/jordan-bravo")
+        casey = {"person": {**CASEY, "sources": ["gmail", "imessage"]}, "candidate": CASEY_CANDIDATE}
+        # By slug or by parent id.
+        self.assertEqual(self.payload("/api/review/worth-details?slug=casey-delta"), casey)
+        self.assertEqual(self.payload("/api/review/worth-details?slug=worth-parent"), casey)
+        self.assertEqual(
+            self.payload("/api/review/worth-details?slug=jordan-bravo"),
+            {"person": JORDAN, "candidate": JORDAN_CANDIDATE},
+        )
+        # Of several candidates, the profile shown is the first.
+        self.store.add_second_candidate()
+        self.assertEqual(
+            self.payload("/api/review/worth-details?slug=jordan-bravo")["candidate"], JORDAN_CANDIDATE
+        )
 
     def test_worth_details_is_gone_with_its_parent(self) -> None:
         for query_string in ("", "?slug=nobody"):
             with self.subTest(query=query_string):
                 self.assertEqual(self.get_json(f"/api/review/worth-details{query_string}"), (404, {"error": "gone"}))
-                self.assertEqual(self.jinja("GET", f"/api/worth-details{query_string}"), (404, "gone"))
 
     def test_worth_table_refuses_a_bad_view_or_offset(self) -> None:
-        for query_string in ("", "?view=maybe", "?view=review", "?view=yes&offset=x"):
+        refusals = {
+            "": "view must be yes or no",
+            "?view=maybe": "view must be yes or no",
+            "?view=review": "view must be yes or no",
+            "?view=yes&offset=x": "offset must be an integer",
+        }
+        for query_string, error in refusals.items():
             with self.subTest(query=query_string):
-                status, payload = self.get_json(f"/api/review/worth-table{query_string}")
-                old_status, old = self.jinja("GET", f"/api/worth-table{query_string}")
-                self.assertEqual((status, payload), (old_status, {"error": old}))
-                self.assertEqual(status, 400)
+                self.assertEqual(self.get_json(f"/api/review/worth-table{query_string}"), (400, {"error": error}))
 
-    def test_decision_reason_follows_the_jinja_row_rule(self) -> None:
+    def test_decision_reason_is_the_humans_note_or_call_else_the_machines_reason(self) -> None:
         parent = person_detail(self.db, "worth-parent")
         long_reason = "Synthetic reason. " * 12
         human = WorthHumanRow("yes", "2026-09-30T00:00:00Z", "")
+        worth = parent.worth_row
         cases = (
-            ("machine reason", replace(parent.worth_row, machine=WorthMachineRow("yes", "Synthetic fit", "llm"))),
-            ("long machine reason", replace(parent.worth_row, machine=WorthMachineRow("yes", long_reason, "llm"))),
-            ("no machine reason", replace(parent.worth_row, machine=WorthMachineRow("yes", "", "llm"))),
-            ("null machine reason", replace(parent.worth_row, machine=WorthMachineRow("yes", None, "llm"))),
-            ("human note", replace(parent.worth_row, human=replace(human, note="Met at a synthetic dinner"))),
-            ("human yes", replace(parent.worth_row, human=human, effective="yes")),
-            ("human no", replace(parent.worth_row, human=replace(human, decision="no"), effective="no")),
+            (replace(worth, machine=WorthMachineRow("yes", "Synthetic fit", "llm")), "Synthetic fit", "Synthetic fit"),
+            # A long machine reason is cut to 140 characters and an ellipsis.
+            (
+                replace(worth, machine=WorthMachineRow("yes", long_reason, "llm")),
+                long_reason[:140] + "…",
+                long_reason[:140] + "…",
+            ),
+            (replace(worth, machine=WorthMachineRow("yes", "", "llm")), "Worth adding", "Not worth adding"),
+            (replace(worth, machine=WorthMachineRow("yes", None, "llm")), "Worth adding", "Not worth adding"),
+            # A human's call outranks the machine's reason: the note, else the call itself.
+            (
+                replace(worth, human=replace(human, note="Met at a synthetic dinner")),
+                "Met at a synthetic dinner",
+                "Met at a synthetic dinner",
+            ),
+            (replace(worth, human=human, effective="yes"), "You said yes", "You said yes"),
+            (replace(worth, human=replace(human, decision="no"), effective="no"), "You said no", "You said no"),
         )
-        for name, worth_row in cases:
-            for pile in ("yes", "no"):
-                with self.subTest(case=name, pile=pile):
-                    row_parent = replace(parent, worth_row=worth_row)
-                    row = DecisionRow.from_parent(row_parent, pile)
-                    old = decision_rows_html([row_parent], pile)
-                    drawn = re.search(r"<dt>Why (?:yes|no)</dt><dd>(.*?)</dd>", old).group(1)
-                    self.assertEqual(row.reason, html.unescape(drawn))
-
-        cut = DecisionRow.from_parent(replace(parent, worth_row=cases[1][1]), "yes").reason
-        self.assertEqual((len(cut), cut[-1]), (141, "…"))
-        empty = replace(parent, worth_row=cases[2][1])
-        self.assertEqual(DecisionRow.from_parent(empty, "yes").reason, "Worth adding")
-        self.assertEqual(DecisionRow.from_parent(empty, "no").reason, "Not worth adding")
+        self.assertEqual(len(long_reason[:140] + "…"), 141)
+        for worth_row, in_yes_pile, in_no_pile in cases:
+            with self.subTest(expected=in_yes_pile[:30]):
+                row_parent = replace(parent, worth_row=worth_row)
+                self.assertEqual(DecisionRow.from_parent(row_parent, "yes").reason, in_yes_pile)
+                self.assertEqual(DecisionRow.from_parent(row_parent, "no").reason, in_no_pile)
 
 
 class LinkedinRoutesTests(ReviewApiFixture):
@@ -727,79 +815,51 @@ class LinkedinRoutesTests(ReviewApiFixture):
             submitted_at="", updated_at="", new_url="", wire_fields=(),
         )
 
-    def assert_card_parity(self, query_string: str) -> dict:
-        payload = self.payload(f"/api/review/linkedin-card{query_string}")
-        status, old = self.jinja("GET", f"/api/linkedin-card{query_string}")
-        self.assertEqual(status, 200)
-        shown = re.search(r"<article class='decision-card identity-card[^']*' data-card data-parent='(.*?)'>", old)
-        if shown is None:
-            self.assertIsNone(payload["card"])
-            self.assertIsNone(payload["queue"])
-            finished = payload["finished"]
-            self.assertIn("LinkedIn Profiles Checked", old)
-            self.assertIn(f"<p>{finished['linkedin_done']} decisions saved</p>", old)
-            self.assertEqual("data-auto-complete" in old, finished["auto_continue"])
-            self.assertEqual("data-complete='linkedin'" in old, not finished["linkedin_complete"])
-            self.assertEqual("Review complete, continue" in old, finished["linkedin_complete"])
-            running = re.search(r"<p>(\d+) re-research still running</p>", old)
-            self.assertEqual(finished["retargets_in_flight"], int(running.group(1)) if running else 0)
-            return payload
-
-        self.assertIsNone(payload["finished"])
-        card = payload["card"]
-        self.assertEqual(card["person"]["slug"], shown.group(1))
-        self.assertEqual(
-            [candidate["row_key"] for candidate in card["candidates"]],
-            re.findall(r"data-decide='keep' data-pub='(.*?)'", old),
-        )
-        failed = re.search(r"<div class='reresearch-failed'>Re-research failed: (.*?)</div>", old)
-        self.assertEqual(card["failure_note"], html.unescape(failed.group(1)) if failed else "")
-        self.assertEqual(
-            set(re.findall(r"<img src='(.*?)'", old)),
-            {candidate["avatar_url"] for candidate in card["candidates"]} - {""},
-        )
-        question = card["candidates"][0]["question"]
-        single = re.search(r"<div class='question'>(.*?) Or <button", old)
-        if single:
-            self.assertEqual(html.unescape(single.group(1)), question or "Is this the right profile?")
-        else:
-            asked = re.findall(r"<div class='question'>(.*?)</div>", old)
-            self.assertEqual([html.unescape(text) for text in asked], [question][: bool(question)])
-        position = re.search(r"data-queue-index='(\d+)' data-queue-total='(\d+)'", old)
-        self.assertEqual(
-            payload["queue"],
-            {"index": int(position.group(1)), "total": int(position.group(2))} if position else None,
-        )
-        return payload
-
-    def test_linkedin_card_picks_the_parent_the_jinja_route_picks(self) -> None:
+    def test_linkedin_card_picks_by_index_and_exclude(self) -> None:
         self.store.seed_linkedin_queue()
-        queries = (
-            "",
-            "?index=1",
-            "?index=2",
-            "?index=4",
-            "?index=x",
-            "?debug=1&index=1",
-            "?exclude=jordan-bravo",
-            "?exclude=JORDAN-BRAVO, sam-tango",
-            "?exclude=riley-stone&index=1&debug=1",
-            "?exclude=jordan-bravo,riley-stone,sam-tango",
-        )
-        picked = set()
-        for query_string in queries:
+        # The queue is in name order: Jordan Bravo, Riley Stone, Sam Tango.
+        picks = {
+            "": ("jordan-bravo", None),
+            "?index=1": ("riley-stone", None),
+            "?index=2": ("sam-tango", None),
+            "?index=4": ("riley-stone", None),
+            "?index=x": ("jordan-bravo", None),
+            "?debug=1&index=1": ("riley-stone", {"index": 1, "total": 3}),
+            "?exclude=jordan-bravo": ("riley-stone", None),
+            "?exclude=JORDAN-BRAVO,%20sam-tango": ("riley-stone", None),
+            "?exclude=riley-stone&index=1&debug=1": ("sam-tango", {"index": 1, "total": 2}),
+        }
+        for query_string, (slug, position) in picks.items():
             with self.subTest(query=query_string):
-                payload = self.assert_card_parity(query_string.replace(" ", "%20"))
-                self.assertEqual(payload["pending"], 3)
-                if payload["card"]:
-                    picked.add(payload["card"]["person"]["slug"])
-        self.assertEqual(picked, {"jordan-bravo", "riley-stone", "sam-tango"})
+                payload = self.payload(f"/api/review/linkedin-card{query_string}")
+                card = payload["card"]
+                self.assertEqual(card["person"]["slug"], slug)
+                # One candidate each: the parent's own LinkedIn.
+                self.assertEqual([profile["row_key"] for profile in card["candidates"]], [slug])
+                # `pending` counts the whole queue, whatever the card leaves out.
+                self.assertEqual((payload["queue"], payload["pending"], payload["finished"]), (position, 3, None))
+
+        self.assertEqual(
+            self.payload("/api/review/linkedin-card?exclude=jordan-bravo,riley-stone,sam-tango"),
+            {"card": None, "finished": NOT_FINISHED, "pending": 3, "queue": None},
+        )
+
+    def test_linkedin_card_carries_the_person_and_every_pending_candidate(self) -> None:
+        card = {"person": JORDAN, "candidates": [JORDAN_CANDIDATE], "failure_note": ""}
+        self.assertEqual(
+            self.payload("/api/review/linkedin-card"), {"card": card, "finished": None, "pending": 1, "queue": None}
+        )
+
+        self.store.add_second_candidate()
+        second = candidate("jordan-bravo-alt", "Jordan B. Bravo", url="https://www.linkedin.com/in/jordan-bravo-alt")
+        self.assertEqual(
+            self.payload("/api/review/linkedin-card")["card"], {**card, "candidates": [JORDAN_CANDIDATE, second]}
+        )
 
     def test_linkedin_card_hides_in_flight_research_and_reports_a_failed_one(self) -> None:
         self.store.seed_linkedin_queue()
-        first = self.payload("/api/review/linkedin-card")["card"]["person"]["slug"]
         retargets = [
-            self.retarget(first, "researching"),
+            self.retarget("jordan-bravo", "researching"),
             self.retarget("sam-tango", "failed", "Synthetic provider outage"),
             self.retarget("sam-tango", "failed", "An older synthetic failure"),
             self.retarget("riley-stone", "failed"),
@@ -807,86 +867,48 @@ class LinkedinRoutesTests(ReviewApiFixture):
         with mock.patch.object(SqliteReviewAdapter, "retargets", return_value=retargets):
             notes = {}
             for index in (0, 1):
-                payload = self.assert_card_parity(f"?index={index}")
+                payload = self.payload(f"/api/review/linkedin-card?index={index}")
                 self.assertEqual(payload["pending"], 3)
                 notes[payload["card"]["person"]["slug"]] = payload["card"]["failure_note"]
-            everyone_else = ",".join(notes)
-            finished = self.assert_card_parity(f"?exclude={everyone_else}")
-        self.assertNotIn(first, notes)
+            finished = self.payload("/api/review/linkedin-card?exclude=riley-stone,sam-tango")
+        # Jordan is being re-researched: no card. The latest failure is the one reported.
         self.assertEqual(
-            notes, {"sam-tango": "Synthetic provider outage", "riley-stone": "the job did not finish"}
+            notes, {"riley-stone": "the job did not finish", "sam-tango": "Synthetic provider outage"}
         )
         self.assertEqual(
-            finished["finished"],
-            {
-                "synthesize_pending": False,
-                "linkedin_done": 0,
-                "linkedin_complete": False,
-                "retargets_in_flight": 1,
-                "auto_continue": True,
-            },
+            finished,
+            {"card": None, "finished": {**NOT_FINISHED, "retargets_in_flight": 1}, "pending": 3, "queue": None},
         )
-        self.assertEqual(finished["pending"], 3)
 
     def test_research_landing_mid_request_never_serves_a_blank_card(self) -> None:
         self.store.seed_linkedin_queue()
-        first = self.payload("/api/review/linkedin-card")["card"]["person"]["slug"]
-        # The first parent is being re-researched; the worker's result lands right
-        # after this request read the queue's order.
+        # Jordan is first in the queue and is being re-researched; the worker's result
+        # lands right after this request read the queue's order.
         landed = False
-        read_order = review_api.linkedin_queue_order
+        read_order = linkedin_queue.linkedin_queue_order
 
         def order_then_land(db: Db) -> list:
             nonlocal landed
             order = read_order(db)
-            db.decide_identity(first, "verify")
+            db.decide_identity("jordan-bravo", "verify")
             landed = True
             return order
 
         def retargets(_adapter: SqliteReviewAdapter) -> list[GuidanceViewRow]:
-            return [] if landed else [self.retarget(first, "researching")]
+            return [] if landed else [self.retarget("jordan-bravo", "researching")]
 
         with (
-            mock.patch.object(review_api, "linkedin_queue_order", order_then_land),
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", order_then_land),
             mock.patch.object(SqliteReviewAdapter, "retargets", retargets),
         ):
             payload = self.payload("/api/review/linkedin-card")
-        self.assertNotEqual(payload["card"]["person"]["slug"], first)
-        self.assertTrue(payload["card"]["candidates"])
-
-    def test_linkedin_card_lists_every_pending_candidate(self) -> None:
-        self.db.project_rows(
-            (
-                LinkRow(
-                    "jordan-bravo-alt",
-                    "linkedin-parent",
-                    "jordan-bravo-alt",
-                    RowKind.PUB.value,
-                    "https://www.linkedin.com/in/jordan-bravo-alt",
-                    "Jordan B. Bravo",
-                    machine_action="verify",
-                    machine_confidence=0.5,
-                    paid_profile=1,
-                    source=WriterSource.RECONCILE.value,
-                ),
-            )
-        )
-        replace_candidate_people(self.db, "jordan-bravo-alt", ())
-        card = self.assert_card_parity("")["card"]
-        self.assertEqual(
-            sorted((candidate["row_key"], candidate["name"]) for candidate in card["candidates"]),
-            [("jordan-bravo", "Jordan Bravo"), ("jordan-bravo-alt", "Jordan B. Bravo")],
-        )
-        self.assertEqual(
-            {candidate["url"] for candidate in card["candidates"]},
-            {"https://www.linkedin.com/in/jordan-bravo", "https://www.linkedin.com/in/jordan-bravo-alt"},
-        )
+        self.assertEqual(payload["card"]["person"]["slug"], "riley-stone")
+        self.assertEqual([profile["row_key"] for profile in payload["card"]["candidates"]], ["riley-stone"])
 
     def test_finished_state_follows_the_queue(self) -> None:
         self.store.reach_done()
-        finished = self.assert_card_parity("")
         self.assertEqual(
-            finished,
+            self.payload("/api/review/linkedin-card"),
             {
                 "card": None,
                 "finished": {
@@ -901,9 +923,9 @@ class LinkedinRoutesTests(ReviewApiFixture):
             },
         )
 
-    def test_candidate_carries_what_the_jinja_cards_show(self) -> None:
+    def test_candidate_is_shaped_for_the_card(self) -> None:
         parent = person_detail(self.db, "linkedin-parent")
-        base = replace(
+        fetched = replace(
             parent.candidates[0],
             headline="Synthetic operator",
             location="Example City",
@@ -911,134 +933,224 @@ class LinkedinRoutesTests(ReviewApiFixture):
             education=("BS — Example University", ""),
             match_emails=("jordan@example.com", "jordan@example.com"),
             match_phones=("+14155550100", "4155550100", "+14155550101"),
+            profile_pic_url="https://example.com/photo.png",
         )
-        linked = ReviewCandidate.from_row(base)
         self.assertEqual(
-            dataclasses.asdict(linked),
+            dataclasses.asdict(ReviewCandidate.from_row(fetched)),
             {
                 "row_key": "jordan-bravo",
                 "name": "Jordan Bravo",
                 "url": "https://www.linkedin.com/in/jordan-bravo",
                 "headline": "Synthetic operator",
                 "location": "Example City",
+                # Blank entries are dropped; a repeated email and one phone in two spellings are one each.
                 "experiences": ("Founder @ Bravo Robotics", "Engineer @ Example Labs"),
                 "education": ("BS — Example University",),
                 "synthetic": False,
                 "contacts": "jordan@example.com · +14155550100 · +14155550101",
-                "avatar_url": "",
-                "question": "",
+                "avatar_url": "https://example.com/photo.png",
             },
         )
-        researched = ReviewCandidate.from_row(replace(base, synthetic=True, url="https://example.com/researched"))
-        self.assertEqual((researched.synthetic, researched.url), (True, ""))
-
-        for candidate, payload in ((base, linked), (replace(base, synthetic=True), researched)):
-            rich = replace(parent, candidates=(candidate,))
-            for old in (render_worth_card(rich), render_linkedin_card(rich, rich.candidates)):
-                with self.subTest(synthetic=candidate.synthetic, card=old[:40]):
-                    drawn = html.unescape(old)
-                    for value in (payload.name, payload.headline, payload.location, payload.contacts,
-                                  *payload.experiences, *payload.education):
-                        self.assertIn(f">{value}<", drawn)
-                    self.assertEqual(drawn.count("<li"), len(payload.experiences) + len(payload.education))
-                    self.assertEqual(f"href='{candidate.url}'" in drawn, bool(payload.url))
+        # A researched profile links nowhere and shows no picture.
+        researched = ReviewCandidate.from_row(replace(fetched, synthetic=True, url="https://example.com/researched"))
+        self.assertEqual((researched.synthetic, researched.url, researched.avatar_url), (True, "", ""))
+        self.assertEqual(ReviewCandidate.from_row(parent.candidates[0]).avatar_url, "")
 
         labelled = person_detail(self.db, "worth-parent")
-        self.assertEqual(list(ReviewPerson.from_parent(labelled).labels), jinja_labels(render_worth_card(labelled)))
+        self.assertEqual(list(ReviewPerson.from_parent(labelled).labels), CASEY_TITLES)
         self.assertEqual(ReviewPerson.from_parent(parent).labels, ())
 
 
-    def test_candidate_picture_and_question_are_the_ones_the_jinja_cards_show(self) -> None:
-        parent = person_detail(self.db, "linkedin-parent")
-        plain = parent.candidates[0]
-        picture, question = "https://example.com/photo.png", "Which Jordan ran Bravo Robotics?"
-        asked = replace(plain, profile_pic_url=picture, human_question=question)
-        cases = (
-            (plain, "", ""),
-            (asked, picture, question),
-            # A researched profile never shows a picture.
-            (replace(asked, synthetic=True), "", question),
+class LinkedinQueueTests(ReviewApiFixture):
+    """The server reads who is pending once and keeps it; a click takes one parent out."""
+
+    def keep(self, slug: str) -> dict:
+        status, written = self.post_json(
+            "/api/review/decide", {"pub": slug, "decision": "keep", "parent_slug": slug}
         )
-        for candidate, avatar_url, expected_question in cases:
-            with self.subTest(picture=candidate.profile_pic_url, synthetic=candidate.synthetic):
-                payload = ReviewCandidate.from_row(candidate)
-                self.assertEqual((payload.avatar_url, payload.question), (avatar_url, expected_question))
-                alone = replace(parent, candidates=(candidate,))
-                single = render_linkedin_card(alone, alone.candidates)
-                for old in (render_worth_card(alone), single):
-                    self.assertEqual(re.findall(r"<img src='(.*?)'", old), [payload.avatar_url][: bool(payload.avatar_url)])
-                drawn = re.search(r"<div class='question'>(.*?) Or <button", single).group(1)
-                self.assertEqual(html.unescape(drawn), payload.question or "Is this the right profile?")
+        self.assertEqual(status, 200)
+        return written
 
-                # Several candidates: the first one's question sits above the options, or nothing does.
-                several = replace(parent, candidates=(candidate, replace(plain, row_key="jordan-bravo-alt")))
-                drawn = re.findall(r"<div class='question'>(.*?)</div>", render_linkedin_card(several, several.candidates))
-                self.assertEqual([html.unescape(text) for text in drawn], [payload.question][: bool(payload.question)])
+    def test_the_queue_is_read_once_and_each_click_takes_one_parent_out(self) -> None:
+        self.store.seed_linkedin_queue()
+        with (
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", wraps=linkedin_queue.linkedin_queue_order) as order,
+            mock.patch.object(review_api, "worth_counts", wraps=review_api.worth_counts) as worth,
+            mock.patch.object(review_api, "person_detail", wraps=review_api.person_detail) as detail,
+        ):
+            self.assertEqual(self.payload("/api/review/linkedin-card")["pending"], 3)
+            first = self.keep("jordan-bravo")
+            second = self.keep("riley-stone")
+        self.assertEqual(order.call_count, 1)
+        # A LinkedIn click cannot change the worth piles, and its card names its parent.
+        self.assertEqual((worth.call_count, detail.call_count), (0, 0))
+        self.assertEqual((first["next"]["pending"], first["next"]["card"]["person"]["slug"]), (2, "riley-stone"))
+        self.assertEqual((second["next"]["pending"], second["next"]["card"]["person"]["slug"]), (1, "sam-tango"))
+        self.assertNotIn("progress", first)
 
-    def test_linkedin_card_asks_the_stored_question(self) -> None:
-        question = "Which Jordan ran Bravo Robotics?"
-        with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE links SET judgment_payload_json=? WHERE row_key='jordan-bravo'",
-                (json.dumps({"relationship_decision": {"human_question": question}}),),
-            )
-        card = self.assert_card_parity("")["card"]
-        self.assertEqual([candidate["question"] for candidate in card["candidates"]], [question])
-
-        self.db.project_rows(
-            (
-                LinkRow(
-                    "jordan-bravo-alt",
-                    "linkedin-parent",
-                    "jordan-bravo-alt",
-                    RowKind.PUB.value,
-                    "https://www.linkedin.com/in/jordan-bravo-alt",
-                    "Jordan B. Bravo",
-                    machine_action="verify",
-                    machine_confidence=0.5,
-                    paid_profile=1,
-                    source=WriterSource.RECONCILE.value,
-                ),
-            )
+    def test_a_reset_puts_the_parent_back_in_its_place(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.keep("riley-stone")["next"]["pending"], 2)
+        status, written = self.post_json(
+            "/api/review/decide", {"pub": "riley-stone", "decision": "reset", "parent_slug": "riley-stone"}
         )
-        card = self.assert_card_parity("")["card"]
-        self.assertEqual([candidate["question"] for candidate in card["candidates"]], [question, ""])
+        self.assertEqual((status, written["next"]["pending"]), (200, 3))
+        slugs = [self.payload(f"/api/review/linkedin-card?index={index}")["card"]["person"]["slug"] for index in range(3)]
+        self.assertEqual(slugs, ["jordan-bravo", "riley-stone", "sam-tango"])
+
+    def test_a_card_decided_behind_the_servers_back_is_skipped(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.payload("/api/review/linkedin-card")["card"]["person"]["slug"], "jordan-bravo")
+        # Another process settles Jordan: the queue in memory still names him.
+        self.db.decide_identity("jordan-bravo", "verify")
+        following = self.payload("/api/review/linkedin-card")
+        self.assertEqual((following["card"]["person"]["slug"], following["pending"]), ("riley-stone", 2))
+
+    def test_a_card_read_before_a_reset_landed_does_not_take_the_parent_out(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.payload("/api/review/linkedin-card")["pending"], 3)
+        read = review_api.linkedin_queue_parent
+        # The first read saw Jordan decided; a reset has put him back since.
+        jordan = read(self.db, linkedin_queue.linkedin_queue_order(self.db)[0].parent_id)
+        stale = dataclasses.replace(jordan, candidates=())
+        with mock.patch.object(review_api, "linkedin_queue_parent", side_effect=[stale, jordan]):
+            card = self.payload("/api/review/linkedin-card")
+        self.assertEqual((card["card"]["person"]["slug"], card["pending"]), ("jordan-bravo", 3))
+
+    def test_a_worth_decision_makes_the_next_read_load_the_queue_again(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.payload("/api/review/linkedin-card")["pending"], 3)
+        status, written = self.post_json(
+            "/worth", {"pub": "parent-worth:riley-parent", "worth": "no", "parent_slug": "riley-stone"}
+        )
+        self.assertEqual((status, written["progress"]["linkedin_pending"]), (200, 2))
+        slugs = [self.payload(f"/api/review/linkedin-card?index={index}")["card"]["person"]["slug"] for index in range(2)]
+        self.assertEqual(slugs, ["jordan-bravo", "sam-tango"])
+
+    def test_enrich_finishing_and_a_reresearch_changing_both_load_the_queue(self) -> None:
+        with (
+            mock.patch.object(review_server, "EnrichmentPipeline") as pipeline,
+            mock.patch.object(review_server, "GuidedRetargetWorker") as worker,
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", wraps=linkedin_queue.linkedin_queue_order) as order,
+        ):
+            review_server.make_handler(db=self.db, run_jobs=True)
+            self.assertEqual(order.call_count, 0)
+            pipeline.call_args.kwargs["on_finish"]()
+            self.assertEqual(order.call_count, 1)
+            worker.call_args.kwargs["on_change"]()
+            self.assertEqual(order.call_count, 2)
+
+    def test_a_slow_read_never_replaces_a_newer_one(self) -> None:
+        reading, release = threading.Event(), threading.Event()
+
+        def order(_db: object) -> list[str]:
+            if reading.is_set():
+                return ["new"]
+            reading.set()
+            release.wait(5)
+            return ["old"]
+
+        queue = linkedin_queue.LinkedinQueue(self.db)
+        with mock.patch.object(linkedin_queue, "linkedin_queue_order", order):
+            slow = threading.Thread(target=queue.load)
+            slow.start()
+            reading.wait(5)
+            newer = threading.Thread(target=queue.load)
+            newer.start()
+            # The newer read waits its turn; one that did not would finish here.
+            newer.join(0.2)
+            release.set()
+            slow.join(5)
+            newer.join(5)
+        self.assertEqual(queue.rows(), ("new",))
+
+    def test_two_settles_of_one_parent_leave_the_queue_as_the_store_has_it(self) -> None:
+        row = LinkedInQueueRow("jordan-parent", "jordan-bravo")
+        checking, release = threading.Event(), threading.Event()
+
+        def pending(_db: object, _parent_id: str) -> bool:
+            # The second check is made after a reset put the parent back.
+            if checking.is_set():
+                return True
+            checking.set()
+            release.wait(5)
+            return False
+
+        queue = linkedin_queue.LinkedinQueue(self.db)
+        with (
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", lambda _db: [row]),
+            mock.patch.object(linkedin_queue, "linkedin_parent_pending", pending),
+        ):
+            queue.load()
+            kept = threading.Thread(target=queue.settle, args=(row.parent_id,))
+            kept.start()
+            checking.wait(5)
+            reset = threading.Thread(target=queue.settle, args=(row.parent_id,))
+            reset.start()
+            # The second settle waits its turn; one that did not would finish here.
+            reset.join(0.2)
+            release.set()
+            kept.join(5)
+            reset.join(5)
+        self.assertEqual(queue.rows(), (row,))
 
 
 class DecideTests(ReviewApiFixture):
-    def test_decide_writes_the_rows_the_jinja_route_writes(self) -> None:
+    def test_decide_writes_the_decision_on_its_row_and_nothing_else(self) -> None:
+        url = "https://www.linkedin.com/in/jordan-bravo-correct"
         cases = (
-            ({"decision": "keep"}, "verify"),
-            ({"decision": "detach", "note": "  Synthetic note  "}, "detach"),
-            ({"decision": "fix", "new_url": "https://www.linkedin.com/in/jordan-bravo-correct"}, "retarget"),
-            ({"decision": "exclude"}, "exclude"),
+            ({"decision": "keep"}, "verify", "", ("verify", "yes", "deep-context-review", None, None, None)),
+            (
+                {"decision": "detach", "note": "  Synthetic note  "},
+                "detach",
+                "",
+                ("detach", "yes", "deep-context-review", "Synthetic note", None, None),
+            ),
+            (
+                {"decision": "fix", "new_url": url},
+                "retarget",
+                url,
+                ("retarget", "yes", "deep-context-review", None, url, "jordan-bravo-correct"),
+            ),
+            ({"decision": "exclude"}, "exclude", "", ("exclude", "yes", "deep-context-review", None, None, None)),
         )
-        for index, (fields, action) in enumerate(cases):
+        for index, (fields, action, new_url, written) in enumerate(cases):
             with self.subTest(decision=fields["decision"]):
-                old_store = ReviewStore(self.root / f"old-{index}")
-                new_store = ReviewStore(self.root / f"new-{index}")
-                for store in (old_store, new_store):
-                    store.seed_linkedin_queue()
+                store = ReviewStore(self.root / f"decide-{index}")
+                store.seed_linkedin_queue()
+                before = store.link_rows()
                 form = {"pub": "jordan-bravo", "parent_slug": "jordan-bravo", **fields}
-                old_status, _, old_body, _ = old_store.http.request("POST", "/decide", form)
-                status, written = self.post_json("/api/review/decide", form, http=new_store.http)
-                self.assertEqual((status, old_status), (200, 200))
-                old = json.loads(old_body)
-                self.assertEqual(written["action"], action)
-                for key in ("ok", "pub", "action", "approved", "new_url", "progress", "resolved_pubs"):
-                    self.assertEqual(written[key], old[key], key)
-                self.assertEqual(new_store.link_rows(), old_store.link_rows())
-                decided = next(row for row in new_store.link_rows() if row["row_key"] == "jordan-bravo")
-                self.assertEqual(decided["decision_action"], action)
-
-                # The same one-shot reset, through both routes.
-                reset = {"pub": "jordan-bravo", "parent_slug": "jordan-bravo", "decision": "reset"}
-                old_store.http.request("POST", "/decide", reset)
-                status, _ = self.post_json("/api/review/decide", reset, http=new_store.http)
+                status, answer = self.post_json("/api/review/decide", form, http=store.http)
                 self.assertEqual(status, 200)
-                self.assertEqual(new_store.link_rows(), old_store.link_rows())
+                following = answer.pop("next")
+                self.assertEqual(
+                    answer,
+                    {
+                        "ok": True,
+                        "pub": "jordan-bravo",
+                        "action": action,
+                        "approved": "yes",
+                        "new_url": new_url,
+                        "resolved_pubs": ["jordan-bravo"],
+                    },
+                )
+                self.assertEqual((following["card"]["person"]["slug"], following["pending"]), ("riley-stone", 2))
+                after = store.link_rows()
+                self.assertEqual(tuple(after["jordan-bravo"][column] for column in DECISION_COLUMNS), written)
+                # Only the decision columns of the decided row moved.
+                self.assertEqual(
+                    {**after, "jordan-bravo": {**after["jordan-bravo"], **dict.fromkeys(DECISION_COLUMNS)}}, before
+                )
 
-    def test_decide_answers_with_the_next_card_and_the_counts(self) -> None:
+                # A reset takes the decision back off.
+                reset = {"pub": "jordan-bravo", "parent_slug": "jordan-bravo", "decision": "reset"}
+                status, answer = self.post_json("/api/review/decide", reset, http=store.http)
+                self.assertEqual(status, 200)
+                self.assertEqual((answer["action"], answer["approved"], answer["new_url"]), ("", "", ""))
+                self.assertEqual(answer["next"]["pending"], 3)
+                self.assertEqual(store.link_rows(), before)
+
+    def test_decide_answers_with_the_next_card_and_its_count(self) -> None:
         self.store.seed_linkedin_queue()
         status, written = self.post_json(
             "/api/review/decide", {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
@@ -1046,10 +1158,7 @@ class DecideTests(ReviewApiFixture):
         self.assertEqual(status, 200)
         self.assertEqual(written["next"], self.payload("/api/review/linkedin-card?exclude=jordan-bravo"))
         self.assertEqual(written["next"]["pending"], 2)
-        self.assertNotEqual(written["next"]["card"]["person"]["slug"], "jordan-bravo")
-        self.assertEqual(
-            written["progress"], {"worth_pending": 1, "worth_yes": 3, "worth_no": 0, "linkedin_pending": 2}
-        )
+        self.assertEqual(written["next"]["card"]["person"]["slug"], "riley-stone")
         self.assertEqual((written["ok"], written["pub"], written["approved"]), (True, "jordan-bravo", "yes"))
 
     def test_decide_never_serves_the_decided_parent_back(self) -> None:
@@ -1060,10 +1169,9 @@ class DecideTests(ReviewApiFixture):
                     "/api/review/decide", {"pub": "jordan-bravo", "decision": "reset", **fields}
                 )
                 self.assertEqual(status, 200)
-                self.assertIsNone(written["next"]["card"])
-                self.assertEqual(written["next"]["pending"], 1)
-                self.assertEqual(written["progress"]["linkedin_pending"], 1)
-                self.assertIs(written["next"]["finished"]["linkedin_complete"], False)
+                self.assertEqual(
+                    written["next"], {"card": None, "finished": NOT_FINISHED, "pending": 1, "queue": None}
+                )
 
     def test_last_decision_answers_with_the_finished_state(self) -> None:
         self.store.reach_linkedin()
@@ -1071,7 +1179,7 @@ class DecideTests(ReviewApiFixture):
             "/api/review/decide", {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
         )
         self.assertEqual(status, 200)
-        self.assertEqual(written["progress"]["linkedin_pending"], 0)
+        self.assertEqual(written["next"]["pending"], 0)
         self.assertEqual(
             written["next"]["finished"],
             {
@@ -1112,10 +1220,9 @@ class DecideTests(ReviewApiFixture):
             "/api/review/decide", {"pub": "public-jordan", "parent_slug": "jordan-opaque", "decision": "detach"}
         )
         self.assertEqual((status, written["pub"]), (200, "identity-row-42"))
-        row = query(self.db, "SELECT decision_action FROM links WHERE row_key='identity-row-42'")[0]
-        self.assertEqual(row["decision_action"], "detach")
+        self.assertEqual(self.store.link_rows()["identity-row-42"]["decision_action"], "detach")
 
-    def test_decide_refuses_what_the_jinja_route_refuses(self) -> None:
+    def test_decide_refuses_a_bad_form_and_writes_nothing(self) -> None:
         cases = (
             ({}, 400, "bad request"),
             ({"pub": "jordan-bravo", "decision": "maybe"}, 400, "bad request"),
@@ -1132,7 +1239,6 @@ class DecideTests(ReviewApiFixture):
         for fields, expected_status, text in cases:
             with self.subTest(fields=fields):
                 self.assertEqual(self.post_json("/api/review/decide", fields), (expected_status, {"error": text}))
-                self.assertEqual(self.jinja("POST", "/decide", fields), (expected_status, text))
         self.assertEqual(self.store.link_rows(), before)
 
     def test_decide_refuses_a_row_no_card_ever_showed(self) -> None:
@@ -1154,11 +1260,10 @@ class DecideTests(ReviewApiFixture):
         replace_candidate_people(
             self.db, "owner-row", (CandidatePersonRow("owner-row", "owner-person", "linkedin-parent"),)
         )
-        fields = {"pub": "owner-row", "decision": "keep"}
         self.assertEqual(
-            self.post_json("/api/review/decide", fields), (404, {"error": "review row not found: owner-row"})
+            self.post_json("/api/review/decide", {"pub": "owner-row", "decision": "keep"}),
+            (404, {"error": "review row not found: owner-row"}),
         )
-        self.assertEqual(self.jinja("POST", "/decide", fields), (404, "review row not found: owner-row"))
 
     def test_decide_refuses_an_ambiguous_public_identifier(self) -> None:
         self.db.project_rows(
@@ -1175,19 +1280,30 @@ class DecideTests(ReviewApiFixture):
                 for index in (1, 2)
             )
         )
-        fields = {"pub": "ambiguous-public-identifier", "decision": "keep"}
-        status, payload = self.post_json("/api/review/decide", fields)
         self.assertEqual(
-            (status, payload), (400, {"error": "ambiguous identity candidate: ambiguous-public-identifier"})
+            self.post_json("/api/review/decide", {"pub": "ambiguous-public-identifier", "decision": "keep"}),
+            (400, {"error": "ambiguous identity candidate: ambiguous-public-identifier"}),
         )
-        self.assertEqual(self.jinja("POST", "/decide", fields), (400, payload["error"]))
 
     def test_posts_refuse_another_origin_and_accept_this_machine(self) -> None:
         before = self.store.link_rows()
         fields = {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
-        for path in ("/api/review/decide", "/api/review/approve-enrichment"):
-            with self.subTest(path=path), mock.patch.object(
-                enrichment_pipeline.EnrichmentPipeline, "start", side_effect=AssertionError("refused first")
+        paths = (
+            "/api/review/decide",
+            "/api/review/approve-enrichment",
+            "/worth",
+            "/complete",
+            "/retarget",
+            "/feedback",
+            "/auth/login",
+        )
+        for path in paths:
+            with (
+                self.subTest(path=path),
+                mock.patch.object(
+                    enrichment_pipeline.EnrichmentPipeline, "start", side_effect=AssertionError("refused first")
+                ),
+                mock.patch.object(auth_login, "start_auth_login", side_effect=AssertionError("refused first")),
             ):
                 status, payload = self.post_json(path, fields, headers={"Origin": "https://example.test"})
                 self.assertEqual((status, payload), (403, {"error": "cross-origin request rejected"}))
@@ -1202,7 +1318,7 @@ class DecideTests(ReviewApiFixture):
 
 
 class EnrichmentPanelTests(ReviewApiFixture):
-    def test_panel_takes_the_branch_the_jinja_panel_takes(self) -> None:
+    def test_panel_is_one_of_five_states(self) -> None:
         base = SqliteReviewAdapter(self.db, 0.7).enrichment()
         counts = base.counts
         cases = (
@@ -1252,29 +1368,19 @@ class EnrichmentPanelTests(ReviewApiFixture):
         self.assertEqual({panel.mode for _, panel in cases}, set(get_args(EnrichmentMode)))
         for view, expected in cases:
             with self.subTest(status=view.status, state=view.state, estimate=view.estimated_usd):
-                panel = EnrichmentPanel.from_view(view)
-                self.assertEqual(panel, expected)
-                old = render_enrichment(view)
-                self.assertIn(f"<h2>{ENRICH_HEADINGS[panel.mode]}</h2>", old)
-                if panel.mode == "running":
-                    self.assertIn(f"<p>{panel.completed} of {panel.total} complete</p>", old)
-                    self.assertIn(f"aria-valuemax='{panel.total}' aria-valuenow='{panel.completed}'", old)
-                if panel.mode == "approval":
-                    self.assertIn(f"data-approve-enrichment>{panel.approval_label}</button>", old)
-                if panel.mode == "failed":
-                    self.assertIn(f"<p>{panel.error}</p>", old)
+                self.assertEqual(EnrichmentPanel.from_view(view), expected)
 
     def test_page_carries_the_stores_enrichment_panel(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
+        estimate = self.store.estimate()
+        self.assertGreater(round(estimate, 2), 0)
         page = self.payload("/api/review/page")
         self.assertEqual(page["view"], "enrich")
-        _, old = self.jinja("GET", "/?stage=enrich")
-        asked = re.search(r"data-approve-enrichment>(Approve \$\d+\.\d\d)</button>", old).group(1)
-        self.assertEqual(asked, f"Approve ${self.store.estimate():.2f}")
         self.assertEqual(
             page["enrichment"],
-            {"mode": "approval", "completed": 0, "total": 0, "approval_label": asked, "error": ""},
+            {"mode": "approval", "completed": 0, "total": 0, "approval_label": f"Approve ${estimate:.2f}", "error": ""},
         )
+        # One person to research: the step is not complete and counts them.
         self.assertEqual((page["steps"][1]["complete"], page["steps"][1]["count"]), (False, 1))
 
     def test_judgments_alone_are_an_approval_of_their_estimate(self) -> None:
@@ -1282,10 +1388,10 @@ class EnrichmentPanelTests(ReviewApiFixture):
         self.store.reach_enrich()
         estimate = self.store.estimate()
         self.assertGreater(round(estimate, 2), 0)
-        panel = self.payload("/api/review/page")["enrichment"]
-        _, old = self.jinja("GET", "/?stage=enrich")
+        page = self.payload("/api/review/page")
+        panel = page["enrichment"]
         self.assertEqual((panel["mode"], panel["approval_label"]), ("approval", f"Approve ${estimate:.2f}"))
-        self.assertIn(f"data-approve-enrichment>{panel['approval_label']}</button>", old)
+        self.assertEqual((page["steps"][1]["complete"], page["steps"][1]["count"]), (False, 0))
 
 
 class ApproveEnrichmentTests(ReviewApiFixture):
@@ -1300,13 +1406,19 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             time.sleep(0.01)
         self.fail(f"enrichment job did not reach {status}")
 
-    def test_page_and_card_reads_never_launch_the_pipeline(self) -> None:
+    def test_reads_never_launch_the_pipeline(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         with mock.patch.object(
             enrichment_pipeline.EnrichmentPipeline, "start", side_effect=AssertionError("GET must not start work")
         ) as start:
             http = self.store.client()
-            for path in ("/api/review/page?stage=enrich", "/api/review/worth-card", "/api/review/linkedin-card"):
+            for path in (
+                "/api/review/page?stage=enrich",
+                "/api/review/worth-card",
+                "/api/review/linkedin-card",
+                "/api/status",
+                "/api/enrichment",
+            ):
                 self.assertEqual(self.get_json(path, http=http)[0], 200)
         start.assert_not_called()
 
@@ -1349,31 +1461,29 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             self.assertEqual(reconcile.call_args.kwargs["budget"], round(estimate, 2))
             self.assertIs(reconcile.call_args.kwargs["approve"], True)
 
-    def test_approval_starts_the_pipeline_the_jinja_route_starts(self) -> None:
+    def test_approval_starts_the_pipeline_with_the_plan_it_showed(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
-        estimate = self.store.estimate()
-        calls = []
-        for path in ("/approve-enrichment", "/api/review/approve-enrichment"):
-            with mock.patch.object(enrichment_pipeline.EnrichmentPipeline, "start", return_value=False) as start:
-                status, content_type, body, _ = self.store.client().request("POST", path, {})
-            self.assertEqual((status, content_type), (200, JSON_TYPE))
-            start.assert_called_once()
-            calls.append(start.call_args)
-        self.assertEqual(calls[0], calls[1])
-        self.assertEqual(calls[1].args[:2], (1, estimate))
+        plan = SqliteReviewAdapter(self.db, 0.7).enrichment()
+        with mock.patch.object(enrichment_pipeline.EnrichmentPipeline, "start", return_value=False) as start:
+            status, answer = self.post_json("/api/review/approve-enrichment", http=self.store.client())
+        # One person to research, the estimate the button showed, that plan's fingerprint.
+        start.assert_called_once_with(1, plan.estimated_usd, plan.request_fingerprint)
         # Not launched: the panel is the store's, still waiting for the approval.
         self.assertEqual(
-            json.loads(body),
-            {
-                "ok": True,
-                "enrichment": {
-                    "mode": "approval",
-                    "completed": 0,
-                    "total": 0,
-                    "approval_label": f"Approve ${estimate:.2f}",
-                    "error": "",
+            (status, answer),
+            (
+                200,
+                {
+                    "ok": True,
+                    "enrichment": {
+                        "mode": "approval",
+                        "completed": 0,
+                        "total": 0,
+                        "approval_label": f"Approve ${plan.estimated_usd:.2f}",
+                        "error": "",
+                    },
                 },
-            },
+            ),
         )
 
     def test_a_launch_wakes_the_agent_and_a_refused_one_does_not(self) -> None:
@@ -1395,20 +1505,16 @@ class ApproveEnrichmentTests(ReviewApiFixture):
         with mock.patch.object(
             enrichment_pipeline.EnrichmentPipeline, "start", side_effect=AssertionError("nothing to start")
         ):
-            status, payload = self.post_json("/api/review/approve-enrichment", http=self.store.client())
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["enrichment"]["mode"], "completed")
+            answer = self.post_json("/api/review/approve-enrichment", http=self.store.client())
+        self.assertEqual(answer, (200, {"ok": True, "enrichment": COMPLETED_PANEL}))
 
     def test_disabled_job_execution_refuses_the_approval(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         with mock.patch.object(
             enrichment_pipeline.EnrichmentPipeline, "start", side_effect=AssertionError("jobs are disabled")
         ):
-            http = self.store.client(run_jobs=False)
-            status, payload = self.post_json("/api/review/approve-enrichment", http=http)
-            old_status, _, old_body, _ = http.request("POST", "/approve-enrichment", {})
-        self.assertEqual((status, payload), (409, {"error": "enrichment job execution is disabled"}))
-        self.assertEqual((old_status, old_body.decode()), (409, payload["error"]))
+            answer = self.post_json("/api/review/approve-enrichment", http=self.store.client(run_jobs=False))
+        self.assertEqual(answer, (409, {"error": "enrichment job execution is disabled"}))
 
     def test_disabled_job_execution_refuses_a_computed_approval(self) -> None:
         base = SqliteReviewAdapter(self.db, 0.7).enrichment()
@@ -1424,16 +1530,14 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             ),
         )
         with mock.patch.object(SqliteReviewAdapter, "approve_enrichment", return_value=approved):
-            status, payload = self.post_json("/api/review/approve-enrichment", http=self.store.client(run_jobs=False))
-        self.assertEqual((status, payload), (409, {"error": "enrichment job execution is disabled"}))
+            answer = self.post_json("/api/review/approve-enrichment", http=self.store.client(run_jobs=False))
+        self.assertEqual(answer, (409, {"error": "enrichment job execution is disabled"}))
 
     def test_an_approval_the_store_turns_down_is_a_conflict(self) -> None:
         refusal = StoreError("Enrichment is not waiting for approval")
         with mock.patch.object(SqliteReviewAdapter, "approve_enrichment", side_effect=refusal):
-            status, payload = self.post_json("/api/review/approve-enrichment")
-            old = self.jinja("POST", "/approve-enrichment", {})
-        self.assertEqual((status, payload), (409, {"error": "Enrichment is not waiting for approval"}))
-        self.assertEqual(old, (409, payload["error"]))
+            answer = self.post_json("/api/review/approve-enrichment")
+        self.assertEqual(answer, (409, {"error": "Enrichment is not waiting for approval"}))
 
 
 class TypeScriptPinTests(ReviewApiFixture):
@@ -1456,6 +1560,7 @@ class TypeScriptPinTests(ReviewApiFixture):
             "WorthTablePayload": WorthTablePayload,
             "LinkedinFinished": LinkedinFinished,
             "LinkedinCardPayload": LinkedinCardPayload,
+            "WorthResult": WorthResult,
             "DecideResult": DecideResult,
             "ApproveResult": ApproveResult,
         }
@@ -1473,8 +1578,9 @@ class TypeScriptPinTests(ReviewApiFixture):
         ):
             with self.subTest(union=name):
                 self.assertEqual(ts_union(name), set(get_args(literal)))
-        self.assertEqual(ts_union("ReviewView"), set(review_api.TITLES))
+        self.assertEqual(ts_union("ReviewView"), set(TITLES))
         self.assertEqual(ts_union("ReviewView"), set(STAGE_BY_ACTION.values()))
+        self.assertEqual(ts_union("ReviewView"), set(SCREENS))
 
     def test_live_payloads_carry_exactly_the_interface_fields(self) -> None:
         self.store.seed_linkedin_queue()
@@ -1521,7 +1627,6 @@ class TypeScriptPinTests(ReviewApiFixture):
             "/api/review/decide", {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
         )
         self.assertEqual(set(decided), fields("DecideResult"))
-        self.assertEqual(set(decided["progress"]), fields("DecisionProgress"))
         self.assertEqual(set(decided["next"]), fields("LinkedinCardPayload"))
 
         with mock.patch.object(enrichment_pipeline.EnrichmentPipeline, "start", return_value=False):
@@ -1529,16 +1634,16 @@ class TypeScriptPinTests(ReviewApiFixture):
         self.assertEqual(set(approved), fields("ApproveResult"))
         self.assertEqual(set(approved["enrichment"]), fields("EnrichmentPanel"))
 
-    def test_unchanged_routes_carry_the_fields_the_page_reads(self) -> None:
-        _, status = self.get_json("/api/status")
-        self.assertLessEqual(set(ts_fields("ReviewStatus")), set(status))
-        self.assertIn(status["stage"], ts_union("ReviewView"))
-
         _, worth = self.post_json(
             "/worth", {"pub": "parent-worth:worth-parent", "worth": "yes", "parent_slug": "casey-delta"}
         )
-        self.assertLessEqual(set(ts_fields("WorthResult")), set(worth))
-        self.assertEqual(set(worth["progress"]), set(ts_fields("DecisionProgress")))
+        self.assertEqual(set(worth), fields("WorthResult"))
+        self.assertEqual(set(worth["progress"]), fields("DecisionProgress"))
+
+    def test_status_carries_the_fields_the_page_reads(self) -> None:
+        _, status = self.get_json("/api/status")
+        self.assertLessEqual(set(ts_fields("ReviewStatus")), set(status))
+        self.assertIn(status["stage"], ts_union("ReviewView"))
 
 
 if __name__ == "__main__":
