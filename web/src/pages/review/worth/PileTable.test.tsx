@@ -630,6 +630,20 @@ describe("PileTable: a flip", () => {
     await waitFor(() => expect(server.reads(TABLE)[2]).toBe(`${TABLE}?view=yes&offset=39`))
   })
 
+  it("reads no page while a saved row is still fading out of the rows held", async () => {
+    serve(worthServer({ pending: [], yes: pileOf(45), pageSize: 20 }))
+    await openPile("yes", { fadeMs: 300 })
+    fireEvent.click(flipButton(named(3)))
+    await waitFor(() => expect(server.saves()).toHaveLength(1))
+    // The save has answered; the row is still on screen, fading. The end is in reach.
+    layout.scrollTo(list(), 800)
+    await settle()
+    expect(row(named(15)).isConnected).toBe(true)
+    expect(server.reads(TABLE)).toHaveLength(1)
+    // Once the row is gone the page starts at the 19 rows held.
+    await waitFor(() => expect(server.reads(TABLE)[1]).toBe(`${TABLE}?view=yes&offset=19`))
+  })
+
   // P0.3
   it("posts exactly once however often the flip is pressed", async () => {
     await openPile()

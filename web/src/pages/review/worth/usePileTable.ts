@@ -42,13 +42,22 @@ function without({ rows, total }: PileRows, slug: string): PileRows {
  *           its counts back
  *
  * A flipped row has left the pile on the server too, so the next page starts at the number
- * of rows still held. A page read and a save never overlap: a page asked for at one row
- * count and read by the server after a flip would skip a person. A stage that left the
- * screen does nothing more (useLeftScreen).
+ * of rows still held. A page read never overlaps a flip, from its click until its row has
+ * left the rows held: a page asked for at one row count and read by the server after the
+ * flip would skip a person. The offset comes from `held`, which changes in the same step as
+ * the rows, not from the last render. A stage that left the screen does nothing more
+ * (useLeftScreen).
  */
 export function usePileTable(pile: Pile, moves: PileMoves) {
   const review = useReview()
   const [table, setTable] = useState<PileRows | null>(null)
+  /** The rows held right now: `table` as the next render will see it. */
+  const held = useRef<PileRows | null>(null)
+  const hold = (change: (before: PileRows) => PileRows) => {
+    if (!held.current) return
+    held.current = change(held.current)
+    setTable(held.current)
+  }
   /** Why the first page could not be read. */
   const [failure, setFailure] = useState<string | null>(null)
   /** The next page is on its way: the list says so. */
@@ -56,33 +65,40 @@ export function usePileTable(pile: Pile, moves: PileMoves) {
   /** The page on its way, for the callers that ask again before the list has drawn it and
    *  for a flip that must let it land first. */
   const read = useRef<Promise<void> | null>(null)
-  /** Flips whose save has not answered yet. */
-  const saving = useRef(0)
+  /** Flips under way: clicked, and their row not yet gone from (or back in) the rows held. */
+  const flipping = useRef(0)
   /** Slugs whose flip is saving: their rows are fading and take no clicks. */
   const [leaving, setLeaving] = useState(EMPTY)
   const left = useLeftScreen()
 
   useEffect(() => {
     const gone = new AbortController()
-    fetchWorthTable(pile, 0, gone.signal).then(setTable, (error: unknown) => {
-      if (!gone.signal.aborted) setFailure(errorText(error))
-    })
+    fetchWorthTable(pile, 0, gone.signal).then(
+      (first) => {
+        held.current = first
+        setTable(first)
+      },
+      (error: unknown) => {
+        if (!gone.signal.aborted) setFailure(errorText(error))
+      },
+    )
     return () => gone.abort()
   }, [pile])
 
   async function readPage(offset: number) {
     try {
       const page = await fetchWorthTable(pile, offset)
-      setTable((before) => before && appended(before, page.rows))
+      hold((before) => appended(before, page.rows))
     } catch (error) {
       if (!left()) review.toastError(errorText(error))
     }
   }
 
   async function more() {
-    if (read.current || saving.current > 0 || !table || table.rows.length >= table.total) return
+    const rows = held.current
+    if (read.current || flipping.current > 0 || !rows || rows.rows.length >= rows.total) return
     setReading(true)
-    read.current = readPage(table.rows.length)
+    read.current = readPage(rows.rows.length)
     await read.current
     read.current = null
     setReading(false)
@@ -94,22 +110,22 @@ export function usePileTable(pile: Pile, moves: PileMoves) {
     const move: PileMove = { from: pile, to }
     setLeaving((slugs) => toggled(slugs, slug, true))
     moves.begin(move)
-    saving.current += 1
+    flipping.current += 1
     const fade = wait(review.fadeMs)
     // A page on its way was asked for by the rows as they are: it lands before the pile changes.
     await read.current
     const saved = await saveWorth({ pub: key, worth: to, parent_slug: slug })
-    saving.current -= 1
     // A refusal brings the row back at once; a saved row finishes its fade first.
     if (saved.ok) await fade
     if (left()) return
     moves.end(move)
+    if (saved.ok) hold((before) => without(before, slug))
+    flipping.current -= 1
     setLeaving((slugs) => toggled(slugs, slug, false))
     if (!saved.ok) {
       review.toastError(saved.message)
       return
     }
-    setTable((before) => before && without(before, slug))
     review.applyProgress(saved.result.progress)
     review.toast(DECIDED[to])
   }
