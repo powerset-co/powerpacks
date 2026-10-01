@@ -52,6 +52,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.legacy import (
     LEGACY_PARALLEL_HANDLE_RESULT,
     MESSAGE_LINKEDIN_PREFIX,
+    is_harmonic_bootstrap,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageObservation
 from packs.ingestion.primitives.deep_context.db import queries
@@ -848,7 +849,7 @@ class Seed(Node):
             public_identifier = _slug(url)
             path = indexed_profile_cache_path(cache_dir, public_identifier, available)
             cached = read_usable_cached_profile(path)
-            if cached is None:
+            if cached is None or is_harmonic_bootstrap(cached.get('source')):
                 continue
             target = ProfileTarget(public_identifier, url, link["row_key"], link["parent_id"])
             results.append((target, ProfileResult.from_payload(public_identifier, url, cached)))

@@ -376,6 +376,26 @@ class SeedTests(SeedFixture):
         self.assertEqual(profile["candidate_key"], research["candidate_key"])
         self.assertEqual(manifest.profiles_carried, 1)
 
+    def test_seed_does_not_restore_harmonic_profiles_after_migration(self) -> None:
+        cache = self.legacy / "network-import/profile_cache_v2"
+        cache.mkdir(parents=True)
+        path = cache / "morgan-delta.json"
+        path.write_text(json.dumps({
+            "source": {"provider": "existing_export_bootstrap",
+                       "source_file": "/old/harmonic_enriched_example.csv"},
+            "public_identifier": "morgan-delta",
+            "raw_response": {"name": "Morgan Delta"},
+            "normalized_profile": {"success": True, "public_identifier": "morgan-delta",
+                                   "experiences": [{"title": "Engineer", "company_name": "Example"}]},
+        }))
+        db = self.cold_store()
+        self.assertEqual(db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '2')
+        manifest = self.seed(db)
+        self.assertEqual(manifest.profiles_carried, 0)
+        self.assertEqual(db.query("SELECT * FROM artifacts WHERE kind='profile'"), [])
+        self.assertEqual(manifest.research_carried, 1)
+        self.assertTrue(path.is_file())
+
     def test_human_retarget_settles_research_candidate_before_judging(self) -> None:
         research = self.legacy / "deep-context/reconcile/deep-research/morgan-delta-parent/00_parallel_result.json"
         payload = json.loads(research.read_text())
