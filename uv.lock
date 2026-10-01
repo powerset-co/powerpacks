@@ -538,7 +538,7 @@ wheels = [
 
 [[package]]
 name = "powerpacks"
-version = "3.8.6"
+version = "3.9.0"
 source = { virtual = "." }
 dependencies = [
     { name = "duckdb" },

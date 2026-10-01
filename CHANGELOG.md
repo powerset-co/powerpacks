@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.6...powerpacks-v3.9.0) (2026-10-01)
+
+
+### Features
+
+* **deep-context:** the review flow as a React page at /review ([#641](https://github.com/powerset-co/powerpacks/issues/641)) ([b688ada](https://github.com/powerset-co/powerpacks/commit/b688ada958efc2c8a9817981dd856045af7d160d))
+
 ## [3.8.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.8.5...powerpacks-v3.8.6) (2026-10-01)
 
 
