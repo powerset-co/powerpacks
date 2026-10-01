@@ -61,8 +61,9 @@ export function useLinkedinQueue() {
       return
     }
 
-    applyProgress(response.progress)
-    if (response.progress.linkedin_pending === 0) {
+    const pending = response.next.pending
+    applyProgress({ linkedin_pending: pending })
+    if (pending === 0) {
       // The last decision: the check, then the screen loads again on the finished state.
       transition(STAGE_DONE.linkedin, "linkedin")
       return

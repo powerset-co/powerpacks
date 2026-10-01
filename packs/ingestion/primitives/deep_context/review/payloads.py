@@ -274,7 +274,6 @@ class DecideResult:
     action: str
     approved: str
     new_url: str
-    progress: DecisionProgress
     resolved_pubs: tuple[str, ...]
     next: LinkedinCardPayload
 

@@ -258,8 +258,8 @@
   opacity: 0;
   transform: translateY(-5px);
   transition:
-    opacity 50ms ease,
-    transform 50ms ease;
+    opacity 100ms ease,
+    transform 100ms ease;
   pointer-events: none;
 }
 

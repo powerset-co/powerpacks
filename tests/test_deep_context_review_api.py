@@ -51,6 +51,7 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_counts import Rec
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.review import api as review_api
 from packs.ingestion.primitives.deep_context.review import auth_login
+from packs.ingestion.primitives.deep_context.review import linkedin_queue
 from packs.ingestion.primitives.deep_context.review import server as review_server
 from packs.ingestion.primitives.deep_context.review import sqlite_adapter as review_adapter
 from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION
@@ -880,7 +881,7 @@ class LinkedinRoutesTests(ReviewApiFixture):
         # Jordan is first in the queue and is being re-researched; the worker's result
         # lands right after this request read the queue's order.
         landed = False
-        read_order = review_api.linkedin_queue_order
+        read_order = linkedin_queue.linkedin_queue_order
 
         def order_then_land(db: Db) -> list:
             nonlocal landed
@@ -893,7 +894,7 @@ class LinkedinRoutesTests(ReviewApiFixture):
             return [] if landed else [self.retarget("jordan-bravo", "researching")]
 
         with (
-            mock.patch.object(review_api, "linkedin_queue_order", order_then_land),
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", order_then_land),
             mock.patch.object(SqliteReviewAdapter, "retargets", retargets),
         ):
             payload = self.payload("/api/review/linkedin-card")
@@ -956,6 +957,75 @@ class LinkedinRoutesTests(ReviewApiFixture):
         self.assertEqual(ReviewPerson.from_parent(parent).labels, ())
 
 
+class LinkedinQueueTests(ReviewApiFixture):
+    """The server reads who is pending once and keeps it; a click takes one parent out."""
+
+    def keep(self, slug: str) -> dict:
+        status, written = self.post_json(
+            "/api/review/decide", {"pub": slug, "decision": "keep", "parent_slug": slug}
+        )
+        self.assertEqual(status, 200)
+        return written
+
+    def test_the_queue_is_read_once_and_each_click_takes_one_parent_out(self) -> None:
+        self.store.seed_linkedin_queue()
+        with (
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", wraps=linkedin_queue.linkedin_queue_order) as order,
+            mock.patch.object(review_api, "worth_counts", wraps=review_api.worth_counts) as worth,
+            mock.patch.object(review_api, "person_detail", wraps=review_api.person_detail) as detail,
+        ):
+            self.assertEqual(self.payload("/api/review/linkedin-card")["pending"], 3)
+            first = self.keep("jordan-bravo")
+            second = self.keep("riley-stone")
+        self.assertEqual(order.call_count, 1)
+        # A LinkedIn click cannot change the worth piles, and its card names its parent.
+        self.assertEqual((worth.call_count, detail.call_count), (0, 0))
+        self.assertEqual((first["next"]["pending"], first["next"]["card"]["person"]["slug"]), (2, "riley-stone"))
+        self.assertEqual((second["next"]["pending"], second["next"]["card"]["person"]["slug"]), (1, "sam-tango"))
+        self.assertNotIn("progress", first)
+
+    def test_a_reset_puts_the_parent_back_in_its_place(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.keep("riley-stone")["next"]["pending"], 2)
+        status, written = self.post_json(
+            "/api/review/decide", {"pub": "riley-stone", "decision": "reset", "parent_slug": "riley-stone"}
+        )
+        self.assertEqual((status, written["next"]["pending"]), (200, 3))
+        slugs = [self.payload(f"/api/review/linkedin-card?index={index}")["card"]["person"]["slug"] for index in range(3)]
+        self.assertEqual(slugs, ["jordan-bravo", "riley-stone", "sam-tango"])
+
+    def test_a_card_decided_behind_the_servers_back_is_skipped(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.payload("/api/review/linkedin-card")["card"]["person"]["slug"], "jordan-bravo")
+        # Another process settles Jordan: the queue in memory still names him.
+        self.db.decide_identity("jordan-bravo", "verify")
+        following = self.payload("/api/review/linkedin-card")
+        self.assertEqual((following["card"]["person"]["slug"], following["pending"]), ("riley-stone", 2))
+
+    def test_a_worth_decision_makes_the_next_read_load_the_queue_again(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.payload("/api/review/linkedin-card")["pending"], 3)
+        status, written = self.post_json(
+            "/worth", {"pub": "parent-worth:riley-parent", "worth": "no", "parent_slug": "riley-stone"}
+        )
+        self.assertEqual((status, written["progress"]["linkedin_pending"]), (200, 2))
+        slugs = [self.payload(f"/api/review/linkedin-card?index={index}")["card"]["person"]["slug"] for index in range(2)]
+        self.assertEqual(slugs, ["jordan-bravo", "sam-tango"])
+
+    def test_enrich_finishing_and_a_reresearch_changing_both_load_the_queue(self) -> None:
+        with (
+            mock.patch.object(review_server, "EnrichmentPipeline") as pipeline,
+            mock.patch.object(review_server, "GuidedRetargetWorker") as worker,
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", wraps=linkedin_queue.linkedin_queue_order) as order,
+        ):
+            review_server.make_handler(db=self.db, run_jobs=True)
+            self.assertEqual(order.call_count, 0)
+            pipeline.call_args.kwargs["on_finish"]()
+            self.assertEqual(order.call_count, 1)
+            worker.call_args.kwargs["on_change"]()
+            self.assertEqual(order.call_count, 2)
+
+
 class DecideTests(ReviewApiFixture):
     def test_decide_writes_the_decision_on_its_row_and_nothing_else(self) -> None:
         url = "https://www.linkedin.com/in/jordan-bravo-correct"
@@ -992,11 +1062,10 @@ class DecideTests(ReviewApiFixture):
                         "action": action,
                         "approved": "yes",
                         "new_url": new_url,
-                        "progress": {"worth_pending": 1, "worth_yes": 3, "worth_no": 0, "linkedin_pending": 2},
                         "resolved_pubs": ["jordan-bravo"],
                     },
                 )
-                self.assertEqual(following["card"]["person"]["slug"], "riley-stone")
+                self.assertEqual((following["card"]["person"]["slug"], following["pending"]), ("riley-stone", 2))
                 after = store.link_rows()
                 self.assertEqual(tuple(after["jordan-bravo"][column] for column in DECISION_COLUMNS), written)
                 # Only the decision columns of the decided row moved.
@@ -1009,10 +1078,10 @@ class DecideTests(ReviewApiFixture):
                 status, answer = self.post_json("/api/review/decide", reset, http=store.http)
                 self.assertEqual(status, 200)
                 self.assertEqual((answer["action"], answer["approved"], answer["new_url"]), ("", "", ""))
-                self.assertEqual(answer["progress"]["linkedin_pending"], 3)
+                self.assertEqual(answer["next"]["pending"], 3)
                 self.assertEqual(store.link_rows(), before)
 
-    def test_decide_answers_with_the_next_card_and_the_counts(self) -> None:
+    def test_decide_answers_with_the_next_card_and_its_count(self) -> None:
         self.store.seed_linkedin_queue()
         status, written = self.post_json(
             "/api/review/decide", {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
@@ -1021,9 +1090,6 @@ class DecideTests(ReviewApiFixture):
         self.assertEqual(written["next"], self.payload("/api/review/linkedin-card?exclude=jordan-bravo"))
         self.assertEqual(written["next"]["pending"], 2)
         self.assertEqual(written["next"]["card"]["person"]["slug"], "riley-stone")
-        self.assertEqual(
-            written["progress"], {"worth_pending": 1, "worth_yes": 3, "worth_no": 0, "linkedin_pending": 2}
-        )
         self.assertEqual((written["ok"], written["pub"], written["approved"]), (True, "jordan-bravo", "yes"))
 
     def test_decide_never_serves_the_decided_parent_back(self) -> None:
@@ -1037,7 +1103,6 @@ class DecideTests(ReviewApiFixture):
                 self.assertEqual(
                     written["next"], {"card": None, "finished": NOT_FINISHED, "pending": 1, "queue": None}
                 )
-                self.assertEqual(written["progress"]["linkedin_pending"], 1)
 
     def test_last_decision_answers_with_the_finished_state(self) -> None:
         self.store.reach_linkedin()
@@ -1045,7 +1110,7 @@ class DecideTests(ReviewApiFixture):
             "/api/review/decide", {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
         )
         self.assertEqual(status, 200)
-        self.assertEqual(written["progress"]["linkedin_pending"], 0)
+        self.assertEqual(written["next"]["pending"], 0)
         self.assertEqual(
             written["next"]["finished"],
             {
@@ -1493,7 +1558,6 @@ class TypeScriptPinTests(ReviewApiFixture):
             "/api/review/decide", {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"}
         )
         self.assertEqual(set(decided), fields("DecideResult"))
-        self.assertEqual(set(decided["progress"]), fields("DecisionProgress"))
         self.assertEqual(set(decided["next"]), fields("LinkedinCardPayload"))
 
         with mock.patch.object(enrichment_pipeline.EnrichmentPipeline, "start", return_value=False):

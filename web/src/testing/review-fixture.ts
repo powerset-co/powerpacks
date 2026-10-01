@@ -230,7 +230,6 @@ export function decideResult(overrides: Partial<DecideResult> = {}): DecideResul
     action: "keep",
     approved: "yes",
     new_url: "",
-    progress: decisionProgress({ linkedin_pending: 3 }),
     resolved_pubs: ["jordan-bravo-1"],
     next: linkedinCard({ pending: 3 }),
     ...overrides,

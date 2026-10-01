@@ -176,8 +176,8 @@ export interface DecideResult {
   action: string
   approved: string
   new_url: string
-  progress: DecisionProgress
   resolved_pubs: string[]
+  /** The card to show next; its `pending` is the count the page repaints. */
   next: LinkedinCardPayload
 }
 

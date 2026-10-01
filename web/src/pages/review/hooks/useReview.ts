@@ -19,7 +19,7 @@ export interface Review {
   /** An error for 6 s. */
   toastError: (message: string) => void
   /** Repaints the step badges and the tab counts from a click response; no refetch. */
-  applyProgress: (progress: DecisionProgress) => void
+  applyProgress: (progress: Partial<DecisionProgress>) => void
   /** The stage check: the stage becomes a check mark over `message` for 650 ms, then
    *  `stage`'s screen loads. Marks a stage-complete action in flight until it does. */
   transition: (message: string, stage: ReviewView) => void

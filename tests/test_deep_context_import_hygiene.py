@@ -21,6 +21,8 @@ EXPECTED_DB_OPERATIONS = {
     "identity_views.linkedin_parents",
     "identity_views.linkedin_progress",
     "identity_views.linkedin_queue",
+    "identity_views.linkedin_candidate_shown",
+    "identity_views.linkedin_parent_pending",
     "identity_views.linkedin_queue_order",
     "identity_views.linkedin_queue_parent",
     "identity_views.resolve_identity_key",

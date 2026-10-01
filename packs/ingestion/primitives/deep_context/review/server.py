@@ -18,6 +18,8 @@ POST  People, Searches, Accounts, Tasks, then ReviewApi (every write the review 
 Anything unclaimed is a 404.
 
 Changelog:
+- 2026-10-01: the LinkedIn queue is held in memory (linkedin_queue.py): loaded when Enrich
+  finishes and when a re-research changes, not derived on every click.
 - 2026-10-01: the Jinja review page is gone. `/` is the React shell (AppRoutes); the HTML
   routes (/api/worth-card, /api/linkedin-card, /api/worth-table, /api/worth-details,
   /assets/reconcile-review.*), /api/avatar, /decide and /approve-enrichment are deleted;
@@ -52,6 +54,7 @@ from packs.ingestion.primitives.deep_context.review.api import (
 from packs.ingestion.primitives.deep_context.review.dossier_html import markdown_to_html
 from packs.ingestion.primitives.deep_context.review.feedback import feedback_alert
 from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.review.linkedin_queue import LinkedinQueue
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import SqliteReviewAdapter
 from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.ingestion.primitives.share.web.server import share_routes
@@ -82,11 +85,23 @@ def make_handler(
             except Exception:
                 pass
 
+    # Who is pending a LinkedIn check, kept in memory: known once Enrich finishes, changed
+    # after that only by a decision (which takes its parent out) or a re-research.
+    linkedin = LinkedinQueue(db)
+
+    def enrichment_finished() -> None:
+        linkedin.load()
+        wake_agent()
+
+    def retarget_changed() -> None:
+        linkedin.load()
+        notify()
+
     enrichment_jobs = EnrichmentPipeline(
         db,
         confirm_threshold,
         on_change=notify,
-        on_finish=wake_agent,
+        on_finish=enrichment_finished,
     )
     adapter = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
     if not parents(db, limit=1):
@@ -101,7 +116,7 @@ def make_handler(
     tasks = TasksApi()
 
     if guided_retargets is None and run_jobs:
-        guided_retargets = GuidedRetargetWorker(db, on_change=notify)
+        guided_retargets = GuidedRetargetWorker(db, on_change=retarget_changed)
         guided_retargets.resume()
     review = ReviewApi(
         db=db,
@@ -111,6 +126,7 @@ def make_handler(
         wake_agent=wake_agent,
         run_jobs=run_jobs,
         guided_retargets=guided_retargets,
+        linkedin=linkedin,
     )
 
     class Handler(BaseHTTPRequestHandler):

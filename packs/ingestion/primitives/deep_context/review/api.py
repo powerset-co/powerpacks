@@ -41,6 +41,10 @@ Changelog:
     question is no longer served: the card always asks the usual one.
   2026-10-01: this module is the routes alone. The payload shapes moved to payloads.py
     and the Powerset sign-in to auth_login.py.
+  2026-10-01: the LinkedIn routes read the server's queue (linkedin_queue.py) instead of
+    deriving who is pending on every click, a decision no longer recounts the worth piles
+    or loads its parent's full record, and its answer carries no `progress` (the next
+    card's `pending` is the count).
 """
 
 from __future__ import annotations
@@ -56,9 +60,9 @@ from typing import Callable, Protocol, get_args
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
-    linkedin_progress,
-    linkedin_queue_order,
+    linkedin_candidate_shown,
     linkedin_queue_parent,
+    resolve_identity_key,
 )
 from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -69,6 +73,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance 
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidanceOutcome
 from packs.ingestion.primitives.deep_context.review import auth_login
 from packs.ingestion.primitives.deep_context.review.enrichment import STAGE_BY_ACTION, STAGES
+from packs.ingestion.primitives.deep_context.review.linkedin_queue import LinkedinQueue
 from packs.ingestion.primitives.deep_context.review.feedback import (
     FEEDBACK_ACTIONS,
     build_feedback_request,
@@ -157,9 +162,11 @@ class ReviewApi:
         wake_agent: Callable[[], None],
         run_jobs: bool,
         guided_retargets: GuidedRetargets | None,
+        linkedin: LinkedinQueue,
     ) -> None:
         self.db = db
         self.adapter = adapter
+        self.linkedin = linkedin
         self.start_enrichment = start_enrichment
         self.notify = notify
         self.wake_agent = wake_agent
@@ -328,23 +335,23 @@ class ReviewApi:
         # the two reads has either left the order or is still excluded here.
         retargets = self.adapter.retargets()
         inflight = {item.slug.lower() for item in retargets if item.state in IN_FLIGHT_RETARGET_STATES}
-        order = linkedin_queue_order(self.db)
-        queue = [row for row in order if row.slug.lower() not in excluded | inflight]
-        if not queue:
-            progress = self.adapter.snapshot().progress
-            completed = not progress.linkedin_pending
-            finished = LinkedinFinished(
-                synthesize_pending=bool(progress.synthesize_pending),
-                linkedin_done=progress.linkedin_done,
-                linkedin_complete=completed,
-                retargets_in_flight=len(inflight),
-                auto_continue=not completed,
-            )
-            return LinkedinCardPayload(card=None, finished=finished, pending=len(order), queue=None)
+        while True:
+            order = self.linkedin.rows()
+            queue = [row for row in order if row.slug.lower() not in excluded | inflight]
+            if not queue:
+                return LinkedinCardPayload(
+                    card=None, finished=self._linkedin_finished(len(inflight)), pending=len(order), queue=None
+                )
 
-        index = _index(params, len(queue))
-        # Only the card on screen is hydrated; the queue itself is ids and slugs.
-        parent = linkedin_queue_parent(self.db, queue[index].parent_id)
+            index = _index(params, len(queue))
+            # Only the card on screen is hydrated; the queue itself is ids and slugs.
+            parent = linkedin_queue_parent(self.db, queue[index].parent_id)
+            if parent.candidates:
+                break
+
+            # Settled since the queue was read (a re-research, another process): it has left.
+            self.linkedin.drop(parent.parent_id)
+
         card = LinkedinCard(
             person=ReviewPerson.from_parent(parent),
             candidates=tuple(ReviewCandidate.from_row(candidate) for candidate in parent.candidates),
@@ -354,6 +361,17 @@ class ReviewApi:
             card=card, finished=None, pending=len(order), queue=_debug_position(params, index, len(queue))
         )
 
+    def _linkedin_finished(self, retargets_in_flight: int) -> LinkedinFinished:
+        progress = self.adapter.snapshot().progress
+        completed = not progress.linkedin_pending
+        return LinkedinFinished(
+            synthesize_pending=bool(progress.synthesize_pending),
+            linkedin_done=progress.linkedin_done,
+            linkedin_complete=completed,
+            retargets_in_flight=retargets_in_flight,
+            auto_continue=not completed,
+        )
+
     def _decide(self, form: Params) -> DecideResult:
         pub = _value(form, "pub")
         decision = _value(form, "decision")
@@ -361,32 +379,52 @@ class ReviewApi:
         if not pub or decision not in get_args(LinkedinDecision):
             raise _Refusal(HTTPStatus.BAD_REQUEST, "bad request")
 
-        hit = self._submitted_row(pub, slug)
-        if not hit:
-            raise _Refusal(HTTPStatus.NOT_FOUND, f"review row not found: {pub}")
-
-        row_key, parent, _ = hit
+        row_key, parent_id, parent_slug = self._decided_row(pub, slug)
         note = _value(form, "note").strip()[:MAX_NOTE_CHARS]
         try:
             result = self.adapter.decide(row_key, decision, _value(form, "new_url"), note)
         except StoreError as error:
             raise _Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
 
+        self.linkedin.settle(parent_id)
         self.notify()
         self.wake_agent()
         # The next card is read AFTER the write committed: one round trip, and the
-        # decided parent is never served back.
-        following = self._linkedin_card({"exclude": [slug or parent.slug]})
+        # decided parent is never served back. Its `pending` is the count the page repaints.
+        following = self._linkedin_card({"exclude": [slug or parent_slug]})
         return DecideResult(
             ok=True,
             pub=row_key,
             action=result.action,
             approved=result.approved,
             new_url=result.new_url,
-            progress=self._decision_progress(following.pending),
             resolved_pubs=result.resolved_pubs,
             next=following,
         )
+
+    def _decided_row(self, pub: str, slug: str) -> tuple[str, str, str]:
+        """The identity row a LinkedIn card posted: its key, its parent and the parent's slug.
+
+        A queued parent is named by the queue; any other row takes the full lookup, which
+        also refuses a row no card shows.
+        """
+        try:
+            resolved = resolve_identity_key(self.db, pub)
+        except StoreError as error:
+            raise _Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
+
+        queued_slug = self.linkedin.slug(resolved[1]) if resolved else None
+        if resolved and queued_slug is not None and linkedin_candidate_shown(self.db, resolved[0]):
+            if slug and queued_slug != slug:
+                raise _Refusal(HTTPStatus.BAD_REQUEST, "stale or mismatched person card")
+            return resolved[0], resolved[1], queued_slug
+
+        hit = self._submitted_row(pub, slug)
+        if not hit:
+            raise _Refusal(HTTPStatus.NOT_FOUND, f"review row not found: {pub}")
+
+        row_key, parent, _ = hit
+        return row_key, parent.parent_id, parent.slug
 
     def _approve_enrichment(self, _form: Params) -> ApproveResult:
         try:
@@ -437,7 +475,9 @@ class ReviewApi:
 
         # The write is what the page waits on, so the answer is the counts it repaints
         # and nothing more: the full workflow state costs seconds on a large store.
-        progress = self._decision_progress(linkedin_progress(self.db).pending)
+        # A worth decision can move a person in or out of the LinkedIn queue.
+        self.linkedin.forget()
+        progress = self._decision_progress(len(self.linkedin.rows()))
         self.notify()
         self.wake_agent()
         return WorthResult(

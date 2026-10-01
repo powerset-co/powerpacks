@@ -1,6 +1,8 @@
 """Private row shapers shared by the named review queries.
 
 Changelog:
+- 2026-10-01: `_linkedin_parent_pending` and `_linkedin_candidate_shown` ask about one queued
+  parent and one posted row without hydrating either.
 - 2026-09-30: `_linkedin_queue_order` and `_linkedin_queue_parent` serve one review card
   without hydrating the whole queue.
 - 2026-09-25: candidate hydration binds its parent ids as one JSON array; `_worth_rows` can select one parent.
@@ -341,6 +343,17 @@ def _linkedin_queue_order(db: Db) -> list[LinkedInQueueRow]:
         LinkedInQueueRow(row["parent_id"], ResearchHandle.for_parent(row["parent_id"], row["display_slug"]))
         for row in db.query(LINKEDIN_CTE + LINKEDIN_QUEUE_ORDER_SELECT)
     ]
+
+
+def _linkedin_candidate_shown(db: Db, row_key: str) -> bool:
+    return bool(db.query(LINKEDIN_CTE + "SELECT 1 FROM candidate_policy c WHERE c.row_key=? LIMIT 1", (row_key,)))
+
+
+def _linkedin_parent_pending(db: Db, parent_id: str) -> bool:
+    return bool(db.query(
+        LINKEDIN_CTE + "SELECT 1 FROM candidate_policy c WHERE c.parent_id=? AND c.is_pending=1 LIMIT 1",
+        (parent_id,),
+    ))
 
 
 def _linkedin_queue_parent(db: Db, parent_id: str) -> ParentViewRow:

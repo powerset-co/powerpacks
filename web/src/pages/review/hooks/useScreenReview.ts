@@ -31,7 +31,13 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
   const reducedMotion = useReducedMotion()
   const fade = fadeMs(reducedMotion)
 
-  const [applied, setApplied] = useState<DecisionProgress | null>(null)
+  /** The counts click responses carried, laid over the page load's; a response names the
+   *  counts its click could change (a LinkedIn decision only its own). */
+  const [applied, setApplied] = useState<Partial<DecisionProgress>>({})
+  const applyProgress = useCallback(
+    (counts: Partial<DecisionProgress>) => setApplied((before) => ({ ...before, ...counts })),
+    [],
+  )
   const progress: PageProgress = useMemo(() => ({ ...page.progress, ...applied }), [page.progress, applied])
 
   /** The stage check's words while a stage transition runs; null otherwise. */
@@ -102,7 +108,7 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
       fadeMs: fade,
       toast: say,
       toastError: sayError,
-      applyProgress: setApplied,
+      applyProgress,
       transition,
       reload,
       leaveAndReload,
@@ -119,6 +125,7 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
       fade,
       say,
       sayError,
+      applyProgress,
       transition,
       reload,
       leaveAndReload,
