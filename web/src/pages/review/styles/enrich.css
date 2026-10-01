@@ -1,0 +1,56 @@
+/* The Enrich stage's look, ported from deep_context/review/reconcile_review.css: the panel,
+   the progress bar and its shimmer, and the approve button. The panel's frame, title and text
+   are the shared .empty-state (base.css).
+
+   Not ported: `.enrich-state .button { min-width: 180px; margin-top: 36px; }`. The old file is
+   malformed just above it (stray declarations after the shimmer's reduced-motion block), so
+   browsers dropped the rule and Continue sat straight under the title at its own width. This
+   file keeps what the old page drew. The shimmer's reduced-motion rule is the app's
+   (styles/index.css stops every animation). */
+
+.review-page .enrich-state {
+  height: 100%;
+  min-height: 380px;
+}
+
+.review-page .enrich-progress {
+  width: min(100%, 360px);
+  height: 8px;
+  margin-top: 28px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--secondary);
+}
+.review-page .enrich-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 240ms ease;
+  position: relative;
+  overflow: hidden;
+}
+/* Moving shimmer = "still working" even when the tail subject is slow. */
+.review-page .enrich-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.25) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: enrich-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes enrich-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* The one spend gate in the app: a compact, confident orange pill, 40px tall, 15px type, real
+   breathing room inside. */
+.review-page .enrich-state .button-hero {
+  min-height: 40px;
+  min-width: 200px;
+  padding: 0 28px;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  margin-top: 36px;
+}

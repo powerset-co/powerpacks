@@ -41,13 +41,21 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
   const completing = useRef(false)
   const draft = useRef(false)
   const timers = useRef<number[]>([])
+  // A late answer to a screen that has gone must not move the screen opened since: on the
+  // old page the document was gone by then.
+  const gone = useRef(false)
   useEffect(() => {
     const pending = timers.current
-    return () => pending.forEach((timer) => window.clearTimeout(timer))
+    gone.current = false
+    return () => {
+      gone.current = true
+      pending.forEach((timer) => window.clearTimeout(timer))
+    }
   }, [])
 
   const transition = useCallback(
     (message: string, stage: ReviewView) => {
+      if (gone.current) return
       completing.current = true
       setCheck(message)
       timers.current.push(window.setTimeout(() => open(stageHref(stage)), STAGE_CHECK_MS))
@@ -58,6 +66,7 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
   const { say } = toast
   const leaveAndReload = useCallback(
     (message: string) => {
+      if (gone.current) return
       say(message)
       setLeaving(true)
       timers.current.push(window.setTimeout(reload, fade))

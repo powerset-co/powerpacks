@@ -388,6 +388,10 @@ describe("ReviewPage: watching the server", () => {
   it("stays on a screen the server was already past when it opened, and reloads it on a new token", async () => {
     server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
     renderPage("/review?stage=enrich")
+    // The first read is out with the old token; the read after it carries the server's own,
+    // as a real server's page and status always agree.
+    expect(requests("/api/review/page")).toHaveLength(1)
+    server.pages.enrich = reviewPage("enrich", { state_token: "token-2" })
     await waitFor(() => expect(requests("/api/review/page")).toHaveLength(2))
     await waitFor(() => expect(seen.mounts).toBe(2))
     expect(probe("enrich")).toBeTruthy()

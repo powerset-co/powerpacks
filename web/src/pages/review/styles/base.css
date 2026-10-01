@@ -21,6 +21,19 @@
   font-weight: bold;
 }
 
+/* The old page's focus ring; a textarea kept the browser's own. */
+.review-page button:focus-visible,
+.review-page a:focus-visible,
+.review-page input:focus-visible,
+.review-page summary:focus-visible {
+  outline: 3px solid var(--foreground);
+  outline-offset: 3px;
+}
+.review-page textarea:focus-visible {
+  outline: revert;
+  outline-offset: revert;
+}
+
 .review-page .topbar {
   height: var(--topbar-height);
   display: grid;
@@ -535,6 +548,7 @@
 }
 .review-page .handoff-copy code {
   color: var(--foreground);
+  font-family: monospace;
   font-size: 13px;
 }
 .review-page .handoff-copy .button {

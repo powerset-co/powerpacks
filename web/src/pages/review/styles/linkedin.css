@@ -1,0 +1,466 @@
+/* The LinkedIn stage's look, ported from deep_context/review/reconcile_review.css: the stage
+   and its swap panel, the question and its Skip link, the profile options, the guidance box,
+   the failed re-research note, the person menu and the feedback popover. Loaded after
+   base.css (LinkedinStage imports it), under the same .review-page root. */
+
+/* The debug carousel's arrows sit against the stage. */
+.review-page .linkedin-stage {
+  position: relative;
+}
+
+.review-page .identity-decision {
+  min-width: 0;
+}
+
+.review-page .question {
+  margin: 34px 0 18px;
+  font-size: clamp(18px, 3vw, 22px);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+/* Inline "Skip" folded into the card's question line: a subtle secondary link,
+   not a button — but an obvious click target (hit area, hover/focus, keyboard). */
+.review-page .skip-link {
+  display: inline;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  /* A button kept the browser's own spacing on the old page; preflight makes it inherit the
+     question's. */
+  letter-spacing: normal;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.review-page .skip-link:hover {
+  color: var(--foreground);
+}
+.review-page .skip-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  color: var(--foreground);
+}
+.review-page .skip-link:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+/* Multi-candidate parent card: one person, several selectable profile options. */
+.review-page .linkedin-options-intro {
+  margin: 18px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.review-page .linkedin-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.review-page .linkedin-option .profile-copy h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+/* Option kind label: which of the two things this option is. */
+.review-page .option-kind {
+  display: inline-block;
+  margin: 2px 0 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.review-page .option-synthetic .option-kind {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.review-page .linkedin-option {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--background);
+}
+.review-page .linkedin-option dl {
+  margin: 0;
+}
+.review-page .linkedin-option dl > div {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 12px;
+  padding: 5px 0;
+}
+.review-page .linkedin-option dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.review-page .linkedin-option dd {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.review-page .linkedin-option .linkedin-label {
+  margin-top: 0;
+}
+/* A list inside the options list took the browser's second-level bullet on the old page. */
+.review-page .linkedin-option .fact-list {
+  list-style: circle;
+}
+.review-page .linkedin-option .button-primary {
+  margin-top: 12px;
+  width: 100%;
+}
+
+/* Optional-feedback popover — mirrored off the network-search-app
+   FeedbackForm: 288px card, 12px radius, soft drop shadow, context label,
+   auto-grow textarea, ⌘+Enter hint + send icon, green "Got it" done beat. */
+.review-page .feedback-popover {
+  position: absolute;
+  z-index: 40;
+  width: 288px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.12);
+  animation: feedback-pop-in 0.15s ease-out;
+}
+
+@keyframes feedback-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.review-page .feedback-context {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.review-page .feedback-popover textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 140px;
+  /* The browser's own textarea padding, which the old page kept and preflight removes. */
+  padding: revert;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+}
+
+.review-page .feedback-popover textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.review-page .feedback-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+}
+
+.review-page .feedback-hint {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.review-page .feedback-login {
+  align-self: stretch;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--secondary);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.review-page .feedback-login:hover {
+  background: var(--border);
+}
+
+.review-page .feedback-login:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* "…" overflow menu on the person pane */
+.review-page .person-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+/* The same menu pinned to a review card's top-right corner. The toggle sheds the full-size
+   .button pill (48px min-height) — in a card corner it is a quiet fitted affordance, not an
+   action button. */
+.review-page .card-menu {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+}
+.review-page .card-menu .person-menu-toggle {
+  min-height: 26px;
+  min-width: 30px;
+  padding: 0 7px;
+  font-size: 14px;
+  border-radius: 7px;
+}
+
+/* A returned card leads with WHY its re-research failed. */
+.review-page .reresearch-failed {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  background: rgba(185, 28, 28, 0.12);
+  color: #f87171;
+  font-size: 13px;
+}
+
+.review-page .person-menu-toggle {
+  min-width: 36px;
+  padding: 6px 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.review-page .person-menu-items {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.12);
+}
+
+.review-page .person-menu-items button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-page .person-menu-items button:hover {
+  background: var(--secondary);
+}
+
+.review-page .feedback-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-page .feedback-skip {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.review-page .feedback-skip:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.review-page .feedback-skip:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.review-page .feedback-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--secondary);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.review-page .feedback-send:hover {
+  color: var(--foreground);
+}
+
+.review-page .feedback-send:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.review-page .feedback-done {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.review-page .feedback-done p {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.review-page .feedback-done-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  flex-shrink: 0;
+}
+
+/* The wrong-person guidance box under the decision buttons. */
+.review-page .retarget-guidance {
+  margin: 12px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--secondary);
+}
+
+.review-page .retarget-guidance summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.review-page .retarget-guidance[open] summary {
+  margin-bottom: 8px;
+}
+
+.review-page .retarget-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* The old page left this box's placeholder and focus ring to the browser. Preflight gives the
+   placeholder Tailwind's grey and index.css gives every field the app's ring: both go back. */
+.review-page .retarget-form textarea::placeholder {
+  color: revert;
+  opacity: revert;
+}
+.review-page .retarget-form textarea:focus-visible {
+  outline: revert;
+  outline-offset: revert;
+}
+
+/* The inline Retarget submit: compact (not the 48px action-pill default)
+   with breathing room from the textarea above it. */
+.review-page .retarget-form .button[type="submit"] {
+  margin-top: 12px;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+@media (min-width: 621px) and (min-height: 600px) {
+  /* The stage passes the locked height through to the card, or the card's height:100%
+     collapses to content height and the bottom controls get clipped under the page's
+     overflow:hidden. The last child (the swap panel) always fills the remaining space. */
+  .review-page[data-stage="linkedin"] .linkedin-stage {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .review-page[data-stage="linkedin"] .linkedin-stage > :last-child {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* The swap panel sits between .linkedin-stage and .identity-card and must forward the
+     locked height, or the decision buttons are clipped off-screen. */
+  .review-page[data-stage="linkedin"] .linkedin-panel {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .review-page[data-stage="linkedin"] .identity-decision {
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    background: var(--card);
+  }
+
+  .review-page[data-stage="linkedin"] .question {
+    margin: 0;
+    font-size: 18px;
+  }
+}
+
+@media (max-width: 620px) {
+  /* On the old page the small-screen `.details dl > div` rule came after the option's and
+     won; base.css loads before this file, so the option's facts stack here by name. */
+  .review-page .linkedin-option dl > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}

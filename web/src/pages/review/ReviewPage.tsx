@@ -31,6 +31,11 @@ export function ReviewPage() {
     if (title) document.title = documentTitle(title)
   }, [title])
 
+  // A new screen starts without the last one's toast, as a document load cleared it.
+  const { dismiss } = toast
+  const screenId = screen?.id
+  useEffect(() => dismiss(), [dismiss, screenId])
+
   return (
     <div className="review-page" data-stage={screen?.page.view} data-preview={screen?.preview}>
       <header className="topbar">

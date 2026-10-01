@@ -1,0 +1,340 @@
+/* The worth stage's look, ported from deep_context/review/reconcile_review.css: the tabs, the
+   typeahead, the card's note box, and the Yes / No tables with their rows. The card itself is
+   in base.css. Every rule sits under .review-page, as there. */
+
+.review-page .worth-stage {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+}
+
+/* Review tab: the typeahead sits between the tabs and the swap panel (outside the panel, so
+   card swaps never touch it). */
+.review-page .worth-stage:has(> .worth-search) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.review-page .worth-panel {
+  min-height: 0;
+}
+
+.review-page .worth-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-page .worth-search-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.review-page .worth-search-input::placeholder {
+  color: var(--muted);
+}
+
+/* The focus ring reads as a permanent highlight on an input that stays focused while typing;
+   the caret and the border shift signal focus instead. */
+.review-page .worth-search-input:focus-visible {
+  outline: none;
+  border-color: var(--muted);
+}
+
+.review-page .worth-search-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.review-page .worth-search-list li {
+  padding: 10px 12px;
+  border-radius: 7px;
+  color: var(--foreground);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.review-page .worth-search-list li.active,
+.review-page .worth-search-list li:hover {
+  background: var(--secondary);
+}
+
+.review-page .worth-search-list li.worth-search-empty {
+  color: var(--muted);
+  cursor: default;
+  background: none;
+}
+
+.review-page .decision-tabs {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.review-page .decision-tab {
+  min-height: 36px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.review-page .decision-tab:hover {
+  color: var(--foreground);
+}
+.review-page .decision-tab.active {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.review-page .decision-tab span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.review-page .decision-row {
+  border-bottom: 1px solid var(--border);
+}
+.review-page .decision-row:last-child {
+  border-bottom: 0;
+}
+.review-page .table-more {
+  display: block;
+  margin: 14px auto 4px;
+}
+.review-page .decision-row-summary {
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 16px;
+  position: relative; /* anchors the left-edge chevron */
+  padding: 8px 16px 8px 44px;
+  cursor: pointer;
+  list-style: none;
+}
+.review-page .decision-row-summary::-webkit-details-marker {
+  display: none;
+}
+.review-page .decision-row-summary:hover {
+  background: var(--secondary);
+}
+/* A 40px circle in the summary row's first grid column. The card's 58px avatar rule must not
+   reach here: rows are not cards. */
+.review-page .decision-row .avatar {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  font-size: 13px;
+}
+.review-page .decision-row-main {
+  min-width: 0;
+}
+.review-page .decision-row-main strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.review-page .decision-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.review-page .decision-row-actions .button {
+  width: 64px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+/* Left-edge chevron: points right when the row is collapsed, down when it is open. */
+.review-page .decision-row-caret {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-50%) rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.review-page .decision-row[open] .decision-row-caret {
+  transform: translateY(-50%) rotate(45deg);
+}
+.review-page .decision-row-detail {
+  position: relative;
+  padding: 2px 16px 18px 100px;
+  /* One scroll container: the detail itself, so the wheel is never trapped in a box inside it. */
+  max-height: 420px;
+  overflow-y: auto;
+}
+/* Centre the cue on the content column, not the padding box: the detail's left padding (100px)
+   exceeds the right (16px), so shift by half the difference (42px). Sticky, so it stays in
+   view while the detail scrolls. */
+.review-page .decision-row-detail .scroll-cue {
+  bottom: 18px;
+  left: calc(50% + 42px);
+  position: sticky;
+}
+.review-page .row-facts {
+  margin: 0 0 14px;
+}
+.review-page .row-facts > div {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 12px;
+  padding: 5px 0;
+}
+.review-page .row-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.review-page .row-facts dd {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.review-page .dossier-heading {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.review-page .decision-row-detail .dossier-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--foreground);
+}
+
+/* A flipped row fades out at once while its save runs; a refused save brings it back. */
+.review-page details.decision-row.leaving {
+  opacity: 0;
+  transform: translateY(-5px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
+}
+
+/* The card's optional "why" box: quiet while collapsed; whatever is typed rides along with
+   the Yes / No click. */
+.review-page .worth-why {
+  margin: 0 0 10px;
+}
+
+.review-page .worth-why summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.review-page .worth-why[open] summary {
+  margin-bottom: 8px;
+}
+
+.review-page .worth-why textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.review-page .person-name-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.review-page .person-name-line .person-labels {
+  margin: 0;
+}
+.review-page .decision-expanded-profile {
+  margin: 12px 0 18px;
+}
+.review-page .decision-expanded-profile h2 {
+  margin: 0;
+  font-size: 24px;
+}
+/* An open row shows its labels under the name in the detail, so the summary's copy hides. */
+.review-page .decision-row[open] .person-name-line .person-labels {
+  display: none;
+}
+
+/* The locked one-screen layout (base.css): the stage and its panel fill the height the
+   stepper leaves, and the panel is the scroll container, so a long table scrolls inside it. */
+@media (min-width: 621px) and (min-height: 600px) {
+  .review-page[data-stage="worth"] .worth-stage,
+  .review-page[data-stage="worth"] .worth-panel {
+    height: 100%;
+  }
+
+  .review-page[data-stage="worth"] .worth-panel {
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .review-page .decision-row {
+    padding-inline: 12px;
+  }
+
+  .review-page .decision-row .avatar {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  /* The detail drops the left indent, so the cue centres plainly. */
+  .review-page .decision-row-detail {
+    padding-left: 12px;
+  }
+  .review-page .decision-row-detail .scroll-cue {
+    left: 50%;
+  }
+
+  .review-page .decision-row-actions .button {
+    width: 52px;
+    padding-inline: 8px;
+  }
+}
