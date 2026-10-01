@@ -119,7 +119,7 @@ class EnrichmentPipeline:
                 f"{f': {detail}' if detail else ''}"
             )
         profiles = PrefetchProfiles(db=self.db, fetch=True).run()
-        if profiles.status != "completed":
+        if profiles.status not in {"completed", "completed_with_failures"}:
             raise RuntimeError(
                 f"profile prefetch stopped with status {profiles.status}"
                 f"{f': {profiles.note}' if profiles.note else ''}"

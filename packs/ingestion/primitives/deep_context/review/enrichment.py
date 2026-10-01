@@ -99,7 +99,7 @@ def enrichment_view(
     # The remaining chain prepares profiles, assembles no-match cards, and
     # resolves identity disagreements.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
-    if not total and remaining_judgments:
+    if not total and remaining_judgments and not applied:
         status, route_state = "not_started", "profile_prep_pending"
     elif not total:
         status, route_state = "completed", "done"

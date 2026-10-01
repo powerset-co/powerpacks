@@ -121,6 +121,28 @@ def stub_mapped_identity_judge(answer):
 
 
 class MappedCandidateJudgeTests(unittest.TestCase):
+    def test_failed_profile_is_not_judged_and_remains_retryable(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            db = profile_db(root)
+            target = ProfileTarget('jordan-bravo', 'https://www.linkedin.com/in/jordan-bravo',
+                                   'jordan-bravo', 'parent-1')
+            failed = ProfileResult.from_payload(target.public_identifier, target.linkedin_url, {
+                'state': 'error', 'status_code': 503, 'detail': 'fetch failed (503)',
+                'normalized_profile': {},
+            })
+            profile_projection.project_profile_results(db, ((target, failed),), root / 'cache')
+            with stub_mapped_identity_judge({'verdict': 'confirmed', 'confidence': .99, 'reason': 'matched'}) as judge_call:
+                self.assertEqual(judging.judge_mapped_candidates(db).judge_calls, 0)
+                judge_call.assert_not_called()
+                self.assertIsNone(db.query('SELECT machine_judgment FROM links')[0][0])
+                recovered = ProfileResult.from_payload(target.public_identifier, target.linkedin_url, {
+                    'state': 'content', 'normalized_profile': {'success': True,
+                        'full_name': 'Jordan Bravo', 'experiences': [{'title': 'Founder', 'company_name': 'Example'}]},
+                })
+                profile_projection.project_profile_results(db, ((target, recovered),), root / 'cache')
+                self.assertEqual(judging.judge_mapped_candidates(db).judge_calls, 1)
+
     def test_research_only_person_stays_reviewable_after_uncertain_verdict(self) -> None:
         from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 

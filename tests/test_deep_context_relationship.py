@@ -40,6 +40,18 @@ class RelationshipTest(unittest.TestCase):
     def stage(self, **kwargs):
         return ReviewRelationships(db=self.db, out_dir=self.root / "relationships", **kwargs)
 
+    def test_failed_profile_defers_parent_without_recording_a_decision(self):
+        self.db.project_rows((ArtifactRow('profile:jordan:proposal', 'profile', 'jordan',
+            '/fixture/profile.json', 'fixture', 'projected', candidate_key='jordan:proposal',
+            payload_json=json.dumps({'state': 'error', 'status_code': 503,
+                'detail': 'fetch failed (503)', 'normalized_profile': {}})),))
+        with patch('packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call',
+                   new_callable=AsyncMock) as call:
+            result = self.stage(approve_spend=True).run()
+        self.assertEqual(result['status'], 'completed')
+        call.assert_not_called()
+        self.assertIsNone(self.db.query('SELECT machine_judgment FROM links')[0][0])
+
     def test_judge_receives_full_fetched_career_history(self):
         self.db.project_rows((ArtifactRow('profile:jordan:proposal', 'profile', 'jordan',
             '/fixture/profile.json', 'fixture-profile', 'projected', candidate_key='jordan:proposal',

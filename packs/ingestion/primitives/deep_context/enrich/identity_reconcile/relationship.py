@@ -33,6 +33,7 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd,
 )
 from packs.ingestion.primitives.imports.common import write_manifest
+from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR
 from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 SYSTEM_PROMPT = load_prompt("relationship_system")
@@ -97,6 +98,9 @@ class ReviewRelationships:
         tasks = []
         for parent_id in pending:
             rows = links(self.db, parent_id=parent_id)
+            if any(not row.decision_action and (profile := hydrated.get(row.row_key)) is not None
+                   and profile.state == PROFILE_ERROR for row in rows):
+                continue
             if any(row.decision_action in {"verify", "retarget"} and row.decision_approved in {"yes", "auto"} for row in rows):
                 continue
             eligible_urls = {normalize_linkedin_url(row.machine_proposed_url or row.linkedin_url) for row in rows

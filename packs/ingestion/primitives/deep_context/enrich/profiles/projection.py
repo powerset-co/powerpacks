@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -123,6 +124,8 @@ def hydrate_profiles(
         # exactly once here, then fan the SAME parsed value out to every
         # target sharing this pub (project + caller callback).
         parsed: ProfileResult = ProfileResult.from_payload(public_identifier, _url, result)
+        if parsed.state == rapidapi_client.PROFILE_ERROR:
+            print(f"[profile-prefetch] {public_identifier}: {parsed.detail}; deferred", file=sys.stderr)
         profiles[public_identifier] = parsed
         rows = grouped.get(public_identifier, [])
         if db is not None:
