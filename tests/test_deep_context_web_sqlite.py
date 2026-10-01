@@ -1511,6 +1511,25 @@ class DeepContextLinkedInPageTests(unittest.TestCase):
         self.assertEqual((total, index, parent), (3, 1, expected[1]))
         self.assertEqual(len(hydrate.call_args.args[1]), 1)
 
+    def test_linkedin_page_reads_only_metadata_before_selected_dossier(self):
+        from packs.ingestion.primitives.deep_context.db import _view_rows
+        calls = []
+        query = self.db.query
+
+        def record(sql, params=()):
+            rows = query(sql, params)
+            calls.append((sql, params, rows))
+            return rows
+
+        with mock.patch.object(self.db, "query", side_effect=record):
+            total, index, parent = _view_rows._linkedin_page(self.db, index=1)
+        self.assertEqual((total, index), (3, 1))
+        self.assertEqual(set(calls[0][2][0].keys()), {"parent_id", "display_slug"})
+        self.assertEqual(len(calls[0][2]), 3)
+        self.assertIn("WHERE p.parent_id=?", calls[1][0])
+        self.assertEqual(calls[1][1], (parent.parent_id,))
+        self.assertEqual(len(calls[1][2]), 1)
+
     def test_linkedin_page_exclusion_negative_index_and_empty_queue(self):
         from packs.ingestion.primitives.deep_context.db import _view_rows
         expected = _view_rows._linkedin_queue(self.db)

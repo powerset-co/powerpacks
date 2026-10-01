@@ -317,14 +317,11 @@ def _decision_page(
     return _hydrate_parents(db, rows, pending_only=False)
 
 
-def _linkedin_parent_rows(db: Db) -> list[sqlite3.Row]:
-    return db.query(
+def _linkedin_queue(db: Db) -> list[ParentViewRow]:
+    rows = db.query(
         LINKEDIN_CTE + PARENT_SELECT.format(where="WHERE p.parent_id IN (SELECT parent_id FROM pending_parents)")
     )
-
-
-def _linkedin_queue(db: Db) -> list[ParentViewRow]:
-    return _hydrate_parents(db, _linkedin_parent_rows(db), pending_only=True)
+    return _hydrate_parents(db, rows, pending_only=True)
 
 
 def _linkedin_page(
@@ -334,15 +331,24 @@ def _linkedin_page(
     excluded: Sequence[str] = (),
 ) -> tuple[int, int, ParentViewRow | None]:
     excluded_slugs = {slug.lower() for slug in excluded}
+    pending = db.query(LINKEDIN_CTE + """
+SELECT p.parent_id, p.display_slug
+FROM parents p JOIN pending_parents pending USING(parent_id)
+ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
+""")
     rows = [
-        row for row in _linkedin_parent_rows(db)
+        row for row in pending
         if ResearchHandle.for_parent(row["parent_id"], row["display_slug"]).lower() not in excluded_slugs
     ]
     total = len(rows)
     if not total:
         return 0, 0, None
     index = max(0, index) % total
-    parent = _hydrate_parents(db, rows[index:index + 1], pending_only=True)[0]
+    selected = db.query(
+        WORTH_CTE + PARENT_SELECT.format(where="WHERE p.parent_id=?"),
+        (rows[index]["parent_id"],),
+    )
+    parent = _hydrate_parents(db, selected, pending_only=True)[0]
     return total, index, parent
 
 
