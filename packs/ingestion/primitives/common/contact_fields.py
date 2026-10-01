@@ -32,6 +32,9 @@ Changelog:
     / is_generic_or_non_person (+ GENERIC_PREFIXES / GENERIC_KEYWORDS /
     BUSINESS_NAME_KEYWORDS) from discover/gmail/msgvault_store — they are generic
     name/email testers, not msgvault-specific. Behavior unchanged.
+  2026-10-01: adds `is_role_address` / `ROLE_ADDRESS_WORDS`, a whole-local-part
+    shared-mailbox test (`ir@` yes, `irene@` no) that deep-context applies where
+    imported contacts enter it.
 """
 
 from __future__ import annotations
@@ -310,6 +313,38 @@ def is_likely_person_name(name: str) -> bool:
     if clean == clean.upper() and len(words) <= 2:
         return False
     return True
+
+
+ROLE_ADDRESS_WORDS = frozenset({
+    "accounting", "accounts", "accountspayable", "accountsreceivable", "admin",
+    "ap", "ar", "billing", "care", "careers", "community", "compliance",
+    "concierge", "contact", "customerservice", "customersupport", "events",
+    "feedback", "filings", "finance", "frontdesk", "help", "helpdesk", "hr",
+    "info", "investorrelations", "investors", "invoice", "invoices", "ir",
+    "legal", "mail", "members", "membership", "office", "onboarding", "operations",
+    "ops", "orders", "partnerships", "payments", "portfolio", "reception",
+    "registration", "rsvp", "sales", "scheduling", "service", "services",
+    "support", "tax", "taxes",
+})
+"""Local parts of shared mailboxes. Deliberately absent: hello, hi, team,
+assistant — real people and solo founders write from those."""
+
+_SHORT_ROLE_LENGTH = 3
+"""A separator-joined local part this short is never a role word (`i.r`)."""
+
+
+def is_role_address(email: str) -> bool:
+    """True when the whole local part is a role word (`ir@`, `customer.service@`).
+
+    Never matches a piece of the local part: `irene@` and `kirk.ir@` are people.
+    Separators are dropped only when the joined result is longer than 3
+    characters, so short words must equal the raw local part.
+    """
+    local = email.strip().lower().rsplit("@", 1)[0]
+    if local in ROLE_ADDRESS_WORDS:
+        return True
+    joined = re.sub(r"[.\-_]", "", local)
+    return len(joined) > _SHORT_ROLE_LENGTH and joined in ROLE_ADDRESS_WORDS
 
 
 def is_generic_or_non_person(email: str) -> bool:

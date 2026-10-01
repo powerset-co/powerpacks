@@ -7,6 +7,9 @@ Everything downstream reads the SQLite roster, including the headline used by
 the notable-title rule.
 
 Changelog:
+  2026-10-01: `read_imported_people` drops shared mailboxes (every email a
+      role address, no phone, not a LinkedIn connection). People already in
+      the store are carried forward unchanged.
   2026-09-26: the profile cells a person list renders (LinkedIn URL, avatar,
       title, company, location) ride the row; the share UI reads them.
   2026-09-25: `headline` (the imported LinkedIn headline) rides the row; the
@@ -21,6 +24,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import (
     emails_from_row,
+    is_role_address,
     normalize_email,
     normalize_phone,
     phones_from_row,
@@ -39,6 +43,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     PersonSourceRow,
     PersonSourcesProjection,
+    SourceChannel,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
@@ -188,8 +193,23 @@ def _imported_people(rows: tuple[PeopleRow, ...]) -> tuple[ImportedPerson, ...]:
     return tuple(combined[key] for key in sorted(combined))
 
 
+def _is_shared_mailbox(person: ImportedPerson) -> bool:
+    """Only role addresses, no phone, and not a LinkedIn connection."""
+    return (
+        bool(person.emails)
+        and all(is_role_address(email) for email in person.emails)
+        and not person.phones
+        and SourceChannel.LINKEDIN not in person.source_channels
+        and not person.public_identifier
+    )
+
+
 def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
-    """Read the canonical fan-in CSV only at the import boundary."""
+    """Read the canonical fan-in CSV only at the import boundary.
+
+    Shared mailboxes (`ir@`, `billing@`) are dropped here: a human replies from
+    them, so the Gmail import keeps them, but they are not people.
+    """
     if not path.is_file():
         return ()
     rows = []
@@ -197,7 +217,7 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
         if not raw.get("primary_phone"):
             raw["primary_phone"] = raw.get("phone") or raw.get("phone_e164") or ""
         rows.append(PeopleRow.model_validate(raw))
-    return _imported_people(tuple(rows))
+    return tuple(person for person in _imported_people(tuple(rows)) if not _is_shared_mailbox(person))
 
 
 def stored_imported_people(db: Db) -> tuple[ImportedPerson, ...]:

@@ -14,6 +14,7 @@ from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
+    _imported_people,
     project_imported_people,
     read_imported_people,
 )
@@ -213,6 +214,42 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             rows[0].source_channels,
             ("gmail_msgvault", "imessage", "whatsapp"),
         )
+
+    def test_shared_mailbox_does_not_enter_the_store(self) -> None:
+        self.write([
+            {"id": "candidate:email:ir@acme.example", "full_name": "Investor Relations",
+             "primary_email": "ir@acme.example", "source_channels": "gmail_msgvault"},
+            {"id": "person-1", "full_name": "Jordan Bravo",
+             "all_emails": '["ir@acme.example", "jordan@example.com"]', "source_channels": "gmail_msgvault"},
+            {"id": "person-2", "full_name": "Front Desk",
+             "primary_email": "front.desk@example.com", "primary_phone": "+15550100",
+             "source_channels": "gmail_msgvault"},
+            {"id": "person-3", "full_name": "Casey Info",
+             "primary_email": "info@example.com", "source_channels": "linkedin_csv"},
+            {"id": "person-4", "full_name": "Casey Info",
+             "primary_email": "info@example.org", "source_channels": "gmail_msgvault",
+             "public_identifier": "casey-info"},
+        ])
+
+        EnsureParents(db=self.db, people_csv=self.csv).run()
+
+        stored = sorted(person.person_id for person in canonical_snapshot(self.db).people)
+        self.assertEqual(stored, ["person-1", "person-2", "person-3", "person-4"])
+        self.assertNotIn("candidate:email:ir@acme.example", {row.row_key for row in links(self.db)})
+
+    def test_shared_mailbox_already_in_the_store_lingers_after_the_filter(self) -> None:
+        """Records current behaviour: the roster carries stored people forward."""
+        mailbox = {"id": "person-ir", "full_name": "Investor Relations",
+                   "primary_email": "ir@acme.example", "source_channels": "gmail_msgvault"}
+        # Seeds the store as an import from before the filter did.
+        project_imported_people(self.db, _imported_people((PeopleRow.model_validate(mailbox),)))
+        self.write([{"id": "person-1", "full_name": "Jordan Bravo",
+                     "primary_email": "jordan@example.com", "source_channels": "gmail_msgvault"}])
+
+        EnsureParents(db=self.db, people_csv=self.csv).run()
+
+        self.assertIn("person-ir", {person.person_id for person in canonical_snapshot(self.db).people})
+        self.assertIn("person-ir", {row.id for row in queries.imported_people(self.db)})
 
     def test_projection_gets_one_stable_parent_and_preserves_newer_evidence(self) -> None:
         self.write(
