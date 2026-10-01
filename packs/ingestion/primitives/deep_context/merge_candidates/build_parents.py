@@ -32,7 +32,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactReplacement,
     ArtifactRow,
     IdentifierKind,
-    MergeVerdictRow,
     PARENT_DOSSIER_ARTIFACT_PREFIX,
     PersonRow,
     ProjectionStatus,
@@ -55,7 +54,7 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
 )
-from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import accepted_edges, connected_components
 from packs.ingestion.primitives.deep_context.manifests.build_parents_manifest import (
     BuildParentsManifest,
 )
@@ -68,21 +67,16 @@ PARENT_RENDER_CONTRACT = "parent-dossier-v1"
 
 
 def _accepted_components(db: Db) -> tuple[tuple[str, ...], ...]:
-    """Current parent components linked by their latest accepted verdict."""
+    """Join current parents without overriding any child-pair rejection."""
     parent_by_person = {row.person_id: row.parent_id for row in person_rows(db)}
-    latest: dict[tuple[str, str], MergeVerdictRow] = {}
+    verdicts = []
     for row in merge_verdicts(db):
-        left: str | None = parent_by_person.get(row.person_a)
-        right: str | None = parent_by_person.get(row.person_b)
-        if not left or not right or left == right:
+        left = parent_by_person[row.person_a]
+        right = parent_by_person[row.person_b]
+        if left == right or (row.same_person and not row.accepted):
             continue
-        key = tuple(sorted((left, right)))
-        prior: MergeVerdictRow | None = latest.get(key)
-        rank = (row.updated_at or "", row.person_a, row.person_b)
-        if prior is None or rank >= (prior.updated_at or "", prior.person_a, prior.person_b):
-            latest[key] = row
-
-    edges = [key for key, row in latest.items() if row.accepted]
+        verdicts.append((left, right, bool(row.same_person), row.confidence))
+    edges = accepted_edges(verdicts)
     nodes = sorted({parent_id for edge in edges for parent_id in edge})
     return tuple(tuple(sorted(group)) for group in connected_components(nodes, edges))
 

@@ -379,6 +379,12 @@ def _static_asset_read(
     if relative.endswith("/synthesis/prompting.py"):
         expression = ast.unparse(call.func.value) if isinstance(call.func, ast.Attribute) else ""
         return method == "read_text" and "fact_schema.json" in expression and "__file__" in expression
+    if relative.endswith("/enrich/identity_reconcile/jev_judge.py"):
+        expression = ast.unparse(call.func.value) if isinstance(call.func, ast.Attribute) else ""
+        return method in DIRECT_FILE_READ_METHODS and expression in {
+            "Path(__file__).with_name('jev_model.json')",
+            "Path(__file__).with_name('jev_questions.json')",
+        }
     if "/jev_worth/" in relative:
         # The frozen mapping/questions JSON next to the module, same pattern as
         # synthesis/prompting.py's fact_schema.json above.

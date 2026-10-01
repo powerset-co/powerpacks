@@ -1,6 +1,6 @@
-"""Judge useful owner-answerable questions from saved dossiers, then limit review.
+"""Resolve parent identity disagreements from saved dossiers and candidate evidence.
 
-SQLite pending parents -> cached question judgments -> at most 100 questions.
+SQLite pending parents -> cached identity judgments -> candidate settlement.
 Dry-run previews uncached OpenAI calls; completed outputs resume from SQLite.
 """
 
@@ -15,15 +15,14 @@ from pathlib import Path
 
 import jsonschema
 
-from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
 from packs.ingestion.primitives.common.gates import exit_code_for_status
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db.context_queries import dossier_message_count
-from packs.ingestion.primitives.deep_context.db.identity_queries import links
-from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids, linkedin_queue
-from packs.ingestion.primitives.deep_context.db.queries import parents
+from packs.ingestion.primitives.deep_context.db.identity_queries import imported_linkedin_urls, links, research_rows
+from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids, linkedin_parents
+from packs.ingestion.primitives.deep_context.db.queries import parents, facts
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
     RelationshipDecision, cache_relationship_judgment, finish_reviews,
 )
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
@@ -44,14 +43,13 @@ class _RelationshipTask:
     parent_id: str
     prompt: str
     fingerprint: str
-    message_count: int
 
 
 class ReviewRelationships:
-    """Checkpoint each paid question judgment before finishing the complete queue."""
+    """Checkpoint each paid identity judgment before settling the parent choices."""
 
     def __init__(self, *, db: Db, out_dir: Path | None = None,
-                 model: str = DEFAULT_IDENTITY_MODEL, reasoning_effort: str = "medium",
+                 model: str = "gpt-6.1-sol", reasoning_effort: str = "medium",
                  concurrency: int | None = None, approve_spend: bool = False,
                  dry_run: bool = False, limit: int | None = None):
         self.db = db
@@ -64,33 +62,59 @@ class ReviewRelationships:
         self.limit = limit
 
     def run(self) -> dict[str, object]:
+        pending = sorted(pending_parent_ids(self.db))
         records: dict[str, RelationshipDecision] = {}
-        for candidate in links(self.db):
+        saved = {}
+        for candidate in links(self.db, parent_ids=pending):
             payload = parse_json_object(candidate.judgment_payload_json)
             raw = payload.get("relationship_judgment") or payload.get("relationship_decision")
-            if raw:
-                decision = RelationshipDecision(**raw)
-                records[decision.parent_id] = decision
+            if raw and "candidates" in raw:
+                saved[raw["parent_id"]] = RelationshipDecision.from_payload(
+                    raw["parent_id"], raw["fingerprint"], raw)
         candidates = {parent.parent_id: [{
             "url": candidate.url, "name": candidate.full_name, "headline": candidate.headline,
             "location": candidate.location, "experiences": candidate.experiences,
             "education": candidate.education, "identity_verdict": candidate.verdict,
             "identity_reason": candidate.reason,
-        } for candidate in parent.candidates] for parent in linkedin_queue(self.db)}
+        } for candidate in parent.candidates if candidate.url] for parent in linkedin_parents(self.db, parent_ids=pending)}
+        known_urls = imported_linkedin_urls(self.db, pending)
         tasks = []
-        for parent_id in sorted(pending_parent_ids(self.db)):
+        for parent_id in pending:
+            rows = links(self.db, parent_id=parent_id)
+            if any(row.decision_action in {"verify", "retarget"} and row.decision_approved in {"yes", "auto"} for row in rows):
+                continue
+            eligible_urls = {row.machine_proposed_url or row.linkedin_url for row in rows
+                if not row.decision_action and row.kind != "synthetic"} - {None, ""}
+            if not eligible_urls:
+                continue
+            profiles = {candidate["url"]: candidate for candidate in candidates.get(parent_id, ())
+                if candidate["url"] in eligible_urls}
+            for url in eligible_urls:
+                profiles.setdefault(url, {"url": url})
             evidence = DossierEvidence.from_parent_db(self.db, parent_id)
             message_count = dossier_message_count(self.db, parent_id)
             context = {key: value for key, value in evidence.as_judge_dict().items() if value}
-            context.update(dossier=evidence.dossier,
+            context.update(dossier=evidence.dossier, message_count=message_count,
+                imported_linkedin_urls=known_urls.get(parent_id, ()),
                 human_worth=parents(self.db, parent_id=parent_id)[0].human_worth,
-                message_count=message_count, candidates=candidates[parent_id])
+                worth_evidence=[{"machine_worth": row.machine_worth, "reason": row.machine_worth_reason,
+                    "labels": parse_json_object(row.facts_json).get("labels"),
+                    "network_worth": parse_json_object(row.facts_json).get("network_worth")}
+                    for row in facts(self.db, parent_id=parent_id)],
+                candidates=[profiles[url] for url in sorted(profiles)],
+                research=[parse_json_object(row.result_json) for row in research_rows(self.db, parent_id=parent_id)
+                    if row.result_json])
             prompt = json.dumps(context, ensure_ascii=False, sort_keys=True)
-            fingerprint = hashlib.sha256(json.dumps({
-                "parent_id": parent_id, "system": SYSTEM_PROMPT, "input": prompt, "schema": SCHEMA,
-                "model": self.config.model, "effort": self.config.effort,
-            }, sort_keys=True).encode()).hexdigest()
-            tasks.append(_RelationshipTask(parent_id, prompt, fingerprint, message_count))
+            # Machine verdicts change when this decision settles; paid evidence does not.
+            evidence_input = dict(context)
+            evidence_input["candidates"] = [{key: value for key, value in candidate.items()
+                if key not in {"identity_verdict", "identity_reason"}} for candidate in context["candidates"]]
+            fingerprint = hashlib.sha256(json.dumps(evidence_input, ensure_ascii=False,
+                sort_keys=True).encode()).hexdigest()
+            task = _RelationshipTask(parent_id, prompt, fingerprint)
+            tasks.append(task)
+            if parent_id in saved and saved[parent_id].fingerprint == fingerprint:
+                records[parent_id] = saved[parent_id]
         missing = [task for task in tasks if task.parent_id not in records]
         chosen = missing[:self.limit] if self.limit is not None else missing
         estimate = estimate_cost_usd(
@@ -126,8 +150,10 @@ class ReviewRelationships:
                 result = await caller.call(system_prompt=SYSTEM_PROMPT, user_prompt=task.prompt,
                     schema=SCHEMA, schema_name="relationship", context=task.parent_id)
                 jsonschema.validate(result.payload, SCHEMA)
-                decision = RelationshipDecision(parent_id=task.parent_id, fingerprint=task.fingerprint,
-                    message_count=task.message_count, **result.payload)
+                decision = RelationshipDecision.from_payload(task.parent_id, task.fingerprint, result.payload)
+                expected_urls = {candidate["url"] for candidate in json.loads(task.prompt)["candidates"]}
+                if {candidate.url for candidate in decision.candidates} != expected_urls:
+                    raise ValueError("identity decision must return exactly the supplied URLs")
                 with self.decisions_path.open("a") as target:
                     target.write(json.dumps({"judgment": asdict(decision), "model": self.config.model,
                         "effort": self.config.effort, "usage": result.usage.as_dict()}, ensure_ascii=False) + "\n")
@@ -142,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=CANONICAL_DB)
     parser.add_argument("--out-dir", type=Path)
-    parser.add_argument("--model", default=DEFAULT_IDENTITY_MODEL)
+    parser.add_argument("--model", default="gpt-6.1-sol")
     parser.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
     parser.add_argument("--concurrency", type=int)
     parser.add_argument("--limit", type=int)

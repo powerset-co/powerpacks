@@ -20,6 +20,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     identifiers as identifier_rows,
     parents as parent_rows,
     people as person_rows,
+    owner_profile,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import DossierEvidenceRows
@@ -109,6 +110,7 @@ class _Roster:
             identifiers.setdefault(row.person_id, {}).setdefault(row.kind, []).append(row.normalized_value)
         people_rows = person_rows(db)
         owner_ids = {row.person_id for row in people_rows if row.is_owner}
+        owner = owner_profile(db)
         members: dict[str, list[PersonRow]] = {}
         for person in people_rows:
             members.setdefault(person.parent_id, []).append(person)
@@ -116,12 +118,12 @@ class _Roster:
             facts={row.parent_id: row for row in fact_rows(db, parent_owned=True) if row.parent_id},
             identifiers=identifiers,
             members=members,
-            owner_emails={
+            owner_emails=identifier_emails(owner.emails if owner else ()) | {
                 value
                 for person_id in owner_ids
                 for value in identifiers.get(person_id, {}).get(IdentifierKind.EMAIL.value, [])
             },
-            owner_phones={
+            owner_phones=identifier_phones(owner.phones if owner else ()) | {
                 phone_digits(value)
                 for person_id in owner_ids
                 for value in identifiers.get(person_id, {}).get(IdentifierKind.PHONE.value, [])
@@ -148,13 +150,13 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
         value
         for person_id in member_ids
         for value in roster.identifiers.get(person_id, {}).get(IdentifierKind.EMAIL.value, [])
-    }))
+    } - roster.owner_emails))
     phones = tuple(sorted({
         phone_digits(value)
         for person_id in member_ids
         for value in roster.identifiers.get(person_id, {}).get(IdentifierKind.PHONE.value, [])
         if phone_digits(value)
-    }))
+    } - roster.owner_phones))
     extra_emails = tuple(sorted(identifier_emails(owned.emails) - set(emails) - roster.owner_emails))
     extra_phones = tuple(sorted(identifier_phones(owned.phones) - set(phones) - roster.owner_phones))
     name = parent.display_name or fact_payload.canonical_name

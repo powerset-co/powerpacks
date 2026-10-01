@@ -21,7 +21,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
     RelationshipDecision,
     finish_reviews,
 )
@@ -764,66 +764,15 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(missing.candidates[0].full_name, "")
         self.assertFalse(missing.candidates[0].has_profile)
 
-    def test_synthetic_review_queue_excludes_machine_settled_candidates(self) -> None:
+    def test_synthetic_only_parent_goes_directly_to_identity_review(self) -> None:
         people = self.add_parent("synthetic-review", "yes")
         key = "synthetic:review"
         self.add_candidate("synthetic-review", key, person_ids=people, kind="synthetic")
         project_synthetic_profile(self.db, SyntheticProfileRow(key, key, "{}"))
         self.assertEqual([row.parent_id for row in linkedin_queue(self.db)], ["synthetic-review"])
-        self.assertEqual(review_questions_pending(self.db), 1)
-
-        result = finish_reviews(self.db, [RelationshipDecision(
-            "synthetic-review", "No useful identity question", False,
-            "", 0, "fixture-question",
-        )])
-        self.assertEqual(result["completed_parents"], 1)
-        self.assertEqual(linkedin_queue(self.db), [])
         self.assertEqual(review_questions_pending(self.db), 0)
-        row = query(self.db, "SELECT * FROM links WHERE row_key=?", (key,))[0]
-        self.assertEqual((row["machine_action"], row["machine_approved"]), ("detach", "auto"))
-
-    def test_workflow_orders_review_questions_before_linkedin(self) -> None:
-        people = self.add_parent("state", "maybe")
-        self.add_candidate(
-            "state",
-            "jordan-state",
-            person_ids=people,
-            paid_profile=1,
-            linkedin_url="https://www.linkedin.com/in/jordan-state",
-            machine_judgment="wrong_person",
-            machine_confidence=0.9,
-            judgment_payload_json=json.dumps({"recommend_deep_research": True}),
-        )
-        self.assertEqual(workflow_state(self.db).next_action, "review_people")
-
-        self.db.decide_worth("state", "yes", decided_at="2026-08-05T00:30:00Z")
-        self.assertEqual(workflow_state(self.db).next_action, "enrich")
-        self.db.project_rows((ResearchRow("state", "state", "no_match", "jordan-state"),))
-        self.assertEqual(workflow_state(self.db).next_action, "enrich")
-
-        self.add_candidate(
-            "state",
-            "synthetic:state",
-            person_ids=people,
-            kind="synthetic",
-        )
-        project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:state", "synthetic:state", "{}"))
-        with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE links SET judgment_payload_json=? WHERE row_key='jordan-state'",
-                (json.dumps({"verdict": "wrong_person", "confidence": 0.9}),),
-            )
-        self.assertEqual(review_questions_pending(self.db), 1)
-        self.assertEqual(workflow_state(self.db).next_action, "enrich")
-        result = finish_reviews(self.db, [RelationshipDecision(
-            "state", "Owner can identify this contact", True,
-            "Is this Jordan Bravo?", 1, "fixture-question",
-        )])
-        self.assertEqual(result["review_parent_ids"], ["state"])
-        self.assertEqual(review_questions_pending(self.db), 0)
+        self.db.project_rows((ResearchRow("synthetic-review", "synthetic-review", "no_match", key),))
         self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
-        self.db.decide_identity("synthetic:state", "verify")
-        self.assertEqual(workflow_state(self.db).next_action, "realize")
 
     def test_collected_parent_without_facts_queues_synthesize(self) -> None:
         self.add_factsless_parent("linkedin-only")

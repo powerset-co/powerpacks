@@ -160,10 +160,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             cls.addClassCleanup(patcher.stop)
 
     def finish_questions(self):
-        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import RelationshipDecision, finish_reviews
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import RelationshipDecision, finish_reviews
         from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids
-        finish_reviews(self.db, tuple(RelationshipDecision(parent, "Shared work context.", True,
-            "Is this your colleague?", 2, f"question:{parent}") for parent in pending_parent_ids(self.db)))
+        from packs.ingestion.primitives.deep_context.db.identity_queries import links
+        finish_reviews(self.db, tuple(RelationshipDecision.from_payload(parent, f"question:{parent}",
+            {"candidates": [{"url": url, "verdict": "review", "reason": "Owner can identify colleague", "confidence": .5}
+                for url in sorted({row.machine_proposed_url or row.linkedin_url for row in links(self.db, parent_id=parent)
+                    if not row.decision_action and row.kind != "synthetic"} - {None, ""})]})
+            for parent in pending_parent_ids(self.db)))
         return {"status": "completed"}
 
     def setUp(self) -> None:
@@ -469,15 +473,15 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(linkedin_queue(self.db), [])
 
     def test_enrichment_estimate_includes_judgments_created_by_new_research(self) -> None:
-        from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
         from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
         from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, review_questions_pending
         self.db.decide_worth("worth-parent", "yes")
         plan = select_research(self.db, processor="core2x")
         self.assertEqual(len(plan.pending), 1)
         existing = len(judge_candidates(self.db)) + review_questions_pending(self.db)
-        required = plan.estimated_usd + estimate_cost_usd(2000 * (existing + 2),
-            1500 * (existing + 2), DEFAULT_IDENTITY_MODEL)
+        from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
+        required = plan.estimated_usd + 2 * (existing + 1) * 2000 * INPUT_PRICE_PER_MILLION / 1_000_000 + estimate_cost_usd(2000 * (existing + 1),
+            1500 * (existing + 1), "gpt-6.1-sol")
         self.assertGreaterEqual(self.adapter().enrichment().estimated_usd, required)
 
     def test_enrichment_preview_does_not_repeat_workflow_identity_queries(self) -> None:
@@ -623,15 +627,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             status, _, raw = self.request("GET", "/?stage=enrich")
             self.assertEqual(status, 200)
             page = raw.decode()
-            # Cached research is not a $0.00 spend approval: the button is a
-            self.assertIn("Prepare profiles and judge LinkedIns", page)
-            self.assertNotIn("Approve $", page)
+            # Cached research can still need a paid Sol identity decision.
+            self.assertIn("Approve $", page)
             self.assertEqual(reconcile.call_count, 0)
             status, payload = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(status, 200)
             # The POST response is built from a fresh read after the pipeline
             # thread is spawned, so it carries the then-current stage — not
-            # the one-shot approval block. The accepted $0 continue is proven
+            # the one-shot approval block. The accepted continuation is proven
             # by the receipt the job writes and the reconcile call below.
             self.assertIs(payload["ok"], True)
             self.assertIsInstance(payload["enrichment"], dict)

@@ -73,6 +73,11 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_whatsapp_wacli \
   tests.test_clean_slate \
   tests.test_cluster_merge_candidates \
+  tests.test_merge_candidate_conflicts \
+  tests.test_deep_context_merge_repair \
+  tests.test_deep_context_merge_owner \
+  tests.test_identity_jev \
+  tests.test_mapped_identity_batch \
   tests.test_deep_context_append \
   tests.test_deep_context_append_sources \
   tests.test_deep_context_collection_sqlite \
@@ -114,7 +119,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_synthetic_prefetch \
   tests.test_deep_context_web_sqlite \
   tests.test_deep_context_relationship \
-  tests.test_deep_context_review_cap \
+  tests.test_deep_context_identity_disagreements \
   tests.test_identity_dossier_context \
   tests.test_research_selection_batch \
   tests.test_identity_research_claims \

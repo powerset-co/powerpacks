@@ -43,7 +43,8 @@ from packs.ingestion.primitives.deep_context.db.identity_invariants import (
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     approved_identities,
 )
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
+from packs.ingestion.primitives.deep_context.db.identity_queries import links
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
     RelationshipDecision,
     finish_reviews,
 )
@@ -387,10 +388,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 (json.dumps({"verdict": "needs_review", "confidence": 0.5}), self.PUB),
             )
         assert_stage("enrich")
-        result = finish_reviews(self.db, [RelationshipDecision(
-            "parent-jordan-bravo", "Owner can identify this contact", True,
-            "Is this Jordan Bravo?", 1, "fixture-question",
-        )])
+        result = finish_reviews(self.db, [RelationshipDecision.from_payload("parent-jordan-bravo", "fixture-question", {"candidates": [{
+            "url": row.machine_proposed_url or row.linkedin_url, "verdict": "review",
+            "reason": "Owner can identify contact", "confidence": .5}
+            for row in links(self.db, parent_id="parent-jordan-bravo") if not row.decision_action and row.linkedin_url]})])
         self.assertEqual(result["review_parent_ids"], ["parent-jordan-bravo"])
         assert_stage("linkedin")
         status, _, body, _ = self.request("GET", "/?stage=worth&view=yes")

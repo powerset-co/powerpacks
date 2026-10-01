@@ -146,7 +146,7 @@ class IdentityPolicy:
         affirmative = AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix="")
         for parent_id in set(parent_ids):
             winners = conn.execute(
-                "SELECT count(*) FROM links WHERE parent_id=? AND decision_action IS NULL "
+                "SELECT count(DISTINCT CASE WHEN machine_action='retarget' THEN machine_proposed_url ELSE linkedin_url END) FROM links WHERE parent_id=? AND decision_action IS NULL "
                 f"AND {affirmative}",
                 (parent_id,),
             ).fetchone()[0]

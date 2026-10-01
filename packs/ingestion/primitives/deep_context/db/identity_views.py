@@ -56,7 +56,11 @@ WHERE l.kind!='synthetic' AND l.decision_action IS NULL
 """
 
 _REVIEW_QUESTIONS_PENDING_SELECT = """
-SELECT count(*) FROM pending_parents p WHERE NOT EXISTS (
+SELECT count(*) FROM pending_parents p WHERE EXISTS (
+  SELECT 1 FROM eligible_links candidate WHERE candidate.parent_id=p.parent_id
+    AND candidate.kind!='synthetic'
+    AND (COALESCE(candidate.linkedin_url, '')!='' OR COALESCE(candidate.machine_proposed_url, '')!='')
+) AND NOT EXISTS (
   SELECT 1 FROM links l WHERE l.parent_id=p.parent_id
     AND json_extract(l.judgment_payload_json, '$.relationship_decision') IS NOT NULL
 )
@@ -361,8 +365,8 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
     ]
 
 
-def linkedin_parents(db: Db) -> list[ParentViewRow]:
-    return _all_parents(db)
+def linkedin_parents(db: Db, *, parent_ids: Sequence[str] | None = None) -> list[ParentViewRow]:
+    return _all_parents(db, parent_ids=parent_ids)
 
 
 def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 10) -> list[ParentViewRow]:

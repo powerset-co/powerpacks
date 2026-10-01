@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
 from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
+from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
@@ -30,6 +30,8 @@ from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentCounts,
     EnrichmentView,
 )
+
+ESTIMATED_JUDGMENT_INPUT_TOKENS = 2000
 
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
@@ -65,11 +67,12 @@ def enrichment_view(
         fingerprint=state.selection,
     )
     remaining_judgments = state.progress.enrichment_pending - len(plan.eligible)
-    # Each new research result can require an identity judgment and a question.
-    judgment_count = remaining_judgments + 2 * len(plan.pending)
-    judgment_estimate = estimate_cost_usd(2000 * judgment_count,
-        1500 * judgment_count, DEFAULT_IDENTITY_MODEL)
-    estimate = plan.estimated_usd + judgment_estimate
+    # Budget two JEV requests and one possible Sol comparison per candidate.
+    judgment_count = remaining_judgments + len(plan.pending)
+    judgment_estimate = estimate_cost_usd(ESTIMATED_JUDGMENT_INPUT_TOKENS * judgment_count,
+        1500 * judgment_count, "gpt-6.1-sol")
+    jev_estimate = 2 * judgment_count * ESTIMATED_JUDGMENT_INPUT_TOKENS * INPUT_PRICE_PER_MILLION / 1_000_000
+    estimate = plan.estimated_usd + judgment_estimate + jev_estimate
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), plan.deduped_total
     # While the local thread runs, live progress IS the plan: every projected
@@ -94,7 +97,7 @@ def enrichment_view(
             approvable=False,
         )
     # The remaining chain prepares profiles, assembles no-match cards, and
-    # judges identities, and prioritizes remaining review questions.
+    # resolves identity disagreements.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
     if not total and remaining_judgments:
         status, route_state = "not_started", "profile_prep_pending"
@@ -206,8 +209,7 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
     )
     if enrichment.status == ReceiptStatus.RUNNING:
         return enrichment
-    # A completed plan is done unless its cached research still needs the free
-    # local chain, which the $0 continue launches.
+    # Cached research can still need profile hydration and identity judgments.
     if enrichment.status == "completed" and enrichment.state != "profile_prep_pending":
         return enrichment
     if (

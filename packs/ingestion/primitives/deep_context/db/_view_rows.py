@@ -283,7 +283,7 @@ def _hydrate_parents(
     return [_parent_row(row, tuple(candidates_by_id[row["parent_id"]])) for row in parent_rows]
 
 
-def _all_parents(db: Db) -> list[ParentViewRow]:
+def _all_parents(db: Db, parent_ids: Sequence[str] | None = None) -> list[ParentViewRow]:
     rows = db.query(
         LINKEDIN_CTE
         + PARENT_SELECT.format(
@@ -296,6 +296,9 @@ def _all_parents(db: Db) -> list[ParentViewRow]:
             )"""
         )
     )
+    if parent_ids is not None:
+        selected = set(parent_ids)
+        rows = [row for row in rows if row["parent_id"] in selected]
     return _hydrate_parents(db, rows, pending_only=False)
 
 

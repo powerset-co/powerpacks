@@ -23,9 +23,8 @@ class RelationshipTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.db = Db(self.root / "context.sqlite")
         self.parent("jordan")
-        self.response = OpenAIResponse({"reason": "Specific collaboration.",
-            "useful_answerable_question": True, "human_question": "Is Jordan your robotics colleague?",
-            "priority": 2}, OpenAIUsage(100, 50))
+        self.response = OpenAIResponse({"candidates": [{"url": "https://linkedin.com/in/jordan-bravo",
+            "verdict": "review", "reason": "Two plausible histories", "confidence": 0.5}]}, OpenAIUsage(100, 50))
 
     def parent(self, parent):
         self.db.project_rows((
@@ -50,7 +49,7 @@ class RelationshipTest(unittest.TestCase):
         call.assert_not_called()
         self.assertEqual(self.db.db_path.read_bytes(), before)
 
-    def test_paid_decision_resumes_from_sqlite_and_omits_old_machine_labels(self):
+    def test_paid_decision_resumes_from_sqlite_and_includes_worth_evidence(self):
         with patch("packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call",
                    new_callable=AsyncMock, return_value=self.response) as call:
             first = self.stage(approve_spend=True).run()
@@ -58,7 +57,7 @@ class RelationshipTest(unittest.TestCase):
             second = self.stage().run()
         self.assertEqual(self.db.query("SELECT * FROM links"), before)
         self.assertEqual(call.call_count, 1)
-        self.assertNotIn("OLD_MACHINE_REASON", call.call_args.kwargs["user_prompt"])
+        self.assertIn("OLD_MACHINE_REASON", call.call_args.kwargs["user_prompt"])
         self.assertEqual((first["status"], second["status"], second["reused"]), ("completed", "completed", 1))
         self.assertEqual(len((self.root / "relationships" / "decisions.jsonl").read_text().splitlines()), 1)
 
@@ -90,15 +89,16 @@ class RelationshipTest(unittest.TestCase):
     def test_partial_failure_reuses_success_and_limit_does_not_finish_unjudged(self):
         self.parent("casey")
         async def partial(**kwargs):
-            if kwargs["context"] == "casey":
+            if kwargs["context"] == "casey" and not self.db.query("SELECT judgment_payload_json FROM links WHERE parent_id='jordan'")[0][0]:
                 raise RuntimeError("fixture provider failure")
-            return self.response
+            return OpenAIResponse({"candidates": [{"url": f"https://linkedin.com/in/{kwargs["context"]}-bravo",
+                "verdict": "review", "reason": "Two plausible histories", "confidence": .5}]}, OpenAIUsage(100, 50))
         target = "packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call"
         with patch(target, new_callable=AsyncMock, side_effect=partial):
             first = self.stage(approve_spend=True).run()
         self.assertEqual((first["status"], first["remaining"]), ("failed", 1))
         self.assertTrue(all(row["machine_approved"] is None for row in self.db.query("SELECT machine_approved FROM links")))
-        with patch(target, new_callable=AsyncMock, return_value=self.response) as call:
+        with patch(target, new_callable=AsyncMock, side_effect=partial) as call:
             second = self.stage(approve_spend=True, limit=1).run()
         self.assertEqual((second["status"], second["reused"], call.call_count), ("completed", 1, 1))
         self.assertEqual(call.call_args.kwargs["context"], "casey")
@@ -106,7 +106,7 @@ class RelationshipTest(unittest.TestCase):
     def test_limit_leaves_all_identity_decisions_pending(self):
         self.parent("casey")
         with patch("packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call",
-                   new_callable=AsyncMock, return_value=self.response):
+                   new_callable=AsyncMock, return_value=OpenAIResponse({"candidates": [{"url": "https://linkedin.com/in/casey-bravo", "verdict": "review", "reason": "Unresolved", "confidence": .5}]}, OpenAIUsage(100, 50))):
             result = self.stage(approve_spend=True, limit=1).run()
         self.assertEqual((result["status"], result["remaining"]), ("incomplete", 1))
         self.assertTrue(all(row["machine_approved"] is None for row in self.db.query("SELECT machine_approved FROM links")))

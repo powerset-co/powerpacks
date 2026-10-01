@@ -1,7 +1,7 @@
 """SQLite-backed merge survey cache plus human-readable result exports.
 
 Changelog:
-- 2026-09-25: a verdict's same_person is the acceptance; no second threshold.
+- 2026-10-01: accepted merges preserve explicit different-person judgments.
 """
 
 from __future__ import annotations
@@ -15,11 +15,12 @@ from packs.ingestion.primitives.deep_context.db.merge_queries import merge_peopl
 from packs.ingestion.primitives.deep_context.db.queries import merge_verdicts, people as person_rows
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import (
+    accepted_edges,
     connected_components,
     generate_pairs,
     slam_dunk_verdict,
 )
-from packs.ingestion.primitives.deep_context.merge_candidates.judge import JUDGE_SYSTEM
+from packs.ingestion.primitives.deep_context.merge_candidates.judge import JUDGE_SYSTEM, judge_prompt
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     CachedMergeVerdict,
     ConfirmedMergeRow,
@@ -32,30 +33,13 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
 )
 from packs.shared.csv_io import CsvIO
 
-IDENTITY_CONTRACT_VERSION = "owned-identifiers-v1"
+IDENTITY_CONTRACT_VERSION = "owned-identifiers-v2"
 _JUDGE_VERSION = hashlib.sha1(f"{IDENTITY_CONTRACT_VERSION}\x1e{JUDGE_SYSTEM}".encode("utf-8")).hexdigest()[:8]
 
 
-def person_sig(person: MergePerson) -> str:
-    profile = person.evidence
-    return "\x1f".join(
-        [
-            person.name_key,
-            "|".join(sorted(person.all_emails)),
-            "|".join(sorted(person.all_phones)),
-            profile.relationship,
-            profile.title,
-            "|".join(sorted(profile.employers)),
-            profile.school,
-            profile.location,
-            "|".join(sorted(profile.topics)),
-        ]
-    )
-
-
 def pair_sig(first: MergePerson, second: MergePerson) -> str:
-    left, right = sorted([person_sig(first), person_sig(second)])
-    return hashlib.sha1(f"{_JUDGE_VERSION}\x1e{left}\x1e{right}".encode("utf-8")).hexdigest()[:16]
+    prompt = judge_prompt(first, second)
+    return hashlib.sha1(f"{_JUDGE_VERSION}\x1e{prompt}".encode("utf-8")).hexdigest()[:16]
 
 
 def load_cached_verdicts(
@@ -114,21 +98,19 @@ def split_cached_pairs(
 
 
 def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
-    """Split candidate pairs into free slam dunks and everything the judge decides.
-
-    Every pair lands in exactly one of the two buckets. There used to be a
-    third — pairs sharing an observed email/phone were dropped unjudged on the
-    premise that a shared identifier means the identity graph had already
-    joined them into one parent. Two parents holding one identifier is proof
-    that premise failed for that pair, so the bucket described a state that
-    could not exist while collecting the pairs that proved it could. On the
-    owner's install it silently stranded a real duplicate forever: one shared
-    phone, name keys one character apart, so `slam_dunk_verdict`'s equality
-    test missed and nothing else ever looked at it again. Shared identifiers
-    now go to the judge like any other ambiguous pair — that is what it is for.
-    """
+    """Survey current parents without rejudging source-child rejections as aggregates."""
     people = merge_people(db)
-    pairs = generate_pairs(people)
+    parent_by_person = {row.person_id: row.parent_id for row in person_rows(db)}
+    stored = merge_verdicts(db)
+    rejected = {
+        frozenset((parent_by_person[row.person_a], parent_by_person[row.person_b]))
+        for row in stored if not row.same_person
+    }
+    # Aggregate evidence uses a borrowed child ID; it cannot replace that child's rejection.
+    pairs = [pair for pair in generate_pairs(people) if not (
+        (len(pair.first.member_person_ids) > 1 or len(pair.second.member_person_ids) > 1)
+        and frozenset((pair.first.parent_id, pair.second.parent_id)) in rejected
+    )]
     slam: list[MergePairVerdict] = []
     rest: list[MergePair] = []
     for pair in pairs:
@@ -138,12 +120,11 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
             slam.append(MergePairVerdict(first, second, pair_sig(first, second), verdict))
         else:
             rest.append(pair)
-    parent_by_person = {row.person_id: row.parent_id for row in person_rows(db)}
     cache = (
         {}
         if refresh
         else load_cached_verdicts(
-            merge_verdicts(db),
+            stored,
             parent_by_person,
         )
     )
@@ -152,6 +133,10 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
 
 
 def verdict_rows(verdicts: list[MergePairVerdict]) -> tuple[MergeVerdictRow, ...]:
+    selected = set(accepted_edges([
+        (v.first.person_id, v.second.person_id, v.decision.same_person, v.decision.confidence)
+        for v in verdicts
+    ]))
     rows = []
     for verdict in verdicts:
         first, second = verdict.first, verdict.second
@@ -171,7 +156,7 @@ def verdict_rows(verdicts: list[MergePairVerdict]) -> tuple[MergeVerdictRow, ...
                 score,
                 verdict.decision.tone_consistent,
                 verdict.decision.reason,
-                same,
+                (first.person_id, second.person_id) in selected,
                 now_iso(),
             )
         )
@@ -182,14 +167,17 @@ def _confirmed(
     people: list[MergePerson],
     verdicts: list[MergePairVerdict],
 ) -> tuple[list[ConfirmedMergeRow], list[list[str]]]:
-    edges: list[tuple[str, str]] = []
+    edges = accepted_edges([
+        (v.first.person_id, v.second.person_id, v.decision.same_person, v.decision.confidence)
+        for v in verdicts
+    ])
+    selected = set(edges)
     rows: list[ConfirmedMergeRow] = []
     for verdict in verdicts:
         decision = verdict.decision
-        if not decision.same_person:
-            continue
         first, second = verdict.first, verdict.second
-        edges.append((first.person_id, second.person_id))
+        if tuple(sorted((first.person_id, second.person_id))) not in selected:
+            continue
         rows.append(
             ConfirmedMergeRow(
                 first.slug,

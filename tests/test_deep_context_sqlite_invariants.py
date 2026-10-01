@@ -227,6 +227,20 @@ def hydrate(db: object, root: object, rows: list[dict[str, object]]) -> object:
         )
         self.assertEqual([item.rule for item in violations], ["untyped-projector"])
 
+    def test_identity_model_assets_are_static_but_candidate_files_are_not(self) -> None:
+        source = """from pathlib import Path
+MODEL = Path(__file__).with_name('jev_model.json').read_bytes()
+QUESTIONS = Path(__file__).with_name('jev_questions.json').read_text()
+"""
+        self.assertEqual(self.audit_source("enrich/identity_reconcile/jev_judge.py", source), [])
+        source = """from pathlib import Path
+
+def load_candidate(path):
+    return path.read_text()
+"""
+        violations = self.audit_source("enrich/identity_reconcile/jev_judge.py", source)
+        self.assertEqual([row.rule for row in violations], ["artifact-file-read"])
+
     def test_runtime_respects_sqlite_projection_boundary(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],

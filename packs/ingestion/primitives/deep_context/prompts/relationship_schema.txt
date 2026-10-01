@@ -1,11 +1,1 @@
-{
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "reason": {"type": "string", "minLength": 1},
-    "useful_answerable_question": {"type": "boolean"},
-    "human_question": {"type": "string"},
-    "priority": {"type": "integer", "minimum": 0, "maximum": 3}
-  },
-  "required": ["reason", "useful_answerable_question", "human_question", "priority"]
-}
+{"type":"object","additionalProperties":false,"properties":{"candidates":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"url":{"type":"string","minLength":1},"verdict":{"type":"string","enum":["yes","no","review"]},"reason":{"type":"string","minLength":1},"confidence":{"type":"number","minimum":0,"maximum":1}},"required":["url","verdict","reason","confidence"]}}},"required":["candidates"]}

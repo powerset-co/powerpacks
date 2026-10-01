@@ -326,3 +326,20 @@ ORDER BY w.parent_id
             for row in worth_rows
         )
     return tuple(result)
+
+
+def imported_linkedin_urls(db: Db, parent_ids: Sequence[str]) -> dict[str, tuple[str, ...]]:
+    """Known imported-network URLs for only the candidate parents being judged."""
+    rows = db.query(
+        "SELECT DISTINCT p.parent_id, json_extract(i.row_json, '$.linkedin_url') AS url "
+        "FROM people p JOIN imported_people i USING(person_id) "
+        f"WHERE p.parent_id IN {ID_SET} "
+        "AND instr(',' || json_extract(i.row_json, '$.source_channels') || ',', ',linkedin_csv,')>0 "
+        "AND COALESCE(json_extract(i.row_json, '$.linkedin_url'), '')!='' "
+        "ORDER BY p.parent_id, url",
+        (id_set(parent_ids),),
+    )
+    result: dict[str, list[str]] = {}
+    for row in rows:
+        result.setdefault(row['parent_id'], []).append(row['url'])
+    return {parent: tuple(urls) for parent, urls in result.items()}
