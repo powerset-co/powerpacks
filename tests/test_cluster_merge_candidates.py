@@ -166,6 +166,7 @@ class TestSlamDunkVerdict(unittest.TestCase):
             ("Jordan O'Bravo", "Jordan O\u2019Bravo"),
             ("\u00c9mile Bravo", "E\u0301mile Bravo"),     # one accent, composed and decomposed
             ("Jordan Bravo Jr", "Bravo, Jordan Jr."),     # the same suffix on both sides
+            ("Dr. Jordan Bravo", "Jordan Bravo"),         # a title is not part of the name
         ):
             with self.subTest(first=first, second=second):
                 self.assertEqual(slam_dunk_verdict(person(first), person(second)).reason, SAME_FULL_NAME)
@@ -191,6 +192,9 @@ class TestSlamDunkVerdict(unittest.TestCase):
             ("Bravo, Jordan", "Bravo, Jordan Jr."),
             ("Jordan Bravo Jr", "Jordan Bravo Sr"),
             ("Jordan Bravo", "Jordan Bravo III"),
+            ("Bravo, Dr Jordan", "Dr Bravo"),              # a title is not a first name
+            ("O'Bravo, Jordan", "Jordan Bravo"),           # O'Bravo is one word, not a middle initial
+            ("jordan.bravo@example.com", "jordan.bravo@example.com"),  # an address is not a name
             ("Jordan", "Jordan"),                          # one-word names
             ("Jordan B", "Jordan B"),                      # an initial is not a last name
             ("J Bravo", "J Bravo"),
@@ -290,6 +294,7 @@ class TestPairGeneration(unittest.TestCase):
             ("Jordan Bravo", "Casey"),
             ("Jordan Bravo", "Riley Delta"),
             ("Jordan Bravo", ""),
+            ("jordan@example.com", "casey@example.com"),
         ):
             with self.subTest(first=first, second=second):
                 self.assertFalse(names_can_match(name_words(first.lower()), name_words(second.lower())))

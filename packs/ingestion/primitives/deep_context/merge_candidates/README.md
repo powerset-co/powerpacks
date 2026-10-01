@@ -37,7 +37,7 @@ Each step takes what the one before left.
 A shared first name, a shared last name or a shared email handle alone is not
 a pair (step 2). A one-word name meets a full name only through a shared email
 handle, phone or email. A generation suffix on one side (Jr, Sr, III) is not
-the same name. A stored "two people" between two parents outranks steps 3
+the same name; a title (Dr, Mr) is not part of a name. A stored "two people" between two parents outranks steps 3
 and 4.
 
 The step 4 bar was set on 127 same-name pairs from two real installs, each

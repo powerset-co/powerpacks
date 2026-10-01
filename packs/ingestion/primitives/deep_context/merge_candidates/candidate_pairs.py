@@ -18,7 +18,8 @@ same first and last name where a middle name is missing on one side or agrees
 on both. The same name is a merge without the pair judge; the judge module
 then asks whether the facts keep the two records apart. Two different middle
 names, a generation suffix on one side (Jr, Sr, III) and one-word names are
-not the same name.
+not the same name. A title (Dr, Mr) is not part of a name, and an email
+address saved as the name is no name.
 
 A bucket only proposes a pair. The pair is kept when the two records share a
 phone or a whole email address, or when one name can be a form of the other:
@@ -65,6 +66,7 @@ SAME_FIRST_AND_LAST_NAME = "same first and last name, middle names do not differ
 SAME_NAME_REASONS = frozenset({SAME_FULL_NAME, SAME_FIRST_AND_LAST_NAME})
 # A father and a son: a name carrying one of these is not the same name as one without it.
 GENERATION_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
+TITLES = frozenset({"dr", "mr", "mrs", "ms", "prof"})
 # Below a shared phone or email (0.99), so those join first.
 SAME_NAME_CONFIDENCE = 0.95
 T = TypeVar("T")
@@ -132,12 +134,18 @@ def email_localparts(emails: tuple[str, ...]) -> frozenset[str]:
 
 
 def name_words(name_key: str) -> tuple[str, ...]:
-    """The words of a name, given name first: "bravo, jordan" reads as jordan bravo."""
+    """The words of a name, given name first and titles left out: "bravo, dr jordan" reads as jordan bravo.
+
+    An email address saved as the name has no words. An apostrophe does not
+    split a word: o'bravo is one word, not an initial and a name.
+    """
+    if "@" in name_key:
+        return ()
     # Composed and decomposed accents are one spelling.
-    composed = unicodedata.normalize("NFC", name_key)
+    composed = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", name_key))
     family, comma, given = composed.partition(",")
     ordered = f"{given} {family}" if comma else composed
-    return tuple(re.findall(r"[^\W\d_]+", ordered.casefold()))
+    return tuple(word for word in re.findall(r"[^\W\d_]+", ordered.casefold()) if word not in TITLES)
 
 
 def _is_full_name(words: tuple[str, ...]) -> bool:
