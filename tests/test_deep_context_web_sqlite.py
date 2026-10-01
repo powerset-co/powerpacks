@@ -652,6 +652,42 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertGreaterEqual(reconcile.call_args.kwargs["budget"], 0.0)
         self.assertIs(reconcile.call_args.kwargs["approve"], True)
 
+    def test_profile_fetch_failure_does_not_pause_or_loop_enrichment(self) -> None:
+        from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
+
+        self.db.decide_worth("worth-parent", "no")
+        cache = self.root / "profile-cache"
+        with (
+            mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as research,
+            mock.patch.object(enrichment_pipeline, "PrefetchProfiles",
+                side_effect=lambda **kwargs: PrefetchProfiles(**kwargs, profile_cache_dir=cache)),
+            mock.patch.object(RapidApiClient, "resolve_key", return_value="fixture"),
+            mock.patch.object(RapidApiClient, "get_profile", return_value={
+                "state": "error", "status_code": 503, "attempts": 3,
+                "detail": "fetch failed (503)", "normalized_profile": {},
+                "fetched": True, "from_cache": False,
+            }) as fetch,
+            mock.patch("sys.stderr", new_callable=io.StringIO) as log,
+        ):
+            research.return_value.run.return_value = ResearchOutcome(
+                ReceiptStatus.REUSED, ReceiptCounts(0, 0, 0, 0), None, 0.0, 0)
+            status, _ = self.json_request("POST", "/api/review/approve-enrichment", {})
+            self.assertEqual(status, 200)
+            self.wait_for_enrichment_job("applied")
+            status, page = self.json_request("GET", "/api/review/page?stage=enrich")
+            self.assertEqual(page["enrichment"]["mode"], "completed")
+            status, workflow = self.json_request("GET", "/api/status")
+            self.assertEqual(workflow["stage"], "linkedin")
+            fetch.assert_called_once()
+            self.assertIn("jordan-bravo: fetch failed (503); deferred", log.getvalue())
+        profile = projection.profile_payloads(self.db)["jordan-bravo"]
+        self.assertEqual(profile.to_payload()["attempts"], 3)
+        self.assertEqual(profile.to_payload()["status_code"], 503)
+        self.assertIsNone(self.db.query("SELECT machine_judgment FROM links WHERE row_key='jordan-bravo'")[0][0])
+        retry = PrefetchProfiles(db=self.db, profile_cache_dir=cache).run()
+        self.assertEqual(retry.estimated_rapidapi_calls, 1)
+        self.assertEqual(self.adapter().enrichment().state, "profile_prep_pending")
+
     def test_failed_or_blocked_research_stops_the_enrichment_chain(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         with (

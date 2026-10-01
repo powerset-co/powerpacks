@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
+from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR
 from packs.ingestion.primitives.deep_context.db import context_queries, identity_queries as queries
 from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -296,6 +297,9 @@ def judge_mapped_candidates(
     tasks = []
     prepared = []
     for row in candidates:
+        projected = profiles.get(row.row_key)
+        if projected is not None and projected.state == PROFILE_ERROR:
+            continue
         result = research.get(row.row_key)
         url = row.machine_proposed_url or row.linkedin_url or (result.linkedin_url if result else "")
         if not url:
