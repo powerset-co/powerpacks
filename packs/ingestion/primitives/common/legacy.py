@@ -401,14 +401,19 @@ def _scrub_historical_merges(db: Db) -> MergeRepairReport:
         HISTORICAL_MERGE_MIGRATION, MergeRepairReport, _repair_historical_merges,
     )
     from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
+    from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 
     version = db.query("SELECT value FROM meta WHERE key='data_migration_version'")
     if version and int(version[0]['value']) >= HISTORICAL_MERGE_MIGRATION:
         return MergeRepairReport()
     facts_dir = db.db_path.parent / 'facts'
     histories = {}
-    for row in db.query('SELECT person_id FROM people'):
+    for row in db.query('SELECT person_id,parent_id FROM people'):
         path = facts_dir / (row['person_id'] + '.jsonl')
+        original_parent = mint_parent_id((row['person_id'],))
+        # An absorbed parent's history predates the current combined dossier.
+        if not path.is_file() and original_parent != row['parent_id']:
+            path = facts_dir / (original_parent + '.jsonl')
         if path.is_file():
             histories[row['person_id']] = FactHistory.from_records(
                 json.loads(line) for line in path.read_text().splitlines() if line.strip())

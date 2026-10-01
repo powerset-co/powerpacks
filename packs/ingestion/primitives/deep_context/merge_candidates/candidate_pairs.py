@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
 GATE_NAME_SIM = 0.85
 MAX_BLOCKING_BUCKET = 200
 JUDGE_SLAM_DUNK = "slam_dunk"
+_GIVEN_NAME_NICKNAMES = {("abdulaziz", "aziz"), ("bob", "robert"), ("nicholas", "nick"), ("nick", "nikolay")}
 T = TypeVar("T")
 
 
@@ -201,17 +202,18 @@ def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[
 
 
 def names_compatible(first: str, second: str) -> bool:
-    """A changed surname or nickname is possible; two unrelated full names are not."""
+    """Require compatible given names when both full names are available."""
     left = re.findall(r"[^\W\d_]+", first.casefold())
     right = re.findall(r"[^\W\d_]+", second.casefold())
     if len(left) < 2 or len(right) < 2 or sorted(left) == sorted(right):
         return True
-    for a, b in ((left[0], right[0]), (left[-1], right[-1])):
-        if a == b or (min(len(a), len(b)) == 1 and a[0] == b[0]):
-            return True
-        if jaro_winkler(a, b) >= GATE_NAME_SIM:
-            return True
-    return False
+    a, b = left[0], right[0]
+    return (
+        a == b
+        or (min(len(a), len(b)) == 1 and a[0] == b[0])
+        or tuple(sorted((a, b))) in _GIVEN_NAME_NICKNAMES
+        or jaro_winkler(a, b) >= GATE_NAME_SIM
+    )
 
 
 def accepted_edges(

@@ -256,6 +256,36 @@ class HistoricalMergeRepairTests(unittest.TestCase):
         _repair_historical_merges(self.db, self._histories())
         self.assertEqual({person.parent_id for person in merge_people(self.db)}, set(self.parents.values()) | {mint_parent_id(('candidate:phone:+15550100100',))})
 
+    def test_legacy_boundary_recovers_absorbed_parent_history(self):
+        from packs.ingestion.primitives.common.legacy import _scrub_historical_merges
+        directory = self.db.db_path.parent / 'facts'
+        directory.mkdir()
+        histories = self._histories()
+        for person, history in histories.items():
+            key = self.parents[person] if person == 'person-b' else person
+            (directory / (key + '.jsonl')).write_text(json.dumps(history.payload()) + '\n')
+        before = {path.name: path.read_bytes() for path in directory.iterdir()}
+        decisions = [tuple(row) for row in self.db.query('SELECT row_key,decision_action,decision_source FROM links ORDER BY row_key')]
+        report = _scrub_historical_merges(self.db)
+        self.assertEqual(report.repaired, (self.parents['person-a'],))
+        self.assertEqual(report.unresolved, ())
+        restored = self.db.query('SELECT facts_json FROM facts WHERE parent_id=?', (self.parents['person-b'],))[0]
+        self.assertEqual(json.loads(restored['facts_json'])['canonical_name'], histories['person-b'].facts.canonical_name)
+        self.assertEqual(decisions, [tuple(row) for row in self.db.query('SELECT row_key,decision_action,decision_source FROM links ORDER BY row_key')])
+        self.assertEqual(before, {path.name: path.read_bytes() for path in directory.iterdir()})
+        self.assertEqual(_scrub_historical_merges(self.db).repaired, ())
+
+    def test_legacy_boundary_does_not_use_current_mixed_parent_history(self):
+        from packs.ingestion.primitives.common.legacy import _scrub_historical_merges
+        directory = self.db.db_path.parent / 'facts'
+        directory.mkdir()
+        for person, history in self._histories().items():
+            key = self.parents[person] if person == 'person-a' else person
+            (directory / (key + '.jsonl')).write_text(json.dumps(history.payload()) + '\n')
+        report = _scrub_historical_merges(self.db)
+        self.assertEqual(report.repaired, ())
+        self.assertEqual(report.unresolved, ((self.parents['person-a'], 'original child facts missing'),))
+
     def test_historical_write_failure_rolls_back_payloads_and_version(self):
         from contextlib import contextmanager
         from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_historical_merges
