@@ -41,7 +41,6 @@ from packs.ingestion.primitives.deep_context.db.people_views import person_detai
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_row
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
-    LinkedInQueueRow,
     ParentViewRow,
     WorthRow,
 )
@@ -238,34 +237,40 @@ def make_handler(
             "linkedin_pending": linkedin_pending,
         }
 
-    def linkedin_body(params: dict[str, list[str]], order: list[LinkedInQueueRow]) -> str:
+    def linkedin_body(params: dict[str, list[str]]) -> tuple[str, int]:
+        """The LinkedIn panel's HTML and how many parents are still pending."""
         excluded = _excluded(params)
-        inflight = {item.slug.lower() for item in api.retargets() if item.state in IN_FLIGHT_RETARGET_STATES}
+        # Re-research is read before the queue's order: a result that lands between
+        # the two reads has either left the order or is still excluded here.
+        retargets = api.retargets()
+        inflight = {item.slug.lower() for item in retargets if item.state in IN_FLIGHT_RETARGET_STATES}
+        order = linkedin_queue_order(db)
         queue = [row for row in order if row.slug.lower() not in excluded | inflight]
         if not queue:
             state = api.snapshot()
             progress = state.progress
             completed = not progress.linkedin_pending
-            return linkedin_finished_body(
+            finished = linkedin_finished_body(
                 progress,
                 linkedin_complete=completed,
                 retargets_in_flight=len(inflight),
                 auto_continue=not completed,
             )
+            return finished, len(order)
         index = _index(params, len(queue))
         # Only the card on screen is hydrated; the queue itself is ids and slugs.
         parent = linkedin_queue_parent(db, queue[index].parent_id)
         card = render_linkedin_card(
             parent,
             parent.candidates,
-            failure_note=_failed_notes(api.retargets()).get(parent.slug, ""),
+            failure_note=_failed_notes(retargets).get(parent.slug, ""),
         )
-        return (
-            f"<div class='linkedin-stage' data-queue-index='{index}' "
-            f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
-            if _value(params, "debug") == "1"
-            else card
-        )
+        if _value(params, "debug") == "1":
+            card = (
+                f"<div class='linkedin-stage' data-queue-index='{index}' "
+                f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
+            )
+        return card, len(order)
 
     def full_page(params: dict[str, list[str]]) -> bytes:
         state = api.snapshot()
@@ -300,9 +305,10 @@ def make_handler(
                 else render_enrichment(enrichment)
             )
         elif view == "linkedin":
+            body, _ = linkedin_body(params)
             content = (
                 "<div class='linkedin-stage'><div class='linkedin-panel' "
-                f"data-linkedin-panel>{linkedin_body(params, linkedin_queue_order(db))}</div></div>"
+                f"data-linkedin-panel>{body}</div></div>"
             )
         elif progress.synthesize_pending:
             content = SYNTHESIZE_HTML
@@ -467,7 +473,8 @@ def make_handler(
                     return self.send_bytes(b"gone", "text/plain; charset=utf-8", 404)
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/linkedin-card":
-                return self.send_bytes(linkedin_body(params, linkedin_queue_order(db)).encode())
+                body, _ = linkedin_body(params)
+                return self.send_bytes(body.encode())
             if parsed.path == "/api/avatar":
                 try:
                     row_key = api.resolve_row_key(_value(params, "pub"))
@@ -702,13 +709,13 @@ def make_handler(
                 result = api.decide(row_key, decision, new_url, note)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-            # One read of the queue's order after the write committed gives both
-            # the pending count and the next card: one round trip, no race, no
-            # client-side prefetch. The LinkedIn page never reads a state token.
-            order = linkedin_queue_order(db)
             notify()
             wake_agent()
-            next_html = linkedin_body({"exclude": [slug or _parent.slug]}, order)
+            # The next card rides in the response, rendered AFTER the write
+            # committed: one round trip, no race, no client-side prefetch. The
+            # same read of the queue's order gives the pending count; the
+            # LinkedIn page never reads a state token.
+            next_html, linkedin_pending = linkedin_body({"exclude": [slug or _parent.slug]})
             return self.send_json(
                 {
                     "ok": True,
@@ -716,7 +723,7 @@ def make_handler(
                     "action": result.action,
                     "approved": result.approved,
                     "new_url": result.new_url,
-                    "progress": review_progress(len(order)),
+                    "progress": review_progress(linkedin_pending),
                     "resolved_pubs": list(result.resolved_pubs),
                     "next": next_html,
                 }

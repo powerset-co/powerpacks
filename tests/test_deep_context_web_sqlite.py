@@ -73,7 +73,7 @@ from packs.ingestion.primitives.deep_context.review import cli as review_cli
 from packs.ingestion.primitives.deep_context.review import server as review_server
 from packs.ingestion.primitives.deep_context.review import enrichment as review_enrichment
 from packs.ingestion.primitives.deep_context.review import sqlite_adapter as review_adapter
-from packs.ingestion.primitives.deep_context.review.models import DecisionResult
+from packs.ingestion.primitives.deep_context.review.models import DecisionResult, GuidanceViewRow
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
@@ -483,6 +483,35 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         self.assertEqual(max(len(call.args[1]) for call in hydrate.call_args_list), 1)
         self.assertEqual(workflow_state.call_count, 0)
+
+    def test_reresearch_landing_mid_request_never_serves_a_blank_card(self) -> None:
+        self._seed_linkedin_queue()
+        # Avery Quinn is first in the queue and is being re-researched. The worker's
+        # result lands right after this request read the queue's order.
+        researching = GuidanceViewRow(
+            slug="avery-quinn", row_key="avery-quinn", name="Avery Quinn", guidance="Synthetic guidance",
+            state="researching", detail="", submitted_at="", updated_at="", new_url="", wire_fields=(),
+        )
+        landed = False
+        read_order = review_server.linkedin_queue_order
+
+        def order_then_land(db: Db) -> list:
+            nonlocal landed
+            order = read_order(db)
+            db.decide_identity("avery-quinn", "verify")
+            landed = True
+            return order
+
+        def retargets(_adapter: SqliteReviewAdapter) -> list[GuidanceViewRow]:
+            return [] if landed else [researching]
+
+        with (
+            mock.patch.object(review_server, "linkedin_queue_order", order_then_land),
+            mock.patch.object(SqliteReviewAdapter, "retargets", retargets),
+        ):
+            status, _, body = self.request("GET", "/api/linkedin-card")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Jordan Bravo", body)
 
     def test_enrichment_preview_reuses_exact_paid_artifact_fingerprint(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
