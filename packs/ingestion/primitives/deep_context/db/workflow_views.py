@@ -143,7 +143,7 @@ SELECT count(DISTINCT parent_id) AS n FROM (
         linkedin_pending=linkedin.pending,
         linkedin_done=linkedin.done,
         rejected=int(rejected),
-        enrichment_pending=int(unassembled_research(db)) + review_questions_pending(db) + len(judge_candidates(db)) + len(enrichment_queue(db)),
+        enrichment_pending=unassembled_research(db) + review_questions_pending(db) + len(judge_candidates(db)) + len(enrichment_queue(db)),
     )
 
 

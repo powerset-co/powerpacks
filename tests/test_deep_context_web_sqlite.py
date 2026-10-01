@@ -447,6 +447,31 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(tuple(row), ("verify", "yes"))
         self.assertEqual(linkedin_queue(self.db), [])
 
+    def test_enrichment_estimate_includes_judgments_created_by_new_research(self) -> None:
+        from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
+        from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
+        from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, review_questions_pending
+        self.db.decide_worth("worth-parent", "yes")
+        plan = select_research(self.db, processor="core2x")
+        self.assertEqual(len(plan.pending), 1)
+        existing = len(judge_candidates(self.db)) + review_questions_pending(self.db)
+        required = plan.estimated_usd + estimate_cost_usd(2000 * (existing + 2),
+            1500 * (existing + 2), DEFAULT_IDENTITY_MODEL)
+        self.assertGreaterEqual(self.adapter().enrichment().estimated_usd, required)
+
+    def test_unassembled_saved_research_requires_paid_question_estimate(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        self.db.decide_identity("jordan-bravo", "verify")
+        self.db.project_rows((ResearchRow(
+            "casey-delta", "worth-parent", ResearchStatus.NO_MATCH.value,
+            candidate_key="candidate:email:casey@example.com",
+            result_json=guided_result("").output.model_dump_json(exclude_none=True),
+        ),))
+        preview = self.adapter().enrichment()
+        self.assertEqual(preview.would_submit, 0)
+        self.assertGreater(preview.estimated_usd, 0)
+        self.assertTrue(preview.approvable)
+
     def test_enrichment_preview_reuses_exact_paid_artifact_fingerprint(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         adapter = self.adapter()

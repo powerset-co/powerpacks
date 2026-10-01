@@ -10,8 +10,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow, FactRow, LinkRow, ParentRow, PersonRow, WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
-from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids, review_questions_pending
+from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids, review_questions_pending, judge_candidates
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import RetargetProposal, upsert_retargets
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityVerdict
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
@@ -135,6 +136,13 @@ class ReviewCapTest(unittest.TestCase):
                     cache_relationship_judgment(self.db, decision)
                 finish_reviews(self.db, [decision])
                 self.assertEqual(links(self.db, parent_id=parent)[0].machine_action, "detach")
+
+    def test_finished_verdictless_identity_does_not_queue_paid_judging(self):
+        parent = self.parent(1)
+        self.assertEqual(len(judge_candidates(self.db)), 1)
+        finish_reviews(self.db, [self.decision(parent, question=False)])
+        self.assertEqual(judge_candidates(self.db), [])
+        self.assertEqual(workflow_state(self.db).next_action, "realize")
 
     def test_pending_retarget_preserves_selected_question_and_updates_identity(self):
         parent = self.parent(1)

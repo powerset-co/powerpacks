@@ -212,6 +212,7 @@ def judge_candidates(db: Db) -> list[LinkSnapshotRow]:
         LINKEDIN_CTE + """
 SELECT l.row_key FROM eligible_links l JOIN identity_scope s USING(parent_id)
 WHERE l.kind!='synthetic' AND l.decision_action IS NULL
+  AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
   AND (COALESCE(l.linkedin_url, '')!='' OR COALESCE(l.machine_proposed_url, '')!=''
        OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
 """
@@ -229,14 +230,14 @@ def research_candidate_urls(db: Db) -> dict[str, str]:
     )}
 
 
-def unassembled_research(db: Db) -> bool:
-    """Usable, unambiguous no-match research without its synthetic review card."""
+def unassembled_research(db: Db) -> int:
+    """Count usable, unambiguous no-match parents without synthetic review cards."""
     counts: dict[str, int] = {}
     for row in synthetic_fallback(db):
         result = ResearchResult.from_json(row.result_json)
         if result and result.usable and (not result.linkedin_url or row.research_link_rejected):
             counts[row.parent_id] = counts.get(row.parent_id, 0) + 1
-    return any(count == 1 and not db.query(
+    return sum(count == 1 and not db.query(
         "SELECT 1 FROM synthetic_profiles WHERE public_identifier=?", (parent_id,),
     ) for parent_id, count in counts.items())
 

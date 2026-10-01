@@ -67,9 +67,11 @@ def enrichment_view(
     )
     judge_count = len(judge_candidates(db))
     question_count = review_questions_pending(db)
-    # Budget both judgment passes conservatively before identities are confirmed.
-    judgment_estimate = estimate_cost_usd(2000 * (judge_count + question_count),
-        1500 * (judge_count + question_count), DEFAULT_IDENTITY_MODEL)
+    synthetic_count = unassembled_research(db)
+    # Each new research result can require an identity judgment and a question.
+    judgment_count = judge_count + question_count + synthetic_count + 2 * len(plan.pending)
+    judgment_estimate = estimate_cost_usd(2000 * judgment_count,
+        1500 * judgment_count, DEFAULT_IDENTITY_MODEL)
     estimate = plan.estimated_usd + judgment_estimate
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), plan.deduped_total
@@ -97,7 +99,7 @@ def enrichment_view(
     # The remaining chain prepares profiles, assembles no-match cards, and
     # judges identities, and prioritizes remaining review questions.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
-    if not total and (judge_count or unassembled_research(db) or question_count):
+    if not total and (judge_count or synthetic_count or question_count):
         status, route_state = "not_started", "profile_prep_pending"
     elif not total:
         status, route_state = "completed", "done"

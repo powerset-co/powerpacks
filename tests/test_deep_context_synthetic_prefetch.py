@@ -251,6 +251,24 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.assertEqual([row[0] for row in query(self.db, "SELECT candidate_key FROM synthetic_profiles")], ["parent-2"])
         self.assertFalse(unassembled_research(self.db))
 
+    def test_unassembled_research_counts_each_eligible_parent(self) -> None:
+        self._write_no_linkedin_result()
+        self.db.project_rows((
+            ParentRow("parent-2", "parent-worth:parent-2", "Jordan Delta"),
+            PersonRow("person-b", "parent-2", display_name="Jordan Delta"),
+            ArtifactRow("facts:parent-2", "facts", "parent-2", "/facts/parent-2.jsonl", "fixture", "projected"),
+            FactRow("parent-2", "parent-2", "facts:parent-2", machine_worth="yes", facts_json="{}"),
+        ))
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-2", candidate_exists=False,
+            row_key="candidate:email:delta@example.com", handle="jordan-delta",
+            source_person_ids=("person-b",), display_name="Jordan Delta",
+        )
+        self._write_no_linkedin_result()
+        self.assertEqual(unassembled_research(self.db), 2)
+        AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(unassembled_research(self.db), 0)
+
     def test_empty_profile_completes_but_provider_error_blocks_review(self) -> None:
         self.db.project_rows((LinkRow(
             "jordan-bravo", "parent-1", "jordan-bravo", "pub",
