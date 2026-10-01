@@ -1,5 +1,6 @@
 """Relationship judgments preview spend and resume completed paid outputs."""
 
+import asyncio
 import json
 import os
 import tempfile
@@ -9,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactRow, LinkRow, ParentRow, PersonRow, SyntheticProfileRow, WriterSource
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships, _RelationshipTask
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponse, OpenAIUsage
 
 
@@ -157,16 +158,55 @@ class RelationshipTest(unittest.TestCase):
         with patch(target, new_callable=AsyncMock, side_effect=partial):
             first = self.stage(approve_spend=True).run()
         self.assertEqual((first["status"], first["remaining"]), ("failed", 1))
-        self.assertTrue(all(row["machine_approved"] is None for row in self.db.query("SELECT machine_approved FROM links")))
+        self.assertIsNone(self.db.query("SELECT machine_judgment FROM links WHERE parent_id='casey'")[0][0])
+        self.assertEqual(self.db.query("SELECT machine_judgment FROM links WHERE parent_id='jordan'")[0][0], "needs_review")
+        self.assertEqual(first["errors"], [{"parent_id": "casey", "error": "fixture provider failure"}])
         with patch(target, new_callable=AsyncMock, side_effect=partial) as call:
             second = self.stage(approve_spend=True, limit=1).run()
         self.assertEqual((second["status"], second["reused"], call.call_count), ("completed", 1, 1))
         self.assertEqual(call.call_args.kwargs["context"], "casey")
 
-    def test_limit_leaves_all_identity_decisions_pending(self):
+    def test_success_is_cached_before_other_request_finishes(self):
+        self.parent("casey")
+        stage = self.stage(approve_spend=True)
+        stage.out_dir.mkdir()
+        async def check():
+            release = asyncio.Event()
+            responded = asyncio.Event()
+            async def call(**kwargs):
+                if kwargs["context"] == "casey":
+                    await release.wait()
+                else:
+                    responded.set()
+                return OpenAIResponse({"candidates": [{"url": f"https://www.linkedin.com/in/{kwargs['context']}-bravo",
+                    "verdict": "review", "reason": "Unresolved", "confidence": .5}]}, OpenAIUsage(100, 50))
+            tasks = [_RelationshipTask(parent, json.dumps({"candidates": [
+                {"url": f"https://www.linkedin.com/in/{parent}-bravo"}]}), "fixture") for parent in ("casey", "jordan")]
+            with patch("packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call",
+                       new_callable=AsyncMock, side_effect=call):
+                judging = asyncio.create_task(stage._judge(tasks))
+                await asyncio.wait_for(responded.wait(), timeout=1)
+                cached = self.db.query("SELECT judgment_payload_json FROM links WHERE parent_id='jordan'")[0][0]
+                release.set()
+                completed, errors = await judging
+            self.assertTrue(cached)
+            self.assertEqual((len(completed), errors), (2, []))
+        asyncio.run(check())
+
+    def test_persistence_failure_is_not_a_parent_judgment_failure(self):
+        target = "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship.cache_relationship_judgment"
+        with patch("packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call",
+                   new_callable=AsyncMock, return_value=self.response), patch(target, side_effect=RuntimeError("database write failed")):
+            result = self.stage(approve_spend=True).run()
+        self.assertEqual((result["status"], result["error"]), ("failed", "database write failed"))
+        self.assertNotIn("errors", result)
+        self.assertIsNone(self.db.query("SELECT machine_judgment FROM links")[0][0])
+
+    def test_limit_settles_judged_identity_decisions(self):
         self.parent("casey")
         with patch("packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call",
                    new_callable=AsyncMock, return_value=OpenAIResponse({"candidates": [{"url": "https://www.linkedin.com/in/casey-bravo", "verdict": "review", "reason": "Unresolved", "confidence": .5}]}, OpenAIUsage(100, 50))):
             result = self.stage(approve_spend=True, limit=1).run()
         self.assertEqual((result["status"], result["remaining"]), ("incomplete", 1))
-        self.assertTrue(all(row["machine_approved"] is None for row in self.db.query("SELECT machine_approved FROM links")))
+        self.assertEqual(self.db.query("SELECT machine_judgment FROM links WHERE parent_id='casey'")[0][0], "needs_review")
+        self.assertIsNone(self.db.query("SELECT machine_judgment FROM links WHERE parent_id='jordan'")[0][0])

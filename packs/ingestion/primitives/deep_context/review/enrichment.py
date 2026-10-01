@@ -99,16 +99,16 @@ def enrichment_view(
     # The remaining chain prepares profiles, assembles no-match cards, and
     # resolves identity disagreements.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
-    if not total and remaining_judgments and not applied:
+    if applied:
+        status, route_state = "completed", "done"
+    elif not total and remaining_judgments:
         status, route_state = "not_started", "profile_prep_pending"
     elif not total:
         status, route_state = "completed", "done"
     elif pending:
         status, route_state = ReceiptStatus.NEEDS_APPROVAL, "needs_approval"
-    elif plan.reused_completed and not applied:
-        status, route_state = "completed", "profile_prep_pending"
     elif plan.reused_completed:
-        status, route_state = "completed", "done"
+        status, route_state = "completed", "profile_prep_pending"
     else:
         status, route_state = "not_started", "profile_prep_pending"
     payload = EnrichmentView(
@@ -125,9 +125,9 @@ def enrichment_view(
         request_fingerprint=plan.request_fingerprint,
         stage="enrich",
         status=status,
-        counts=EnrichmentCounts(total, plan.reused_completed, pending),
+        counts=EnrichmentCounts(total, plan.reused_completed, 0 if applied else pending),
         state=route_state,
-        approvable=bool(pending or judgment_estimate),
+        approvable=not applied and bool(pending or judgment_estimate),
     )
     # A just-failed run's error rides in memory (the pipeline thread's last
     # write); after a restart it is gone and the button returns.

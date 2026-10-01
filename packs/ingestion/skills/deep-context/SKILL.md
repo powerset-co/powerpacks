@@ -422,6 +422,14 @@ The fixed enrichment manifest contains display progress and a `parallel`
 provider receipt so a later process can recover already-submitted research.
 The manual commands remain available for headless/broken-UI recovery only.
 
+Individual provider failures are deferred while the approved pass continues.
+After completion, read `errors` in
+`.powerpacks/deep-context/reconcile/deep-research/manifest.json` for harness
+follow-up. It identifies research failures and points to the saved profile and
+identity errors; relationship errors include the parent. Preserve the successful
+results and report what remains unresolved. Do not automatically repeat the
+failed work or ask the user to troubleshoot each contact.
+
 The pipeline writes progress while preserving the provider receipt; the
 Parallel client writes the receipt while preserving progress. Parallel's SDK
 stream reports status through the pipeline callback. Review reads the manifest

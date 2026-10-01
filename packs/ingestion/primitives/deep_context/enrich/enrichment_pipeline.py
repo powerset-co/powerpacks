@@ -8,6 +8,7 @@ SQLite artifacts and the freshly selected plan own eligibility and result reuse.
 from __future__ import annotations
 
 import threading
+import sys
 from typing import Callable
 
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
@@ -19,6 +20,8 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.coordinat
     ReconcileDeepResearch,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import judge_mapped_candidates
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import select_research
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import DEFAULT_PROCESSOR
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
 from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
@@ -75,6 +78,7 @@ class EnrichmentPipeline:
         phase: str | None = None,
         progress: dict[str, object] | None = None,
         error: str | None = None,
+        errors: tuple[str, ...] = (),
     ) -> None:
         completed = min(max(0, completed), total)
         failed = int(status == ReceiptStatus.FAILED)
@@ -96,6 +100,8 @@ class EnrichmentPipeline:
             payload["progress"] = progress
         if error:
             payload["error"] = error[:500]
+        if errors:
+            payload["errors"] = list(errors)
         self.receipt.write(payload)
         # The last-written payload is the SSE job payload — the review UI's
         # live progress rides in on /api/events, no polling.
@@ -105,25 +111,27 @@ class EnrichmentPipeline:
         self,
         budget: float,
         on_progress: Callable[[EnrichmentProgress], None],
-    ) -> None:
+    ) -> tuple[str, ...]:
+        errors: list[str] = []
         research = ReconcileDeepResearch(
             db=self.db,
             approve=True,
             budget=round(budget, 2),
             on_progress=on_progress,
         ).run()
-        if research.status.value not in RECONCILE_SUCCESS_STATUSES:
+        if research.status == ReceiptStatus.FAILED:
+            errors.extend(f"research: {error}" for error in research.errors)
+            if not research.errors:
+                errors.append(f"research: {research.message or research.reason or 'failed'}")
+        elif research.status.value not in RECONCILE_SUCCESS_STATUSES:
             detail = "; ".join(research.errors) or research.message or research.reason
             raise RuntimeError(
                 f"research stopped with status {research.status.value}"
                 f"{f': {detail}' if detail else ''}"
             )
         profiles = PrefetchProfiles(db=self.db, fetch=True).run()
-        if profiles.status not in {"completed", "completed_with_failures"}:
-            raise RuntimeError(
-                f"profile prefetch stopped with status {profiles.status}"
-                f"{f': {profiles.note}' if profiles.note else ''}"
-            )
+        if profiles.status != "completed":
+            errors.append(f"profiles: {profiles.note or profiles.status}; details in SQLite profile artifacts")
         judged = judge_mapped_candidates(
             self.db,
             heartbeat=lambda done, total: on_progress(EnrichmentProgress(
@@ -131,11 +139,17 @@ class EnrichmentPipeline:
             )),
         )
         if judged.judge_errors:
-            raise RuntimeError(f"identity judge returned no verdict for {judged.judge_errors} candidate(s)")
+            errors.append(f"identity: {judged.judge_errors} candidate(s) deferred; see reconcile/identity/manifest.json")
         reviews = ReviewRelationships(db=self.db, approve_spend=True).run()
         if reviews["status"] != "completed":
-            raise RuntimeError(f"review questions stopped with status {reviews['status']}")
+            if reviews.get("errors"):
+                errors.extend(f"relationships: {item['parent_id']}: {item['error']}" for item in reviews["errors"])
+            else:
+                errors.append(f"relationships: {reviews.get('error') or reviews['status']}")
         AssembleSyntheticProfile(db=self.db).run()
+        for error in errors:
+            print(f"[enrichment] {error}", file=sys.stderr, flush=True)
+        return tuple(errors)
 
     def start(self, total: int, budget: float, request_fingerprint: str) -> bool:
         if not self._running.acquire(blocking=False):
@@ -166,9 +180,11 @@ class EnrichmentPipeline:
 
         def run() -> None:
             try:
-                self._run(budget, progress)
+                errors = self._run(budget, progress)
                 self.last_error = None
-                self.applied_fingerprint = request_fingerprint
+                # Successful research leaves the queue; remaining failures belong
+                # to this completed pass, not an immediate new approval request.
+                self.applied_fingerprint = select_research(self.db, processor=DEFAULT_PROCESSOR).request_fingerprint
                 self._write(
                     "completed",
                     request_fingerprint,
@@ -176,6 +192,7 @@ class EnrichmentPipeline:
                     budget,
                     completed=total,
                     phase="profiles_complete",
+                    errors=errors,
                 )
             except BaseException as exc:
                 self.last_error = f"enrichment: {type(exc).__name__}: {exc}"

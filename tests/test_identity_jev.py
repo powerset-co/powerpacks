@@ -1,5 +1,6 @@
 """The cheap identity judge accepts supported matches and escalates disagreement."""
 import unittest
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -85,6 +86,65 @@ class IdentityJevTest(unittest.TestCase):
                          jev_judge._probability(dict(reversed(list(network.items()))),
                                                 dict(reversed(list(association.items())))))
 
+
+    def test_failed_request_does_not_stop_other_people_or_chunks(self):
+        tasks = [IdentityTask(DossierEvidence(name=name), JudgeProfile.from_payload({
+            "full_name": name, "linkedin_url": f"https://www.linkedin.com/in/person-{index}",
+            "has_profile": True,
+        })) for index, name in enumerate(("Jordan Bravo", "Casey Example", "Taylor Sample"))]
+        calls = []
+
+        async def answer(requests, **kwargs):
+            replies = {}
+            for digest, request in requests.items():
+                calls.append((kwargs["output_dir"].name, request["state"]["profile"]["full_name"]))
+                if kwargs["output_dir"].name == "network" and request["state"]["profile"]["full_name"] == "Jordan Bravo":
+                    raise RuntimeError("Jev HTTP 403")
+                replies[digest] = jev.AnsweredRequest(_payload(request), Path("synthetic"), False, 1)
+            return replies
+
+        progress = []
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(jev_judge, "load_env"), \
+             patch.object(jev_judge, "_CHUNK_SIZE", 2), \
+             patch.object(jev_judge, "answer_requests", side_effect=answer):
+            results = jev_judge.judge_batch(tasks, imported_urls=[(), (), ()],
+                output_dir=Path(directory), on_done=lambda done, total: progress.append((done, total)))
+            manifest = json.loads((Path(directory) / "manifest.json").read_text())
+            self.assertEqual(manifest["status"], "partial")
+            self.assertEqual(manifest["errors"], [{"linkedin_url": tasks[0].linkedin.linkedin_url,
+                                                  "error": results[0].error}])
+        self.assertIsNone(results[0].verdict)
+        self.assertIn("network: Jev HTTP 403", results[0].error)
+        self.assertTrue(all(result.verdict is not None for result in results[1:]))
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(progress, [(1, 3), (2, 3), (3, 3)])
+
+    def test_failed_cached_view_preserves_success_without_paid_replay(self):
+        task = IdentityTask(DossierEvidence(name="Jordan Bravo"), JudgeProfile.from_payload({
+            "full_name": "Jordan Bravo", "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+            "has_profile": True,
+        }))
+        requests = jev_judge._requests(task, (), "2026-10-01")
+        client = _Client(_Response(200, {"model": "invalid"}),
+                         _Response(200, _payload(requests["association"])))
+        with tempfile.TemporaryDirectory() as directory:
+            kwargs = dict(imported_urls=[()], output_dir=Path(directory), reference_date="2026-10-01")
+            with patch.dict("os.environ", {"TYPESAFE_API_KEY": "synthetic-test-key"}), \
+                 patch.object(jev.httpx, "AsyncClient", return_value=client), \
+                 patch.object(jev, "append_usage_row"):
+                first = jev_judge.judge_batch([task], **kwargs)
+            self.assertIsNone(first[0].verdict)
+            self.assertEqual(first[0].usage.input_tokens, 2000)
+            self.assertEqual(len(client.calls), 2)
+            self.assertEqual(len(list(Path(directory).glob("*/jev/*.json"))), 2)
+            with patch.object(jev_judge, "load_env"), \
+                 patch.dict("os.environ", {}, clear=True), \
+                 patch.object(jev.httpx, "AsyncClient", side_effect=AssertionError("cache must avoid network")):
+                second = jev_judge.judge_batch([task], **kwargs)
+            self.assertIsNone(second[0].verdict)
+            self.assertIn("network:", second[0].error)
+            self.assertEqual(second[0].usage.input_tokens, 0)
 
     def test_paid_answers_resume_from_exact_cache_without_an_api_key(self):
         task = IdentityTask(DossierEvidence(name="Jordan Bravo"), JudgeProfile.from_payload({

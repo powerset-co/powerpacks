@@ -688,7 +688,41 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(retry.estimated_rapidapi_calls, 1)
         self.assertEqual(self.adapter().enrichment().state, "profile_prep_pending")
 
-    def test_failed_or_blocked_research_stops_the_enrichment_chain(self) -> None:
+    def test_partial_provider_failures_finish_and_report_errors_without_reapproval(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        with (
+            mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as research,
+            mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as profiles,
+            mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as relationships,
+            mock.patch.object(enrichment_pipeline, "AssembleSyntheticProfile") as assemble,
+        ):
+            research.return_value.run.return_value = ResearchOutcome(
+                ReceiptStatus.FAILED, ReceiptCounts(1, 0, 0, 1), None, 0.0, 0,
+                errors=("casey-delta: research timeout",))
+            profiles.return_value.run.return_value.status = "completed_with_failures"
+            profiles.return_value.run.return_value.note = "one profile failed"
+            judge.return_value.judge_errors = 1
+            relationships.return_value.run.return_value = {
+                "status": "failed", "error": "one judgment failed",
+                "errors": [{"parent_id": "linkedin-parent", "error": "judge timeout"}],
+            }
+            status, _ = self.json_request("POST", "/api/review/approve-enrichment", {})
+            self.assertEqual(status, 200)
+            receipt = self.wait_for_enrichment_job("applied")
+            self.assertEqual(len(receipt["errors"]), 4)
+            self.assertIn("casey-delta: research timeout", receipt["errors"][0])
+            self.assertIn("linkedin-parent", receipt["errors"][3])
+            assemble.return_value.run.assert_called_once()
+            for _ in range(2):
+                status, page = self.json_request("GET", "/api/review/page?stage=enrich")
+                self.assertEqual(page["enrichment"]["mode"], "completed")
+                status, workflow = self.json_request("GET", "/api/status")
+                self.assertEqual(workflow["stage"], "linkedin")
+            self.assertEqual(research.return_value.run.call_count, 1)
+        self.assertEqual(self.adapter().enrichment().state, "needs_approval")
+
+    def test_unapproved_research_stops_the_enrichment_chain(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         with (
             mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as reconcile,
@@ -697,7 +731,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         ):
             prefetch.return_value.run.return_value.status = "completed"
             prefetch.return_value.run.return_value.note = None
-            for research_status in ("failed", "needs_approval"):
+            for research_status in ("needs_approval", "invalid_budget"):
                 with self.subTest(research_status=research_status):
                     reconcile.return_value.run.return_value = ResearchOutcome(
                         ReceiptStatus(research_status),
@@ -775,9 +809,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             # The SSE job payload (the pipeline's last receipt write) carried
             # the in-flight phase progress the bar animates from.
             final = self.json_request("GET", "/api/enrichment")[1]
-            # The fake research projected nothing, so the plan honestly
-            # re-offers the subject.
-            self.assertEqual(final["status"], "needs_approval")
+            # An attempted pass finishes even when some subjects remain queued;
+            # refreshing the UI must not automatically re-offer the same work.
+            self.assertEqual(final["status"], "completed")
 
     def test_running_receipt_file_is_never_read_for_render_state(self) -> None:
         # The manifest is write-only observability: no receipt content —

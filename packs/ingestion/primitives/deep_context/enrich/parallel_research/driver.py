@@ -96,7 +96,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
             inputs, params, on_status, on_result
         )
     except Exception as exc:
-        return ResearchRunResult.failed(total, f"{type(exc).__name__}: {exc}"[:300])
+        provider_errors = (f"{type(exc).__name__}: {exc}"[:300],)
     errors = [*provider_errors, *local_errors]
     if not completed:
         error = errors[0] if errors else "Parallel returned no completed results"
