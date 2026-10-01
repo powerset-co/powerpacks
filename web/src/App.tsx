@@ -5,6 +5,7 @@ import { TopBar } from "@/components/shared"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { PeoplePage } from "@/pages/people/PeoplePage"
+import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
 import { TasksPage } from "@/pages/tasks/TasksPage"
 
@@ -23,12 +24,14 @@ function Shell() {
 }
 
 // The paths the server answers with this app (packs/shared/web/app.py PAGE_PATHS). /searches
-// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted. Any
-// other client-side path lands on HOME.
+// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted. /review
+// stands outside the shell: it is the user's entry point, with its own top bar and no page
+// tabs. Any other client-side path lands on HOME.
 export function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/review" element={<ReviewPage />} />
         <Route element={<Shell />}>
           <Route path="/people" element={<PeoplePage />} />
           <Route path="/searches" element={<SearchesPage />}>

@@ -1,6 +1,7 @@
 """Presentation-only HTML for SQLite-hydrated Deep Context rows.
 
 Changelog:
+  2026-10-01: `label_titles` is the badge policy on its own, shared with the JSON routes.
   2026-09-30: the directory page and its person pane are gone; People is the browse surface.
   2026-09-25: label badges show the title only; the percentage is gone.
 """
@@ -76,8 +77,8 @@ _VISIBLE_LABELS = 3
 _LABEL_THRESHOLD = 0.85
 
 
-def _label_badges(parent: ParentViewRow) -> Markup:
-    """The visible share-label badges for one parent, highest probability first."""
+def label_titles(parent: ParentViewRow) -> tuple[str, ...]:
+    """Every label badge title that clears the threshold, highest probability first."""
 
     def sort_key(item: tuple[str, float]) -> float:
         return -item[1]
@@ -91,11 +92,16 @@ def _label_badges(parent: ParentViewRow) -> Markup:
     if relationship and relationship != "unknown" and "relationship_kind_p" in labels:
         title = relationship.replace("_", " ").capitalize()
         scores[title] = max(scores.get(title, 0.0), float(labels["relationship_kind_p"]))
-    names = [
+    return tuple(
         title
         for title, score in sorted(scores.items(), key=sort_key)
         if score >= _LABEL_THRESHOLD
-    ]
+    )
+
+
+def _label_badges(parent: ParentViewRow) -> Markup:
+    """The visible share-label badges for one parent, highest probability first."""
+    names = label_titles(parent)
     if not names:
         return Markup("")
     shown = "".join(
