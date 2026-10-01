@@ -11,8 +11,9 @@
   /* The old page's own top bar; the locked-height layout below subtracts it. */
   --topbar-height: 64px;
   min-height: 100dvh;
-  /* The old page set no size on body: its rules assume the browser's 16px and normal leading. */
-  font-size: 16px;
+  /* The old page set no size on body, so text with no size of its own (the dossier, plain
+     paragraphs) took the browser's default, which a user may have changed from 16px. */
+  font-size: medium;
   line-height: normal;
 }
 

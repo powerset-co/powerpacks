@@ -49,13 +49,21 @@ export function reviewCandidate(overrides: Partial<ReviewCandidate> = {}): Revie
     education: ["Example University"],
     synthetic: false,
     contacts: "jordan@example.com · +15550100",
+    avatar_url: "https://media.example.com/jordan-bravo.jpg",
+    question: "",
     ...overrides,
   }
 }
 
 /** A researched profile: no LinkedIn, no picture. */
 export function syntheticCandidate(overrides: Partial<ReviewCandidate> = {}): ReviewCandidate {
-  return reviewCandidate({ row_key: "jordan-bravo-research", url: "", synthetic: true, ...overrides })
+  return reviewCandidate({
+    row_key: "jordan-bravo-research",
+    url: "",
+    synthetic: true,
+    avatar_url: "",
+    ...overrides,
+  })
 }
 
 export function decisionProgress(overrides: Partial<DecisionProgress> = {}): DecisionProgress {

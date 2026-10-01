@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 
 import { reviewCandidate, reviewPerson, syntheticCandidate } from "@/testing/review-fixture"
 
+import { initials } from "@/components/shared"
+
 import {
   avatarKey,
   avatarName,
@@ -59,6 +61,16 @@ describe("the avatar", () => {
     )
     expect(avatarName(reviewPerson({ name: "Jordan B" }), reviewCandidate({ name: "" }))).toBe("Jordan B")
     expect(avatarName(reviewPerson({ name: "Jordan B" }), null)).toBe("Jordan B")
+  })
+
+  it("draws the old page's initials: first and last run of letters or digits", () => {
+    const drawn = (name: string) => initials(avatarName(reviewPerson({ name }), null))
+    expect(drawn("Jordan O'Bravo")).toBe("JB")
+    expect(drawn("Casey-Lee Delta")).toBe("CD")
+    expect(drawn("jordan.bravo@example.com")).toBe("JC")
+    expect(drawn("Jordan")).toBe("J")
+    expect(drawn("+15550100")).toBe("1")
+    expect(drawn("…")).toBe("?")
   })
 
   it("asks for a fetched candidate's picture only", () => {
