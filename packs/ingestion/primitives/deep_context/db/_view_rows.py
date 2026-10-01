@@ -194,11 +194,9 @@ def _attached_candidate(row: sqlite3.Row) -> CandidateProfile:
 
 
 def _candidate_profile(row: sqlite3.Row) -> CandidateProfile:
-    """Select exactly one profile source from the candidate's persisted origin."""
+    """Use fetched LinkedIn profiles for real candidates; research for synthetic ones."""
     if row["profile_source"] == "synthetic":
         return _synthetic_candidate(row["synthetic_profile_json"])
-    if row["profile_source"] == "research":
-        return _research_candidate(row["research_json"])
     return _attached_candidate(row)
 
 

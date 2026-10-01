@@ -8,10 +8,11 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store
+from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store, scrub_deep_context
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
@@ -33,7 +34,7 @@ class EnsureParents(Node):
 
     name = "deep_ensure_parents"
     inputs = (
-        Artifact(path=str(DEFAULT_PEOPLE_CSV), external=True),
+        Artifact(path=str(DEFAULT_PEOPLE_CSV), external=True, required=False),
         Artifact(path=str(CANONICAL_DB), external=True),
     )
     outputs = ()
@@ -51,6 +52,15 @@ class EnsureParents(Node):
         }
 
     def execute(self) -> EnsureParentsManifest:
+        repair, removed, historical = scrub_deep_context(self.db)
+        if removed:
+            print(f'[deep-context] invalidated {removed} Harmonic profile artifacts', file=sys.stderr)
+        if repair.repaired or repair.unresolved:
+            print(f'[deep-context] repaired {len(repair.repaired)} merged parents; '
+                  f'{len(repair.unresolved)} unresolved', file=sys.stderr)
+        if historical.repaired or historical.unresolved:
+            print(f'[deep-context] restored {len(historical.repaired)} historical merged parents; '
+                  f'{len(historical.unresolved)} unresolved', file=sys.stderr)
         imported = read_imported_people(self.people_csv)
         projected = project_imported_people(self.db, imported)
         return EnsureParentsManifest(

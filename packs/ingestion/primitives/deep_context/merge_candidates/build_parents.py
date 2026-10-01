@@ -68,7 +68,11 @@ PARENT_RENDER_CONTRACT = "parent-dossier-v1"
 
 def _accepted_components(db: Db) -> tuple[tuple[str, ...], ...]:
     """Join current parents without overriding any child-pair rejection."""
-    parent_by_person = {row.person_id: row.parent_id for row in person_rows(db)}
+    people = person_rows(db)
+    parent_by_person = {row.person_id: row.parent_id for row in people}
+    names: dict[str, tuple[str, ...]] = {}
+    for row in people:
+        names[row.parent_id] = (*names.get(row.parent_id, ()), row.display_name)
     verdicts = []
     for row in merge_verdicts(db):
         left = parent_by_person[row.person_a]
@@ -76,7 +80,7 @@ def _accepted_components(db: Db) -> tuple[tuple[str, ...], ...]:
         if left == right or (row.same_person and not row.accepted):
             continue
         verdicts.append((left, right, bool(row.same_person), row.confidence))
-    edges = accepted_edges(verdicts)
+    edges = accepted_edges(verdicts, names=names)
     nodes = sorted({parent_id for edge in edges for parent_id in edge})
     return tuple(tuple(sorted(group)) for group in connected_components(nodes, edges))
 

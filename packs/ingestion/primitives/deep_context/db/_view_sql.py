@@ -224,11 +224,9 @@ WHERE p.parent_id IN (SELECT parent_id FROM pending_parents)
 CANDIDATE_SELECT = """
 SELECT c.*,
        CASE WHEN c.kind='synthetic' THEN 'synthetic'
-            WHEN r.candidate_key IS NOT NULL THEN 'research'
             ELSE 'attached' END AS profile_source,
        sp.profile_json AS synthetic_profile_json,
        pa.payload_json AS profile_artifact_json,
-       r.result_json AS research_json,
        -- CROSS JOIN pins the join order candidate -> person -> identifiers.
        -- Left to itself the planner walks identifiers_by_value(kind) for every
        -- candidate row, which is quadratic in the store (a 5k-candidate queue
@@ -248,10 +246,6 @@ SELECT c.*,
 FROM candidate_policy c
 LEFT JOIN synthetic_profiles sp ON sp.candidate_key=c.row_key
 LEFT JOIN artifacts pa ON pa.artifact_key='profile:'||c.row_key AND pa.status='projected' 
-LEFT JOIN research r ON r.candidate_key=c.row_key AND r.handle=(
-  SELECT r2.handle FROM research r2 WHERE r2.candidate_key=c.row_key
-  ORDER BY r2.updated_at DESC, r2.handle LIMIT 1
-)
 WHERE c.parent_id IN (SELECT value FROM json_each(?))
 {pending}
 ORDER BY c.parent_id, c.is_pending DESC, c.row_key

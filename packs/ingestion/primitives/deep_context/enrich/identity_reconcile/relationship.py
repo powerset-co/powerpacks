@@ -25,6 +25,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_d
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
     RelationshipDecision, cache_relationship_judgment, finish_reviews,
 )
+from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, emit
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
@@ -72,12 +73,26 @@ class ReviewRelationships:
             if raw and "candidates" in raw:
                 saved[raw["parent_id"]] = RelationshipDecision.from_payload(
                     raw["parent_id"], raw["fingerprint"], raw)
+        review_parents = linkedin_parents(self.db, parent_ids=pending)
         candidates = {parent.parent_id: [{
             "url": normalize_linkedin_url(candidate.url), "name": candidate.full_name, "headline": candidate.headline,
             "location": candidate.location, "experiences": candidate.experiences,
             "education": candidate.education, "identity_verdict": candidate.verdict,
             "identity_reason": candidate.reason,
-        } for candidate in parent.candidates if candidate.url] for parent in linkedin_parents(self.db, parent_ids=pending)}
+        } for candidate in parent.candidates if candidate.url and not candidate.synthetic] for parent in review_parents}
+        hydrated = profile_payloads(self.db, candidate_keys=(candidate.row_key
+            for parent in review_parents for candidate in parent.candidates if not candidate.synthetic))
+        for parent in review_parents:
+            for candidate, evidence in zip((item for item in parent.candidates if item.url and not item.synthetic), candidates[parent.parent_id]):
+                result = hydrated.get(candidate.row_key)
+                if result is None:
+                    continue
+                profile = result.normalized_profile
+                if normalize_linkedin_url(profile.linkedin_url or '') != evidence['url']:
+                    evidence.update(name='', headline='', location='', experiences=(), education=())
+                    continue
+                evidence['experiences'] = [asdict(item) for item in profile.experiences]
+                evidence['education'] = [asdict(item) for item in profile.education]
         known_urls = imported_linkedin_urls(self.db, pending)
         tasks = []
         for parent_id in pending:

@@ -69,6 +69,20 @@ flowchart TD
   sqlite --> realize["realize/export_people\nfinal roster in SQLite → people.csv → index build"]
 ```
 
+## Data repairs
+
+`common/legacy.scrub_deep_context(db)` runs data repairs in order before
+`EnsureParents` reads imports. Any future self-heal stage calls this same entry
+before its own work. Each repair commits its changes and
+`meta.data_migration_version` together; failure stops the sequence, and a rerun
+skips completed repairs. Add new repairs after existing versions rather than
+changing a version that users may already have completed. Ambiguous ownership
+remains unchanged; a completed repair does not mean every contact was resolved.
+
+Stages read the preceding stage's SQLite outputs. Paid stages save completed
+results as they arrive and select remaining work on rerun; manifests report
+progress but do not decide whether a task is complete.
+
 ## Contracts
 
 1. **SQLite is the record.** `deep-context.sqlite` (schema in `db/schema.py`)

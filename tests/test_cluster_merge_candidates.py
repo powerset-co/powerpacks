@@ -307,7 +307,7 @@ class TestJudgeSystemRule(unittest.TestCase):
             "Jordan Bravo", extra_emails=["jordan@example.com"],
             extra_phones=["9145550466"],
         )
-        self.assertEqual(pair_sig(first, second), "042d17c53630d5f8")
+        self.assertEqual(pair_sig(first, second), "ba4a95fddd2f6a2d")
 
 
 class TestCacheAndArtifacts(unittest.TestCase):
@@ -429,7 +429,7 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertFalse(output.with_name("merge-verdicts.csv").exists())
             cached = canonical_snapshot(db).merge_verdicts
             self.assertEqual(len(cached), 1)
-            self.assertEqual(cached[0].signature, "a253570e50514c08")
+            self.assertEqual(cached[0].signature, "eb88ef165162e5de")
             self.assertEqual(cached[0].accepted, 1)
             self.assertEqual(payload.pairs_slam_dunk, 1)
 
@@ -553,14 +553,14 @@ class TestJevJudge(unittest.TestCase):
             self.assertIn("CONTACT A", request["state"]["dossier"])
             self.assertIn("SHARED IDENTIFIERS", request["state"]["dossier"])
 
-    def test_p_yes_is_the_stored_confidence_and_the_cutoff_decides_accepted(self):
+    def test_p_yes_is_preserved_but_incompatible_names_prevent_acceptance(self):
         with tempfile.TemporaryDirectory() as directory:
             node = self._node(Path(directory))
             with mock.patch.object(judge, "answer_requests", scripted_answers(p_yes=0.9)):
                 payload = node.run()
             rows = canonical_snapshot(node.db).merge_verdicts
             self.assertEqual({(row.judge, row.same_person, row.confidence, row.reason, row.accepted)
-                              for row in rows}, {("llm", 1, 0.9, "", 1)})
+                              for row in rows}, {("llm", 1, 0.9, "", 0)})
             self.assertEqual(payload.model, MODEL_ID)
             self.assertEqual(payload.tokens, {"input_tokens": 2000, "output_tokens": 20})
             self.assertAlmostEqual(payload.estimated_cost_usd, 2000 * INPUT_PRICE_PER_MILLION / 1_000_000)

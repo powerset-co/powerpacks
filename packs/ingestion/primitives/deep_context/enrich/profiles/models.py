@@ -76,6 +76,7 @@ class ProfileExperience:
     company_name: str | None
     starts_at: int | str | None
     ends_at: int | str | None
+    description: str | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ProfileExperience:
@@ -84,6 +85,7 @@ class ProfileExperience:
             text(payload.get("company_name")),
             _year(payload.get("starts_at")),
             _year(payload.get("ends_at")),
+            text(payload.get("description")),
         )
 
 

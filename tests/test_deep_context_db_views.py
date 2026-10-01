@@ -659,7 +659,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(detail.sources, ("gmail",))
         self.assertEqual(detail.source_channels, ("gmail_msgvault", "linkedin_csv"))
 
-    def test_candidate_profiles_use_their_typed_origin_only(self) -> None:
+    def test_researched_linkedin_uses_fetched_profile_not_research(self) -> None:
         research_people = self.add_parent("research-profile", "yes")
         self.add_candidate(
             "research-profile",
@@ -748,24 +748,33 @@ class DeepContextDbViewTests(unittest.TestCase):
             ),
         )
 
+        self.db.project_rows((ArtifactRow(
+            'profile:research-profile-link', 'profile', 'research-profile', '/fixture/profile.json',
+            'profile-hash', 'projected', candidate_key='research-profile-link',
+            payload_json=json.dumps({'public_identifier': 'jordan-research',
+                'linkedin_url': 'https://www.linkedin.com/in/jordan-research',
+                'normalized_profile': {'success': True, 'full_name': 'Jordan Fetched',
+                    'headline': 'Fetched engineer', 'experiences': [{'title': 'Engineer', 'company_name': 'Actual Labs'}]}}),
+        ),))
+
         research = person_detail(self.db, "research-profile")
         synthetic = person_detail(self.db, "synthetic-profile")
         missing = person_detail(self.db, "missing-research-profile")
         assert research is not None and synthetic is not None and missing is not None
         research_candidate = research.candidates[0]
         synthetic_candidate = synthetic.candidates[0]
-        self.assertEqual(research_candidate.full_name, "Jordan Research")
-        self.assertEqual(research_candidate.headline, "Research leader")
+        self.assertEqual(research_candidate.full_name, "Jordan Fetched")
+        self.assertEqual(research_candidate.headline, "Fetched engineer")
         self.assertEqual(
             research_candidate.experiences,
-            ("Founder @ Example Labs",),
+            ("Engineer @ Actual Labs",),
         )
         self.assertEqual(synthetic_candidate.full_name, "Jordan Synthetic")
         self.assertEqual(synthetic_candidate.headline, "Synthetic leader")
         self.assertEqual(synthetic_candidate.experiences, ("Designer @ ?",))
         self.assertEqual(synthetic_candidate.location, "Portland, Oregon")
-        self.assertEqual(missing.candidates[0].full_name, "")
-        self.assertFalse(missing.candidates[0].has_profile)
+        self.assertEqual(missing.candidates[0].full_name, "Wrong Attached Profile")
+        self.assertTrue(missing.candidates[0].has_profile)
 
     def test_synthetic_only_parent_stays_local_without_identity_review(self) -> None:
         people = self.add_parent("synthetic-review", "yes")

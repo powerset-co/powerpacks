@@ -47,7 +47,6 @@ EXPECTED_DB_OPERATIONS = {
     "queries.facts",
     "identity_queries.guidance_rows",
     "identity_queries.imported_linkedin_urls",
-    "merge_repair.repair_merged_parents",
     "queries.identifiers",
     "identity_queries.links",
     "identity_queries.stored_judgments",
