@@ -23,4 +23,11 @@ if [[ ! -x "$PYTHON" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "hook" ]]; then
+  # The primitive prints `{}` itself; this covers an interpreter that fails to
+  # start (broken venv, import error) and would otherwise leave stdout empty.
+  "$PYTHON" "$ROOT/packs/powerset/primitives/reflect/reflect.py" "$@" || echo '{}'
+  exit 0
+fi
+
 exec "$PYTHON" "$ROOT/packs/powerset/primitives/reflect/reflect.py" "$@"

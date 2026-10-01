@@ -73,7 +73,8 @@ The install also registers a SessionEnd hook: after a Powerpacks session ends,
 the harness runs `bin/reflect hook end`, which writes
 `.powerpacks/reflect/<harness>-<session>/report.md` and `narrative.md` locally
 (the narrative is one headless run of your own CLI, `claude -p` or
-`codex exec`). Nothing is uploaded. `POWERPACKS_REFLECT=off` disables it;
+`codex exec`). Nothing is uploaded; the scrub is pattern-based (emails, phones, keys, home
+paths) and the narrative is model-written, so both files stay on your machine. `POWERPACKS_REFLECT=off` disables it;
 `bin/reflect latest` prints the newest one. To unregister:
 `uv run --project . python packs/powerset/primitives/reflect/hooks_install.py --harness claude-code --config-dir ~/.claude --command x --remove`.
 

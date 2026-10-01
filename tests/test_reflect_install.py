@@ -112,11 +112,7 @@ class HooksInstallTest(unittest.TestCase):
 
                 install(harness, self.tmp / harness)
                 expected = real_shaped_config()
-                groups = expected["hooks"]["SessionEnd"]
-                if harness == "codex":
-                    groups.insert(0, our_group(harness))
-                else:
-                    groups.append(our_group(harness))
+                expected["hooks"]["SessionEnd"].append(our_group(harness))
                 self.assertEqual(self.read(harness), expected)
 
                 proc = install(harness, self.tmp / harness, "x", remove=True)
@@ -196,6 +192,58 @@ class CodexTrustRecordTest(unittest.TestCase):
 
         install("codex", self.tmp, "x", remove=True)
         self.assertEqual(self.toml_path.read_text(encoding="utf-8"), FOREIGN_TOML + tail)
+
+    def test_foreign_hook_at_index_zero_keeps_its_record(self) -> None:
+        hooks_path = self.tmp / "hooks.json"
+        foreign = {"hooks": {"SessionEnd": [{"matcher": None, "hooks": [{"type": "command", "command": "notify.sh", "timeout": 3}]}]}}
+        hooks_path.write_text(json.dumps(foreign, indent=2) + "\n", encoding="utf-8")
+        foreign_toml = (
+            FOREIGN_TOML
+            + f'\n[hooks.state.{json.dumps(self.key)}]\ntrusted_hash = "sha256:theirs"\nenabled = true\n'
+        )
+        self.toml_path.write_text(foreign_toml, encoding="utf-8")
+        ours_key = self.key.replace(":0:0", ":1:0")
+
+        install("codex", self.tmp)
+        self.assertEqual(json.loads(hooks_path.read_text(encoding="utf-8"))["hooks"]["SessionEnd"][0], foreign["hooks"]["SessionEnd"][0])
+        self.assertEqual(self.trust()[self.key], {"trusted_hash": "sha256:theirs", "enabled": True})
+        self.assertEqual(self.trust()[ours_key], {"trusted_hash": COMMAND_TRUSTED_HASH, "enabled": True})
+
+        install("codex", self.tmp, "/y/bin/reflect hook end")
+        self.assertEqual(self.trust()[self.key], {"trusted_hash": "sha256:theirs", "enabled": True})
+        self.assertEqual(sorted(self.trust()), sorted([self.key, ours_key]))
+
+        install("codex", self.tmp, "x", remove=True)
+        self.assertEqual(json.loads(hooks_path.read_text(encoding="utf-8")), foreign)
+        self.assertEqual(self.toml_path.read_text(encoding="utf-8"), foreign_toml)
+
+    def test_stale_record_of_ours_under_another_index_is_dropped(self) -> None:
+        stale_key = self.key.replace(":0:0", ":5:0")
+        self.toml_path.write_text(
+            FOREIGN_TOML + f'\n[hooks.state.{json.dumps(stale_key)}]\ntrusted_hash = "{COMMAND_TRUSTED_HASH}"\nenabled = true\n',
+            encoding="utf-8",
+        )
+        install("codex", self.tmp)
+        self.assertEqual(sorted(self.trust()), [self.key])
+        self.assertTrue(self.toml_path.read_text(encoding="utf-8").startswith(FOREIGN_TOML))
+
+    def test_invalid_toml_is_left_untouched(self) -> None:
+        self.toml_path.write_text("[features\n", encoding="utf-8")
+        proc = install("codex", self.tmp)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(len(proc.stderr.strip().splitlines()), 1)
+        self.assertEqual(self.toml_path.read_text(encoding="utf-8"), "[features\n")
+        self.assertFalse((self.tmp / "hooks.json").exists())
+
+    def test_edit_that_would_break_toml_is_refused(self) -> None:
+        # Our table already present under literal-string quoting: a text append would duplicate it.
+        original = FOREIGN_TOML + f"\n[hooks.state.'{self.key}']\ntrusted_hash = \"sha256:old\"\nenabled = true\n"
+        self.toml_path.write_text(original, encoding="utf-8")
+        proc = install("codex", self.tmp)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("invalid TOML", proc.stderr)
+        self.assertEqual(self.toml_path.read_text(encoding="utf-8"), original)
+        self.assertFalse((self.tmp / "hooks.json").exists())
 
 
 class ReflectBinTest(unittest.TestCase):

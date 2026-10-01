@@ -109,7 +109,11 @@ def hook_end(raw: str) -> None:
         "narrative": PENDING,
     }
     _write_meta(session_dir, meta)
-    _spawn_process(session_dir)
+    try:
+        _spawn_process(session_dir)
+    except Exception:
+        (session_dir / META_FILE).unlink(missing_ok=True)  # leave no un-retryable "pending"
+        raise
 
 
 def process(session_dir: Path) -> Exit:
@@ -190,7 +194,10 @@ def main() -> int:
             raw = sys.stdin.read()
             hook_end(raw)
         except Exception as e:
-            _log_hook_failure(raw, e)
+            try:
+                _log_hook_failure(raw, e)
+            except Exception:
+                pass  # logging must never cost the host its `{}`
         print(HOOK_REPLY)
         return Exit.OK
 

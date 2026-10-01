@@ -5,8 +5,10 @@ at 90 000 chars, run `claude -p` or `codex exec` with `prompt.md`, scrub the
 result into `narrative.md`, record the outcome in `meta.json`.
 - Claude Code: `claude -p --output-format json --tools ""`; report on stdin,
   prompt as the system prompt, `CLAUDECODE` dropped from env. Default `opus`.
-- Codex: `codex exec … -C ~/.powerpacks -`; prompt + report on stdin; `-C`
-  sits outside any git checkout so no repo AGENTS.md loads. Default `gpt-6-sol`.
+- Codex: `codex exec … -C ~/.powerpacks -`; prompt + report on stdin. Default
+  `gpt-6-sol`.
+- Both run from `~/.powerpacks`, outside any git checkout, so neither CLI
+  loads a project's AGENTS.md / CLAUDE.md into the narrative run.
 - `POWERPACKS_REFLECT_MODEL` overrides the model; the child env carries
   `POWERPACKS_REFLECT=off` so its own SessionEnd hook does nothing.
 
@@ -37,7 +39,7 @@ TIMEOUT_S = 600
 CLAUDE_MODEL = "opus"
 CODEX_MODEL = "gpt-6-sol"
 CODEX_EFFORT = "medium"
-CODEX_WORKDIR = Path.home() / ".powerpacks"
+HEADLESS_WORKDIR = Path.home() / ".powerpacks"
 REPORT_FILE = "report.md"
 META_FILE = "meta.json"
 NARRATIVE_FILE = "narrative.md"
@@ -76,6 +78,7 @@ def narrate(session_dir: Path) -> Exit:
         meta_path.write_text(json.dumps(meta, indent=2))
         return Exit.OK
     prompt = PROMPT_PATH.read_text()
+    HEADLESS_WORKDIR.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     try:
         result = _run_codex(model, prompt, report, session_dir) if is_codex else _run_claude(model, prompt, report)
@@ -109,7 +112,9 @@ def _run_claude(model: str, prompt: str, report: str) -> RunResult:
         "claude", "-p", "--model", model, "--output-format", "json", "--tools", "",
         "--no-session-persistence", "--setting-sources", "", "--system-prompt", prompt,
     ]
-    proc = subprocess.run(cmd, input=report, capture_output=True, text=True, env=_child_env(), timeout=TIMEOUT_S)
+    proc = subprocess.run(
+        cmd, input=report, capture_output=True, text=True, env=_child_env(), cwd=HEADLESS_WORKDIR, timeout=TIMEOUT_S,
+    )
     if proc.returncode != 0:
         raise NarrateError(f"claude exit {proc.returncode}: {proc.stderr[-_STDERR_TAIL:].strip()}")
     try:
@@ -122,14 +127,14 @@ def _run_claude(model: str, prompt: str, report: str) -> RunResult:
 
 
 def _run_codex(model: str, prompt: str, report: str, session_dir: Path) -> RunResult:
-    CODEX_WORKDIR.mkdir(parents=True, exist_ok=True)
     raw = session_dir / CODEX_RAW_FILE
     cmd = [
         "codex", "exec", "-m", model, "-c", f'model_reasoning_effort="{CODEX_EFFORT}"', "-c", "mcp_servers={}",
-        "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "-C", str(CODEX_WORKDIR), "-o", str(raw), "-",
+        "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "-C", str(HEADLESS_WORKDIR), "-o", str(raw), "-",
     ]
     proc = subprocess.run(
-        cmd, input=prompt + "\n\n" + report, capture_output=True, text=True, env=_child_env(), timeout=TIMEOUT_S,
+        cmd, input=prompt + "\n\n" + report, capture_output=True, text=True, env=_child_env(),
+        cwd=HEADLESS_WORKDIR, timeout=TIMEOUT_S,
     )
     if proc.returncode != 0 or not raw.exists():
         raise NarrateError(f"codex exit {proc.returncode}: {proc.stderr[-_STDERR_TAIL:].strip()}")

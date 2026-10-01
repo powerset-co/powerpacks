@@ -55,7 +55,9 @@ _ERROR_SCAN_CHARS = 4000
 
 _USER_SKILL = re.compile(r"(?<![\w$])\$([a-z][a-z0-9-]*)|^/([a-z][a-z0-9-]*)")
 _SKILL_MD = re.compile(r"skills/([a-z0-9-]+)/SKILL\.md")
-_BIN_CMD = re.compile(r"(?<![\w.-])bin/([a-z][a-z0-9_.-]*)")
+# `bin/<name>` counts only as the program of a shell segment (`bin/x`, `./bin/x`,
+# `/path/bin/x`, after `;`/`&&`/`|`), never as an argument (`cat bin/x`).
+_BIN_CMD = re.compile(r"(?:^|[;&|(]\s*)\S*?bin/([a-z][a-z0-9_.-]*)(?=\s|$)")
 # A primitive counts only when the command EXECUTES it (python/uv run), not when
 # it is read with cat/sed/rg — otherwise every dev session gates in.
 _PRIMITIVE_CMD = re.compile(r"(?:python3?|uv run)\b[^|;&\n]*?\s(packs/[a-z0-9_-]+/primitives/[\w./-]+\.py)")

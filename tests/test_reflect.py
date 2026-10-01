@@ -187,6 +187,18 @@ class GateTests(_TempDirCase):
         self.assertFalse(result.passed)
         self.assertEqual(result.reason, "no tool calls")
 
+    def test_bin_and_primitive_count_only_when_run(self) -> None:
+        read_only = CLAUDE_DEV_SESSION + [
+            _claude_line("assistant", 20, [_tool_use("b1", "Bash", {"command": "cat bin/reflect; sed -n '1,5p' packs/powerset/primitives/reflect/reflect.py"})]),
+            _claude_line("user", 21, [_tool_result("b1", "...")]),
+        ]
+        self.assertFalse(self._gate(read_only).passed)
+        ran = CLAUDE_DEV_SESSION + [
+            _claude_line("assistant", 30, [_tool_use("b2", "Bash", {"command": "cd /repo && bin/reflect latest"})]),
+            _claude_line("user", 31, [_tool_result("b2", "/x")]),
+        ]
+        self.assertEqual(self._gate(ran).signals, {"ran_powerpacks_command": ["bin/reflect"]})
+
 
 class ReportTests(_TempDirCase):
     def setUp(self) -> None:
