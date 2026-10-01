@@ -411,6 +411,19 @@ def _allowed_file_read(
         return True
     called = _name(call.func)
     scope = _scope(call, parents)
+    # This receipt identifies an external paid group; research results still
+    # hydrate from SQLite. Allow only its fixed manifest path in the submitter.
+    if (
+        relative == "packs/ingestion/primitives/deep_context/enrich/parallel_research/parallel_client.py"
+        and scope == "ParallelClient.execute"
+        and called == "manifest_path.read_text"
+    ):
+        return any(
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "manifest_path" for target in node.targets)
+            and ast.unparse(node.value) == "params.output_dir / 'manifest.json'"
+            for node in ast.walk(tree)
+        )
     if (relative, scope) in TYPED_ARTIFACT_READ_BOUNDARIES:
         return True
     if (relative, scope) in JEV_ARTIFACT_READ_BOUNDARIES:

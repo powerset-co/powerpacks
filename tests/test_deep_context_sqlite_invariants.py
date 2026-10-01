@@ -241,6 +241,21 @@ def load_candidate(path):
         violations = self.audit_source("enrich/identity_reconcile/jev_judge.py", source)
         self.assertEqual([row.rule for row in violations], ["artifact-file-read"])
 
+    def test_parallel_reads_only_its_provider_group_receipt(self) -> None:
+        source = """class ParallelClient:
+    def execute(self, params):
+        manifest_path = params.output_dir / 'manifest.json'
+        return manifest_path.read_text()
+"""
+        relative = "enrich/parallel_research/parallel_client.py"
+        self.assertEqual(self.audit_source(relative, source), [])
+        for changed in (
+            source.replace("'manifest.json'", "'00_parallel_result.json'"),
+            source.replace("manifest_path.read_text()", "params.artifact_path.read_text()"),
+        ):
+            self.assertEqual([row.rule for row in self.audit_source(relative, changed)],
+                             ["artifact-file-read"])
+
     def test_runtime_respects_sqlite_projection_boundary(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],
