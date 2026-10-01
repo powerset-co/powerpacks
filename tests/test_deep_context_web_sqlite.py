@@ -459,6 +459,21 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             1500 * (existing + 2), DEFAULT_IDENTITY_MODEL)
         self.assertGreaterEqual(self.adapter().enrichment().estimated_usd, required)
 
+    def test_enrichment_preview_does_not_repeat_workflow_identity_queries(self) -> None:
+        adapter = self.adapter()
+        state = adapter.snapshot()
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            adapter.enrichment(state)
+        statements = [call.args[0] for call in reads.call_args_list]
+        self.assertFalse(any("candidate_policy AS" in sql for sql in statements))
+        self.assertFalse(any("research_link_rejected" in sql for sql in statements))
+
+    def test_worth_page_reads_pending_queue_once(self) -> None:
+        with mock.patch.object(review_server, "worth_queue", wraps=worth_queue) as reads:
+            status, _, _ = self.request("GET", "/?stage=worth")
+        self.assertEqual(status, 200)
+        self.assertEqual(reads.call_count, 1)
+
     def test_unassembled_saved_research_requires_paid_question_estimate(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         self.db.decide_identity("jordan-bravo", "verify")
@@ -498,6 +513,28 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             payload = self.adapter().workflow_status()
         self.assertEqual(payload["next_action"], "review_people")
         self.assertEqual(workflow_state.call_count, 1)
+
+    def test_review_startup_binds_without_calculating_workflow_queues(self) -> None:
+        server = mock.Mock(server_address=("127.0.0.1", 8765))
+        server.serve_forever.side_effect = KeyboardInterrupt
+        with (
+            mock.patch.object(review_cli, "CANONICAL_DB", self.db.db_path),
+            mock.patch.object(review_cli, "load_env"),
+            mock.patch.object(review_cli.urllib.request, "urlopen", side_effect=OSError),
+            mock.patch.object(review_cli, "open_existing_db", return_value=self.db),
+            mock.patch.object(review_server, "GuidedRetargetWorker"),
+            mock.patch.object(review_cli, "ThreadingHTTPServer", return_value=server) as bind,
+            mock.patch.object(review_cli, "_announce"),
+            mock.patch.object(self.db, "query", wraps=self.db.query) as query,
+        ):
+            review_cli.main(["serve"])
+        bind.assert_called_once()
+        self.assertEqual(query.call_count, 1, "Startup must check existence, not calculate review or research queues")
+
+    def test_empty_review_store_still_refuses_startup(self) -> None:
+        empty = Db(self.root / "empty.sqlite")
+        with self.assertRaisesRegex(ValueError, "database is empty"):
+            review_server.make_handler(db=empty)
 
     def test_enrichment_get_never_launches_job(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
@@ -1453,6 +1490,44 @@ class SynthesisPendingWebTests(unittest.TestCase):
                 self.assertIn("bin/deep-context dry", page)
                 for claim in ("Decisions ready", "Contacts enriched", "Review complete", "All set", "✓"):
                     self.assertNotIn(claim, page)
+
+
+class DeepContextLinkedInPageTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Db(Path(self.tmp.name) / "deep-context.sqlite")
+        for number, name in enumerate(("Casey Delta", "Jordan Bravo", "Morgan Echo")):
+            seed_identity(self.db, parent_id=f"parent-{number}", person_id=f"person-{number}",
+                row_key=f"candidate-{number}", name=name, machine_worth="yes",
+                display_slug=f"contact-{number}", linkedin_url=f"https://www.linkedin.com/in/contact-{number}",
+                link_updates={"paid_profile": 1})
+
+    def test_linkedin_page_hydrates_only_selected_parent_and_preserves_queue(self):
+        from packs.ingestion.primitives.deep_context.db import _view_rows
+        expected = _view_rows._linkedin_queue(self.db)
+        with mock.patch.object(_view_rows, "_hydrate_parents", wraps=_view_rows._hydrate_parents) as hydrate:
+            total, index, parent = _view_rows._linkedin_page(self.db, index=4)
+        self.assertEqual((total, index, parent), (3, 1, expected[1]))
+        self.assertEqual(len(hydrate.call_args.args[1]), 1)
+
+    def test_linkedin_page_exclusion_negative_index_and_empty_queue(self):
+        from packs.ingestion.primitives.deep_context.db import _view_rows
+        expected = _view_rows._linkedin_queue(self.db)
+        self.assertEqual(_view_rows._linkedin_page(self.db, index=-3, excluded=("CONTACT-0",)),
+            (2, 0, expected[1]))
+        with mock.patch.object(_view_rows, "_hydrate_parents", wraps=_view_rows._hydrate_parents) as hydrate:
+            self.assertEqual(_view_rows._linkedin_page(self.db, excluded=tuple(row.slug for row in expected)),
+                (0, 0, None))
+        hydrate.assert_not_called()
+
+    def test_fact_ranking_carries_keys_and_keeps_selected_fact_payload(self):
+        from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
+        ranked = self.db.query(WORTH_CTE + "SELECT * FROM ranked_facts")
+        self.assertEqual(set(ranked[0].keys()), {"subject_key", "parent_id", "worth_rank"})
+        worth = self.db.query(WORTH_CTE + "SELECT parent_id, machine_facts_json FROM worth ORDER BY parent_id")
+        facts = self.db.query("SELECT parent_id, facts_json FROM facts ORDER BY parent_id")
+        self.assertEqual([tuple(row) for row in worth], [tuple(row) for row in facts])
 
 
 if __name__ == "__main__":

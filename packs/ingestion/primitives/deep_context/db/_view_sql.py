@@ -21,7 +21,7 @@ WITH eligible_links AS (
     WHERE cp.row_key=l.row_key AND pe.is_owner=0
   )
 ), ranked_facts AS (
-  SELECT f.*,
+  SELECT f.subject_key, f.parent_id,
          row_number() OVER (
            PARTITION BY f.parent_id
            -- Merges can leave several child facts on one parent. The most
@@ -57,7 +57,8 @@ WITH eligible_links AS (
            WHERE l.parent_id=p.parent_id AND l.kind='synthetic'
          ) AS has_synthetic
   FROM parents p
-  JOIN ranked_facts r ON r.parent_id=p.parent_id AND r.worth_rank=1
+  JOIN ranked_facts ranked ON ranked.parent_id=p.parent_id AND ranked.worth_rank=1
+  JOIN facts r ON r.subject_key=ranked.subject_key
   -- Empty, ghost-only, and owner-only families cannot enter review; an owner
   -- person never hides a real non-owner member of the same family.
   WHERE EXISTS (

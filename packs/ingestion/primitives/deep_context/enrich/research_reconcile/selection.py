@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.deep_context.db import context_queries, queries
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, ProjectionStatus
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
@@ -27,8 +27,12 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
     ResearchSelection,
 )
 
+
+RESEARCH_BATCH = 500
+
+
 def build_queue_row(
-    db: Db,
+    evidence: DossierEvidence,
     row: EnrichmentQueueRow,
     *,
     owner_context: str,
@@ -57,7 +61,7 @@ def build_queue_row(
         handle=row.parent_slug,
         source_person_ids=row.person_ids,
         display_name=row.name,
-        bio=DossierEvidence.from_db(db, row.person_ids).research_bio(),
+        bio=evidence.research_bio(),
         known_info=context,
         primary_email=email,
         phone_e164=phone,
@@ -72,15 +76,23 @@ def build_queue(
     guidance: str = "",
 ) -> list[ResearchQueueRow]:
     owner_context = owner_background(db)
-    return [
-        build_queue_row(
-            db,
-            row,
-            owner_context=owner_context,
-            guidance=guidance,
+    queue: list[ResearchQueueRow] = []
+    for start in range(0, len(subset), RESEARCH_BATCH):
+        batch = subset[start:start + RESEARCH_BATCH]
+        evidence_rows = context_queries.dossier_evidence_rows(
+            db, tuple(person_id for row in batch for person_id in row.person_ids),
         )
-        for row in subset
-    ]
+        queue.extend(
+            build_queue_row(
+                DossierEvidence.from_rows(row.person_ids, evidence_rows),
+                row,
+                owner_context=owner_context,
+                guidance=guidance,
+            )
+            for row in batch
+        )
+        del evidence_rows
+    return queue
 
 
 def select_research(
@@ -99,10 +111,15 @@ def select_research(
     # the last projected research artifact for its handle.
     pending, reused_completed = filter_already_done(
         queue,
-        queries.artifacts(
-            db,
-            kind=ArtifactKind.RESEARCH.value,
-            status=ProjectionStatus.PROJECTED.value,
+        (
+            artifact
+            for start in range(0, len(eligible), RESEARCH_BATCH)
+            for artifact in queries.artifacts(
+                db,
+                kind=ArtifactKind.RESEARCH.value,
+                status=ProjectionStatus.PROJECTED.value,
+                parent_ids=tuple(row.parent_id for row in eligible[start:start + RESEARCH_BATCH]),
+            )
         ),
         processor=processor,
     )

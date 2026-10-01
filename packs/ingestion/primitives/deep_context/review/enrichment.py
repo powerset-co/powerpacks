@@ -9,7 +9,6 @@ from packs.indexing.lib.llm_config import DEFAULT_IDENTITY_MODEL
 from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.identity_views import judge_candidates, unassembled_research, review_questions_pending
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
@@ -65,11 +64,9 @@ def enrichment_view(
         processor=DEFAULT_PROCESSOR,
         fingerprint=state.selection,
     )
-    judge_count = len(judge_candidates(db))
-    question_count = review_questions_pending(db)
-    synthetic_count = unassembled_research(db)
+    remaining_judgments = state.progress.enrichment_pending - len(plan.eligible)
     # Each new research result can require an identity judgment and a question.
-    judgment_count = judge_count + question_count + synthetic_count + 2 * len(plan.pending)
+    judgment_count = remaining_judgments + 2 * len(plan.pending)
     judgment_estimate = estimate_cost_usd(2000 * judgment_count,
         1500 * judgment_count, DEFAULT_IDENTITY_MODEL)
     estimate = plan.estimated_usd + judgment_estimate
@@ -99,7 +96,7 @@ def enrichment_view(
     # The remaining chain prepares profiles, assembles no-match cards, and
     # judges identities, and prioritizes remaining review questions.
     applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
-    if not total and (judge_count or synthetic_count or question_count):
+    if not total and remaining_judgments:
         status, route_state = "not_started", "profile_prep_pending"
     elif not total:
         status, route_state = "completed", "done"

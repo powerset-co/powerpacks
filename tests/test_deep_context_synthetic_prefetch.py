@@ -251,6 +251,12 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.assertEqual([row[0] for row in query(self.db, "SELECT candidate_key FROM synthetic_profiles")], ["parent-2"])
         self.assertFalse(unassembled_research(self.db))
 
+    def test_unassembled_research_does_not_load_full_synthetic_fallback(self):
+        from packs.ingestion.primitives.deep_context.db import identity_views
+        self._write_no_linkedin_result()
+        with mock.patch.object(identity_views, "synthetic_fallback", side_effect=AssertionError("full cards loaded")):
+            self.assertEqual(unassembled_research(self.db), 1)
+
     def test_unassembled_research_counts_each_eligible_parent(self) -> None:
         self._write_no_linkedin_result()
         self.db.project_rows((
@@ -265,7 +271,9 @@ class SyntheticPrefetchTest(unittest.TestCase):
             source_person_ids=("person-b",), display_name="Jordan Delta",
         )
         self._write_no_linkedin_result()
-        self.assertEqual(unassembled_research(self.db), 2)
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            self.assertEqual(unassembled_research(self.db), 2)
+        self.assertLessEqual(reads.call_count, 2)
         AssembleSyntheticProfile(db=self.db).run()
         self.assertEqual(unassembled_research(self.db), 0)
 

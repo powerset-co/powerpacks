@@ -36,7 +36,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research import dri
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchRunParams,
 )
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, owner_background
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     GuidanceOutcome,
@@ -240,7 +240,7 @@ class GuidedResearch:
         # gets searched, not whether the result is accepted; see
         # apply_provider_result for the judge gate that still applies.
         return build_queue_row(
-            self.db,
+            DossierEvidence.from_db(self.db, row.person_ids),
             row,
             owner_context=owner_background(self.db),
             guidance=request.guidance,

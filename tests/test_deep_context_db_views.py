@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -855,6 +856,57 @@ class DeepContextDbViewTests(unittest.TestCase):
         state = workflow_state(self.db)
         self.assertEqual(state.next_action, "review_people")
         self.assertEqual(state.progress.synthesize_pending, 0)
+
+    def test_workflow_reuses_selection_for_worth_counts(self):
+        self.add_parent("yes", "yes")
+        self.add_parent("no", "no")
+        self.add_parent("maybe", "maybe")
+        people = self.add_parent("synthetic", "maybe")
+        self.add_candidate("synthetic", "synthetic-link", person_ids=people, kind="synthetic")
+        expected = worth_counts(self.db)
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            state = workflow_state(self.db)
+        self.assertEqual((state.progress.worth_total, state.progress.worth_pending,
+                          state.progress.worth_yes, state.progress.worth_no),
+                         (expected.total, expected.pending, expected.yes, expected.no))
+        self.assertEqual((state.selection.maybe, state.progress.worth_pending), (2, 1))
+        statements = [call.args[0] for call in reads.call_args_list]
+        self.assertFalse(any("sum(w.effective_worth='maybe'" in sql for sql in statements))
+        self.assertTrue(any("AS lookup_ready" in sql and "AS rejected" in sql for sql in statements))
+
+    def test_workflow_counts_do_not_load_candidate_or_contact_snapshots(self):
+        people = self.add_parent("fixture", "yes")
+        self.add_candidate("fixture", "fixture-link", person_ids=people,
+                           linkedin_url="https://linkedin.com/in/jordan-fixture", candidate_origin=1)
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            self.assertGreater(workflow_state(self.db).progress.enrichment_pending, 0)
+        statements = [call.args[0] for call in reads.call_args_list]
+        self.assertFalse(any(sql.startswith("SELECT * FROM links") for sql in statements))
+        self.assertFalse(any("AS emails_json" in sql for sql in statements))
+        self.assertFalse(any("SELECT * FROM worth" in sql for sql in statements))
+        self.assertEqual(sum("candidate_policy AS" in sql for sql in statements), 1)
+
+    def test_enrichment_queue_excludes_only_terminal_research_parents(self):
+        for status in ("pending", "running", "complete", "no_match", "failed"):
+            self.add_parent(status, "yes")
+            self.db.project_rows((ResearchRow(f"research:{status}", status, status),))
+        self.add_parent("no-research", "yes")
+        self.assertEqual({row.parent_id for row in enrichment_queue(self.db)},
+                         {"pending", "running", "failed", "no-research"})
+
+    def test_enrichment_queue_scopes_identifiers_and_scans_research_once(self):
+        self.add_parent("fixture", "yes")
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            enrichment_queue(self.db)
+        sql = reads.call_args_list[0].args[0]
+        plan = self.db.query("EXPLAIN QUERY PLAN " + sql)
+        details = [row["detail"] for row in plan]
+        self.assertFalse(any("identifiers_by_value (kind=?)" in detail for detail in details))
+        research_scans = [row for row in plan if row["detail"] == "SCAN done"]
+        self.assertEqual(len(research_scans), 1)
+        parents = {row["id"]: row["detail"] for row in plan}
+        self.assertIn("LIST SUBQUERY", parents[research_scans[0]["parent"]])
+
 
 if __name__ == "__main__":
     unittest.main()

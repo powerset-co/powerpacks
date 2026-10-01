@@ -27,7 +27,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
     linkedin_progress,
-    linkedin_queue,
+    linkedin_page,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     PARENT_WORTH_PREFIX,
@@ -166,7 +166,7 @@ def make_handler(
         on_finish=wake_agent,
     )
     api = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
-    if api.snapshot().progress.total == 0:
+    if not db.query("SELECT 1 FROM parents LIMIT 1"):
         raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
     retargets_enabled = bool(run_jobs or guided_retargets)
     # The React app (People and Searches: `review people`, `review searches`), their JSON
@@ -199,8 +199,7 @@ def make_handler(
             raise StoreError("stale or mismatched person card")
         return row_key, parent, candidate
 
-    def worth_body(params: dict[str, list[str]]) -> str | None:
-        queue = worth_queue(db)
+    def worth_body(params: dict[str, list[str]], queue: list[WorthRow]) -> str | None:
         pick = _value(params, "pick").strip().lower()
         excluded = _excluded(params)
         if pick:
@@ -225,11 +224,14 @@ def make_handler(
         return card
 
     def linkedin_body(params: dict[str, list[str]]) -> str:
-        queue = linkedin_queue(db)
         excluded = _excluded(params)
         inflight = {item.slug.lower() for item in api.retargets() if item.state in IN_FLIGHT_RETARGET_STATES}
-        queue = [p for p in queue if p.slug.lower() not in excluded | inflight]
-        if not queue:
+        try:
+            requested_index = int(_value(params, "index", "0"))
+        except ValueError:
+            requested_index = 0
+        total, index, parent = linkedin_page(db, index=requested_index, excluded=tuple(excluded | inflight))
+        if parent is None:
             state = api.snapshot()
             progress = state.progress
             completed = not progress.linkedin_pending
@@ -239,8 +241,6 @@ def make_handler(
                 retargets_in_flight=len(inflight),
                 auto_continue=not completed,
             )
-        index = _index(params, len(queue))
-        parent = queue[index]
         card = render_linkedin_card(
             parent,
             parent.candidates,
@@ -248,7 +248,7 @@ def make_handler(
         )
         return (
             f"<div class='linkedin-stage' data-queue-index='{index}' "
-            f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
+            f"data-queue-total='{total}'>{_carousel_nav()}{card}</div>"
             if _value(params, "debug") == "1"
             else card
         )
@@ -268,8 +268,9 @@ def make_handler(
             tab = tab if tab in {"review", "yes", "no"} else "review"
             tabs = render_decision_tabs(progress, tab, preview=preview)
             if tab == "review":
-                body = worth_body(params) or ""
-                pending = worth_pending_entries(worth_queue(db))
+                queue = worth_queue(db)
+                body = worth_body(params, queue) or ""
+                pending = worth_pending_entries(queue)
                 search = worth_search_html("review", pending) if pending else ""
             else:
                 # One LIMIT/OFFSET page, not the whole pile — the table grows
@@ -448,7 +449,7 @@ def make_handler(
                 )
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/worth-card":
-                body = worth_body(params)
+                body = worth_body(params, worth_queue(db))
                 if body is None:
                     return self.send_bytes(b"gone", "text/plain; charset=utf-8", 404)
                 return self.send_bytes(body.encode())

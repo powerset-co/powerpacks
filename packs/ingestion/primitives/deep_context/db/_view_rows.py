@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
@@ -316,11 +317,33 @@ def _decision_page(
     return _hydrate_parents(db, rows, pending_only=False)
 
 
-def _linkedin_queue(db: Db) -> list[ParentViewRow]:
-    rows = db.query(
+def _linkedin_parent_rows(db: Db) -> list[sqlite3.Row]:
+    return db.query(
         LINKEDIN_CTE + PARENT_SELECT.format(where="WHERE p.parent_id IN (SELECT parent_id FROM pending_parents)")
     )
-    return _hydrate_parents(db, rows, pending_only=True)
+
+
+def _linkedin_queue(db: Db) -> list[ParentViewRow]:
+    return _hydrate_parents(db, _linkedin_parent_rows(db), pending_only=True)
+
+
+def _linkedin_page(
+    db: Db,
+    *,
+    index: int = 0,
+    excluded: Sequence[str] = (),
+) -> tuple[int, int, ParentViewRow | None]:
+    excluded_slugs = {slug.lower() for slug in excluded}
+    rows = [
+        row for row in _linkedin_parent_rows(db)
+        if ResearchHandle.for_parent(row["parent_id"], row["display_slug"]).lower() not in excluded_slugs
+    ]
+    total = len(rows)
+    if not total:
+        return 0, 0, None
+    index = max(0, index) % total
+    parent = _hydrate_parents(db, rows[index:index + 1], pending_only=True)[0]
+    return total, index, parent
 
 
 def _linkedin_progress(db: Db) -> LinkedInProgress:

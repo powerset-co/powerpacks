@@ -213,6 +213,7 @@ def artifacts(
     person_id: str | None = None,
     candidate_key: str | None = None,
     candidate_keys: Sequence[str] | None = None,
+    parent_ids: Sequence[str] | None = None,
     status: str | None = None,
     parent_owned: bool | None = None,
 ) -> tuple[ArtifactRow, ...]:
@@ -234,6 +235,9 @@ def artifacts(
             return ()
         clauses.append(f"candidate_key IN {ID_SET}")
         params.append(id_set(selected))
+    if parent_ids is not None:
+        clauses.append(f"parent_id IN {ID_SET}")
+        params.append(id_set(parent_ids))
     if parent_owned is not None:
         clauses.append("person_id IS NULL" if parent_owned else "person_id IS NOT NULL")
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""

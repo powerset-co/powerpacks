@@ -116,6 +116,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_relationship \
   tests.test_deep_context_review_cap \
   tests.test_identity_dossier_context \
+  tests.test_research_selection_batch \
   tests.test_identity_research_claims \
   tests.test_deep_research_contacts \
   tests.test_email_context \

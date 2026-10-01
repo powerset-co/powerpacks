@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow, FactRow, LinkRow, ParentRow, PersonRow, WriterSource,
@@ -181,3 +182,40 @@ class ReviewCapTest(unittest.TestCase):
             machine_action="verify", machine_approved="auto", machine_judgment="confirmed")
         settle_machine_identities(self.db, [settlement])
         self.assertEqual(json.loads(links(self.db)[0].judgment_payload_json), {"verdict": "confirmed"})
+
+    def test_judge_candidates_reads_only_eligible_links(self):
+        selected = self.parent(1)
+        excluded = self.parent(2)
+        self.db.decide_identity(f"{excluded}:0", "detach")
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as query:
+            self.assertEqual([row.row_key for row in judge_candidates(self.db)], [f"{selected}:0"])
+        link_reads = [call for call in query.call_args_list if call.args[0].startswith("SELECT * FROM links")]
+        self.assertTrue(link_reads)
+        for call in link_reads:
+            self.assertIn("row_key IN", call.args[0])
+            self.assertEqual(json.loads(call.args[1][0]), [f"{selected}:0"])
+
+    def test_judge_candidates_without_eligible_links_does_not_read_links(self):
+        parent = self.parent(1)
+        self.db.decide_identity(f"{parent}:0", "detach")
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as query:
+            self.assertEqual(judge_candidates(self.db), [])
+        self.assertFalse(any(call.args[0].startswith("SELECT * FROM links") for call in query.call_args_list))
+
+    def test_scoped_stored_judgments_preserves_payload_policy(self):
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
+        parent = self.parent(1)
+        link = links(self.db, parent_id=parent)[0]
+        for payload in ('broken-json', '"text"', '[]', 'null', '{}', '{"verdict":"confirmed","confidence":0.9}'):
+            with self.subTest(payload=payload), mock.patch.object(self.db, "query", return_value=[{
+                "row_key": link.row_key, "judgment_payload_json": payload,
+                "judgment_fingerprint": "paid-identity",
+            }]) as read:
+                judgments = judgment_policy.stored_judgments(self.db, row_keys=(link.row_key,))
+                self.assertIn("row_key IN", read.call_args.args[0])
+                self.assertEqual(json.loads(read.call_args.args[1][0]), [link.row_key])
+                if payload == '{"verdict":"confirmed","confidence":0.9}':
+                    self.assertEqual(judgments[link.row_key].verdict.value, "confirmed")
+                    self.assertEqual(judgments[link.row_key].fingerprint, "paid-identity")
+                else:
+                    self.assertEqual(judgments, {})
