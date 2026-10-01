@@ -38,6 +38,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
     PrefetchProfiles,
     review_queue_links,
@@ -347,15 +348,12 @@ class SyntheticPrefetchTest(unittest.TestCase):
             self.db,
             "SELECT machine_approved, decision_approved FROM links WHERE kind='synthetic'",
         )[0]
-        candidate = next(
-            item
-            for parent in linkedin_queue(self.db)
-            for item in parent.candidates
-            if item.synthetic
-        )
+        parent_id = query(self.db, "SELECT parent_id FROM links WHERE kind='synthetic'")[0][0]
+        candidate = next(item for item in person_detail(self.db, parent_id).candidates if item.synthetic)
         self.assertEqual(profile["basis"][0]["confidence"], "high")
         self.assertEqual(tuple(link), (None, None))
-        self.assertTrue(candidate.pending)
+        self.assertFalse(candidate.pending)
+        self.assertFalse(any(item.synthetic for parent in linkedin_queue(self.db) for item in parent.candidates))
         self.assertEqual((candidate.action, candidate.approved), ("", ""))
 
     def test_stale_undecided_synthetic_is_pruned_from_sqlite(self) -> None:

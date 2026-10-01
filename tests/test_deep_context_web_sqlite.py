@@ -663,7 +663,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 "WHERE parent_id='worth-parent'",
             )
         enrichment_pipeline.AssembleSyntheticProfile(db=self.db).run()
-        self.assertIn("worth-parent", {row.parent_id for row in linkedin_queue_order(self.db)})
+        self.assertTrue(self.db.query(
+            "SELECT 1 FROM links WHERE parent_id='worth-parent' AND kind='synthetic'",
+        ))
 
         def accept_real_profile():
             self.db.project_rows((IdentityMachineProjection(

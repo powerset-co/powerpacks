@@ -28,6 +28,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
+    approved_identities,
     enrichment_queue,
     judge_candidates,
     linkedin_parents,
@@ -509,7 +510,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertNotIn("synthetic", queue)
         self.assertEqual(
             asdict(linkedin_progress(self.db)),
-            {"total": 4, "pending": 1, "done": 3},
+            {"total": 3, "pending": 1, "done": 2},
         )
 
     def test_raw_sibling_does_not_hide_attached_link(self) -> None:
@@ -533,7 +534,7 @@ class DeepContextDbViewTests(unittest.TestCase):
                            judgment_fingerprint="failed-input", judgment_payload_json="{}")
         self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-empty"])
 
-    def test_human_kept_identity_rescues_only_machine_worth_no(self):
+    def test_human_synthetic_keep_stays_local_without_linkedin_progress(self):
         people = self.add_parent("keepish", "no")
         self.add_candidate(
             "keepish",
@@ -562,8 +563,10 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
         self.assertEqual(
             asdict(linkedin_progress(self.db)),
-            {"total": 1, "pending": 0, "done": 1},
+            {"total": 0, "pending": 0, "done": 0},
         )
+        decision = self.db.query("SELECT decision_action,decision_approved FROM links WHERE row_key='synthetic:kept'")[0]
+        self.assertEqual(tuple(decision), ("verify", "yes"))
 
     def test_settle_derives_every_sibling_and_replaces_the_prior_winner(self):
         people = self.add_parent("family", "yes", "maybe")
@@ -764,15 +767,44 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(missing.candidates[0].full_name, "")
         self.assertFalse(missing.candidates[0].has_profile)
 
-    def test_synthetic_only_parent_goes_directly_to_identity_review(self) -> None:
+    def test_synthetic_only_parent_stays_local_without_identity_review(self) -> None:
         people = self.add_parent("synthetic-review", "yes")
         key = "synthetic:review"
         self.add_candidate("synthetic-review", key, person_ids=people, kind="synthetic")
         project_synthetic_profile(self.db, SyntheticProfileRow(key, key, "{}"))
-        self.assertEqual([row.parent_id for row in linkedin_queue(self.db)], ["synthetic-review"])
-        self.assertEqual(review_questions_pending(self.db), 0)
         self.db.project_rows((ResearchRow("synthetic-review", "synthetic-review", "no_match", key),))
-        self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
+        before = [tuple(row) for row in self.db.query("SELECT * FROM links")]
+        self.assertEqual(linkedin_queue(self.db), [])
+        self.assertEqual(asdict(linkedin_progress(self.db)), {"total": 0, "pending": 0, "done": 0})
+        self.assertEqual(review_questions_pending(self.db), 0)
+        self.assertEqual(workflow_state(self.db).next_action, "realize")
+        self.assertEqual(approved_identities(self.db), [])
+        self.assertEqual(len(person_detail(self.db, "synthetic-review").candidates), 1)
+        self.assertEqual([tuple(row) for row in self.db.query("SELECT * FROM links")], before)
+        self.assertEqual(self.db.query("SELECT profile_json FROM synthetic_profiles")[0][0], "{}")
+
+    def test_mixed_parent_reviews_real_candidate_only(self) -> None:
+        people = self.add_parent("mixed-synthetic", "yes")
+        self.add_candidate("mixed-synthetic", "synthetic:local", person_ids=people, kind="synthetic")
+        project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:local", "synthetic:local", "{}"))
+        self.add_candidate("mixed-synthetic", "jordan-real", person_ids=people,
+                           linkedin_url="https://www.linkedin.com/in/jordan-real")
+        queue = linkedin_queue(self.db)
+        self.assertEqual([row.parent_id for row in queue], ["mixed-synthetic"])
+        self.assertEqual([row.row_key for row in queue[0].candidates], ["jordan-real"])
+
+    def test_historical_synthetic_retarget_remains_a_real_accepted_identity(self) -> None:
+        people = self.add_parent("retargeted-synthetic", "yes")
+        key = "synthetic:retargeted"
+        self.add_candidate("retargeted-synthetic", key, person_ids=people, kind="synthetic")
+        project_synthetic_profile(self.db, SyntheticProfileRow(key, key, "{}"))
+        url = "https://www.linkedin.com/in/jordan-real"
+        self.db.decide_identity(key, "retarget", replacement_url=url, replacement_public_identifier="jordan-real")
+        before = [tuple(row) for row in self.db.query("SELECT * FROM links")]
+        self.assertEqual(linkedin_queue(self.db), [])
+        self.assertEqual(asdict(linkedin_progress(self.db)), {"total": 1, "pending": 0, "done": 1})
+        self.assertEqual([row.linkedin_url for row in approved_identities(self.db)], [url])
+        self.assertEqual([tuple(row) for row in self.db.query("SELECT * FROM links")], before)
 
     def test_collected_parent_without_facts_queues_synthesize(self) -> None:
         self.add_factsless_parent("linkedin-only")

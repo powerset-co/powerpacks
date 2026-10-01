@@ -80,25 +80,15 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
 
 PENDING_CANDIDATE = """
 (
-  (l.kind='synthetic' OR COALESCE(l.linkedin_url, '')!=''
+  l.kind!='synthetic'
+  AND (COALESCE(l.linkedin_url, '')!=''
    OR COALESCE(l.machine_proposed_url, '')!=''
    OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key
               AND r.status='complete' AND json_extract(r.result_json, '$.content.linkedin_url') IS NOT NULL))
-  AND (
-  (l.kind='synthetic' AND COALESCE(l.decision_approved, l.machine_approved, '') NOT IN ('auto', 'yes', 'no'))
-  OR
-  (l.kind!='synthetic'
-   AND (l.paid_profile=1 OR l.candidate_origin=1 OR COALESCE(l.linkedin_url, '')!='')
-   AND l.decision_action IS NULL
-   AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
-   AND l.authoritative_detach=0
-   AND NOT (
-     l.candidate_origin=1
-     AND l.machine_action='retarget'
-     AND l.machine_proposed_url IS NOT NULL
-     AND COALESCE(l.machine_approved, '') IN ('auto', 'yes')
-   ))
-  )
+  AND (l.paid_profile=1 OR l.candidate_origin=1 OR COALESCE(l.linkedin_url, '')!='')
+  AND l.decision_action IS NULL
+  AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
+  AND l.authoritative_detach=0
 )
 """
 
@@ -158,25 +148,14 @@ LINKEDIN_CTE = (
         )
       )
     )
-    -- A rejected synthetic-only family has no alternate identity to review;
-    -- serving it again would create an endless pending card.
-    AND NOT (
-      NOT EXISTS (
-        SELECT 1 FROM candidate_policy real
-        WHERE real.parent_id=p.parent_id AND real.kind!='synthetic'
-      )
-      AND EXISTS (
-        SELECT 1 FROM candidate_policy rejected
-        WHERE rejected.parent_id=p.parent_id AND rejected.kind='synthetic'
-          AND rejected.decision_action='detach'
-          AND rejected.decision_approved IN ('yes', 'no')
-      )
-    )
     -- Parent existence alone cannot invent a card: require an actionable
     -- candidate, recorded decision, or observed candidate-person origin.
     AND EXISTS (
       SELECT 1 FROM candidate_policy c
       WHERE c.parent_id=p.parent_id
+        AND (c.kind!='synthetic' OR (
+          c.decision_action='retarget' AND COALESCE(c.replacement_url, '')!=''
+        ))
         AND (c.kind='synthetic' OR COALESCE(c.linkedin_url, '')!=''
              OR COALESCE(c.machine_proposed_url, '')!=''
              OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=c.row_key

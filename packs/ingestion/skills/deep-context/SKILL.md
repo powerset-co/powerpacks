@@ -443,10 +443,10 @@ For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
 decision. The correction panel accepts a replacement URL or a terminal Skip;
 Skip writes a detach decision, rejects the shown/proposed LinkedIn, and leaves
-the person out of the index for now. A synthetic result has the same two
-outcomes for indexing: paste the LinkedIn URL to create an approved retarget,
-or Skip it. “Use this profile” keeps synthetic research locally; it does not
-approve a synthetic identity for indexing or upload.
+the person out of the index for now. Synthetic profiles remain local without
+requiring LinkedIn review. They are not automatically approved for indexing or
+upload. Existing human decisions, including synthetic profiles retargeted to a
+real LinkedIn, remain authoritative.
 
 Continue through the wait loop. Continue to realization only when
 `bin/deep-context review-status --wait` returns `next_action == "realize"`.
