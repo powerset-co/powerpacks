@@ -267,7 +267,8 @@ def latest_message(record: dict[str, Any]) -> str | None:
 
 ROLE_ADDRESS_WORDS = frozenset({
     "accounting", "accounts", "accountspayable", "accountsreceivable", "admin",
-    "ap", "ar", "billing", "care", "careers", "community", "compliance",
+    "ap", "ar", "backoffice", "backofficeops", "billing", "care", "careers",
+    "community", "compliance",
     "concierge", "contact", "customerservice", "customersupport", "events",
     "feedback", "filings", "finance", "frontdesk", "help", "helpdesk", "hr",
     "info", "investorrelations", "investors", "invoice", "invoices", "ir",

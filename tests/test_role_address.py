@@ -27,6 +27,12 @@ class RoleAddressTests(unittest.TestCase):
             with self.subTest(email=email):
                 self.assertTrue(is_role_address(email))
 
+    def test_back_office_inboxes_are_role_addresses(self) -> None:
+        for email in ("backoffice@example.com", "back.office@example.com", "backoffice-ops@example.com"):
+            with self.subTest(email=email):
+                self.assertTrue(is_role_address(email))
+        self.assertFalse(is_role_address("jordan.backoffice@example.com"))
+
     def test_short_words_are_never_rejoined_from_pieces(self) -> None:
         for email in ("i.r@acme.com", "a-r@example.com", "h_r@example.com", "o.ps@example.com", "t.ax@example.com"):
             with self.subTest(email=email):
