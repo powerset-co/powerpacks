@@ -99,6 +99,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_fresh_install \
   tests.test_deep_context_import_hygiene \
   tests.test_deep_context_imported_people \
+  tests.test_role_address \
   tests.test_deep_context_judgment_policy \
   tests.test_deep_context_legacy_scrubs \
   tests.test_deep_context_lookup_sqlite \

@@ -194,13 +194,15 @@ def _imported_people(rows: tuple[PeopleRow, ...]) -> tuple[ImportedPerson, ...]:
 
 
 def _is_shared_mailbox(person: ImportedPerson) -> bool:
-    """Only role addresses, no phone, and not a LinkedIn connection."""
+    """Only role addresses, no phone, and not one of the owner's LinkedIn connections.
+
+    A LinkedIn found for the address by a lookup does not make it a person.
+    """
     return (
         bool(person.emails)
         and all(is_role_address(email) for email in person.emails)
         and not person.phones
         and SourceChannel.LINKEDIN not in person.source_channels
-        and not person.public_identifier
     )
 
 

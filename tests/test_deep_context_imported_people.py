@@ -233,8 +233,9 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
 
         EnsureParents(db=self.db, people_csv=self.csv).run()
 
+        # person-4 is a mailbox too: a LinkedIn found by a lookup does not make it a person.
         stored = sorted(person.person_id for person in canonical_snapshot(self.db).people)
-        self.assertEqual(stored, ["person-1", "person-2", "person-3", "person-4"])
+        self.assertEqual(stored, ["person-1", "person-2", "person-3"])
         self.assertNotIn("candidate:email:ir@acme.example", {row.row_key for row in links(self.db)})
 
     def test_shared_mailbox_already_in_the_store_lingers_after_the_filter(self) -> None:
