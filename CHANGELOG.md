@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.10.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.1...powerpacks-v3.10.2) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deep-context:** ask JEV if two names can be one contact's ([#654](https://github.com/powerset-co/powerpacks/issues/654)) ([4220979](https://github.com/powerset-co/powerpacks/commit/42209795edd8b794bfdfc1ec408c091b05223ee4))
+* separate incompatible names and recover original facts ([#652](https://github.com/powerset-co/powerpacks/issues/652)) ([063d2e2](https://github.com/powerset-co/powerpacks/commit/063d2e221112c72eb907a8a4e8397287fe599380))
+
 ## [3.10.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.0...powerpacks-v3.10.1) (2026-10-01)
 
 
