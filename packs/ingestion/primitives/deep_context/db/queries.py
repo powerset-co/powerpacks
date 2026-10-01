@@ -123,12 +123,15 @@ def owner_path(db: Db) -> str | None:
     return str(rows[0]["path"]) if rows else None
 
 
-def parents(db: Db, *, parent_id: str | None = None) -> tuple[ParentSnapshotRow, ...]:
+def parents(db: Db, *, parent_id: str | None = None, limit: int | None = None) -> tuple[ParentSnapshotRow, ...]:
     where = " WHERE parent_id=?" if parent_id is not None else ""
     params = (parent_id,) if parent_id is not None else ()
+    page = " LIMIT ?" if limit is not None else ""
+    if limit is not None:
+        params += (limit,)
     return typed_rows(
         db,
-        f"SELECT * FROM parents{where} ORDER BY parent_id",
+        f"SELECT * FROM parents{where} ORDER BY parent_id{page}",
         ParentSnapshotRow,
         params,
     )

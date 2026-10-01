@@ -78,6 +78,16 @@ class DeepContextHttpContractTests(unittest.TestCase):
     SLUG = "jordan-bravo-p"
     PERSON_ID = "person-jordan-bravo"
 
+    def test_decision_table_exposes_total_for_virtual_scroll(self) -> None:
+        parent = person_detail(self.db, self.SLUG)
+        html = render_decision_table([parent], "yes", total=100)
+        self.assertIn("class='decision-list'", html)
+        self.assertIn("data-total='100'", html)
+        self.assertNotIn("Show more", html)
+        status, _, body, _ = self.request("GET", "/searches/assets/virtual-table.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"class VirtualTable", body)
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -510,8 +520,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                     [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
                     "yes",
                 ),
-                # total > page size so the Show More button (data-table-more /
-                # data-offset / data-remaining) is part of the rendered contract
+                # The virtual scroll viewport retains the full decision count.
                 render_decision_table(
                     [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
                     "yes",

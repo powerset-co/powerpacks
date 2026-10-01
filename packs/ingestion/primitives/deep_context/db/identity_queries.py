@@ -27,6 +27,39 @@ from packs.ingestion.primitives.deep_context.db.queries import typed_rows
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
 
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityVerdict, StoredJudgment
+
+
+def stored_judgments(db: Db, *, row_keys: Sequence[str] | None = None) -> dict[str, StoredJudgment]:
+    """Selected candidates' persisted verdicts, keyed by candidate_key.
+
+    Malformed JSON, a non-object payload, or an empty verdict value is skipped
+    silently rather than raised — that row simply doesn't appear here, so a
+    caller treats it as unjudged (the judge pays for it) instead of acting on a
+    verdict nobody can read.
+    """
+    if row_keys is not None and not row_keys:
+        return {}
+    where = f" WHERE row_key IN {ID_SET}" if row_keys is not None else ""
+    params = (id_set(row_keys),) if row_keys is not None else ()
+    rows = db.query(
+        "SELECT row_key, judgment_payload_json, judgment_fingerprint FROM links" + where,
+        params,
+    )
+    judgments: dict[str, StoredJudgment] = {}
+    for row in rows:
+        try:
+            verdict = json.loads(row["judgment_payload_json"] or "")
+        except json.JSONDecodeError:
+            continue
+        try:
+            parsed = IdentityVerdict.from_payload(verdict)
+        except (TypeError, ValueError):
+            continue
+        if parsed.value:
+            judgments[row["row_key"]] = StoredJudgment(parsed, str(row["judgment_fingerprint"] or ""))
+    return judgments
+
 
 def links(
     db: Db,

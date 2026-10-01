@@ -210,6 +210,15 @@ def decision_rows_html(parents: list[ParentViewRow], decision: str) -> str:
     )
 
 
+def render_decision_details(parent: ParentViewRow) -> str:
+    return _render(
+        "decision_details.html.j2",
+        parent=parent,
+        candidate=_primary_candidate(parent),
+        dossier=Markup(markdown_to_html(parent.dossier_body, skip_name_and_contact=True)),
+    )
+
+
 def render_decision_table(
     parents: list[ParentViewRow],
     decision: str,
@@ -217,16 +226,10 @@ def render_decision_table(
     total: int = 0,
 ) -> str:
     shown = decision_rows_html(parents, decision)
-    more = ""
-    if total > len(parents):
-        remaining = total - len(parents)
-        more = (
-            f"<button class='button button-outline table-more' data-table-more "
-            f"data-view='{decision}' data-offset='{len(parents)}' data-remaining='{remaining}'>"
-            f"Show more ({remaining} left)</button>"
-        )
     return (
-        f"<div class='decision-table' data-view='{decision}'>{shown}</div>{more}"
+        f"<div class='decision-list' tabindex='0' aria-label='{decision.title()} decisions'>"
+        f"<div class='decision-table' data-view='{decision}' data-total='{total}'>{shown}</div>"
+        "<p class='decision-loading' role='status' hidden>Loading…</p></div>"
     )
 
 

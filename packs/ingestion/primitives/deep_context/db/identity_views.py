@@ -33,8 +33,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
     ResearchHandle,
 )
-from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import VERDICTS, stored_judgments
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows, stored_judgments
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import VERDICTS
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -365,7 +365,7 @@ def linkedin_parents(db: Db) -> list[ParentViewRow]:
     return _all_parents(db)
 
 
-def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 100) -> list[ParentViewRow]:
+def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 10) -> list[ParentViewRow]:
     """One LIMIT/OFFSET page of one worth pile (yes/no) for the review tables."""
     return _decision_page(db, decision, offset, limit)
 

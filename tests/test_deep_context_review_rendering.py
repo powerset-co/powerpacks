@@ -1,4 +1,4 @@
-"""Focused tests for the non-paginated worth decision table."""
+"""Focused tests for the Worth decision table's lightweight pages."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class ReviewRenderingTest(unittest.TestCase):
             WorthSummary(effective, "llm"), machine,
         )
 
-    def test_decision_table_renders_given_page_and_offers_more(self) -> None:
+    def test_decision_table_renders_given_page_for_virtual_scroll(self) -> None:
         parents = [
             self.parent(f"Jordan {index:02d}", f"jordan-{index:02d}", "yes")
             for index in range(45)
@@ -38,12 +38,12 @@ class ReviewRenderingTest(unittest.TestCase):
 
         self.assertEqual(rendered.count("class='decision-row'"), 45)
         self.assertLess(rendered.index("Jordan 00"), rendered.index("Jordan 44"))
-        self.assertIn("data-table-more", rendered)
-        self.assertIn("55 left", rendered)
-        self.assertIn("data-offset='45'", rendered)
+        self.assertIn("data-total='100'", rendered)
+        self.assertIn("class='decision-list'", rendered)
+        self.assertNotIn("Show more", rendered)
 
         last = render_decision_table(parents, "yes", total=45)
-        self.assertNotIn("data-table-more", last)
+        self.assertIn("data-total='45'", last)
 
     def test_contact_values_are_escaped_by_the_template_boundary(self) -> None:
         rendered = render_decision_table(

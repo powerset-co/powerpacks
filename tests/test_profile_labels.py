@@ -72,12 +72,11 @@ class LabelBadgeTests(unittest.TestCase):
 
     def test_the_number_of_labels_is_capped_on_every_profile_surface(self) -> None:
         parent = _parent(labels=_labels(is_founder=0.9, is_professional=0.9))
-        for markup in (rendering.render_worth_card(parent),):
+        for markup in (rendering.render_worth_card(parent), rendering.render_decision_details(parent)):
             self.assertIn("class='person-label'", markup)
             self.assertLess(markup.index("<h2>"), markup.index("class='person-label'"))
         rows = rendering.decision_rows_html([parent], "yes")
         self.assertIn("person-name-line", rows)
-        self.assertIn("decision-expanded-profile", rows)
         self.assertIn("class='person-label'", rows)
 
     def test_yes_no_rows_omit_percentages_but_keep_the_machine_reason(self) -> None:

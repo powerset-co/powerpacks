@@ -32,6 +32,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue imp
     linkedin_view,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
+    StoredJudgment,
     IdentityVerdict,
     JudgeProfile,
 )
@@ -79,7 +80,7 @@ def prepare_research_proposal(
     reason: str,
     source: str,
     prior: ReviewExportRow | None,
-    stored: judgment_policy.StoredJudgment | None = None,
+    stored: StoredJudgment | None = None,
     model: str,
     effort: str,
     owner_block: str = "",
@@ -164,7 +165,7 @@ def propose_retargets(
         if (result := results.get(row.parent_slug)) and result.linkedin_url and row.row_key and row.parent_id
     ]
     existing = {row.key: row for row in queries.review_rows(db)}
-    stored = judgment_policy.stored_judgments(db)
+    stored = queries.stored_judgments(db)
     if targets:
         # Warms the profile cache for every candidate URL before judging, so the
         # loop below can prefer the fuller cached profile over the thin research

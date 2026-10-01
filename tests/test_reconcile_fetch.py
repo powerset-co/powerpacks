@@ -21,6 +21,9 @@ from unittest import mock
 
 from parallel.types import TaskGroupStatus, TaskRunJsonOutput
 
+from packs.ingestion.primitives.deep_context.db.identity_queries import stored_judgments
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import StoredJudgment
+
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection as profile_projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
@@ -1084,7 +1087,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
 
     def test_exact_fingerprint_reuses_existing_retarget_verdict(self):
         initial = self.proposal(None)
-        stored = judgment_policy.StoredJudgment(
+        stored = StoredJudgment(
             IdentityVerdict.from_payload({
                 "verdict": "confirmed",
                 "confidence": 0.9,
@@ -1124,7 +1127,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         IdentityPolicy.effective_decision already ranks human over machine.
         """
         initial = self.proposal(None)
-        stored = judgment_policy.StoredJudgment(
+        stored = StoredJudgment(
             IdentityVerdict.from_payload({
                 "verdict": "wrong_person",
                 "confidence": 0.9,
@@ -1299,7 +1302,7 @@ class IdentityVerdictReuseTests(unittest.TestCase):
     """A verdict already bought for this exact input is not bought again."""
 
     def _stored(self, value: str = "confirmed", fingerprint: str = "fp-1"):
-        return judgment_policy.StoredJudgment(
+        return StoredJudgment(
             IdentityVerdict.from_payload({"verdict": value, "confidence": 0.9}),
             fingerprint,
         )
@@ -1335,7 +1338,7 @@ class IdentityVerdictReuseTests(unittest.TestCase):
                     ("fp-1", '{"verdict":"confirmed","confidence":"high"}'),
                 )
 
-            self.assertEqual(judgment_policy.stored_judgments(db), {})
+            self.assertEqual(stored_judgments(db), {})
 
     def test_force_pays_even_on_an_exact_match(self):
         self.assertFalse(

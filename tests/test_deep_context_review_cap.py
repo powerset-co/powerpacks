@@ -12,7 +12,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
-from packs.ingestion.primitives.deep_context.db.identity_queries import links
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, stored_judgments
 from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids, review_questions_pending, judge_candidates
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import RetargetProposal, upsert_retargets
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityVerdict
@@ -203,7 +203,6 @@ class ReviewCapTest(unittest.TestCase):
         self.assertFalse(any(call.args[0].startswith("SELECT * FROM links") for call in query.call_args_list))
 
     def test_scoped_stored_judgments_preserves_payload_policy(self):
-        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
         parent = self.parent(1)
         link = links(self.db, parent_id=parent)[0]
         for payload in ('broken-json', '"text"', '[]', 'null', '{}', '{"verdict":"confirmed","confidence":0.9}'):
@@ -211,7 +210,7 @@ class ReviewCapTest(unittest.TestCase):
                 "row_key": link.row_key, "judgment_payload_json": payload,
                 "judgment_fingerprint": "paid-identity",
             }]) as read:
-                judgments = judgment_policy.stored_judgments(self.db, row_keys=(link.row_key,))
+                judgments = stored_judgments(self.db, row_keys=(link.row_key,))
                 self.assertIn("row_key IN", read.call_args.args[0])
                 self.assertEqual(json.loads(read.call_args.args[1][0]), [link.row_key])
                 if payload == '{"verdict":"confirmed","confidence":0.9}':

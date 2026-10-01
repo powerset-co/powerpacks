@@ -407,6 +407,27 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual((status, content_type), (200, "image/png"))
         self.assertTrue(body.startswith(b"\x89PNG"))
 
+    def test_collapsed_worth_row_loads_profile_only_when_expanded(self) -> None:
+        status, _, body = self.request("GET", "/?stage=worth&view=yes&preview=1")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Jordan Bravo", body)
+        self.assertNotIn(b"Synthetic collaborator", body)
+        self.assertNotIn(b"/api/avatar?", body)
+        status, _, body = self.request("GET", "/api/worth-details?slug=jordan-bravo")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Synthetic collaborator", body)
+        self.assertIn(b"https://www.linkedin.com/in/jordan-bravo", body)
+
+    def test_avatar_uses_profile_picture_only_when_present(self) -> None:
+        parent = person_detail(self.db, "jordan-bravo")
+        self.assertIsNotNone(parent)
+        candidate = replace(parent.candidates[0], profile_pic_url="")
+        card = review_server.render_worth_card(replace(parent, candidates=(candidate,)))
+        self.assertNotIn("<img", card)
+        candidate = replace(candidate, profile_pic_url="https://example.com/photo.png")
+        card = review_server.render_worth_card(replace(parent, candidates=(candidate,)))
+        self.assertIn("src='https://example.com/photo.png'", card)
+
     def test_worth_and_identity_clicks_commit_domain_transactions(self) -> None:
         self.assertEqual(
             [row.key for row in worth_queue(self.db)],

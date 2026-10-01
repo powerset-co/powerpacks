@@ -8,8 +8,8 @@
 {% macro avatar(parent, candidate) -%}
 <span class='avatar'>
   <span>{{ initials(candidate.full_name if candidate and candidate.full_name else parent.name or '?') }}</span>
-  {%- if candidate and candidate.row_key and not candidate.synthetic %}
-  <img src='/api/avatar?pub={{ candidate.row_key | urlencode }}' alt='' onerror='this.remove()'>
+  {%- if candidate and candidate.profile_pic_url and not candidate.synthetic %}
+  <img src='{{ candidate.profile_pic_url }}' alt='' onerror='this.remove()'>
   {%- endif %}
 </span>
 {%- endmacro %}

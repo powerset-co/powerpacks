@@ -907,6 +907,34 @@ class DeepContextDbViewTests(unittest.TestCase):
         parents = {row["id"]: row["detail"] for row in plan}
         self.assertIn("LIST SUBQUERY", parents[research_scans[0]["parent"]])
 
+    def test_decision_page_does_not_hydrate_profiles_or_read_dossiers(self):
+        from packs.ingestion.primitives.deep_context.db import _view_rows
+        people = self.add_parent("alpha", "yes")
+        self.add_candidate("alpha", "alpha-profile", person_ids=people, paid_profile=1,
+            linkedin_url="https://www.linkedin.com/in/alpha-profile")
+        with (
+            mock.patch.object(_view_rows, "_hydrate_parents", side_effect=AssertionError("collapsed page hydrated profiles")),
+            mock.patch.object(self.db, "query", wraps=self.db.query) as reads,
+        ):
+            rows = decision_parents(self.db, "yes")
+        self.assertEqual(len(reads.call_args_list), 1)
+        self.assertNotIn("FROM artifacts", reads.call_args.args[0])
+        self.assertEqual((rows[0].candidates, rows[0].dossier_body, rows[0].dossier_path), ((), "", ""))
+
+    def test_decision_page_defaults_to_ten_and_preserves_labels_and_order(self):
+        for number in range(12):
+            self.add_parent(f"contact-{number:02}", "yes")
+            with self.db.transaction() as conn:
+                conn.execute("UPDATE facts SET facts_json=? WHERE parent_id=?",
+                    (json.dumps({"labels": {"Product": number / 12}}), f"contact-{number:02}"))
+        first = decision_parents(self.db, "yes")
+        second = decision_parents(self.db, "yes", offset=10)
+        self.assertEqual(len(first), 10)
+        self.assertEqual([row.parent_id for row in first + second],
+            [f"contact-{number:02}" for number in range(12)])
+        self.assertEqual(first[3].labels, (("Product", 0.25),))
+        self.assertEqual(worth_counts(self.db).yes, 12)
+
 
 if __name__ == "__main__":
     unittest.main()

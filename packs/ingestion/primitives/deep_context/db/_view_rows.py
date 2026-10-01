@@ -311,10 +311,16 @@ def _decision_page(
 ) -> list[ParentViewRow]:
     """One page of a worth pile (yes/no), in the full table's name order."""
     rows = db.query(
-        WORTH_CTE + PARENT_SELECT.format(where=_DECISION_FILTER) + " LIMIT ? OFFSET ?",
+        WORTH_CTE + """
+SELECT w.*, '[]' AS sources_json, '' AS dossier_path, '' AS dossier_body
+FROM worth w
+""" + _DECISION_FILTER + """
+ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
+LIMIT ? OFFSET ?
+""",
         (decision, limit, offset),
     )
-    return _hydrate_parents(db, rows, pending_only=False)
+    return [_parent_row(row) for row in rows]
 
 
 def _linkedin_queue(db: Db) -> list[ParentViewRow]:

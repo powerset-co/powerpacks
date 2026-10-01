@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_row
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
@@ -69,6 +70,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     markdown_to_html,
     page_html,
     render_decision_table,
+    render_decision_details,
     render_decision_tabs,
     render_enrichment,
     render_linkedin_card,
@@ -166,7 +168,7 @@ def make_handler(
         on_finish=wake_agent,
     )
     api = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
-    if not db.query("SELECT 1 FROM parents LIMIT 1"):
+    if not parents(db, limit=1):
         raise StoreError("Deep Context database is empty; run bin/deep-context ensure-parents")
     retargets_enabled = bool(run_jobs or guided_retargets)
     # The React app (People and Searches: `review people`, `review searches`), their JSON
@@ -437,11 +439,13 @@ def make_handler(
                     return self.send_bytes(b"offset must be an integer", "text/plain", 400)
                 rows = decision_rows_html(decision_parents(db, view, offset=offset), view)
                 return self.send_bytes(rows.encode())
+            if parsed.path == "/api/worth-details":
+                parent = person_detail(db, _value(params, "slug"))
+                if parent is None:
+                    return self.send_bytes(b"gone", "text/plain", 404)
+                return self.send_bytes(render_decision_details(parent).encode())
             if parsed.path == "/api/dossier":
                 parent = person_detail(db, _value(params, "slug"))
-                # Row-detail requests pass skip=1: the expanded decision row
-                # already pins name (summary line) and Contact/Why above the
-                # markdown, so the body starts at Summary.
                 skip = _value(params, "skip") == "1"
                 body = markdown_to_html(
                     parent.dossier_body if parent else "",

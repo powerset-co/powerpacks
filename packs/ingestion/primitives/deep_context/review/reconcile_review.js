@@ -276,14 +276,30 @@ function adoptMutationState(response) {
   if (response?.state_token) reviewStateToken = response.state_token;
 }
 
-// --- decision-table pagination ------------------------------------------------
-// The Yes/No tables render one server page; this appends the next page in
-// place. Rows are click-delegated, so appended rows need no rewiring.
-async function appendDecisionPage(button) {
-  const view = button.dataset.view || "";
-  const offset = Number(button.dataset.offset || "0");
-  let remaining = Number(button.dataset.remaining || "0");
-  button.disabled = true;
+async function virtualizeDecisions(table) {
+  const { VirtualTable } = await import("/searches/assets/virtual-table.js");
+  const viewport = table.closest(".decision-list");
+  table._rows = [...table.querySelectorAll("details.decision-row")];
+  table._virtual = new VirtualTable({
+    viewport, content: table, estimateSize: () => 61,
+    getKey: (row) => row.dataset.slug, createRow: (row) => row, measure: true,
+  });
+  table._virtual.setItems(table._rows);
+  const loadMore = () => { void appendDecisionPage(table); };
+  viewport.addEventListener("scroll", loadMore, { passive: true });
+  new ResizeObserver(loadMore).observe(viewport);
+  requestAnimationFrame(loadMore);
+}
+
+async function appendDecisionPage(table) {
+  if (table._loading || table._rows.length >= Number(table.dataset.total)) return;
+  const viewport = table.closest(".decision-list");
+  if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight >= 120) return;
+  const view = table.dataset.view;
+  const offset = table._rows.length;
+  const loading = table.parentElement.querySelector(".decision-loading");
+  table._loading = true;
+  loading.hidden = false;
   try {
     const response = await fetch(
       `/api/worth-table?view=${encodeURIComponent(view)}&offset=${offset}`,
@@ -291,24 +307,19 @@ async function appendDecisionPage(button) {
     );
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const html = await response.text();
-    const table = button.parentElement?.querySelector(`.decision-table[data-view='${view}']`);
-    if (!table) throw new Error("table missing");
-    table.insertAdjacentHTML("beforeend", html);
-    // Paginated rows are click-delegated but scroll listeners are not.
-    table.querySelectorAll("details.decision-row:not([data-cue-wired])").forEach(wireRowCue);
-    const appended = table.querySelectorAll(".decision-row").length - offset;
-    remaining = Math.max(0, remaining - appended);
-    if (remaining === 0) {
-      button.remove();
-      return;
-    }
-    button.dataset.offset = String(offset + appended);
-    button.dataset.remaining = String(remaining);
-    button.textContent = `Show more (${remaining} left)`;
-    button.disabled = false;
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const rows = [...template.content.querySelectorAll("details.decision-row")];
+    rows.forEach(wireRowCue);
+    table._rows.push(...rows);
+    if (!rows.length) table.dataset.total = String(table._rows.length);
+    table._virtual.setItems(table._rows);
+    requestAnimationFrame(() => { void appendDecisionPage(table); });
   } catch (error) {
-    button.disabled = false;
     announce(error.message, true);
+  } finally {
+    table._loading = false;
+    loading.hidden = true;
   }
 }
 
@@ -326,7 +337,11 @@ async function decideDecisionRow(button, row) {
       delay(170),
     ]);
     adoptMutationState(response);
-    row.remove();
+    const table = row.closest(".decision-table");
+    table._rows = table._rows.filter((item) => item !== row);
+    table.dataset.total = String(Number(table.dataset.total) - 1);
+    table._virtual.setItems(table._rows);
+    requestAnimationFrame(() => { void appendDecisionPage(table); });
     applyProgress(response.progress);
     announce(worth === "yes" ? "Added" : "Rejected");
   } catch (error) {
@@ -716,12 +731,6 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  if (button.dataset.tableMore !== undefined) {
-    event.preventDefault();
-    void appendDecisionPage(button);
-    return;
-  }
-
   if (button.dataset.worth) {
     event.preventDefault();
     const row = button.closest(".decision-row");
@@ -999,10 +1008,9 @@ async function loadDossier(details) {
   body.setAttribute("aria-busy", "true");
   body.textContent = "Loading…";
   try {
-    // Holders that already display the name and Contact above the markdown
-    // (expanded decision rows; identity cards) skip the redundant sections.
-    const skip = details.closest(".decision-row, .identity-card") ? "&skip=1" : "";
-    const response = await fetch(`/api/dossier?slug=${encodeURIComponent(details.dataset.slug || "")}${skip}`);
+    const endpoint = details.classList.contains("decision-row") ? "worth-details" : "dossier";
+    const skip = endpoint === "dossier" && details.closest(".identity-card") ? "&skip=1" : "";
+    const response = await fetch(`/api/${endpoint}?slug=${encodeURIComponent(details.dataset.slug || "")}${skip}`);
     if (response.ok) {
       body.innerHTML = await response.text();
     } else {
@@ -1022,6 +1030,7 @@ function wireDynamicContent(root) {
   root.querySelectorAll("[data-worth-search]").forEach(wireWorthSearch);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   root.querySelectorAll("details.decision-row").forEach(wireRowCue);
+  root.querySelectorAll(".decision-table").forEach((table) => { void virtualizeDecisions(table); });
   refreshScrollCues();
   // A visible queue card kicks off the prefetch of the card after it, so the
   // next decision swaps instantly instead of waiting on the save.
