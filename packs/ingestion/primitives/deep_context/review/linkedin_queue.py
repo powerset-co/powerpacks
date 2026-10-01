@@ -58,15 +58,24 @@ class LinkedinQueue:
         return next((row.slug for row in self.rows() if row.parent_id == parent_id), None)
 
     def settle(self, parent_id: str) -> None:
-        queued = self.slug(parent_id) is not None
-        pending = linkedin_parent_pending(self._db, parent_id)
-        if queued and not pending:
-            self.drop(parent_id)
-        if pending and not queued:
-            # Back in the queue at its place in the card order, which only the store knows.
-            self.load()
+        # Checked and changed under one lock, so the last settle leaves what the store has.
+        with self._lock:
+            if self._rows is None:
+                return
+
+            queued = any(row.parent_id == parent_id for row in self._rows)
+            pending = linkedin_parent_pending(self._db, parent_id)
+            if queued and not pending:
+                self._rows = _without(self._rows, parent_id)
+            if pending and not queued:
+                # Back in the queue at its place in the card order, which only the store knows.
+                self._rows = tuple(linkedin_queue_order(self._db))
 
     def drop(self, parent_id: str) -> None:
         with self._lock:
             if self._rows is not None:
-                self._rows = tuple(row for row in self._rows if row.parent_id != parent_id)
+                self._rows = _without(self._rows, parent_id)
+
+
+def _without(rows: tuple[LinkedInQueueRow, ...], parent_id: str) -> tuple[LinkedInQueueRow, ...]:
+    return tuple(row for row in rows if row.parent_id != parent_id)

@@ -38,7 +38,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.view_models import WorthHumanRow, WorthMachineRow
+from packs.ingestion.primitives.deep_context.db.view_models import (
+    LinkedInQueueRow,
+    WorthHumanRow,
+    WorthMachineRow,
+)
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
@@ -1048,6 +1052,36 @@ class LinkedinQueueTests(ReviewApiFixture):
             slow.join(5)
             newer.join(5)
         self.assertEqual(queue.rows(), ("new",))
+
+    def test_two_settles_of_one_parent_leave_the_queue_as_the_store_has_it(self) -> None:
+        row = LinkedInQueueRow("jordan-parent", "jordan-bravo")
+        checking, release = threading.Event(), threading.Event()
+
+        def pending(_db: object, _parent_id: str) -> bool:
+            # The second check is made after a reset put the parent back.
+            if checking.is_set():
+                return True
+            checking.set()
+            release.wait(5)
+            return False
+
+        queue = linkedin_queue.LinkedinQueue(self.db)
+        with (
+            mock.patch.object(linkedin_queue, "linkedin_queue_order", lambda _db: [row]),
+            mock.patch.object(linkedin_queue, "linkedin_parent_pending", pending),
+        ):
+            queue.load()
+            kept = threading.Thread(target=queue.settle, args=(row.parent_id,))
+            kept.start()
+            checking.wait(5)
+            reset = threading.Thread(target=queue.settle, args=(row.parent_id,))
+            reset.start()
+            # The second settle waits its turn; one that did not would finish here.
+            reset.join(0.2)
+            release.set()
+            kept.join(5)
+            reset.join(5)
+        self.assertEqual(queue.rows(), (row,))
 
 
 class DecideTests(ReviewApiFixture):
