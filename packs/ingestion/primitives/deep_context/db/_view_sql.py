@@ -129,7 +129,7 @@ LINKEDIN_CTE = (
     + PENDING_CANDIDATE
     + f""" AS is_pending
   FROM eligible_links l
-), identity_scope AS (
+), identity_scope AS MATERIALIZED (
   SELECT p.parent_id
   FROM parents p
   JOIN worth w USING(parent_id)

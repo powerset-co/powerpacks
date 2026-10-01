@@ -12,7 +12,8 @@ hosted snapshot; the React app copies them into `web/src/styles/index.css`
 (keep the two in sync). People and the local Searches page are the React app
 (`web/`, shared components in `web/src/components/shared`).
 `packs/shared/web/virtual-table.js` owns visible-row rendering for the legacy
-results page and company employees, using the vendored TanStack Virtual core.
+results page, company employees and Worth Yes/No lists, using the vendored
+TanStack Virtual core.
 Extend these before adding another table implementation or page-specific theme.
 
 ## Typography

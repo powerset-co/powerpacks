@@ -874,6 +874,14 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertFalse(any("sum(w.effective_worth='maybe'" in sql for sql in statements))
         self.assertTrue(any("AS lookup_ready" in sql and "AS rejected" in sql for sql in statements))
 
+    def test_workflow_counts_materialize_identity_scope_once(self):
+        self.add_parent("fixture", "yes")
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            workflow_state(self.db)
+        sql = next(call.args[0] for call in reads.call_args_list if "AS candidate_keys" in call.args[0])
+        plan = self.db.query("EXPLAIN QUERY PLAN " + sql)
+        self.assertEqual(sum(row["detail"] == "MATERIALIZE identity_scope" for row in plan), 1)
+
     def test_workflow_counts_do_not_load_candidate_or_contact_snapshots(self):
         people = self.add_parent("fixture", "yes")
         self.add_candidate("fixture", "fixture-link", person_ids=people,
