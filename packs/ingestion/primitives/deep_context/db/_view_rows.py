@@ -243,7 +243,6 @@ def _candidate_row(row: sqlite3.Row) -> CandidateViewRow:
         new_url=decision.new_url,
         new_public_identifier=decision.new_public_identifier,
         pending=bool(row["is_pending"]),
-        human_question=row["human_question"] or "",
     )
 
 

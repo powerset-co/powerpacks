@@ -22,8 +22,9 @@ interface PersonCardProps {
   dossier?: boolean
 }
 
-// The `profile` macro: avatar, source badges, name, label badges and "View LinkedIn", then the
-// facts (Contact, Summary, Location, Work, Education) and the person's dossier.
+// A person as a card shows them: avatar, source badges, name, label badges and "View
+// LinkedIn", then the facts (Contact, Summary, Location, Work, Education) and the person's
+// dossier.
 export function PersonCard({ person, candidate, personOnly = false, dossier = true }: PersonCardProps) {
   const url = profileUrl(candidate, personOnly)
   const facts = personOnly ? null : candidate

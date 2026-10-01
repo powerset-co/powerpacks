@@ -1,4 +1,4 @@
-// Where the feedback popover sits in its card (reconcile_review.js `feedbackPopover`).
+// Where the feedback popover sits in its card.
 
 import { must } from "@/lib/must"
 

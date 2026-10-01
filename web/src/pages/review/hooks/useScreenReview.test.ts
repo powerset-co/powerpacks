@@ -34,7 +34,7 @@ describe("useScreenReview", () => {
   it("hands the stage the screen's settings and the page's toast", () => {
     const { result, toast } = renderReview()
     const { review } = result.current
-    expect([review.preview, review.debug, review.index, review.fadeMs]).toEqual([true, true, 2, 100])
+    expect([review.preview, review.debug, review.index, review.fadeMs]).toEqual([true, true, 2, 50])
     review.toast("Added")
     review.toastError("Could not save")
     expect(toast.say).toHaveBeenCalledWith("Added")
@@ -65,7 +65,7 @@ describe("useScreenReview", () => {
     act(() => void vi.advanceTimersByTime(649))
     expect(open).not.toHaveBeenCalled()
     act(() => void vi.advanceTimersByTime(1))
-    expect(open).toHaveBeenCalledWith("/review?stage=enrich")
+    expect(open).toHaveBeenCalledWith("/?stage=enrich")
     // The check stays until the next screen loads (this one unmounts then).
     expect(result.current.check).toBe("People Reviewed")
   })
@@ -77,15 +77,15 @@ describe("useScreenReview", () => {
     act(() => void vi.advanceTimersByTime(649))
     expect(open).not.toHaveBeenCalled()
     act(() => void vi.advanceTimersByTime(1))
-    expect(open).toHaveBeenCalledWith("/review?stage=linkedin")
+    expect(open).toHaveBeenCalledWith("/?stage=linkedin")
   })
 
-  it("says the message, fades the stage out for 100 ms, then reloads", () => {
+  it("says the message, fades the stage out for 50 ms, then reloads", () => {
     const { result, toast, reload } = renderReview()
     act(() => result.current.review.leaveAndReload("Saved"))
     expect(toast.say).toHaveBeenCalledWith("Saved")
     expect(result.current.leaving).toBe(true)
-    act(() => void vi.advanceTimersByTime(99))
+    act(() => void vi.advanceTimersByTime(49))
     expect(reload).not.toHaveBeenCalled()
     act(() => void vi.advanceTimersByTime(1))
     expect(reload).toHaveBeenCalledTimes(1)

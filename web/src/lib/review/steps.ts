@@ -1,4 +1,4 @@
-// The stepper's rules (rendering.py `_step`, reconcile_review.js `applyProgress`).
+// The stepper's rules: a step's marker and state, and the counts a decision click repaints.
 
 import type { DecisionProgress, ReviewStep, ReviewView } from "@/types/review"
 

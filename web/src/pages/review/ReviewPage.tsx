@@ -13,11 +13,11 @@ import { useScreen } from "./hooks/useScreen"
 import { ReviewScreen } from "./ReviewScreen"
 import { EmptyPanel } from "./shared/EmptyPanel"
 
-// The old page's toast sat bottom-centre in 13px; the shared Toast is bottom-right in 12px.
+// The review toast sits bottom-centre in 13px; the shared Toast's own place is bottom-right in 12px.
 const TOAST_PLACE = "inset-x-0 bottom-6 mx-auto w-fit max-w-[calc(100vw-32px)] text-[13px]"
 
 /**
- * /review: the deep-context review flow (worth, Enrich, LinkedIn, done), one screen per URL
+ * `/`: the deep-context review flow (worth, Enrich, LinkedIn, done), one screen per URL
  * (`stage`, `view`, `preview`, `debug`, `index`). The page is the user's entry point and
  * stands outside the app shell: its own top bar (brand and the screen's title), the stepper,
  * the stage, and the one toast every control reports to.
@@ -31,7 +31,7 @@ export function ReviewPage() {
     if (title) document.title = documentTitle(title)
   }, [title])
 
-  // A new screen starts without the last one's toast, as a document load cleared it.
+  // A new screen starts without the last one's toast.
   const { dismiss } = toast
   const screenId = screen?.id
   useEffect(() => dismiss(), [dismiss, screenId])

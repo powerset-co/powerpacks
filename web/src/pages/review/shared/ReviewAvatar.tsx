@@ -8,9 +8,9 @@ interface ReviewAvatarProps {
   candidate: ReviewCandidate | null
 }
 
-// The `avatar` macro: initials, with the profile's own picture over them once it loads (nothing
+// A person's avatar: initials, with the profile's own picture over them once it loads (nothing
 // when it fails or the profile has none). The shared Avatar draws it; .avatar (styles/base.css)
-// sets the old sizes.
+// sets its size.
 export function ReviewAvatar({ person, candidate }: ReviewAvatarProps) {
   const picture = candidate?.avatar_url ?? ""
   return (

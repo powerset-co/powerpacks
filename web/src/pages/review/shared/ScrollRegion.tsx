@@ -8,8 +8,7 @@ interface ScrollRegionProps {
   children: ReactNode
 }
 
-// The `scroll_region` macro: the part of a card that scrolls inside it, with a "scroll down"
-// cue while more sits below.
+// The part of a card that scrolls inside it, with a "scroll down" cue while more sits below.
 export function ScrollRegion({ children }: ScrollRegionProps) {
   const { scroller, more, scrollDown } = useScrollCue<HTMLDivElement>()
   return (

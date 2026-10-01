@@ -3,6 +3,8 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-10-01: the review page is the React app's page at `/` (`web/src/pages/review`); the
+  Jinja page is deleted. The browser-observer notes describe it.
 - 2026-09-28: the post-review block is stop → realize. Realize writes the
   final roster into SQLite and exports merged/people.csv from it; no
   directory.csv, retarget-people.csv, fan-in, or provider call. Cold start,
@@ -140,14 +142,13 @@ how to run.
 
 The browser has a separate, faster observer:
 
-- Enrich and Done call `/api/status` immediately on load and then once per
-  second because an external job can change SQLite progress. A
-  LinkedIn preview opened before enrichment completes does the same until those
-  external results arrive.
-- People and a current, fully enriched LinkedIn stage do not poll. Their local
-  saves return the authoritative state token directly.
-- LinkedIn starts with ten cards from the SQLite queue, advances synchronously
-  on click, and refills from the same query when five remain.
+- Enrich and Done read `/api/status` on load and again on every `/api/events`
+  message, because an external job can change SQLite progress. A running
+  enrichment's numbers ride in on the event itself and update the bar in place.
+- The worth and LinkedIn screens never watch the server. Each save answers with
+  the counts the page repaints.
+- A LinkedIn decision answers with the next card, read after the write, so a
+  decided person is never served back. The worth queue reads its next card ahead.
 - A changed `next_action` navigates the current tab to the corresponding stage.
 - A changed state token reloads the current stage with fresh counts/content.
 - A stage opened from the clickable progress steps stays in preview mode while
@@ -327,10 +328,9 @@ The browser state token hashes the stage progress counts, the effective worth
 decisions, and whether enrichment is pending or running.
 
 External handoff changes reach the page through the server's `/api/events`
-stream on Enrich and Done, and on an early LinkedIn preview while enrichment is
-still changing its queue; the page re-snapshots `/api/status` on each nudge and
-never polls. Local People/LinkedIn changes are visible immediately from their
-mutation response.
+stream on Enrich and Done; the page re-reads `/api/status` on each message and
+never polls. Local worth/LinkedIn changes are visible immediately from their
+save's response.
 
 This gives repeatability without a ledger:
 

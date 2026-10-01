@@ -68,13 +68,12 @@ interface PileListProps {
 }
 
 /**
- * rendering.py `render_decision_table` + reconcile_review.js `virtualizeDecisions`: the pile
- * scrolls inside its own box, and only the rows near the viewport are mounted, in the flow
- * between two spacers that stand in for the rest. Rows are measured (an opened row is
- * taller) and keyed by slug. The next page is read whenever the viewport is near the end of
- * the rows: on scroll, on resize, and a frame after the rows change (the first page, each
- * page after it, a flipped row leaving) or a flip's save answers (no page is read while one
- * is out).
+ * A decided pile's table: the pile scrolls inside its own box, and only the rows near the
+ * viewport are mounted, in the flow between two spacers that stand in for the rest. Rows are
+ * measured (an opened row is taller) and keyed by slug. The next page is read whenever the
+ * viewport is near the end of the rows: on scroll, on resize, and a frame after the rows
+ * change (the first page, each page after it, a flipped row leaving) or a flip's save answers
+ * (no page is read while one is out).
  */
 function PileList({ pile, table, reading, leaving, onMore, onFlip }: PileListProps) {
   const { rows, total } = table

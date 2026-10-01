@@ -41,8 +41,7 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
   const completing = useRef(false)
   const draft = useRef(false)
   const timers = useRef<number[]>([])
-  // A late answer to a screen that has gone must not move the screen opened since: on the
-  // old page the document was gone by then.
+  // A late answer to a screen that has gone must not move the screen opened since.
   const gone = useRef(false)
   useEffect(() => {
     const pending = timers.current

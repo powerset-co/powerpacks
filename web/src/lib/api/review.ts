@@ -1,5 +1,5 @@
 // The review page's routes on the Python review server: the JSON routes under /api/review/
-// (deep_context/review/api.py) and the routes the old page already called (review/server.py).
+// and the form routes (deep_context/review/api.py), and the status, event and dossier routes beside them.
 
 import { body, failure } from "@/lib/api/http"
 import { SAVE_FAILED } from "@/lib/review/copy"
@@ -67,7 +67,7 @@ async function bodyStatus(response: Response): Promise<string> {
 }
 
 /** The server's message (`failure`), with the response code and the body's `status`. A JSON
- *  body with a status and no message says the status, as the old page did. */
+ *  body with a status and no message says the status. */
 async function refusal(response: Response, fallback: string): Promise<ReviewError> {
   const status = await bodyStatus(response.clone())
   const { message } = await failure(response, fallback)
@@ -80,7 +80,7 @@ async function get<T>(path: string, fallback: string, signal?: AbortSignal): Pro
   return body<T>(response)
 }
 
-/** A form POST, as the old page's `post()` sent it. */
+/** A form POST: the values URL-encoded. A refusal throws the server's words. */
 async function post(path: string, values: Record<string, string>): Promise<Response> {
   const response = await fetch(path, { method: "POST", headers: FORM, body: new URLSearchParams(values) })
   if (!response.ok) throw await refusal(response, SAVE_FAILED)

@@ -11,7 +11,7 @@ interface EmptyPanelProps {
   children?: ReactNode
 }
 
-// The `empty_state` macro: a centred panel with a title and whatever sits under it.
+// A centred panel with a title and whatever sits under it.
 export function EmptyPanel({ title, mark = false, className, children }: EmptyPanelProps) {
   return (
     <div className={cn("empty-state", className)}>

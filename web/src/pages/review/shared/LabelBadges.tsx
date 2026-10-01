@@ -6,8 +6,8 @@ interface LabelBadgesProps {
   labels: readonly string[]
 }
 
-// rendering.py `_label_badges`: the first three labels, then "+N" whose tooltip (hover or
-// keyboard focus) lists the rest.
+// A person's label badges: the first three labels, then "+N" whose tooltip (hover or keyboard
+// focus) lists the rest.
 export function LabelBadges({ labels }: LabelBadgesProps) {
   if (!labels.length) return null
   const { shown, rest } = foldLabels(labels)

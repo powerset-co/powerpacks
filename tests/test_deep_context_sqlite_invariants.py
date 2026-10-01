@@ -65,43 +65,22 @@ def hydrate(row: object) -> object:
         )
         self.assertEqual(violations, [])
 
-    def test_allows_only_named_static_asset_reads(self) -> None:
-        allowed = self.audit_source(
-            "review/rendering.py",
-            """from pathlib import Path
+    def test_review_server_reads_no_files(self) -> None:
+        # The review page is the React app; nothing under review/ reads a file from disk,
+        # whatever its path is called.
+        for name in ("DOSSIER", "REVIEW_HTML"):
+            with self.subTest(name=name):
+                violations = self.audit_source(
+                    "review/server.py",
+                    f"""from pathlib import Path
 
-PAGE_TEMPLATE = Path(__file__).with_name("templates") / "page.html.j2"
-
-def render() -> str:
-    return PAGE_TEMPLATE.read_text(encoding="utf-8")
-""",
-        )
-        banned = self.audit_source(
-            "review/rendering.py",
-            """from pathlib import Path
-
-DOSSIER = Path("person.md")
+{name} = Path("person.md")
 
 def render() -> str:
-    return DOSSIER.read_text(encoding="utf-8")
+    return {name}.read_text(encoding="utf-8")
 """,
-        )
-        disguised_artifact = self.audit_source(
-            "review/rendering.py",
-            """from pathlib import Path
-
-REVIEW_HTML = Path("person.md")
-
-def render() -> str:
-    return REVIEW_HTML.read_text(encoding="utf-8")
-""",
-        )
-        self.assertEqual(allowed, [])
-        self.assertEqual([item.rule for item in banned], ["artifact-file-read"])
-        self.assertEqual(
-            [item.rule for item in disguised_artifact],
-            ["artifact-file-read"],
-        )
+                )
+                self.assertEqual([item.rule for item in violations], ["artifact-file-read"])
 
     def test_csv_parser_exists_only_at_seed_or_import_input_boundary(self) -> None:
         source = """import csv

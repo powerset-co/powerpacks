@@ -18,8 +18,8 @@ const LOADING: RowDetails = { status: "loading" }
 const MISSING: RowDetails = { status: "missing" }
 const FAILED: RowDetails = { status: "failed" }
 
-/** The profile and the dossier together: the old page had both in one answer, so the row
- *  draws them at once. */
+/** The profile and the dossier together: the row draws them at once, never one without the
+ *  other. */
 async function readDetails(slug: string): Promise<RowDetails> {
   try {
     const [{ person, candidate }, dossier] = await Promise.all([fetchWorthDetails(slug), fetchDossier(slug)])
@@ -39,8 +39,8 @@ export interface OpenedRows {
 
 /**
  * Which rows of a decided pile are open, and the details each one read when it first opened
- * (reconcile_review.js `loadDossier`: once per row, never again). The list keeps this, not
- * the row: a row that scrolls out of the list is unmounted, and comes back as it was left.
+ * (once per row, never again). The list keeps this, not the row: a row that scrolls out of
+ * the list is unmounted, and comes back as it was left.
  */
 export function useOpenedRows(): OpenedRows {
   const [open, setOpen] = useState(EMPTY)

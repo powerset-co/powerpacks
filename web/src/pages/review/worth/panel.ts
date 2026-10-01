@@ -1,5 +1,5 @@
-// What the review tab's panel draws for one card read (server.py `worth_body`): the next
-// person's card, the synthesis handoff, or nothing.
+// What the review tab's panel draws for one card read: the next person's card, the synthesis
+// handoff, or nothing.
 
 import type { QueuePosition, ReviewCandidate, ReviewPerson, WorthCardPayload } from "@/types/review"
 

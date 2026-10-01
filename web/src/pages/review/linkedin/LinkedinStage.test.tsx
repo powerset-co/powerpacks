@@ -95,28 +95,6 @@ describe("LinkedinStage: the card", () => {
     expect(server.gets("/api/dossier")).toEqual(["/api/dossier?slug=jordan-bravo&skip=1"])
   })
 
-  it("asks the judge's own question in place of the usual one", async () => {
-    const asked = reviewCandidate({ question: "Is this the Jordan who ran Example Labs?" })
-    const { container } = await open(
-      linkedinCard({ card: { person: reviewPerson(), candidates: [asked], failure_note: "" } }),
-    )
-    expect(container.querySelector(".question")?.textContent).toBe(
-      "Is this the Jordan who ran Example Labs? Or Skip?",
-    )
-    expect(labels(".question")).toEqual(["Skip"])
-  })
-
-  it("puts the first candidate's question above several options, and nothing when it has none", async () => {
-    const asked = reviewCandidate({ question: "Which Jordan worked at Acme?" })
-    const first = await open(severalCard([asked, syntheticCandidate()]))
-    const question = first.container.querySelector(".question")
-    expect(question?.textContent).toBe("Which Jordan worked at Acme?")
-    expect(question?.nextElementSibling?.className).toBe("linkedin-options-intro")
-    cleanup()
-    const second = await open(severalCard([reviewCandidate(), syntheticCandidate()]))
-    expect(second.container.querySelector(".question")).toBeNull()
-  })
-
   it("draws several candidates as the person alone and one option each (L2)", async () => {
     const candidates = [
       reviewCandidate(),
@@ -309,7 +287,7 @@ describe("LinkedinStage: a decision", () => {
     expect(screen.queryByRole("article")).toBeNull()
     expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
     expect(review.transition).not.toHaveBeenCalled()
-    // Finish presses itself only on the screen's own load, as the old page did.
+    // Finish presses itself only on the screen's own load.
     await act(() => Promise.resolve())
     expect(server.posts("/complete")).toEqual([])
     expect(button("Finish").disabled).toBe(false)

@@ -1,5 +1,5 @@
-// What a screen that watches the server does with what it hears (reconcile_review.js
-// `syncFileState` and the /api/events handler). Only Enrich and Done watch.
+// What a screen that watches the server does with what it hears: each status read
+// (/api/status) and each /api/events message. Only Enrich and Done watch.
 
 import type { ReviewEvent, ReviewStatus, ReviewView } from "@/types/review"
 

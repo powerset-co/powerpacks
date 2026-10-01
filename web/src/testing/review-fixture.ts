@@ -51,7 +51,6 @@ export function reviewCandidate(overrides: Partial<ReviewCandidate> = {}): Revie
     synthetic: false,
     contacts: "jordan@example.com · +15550100",
     avatar_url: "https://media.example.com/jordan-bravo.jpg",
-    question: "",
     ...overrides,
   }
 }
@@ -93,7 +92,7 @@ const TITLES: Readonly<Record<ReviewView, string>> = {
   done: "All Set",
 }
 
-/** The three steps as `full_page` builds them from the progress: nothing complete while
+/** The three steps as the page route builds them from the progress: nothing complete while
  *  synthesis is pending, each count the stage's pending people. */
 export function reviewSteps(
   progress: PageProgress = pageProgress(),

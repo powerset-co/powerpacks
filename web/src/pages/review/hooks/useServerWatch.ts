@@ -22,11 +22,10 @@ interface ServerWatch {
 }
 
 /**
- * One screen's watch on the server (reconcile_review.js `syncFileState` and its /api/events
- * handler). Only a screen with `external_updates` (Enrich, Done) reads the status once on
- * arrival, listens to /api/events, and re-reads the status on every connect and on every
- * message that is not a running job. Worth and LinkedIn never open the stream or read the
- * status. Mount it once per screen: what it has seen resets with the screen.
+ * One screen's watch on the server. Only a screen with `external_updates` (Enrich, Done)
+ * reads the status once on arrival, listens to /api/events, and re-reads the status on every
+ * connect and on every message that is not a running job. Worth and LinkedIn never open the
+ * stream or read the status. Mount it once per screen: what it has seen resets with the screen.
  */
 export function useServerWatch(watch: ServerWatch) {
   const latest = useRef(watch)

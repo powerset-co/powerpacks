@@ -430,7 +430,7 @@ describe("PileTable: an opened row", () => {
     ])
     expect(loaded.querySelector("h4.dossier-heading")?.textContent).toBe("Who they are")
     expect(loaded.querySelector(":scope > .row-facts")?.innerHTML).toBe("<h3>Summary</h3><p>Met at Acme.</p>")
-    // The reason still leads the detail; the old name header and Contact fact are gone.
+    // The reason leads the detail; the row has no name header or Contact fact of its own.
     expect(facts(detail("Avery Fox"), ":scope > dl.row-facts")).toEqual([["Why yes", "You said yes"]])
     expect(detail("Avery Fox").querySelector(".decision-expanded-profile")).toBeNull()
     // One read of each: the card inside the row does not ask for the dossier again.
@@ -453,7 +453,7 @@ describe("PileTable: an opened row", () => {
     await toggle("Avery Fox")
     await waitFor(() => expect(details("Avery Fox").textContent).toBe("Loading…"))
     await act(() => wait(20))
-    // The other read has landed; the row still waits for both, as the old page's one answer.
+    // The other read has landed; the row still waits for both and draws them at once.
     expect(details("Avery Fox").textContent).toBe("Loading…")
     expect(details("Avery Fox").childElementCount).toBe(0)
     expect(details("Avery Fox").getAttribute("aria-busy")).toBe("true")

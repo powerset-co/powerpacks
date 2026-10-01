@@ -1,4 +1,4 @@
-// The Review API's shapes, field for field with packs/ingestion/primitives/deep_context/review/api.py.
+// The Review API's shapes, field for field with packs/ingestion/primitives/deep_context/review/payloads.py.
 // tests/test_deep_context_review_api.py pins the two together.
 
 /** The four review screens. `done` has no step of its own; it lights step 3. */
@@ -33,7 +33,7 @@ export interface ReviewStep {
 
 export type EnrichmentMode = "running" | "approval" | "completed" | "failed" | "preparing"
 
-/** The Enrich screen's one panel (rendering.py `render_enrichment`). */
+/** The Enrich screen's one panel. */
 export interface EnrichmentPanel {
   mode: EnrichmentMode
   /** running: research lookups finished / planned. */
@@ -80,7 +80,7 @@ export interface ReviewPerson {
 
 /** One LinkedIn (or researched) profile a parent might be. */
 export interface ReviewCandidate {
-  /** The key POST /decide, /retarget and /feedback take as `pub`. */
+  /** The key POST /api/review/decide, /retarget and /feedback take as `pub`. */
   row_key: string
   name: string
   /** The profile link; "" for a researched profile with no LinkedIn. */
@@ -95,9 +95,6 @@ export interface ReviewCandidate {
   contacts: string
   /** The profile's picture; "" when it has none or is a researched profile. */
   avatar_url: string
-  /** What the judge wants the reviewer to settle about this profile; "" asks the usual
-   *  "Is this the right profile?". */
-  question: string
 }
 
 /** The debug carousel's position (`?debug=1`). */

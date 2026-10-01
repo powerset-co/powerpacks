@@ -12,7 +12,7 @@ export interface Review {
   debug: boolean
   /** The queue position the URL asked for (`index`), 0 without one. */
   index: number
-  /** A card's fade-out wait: 100 ms, 0 under reduced motion. */
+  /** A card's fade-out wait: 50 ms, 0 under reduced motion. */
   fadeMs: number
   /** A message for 1.8 s; a new one replaces the old. */
   toast: (message: string) => void

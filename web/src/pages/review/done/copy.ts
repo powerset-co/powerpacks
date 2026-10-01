@@ -1,4 +1,4 @@
-// The Done stage's words (server.py `full_page`, the "All set" panel).
+// The Done stage's words: the "All set" panel.
 
 export const ALL_SET = "All set"
 

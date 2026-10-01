@@ -284,81 +284,13 @@ def _inside_hash(call: ast.Call, parents: dict[ast.AST, ast.AST]) -> bool:
     return False
 
 
-def _inside_static_asset_branch(
-    call: ast.Call,
-    parents: dict[ast.AST, ast.AST],
-    static_names: set[str],
-) -> bool:
-    """Recognize the web server's fixed CSS/JS map, not arbitrary path reads."""
-    if _name(call.func) != "path.read_bytes":
-        return False
-    current = parents.get(call)
-    branch: ast.If | None = None
-    function: ast.FunctionDef | ast.AsyncFunctionDef | None = None
-    while current is not None:
-        if branch is None and isinstance(current, ast.If):
-            branch = current
-        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            function = current
-            break
-        current = parents.get(current)
-    if branch is None or function is None or "parsed.path in assets" not in ast.unparse(branch.test):
-        return False
-    for candidate in ast.walk(function):
-        if not (
-            isinstance(candidate, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "assets" for target in candidate.targets)
-            and isinstance(candidate.value, ast.Dict)
-        ):
-            continue
-        values = candidate.value.values
-        return bool(values) and all(
-            isinstance(value, ast.Tuple)
-            and value.elts
-            and isinstance(value.elts[0], ast.Name)
-            and value.elts[0].id in static_names
-            for value in values
-        )
-    return False
-
-
-def _static_asset_names(tree: ast.AST) -> set[str]:
-    names: set[str] = set()
-    for node in getattr(tree, "body", []):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and str(node.module or "").endswith(("deep_context.review", "review.rendering"))
-        ):
-            names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if alias.name in {"REVIEW_HTML", "REVIEW_CSS", "REVIEW_JS"}
-            )
-            continue
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = node.value
-        if value is None:
-            continue
-        expression = ast.unparse(value)
-        if "__file__" not in expression or not any(
-            suffix in expression for suffix in (".css", ".html", ".js")
-        ):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        names.update(target.id for target in targets if isinstance(target, ast.Name))
-    return names
-
-
 def _static_asset_read(
     relative: str,
     call: ast.Call,
-    parents: dict[ast.AST, ast.AST],
     tree: ast.AST,
 ) -> bool:
     called = _name(call.func)
     method = called.rsplit(".", 1)[-1]
-    receiver = called.rsplit(".", 1)[0] if "." in called else ""
     if relative.endswith("/prompts/loader.py"):
         expression = ast.unparse(call.func.value) if isinstance(call.func, ast.Attribute) else ""
         prompt_root = next(
@@ -390,11 +322,6 @@ def _static_asset_read(
         # synthesis/prompting.py's fact_schema.json above.
         expression = ast.unparse(call.func) if isinstance(call.func, ast.Attribute) else ""
         return method == "read_text" and "__file__" in expression and ".json" in expression
-    if relative.endswith(("/review/server.py", "/review/rendering.py")):
-        static_names = _static_asset_names(tree)
-        if receiver in static_names:
-            return called.rsplit(".", 1)[-1] in DIRECT_FILE_READ_METHODS
-        return _inside_static_asset_branch(call, parents, static_names)
     return False
 
 
@@ -407,7 +334,7 @@ def _allowed_file_read(
 ) -> bool:
     if path in {SEED_READER, PROJECTOR_READER}:
         return True
-    if _static_asset_read(relative, call, parents, tree):
+    if _static_asset_read(relative, call, tree):
         return True
     called = _name(call.func)
     scope = _scope(call, parents)

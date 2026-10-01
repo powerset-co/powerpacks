@@ -9,8 +9,8 @@ export interface DoneStageProps {
   rejected: number
 }
 
-// The Done stage (server.py `full_page`): the check, "All set", what the review came to, and
-// the phrase to take back to Codex.
+// The Done stage: the check, "All set", what the review came to, and the phrase to take back
+// to Codex.
 export function DoneStage({ checked, rejected }: DoneStageProps) {
   return (
     <EmptyPanel mark title={ALL_SET} className="done">

@@ -84,7 +84,7 @@ export function gate() {
   return { answer, open: (response: Response) => open(response) }
 }
 
-/** A refusal as server.py sends it on /retarget, /complete and /feedback: plain text. */
+/** A refusal as /retarget, /complete and /feedback send it: plain text. */
 export function refusal(text: string, status = 400): Response {
   return new Response(text, { status })
 }

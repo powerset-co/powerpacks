@@ -28,9 +28,9 @@ interface PileRowProps {
   onFlip: () => void
 }
 
-// templates/decision_row.html.j2: a collapsed row (caret, initials, name, labels, the flip
-// button) that opens to why the person is in this pile and, once read, who they are. A pile's
-// row carries no profile, so its avatar is the person's initials.
+// A collapsed row (caret, initials, name, labels, the flip button) that opens to why the
+// person is in this pile and, once read, who they are. A pile's row carries no profile, so
+// its avatar is the person's initials.
 export function PileRow(props: PileRowProps) {
   const { row, pile, index, measure, open, details, leaving, onToggle, onFlip } = props
   const { person, reason } = row
@@ -95,9 +95,9 @@ export function PileRow(props: PileRowProps) {
   )
 }
 
-// templates/decision_details.html.j2, as `loadDossier` puts it in the row: "Loading…" until
-// the details are read, then the person's profile card, "Who they are" and the dossier; "No
-// details found" when the server has none, "Could not load details" when the read fails.
+// An opened row's details: "Loading…" until they are read, then the person's profile card,
+// "Who they are" and the dossier; "No details found" when the server has none, "Could not load
+// details" when the read fails.
 function Details({ details }: Pick<PileRowProps, "details">) {
   if (details?.status !== "ready") {
     const waiting = details === undefined || details.status === "loading"
@@ -111,7 +111,7 @@ function Details({ details }: Pick<PileRowProps, "details">) {
     <div className="dossier-text">
       <PersonCard person={details.person} candidate={details.candidate} dossier={false} />
       <h4 className="dossier-heading">{WHO_THEY_ARE}</h4>
-      {/* The server rendered the person's own markdown file; the old page injected it the same way. */}
+      {/* The HTML is this machine's own server rendering the person's own markdown file. */}
       <div className="row-facts" dangerouslySetInnerHTML={{ __html: details.dossier }} />
     </div>
   )

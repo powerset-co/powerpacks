@@ -16,16 +16,15 @@ interface FinishedPanelProps {
   pressItself: boolean
 }
 
-// templates/linkedin_finished.html.j2: the queue has nothing left to show. With every person
-// decided it hands back to Codex; otherwise Finish marks the stage complete and the screen
-// loads again.
+// The queue has nothing left to show. With every person decided it hands back to Codex;
+// otherwise Finish marks the stage complete and the screen loads again.
 export function FinishedPanel({ finished, pressItself }: FinishedPanelProps) {
   const { toastError, transition, setCompleting } = useReview()
   const [finishing, setFinishing] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
   const pressed = useRef(false)
 
-  // reconcile_review.js `maybeAutoComplete`: one press, however often the effect runs.
+  // Finish presses itself: one press, however often the effect runs.
   useEffect(() => {
     if (!pressItself || pressed.current) return
     pressed.current = true

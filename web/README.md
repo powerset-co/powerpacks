@@ -3,6 +3,7 @@ Created: 2026-09-26
 Change log:
 
 - 2026-10-01: the Review page (`/review`) and its routes, folders and fixtures.
+- 2026-10-01: the Review page is `/`; the Jinja page it replaced is deleted.
 
 # web
 
@@ -15,8 +16,8 @@ node, so every source change must be rebuilt and the rebuilt `dist/` committed w
 
 One React root: `src/main.tsx` mounts `App`, whose shell renders the top bar once and
 the routed page below it, so pages switch without a document reload. The router claims
-`/people`, `/searches` and `/searches/run?run_id=…`, and `/review` outside the shell; the
-server answers each with the app page (`packs/shared/web/app.py` `PAGE_PATHS`).
+`/people`, `/searches` and `/searches/run?run_id=…`, and `/` (the review flow) outside the
+shell; the server answers each with the app page (`packs/shared/web/app.py` `PAGE_PATHS`).
 
 ## Build
 
@@ -118,15 +119,16 @@ all on the `--t-*` / `--ease-*` tokens; there is no animation library.
 
 ## Review
 
-`/review` is the deep-context review flow (worth, Enrich, LinkedIn, done): the same screens,
-words and requests as the Jinja page at `/`, which still serves until it is deleted. It is the
-user's entry point, so it stands OUTSIDE the app shell: no page tabs, its own top bar (brand and
-the screen's title). One screen per URL (`stage`, `view`, `preview`, `debug`, `index`); moving
-between stages and tabs is client-side, and every navigation reads the screen again.
+`/` is the deep-context review flow (worth, Enrich, LinkedIn, done), the page `bin/deep-context
+review` opens (`/?stage=worth|enrich|linkedin|done`). It is the user's entry point, so it stands
+OUTSIDE the app shell: no page tabs, its own top bar (brand and the screen's title). One screen
+per URL (`stage`, `view`, `preview`, `debug`, `index`); moving between stages and tabs is
+client-side, and every navigation reads the screen again. It was ported from a Jinja page and
+`reconcile_review.js`, which are deleted; its words and behaviour are theirs.
 
 | Path                                                            | Role                                                                                                                                           | Reads / writes                                                                                                                |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `src/types/review.ts`                                           | The contract, field for field with `deep_context/review/api.py` (pinned by `tests/test_deep_context_review_api.py`)                            | —                                                                                                                             |
+| `src/types/review.ts`                                           | The contract, field for field with `deep_context/review/payloads.py` (pinned by `tests/test_deep_context_review_api.py`)                       | —                                                                                                                             |
 | `src/lib/api/review.ts`                                         | One function per route; `ReviewError` carries the status (`gone`, `needsAuth`)                                                                 | `/api/review/*`, `/worth`, `/complete`, `/retarget`, `/feedback`, `/auth/login`, `/api/status`, `/api/events`, `/api/dossier` |
 | `src/lib/review/`                                               | Pure rules: guidance routing (URL is the free fix, text the paid re-research), step markers, the status feed-forward, links, timings, copy     | —                                                                                                                             |
 | `src/pages/review/ReviewPage.tsx`, `ReviewScreen.tsx`, `hooks/` | The page, one loaded screen (stepper + stage), the `useReview()` context a stage works through, the server watch (Enrich and Done only)        | `lib/api/review`                                                                                                              |

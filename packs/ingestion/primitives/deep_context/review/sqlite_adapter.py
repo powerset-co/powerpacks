@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -13,10 +12,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewExportRow,
 )
-from packs.ingestion.primitives.deep_context.db.people_views import (
-    avatar_payload,
-    person_detail,
-)
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
     ParentViewRow,
@@ -213,11 +209,6 @@ class SqliteReviewAdapter:
         rows = guidance_rows(self.db)
         return [_guidance_view_row(row) for row in reversed(rows)]
 
-    def resolve_row_key(self, value: str) -> str | None:
-        """Resolve one external row key or public identifier at the HTTP edge."""
-        resolved = resolve_identity_key(self.db, value)
-        return resolved[0] if resolved else None
-
     def resolve_candidate(
         self,
         value: str,
@@ -240,16 +231,6 @@ class SqliteReviewAdapter:
             if parent
             else None
         )
-
-    def avatar(self, key: str) -> tuple[bytes, str] | None:
-        payload = avatar_payload(self.db, key)
-        if payload is None:
-            return None
-        try:
-            body = base64.b64decode(payload.base64, validate=True)
-        except (ValueError, TypeError):
-            return None
-        return (body, payload.content_type) if body else None
 
     def workflow_status(
         self,

@@ -33,10 +33,10 @@ interface FeedbackPopoverProps {
   onClose: () => void
 }
 
-// reconcile_review.js `feedbackPopover`: optional feedback on the person. A context line, a
-// textarea that grows, ⌘/Ctrl+Enter or the send button, then a "Got it, thanks!" beat before
-// it closes. Skip, Escape in the textarea, or a click outside closes it. A refusal for want
-// of a Powerset sign-in offers the sign-in; every refusal leaves Send usable again.
+// Optional feedback on the person. A context line, a textarea that grows, ⌘/Ctrl+Enter or the
+// send button, then a "Got it, thanks!" beat before it closes. Skip, Escape in the textarea,
+// or a click outside closes it. A refusal for want of a Powerset sign-in offers the sign-in;
+// every refusal leaves Send usable again.
 export function FeedbackPopover({ anchor, place, context, pub, slug, onClose }: FeedbackPopoverProps) {
   const { toastError } = useReview()
   const popover = useRef<HTMLDivElement>(null)
@@ -156,8 +156,8 @@ export function FeedbackPopover({ anchor, place, context, pub, slug, onClose }: 
   )
 }
 
-// reconcile_review.js `signInButton`: one click starts the browser sign-in on this machine.
-// It stays "Waiting for sign-in…" once the sign-in has opened; a failure hands it back.
+// The Powerset sign-in button: one click starts the browser sign-in on this machine. It stays
+// "Waiting for sign-in…" once the sign-in has opened; a failure hands it back.
 function SignIn() {
   const { toast, toastError } = useReview()
   const [waiting, setWaiting] = useState(false)
