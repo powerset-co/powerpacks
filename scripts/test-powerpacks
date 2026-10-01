@@ -75,6 +75,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_cluster_merge_candidates \
   tests.test_merge_candidate_conflicts \
   tests.test_deep_context_merge_repair \
+  tests.test_deep_context_harmonic_migration \
   tests.test_deep_context_merge_owner \
   tests.test_identity_jev \
   tests.test_mapped_identity_batch \
