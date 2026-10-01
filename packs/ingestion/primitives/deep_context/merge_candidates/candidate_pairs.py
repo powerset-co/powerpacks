@@ -200,8 +200,26 @@ def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[
     return [group for group in groups.values() if len(group) > 1]
 
 
-def accepted_edges(verdicts: list[tuple[str, str, bool, float]]) -> list[tuple[str, str]]:
-    """Join strongest pairs first without overriding a different-person verdict."""
+def names_compatible(first: str, second: str) -> bool:
+    """A changed surname or nickname is possible; two unrelated full names are not."""
+    left = re.findall(r"[^\W\d_]+", first.casefold())
+    right = re.findall(r"[^\W\d_]+", second.casefold())
+    if len(left) < 2 or len(right) < 2 or sorted(left) == sorted(right):
+        return True
+    for a, b in ((left[0], right[0]), (left[-1], right[-1])):
+        if a == b or (min(len(a), len(b)) == 1 and a[0] == b[0]):
+            return True
+        if jaro_winkler(a, b) >= GATE_NAME_SIM:
+            return True
+    return False
+
+
+def accepted_edges(
+    verdicts: list[tuple[str, str, bool, float]],
+    *,
+    names: dict[str, tuple[str, ...]] | None = None,
+) -> list[tuple[str, str]]:
+    """Join strongest pairs without overriding different-person evidence."""
     groups = {node: {node} for left, right, _, _ in verdicts for node in (left, right)}
     rejected = [(left, right) for left, right, same, _ in verdicts if not same]
     accepted = []
@@ -212,6 +230,10 @@ def accepted_edges(verdicts: list[tuple[str, str, bool, float]]) -> list[tuple[s
             continue
         joined = groups[left] | groups[right]
         if any(a in joined and b in joined for a, b in rejected):
+            continue
+        if names and any(not names_compatible(a, b)
+                         for left, right in combinations(joined, 2)
+                         for a in names[left] for b in names[right]):
             continue
         accepted.append(tuple(sorted((left, right))))
         for node in joined:

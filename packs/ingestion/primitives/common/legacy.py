@@ -47,9 +47,13 @@ import hashlib
 import json
 import sqlite3
 import sys
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
 from packs.ingestion.primitives.deep_context.db.store import Db, LEGACY_SCHEMA_SIGNATURE
+
+
+if TYPE_CHECKING:
+    from packs.ingestion.primitives.deep_context.db.merge_repair import MergeRepairReport
 
 
 HARMONIC_PROFILE_MIGRATION = 2
@@ -62,7 +66,17 @@ def is_harmonic_bootstrap(source: object) -> bool:
             and Path(source.get('source_file') or '').match('harmonic_enriched*.csv'))
 
 
-def scrub_harmonic_profiles(db: Db) -> int:
+def scrub_deep_context(db: Db) -> tuple[MergeRepairReport, int, MergeRepairReport]:
+    """Run pending data repairs in order before the calling stage does work."""
+    from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_merged_parents
+
+    merged = _repair_merged_parents(db)
+    harmonic = _scrub_harmonic_profiles(db)
+    historical = _scrub_historical_merges(db)
+    return merged, harmonic, historical
+
+
+def _scrub_harmonic_profiles(db: Db) -> int:
     """2026-10-01: archive partial Harmonic caches; remove after pre-v4 installs.
 
     Uses the existing data migration version, after merge recovery (version 1).
@@ -379,3 +393,23 @@ def ensure_owner_phones(owner_json: Path) -> bool:
     owner["phones"] = phones
     owner_json.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
     return True
+
+
+def _scrub_historical_merges(db: Db) -> MergeRepairReport:
+    """2026-10-01: restore original child evidence; remove after pre-v4 installs."""
+    from packs.ingestion.primitives.deep_context.db.merge_repair import (
+        HISTORICAL_MERGE_MIGRATION, MergeRepairReport, _repair_historical_merges,
+    )
+    from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
+
+    version = db.query("SELECT value FROM meta WHERE key='data_migration_version'")
+    if version and int(version[0]['value']) >= HISTORICAL_MERGE_MIGRATION:
+        return MergeRepairReport()
+    facts_dir = db.db_path.parent / 'facts'
+    histories = {}
+    for row in db.query('SELECT person_id FROM people'):
+        path = facts_dir / (row['person_id'] + '.jsonl')
+        if path.is_file():
+            histories[row['person_id']] = FactHistory.from_records(
+                json.loads(line) for line in path.read_text().splitlines() if line.strip())
+    return _repair_historical_merges(db, histories)

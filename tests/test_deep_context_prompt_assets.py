@@ -13,7 +13,7 @@ PROMPTS = {
     "identity_merge_system": (
         "packs.ingestion.primitives.deep_context.merge_candidates.judge",
         "JUDGE_SYSTEM",
-        "2161270f43453f61421df576a9c675cde291af619723607e94856d24d06a8fbe",
+        "8858fe4e50af4998a9baf10dc16bb1049922bc47dd6c3dfa0f08b4184adcd05d",
     ),
     "contact_research_instructions": (
         "packs.ingestion.primitives.deep_context.enrich.parallel_research.config",

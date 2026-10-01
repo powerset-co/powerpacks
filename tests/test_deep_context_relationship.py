@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactRow, LinkRow, ParentRow, PersonRow, WriterSource
+from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactRow, LinkRow, ParentRow, PersonRow, SyntheticProfileRow, WriterSource
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponse, OpenAIUsage
@@ -39,6 +39,54 @@ class RelationshipTest(unittest.TestCase):
 
     def stage(self, **kwargs):
         return ReviewRelationships(db=self.db, out_dir=self.root / "relationships", **kwargs)
+
+    def test_judge_receives_full_fetched_career_history(self):
+        self.db.project_rows((ArtifactRow('profile:jordan:proposal', 'profile', 'jordan',
+            '/fixture/profile.json', 'fixture-profile', 'projected', candidate_key='jordan:proposal',
+            payload_json=json.dumps({'public_identifier': 'jordan-bravo',
+                'linkedin_url': 'https://www.linkedin.com/in/jordan-bravo',
+                'normalized_profile': {'success': True, 'full_name': 'Jordan Bravo',
+                    'experiences': [{'title': 'Founder', 'company_name': 'Actual Labs',
+                        'starts_at': {'year': 2014}, 'ends_at': {'year': 2018}, 'description': 'Built robotics systems.'}],
+                    'education': [{'school_name': 'Example University', 'degree': 'BS', 'field': 'Robotics',
+                        'starts_at': {'year': 2010}, 'ends_at': {'year': 2014}}]}})),))
+        with patch('packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call',
+                   new_callable=AsyncMock, return_value=self.response) as call:
+            self.stage(approve_spend=True).run()
+        candidate = json.loads(call.call_args.kwargs['user_prompt'])['candidates'][0]
+        self.assertEqual(candidate['experiences'][0], {'title': 'Founder', 'company_name': 'Actual Labs',
+            'starts_at': 2014, 'ends_at': 2018, 'description': 'Built robotics systems.'})
+        self.assertEqual(candidate['education'][0]['field'], 'Robotics')
+        self.assertEqual(candidate['education'][0]['starts_at'], 2010)
+
+    def test_retarget_does_not_borrow_previous_profile_history(self):
+        self.db.project_rows((ArtifactRow('profile:jordan:proposal', 'profile', 'jordan',
+            '/fixture/profile.json', 'fixture-profile', 'projected', candidate_key='jordan:proposal',
+            payload_json=json.dumps({'public_identifier': 'old-profile',
+                'linkedin_url': 'https://www.linkedin.com/in/old-profile',
+                'normalized_profile': {'success': True, 'full_name': 'Wrong Person',
+                    'experiences': [{'title': 'Founder', 'company_name': 'Wrong Labs'}]}})),))
+        with patch('packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call',
+                   new_callable=AsyncMock, return_value=self.response) as call:
+            self.stage(approve_spend=True).run()
+        candidate = json.loads(call.call_args.kwargs['user_prompt'])['candidates'][0]
+        self.assertEqual(candidate['name'], '')
+        self.assertEqual(candidate['experiences'], [])
+        self.assertEqual(candidate['url'], 'https://www.linkedin.com/in/jordan-bravo')
+
+    def test_synthetic_research_does_not_override_real_profile_for_same_url(self):
+        self.db.project_rows((
+            LinkRow('synthetic:zz', 'jordan', 'synthetic:zz', 'synthetic', source=WriterSource.RECONCILE.value),
+            SyntheticProfileRow('synthetic:zz', 'synthetic:zz', json.dumps({'type': 'json', 'content': {
+                'real_name': 'Invented Research Person', 'summary': 'Invented career',
+                'linkedin_url': 'https://www.linkedin.com/in/jordan-bravo'}})),
+        ))
+        with patch('packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call',
+                   new_callable=AsyncMock, return_value=self.response) as call:
+            self.stage(approve_spend=True).run()
+        candidates = json.loads(call.call_args.kwargs['user_prompt'])['candidates']
+        self.assertEqual(len(candidates), 1)
+        self.assertNotIn('Invented', json.dumps(candidates))
 
     def test_preview_does_not_call_or_write(self):
         before = self.db.db_path.read_bytes()

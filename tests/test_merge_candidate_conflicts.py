@@ -13,6 +13,40 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import _c
 
 
 class MergeConflictTests(unittest.TestCase):
+    def test_different_names_cannot_merge_through_shared_phone(self):
+        a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo')
+        b = MergePerson('b', 'b', 'Casey Delta', 'casey delta')
+        verdict = MergePairVerdict(a, b, 'ab', MergeDecision(True, .98, True, 'shared phone; name change', 'llm'))
+        self.assertFalse(verdict_rows([verdict])[0].accepted)
+        self.assertEqual(_confirmed([a, b], [verdict])[1], [])
+
+    def test_corrupted_contact_cannot_bridge_incompatible_names(self):
+        edges = accepted_edges([('a', 'b', True, .99), ('b', 'c', True, .92)],
+                               names={'a': ('Jordan Bravo',), 'b': ('Jordan B',), 'c': ('Casey Delta',)})
+        self.assertEqual(edges, [('a', 'b')])
+
+    def test_surname_change_with_same_given_name_remains_judge_eligible(self):
+        a = MergePerson('a', 'a', 'Casey Bravo', 'casey bravo')
+        b = MergePerson('b', 'b', 'Casey Morgan Delta', 'casey morgan delta')
+        verdict = MergePairVerdict(a, b, 'ab', MergeDecision(True, .98, True, 'same person role and employer', 'llm'))
+        self.assertTrue(verdict_rows([verdict])[0].accepted)
+
+    def test_old_positive_receipt_cannot_join_incompatible_names(self):
+        people = [SimpleNamespace(person_id=key, parent_id=key, display_name=name)
+                  for key, name in [('a', 'Jordan Bravo'), ('b', 'Casey Delta')]]
+        verdict = SimpleNamespace(person_a='a', person_b='b', same_person=True,
+                                  accepted=True, confidence=.98)
+        with patch.object(build_parents, 'person_rows', return_value=people), patch.object(
+            build_parents, 'merge_verdicts', return_value=[verdict],
+        ):
+            self.assertEqual(build_parents._accepted_components(None), ())
+
+    def test_name_order_and_short_forms_remain_compatible(self):
+        from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import names_compatible
+        for first, second in [('Bravo, Jordan', 'Jordan Bravo'), ('J Bravo', 'Jordan Bravo'),
+                              ('Robert Bravo', 'Bob Bravo'), ('Casey B', 'Casey Bravo')]:
+            self.assertTrue(names_compatible(first, second))
+
     def test_hub_does_not_override_negative_leaf_pair(self):
         people = [MergePerson(key, key, key, key) for key in ('a', 'b', 'c')]
         a, b, c = people
@@ -27,7 +61,7 @@ class MergeConflictTests(unittest.TestCase):
         self.assertEqual(accepted, {('a', 'b')})
 
     def test_parent_application_does_not_override_negative_leaf_pair(self):
-        people = [SimpleNamespace(person_id=key, parent_id=key) for key in ('a', 'b', 'c')]
+        people = [SimpleNamespace(person_id=key, parent_id=key, display_name=key) for key in ('a', 'b', 'c')]
         verdicts = [
             SimpleNamespace(person_a=a, person_b=b, same_person=same, accepted=same,
                             confidence=score, updated_at='2026-10-01T00:00:00Z')
@@ -75,13 +109,15 @@ class MergeConflictTests(unittest.TestCase):
         ]
         stored = verdict_rows(verdicts)
         _, groups = _confirmed(people, verdicts)
-        with patch.object(build_parents, 'person_rows', return_value=people), patch.object(
+        with patch.object(build_parents, 'person_rows', return_value=[
+            SimpleNamespace(person_id=p.person_id, parent_id=p.parent_id, display_name=p.name) for p in people
+        ]), patch.object(
             build_parents, 'merge_verdicts', return_value=stored,
         ):
             self.assertEqual(build_parents._accepted_components(None), tuple(tuple(g) for g in groups))
 
     def test_older_negative_between_children_blocks_newer_positive_between_parents(self):
-        people = [SimpleNamespace(person_id=child, parent_id=parent)
+        people = [SimpleNamespace(person_id=child, parent_id=parent, display_name=parent)
                   for child, parent in [('a1', 'a'), ('a2', 'a'), ('b1', 'b'), ('b2', 'b')]]
         verdicts = [
             SimpleNamespace(person_a='a1', person_b='b1', same_person=False,
@@ -157,3 +193,26 @@ class MergeConflictTests(unittest.TestCase):
         first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',))
         second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',))
         self.assertTrue(slam_dunk_verdict(first, second).same_person)
+
+    def test_stored_singleton_no_cannot_be_replaced_by_slam_dunk(self):
+        import tempfile
+        from pathlib import Path
+        from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
+        from packs.ingestion.primitives.deep_context.db.store import Db
+        import packs.ingestion.primitives.deep_context.merge_candidates.receipts as receipts
+        with tempfile.TemporaryDirectory() as directory:
+            db = Db(Path(directory) / 'context.sqlite')
+            db.project_rows((ParentRow('a', 'a'), ParentRow('b', 'b'), PersonRow('a', 'a'), PersonRow('b', 'b')))
+            a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', parent_id='a', member_person_ids=('a',), emails=('jordan@example.com',))
+            b = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', parent_id='b', member_person_ids=('b',), emails=('jordan@example.com',))
+            db.replace_merge_verdicts(verdict_rows([
+                MergePairVerdict(a, b, receipts.pair_sig(a, b), MergeDecision(False, .98, True, 'Shared office email', 'llm')),
+            ]))
+            with patch.object(receipts, 'merge_people', return_value=[a, b]):
+                survey = receipts.survey_pairs(db)
+                self.assertEqual(survey.slam, [])
+                self.assertEqual(len(survey.reused), 1)
+                self.assertFalse(survey.reused[0].decision.same_person)
+                refreshed = receipts.survey_pairs(db, refresh=True)
+                self.assertEqual(refreshed.slam, [])
+                self.assertEqual(len(refreshed.to_judge), 1)
