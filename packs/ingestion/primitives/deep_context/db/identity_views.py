@@ -1,6 +1,8 @@
 """LinkedIn review, enrichment, and identity receipt projections.
 
 Changelog:
+- 2026-09-30: `linkedin_queue_order` + `linkedin_queue_parent` load one review card;
+  `linkedin_queue` stays for callers that want every card.
 - 2026-09-25: approved families read through `_family_rows`, one JSON-bound id set.
 """
 
@@ -15,6 +17,8 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _json,
     _linkedin_progress,
     _linkedin_queue,
+    _linkedin_queue_order,
+    _linkedin_queue_parent,
 )
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     LINKEDIN_CTE,
@@ -41,6 +45,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
     EnrichmentQueueRow,
     LinkedInProgress,
+    LinkedInQueueRow,
     ParentViewRow,
     SyntheticFallbackRow,
 )
@@ -318,6 +323,16 @@ def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 100
 
 def linkedin_queue(db: Db) -> list[ParentViewRow]:
     return _linkedin_queue(db)
+
+
+def linkedin_queue_order(db: Db) -> list[LinkedInQueueRow]:
+    """The queue's parents in card order — ids and slugs only."""
+    return _linkedin_queue_order(db)
+
+
+def linkedin_queue_parent(db: Db, parent_id: str) -> ParentViewRow:
+    """One queued parent with its pending candidates: the card `linkedin_queue` would hold."""
+    return _linkedin_queue_parent(db, parent_id)
 
 
 def linkedin_progress(db: Db) -> LinkedInProgress:

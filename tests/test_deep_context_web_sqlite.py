@@ -30,7 +30,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
+from packs.ingestion.primitives.deep_context.db import _view_rows as view_rows
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    linkedin_queue,
+    linkedin_queue_order,
+    linkedin_queue_parent,
+)
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
@@ -68,7 +73,7 @@ from packs.ingestion.primitives.deep_context.review import cli as review_cli
 from packs.ingestion.primitives.deep_context.review import server as review_server
 from packs.ingestion.primitives.deep_context.review import enrichment as review_enrichment
 from packs.ingestion.primitives.deep_context.review import sqlite_adapter as review_adapter
-from packs.ingestion.primitives.deep_context.review.models import DecisionResult
+from packs.ingestion.primitives.deep_context.review.models import DecisionResult, GuidanceViewRow
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
@@ -439,6 +444,74 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         row = query(self.db, "SELECT decision_action, decision_approved FROM links WHERE row_key='jordan-bravo'")[0]
         self.assertEqual(tuple(row), ("verify", "yes"))
         self.assertEqual(linkedin_queue(self.db), [])
+
+    def _seed_linkedin_queue(self) -> None:
+        for slug, name in (("riley-stone", "Riley Stone"), ("avery-quinn", "Avery Quinn")):
+            self._seed_parent(
+                f"{slug}-parent", f"{slug}-person", slug, name, "yes", slug, RowKind.PUB.value, paid_profile=1,
+            )
+
+    def test_linkedin_queue_order_names_the_queue_without_its_cards(self) -> None:
+        self._seed_linkedin_queue()
+        queue = linkedin_queue(self.db)
+        order = linkedin_queue_order(self.db)
+        self.assertEqual(
+            [(row.parent_id, row.slug) for row in order],
+            [(parent.parent_id, parent.slug) for parent in queue],
+        )
+        self.assertEqual(len(order), 3)
+        self.assertEqual(linkedin_queue_parent(self.db, order[1].parent_id), queue[1])
+
+    def test_linkedin_click_loads_one_card_and_no_workflow_state(self) -> None:
+        self._seed_linkedin_queue()
+        with (
+            mock.patch.object(view_rows, "_hydrate_parents", wraps=view_rows._hydrate_parents) as hydrate,
+            mock.patch.object(review_adapter, "workflow_state", wraps=review_adapter.workflow_state) as workflow_state,
+        ):
+            status, payload = self.json_request(
+                "POST",
+                "/decide",
+                {"pub": "jordan-bravo", "decision": "keep", "parent_slug": "jordan-bravo"},
+            )
+        self.assertEqual(status, 200)
+        # Two parents are still pending; the response carries the next one's card.
+        self.assertIn("Avery Quinn", payload["next"])
+        self.assertNotIn("Riley Stone", payload["next"])
+        self.assertEqual(
+            payload["progress"],
+            {"worth_pending": 1, "worth_yes": 3, "worth_no": 0, "linkedin_pending": 2},
+        )
+        self.assertEqual(max(len(call.args[1]) for call in hydrate.call_args_list), 1)
+        self.assertEqual(workflow_state.call_count, 0)
+
+    def test_reresearch_landing_mid_request_never_serves_a_blank_card(self) -> None:
+        self._seed_linkedin_queue()
+        # Avery Quinn is first in the queue and is being re-researched. The worker's
+        # result lands right after this request read the queue's order.
+        researching = GuidanceViewRow(
+            slug="avery-quinn", row_key="avery-quinn", name="Avery Quinn", guidance="Synthetic guidance",
+            state="researching", detail="", submitted_at="", updated_at="", new_url="", wire_fields=(),
+        )
+        landed = False
+        read_order = review_server.linkedin_queue_order
+
+        def order_then_land(db: Db) -> list:
+            nonlocal landed
+            order = read_order(db)
+            db.decide_identity("avery-quinn", "verify")
+            landed = True
+            return order
+
+        def retargets(_adapter: SqliteReviewAdapter) -> list[GuidanceViewRow]:
+            return [] if landed else [researching]
+
+        with (
+            mock.patch.object(review_server, "linkedin_queue_order", order_then_land),
+            mock.patch.object(SqliteReviewAdapter, "retargets", retargets),
+        ):
+            status, _, body = self.request("GET", "/api/linkedin-card")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Jordan Bravo", body)
 
     def test_enrichment_preview_reuses_exact_paid_artifact_fingerprint(self) -> None:
         self.db.decide_worth("worth-parent", "yes")

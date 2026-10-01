@@ -1,6 +1,8 @@
 """Private row shapers shared by the named review queries.
 
 Changelog:
+- 2026-09-30: `_linkedin_queue_order` and `_linkedin_queue_parent` serve one review card
+  without hydrating the whole queue.
 - 2026-09-25: candidate hydration binds its parent ids as one JSON array; `_worth_rows` can select one parent.
 - 2026-09-25: the worth Yes/No tables list every row with that effective worth;
   the links predicate that hid unresearched people is gone.
@@ -16,6 +18,7 @@ from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     CANDIDATE_SELECT,
     LINKEDIN_CTE,
+    LINKEDIN_QUEUE_ORDER_SELECT,
     PARENT_SELECT,
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
@@ -35,6 +38,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateProfile,
     CandidateViewRow,
     LinkedInProgress,
+    LinkedInQueueRow,
     ParentViewRow,
     WorthCounts,
     WorthHumanRow,
@@ -320,6 +324,18 @@ def _linkedin_queue(db: Db) -> list[ParentViewRow]:
         LINKEDIN_CTE + PARENT_SELECT.format(where="WHERE p.parent_id IN (SELECT parent_id FROM pending_parents)")
     )
     return _hydrate_parents(db, rows, pending_only=True)
+
+
+def _linkedin_queue_order(db: Db) -> list[LinkedInQueueRow]:
+    return [
+        LinkedInQueueRow(row["parent_id"], ResearchHandle.for_parent(row["parent_id"], row["display_slug"]))
+        for row in db.query(LINKEDIN_CTE + LINKEDIN_QUEUE_ORDER_SELECT)
+    ]
+
+
+def _linkedin_queue_parent(db: Db, parent_id: str) -> ParentViewRow:
+    rows = db.query(LINKEDIN_CTE + PARENT_SELECT.format(where="WHERE p.parent_id=?"), (parent_id,))
+    return _hydrate_parents(db, rows, pending_only=True)[0]
 
 
 def _linkedin_progress(db: Db) -> LinkedInProgress:
