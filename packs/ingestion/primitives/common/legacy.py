@@ -49,7 +49,60 @@ import sqlite3
 import sys
 from typing import Any
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
-from packs.ingestion.primitives.deep_context.db.store import LEGACY_SCHEMA_SIGNATURE
+from packs.ingestion.primitives.deep_context.db.store import Db, LEGACY_SCHEMA_SIGNATURE
+
+
+HARMONIC_PROFILE_MIGRATION = 2
+
+
+def is_harmonic_bootstrap(source: object) -> bool:
+    """Identify partial export profiles. Remove when no pre-v4 install remains."""
+    return (isinstance(source, dict)
+            and source.get('provider') == 'existing_export_bootstrap'
+            and Path(source.get('source_file') or '').match('harmonic_enriched*.csv'))
+
+
+def scrub_harmonic_profiles(db: Db) -> int:
+    """2026-10-01: archive partial Harmonic caches; remove after pre-v4 installs.
+
+    Uses the existing data migration version, after merge recovery (version 1).
+    Human choices and research survive; affected machine judgments are rebuilt.
+    """
+    from packs.ingestion.primitives.deep_context.db.models import IdentityMachineProjection
+    from packs.ingestion.primitives.deep_context.db.store import DbMaintenance
+
+    version = db.query("SELECT value FROM meta WHERE key='data_migration_version'")
+    if version and int(version[0]['value']) >= HARMONIC_PROFILE_MIGRATION:
+        return 0
+    artifacts = [row for row in db.query(
+        "SELECT artifact_key,parent_id,json_extract(payload_json,'$.source') AS source "
+        "FROM artifacts WHERE kind='profile' AND payload_json IS NOT NULL"
+    ) if is_harmonic_bootstrap(json.loads(row['source'] or 'null'))]
+    cache_dir = db.db_path.parent.parent / 'network-import' / 'profile_cache_v2'
+    paths = [path for path in cache_dir.glob('*.json')
+             if is_harmonic_bootstrap(json.loads(path.read_text()).get('source'))]
+    backup = db.db_path.with_suffix('.sqlite.bkup-harmonic')
+    if (artifacts or paths) and not backup.exists():
+        DbMaintenance(db).backup_to(backup)
+    for path in paths:
+        destination = path.with_suffix('.json.bkup-harmonic')
+        if destination.exists():
+            stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+            destination = path.with_suffix(f'.json.bkup-harmonic-{stamp}')
+        path.rename(destination)
+    fields = tuple(name for name in IdentityMachineProjection.__dataclass_fields__
+                   if name.startswith(('machine_', 'judgment_')))
+    parents = {row['parent_id'] for row in artifacts}
+    with db.transaction() as conn:
+        conn.executemany('DELETE FROM artifacts WHERE artifact_key=?',
+                         ((row['artifact_key'],) for row in artifacts))
+        conn.executemany('UPDATE links SET ' + ','.join(f'{name}=NULL' for name in fields)
+                         + ',authoritative_detach=0 WHERE parent_id=?',
+                         ((parent,) for parent in parents))
+        conn.execute("INSERT INTO meta(key,value) VALUES ('data_migration_version',?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (str(HARMONIC_PROFILE_MIGRATION),))
+    return len(artifacts)
 
 
 def scrub_august_deep_context_store(db_path: Path) -> None:

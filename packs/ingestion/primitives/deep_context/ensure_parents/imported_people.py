@@ -27,6 +27,7 @@ from packs.ingestion.primitives.common.contact_fields import (
     phones_from_row,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.legacy import scrub_harmonic_profiles
 from packs.ingestion.primitives.deep_context.shared.common import slugify
 from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePeopleProjection,
@@ -242,6 +243,9 @@ def _components(
 def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int:
     """Get or create imported people, incrementally joining prior families."""
     repair = repair_merged_parents(db)
+    removed = scrub_harmonic_profiles(db)
+    if removed:
+        print(f'[deep-context] invalidated {removed} Harmonic profile artifacts', file=sys.stderr)
     if repair.repaired or repair.unresolved:
         print(f'[deep-context] repaired {len(repair.repaired)} merged parents; '
               f'{len(repair.unresolved)} unresolved', file=sys.stderr)
