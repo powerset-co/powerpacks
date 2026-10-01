@@ -10,6 +10,11 @@ from parallel.types import TaskGroupStatus, TaskGroupStatusEvent, TaskRunEvent, 
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import parallel_client
 
 
+def write_receipt(path, receipt):
+    from packs.ingestion.primitives.common.jsonio import write_json
+    write_json(path, {"parallel": receipt})
+
+
 class Events:
     def __init__(self, values):
         self.values = values
@@ -63,7 +68,7 @@ class ParallelStreamResumeTests(unittest.TestCase):
         self.assertTrue(all(call.args[0] == 'group' for call in group.events.call_args_list))
 
     def test_resume_remaining_subset_does_not_submit_existing_runs(self):
-        from packs.ingestion.primitives.common.jsonio import write_json
+        write_json = write_receipt
         inputs = [{"input": {}, "metadata": {"handle": handle}, "processor": "core2x"}
                   for handle in ("jordan", "casey")]
         write_json(self.params.output_dir / "manifest.json", {
@@ -110,7 +115,7 @@ class ParallelStreamResumeTests(unittest.TestCase):
         group.add_runs.assert_called_once()
 
     def test_historical_terminal_event_does_not_finish_newly_added_run(self):
-        from packs.ingestion.primitives.common.jsonio import write_json
+        write_json = write_receipt
         inputs = [{"input": {}, "metadata": {"handle": "casey"}, "processor": "core2x"}]
         write_json(self.params.output_dir / "manifest.json", {
             "task_group_id": "group", "inputs": {"casey": inputs[0]},
@@ -143,7 +148,7 @@ class ParallelStreamResumeTests(unittest.TestCase):
         self._assert_receipt_reuses_group(grow=False)
 
     def _assert_receipt_reuses_group(self, *, grow, active=False):
-        from packs.ingestion.primitives.common.jsonio import write_json
+        write_json = write_receipt
         import json
         def input_for(handle):
             return {"input": {}, "metadata": {"handle": handle}, "processor": "core2x"}
@@ -163,7 +168,7 @@ class ParallelStreamResumeTests(unittest.TestCase):
         final = TaskGroupStatus(is_active=False, num_task_runs=2, task_run_status_counts={"completed": 2})
         def add(group_id, **kwargs):
             receipt = json.loads((self.params.output_dir / "manifest.json").read_text())
-            self.assertEqual(set(receipt["inputs"]), {item["metadata"]["handle"] for item in requested})
+            self.assertEqual(set(receipt["parallel"]["inputs"]), {item["metadata"]["handle"] for item in requested})
         group = SimpleNamespace(create=Mock(), add_runs=Mock(side_effect=add),
             get_runs=Mock(side_effect=[Events([old]), Events([old, new])]),
             events=Mock(return_value=Events([TaskGroupStatusEvent(type="task_group_status", event_id="done", status=final)])),
@@ -192,3 +197,26 @@ class ParallelStreamResumeTests(unittest.TestCase):
         self.assertEqual(group.get_runs.call_count, 3)
         group.add_runs.assert_called_once()
         self.assertTrue((self.params.output_dir / "manifest.json").exists())
+
+    def test_provider_receipt_survives_native_progress_and_failure_writes(self):
+        import json
+        from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import EnrichmentReceipt
+        ui = EnrichmentReceipt(self.params.output_dir / "manifest.json")
+        ui.write({"status": "running", "stage": "enrich", "counts": {"total": 1}})
+        terminal = TaskGroupStatus(is_active=False, num_task_runs=1, task_run_status_counts={"completed": 1})
+        def add(*args, **kwargs):
+            document = json.loads(ui.path.read_text())
+            self.assertEqual(document["status"], "running")
+            ui.write({"status": "running", "counts": {"completed": 0}})
+        def progress(_):
+            ui.write({"status": "failed", "error": "stream disconnected"})
+        group = SimpleNamespace(create=Mock(return_value=SimpleNamespace(task_group_id="paid")),
+            add_runs=Mock(side_effect=add), get_runs=Mock(return_value=Events([])),
+            events=Mock(return_value=Events([TaskGroupStatusEvent(type="task_group_status", event_id="done", status=terminal)])))
+        inputs = [{"input": {}, "metadata": {"handle": "jordan"}, "processor": "core2x"}]
+        with patch.object(parallel_client, "Parallel", return_value=SimpleNamespace(task_group=group)):
+            parallel_client.ParallelClient("fixture", "https://parallel.test", "").execute(
+                inputs, self.params, progress, lambda *_: None)
+        document = json.loads(ui.path.read_text())
+        self.assertEqual(document["parallel"]["task_group_id"], "paid")
+        self.assertEqual(document["status"], "failed")

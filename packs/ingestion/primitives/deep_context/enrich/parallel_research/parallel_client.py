@@ -50,7 +50,8 @@ class ParallelClient:
     ) -> tuple[str, ...]:
         manifest_path = params.output_dir / "manifest.json"
         requested = {str(item["metadata"]["handle"]): item for item in inputs}
-        receipt = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+        receipt = manifest.get("parallel", {})
         contract = {"task_spec": config.TASK_SPEC, "beta_header": self._beta_header}
         previous = receipt.get("inputs", {})
         resume = (
@@ -64,11 +65,12 @@ class ParallelClient:
             ).task_group_id
         )
         if not resume or previous.keys() != (previous | requested).keys():
-            write_json(manifest_path, {
+            manifest["parallel"] = {
                 "source": "powerpacks", "submitted_at": now_iso(),
                 "task_group_id": group_id, "inputs": previous | requested if resume else requested,
                 "provider_contract": contract,
-            })
+            }
+            write_json(manifest_path, manifest)
         errors: list[str] = []
         finished_runs: set[str] = set()
 

@@ -654,6 +654,49 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         start.assert_not_called()
 
+    def test_identity_selection_prevents_pending_synthetic_for_accepted_real_profile(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        self.cache_enrichment_result(self.adapter())
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE research SET result_json=json_set(result_json, '$.content.location_city', 'Oakland') "
+                "WHERE parent_id='worth-parent'",
+            )
+        enrichment_pipeline.AssembleSyntheticProfile(db=self.db).run()
+        self.assertIn("worth-parent", {row.parent_id for row in linkedin_queue_order(self.db)})
+
+        def accept_real_profile():
+            self.db.project_rows((IdentityMachineProjection(
+                "candidate:email:casey@example.com",
+                machine_action="retarget", machine_approved="yes",
+                machine_judgment="confirmed", machine_confidence=.95,
+                machine_proposed_url="https://www.linkedin.com/in/casey-delta",
+                machine_proposed_public_identifier="casey-delta",
+                source=WriterSource.DEEP_RESEARCH.value,
+            ),))
+            return {"status": "completed"}
+
+        pipeline = enrichment_pipeline.EnrichmentPipeline(
+            self.db, on_change=lambda: None, on_finish=lambda: None,
+        )
+        with (
+            mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as research,
+            mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as profiles,
+            mock.patch.object(enrichment_pipeline, "judge_mapped_candidates") as judge,
+            mock.patch.object(enrichment_pipeline, "ReviewRelationships") as selection,
+        ):
+            research.return_value.run.return_value = ResearchOutcome(
+                ReceiptStatus.REUSED, ReceiptCounts(1, 1, 0, 0), None, 0.0, 0,
+            )
+            profiles.return_value.run.return_value.status = "completed"
+            judge.return_value.judge_errors = 0
+            selection.return_value.run.side_effect = accept_real_profile
+            pipeline._run(0.0, lambda _: None)
+        self.assertEqual(self.db.query(
+            "SELECT row_key FROM links WHERE parent_id='worth-parent' AND kind='synthetic'",
+        ), [])
+        self.assertNotIn("worth-parent", {row.parent_id for row in linkedin_queue_order(self.db)})
+
     def test_cached_enrichment_launches_only_after_explicit_approval(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         with self.db.transaction() as conn:

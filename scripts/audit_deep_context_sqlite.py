@@ -411,6 +411,18 @@ def _allowed_file_read(
         return True
     called = _name(call.func)
     scope = _scope(call, parents)
+    if (
+        relative == "packs/ingestion/primitives/deep_context/manifests/enrichment_receipt.py"
+        and scope == "EnrichmentReceipt.write"
+        and called == "self.path.read_text"
+    ):
+        return any(
+            isinstance(node, ast.If)
+            and _scope(node, parents) == "EnrichmentReceipt.__post_init__"
+            and ast.unparse(node.test) == "self.path.name != 'manifest.json'"
+            and any(isinstance(statement, ast.Raise) for statement in node.body)
+            for node in ast.walk(tree)
+        )
     # This receipt identifies an external paid group; research results still
     # hydrate from SQLite. Allow only its fixed manifest path in the submitter.
     if (

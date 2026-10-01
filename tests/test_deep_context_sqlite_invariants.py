@@ -256,6 +256,23 @@ def load_candidate(path):
             self.assertEqual([row.rule for row in self.audit_source(relative, changed)],
                              ["artifact-file-read"])
 
+    def test_enrichment_preserves_only_its_validated_provider_receipt(self) -> None:
+        source = """class EnrichmentReceipt:
+    def __post_init__(self):
+        if self.path.name != 'manifest.json':
+            raise ValueError('invalid receipt path')
+    def write(self, payload):
+        return self.path.read_text()
+"""
+        relative = "manifests/enrichment_receipt.py"
+        self.assertEqual(self.audit_source(relative, source), [])
+        for changed in (
+            source.replace("self.path.read_text()", "self.artifact_path.read_text()"),
+            source.replace("'manifest.json'", "'result.json'"),
+        ):
+            self.assertEqual([row.rule for row in self.audit_source(relative, changed)],
+                             ["artifact-file-read"])
+
     def test_runtime_respects_sqlite_projection_boundary(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],

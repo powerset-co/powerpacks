@@ -1,8 +1,8 @@
 """Run the approved enrichment stages once in the review-server process.
 
 The process-local flag prevents double submission while this server is alive.
-The fixed enrichment manifest is display-only progress; SQLite artifacts and
-the freshly selected research plan own eligibility, reuse, and resume.
+The fixed enrichment manifest holds progress and the Parallel provider receipt.
+SQLite artifacts and the freshly selected plan own eligibility and result reuse.
 """
 
 from __future__ import annotations
@@ -132,10 +132,10 @@ class EnrichmentPipeline:
         )
         if judged.judge_errors:
             raise RuntimeError(f"identity judge returned no verdict for {judged.judge_errors} candidate(s)")
-        AssembleSyntheticProfile(db=self.db).run()
         reviews = ReviewRelationships(db=self.db, approve_spend=True).run()
         if reviews["status"] != "completed":
             raise RuntimeError(f"review questions stopped with status {reviews['status']}")
+        AssembleSyntheticProfile(db=self.db).run()
 
     def start(self, total: int, budget: float, request_fingerprint: str) -> bool:
         if not self._running.acquire(blocking=False):

@@ -32,6 +32,7 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd,
 )
 from packs.ingestion.primitives.imports.common import write_manifest
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 SYSTEM_PROMPT = load_prompt("relationship_system")
 SCHEMA = json.loads(load_prompt("relationship_schema"))
@@ -72,7 +73,7 @@ class ReviewRelationships:
                 saved[raw["parent_id"]] = RelationshipDecision.from_payload(
                     raw["parent_id"], raw["fingerprint"], raw)
         candidates = {parent.parent_id: [{
-            "url": candidate.url, "name": candidate.full_name, "headline": candidate.headline,
+            "url": normalize_linkedin_url(candidate.url), "name": candidate.full_name, "headline": candidate.headline,
             "location": candidate.location, "experiences": candidate.experiences,
             "education": candidate.education, "identity_verdict": candidate.verdict,
             "identity_reason": candidate.reason,
@@ -83,8 +84,8 @@ class ReviewRelationships:
             rows = links(self.db, parent_id=parent_id)
             if any(row.decision_action in {"verify", "retarget"} and row.decision_approved in {"yes", "auto"} for row in rows):
                 continue
-            eligible_urls = {row.machine_proposed_url or row.linkedin_url for row in rows
-                if not row.decision_action and row.kind != "synthetic"} - {None, ""}
+            eligible_urls = {normalize_linkedin_url(row.machine_proposed_url or row.linkedin_url) for row in rows
+                if not row.decision_action and row.kind != "synthetic"} - {""}
             if not eligible_urls:
                 continue
             profiles = {candidate["url"]: candidate for candidate in candidates.get(parent_id, ())
