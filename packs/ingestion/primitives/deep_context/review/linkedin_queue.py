@@ -7,9 +7,9 @@ large store, so the server derives it once and keeps the answer.
     load     read the queue from the store: when Enrich finishes, when a re-research
              finishes, and on the first read after a restart or a worth decision
     rows     the queue as it stands
-    settle   a decision was written for a parent: it leaves, unless one of its
-             candidates is still pending; a parent a reset made pending again comes back
-    drop     a parent the store says is no longer pending leaves
+    settle   the store changed a parent (a decision, or a card found it already decided):
+             it leaves unless one of its candidates is still pending; a parent a reset
+             made pending again comes back
     forget   who is pending may have changed (a worth decision): the next read loads
 
 A write the server did not make (another process) is not seen until the next load; a card
@@ -66,16 +66,7 @@ class LinkedinQueue:
             queued = any(row.parent_id == parent_id for row in self._rows)
             pending = linkedin_parent_pending(self._db, parent_id)
             if queued and not pending:
-                self._rows = _without(self._rows, parent_id)
+                self._rows = tuple(row for row in self._rows if row.parent_id != parent_id)
             if pending and not queued:
                 # Back in the queue at its place in the card order, which only the store knows.
                 self._rows = tuple(linkedin_queue_order(self._db))
-
-    def drop(self, parent_id: str) -> None:
-        with self._lock:
-            if self._rows is not None:
-                self._rows = _without(self._rows, parent_id)
-
-
-def _without(rows: tuple[LinkedInQueueRow, ...], parent_id: str) -> tuple[LinkedInQueueRow, ...]:
-    return tuple(row for row in rows if row.parent_id != parent_id)

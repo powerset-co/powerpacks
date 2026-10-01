@@ -1006,6 +1006,17 @@ class LinkedinQueueTests(ReviewApiFixture):
         following = self.payload("/api/review/linkedin-card")
         self.assertEqual((following["card"]["person"]["slug"], following["pending"]), ("riley-stone", 2))
 
+    def test_a_card_read_before_a_reset_landed_does_not_take_the_parent_out(self) -> None:
+        self.store.seed_linkedin_queue()
+        self.assertEqual(self.payload("/api/review/linkedin-card")["pending"], 3)
+        read = review_api.linkedin_queue_parent
+        # The first read saw Jordan decided; a reset has put him back since.
+        jordan = read(self.db, linkedin_queue.linkedin_queue_order(self.db)[0].parent_id)
+        stale = dataclasses.replace(jordan, candidates=())
+        with mock.patch.object(review_api, "linkedin_queue_parent", side_effect=[stale, jordan]):
+            card = self.payload("/api/review/linkedin-card")
+        self.assertEqual((card["card"]["person"]["slug"], card["pending"]), ("jordan-bravo", 3))
+
     def test_a_worth_decision_makes_the_next_read_load_the_queue_again(self) -> None:
         self.store.seed_linkedin_queue()
         self.assertEqual(self.payload("/api/review/linkedin-card")["pending"], 3)

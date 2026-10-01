@@ -349,8 +349,9 @@ class ReviewApi:
             if parent.candidates:
                 break
 
-            # Settled since the queue was read (a re-research, another process): it has left.
-            self.linkedin.drop(parent.parent_id)
+            # Settled since the queue was read (a re-research, another process): it leaves,
+            # unless the store has made it pending again since this read.
+            self.linkedin.settle(parent.parent_id)
 
         card = LinkedinCard(
             person=ReviewPerson.from_parent(parent),
