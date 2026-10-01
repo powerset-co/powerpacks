@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.10.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.0...powerpacks-v3.10.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deep-context:** show every merged record's contact on review cards ([#651](https://github.com/powerset-co/powerpacks/issues/651)) ([67cae0e](https://github.com/powerset-co/powerpacks/commit/67cae0e6c4d8f2d8ef98c4e57f5356111e40667a))
+* restore contact ownership before identity review ([#649](https://github.com/powerset-co/powerpacks/issues/649)) ([5294a0c](https://github.com/powerset-co/powerpacks/commit/5294a0c834f879faecffe17a92acb8fac1b4d4c8))
+
 ## [3.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.9.1...powerpacks-v3.10.0) (2026-10-01)
 
 
