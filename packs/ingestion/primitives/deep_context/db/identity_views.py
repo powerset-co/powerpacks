@@ -230,14 +230,15 @@ def research_candidate_urls(db: Db) -> dict[str, str]:
 
 
 def unassembled_research(db: Db) -> bool:
-    """Usable no-match research without its synthetic review card."""
+    """Usable, unambiguous no-match research without its synthetic review card."""
+    counts: dict[str, int] = {}
     for row in synthetic_fallback(db):
-        if db.query("SELECT 1 FROM synthetic_profiles WHERE public_identifier=?", (row.parent_id,)):
-            continue
         result = ResearchResult.from_json(row.result_json)
         if result and result.usable and (not result.linkedin_url or row.research_link_rejected):
-            return True
-    return False
+            counts[row.parent_id] = counts.get(row.parent_id, 0) + 1
+    return any(count == 1 and not db.query(
+        "SELECT 1 FROM synthetic_profiles WHERE public_identifier=?", (parent_id,),
+    ) for parent_id, count in counts.items())
 
 
 def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:

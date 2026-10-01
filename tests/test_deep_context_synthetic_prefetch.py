@@ -19,7 +19,12 @@ from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    linkedin_queue, review_questions_pending, unassembled_research,
+)
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
+    RelationshipDecision, cache_relationship_judgment, finish_reviews,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -167,6 +172,84 @@ class SyntheticPrefetchTest(unittest.TestCase):
 
         self.assertEqual(prefetched.status, "completed")
         self.assertFalse((self.research_dir / "manifest.json").exists())
+
+    def test_reassembly_preserves_cached_question_and_selected_decision(self) -> None:
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        decision = RelationshipDecision(
+            "parent-1", "Owner can identify this contact", True,
+            "Is this Jordan Bravo?", 1, "fixture-question",
+        )
+        cache_relationship_judgment(self.db, decision)
+        cached = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+        AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), cached)
+
+        finish_reviews(self.db, [decision])
+        selected = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+        AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), selected)
+        self.assertEqual(review_questions_pending(self.db), 0)
+        self.assertEqual([row.parent_id for row in linkedin_queue(self.db)], ["parent-1"])
+
+    def test_reassembly_preserves_machine_detach_without_new_question(self) -> None:
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        finish_reviews(self.db, [RelationshipDecision(
+            "parent-1", "No useful identity question", False,
+            "", 0, "fixture-question",
+        )])
+        settled = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+        AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), settled)
+        self.assertEqual(linkedin_queue(self.db), [])
+        self.assertEqual(review_questions_pending(self.db), 0)
+
+    def test_ambiguous_research_is_skipped_without_reopening_enrichment(self) -> None:
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        self.db.decide_identity("parent-1", "detach")
+        human = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-1", candidate_exists=False,
+            row_key="candidate:email:casey@example.com", handle="casey-delta",
+            source_person_ids=("person-a",), display_name="Casey Delta",
+        )
+        self._write_no_linkedin_result()
+        research = [tuple(row) for row in query(self.db, "SELECT * FROM research ORDER BY handle")]
+        self.assertFalse(unassembled_research(self.db))
+        result = AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(result.to_payload()["skipped_ambiguous_parents"], 1)
+        self.assertEqual(result.counts.built, 0)
+        self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), human)
+        self.assertEqual([tuple(row) for row in query(self.db, "SELECT * FROM research ORDER BY handle")], research)
+
+    def test_ambiguous_research_does_not_block_single_parent_assembly(self) -> None:
+        self._write_no_linkedin_result()
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-1", candidate_exists=False,
+            row_key="candidate:email:casey@example.com", handle="casey-delta",
+            source_person_ids=("person-a",), display_name="Casey Delta",
+        )
+        self._write_no_linkedin_result()
+        self.assertFalse(unassembled_research(self.db))
+        self.db.project_rows((
+            ParentRow("parent-2", "parent-worth:parent-2", "Jordan Delta"),
+            PersonRow("person-b", "parent-2", display_name="Jordan Delta"),
+            ArtifactRow("facts:parent-2", "facts", "parent-2", "/facts/parent-2.jsonl", "fixture", "projected"),
+            FactRow("parent-2", "parent-2", "facts:parent-2", machine_worth="yes", facts_json="{}"),
+        ))
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-2", candidate_exists=False,
+            row_key="candidate:email:delta@example.com", handle="jordan-delta",
+            source_person_ids=("person-b",), display_name="Jordan Delta",
+        )
+        self._write_no_linkedin_result()
+        self.assertTrue(unassembled_research(self.db))
+        result = AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual((result.counts.built, result.to_payload()["skipped_ambiguous_parents"]), (1, 1))
+        self.assertEqual([row[0] for row in query(self.db, "SELECT candidate_key FROM synthetic_profiles")], ["parent-2"])
+        self.assertFalse(unassembled_research(self.db))
 
     def test_empty_profile_completes_but_provider_error_blocks_review(self) -> None:
         self.db.project_rows((LinkRow(

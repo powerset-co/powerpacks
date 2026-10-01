@@ -62,6 +62,31 @@ class RelationshipTest(unittest.TestCase):
         self.assertEqual((first["status"], second["status"], second["reused"]), ("completed", "completed", 1))
         self.assertEqual(len((self.root / "relationships" / "decisions.jsonl").read_text().splitlines()), 1)
 
+    def test_saved_question_skips_judging_after_prompt_or_model_changes(self):
+        target = "packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call"
+        with patch(target, new_callable=AsyncMock, return_value=self.response):
+            self.stage(approve_spend=True).run()
+        before = self.db.query("SELECT * FROM links")
+        with patch(target, new_callable=AsyncMock) as call, patch(
+            "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship.SYSTEM_PROMPT",
+            "A revised prompt",
+        ):
+            result = self.stage(model="gpt-6-sol").run()
+        call.assert_not_called()
+        self.assertEqual((result["status"], result["reused"]), ("completed", 1))
+        self.assertEqual(self.db.query("SELECT * FROM links"), before)
+
+    def test_question_prompt_includes_the_candidate_identity_uncertainty(self):
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE links SET machine_judgment='needs_review', "
+                "machine_reason='Two different Jordan profiles.' WHERE parent_id='jordan'")
+        with patch("packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call",
+            new_callable=AsyncMock, return_value=self.response) as call:
+            self.stage(approve_spend=True).run()
+        candidates = json.loads(call.call_args.kwargs["user_prompt"])["candidates"]
+        self.assertEqual(candidates[0]["url"], "https://linkedin.com/in/jordan-bravo")
+        self.assertEqual(candidates[0]["identity_reason"], "Two different Jordan profiles.")
+
     def test_partial_failure_reuses_success_and_limit_does_not_finish_unjudged(self):
         self.parent("casey")
         async def partial(**kwargs):

@@ -45,8 +45,10 @@ class MachineIdentitySettlement:
         values = {field.name: getattr(row, field.name) for field in fields(_IdentityMachineFields)}
         payload = json.loads(self.judgment_payload_json or "{}")
         previous = parse_json_object(row.judgment_payload_json)
-        if "relationship_judgment" in previous and not ({"relationship_judgment", "relationship_decision"} & payload.keys()):
-            payload["relationship_judgment"] = previous["relationship_judgment"]
+        if not ({"relationship_judgment", "relationship_decision"} & payload.keys()):
+            for key in ("relationship_judgment", "relationship_decision"):
+                if key in previous:
+                    payload[key] = previous[key]
         values.update(
             {
                 "machine_action": self.machine_action,

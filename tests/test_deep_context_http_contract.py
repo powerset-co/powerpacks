@@ -42,6 +42,10 @@ from packs.ingestion.primitives.deep_context.db.identity_invariants import (
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     approved_identities,
 )
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
+    RelationshipDecision,
+    finish_reviews,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
@@ -371,6 +375,12 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 "UPDATE links SET judgment_payload_json=?, judgment_fingerprint='fixture' WHERE row_key=?",
                 (json.dumps({"verdict": "needs_review", "confidence": 0.5}), self.PUB),
             )
+        assert_stage("enrich")
+        result = finish_reviews(self.db, [RelationshipDecision(
+            "parent-jordan-bravo", "Owner can identify this contact", True,
+            "Is this Jordan Bravo?", 1, "fixture-question",
+        )])
+        self.assertEqual(result["review_parent_ids"], ["parent-jordan-bravo"])
         assert_stage("linkedin")
         status, _, body, _ = self.request("GET", "/?stage=worth&view=yes")
         self.assertEqual(status, 200)

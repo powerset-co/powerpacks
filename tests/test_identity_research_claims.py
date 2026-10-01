@@ -32,6 +32,15 @@ class IdentityResearchClaimsTests(unittest.TestCase):
             }],
         )).identity_profile()
 
+    def test_contact_only_employer_cannot_confirm_an_empty_attached_profile(self):
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge import SYSTEM_PROMPT
+        evidence = DossierEvidence(name="Jordan Bravo", emails=("jordan@acme.example",),
+            employers=("Acme",), dossier="Employer: Acme")
+        profile = JudgeProfile(full_name="Jordan Bravo")
+        prompt = identity_judge_prompt(evidence, profile, IdentityOrigin.ATTACHED, "")
+        self.assertIn("experience:\n  (none)", prompt)
+        self.assertIn("An employer appearing only in the contact dossier cannot corroborate the profile.", SYSTEM_PROMPT)
+
     def test_research_positions_are_claims_not_independent_profile_employment(self):
         research = self.research_profile()
         selected = prefer_cached_profile(research, JudgeProfile())

@@ -52,7 +52,7 @@ class ReviewRelationships:
 
     def __init__(self, *, db: Db, out_dir: Path | None = None,
                  model: str = DEFAULT_IDENTITY_MODEL, reasoning_effort: str = "medium",
-                 concurrency: int = 8, approve_spend: bool = False,
+                 concurrency: int | None = None, approve_spend: bool = False,
                  dry_run: bool = False, limit: int | None = None):
         self.db = db
         self.out_dir = out_dir or db.db_path.parent / "reconcile" / "relationships"
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--model", default=DEFAULT_IDENTITY_MODEL)
     parser.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
-    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--concurrency", type=int)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--approve-spend", action="store_true")

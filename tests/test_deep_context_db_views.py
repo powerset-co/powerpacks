@@ -20,6 +20,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
     WriterSource,
 )
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
+    RelationshipDecision,
+    finish_reviews,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
@@ -28,6 +32,7 @@ from packs.ingestion.primitives.deep_context.db.identity_views import (
     linkedin_parents,
     linkedin_progress,
     linkedin_queue,
+    review_questions_pending,
     synthetic_fallback,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -495,21 +500,15 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
 
         queue = {parent.parent_id: parent for parent in linkedin_queue(self.db)}
-        self.assertEqual(
-            set(queue),
-            {
-                "review",
-                "synthetic",
-            },
-        )
+        self.assertEqual(set(queue), {"review"})
         self.assertEqual(
             [candidate.row_key for candidate in queue["review"].candidates],
             ["paid-reject"],
         )
-        self.assertTrue(queue["synthetic"].candidates[0].pending)
+        self.assertNotIn("synthetic", queue)
         self.assertEqual(
             asdict(linkedin_progress(self.db)),
-            {"total": 4, "pending": 2, "done": 2},
+            {"total": 4, "pending": 1, "done": 3},
         )
 
     def test_raw_sibling_does_not_hide_attached_link(self) -> None:
@@ -764,7 +763,25 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(missing.candidates[0].full_name, "")
         self.assertFalse(missing.candidates[0].has_profile)
 
-    def test_workflow_is_only_the_four_ordered_queue_predicates(self) -> None:
+    def test_synthetic_review_queue_excludes_machine_settled_candidates(self) -> None:
+        people = self.add_parent("synthetic-review", "yes")
+        key = "synthetic:review"
+        self.add_candidate("synthetic-review", key, person_ids=people, kind="synthetic")
+        project_synthetic_profile(self.db, SyntheticProfileRow(key, key, "{}"))
+        self.assertEqual([row.parent_id for row in linkedin_queue(self.db)], ["synthetic-review"])
+        self.assertEqual(review_questions_pending(self.db), 1)
+
+        result = finish_reviews(self.db, [RelationshipDecision(
+            "synthetic-review", "No useful identity question", False,
+            "", 0, "fixture-question",
+        )])
+        self.assertEqual(result["completed_parents"], 1)
+        self.assertEqual(linkedin_queue(self.db), [])
+        self.assertEqual(review_questions_pending(self.db), 0)
+        row = query(self.db, "SELECT * FROM links WHERE row_key=?", (key,))[0]
+        self.assertEqual((row["machine_action"], row["machine_approved"]), ("detach", "auto"))
+
+    def test_workflow_orders_review_questions_before_linkedin(self) -> None:
         people = self.add_parent("state", "maybe")
         self.add_candidate(
             "state",
@@ -788,8 +805,6 @@ class DeepContextDbViewTests(unittest.TestCase):
             "synthetic:state",
             person_ids=people,
             kind="synthetic",
-            machine_action="verify",
-            machine_approved="auto",
         )
         project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:state", "synthetic:state", "{}"))
         with self.db.transaction() as conn:
@@ -797,6 +812,14 @@ class DeepContextDbViewTests(unittest.TestCase):
                 "UPDATE links SET judgment_payload_json=? WHERE row_key='jordan-state'",
                 (json.dumps({"verdict": "wrong_person", "confidence": 0.9}),),
             )
+        self.assertEqual(review_questions_pending(self.db), 1)
+        self.assertEqual(workflow_state(self.db).next_action, "enrich")
+        result = finish_reviews(self.db, [RelationshipDecision(
+            "state", "Owner can identify this contact", True,
+            "Is this Jordan Bravo?", 1, "fixture-question",
+        )])
+        self.assertEqual(result["review_parent_ids"], ["state"])
+        self.assertEqual(review_questions_pending(self.db), 0)
         self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
         self.db.decide_identity("synthetic:state", "verify")
         self.assertEqual(workflow_state(self.db).next_action, "realize")

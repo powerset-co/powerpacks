@@ -11,7 +11,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
-from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids
+from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids, review_questions_pending
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import RetargetProposal, upsert_retargets
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityVerdict
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
     RelationshipDecision, cache_relationship_judgment, finish_reviews,
 )
@@ -133,6 +135,30 @@ class ReviewCapTest(unittest.TestCase):
                     cache_relationship_judgment(self.db, decision)
                 finish_reviews(self.db, [decision])
                 self.assertEqual(links(self.db, parent_id=parent)[0].machine_action, "detach")
+
+    def test_pending_retarget_preserves_selected_question_and_updates_identity(self):
+        parent = self.parent(1)
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE links SET judgment_payload_json=? WHERE parent_id=?",
+                (json.dumps({"verdict": "wrong_person", "reason": "Old evidence."}), parent))
+        finish_reviews(self.db, [self.decision(parent)])
+        before = json.loads(links(self.db)[0].judgment_payload_json)["relationship_decision"]
+        verdict = IdentityVerdict.from_payload({
+            "verdict": "needs_review", "confidence": 0.6, "reason": "New research evidence.",
+        })
+        self.assertEqual(upsert_retargets(self.db, [RetargetProposal(
+            candidate_key=f"{parent}:0", new_linkedin_url="https://linkedin.com/in/jordan-other",
+            judge_fingerprint="new-identity", judge_payload=verdict,
+        )]), 1)
+        row = links(self.db)[0]
+        payload = json.loads(row.judgment_payload_json)
+        self.assertEqual(payload["relationship_decision"], before)
+        self.assertEqual(payload["verdict"], "needs_review")
+        self.assertEqual(payload["reason"], "New research evidence.")
+        self.assertEqual(row.machine_judgment, "needs_review")
+        self.assertEqual(row.judgment_fingerprint, "new-identity")
+        self.assertEqual(review_questions_pending(self.db), 0)
+        self.assertEqual(pending_parent_ids(self.db), {parent})
 
     def test_new_identity_verdict_replaces_non_object_prior_payload(self):
         from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import (

@@ -381,7 +381,7 @@ class LinkedinViewTests(unittest.TestCase):
             judge.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
             ),
-            "300c5f06c68bb77b1bdd75f7c8458731713a7a2c52a11ef36aa975c519d90100",
+            "012e36347158045a6644624a1b2fa7c7ad356e8e57ebb4aea8e63f2dd6c1c864",
         )
 
     def test_failed_cache_is_not_judgeable(self):

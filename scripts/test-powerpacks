@@ -113,6 +113,10 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_synthesis \
   tests.test_deep_context_synthetic_prefetch \
   tests.test_deep_context_web_sqlite \
+  tests.test_deep_context_relationship \
+  tests.test_deep_context_review_cap \
+  tests.test_identity_dossier_context \
+  tests.test_identity_research_claims \
   tests.test_deep_research_contacts \
   tests.test_email_context \
   tests.test_identity_evidence_identifiers \
