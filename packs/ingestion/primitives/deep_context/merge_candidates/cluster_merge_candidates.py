@@ -34,9 +34,11 @@ from packs.ingestion.primitives.deep_context.jev_worth.runner import estimate as
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_LLM,
     SAME_PERSON_CUTOFF,
+    asks_names,
     check_names,
     judge_pairs,
     judge_request,
+    names_request,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.models import MergeUsage, PairSurvey
 from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
@@ -117,6 +119,11 @@ class ClusterMergeCandidates(Node):
                 output_dir=self.output_dir,
             ).input_tokens
             for pair in survey.to_judge
+        )
+        # Upper bound: every pair still to judge may be called one person and asked about its names.
+        input_tokens += sum(
+            estimate_request(names_request(pair.first, pair.second), output_dir=self.output_dir).input_tokens
+            for pair in (*survey.to_judge, *(v for v in survey.reused if asks_names(v.decision)))
         )
         return {
             "source": "cluster_merge_candidates",

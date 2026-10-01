@@ -30,7 +30,9 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
   when JEV also answers that its two names can be one contact's (one more
   request per pair judged the same person, the two names only, about $0.00002).
   Different names are stored as two people. Free `--dry-run` prices the pair
-  requests.
+  requests and a names request for each as an upper bound. Acceptance between
+  two parents is rewritten by every survey: a pair it does not return is no
+  longer accepted.
 - `deep_parents`: free.
 
 ## Invariant

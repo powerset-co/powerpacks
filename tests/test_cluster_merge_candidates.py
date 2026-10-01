@@ -651,6 +651,71 @@ class TestJevJudge(unittest.TestCase):
             self.assertEqual(payload.errors, 0)
             self.assertEqual({row.accepted for row in canonical_snapshot(node.db).merge_verdicts}, {1})
 
+    def _stored_yes(self, node, pairs, *, accepted=True):
+        people = {person.person_id: person for person in merge_people(node.db)}
+        node.db.replace_merge_verdicts(tuple(
+            MergeVerdictRow(a, b, people[a].slug, people[b].slug, pair_sig(people[a], people[b]),
+                            "llm", True, 0.9, True, "", accepted, "2026-09-30T00:00:00Z")
+            for a, b in pairs
+        ))
+
+    def test_failed_names_request_on_an_accepted_cached_pair_leaves_it_unaccepted(self):
+        from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import _accepted_components
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            self._stored_yes(node, (("a", "b"), ("c", "d")))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(fail_names=True)), \
+                    mock.patch("sys.stderr"):
+                payload = node.run()
+
+            self.assertEqual(payload.errors, 2)
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual({(row.same_person, row.accepted) for row in rows}, {(1, 0)})
+            self.assertEqual(_accepted_components(node.db), ())
+
+    def test_accepted_pair_the_survey_does_not_return_is_no_longer_accepted(self):
+        from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import _accepted_components
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            # a and c share nothing, so the survey never pairs them.
+            self._stored_yes(node, (("a", "c"),))
+            with mock.patch.object(judge, "answer_requests", scripted_answers()):
+                node.run()
+
+            stale = [row for row in canonical_snapshot(node.db).merge_verdicts if (row.person_a, row.person_b) == ("a", "c")]
+            self.assertEqual([(row.same_person, row.accepted) for row in stale], [(1, 0)])
+            self.assertNotIn(("parent-a", "parent-c"), _accepted_components(node.db))
+
+    def test_one_names_request_answers_every_pair_with_those_two_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            for person_id, slug, name in (("a", "jordan-bravo", "Jordan Bravo"), ("b", "j-bravo-1", "J Bravo"),
+                                          ("c", "j-bravo-2", "J Bravo")):
+                seed_person(db, person_id=person_id, slug=slug, name=name,
+                            facts_path=root / f"{person_id}.jsonl", facts={}, phone="4155550100")
+            node = ClusterMergeCandidates(db=db, dossier_dir=root, output_dir=root,
+                                          out_csv=root / "merge-candidates.csv", out_md=root / "merge-candidates.md")
+            fake = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", fake):
+                payload = node.run()
+
+            asked = [request["state"]["dossier"] for request in fake.calls if "same_name" in request["questions"]]
+            self.assertEqual(asked, ["A: Jordan Bravo\nB: J Bravo"])
+            self.assertEqual(payload.errors, 0)
+            self.assertEqual({row.accepted for row in canonical_snapshot(node.db).merge_verdicts}, {1})
+
+    def test_dry_run_prices_the_names_requests_too(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._node(Path(directory))
+            unjudged = node.estimate()["estimated_input_tokens"]
+            self._stored_yes(node, (("a", "b"), ("c", "d")), accepted=False)
+            cached = node.estimate()
+
+            self.assertEqual(cached["candidate_pairs_to_judge"], 0)
+            self.assertGreater(cached["estimated_input_tokens"], 0)
+            self.assertLess(cached["estimated_input_tokens"], unjudged)
+
     def test_cluster_has_no_confidence_override(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["--confidence", "0.4"])

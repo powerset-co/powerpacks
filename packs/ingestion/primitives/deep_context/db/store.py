@@ -507,13 +507,22 @@ class Db:
             ).rowcount
 
     def replace_merge_verdicts(self, rows: tuple[MergeVerdictRow, ...]) -> None:
-        """Upsert the current merge survey without evicting unrelated paid cache."""
+        """Upsert the current merge survey without evicting unrelated paid cache.
+
+        Acceptance between two parents is this survey's alone: a pair it did not
+        return keeps its paid verdict and is no longer accepted.
+        """
         keys = [(row.person_a, row.person_b) for row in rows]
         if any(left >= right for left, right in keys):
             raise StoreError("merge verdict people must be ordered and distinct")
         if len(keys) != len(set(keys)):
             raise StoreError("merge verdict survey contains duplicate pairs")
         with self.transaction() as conn:
+            conn.execute(
+                "UPDATE merge_verdicts SET accepted=0 WHERE accepted=1 AND "
+                "(SELECT parent_id FROM people WHERE person_id=person_a) IS NOT "
+                "(SELECT parent_id FROM people WHERE person_id=person_b)"
+            )
             conn.executemany(
                 UPSERTS["merge_verdicts"], [asdict(row) for row in rows],
             )

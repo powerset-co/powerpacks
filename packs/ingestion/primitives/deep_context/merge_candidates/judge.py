@@ -1,9 +1,9 @@
 """Prompt rendering and JEV judging for ambiguous identity pairs.
 
-One JEV request per pair: ``state.dossier`` is the rendered A/B evidence and
-the two questions are ``same_person`` (yes/no; p(yes) is the confidence) and
-``tone_consistent``. A pair judged the same person gets one more request, the
-two names alone: can they name one contact? A no there makes the pair two
+One JEV request judges a pair: ``state.dossier`` is the rendered A/B evidence
+and the two questions are ``same_person`` (yes/no; p(yes) is the confidence)
+and ``tone_consistent``. A pair judged the same person gets a second request,
+the two names alone: can they name one contact? A no there makes the pair two
 people. Answers cache under ``deep-context/jev/`` next to the worth pass; the
 merge versions keep the caches apart. A failed request yields no verdict, so
 the pair is judged again on the next run; the failure is counted and reported
@@ -220,26 +220,9 @@ async def judge_pair(
     return MergeJudgeResult(decision_from_answers(answers), usage)
 
 
-async def judge_names(
-    client: httpx.AsyncClient,
-    verdict: MergePairVerdict,
-    *,
-    output_dir: Path,
-    semaphore: asyncio.Semaphore,
-) -> MergeJudgeResult:
-    """The verdict's decision once its two names are judged: different names are two people."""
-    answers, usage, error = await _answer(
-        client, names_request(verdict.first, verdict.second), output_dir=output_dir, semaphore=semaphore,
-        version=(NAMES_VERSION, NAMES_VERSION),
-    )
-    if answers is None:
-        return MergeJudgeResult(None, usage, error)
-    names = float(answers["same_name"]["noul"])
-    if names >= NAMES_CUTOFF:
-        return MergeJudgeResult(verdict.decision, usage)
-    return MergeJudgeResult(
-        replace(verdict.decision, same_person=False, confidence=names, reason=NAMES_REASON), usage,
-    )
+def asks_names(decision: MergeDecision) -> bool:
+    """Only the judge's own yes is asked about names: a slam dunk has one name."""
+    return decision.same_person and decision.judge == JUDGE_LLM
 
 
 def judge_pairs(
@@ -307,36 +290,46 @@ def check_names(
     usage, and the failure count. A pair whose names request failed is left out,
     like a failed judge request, and asked again on the next run.
     """
-    asked = [
-        index for index, verdict in enumerate(verdicts)
-        if verdict.decision.same_person and verdict.decision.judge == JUDGE_LLM
-    ]
-    if not asked:
+    requests = {
+        index: names_request(verdict.first, verdict.second)
+        for index, verdict in enumerate(verdicts) if asks_names(verdict.decision)
+    }
+    if not requests:
         return verdicts, MergeUsage(), 0
     load_env()
+    # Several pairs can carry the same two names; each distinct request is sent once.
+    distinct = {request_digest(request): request for request in requests.values()}
 
-    async def driver() -> list[MergeJudgeResult]:
+    async def driver() -> list[tuple[dict | None, MergeUsage, str]]:
         semaphore = asyncio.Semaphore(concurrency)
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             return list(await asyncio.gather(*(
-                judge_names(client, verdicts[index], output_dir=output_dir, semaphore=semaphore)
-                for index in asked
+                _answer(client, request, output_dir=output_dir, semaphore=semaphore,
+                        version=(NAMES_VERSION, NAMES_VERSION))
+                for request in distinct.values()
             )))
 
-    results = dict(zip(asked, asyncio.run(driver()), strict=True))
+    answered = dict(zip(distinct, asyncio.run(driver()), strict=True))
     usage = MergeUsage()
+    for _, paid, _ in answered.values():
+        usage = usage + paid
     errors: list[str] = []
     checked: list[MergePairVerdict] = []
     for index, verdict in enumerate(verdicts):
-        result = results.get(index)
-        if result is None:
+        if index not in requests:
             checked.append(verdict)
             continue
-        usage = usage + result.usage
-        if result.decision is None:
-            errors.append(result.error)
+        answers, _, error = answered[request_digest(requests[index])]
+        if answers is None:
+            errors.append(error)
             continue
-        checked.append(replace(verdict, decision=result.decision))
+        names = float(answers["same_name"]["noul"])
+        if names >= NAMES_CUTOFF:
+            checked.append(verdict)
+            continue
+        checked.append(replace(verdict, decision=replace(
+            verdict.decision, same_person=False, confidence=names, reason=NAMES_REASON,
+        )))
     if errors:
         print(
             f"[cluster] {len(errors)} names request(s) failed; asked again next run "
