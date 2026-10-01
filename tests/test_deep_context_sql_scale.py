@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.db import identity_queries, identity_views, merge_queries, queries, worth_views
+from packs.ingestion.primitives.deep_context.db import context_queries, identity_queries, identity_views, merge_queries, queries, worth_views
 from packs.ingestion.primitives.deep_context.db._view_rows import _hydrate_parents
 from packs.ingestion.primitives.deep_context.db._view_sql import CANDIDATE_SELECT, LINKEDIN_CTE, PARENT_SELECT
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
@@ -32,6 +32,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, DbMaintenance
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.merge_candidates import judge
 from packs.ingestion.primitives.deep_context.merge_candidates.models import MergePairCandidate, MergePerson
 from packs.ingestion.primitives.deep_context.review import server as review_server
@@ -122,6 +123,66 @@ class CandidateHydrationPlanTest(unittest.TestCase):
         for step in identifier_steps:
             self.assertIn("(person_id=?", step, plan)
             self.assertNotIn("identifiers_by_value", step, plan)
+
+
+class _QueryRecorder:
+    """Stands in for a Db and keeps the SQL each read ran."""
+
+    def __init__(self, db: Db) -> None:
+        self.db = db
+        self.sql: list[str] = []
+
+    def query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        self.sql.append(sql)
+        return self.db.query(sql, params)
+
+
+class EnrichmentQueuePlanTest(unittest.TestCase):
+    """The enrichment queue reads research once and identifiers through the person.
+
+    It runs on every review page load and status poll. A correlated scan of
+    `research` per worth-Yes parent and the planner's kind-first identifier walk
+    made it 530ms for 57 queued people on a 7.7k-parent store."""
+
+    def _plan(self) -> list[sqlite3.Row]:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "deep-context.sqlite"
+            recorder = _QueryRecorder(Db(path))
+            identity_views.enrichment_queue(recorder)
+            (sql,) = recorder.sql
+            with sqlite3.connect(path) as conn:
+                return list(conn.execute("EXPLAIN QUERY PLAN " + sql))
+
+    def test_research_is_scanned_once_not_per_parent(self) -> None:
+        plan = self._plan()
+        details = {row[0]: row[3] for row in plan}
+        scans = [row for row in plan if row[3] == "SCAN done"]
+        self.assertEqual(len(scans), 1, list(details.values()))
+        self.assertTrue(details[scans[0][1]].startswith("LIST SUBQUERY"), list(details.values()))
+
+    def test_identifier_lookups_go_through_the_person(self) -> None:
+        steps = [row[3] for row in self._plan()]
+        identifier_steps = [step for step in steps if " i USING" in step]
+        self.assertEqual(len(identifier_steps), 2, steps)
+        for step in identifier_steps:
+            self.assertIn("(person_id=?", step, steps)
+            self.assertNotIn("identifiers_by_value", step, steps)
+
+
+class ResearchQueueEvidenceTest(unittest.TestCase):
+    def test_build_queue_reads_evidence_once_for_the_whole_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = _store(Path(directory), 5, facts=True, bundles=True, identifiers=True)
+            eligible = identity_views.enrichment_queue(db)
+            self.assertEqual(len(eligible), 5)
+            expected = [DossierEvidence.from_db(db, row.person_ids).research_bio() for row in eligible]
+            with mock.patch.object(
+                context_queries, "dossier_evidence_rows", wraps=context_queries.dossier_evidence_rows,
+            ) as evidence_rows:
+                queue = selection.build_queue(eligible, db)
+            self.assertEqual(evidence_rows.call_count, 1)
+            self.assertEqual([row.bio for row in queue], expected)
+            self.assertTrue(all(queue_row.bio for queue_row in queue))
 
 
 class IdSetQueryTests(unittest.TestCase):
