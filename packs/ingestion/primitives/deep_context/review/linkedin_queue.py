@@ -38,10 +38,11 @@ class LinkedinQueue:
         self._lock = threading.Lock()
 
     def load(self) -> tuple[LinkedInQueueRow, ...]:
-        rows = tuple(linkedin_queue_order(self._db))
+        # Read inside the lock: reads land in the order they were made, so a slow one
+        # never replaces a newer one.
         with self._lock:
-            self._rows = rows
-        return rows
+            self._rows = tuple(linkedin_queue_order(self._db))
+            return self._rows
 
     def forget(self) -> None:
         with self._lock:

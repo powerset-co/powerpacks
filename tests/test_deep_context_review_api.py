@@ -1025,6 +1025,30 @@ class LinkedinQueueTests(ReviewApiFixture):
             worker.call_args.kwargs["on_change"]()
             self.assertEqual(order.call_count, 2)
 
+    def test_a_slow_read_never_replaces_a_newer_one(self) -> None:
+        reading, release = threading.Event(), threading.Event()
+
+        def order(_db: object) -> list[str]:
+            if reading.is_set():
+                return ["new"]
+            reading.set()
+            release.wait(5)
+            return ["old"]
+
+        queue = linkedin_queue.LinkedinQueue(self.db)
+        with mock.patch.object(linkedin_queue, "linkedin_queue_order", order):
+            slow = threading.Thread(target=queue.load)
+            slow.start()
+            reading.wait(5)
+            newer = threading.Thread(target=queue.load)
+            newer.start()
+            # The newer read waits its turn; one that did not would finish here.
+            newer.join(0.2)
+            release.set()
+            slow.join(5)
+            newer.join(5)
+        self.assertEqual(queue.rows(), ("new",))
+
 
 class DecideTests(ReviewApiFixture):
     def test_decide_writes_the_decision_on_its_row_and_nothing_else(self) -> None:
