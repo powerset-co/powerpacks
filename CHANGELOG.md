@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.10.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.3...powerpacks-v3.10.4) (2026-10-01)
+
+
+### Bug Fixes
+
+* finish enrichment with partial provider results ([#658](https://github.com/powerset-co/powerpacks/issues/658)) ([2114ee0](https://github.com/powerset-co/powerpacks/commit/2114ee00d791f303743e1e865b6855d062428337))
+
 ## [3.10.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.2...powerpacks-v3.10.3) (2026-10-01)
 
 
