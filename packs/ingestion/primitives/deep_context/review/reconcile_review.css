@@ -723,6 +723,7 @@ input::placeholder { color: var(--muted); }
 
 .decision-list {
   height: 100%;
+  max-height: 65dvh;
   min-height: 0;
   display: block;
   overflow-x: hidden;
