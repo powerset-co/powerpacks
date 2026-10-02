@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
-  approveResult,
   changeEvent,
   decideResult,
   errorResponse,
@@ -17,7 +16,6 @@ import {
 } from "@/testing/review-fixture"
 
 import {
-  approveEnrichment,
   completeStage,
   fetchDossier,
   fetchLinkedinCard,
@@ -192,14 +190,6 @@ describe("the review writes", () => {
     expect(sent().form).toBe(
       "pub=jordan-bravo-1&decision=fix&parent_slug=jordan-bravo&new_url=linkedin.com%2Fin%2Fjordan-bravo-2",
     )
-  })
-
-  it("approves the enrichment with one empty post", async () => {
-    answer(jsonResponse(approveResult()))
-    expect((await approveEnrichment()).enrichment.mode).toBe("running")
-    expect(sent().url).toBe("/api/review/approve-enrichment")
-    expect(sent().form).toBe("")
-    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it("completes a stage, queues a re-research and opens the sign-in", async () => {

@@ -85,9 +85,8 @@ class SettleEnrichmentTest(unittest.TestCase):
             mock.patch('packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship.ReviewRelationships.run',
                        return_value={'status': 'completed'}),
         ):
-            pipeline = object.__new__(EnrichmentPipeline)
-            pipeline.db = self.db
-            self.assertEqual(pipeline._run(0, lambda _: None), ())
+            pipeline = EnrichmentPipeline(self.db, manifest=self.root / 'deep-research' / 'manifest.json')
+            self.assertEqual(pipeline.run(total=0, budget=0, request_fingerprint='fixture')['errors'], [])
 
     def test_empty_lookup_profiles_detach(self):
         for parent, state in (('missing', None), ('empty', 'empty'), ('error', 'error'), ('blank', 'content')):

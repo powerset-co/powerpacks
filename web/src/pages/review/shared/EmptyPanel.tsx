@@ -7,12 +7,14 @@ interface EmptyPanelProps {
   title: string
   /** The round check above the title (All set, the stage check). */
   mark?: boolean
+  /** What sits above the title in place of the check. */
+  above?: ReactNode
   className?: string
   children?: ReactNode
 }
 
 // A centred panel with a title and whatever sits under it.
-export function EmptyPanel({ title, mark = false, className, children }: EmptyPanelProps) {
+export function EmptyPanel({ title, mark = false, above, className, children }: EmptyPanelProps) {
   return (
     <div className={cn("empty-state", className)}>
       {mark ? (
@@ -20,6 +22,7 @@ export function EmptyPanel({ title, mark = false, className, children }: EmptyPa
           {COMPLETE_MARK}
         </span>
       ) : null}
+      {above}
       <h2>{title}</h2>
       {children}
     </div>

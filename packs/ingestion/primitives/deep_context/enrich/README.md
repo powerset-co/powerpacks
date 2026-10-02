@@ -3,19 +3,30 @@
 Created: 2026-10-01
 
 Change log:
+- 2026-10-01: the agent CLI previews and runs the shared resumable chain.
 - 2026-10-01: created with the settlement step.
 
-The approved chain reuses completed provider work, then settles identity and
-worth before synthetic assembly. Human worth and link decisions remain
-unchanged.
+`bin/deep-context enrich --dry-run` reports net-new lookups, Parallel cost,
+profile fetches, judgment estimates, and one `estimated_usd` total without
+writes. The agent runs `enrich` without asking when the total is at most $100,
+and asks first only above $100. The research budget is the Parallel estimate.
+Human worth and link decisions remain unchanged.
+
+The CLI and review server use the same ordered sequence. Each step reuses
+completed SQLite and provider artifacts. Re-running after a failure starts the
+sequence again; running after a later import processes pending work. There are no separate checkpoints.
+
+One enrichment `manifest.json` reports `status: running` and the step's `phase`
+before each step, `completed` with non-fatal errors at the end, or `failed`
+with the phase and error when a step raises.
 
 ```mermaid
 flowchart LR
-  research[research] --> profiles[profile prefetch]
-  profiles --> identity[identity judge]
-  identity --> relationship[relationship review]
-  relationship --> settle[local settlement]
-  settle --> synthetic[eligible synthetic profiles]
+  research[research] --> profiles[profiles]
+  profiles --> identity[identity]
+  identity --> relationships[relationships]
+  relationships --> settle[settle]
+  settle --> synthetic[synthetic]
 ```
 
 Settlement detaches machine-accepted lookup LinkedIns whose profiles are
@@ -39,7 +50,9 @@ profile.
 
 | File / package | Role | Reads | Writes |
 | --- | --- | --- | --- |
-| `enrichment_pipeline.py` | Runs the approved chain and exposes progress | SQLite queues and projected work | Display receipt |
+| `cli.py` | Thin argparse entry for plan or run | SQLite, enrichment plan | JSON stdout, progress stderr |
+| `estimate.py` | Shared CLI/review cost calculation | SQLite queues and provider reuse | Read-only plan |
+| `enrichment_pipeline.py` | Runs named steps directly or through the server wrapper | SQLite queues and projected work | One enrichment receipt |
 | `settle_policy.py` | Typed empty-profile and worth decisions | Accepted profile, worth, message count | Decisions only |
 | `settle.py` | Applies local settlement | SQLite people, identities, profiles, worth | Machine identity settlement and parent machine worth |
 | `research_reconcile/` | Research selection and identity judging | SQLite queues, dossier evidence | Research and identity results |

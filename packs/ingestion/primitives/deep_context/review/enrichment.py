@@ -1,6 +1,7 @@
 """Compute review manifests, enrichment state, and explicit spend approval.
 
 Changelog:
+- 2026-10-01: CLI and review share the enrichment cost calculation.
 - 2026-10-01: the worth stage completes with synthesis; enrichment follows directly.
 """
 
@@ -9,8 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
-from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
+from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
@@ -23,19 +23,11 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
 from packs.ingestion.primitives.deep_context.manifests.review_manifest import (
     ReviewManifest,
 )
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import (
-    DEFAULT_PROCESSOR,
-)
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
-    selection as research_selection,
-)
 from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentApproval,
     EnrichmentCounts,
     EnrichmentView,
 )
-
-ESTIMATED_JUDGMENT_INPUT_TOKENS = 2000
 
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
@@ -64,18 +56,11 @@ def enrichment_view(
     observability (and the SSE payload source); it is never read here.
     """
     state = state or workflow_state(db)
-    plan = research_selection.select_research(
-        db,
-        processor=DEFAULT_PROCESSOR,
-        fingerprint=state.selection,
-    )
-    remaining_judgments = state.progress.enrichment_pending - len(plan.eligible)
-    # Budget two JEV requests and one possible Sol comparison per candidate.
-    judgment_count = remaining_judgments + len(plan.pending)
-    judgment_estimate = estimate_cost_usd(ESTIMATED_JUDGMENT_INPUT_TOKENS * judgment_count,
-        1500 * judgment_count, "gpt-6.1-sol")
-    jev_estimate = 2 * judgment_count * ESTIMATED_JUDGMENT_INPUT_TOKENS * INPUT_PRICE_PER_MILLION / 1_000_000
-    estimate = plan.estimated_usd + judgment_estimate + jev_estimate
+    estimate_plan = estimate_enrichment(db, state)
+    plan = estimate_plan.research
+    remaining_judgments = estimate_plan.remaining_judgments
+    judgment_estimate = estimate_plan.judgment_estimated_usd
+    estimate = estimate_plan.estimated_usd
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), plan.deduped_total
     # While the local thread runs, live progress IS the plan: every projected

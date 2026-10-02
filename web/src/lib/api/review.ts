@@ -5,7 +5,6 @@ import { body, failure } from "@/lib/api/http"
 import { SAVE_FAILED } from "@/lib/review/copy"
 import { isRecord } from "@/lib/utils"
 import type {
-  ApproveResult,
   DecideResult,
   FeedbackAction,
   LinkedinCardPayload,
@@ -173,10 +172,6 @@ export async function postDecide({ new_url, ...rest }: DecideRequest): Promise<D
 }
 
 /** Approves the enrichment plan and launches it. A click that reaches this spends money. */
-export async function approveEnrichment(): Promise<ApproveResult> {
-  return body<ApproveResult>(await post(`${API}approve-enrichment`, {}))
-}
-
 export interface WorthRequest {
   /** The person's `worth_key`. */
   pub: string

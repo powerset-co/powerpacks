@@ -8,6 +8,45 @@
   min-height: 380px;
 }
 
+/* The waiting screen's one moving thing: a soft shape that slowly changes form and turns, so
+   the page reads as at work. */
+.review-page .enrich-shape {
+  width: 76px;
+  height: 76px;
+  margin-bottom: 8px;
+  border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  background: radial-gradient(
+    circle at 32% 28%,
+    color-mix(in srgb, var(--primary) 62%, white),
+    var(--primary) 68%
+  );
+  box-shadow: 0 0 44px color-mix(in srgb, var(--primary) 38%, transparent);
+  animation:
+    enrich-shape-form 7s ease-in-out infinite,
+    enrich-shape-turn 13s linear infinite;
+}
+@keyframes enrich-shape-form {
+  0%,
+  100% {
+    border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  }
+  33% {
+    border-radius: 61% 39% 44% 56% / 55% 62% 38% 45%;
+  }
+  66% {
+    border-radius: 37% 63% 55% 45% / 62% 38% 60% 40%;
+  }
+}
+@keyframes enrich-shape-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.review-page .enrich-state p {
+  max-width: 420px;
+}
+
 .review-page .enrich-progress {
   width: min(100%, 360px);
   height: 8px;

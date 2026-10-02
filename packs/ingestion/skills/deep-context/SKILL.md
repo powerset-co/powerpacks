@@ -92,7 +92,7 @@ messages.
 - Never treat memory, an earlier transcript, or an earlier approval as consent
   for OpenAI, Parallel, RapidAPI cache misses, or Modal upload.
 - `bin/deep-context run` is intentionally disabled. Paid stages must be previewed
-  and approved separately.
+  and run separately under the cost rules below.
 
 ## Repo root
 
@@ -111,7 +111,7 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
-[Match] App runs enrichment + profile prep after in-UI approval
+[Match] Preview and run enrichment + profile preparation
 [LinkedIn] Review LinkedIn profiles we found for network
 [Match] Apply approved replacement LinkedIns
 [Build] Build merged people list
@@ -121,6 +121,31 @@ Create a visible plan with these exact phases and keep it current:
 ```
 
 Mark a no-op complete; do not silently drop it.
+
+### When a command fails
+
+Keep going. Read the error, fix what caused it (a missing dependency, a stale
+path, a malformed row, a bug in this checkout's code), and run the same command
+again: every command continues from what is already stored. Stop and tell the
+user only for what you cannot fix from here:
+
+- the provider account has no credit, or a key is rejected;
+- there is no internet connection;
+- the machine is out of memory or disk;
+- a permission only the user can grant (Full Disk Access).
+
+After a run in which anything failed, whether or not you got past it, send the
+developers one report with the feedback sender. Send it without asking: it
+carries commands, statuses, error text, what you changed, stage `manifest.json`
+paths with their counts, and the powerpacks version, and nothing that names a
+person or quotes a dossier or a message.
+
+```bash
+uv run --project . python packs/powerset/primitives/send_feedback/send_feedback.py \
+  --comment "deep-context: <command> failed; <what you did to get past it>" \
+  --category deep-context \
+  --metadata '{"source":"powerpacks-agent","skill":"deep-context","failing_command":"...","error":{"status":"failed","detail":"last ~500 chars"},"fix":"...","manifests":{"<path>":{"status":"...","phase":"..."}},"powerpacks_version":"..."}'
+```
 
 ### 1. Scope and owner
 
@@ -315,128 +340,66 @@ with message context before any paid identity lookup. A candidate merged into an
 existing person does not reappear in the People queue or paid lookup; the
 merge folds its email/phone/channel metadata onto the kept LinkedIn.
 
-### 5. Enrichment without a worth stop
+### 5. Preview and run enrichment
 
-A contact-only person (email/phone only, no LinkedIn) can enter paid research
-when worth is Yes. Existing LinkedIns and completed research, including
-no-match, skip new lookup. Mapped real LinkedIns without human or valid machine
-identity decisions enter the identity judge before LinkedIn review.
+After `parents`, the agent runs:
 
-Launch the local UI once in a background terminal:
+```bash
+bin/deep-context enrich --dry-run
+```
+
+The read-only plan lists net-new Parallel lookups and cost, profile fetches,
+judgment estimates, and one `estimated_usd` total. Run automatically without
+asking when `estimated_usd` is at most $100. Ask first only above $100. Then run:
+
+```bash
+bin/deep-context enrich
+```
+
+The command sets the research budget to the plan's Parallel estimate and runs
+research → profiles → identity → relationships → settle → synthetic. Effective-Yes
+contact-only parents enter research; existing LinkedIns and completed research,
+including no-match, skip new lookups. Mapped real LinkedIns without human or
+valid machine decisions enter the identity judge.
+
+Re-running `enrich` after a failure starts the sequence again and continues from
+completed work in SQLite and provider artifacts on disk. It is safe to run after
+any later import: each step processes only pending work. There are no separate
+checkpoints. One enrichment `manifest.json` reports `status`, `phase`, and
+errors; it does not select work.
+
+Then open the review, which lands on Check LinkedIn:
 
 ```bash
 bin/deep-context review
 ```
 
-Opening review serves the current SQLite review. The app shows the existing
-worth and identity queues without resetting human choices or calling providers.
-Worth review is optional: `review worth` still lets
-the user override Yes/Maybe/No. The page shows no step list.
+Opening review serves current SQLite choices without resetting human decisions
+or calling providers. Worth review remains optional through `review worth`;
+Maybe does not stop enrichment. Open the UI once and wait for the wrapper's
+`review UI:` line before opening the page.
 
-Then watch for your turn with the ONE agent-handoff mechanism — a blocking
-read of canonical SQLite (no daemons, no sockets, no thread ids; it always
-works in any harness):
+Use the read-only handoff command while the user reviews:
 
 ```bash
 bin/deep-context review-status --wait --timeout 900
 ```
 
-It queries canonical SQLite every five seconds and returns the current queue-derived
-`next_action`: pending synthesis -> `synthesize`; pending enrichment -> `enrich`;
-pending LinkedIn candidates -> `review_linkedin`; otherwise `realize`.
-Maybe worth never stops this sequence. The app itself runs everything in between:
-preview, approved enrichment, from-cache continuation, synthetic assembly,
-and profile prefetch. On timeout the wait returns `status: waiting` with the
-current human-wait action — just run it again.
+It returns immediately for agent actions `synthesize`, `enrich`, and `realize`.
+Run the returned action under its cost rule. For `review_linkedin`, it waits for
+SQLite decisions; on timeout, run the wait command again. A bare `review-status`
+prints the same contract once. Readiness comes from SQLite, not chat or browser
+state. The review API continues to serve worth/identity decisions and enrichment
+progress.
 
-The UI is the user's control surface for review and approval. It records choices
-in canonical SQLite. Enrichment writes its fixed artifacts, projects their full
-payloads into SQLite, and writes a display-only manifest receipt. The agent owns workflow control:
-run the wait command, then run only the exact `next_action` it returns, then
-wait again. Never infer readiness from chat text or browser state. Direct
-progress-step navigation is preview only; it does not itself advance provider
-work. A clicked preview stage stays visible.
-The browser observes SQLite through the existing HTTP API and automatically
-refreshes or moves to the current stage. People and LinkedIn decisions commit
-directly to SQLite, and each save returns the new state token. No status poll is
-part of a decision click.
-The page listens to the server's `/api/events` stream only while external
-changes are possible: on Enrich and Done. Those pages snapshot `/api/status`
-once on load and again on every server nudge; they never poll. LinkedIn is a
-local buffered review queue.
-A non-empty replacement URL on a listening preview pauses reload/navigation
-until it is saved; merely focusing an empty field does not. Open the UI once; do not
-open additional tabs or repeatedly open stage URLs as the workflow advances.
+### 6. Identity preparation and settlement
 
-The main Review tab shows only people the model marked `maybe`, one at a time
-with Yes/No. The Yes and No tabs are paginated, editable tables with one action
-per row: No from the Yes table and Yes from the No table.
-Model Yes starts in Yes; model No, user No, and legacy Exclude share No.
-These edits do not gate enrichment. The current workflow opens Enrich Contacts
-after synthesis.
+The agent's enrichment command uses the same chain as the review server.
+Profile preparation is cache-first; saved identity and relationship judgments
+are reused. Human worth and identity decisions remain authoritative. Provider
+outputs are projected into SQLite before downstream steps read them.
 
-The wait command is the read-only deterministic primitive — it queries SQLite
-and emits one `next_action`; it does not mutate files, open a
-browser, shell out, or call a network. Follow only that exact action. A bare
-`bin/deep-context review-status` (no `--wait`) prints the same contract once
-for a quick look.
-
-The fixed runtime record and display receipt are:
-
-```text
-.powerpacks/deep-context/deep-context.sqlite
-.powerpacks/deep-context/reconcile/deep-research/manifest.json
-```
-
-Selection and reuse come from the current SQLite worth/candidate rows plus
-projected artifact fingerprints. Nothing reads the manifest to determine what
-is pending, current, or allowed to run.
-
-### 6. Identity preparation and one lookup — THE APP RUNS THIS
-
-The review app runs the whole mid-flow itself, in-process, when the user acts:
-
-- **Synthesis is complete** → the app builds the free preview
-  (`reconcile-deep-research --dry-run`) and the Enrich Contacts page renders
-  the exact `Approve $X.XX` estimate (gross eligible, completed-result reuse,
-  net-new submissions, budget). When net-new is zero the button reads
-  `Continue` — no approval exists for zero dollars, and the click reruns the
-  cached chain so imported or cached installs still get their follow-ups.
-- **The user clicks Approve $X.XX** → that click IS the spend approval: the
-  app runs the approved Parallel pass with exactly that budget cap.
-- **Research completes** → the app hydrates missing LinkedIn profiles, runs JEV
-  identity checks, and uses GPT-6.1 Sol to resolve remaining disagreements.
-  Completed paid results are reused. Relationship review runs next, followed by
-  the local settlement rules below, then synthetic profiles for eligible people
-  without an accepted LinkedIn.
-
-The agent runs NONE of these steps while the app owns them. Files remain the
-durable provider outputs, but the writer projects every downstream payload into
-SQLite before success. One process-local flag prevents duplicate submission.
-The fixed enrichment manifest contains display progress and a `parallel`
-provider receipt so a later process can recover already-submitted research.
-The manual commands remain available for headless/broken-UI recovery only.
-
-Individual provider failures are deferred while the approved pass continues.
-After completion, read `errors` in
-`.powerpacks/deep-context/reconcile/deep-research/manifest.json` for harness
-follow-up. It identifies research failures and points to the saved profile and
-identity errors; relationship errors include the parent. Preserve the successful
-results and report what remains unresolved. Do not automatically repeat the
-failed work or ask the user to troubleshoot each contact.
-
-The pipeline writes progress while preserving the provider receipt; the
-Parallel client writes the receipt while preserving progress. Parallel's SDK
-stream reports status through the pipeline callback. Review reads the manifest
-only to display selection-matching progress. Selection, completed-result reuse,
-and synthetic assembly query SQLite.
-
-When you report lookup progress to the user, phrase it as "Parallel tasked with
-N net-new lookups" and use the enrichment manifest's running/completed counts. Do not call
-the approved budget a "cap" or restate the dollar amount in status updates — the
-approval already happened, so the number is noise.
-
-Settlement applies two rules before synthetic assembly:
+Settlement applies these rules before synthetic assembly:
 
 - A machine-accepted lookup LinkedIn with a missing, errored, or empty profile
   (no experience and no education) is detached with an empty-profile reason.
@@ -459,9 +422,8 @@ no synthetic profile.
 
 ### 7. LinkedIn decision gate
 
-When enrichment is complete, the page advances to Check LinkedIn automatically.
-Continue also opens Check LinkedIn; it does not create stage state or start work.
-The first review server stays alive.
+After enrichment, `bin/deep-context review` opens Check LinkedIn for any
+remaining uncertain profiles. The review server stays alive during review.
 
 For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a

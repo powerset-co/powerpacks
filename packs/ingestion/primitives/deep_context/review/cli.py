@@ -6,6 +6,7 @@ stage, `/people`, `/searches`. Before a deep-context store exists it serves the 
 alone, and `/` goes to `/searches`. `status` prints what the agent should do next.
 
 Changelog:
+- 2026-10-01: pending enrichment returns to the agent's enrich command.
 - 2026-10-01: status routes synthesis directly to enrichment without worth review.
 - 2026-10-01: the review is the React page at `/`; before a store exists `/` still
   redirects to /searches, ahead of the shell.
@@ -48,7 +49,7 @@ from .sqlite_adapter import SqliteReviewAdapter
 
 
 # The actions the agent runs itself; every other action waits on the user.
-_AGENT_ACTIONS = frozenset({"synthesize", "realize"})
+_AGENT_ACTIONS = frozenset({"synthesize", "enrich", "realize"})
 
 # The status query walks every parent; a tight loop would keep the CPU busy
 # for the whole review.
@@ -117,7 +118,7 @@ def workflow_status(**_: object) -> dict[str, object]:
     payload = api.workflow_status()
     commands = {
         "synthesize": "bin/deep-context dry",
-        "enrich": "wait for the user to approve Enrich Contacts in the review UI",
+        "enrich": "bin/deep-context enrich",
         "review_linkedin": "wait for LinkedIn Yes/No decisions in the review UI",
         "realize": "bin/deep-context stop && bin/deep-context realize",
     }
@@ -206,3 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         cmd_serve(args if args.command == "serve" else parser.parse_args(["serve", *(argv or [])]))
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

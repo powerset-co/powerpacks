@@ -1,5 +1,3 @@
-import { enrichPanelShown } from "@/lib/review/screen"
-import type { EnrichmentJob } from "@/lib/review/sync"
 import { cn } from "@/lib/utils"
 import type { ReviewPage } from "@/types/review"
 
@@ -26,9 +24,8 @@ interface ReviewScreenProps {
 // time. A stage transition replaces the stage with the check until the next screen loads.
 export function ReviewScreen({ screen, toast, reload, open }: ReviewScreenProps) {
   const { page } = screen
-  const { review, check, leaving, job } = useScreenReview({
+  const { review, check, leaving } = useScreenReview({
     screen,
-    panelShown: enrichPanelShown(page),
     toast,
     reload,
     open,
@@ -37,20 +34,20 @@ export function ReviewScreen({ screen, toast, reload, open }: ReviewScreenProps)
     <main className="review-main">
       <section className={cn("stage", leaving && "leaving")} aria-live="polite">
         <ReviewContext.Provider value={review}>
-          {check === null ? <Stage page={page} job={job} /> : <StageCheck message={check} />}
+          {check === null ? <Stage page={page} /> : <StageCheck message={check} />}
         </ReviewContext.Provider>
       </section>
     </main>
   )
 }
 
-function Stage({ page, job }: { page: ReviewPage; job: EnrichmentJob | null }) {
+function Stage({ page }: { page: ReviewPage }) {
   if (page.needs_synthesis) return <SynthesisPending />
   switch (page.view) {
     case "worth":
       return <WorthStage tab={page.tab === "" ? "review" : page.tab} />
     case "enrich":
-      return <EnrichStage enrichment={page.enrichment} job={job} />
+      return <EnrichStage />
     case "linkedin":
       return <LinkedinStage />
     case "done":

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useReducedMotion } from "@/hooks/useReducedMotion"
 import { STAGE_DONE } from "@/lib/review/copy"
 import { stageHref } from "@/lib/review/links"
-import type { EnrichmentJob } from "@/lib/review/sync"
 import { fadeMs, STAGE_CHECK_MS } from "@/lib/review/timing"
 import type { DecisionProgress, PageProgress, ReviewView } from "@/types/review"
 
@@ -14,8 +13,6 @@ import { useServerWatch } from "./useServerWatch"
 
 interface ScreenReviewOptions {
   screen: Screen
-  /** The Enrich panel is what the stage shows (not the synthesis handoff). */
-  panelShown: boolean
   toast: ReviewToast
   reload: () => void
   open: (href: string) => void
@@ -26,7 +23,7 @@ interface ScreenReviewOptions {
  * check, the leave-and-reload fade, and the server watch. Mounted per screen (the caller is
  * keyed by `screen.id`), so all of it starts over when the next screen loads.
  */
-export function useScreenReview({ screen, panelShown, toast, reload, open }: ScreenReviewOptions) {
+export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOptions) {
   const { page, preview, debug, index } = screen
   const reducedMotion = useReducedMotion()
   const fade = fadeMs(reducedMotion)
@@ -43,7 +40,6 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
   /** The stage check's words while a stage transition runs; null otherwise. */
   const [check, setCheck] = useState<string | null>(null)
   const [leaving, setLeaving] = useState(false)
-  const [job, setJob] = useState<EnrichmentJob | null>(null)
   const completing = useRef(false)
   const draft = useRef(false)
   const timers = useRef<number[]>([])
@@ -83,12 +79,10 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
   const { syncStatus, noteServerStage } = useServerWatch({
     page,
     preview,
-    panelShown,
     completing,
     draft,
     onForward,
     onStale: reload,
-    onJob: setJob,
   })
 
   const setGuidanceDraft = useCallback((typed: boolean) => {
@@ -136,5 +130,5 @@ export function useScreenReview({ screen, panelShown, toast, reload, open }: Scr
     ],
   )
 
-  return { review, progress, check, leaving, job }
+  return { review, progress, check, leaving }
 }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 
-import { changeEvent, reviewStatus, runningEvent } from "@/testing/review-fixture"
+import { reviewStatus } from "@/testing/review-fixture"
 
-import { decideStatus, runningJob, type StatusInput } from "./sync"
+import { decideStatus, type StatusInput } from "./sync"
 
 /** The Enrich screen, opened by the flow, with one status already read at "enrich". */
 function input(overrides: Partial<StatusInput> = {}): StatusInput {
@@ -89,27 +89,5 @@ describe("decideStatus", () => {
     expect(decideStatus(input({ status: reviewStatus({ state_token: "" }) })).action).toEqual({
       kind: "nothing",
     })
-  })
-})
-
-describe("runningJob", () => {
-  it("hands a mid-run job with counts to the Enrich panel", () => {
-    expect(runningJob(runningEvent(3, 12), true)).toEqual({
-      status: "running",
-      counts: { total: 12, completed: 3 },
-    })
-  })
-
-  it("re-reads the status when no panel is on screen to take the numbers", () => {
-    expect(runningJob(runningEvent(), false)).toBeNull()
-  })
-
-  it("re-reads the status for a finished job, a job without counts, a plain change and an unreadable message", () => {
-    expect(
-      runningJob(changeEvent({ job: { status: "completed", counts: { total: 12, completed: 12 } } }), true),
-    ).toBeNull()
-    expect(runningJob(changeEvent({ job: { status: "running" } }), true)).toBeNull()
-    expect(runningJob(changeEvent(), true)).toBeNull()
-    expect(runningJob(null, true)).toBeNull()
   })
 })

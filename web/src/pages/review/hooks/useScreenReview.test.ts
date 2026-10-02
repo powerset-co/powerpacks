@@ -20,7 +20,7 @@ function renderReview(reducedMotion = false) {
   const toast = { toast: null, dismiss: vi.fn(), say: vi.fn(), sayError: vi.fn() }
   const reload = vi.fn()
   const open = vi.fn()
-  const hook = renderHook(() => useScreenReview({ screen: SCREEN, panelShown: false, toast, reload, open }))
+  const hook = renderHook(() => useScreenReview({ screen: SCREEN, toast, reload, open }))
   return { ...hook, toast, reload, open }
 }
 

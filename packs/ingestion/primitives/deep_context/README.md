@@ -3,6 +3,8 @@
 Created: 2026-08-06
 
 Changelog:
+- 2026-10-01: `enrich` runs the shared resumable chain from the agent CLI before
+  LinkedIn review, with one progress manifest.
 - 2026-10-01: synthesis advances to enrichment without worth review; settlement
   detaches empty lookup profiles and decides insufficient identity evidence No.
 - 2026-09-28: `realize/export_people.py` writes the final roster into SQLite
@@ -60,12 +62,12 @@ flowchart TD
   sqlite --> dossier["compose_dossier → dossiers/&lt;slug&gt;.md"]
 
   sqlite --> views["db/views — named SQL policy\n(worth queue, identity scope, progress)"]
-  views --> web["review/ — enrich → linkedin; optional worth overrides"]
+  views --> web["review/ — Check LinkedIn; optional worth overrides"]
   web --> decide["db/store.decide_worth / decide_identity"]
   decide --> sqlite
 
-  sqlite --> research["enrich/research_reconcile + parallel_research\nParallel.ai + RapidAPI + shared judge"]
-  research --> receipt["manifest.json\nwrite-only stats receipt"]
+  sqlite --> research["bin/deep-context enrich\nresearch → profiles → identity → relationships"]
+  research --> receipt["manifest.json\nstatus + phase + errors"]
   research --> settle["local settlement — empty lookup profiles, worth No below 25 messages"]
   settle --> sqlite
 
@@ -116,12 +118,10 @@ progress but do not decide whether a task is complete.
    research results key on their canonical dossier plus optional guidance;
    profile fetches cache per public identifier. A rename or
    re-cluster must never re-bill work whose evidence didn't change.
-5. **Spend gates are explicit flags**, not state machines. Every paid stage
-   has a free `--dry-run`/estimate path. The one in-primitive gate is deep
-   research's `--approve`/`--budget`: without approval it emits
-   `status: "needs_approval"` in its JSON and exits 20; failed or invalid
-   requests exit 1. The other paid stages gate by skill convention
-   (dry-run first), not in code.
+5. **Spend follows the skill's cost rules**, not state machines. Every paid stage
+   has a free estimate path. The agent runs `enrich --dry-run`, then `enrich`
+   without asking when the total is at most $100 and asks first above $100. The command sets
+   research's budget to the plan's Parallel estimate; it has no approval flag.
 6. **Human decisions are machine-untouchable.** Machine writers use
    `project_identity`/machine columns only; `decision_*` and `human_worth*`
    columns are written solely through `db/store.decide_identity` /
@@ -211,12 +211,21 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  research["approved research"] --> profiles["profile prefetch"]
-  profiles --> judge["identity judge"]
-  judge --> relationships["relationship review"]
-  relationships --> settle["local settlement"]
-  settle --> synthetic["eligible synthetic profiles"]
+  research[research] --> profiles[profiles]
+  profiles --> judge[identity]
+  judge --> relationships[relationships]
+  relationships --> settle[settle]
+  settle --> synthetic[synthetic]
 ```
+
+`EnrichmentPipeline.run` executes the named sequence directly; the review server
+wraps the same sequence in its thread. `bin/deep-context enrich --dry-run` uses
+shared estimate code without writes. `enrich` writes the one enrichment receipt
+before each step (`status: running`, `phase`), at completion (`completed`,
+non-fatal errors), or on a raised exception (`failed`, phase and error).
+
+Reruns start from research and reuse completed SQLite/provider artifacts. Running after a later
+import processes pending work without separate checkpoints.
 
 Batch research runs only on effective-Yes parents, gated in SQL before paid work.
 Mapped links without a decision enter the identity judge. Human decisions are
@@ -250,7 +259,7 @@ research queues and receive no synthetic profile.
 |---|---|---|---|
 | Fact synthesis | OpenAI (`gpt-5.2`) | `input_evidence_fingerprint` + `SYNTHESIS_VERSION` | estimate → run |
 | Merge pair judge | JEV (`jev-1.13.0`, TypeSafe) | judged pair + evidence, then the two names alone for a pair judged the same person; exact request under `jev/` | dry-run estimate before cluster |
-| Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | `needs_approval` + explicit approve |
+| Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | enrich plan → skill $100 rule → run |
 | Profile hydration | RapidAPI | public identifier | cache-first everywhere |
 | LinkedIn evidence judge | OpenAI | `judgment_fingerprint` | sticky verdicts, re-judge only on new evidence |
 
@@ -258,10 +267,10 @@ research queues and receive no synthetic profile.
 
 `next_action` follows `synthesize` → `enrich` → `review_linkedin` → `realize`,
 derived only from queue predicates. Worth review remains optional and Maybe
-does not block enrichment. The page carries no step list. There is no
-`stage_state` or durable spend approval: approval is the budget flag passed to
-the launched work, a process-local flag prevents duplicate submission, and the
-fixed enrichment manifest remains display-only stage progress.
+does not block enrichment. `enrich` is an agent action, so `review-status --wait`
+returns immediately when it is pending. After `parents`, the agent previews and
+runs enrichment, then opens Check LinkedIn. The fixed enrichment manifest
+reports progress; SQLite and saved provider results determine pending work.
 
 ## Conventions
 

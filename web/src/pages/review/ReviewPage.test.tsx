@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { must } from "@/lib/must"
 import {
   changeEvent,
-  enrichmentPanel,
   errorResponse,
   FakeEventSource,
   jsonResponse,
@@ -15,12 +14,10 @@ import {
   pageProgress,
   reviewPage,
   reviewStatus,
-  runningEvent,
 } from "@/testing/review-fixture"
 import type { ReviewPage as ReviewPageData, ReviewStatus } from "@/types/review"
 
 import type { DoneStageProps } from "./done/DoneStage"
-import type { EnrichStageProps } from "./enrich/EnrichStage"
 import { useReview, type Review } from "./hooks/useReview"
 import { ReviewPage } from "./ReviewPage"
 import type { WorthStageProps } from "./worth/WorthStage"
@@ -44,7 +41,7 @@ vi.mock("./worth/WorthStage", () => ({
   WorthStage: (props: WorthStageProps) => <Probe stage="worth" props={props} />,
 }))
 vi.mock("./enrich/EnrichStage", () => ({
-  EnrichStage: (props: EnrichStageProps) => <Probe stage="enrich" props={props} />,
+  EnrichStage: () => <Probe stage="enrich" props={{}} />,
 }))
 vi.mock("./linkedin/LinkedinStage", () => ({
   LinkedinStage: () => <Probe stage="linkedin" props={{}} />,
@@ -156,11 +153,9 @@ describe("ReviewPage: each screen", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Enrich Contacts")
   })
 
-  it("gives the Enrich stage its panel", async () => {
-    const enrichment = enrichmentPanel({ mode: "running", completed: 2, total: 9 })
-    server.pages.enrich = reviewPage("enrich", { enrichment })
+  it("shows the Enrich stage under its title", async () => {
     renderPage("/?stage=enrich")
-    await waitFor(() => expect(probeProps("enrich")).toEqual({ enrichment, job: null }))
+    await waitFor(() => expect(probe("enrich")).toBeTruthy())
     expect(document.title).toBe("Enrich Contacts · Powerpacks")
   })
 
@@ -285,19 +280,39 @@ describe("ReviewPage: watching the server", () => {
     expect(stream().closed).toBe(true)
   })
 
-  it("hands a running job's numbers to the Enrich stage without reading the status", async () => {
-    renderPage("/?stage=enrich")
-    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    act(() => stream().emit({ ...runningEvent(3, 12), replay: true }))
-    expect(probeProps("enrich")).toMatchObject({
-      job: { status: "running", counts: { total: 12, completed: 3 } },
-    })
-    act(() => stream().emit(runningEvent(4, 12)))
-    expect(probeProps("enrich")).toMatchObject({ job: { counts: { completed: 4 } } })
-    expect(requests("/api/status")).toHaveLength(1)
+  it("reads the status again every ten seconds on Enrich, and moves on when the store has", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      renderPage("/?stage=enrich")
+      await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+      expect(requests("/api/status")).toHaveLength(2)
+      expect(probe("enrich")).toBeTruthy()
+
+      // The agent's run finished: the store is at LinkedIn now.
+      server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+      await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 2000 })
+      expect(where()).toBe("/?stage=linkedin")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it("reads the status on every connect, every other event and every unreadable one", async () => {
+  it("does not poll on Done", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      server.status = reviewStatus({ stage: "done" })
+      renderPage("/?stage=done")
+      await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+      await act(() => vi.advanceTimersByTimeAsync(30_000))
+      expect(requests("/api/status")).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("reads the status on every connect, every event and every unreadable one", async () => {
     renderPage("/?stage=enrich")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
     act(() => stream().open())
@@ -306,14 +321,6 @@ describe("ReviewPage: watching the server", () => {
     await waitFor(() => expect(requests("/api/status")).toHaveLength(3))
     act(() => stream().emit("not json"))
     await waitFor(() => expect(requests("/api/status")).toHaveLength(4))
-  })
-
-  it("re-reads the status for a running job on Done: there is no panel to take it", async () => {
-    server.status = reviewStatus({ stage: "done" })
-    renderPage("/?stage=done")
-    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    act(() => stream().emit(runningEvent()))
-    await waitFor(() => expect(requests("/api/status")).toHaveLength(2))
   })
 
   it("moves forward on a stage change observed while the screen was open", async () => {
@@ -355,13 +362,9 @@ describe("ReviewPage: watching the server", () => {
     renderPage("/?stage=enrich")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
     server.status = reviewStatus({ state_token: "token-2" })
-    server.pages.enrich = reviewPage("enrich", {
-      state_token: "token-2",
-      enrichment: enrichmentPanel({ mode: "running", completed: 1, total: 9 }),
-    })
+    server.pages.enrich = reviewPage("enrich", { state_token: "token-2" })
     act(() => stream().emit(changeEvent()))
-    await waitFor(() => expect(probeProps("enrich")).toMatchObject({ enrichment: { mode: "running" } }))
-    expect(seen.mounts).toBe(2)
+    await waitFor(() => expect(seen.mounts).toBe(2))
     expect(FakeEventSource.opened).toHaveLength(2)
   })
 

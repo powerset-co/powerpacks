@@ -50,6 +50,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
     build_queue,
     select_research,
 )
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection as research_selection
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     EnrichmentProgress,
     ResearchOutcome,
@@ -590,7 +591,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             profiles.return_value.run.return_value.status = "completed"
             judge.return_value.judge_errors = 0
             selection.return_value.run.side_effect = accept_real_profile
-            pipeline._run(0.0, lambda _: None)
+            pipeline.run(total=1, budget=0.0, request_fingerprint="fixture")
         self.assertEqual(self.db.query(
             "SELECT row_key FROM links WHERE parent_id='worth-parent' AND kind='synthetic'",
         ), [])
@@ -871,7 +872,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         changed_queue = [replace(plan.pending[0], bio="A newly changed relationship dossier")]
 
         with mock.patch.object(
-            review_enrichment.research_selection,
+            research_selection,
             "build_queue",
             return_value=changed_queue,
         ):
