@@ -1659,6 +1659,17 @@ class TypeScriptPinTests(ReviewApiFixture):
         _, status = self.get_json("/api/status")
         self.assertLessEqual(set(ts_fields("ReviewStatus")), set(status))
         self.assertIn(status["stage"], ts_union("ReviewView"))
+        self.assertEqual(set(status["pending"]), set(ts_fields("EnrichPending")))
+
+    def test_status_says_what_enrichment_still_has_to_do(self) -> None:
+        # The fixture store: one attached LinkedIn the judge has not checked, on one unsettled person.
+        _, status = self.get_json("/api/status")
+        self.assertEqual(status["stage"], "enrich")
+        self.assertEqual(status["pending"], {"lookups": 0, "linkedin_checks": 1, "unsure": 1, "profiles": 0})
+        self.assertEqual(
+            sum(status["pending"].values()),
+            SqliteReviewAdapter(self.db).snapshot().progress.enrichment_pending,
+        )
 
 
 if __name__ == "__main__":

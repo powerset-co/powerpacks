@@ -385,6 +385,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 "ok",
                 "stage",
                 "next_action",
+                "pending",
                 "state_token",
             },
         )

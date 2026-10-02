@@ -1,7 +1,8 @@
 """Queue-derived Deep Context workflow state.
 
 Changelog:
-- 2026-10-01: synthesis runs straight into enrichment without a worth-review stop.
+- 2026-10-01: synthesis runs straight into enrichment without a worth-review stop;
+  the progress names what enrichment still has to do, step by step.
 - 2026-09-25: a parent with a collected source bundle and no facts queues
   `synthesize`, ahead of every review queue.
 """
@@ -40,6 +41,11 @@ class StageProgress:
     linkedin_pending: int
     linkedin_done: int
     rejected: int
+    # What enrichment still has to do, step by step; `enrichment_pending` is their sum.
+    lookups_pending: int
+    judgments_pending: int
+    questions_pending: int
+    synthetic_pending: int
     enrichment_pending: int
 
 
@@ -72,6 +78,7 @@ WHERE a.kind='source_bundle' AND a.status='projected'
 """
     )[0]["n"]
     linkedin, review_questions, judge_candidates = workflow_identity_counts(db)
+    lookups, synthetic = enrichment_pending(db), unassembled_research(db)
     total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
     counts = db.query(
         WORTH_CTE
@@ -143,7 +150,11 @@ SELECT count(DISTINCT parent_id) FROM (
         linkedin_pending=linkedin.pending,
         linkedin_done=linkedin.done,
         rejected=int(counts["rejected"]),
-        enrichment_pending=unassembled_research(db) + review_questions + judge_candidates + enrichment_pending(db),
+        lookups_pending=lookups,
+        judgments_pending=judge_candidates,
+        questions_pending=review_questions,
+        synthetic_pending=synthetic,
+        enrichment_pending=lookups + judge_candidates + review_questions + synthetic,
     )
 
 

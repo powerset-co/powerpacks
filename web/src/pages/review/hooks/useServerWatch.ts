@@ -16,6 +16,8 @@ interface ServerWatch {
   onForward: (stage: ReviewView) => void
   /** The server's state changed under this screen. */
   onStale: () => void
+  /** Every status read, as it arrives. */
+  onStatus: (status: ReviewStatus) => void
 }
 
 /**
@@ -48,7 +50,8 @@ export function useServerWatch(watch: ServerWatch) {
     }
     // The screen left, or a stage-complete click landed, while the status was being read.
     if (!alive.current || completing()) return
-    const { page, preview, draft, onForward, onStale } = latest.current
+    const { page, preview, draft, onForward, onStale, onStatus } = latest.current
+    onStatus(status)
     const decision = decideStatus({
       view: page.view,
       preview,

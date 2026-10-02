@@ -207,7 +207,13 @@ export function approveResult(overrides: Partial<EnrichmentPanel> = {}): Approve
 }
 
 export function reviewStatus(overrides: Partial<ReviewStatus> = {}): ReviewStatus {
-  return { stage: "enrich", next_action: "approve_enrichment", state_token: "token-1", ...overrides }
+  return {
+    stage: "enrich",
+    next_action: "enrich",
+    state_token: "token-1",
+    pending: { lookups: 0, linkedin_checks: 0, unsure: 0, profiles: 0 },
+    ...overrides,
+  }
 }
 
 /** A mid-run enrichment event: `completed` of `total` lookups done. */

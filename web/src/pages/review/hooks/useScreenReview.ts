@@ -4,7 +4,9 @@ import { useReducedMotion } from "@/hooks/useReducedMotion"
 import { STAGE_DONE } from "@/lib/review/copy"
 import { stageHref } from "@/lib/review/links"
 import { fadeMs, STAGE_CHECK_MS } from "@/lib/review/timing"
-import type { DecisionProgress, PageProgress, ReviewView } from "@/types/review"
+import type { DecisionProgress, PageProgress, ReviewStatus, ReviewView } from "@/types/review"
+
+import type { Waiting } from "../enrich/EnrichStage"
 
 import type { Review } from "./useReview"
 import type { ReviewToast } from "./useReviewToast"
@@ -76,6 +78,12 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
   )
 
   const onForward = useCallback((stage: ReviewView) => transition(STAGE_DONE.enrich, stage), [transition])
+  /** What the latest status read said enrichment still has to do, and when it was read. */
+  const [waiting, setWaiting] = useState<Waiting | null>(null)
+  const onStatus = useCallback(
+    (status: ReviewStatus) => setWaiting({ pending: status.pending, at: Date.now() }),
+    [],
+  )
   const { syncStatus, noteServerStage } = useServerWatch({
     page,
     preview,
@@ -83,6 +91,7 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
     draft,
     onForward,
     onStale: reload,
+    onStatus,
   })
 
   const setGuidanceDraft = useCallback((typed: boolean) => {
@@ -130,5 +139,5 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
     ],
   )
 
-  return { review, progress, check, leaving }
+  return { review, progress, check, leaving, waiting }
 }

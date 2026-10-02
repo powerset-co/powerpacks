@@ -285,7 +285,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(
             set(payload),
-            {"primitive", "ok", "stage", "next_action", "state_token"},
+            {"primitive", "ok", "stage", "next_action", "state_token", "pending"},
         )
         self.assertEqual(payload["primitive"], "reconcile_review_web")
         self.assertIs(payload["ok"], True)

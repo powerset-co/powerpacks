@@ -266,4 +266,11 @@ class SqliteReviewAdapter:
             "stage": STAGE_BY_ACTION[action],
             "next_action": action,
             "state_token": workflow.state_token,
+            # What the waiting screen says is still being done.
+            "pending": {
+                "lookups": workflow.progress.lookups_pending,
+                "linkedin_checks": workflow.progress.judgments_pending,
+                "unsure": workflow.progress.questions_pending,
+                "profiles": workflow.progress.synthetic_pending,
+            },
         }

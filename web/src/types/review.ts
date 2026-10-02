@@ -177,11 +177,24 @@ export interface ApproveResult {
   enrichment: EnrichmentPanel
 }
 
+/** What enrichment still has to do, counted from the store: the waiting screen's words. */
+export interface EnrichPending {
+  /** People still to look up. */
+  lookups: number
+  /** Found LinkedIns the judge has not checked. */
+  linkedin_checks: number
+  /** People whose unsure matches are still to be resolved. */
+  unsure: number
+  /** People with no LinkedIn whose profile is still to be written. */
+  profiles: number
+}
+
 /** GET /api/status. */
 export interface ReviewStatus {
   stage: ReviewView
   next_action: string
   state_token: string
+  pending: EnrichPending
 }
 
 /** One /api/events message. `job` is the running enrichment's last receipt, else null. */

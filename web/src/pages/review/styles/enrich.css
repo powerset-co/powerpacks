@@ -46,6 +46,14 @@
 .review-page .enrich-state p {
   max-width: 420px;
 }
+.review-page .enrich-state .enrich-doing {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.review-page .enrich-state .enrich-time-left {
+  margin-top: 4px;
+  font-size: 13px;
+}
 
 .review-page .enrich-progress {
   width: min(100%, 360px);
