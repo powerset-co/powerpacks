@@ -7,6 +7,7 @@ stranger's content under this candidate)."""
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
@@ -88,6 +89,24 @@ class ProfileResultIdentityTest(unittest.TestCase):
         self.assertEqual(result.normalized_profile.echoed_public_identifier, "jordan-bravo-now")
         # Content survives for the judge.
         self.assertTrue(result.normalized_profile.experiences)
+
+    def test_a_stored_renamed_profile_reads_back_with_its_current_handle(self) -> None:
+        payload = _content_payload(
+            public_identifier="jordan-bravo-now",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo-now",
+        )
+        payload["normalized_profile"]["member_id"] = "42"
+        stored = ProfileResult.from_payload(
+            "jordan-bravo", "https://www.linkedin.com/in/jordan-bravo", payload
+        )
+
+        again = ProfileResult.from_payload(
+            "jordan-bravo", "https://www.linkedin.com/in/jordan-bravo", json.loads(stored.payload_json)
+        )
+
+        self.assertEqual(again.normalized_profile.echoed_public_identifier, "jordan-bravo-now")
+        self.assertEqual(again.normalized_profile.public_identifier, "jordan-bravo")
+        self.assertEqual(again.normalized_profile.member_id, "42")
 
     def test_rename_detected_from_url_when_pub_field_is_blank(self) -> None:
         payload = _content_payload(

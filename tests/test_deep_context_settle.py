@@ -101,20 +101,26 @@ class SettleEnrichmentTest(unittest.TestCase):
             self.assertEqual(link.machine_approved, 'auto')
             self.assertIn('profile is missing or empty', link.machine_reason)
 
-    def two_unsure(self, parent, *, first, second):
-        """One person with two LinkedIns the machine is unsure of; each is given a profile state."""
+    def two_unsure(self, parent, *, first, second, provider=({}, {}), accepted=()):
+        """One person with two LinkedIns the machine is unsure of; each is given a profile state.
+
+        `provider` adds what LinkedIn's own answer carried for each (its member id, the address
+        it answers to); `accepted` names the ones the machine accepted instead.
+        """
         keys = []
-        for slug, state in ((f'{parent}-one', first), (f'{parent}-two', second)):
+        for slug, state, answer in zip((f'{parent}-one', f'{parent}-two'), (first, second), provider):
             seed_identity(
                 self.db, parent_id=parent, person_id=f'person:{parent}', row_key=slug,
                 name='Jordan Bravo', machine_worth='yes',
                 linkedin_url=f'https://www.linkedin.com/in/{slug}',
+                link_updates={'machine_action': 'verify', 'machine_approved': 'auto',
+                              'judgment_fingerprint': 'fixture'} if slug in accepted else {},
             )
             link = links(self.db, row_keys=(slug,))[0]
             experiences = [{'title': 'Engineer'}] if state == 'content' else []
             result = ProfileResult.from_payload(slug, link.linkedin_url, {
                 'state': state, 'normalized_profile': {'success': True, 'full_name': 'Jordan Bravo',
-                                                       'experiences': experiences, 'education': []},
+                                                       'experiences': experiences, 'education': [], **answer},
             })
             project_profile_results(self.db, ((ProfileTarget(slug, link.linkedin_url, slug, parent), result),),
                                     self.root / 'profile-cache')
@@ -149,6 +155,41 @@ class SettleEnrichmentTest(unittest.TestCase):
         self.assertEqual(links(self.db, row_keys=(empty,))[0].machine_action, 'detach')
         self.assertIsNone(links(self.db, row_keys=(failed,))[0].machine_action)
         self.assertEqual([c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending], [failed])
+
+    def test_two_addresses_of_one_linkedin_profile_show_as_one(self):
+        # The person renamed their LinkedIn: the old address answers as the new one.
+        old, new = self.two_unsure('casey', first='content', second='content', provider=(
+            {'member_id': '42', 'public_identifier': 'casey-two'}, {'member_id': '42'},
+        ))
+        SettleEnrichment(db=self.db).run()
+        dropped, kept = links(self.db, row_keys=(old,))[0], links(self.db, row_keys=(new,))[0]
+        self.assertEqual((dropped.machine_action, dropped.machine_approved), ('detach', 'auto'))
+        self.assertEqual(dropped.machine_reason, 'same LinkedIn profile as casey-two')
+        self.assertIsNone(kept.machine_action)
+        self.assertEqual([c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending], [new])
+
+    def test_the_current_address_is_kept_whichever_comes_first(self):
+        new, old = self.two_unsure('casey', first='content', second='content', provider=(
+            {'member_id': '42'}, {'member_id': '42', 'public_identifier': 'casey-one'},
+        ))
+        SettleEnrichment(db=self.db).run()
+        self.assertEqual(links(self.db, row_keys=(old,))[0].machine_reason, 'same LinkedIn profile as casey-one')
+        self.assertEqual([c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending], [new])
+
+    def test_a_second_address_of_an_accepted_linkedin_leaves_the_queue(self):
+        accepted, unsure = self.two_unsure('casey', first='content', second='content', accepted=('casey-one',),
+                                           provider=({'member_id': '42'}, {'member_id': '42'}))
+        self.assertEqual([c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending], [unsure])
+        SettleEnrichment(db=self.db).run()
+        self.assertEqual(links(self.db, row_keys=(unsure,))[0].machine_reason, 'same LinkedIn profile as casey-one')
+        self.assertEqual(links(self.db, row_keys=(accepted,))[0].machine_action, 'verify')
+        self.assertEqual(linkedin_queue(self.db), [])
+
+    def test_two_different_linkedin_profiles_both_stay(self):
+        keys = self.two_unsure('casey', first='content', second='content',
+                               provider=({'member_id': '42'}, {'member_id': '43'}))
+        SettleEnrichment(db=self.db).run()
+        self.assertEqual([link.machine_action for link in links(self.db, row_keys=tuple(keys))], [None, None])
 
     def test_empty_accepted_retarget_detaches_and_clears_proposal(self):
         key = self.seed()
