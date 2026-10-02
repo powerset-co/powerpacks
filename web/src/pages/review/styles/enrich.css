@@ -8,7 +8,7 @@
   min-height: 380px;
 }
 
-/* The waiting screen's mark: the shape, inside a ring of three parts. */
+/* The waiting screen's mark: the shape, inside a ring of three parts that a dot circles. */
 .review-page .enrich-mark {
   position: relative;
   display: grid;
@@ -49,8 +49,42 @@
   }
 }
 
-/* The one thing that always moves: a soft shape that slowly changes form and turns, so the page
-   reads as at work. */
+/* A dot that circles the ring with a fading tail behind it: the run is alive, whatever part it
+   is on. The tail is a sweep of colour cut down to the ring's own line. */
+.review-page .enrich-orbit {
+  position: absolute;
+  inset: 0;
+  animation: enrich-orbit 2.6s linear infinite;
+}
+.review-page .enrich-orbit::before {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: conic-gradient(
+    transparent 0deg 230deg,
+    color-mix(in srgb, var(--primary) 75%, transparent) 360deg
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+}
+.review-page .enrich-orbit::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary) 45%, white);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--primary) 70%, transparent);
+}
+@keyframes enrich-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A soft shape that slowly changes form and turns, so the page reads as at work. */
 .review-page .enrich-shape {
   width: 76px;
   height: 76px;

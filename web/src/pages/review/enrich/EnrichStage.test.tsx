@@ -25,6 +25,7 @@ describe("EnrichStage", () => {
     expect(screen.getByText(STARTING)).toBeTruthy()
     expect(container.querySelector(".enrich-time-left")?.textContent).toBe("")
     expect(container.querySelector(".enrich-shape")).toBeTruthy()
+    expect(container.querySelector(".enrich-orbit")).toBeTruthy()
     expect(ring(container)).toEqual([null, null, null])
     expect(screen.queryByRole("button")).toBeNull()
   })

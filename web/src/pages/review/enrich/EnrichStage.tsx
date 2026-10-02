@@ -36,6 +36,7 @@ export function EnrichStage({ status }: EnrichStageProps) {
               />
             ))}
           </svg>
+          <span className="enrich-orbit" />
           <span className="enrich-shape" />
         </span>
       }
