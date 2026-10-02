@@ -13,6 +13,7 @@ Changelog:
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import replace
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -51,6 +52,13 @@ def empty_profile_decision(
         machine_proposed_url=None,
         machine_proposed_public_identifier=None,
     )
+
+
+def emptier_candidates(profiles: Mapping[str, ProfileResult | None]) -> tuple[str, ...]:
+    """Of one person's unsure LinkedIns, the ones with no real profile when another has one."""
+    if not any(has_real_profile(profile) for profile in profiles.values()):
+        return ()
+    return tuple(key for key, profile in profiles.items() if not has_real_profile(profile))
 
 
 def worth_decision(

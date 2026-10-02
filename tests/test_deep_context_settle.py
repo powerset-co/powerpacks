@@ -101,6 +101,46 @@ class SettleEnrichmentTest(unittest.TestCase):
             self.assertEqual(link.machine_approved, 'auto')
             self.assertIn('profile is missing or empty', link.machine_reason)
 
+    def two_unsure(self, parent, *, first, second):
+        """One person with two LinkedIns the machine is unsure of; each is given a profile state."""
+        keys = []
+        for slug, state in ((f'{parent}-one', first), (f'{parent}-two', second)):
+            seed_identity(
+                self.db, parent_id=parent, person_id=f'person:{parent}', row_key=slug,
+                name='Jordan Bravo', machine_worth='yes',
+                linkedin_url=f'https://www.linkedin.com/in/{slug}',
+            )
+            link = links(self.db, row_keys=(slug,))[0]
+            experiences = [{'title': 'Engineer'}] if state == 'content' else []
+            result = ProfileResult.from_payload(slug, link.linkedin_url, {
+                'state': state, 'normalized_profile': {'success': True, 'full_name': 'Jordan Bravo',
+                                                       'experiences': experiences, 'education': []},
+            })
+            project_profile_results(self.db, ((ProfileTarget(slug, link.linkedin_url, slug, parent), result),),
+                                    self.root / 'profile-cache')
+            keys.append(slug)
+        self.db.replace_imported_people((PeopleRow.model_validate({
+            'id': f'person:{parent}', 'full_name': 'Jordan Bravo',
+            'interaction_counts': json.dumps({'imessage': REVIEW_MESSAGE_BAR}),
+        }),))
+        return keys
+
+    def test_an_unsure_empty_linkedin_loses_to_one_with_content(self):
+        full, empty = self.two_unsure('casey', first='content', second='empty')
+        self.assertEqual({c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending}, {full, empty})
+        SettleEnrichment(db=self.db).run()
+        kept, dropped = links(self.db, row_keys=(full,))[0], links(self.db, row_keys=(empty,))[0]
+        self.assertEqual((dropped.machine_action, dropped.machine_approved), ('detach', 'auto'))
+        self.assertIn('profile is missing or empty', dropped.machine_reason)
+        self.assertIsNone(kept.machine_action)
+        # The person still checks the one with content.
+        self.assertEqual([c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending], [full])
+
+    def test_unsure_linkedins_that_are_all_empty_are_left_for_the_person(self):
+        keys = self.two_unsure('casey', first='empty', second='error')
+        SettleEnrichment(db=self.db).run()
+        self.assertEqual([link.machine_action for link in links(self.db, row_keys=tuple(keys))], [None, None])
+
     def test_empty_accepted_retarget_detaches_and_clears_proposal(self):
         key = self.seed()
         self.db.project_rows((IdentityMachineProjection(
