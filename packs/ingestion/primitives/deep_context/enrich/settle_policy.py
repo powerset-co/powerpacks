@@ -13,7 +13,6 @@ Changelog:
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
 from dataclasses import replace
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -34,10 +33,16 @@ def has_real_profile(profile: ProfileResult | None) -> bool:
     return profile is not None and profile.state != PROFILE_ERROR and profile.normalized_profile.present
 
 
+def nothing_to_show(profile: ProfileResult | None) -> bool:
+    """The profile was fetched and has nothing on it. One whose fetch failed, or that has not
+    been fetched, may still have: the next run fetches it again."""
+    return profile is not None and profile.state != PROFILE_ERROR and not profile.normalized_profile.present
+
+
 def empty_profile_decision(
     link: LinkSnapshotRow, *, own_connection: bool, profile: ProfileResult | None,
 ) -> MachineIdentitySettlement | None:
-    """The caller supplies accepted identities; human decisions remain intact."""
+    """For a LinkedIn the machine accepted or is unsure of; human decisions remain intact."""
     if own_connection or link.decision_action or has_real_profile(profile):
         return None
     fingerprint = hashlib.sha256(
@@ -52,13 +57,6 @@ def empty_profile_decision(
         machine_proposed_url=None,
         machine_proposed_public_identifier=None,
     )
-
-
-def emptier_candidates(profiles: Mapping[str, ProfileResult | None]) -> tuple[str, ...]:
-    """Of one person's unsure LinkedIns, the ones with no real profile when another has one."""
-    if not any(has_real_profile(profile) for profile in profiles.values()):
-        return ()
-    return tuple(key for key, profile in profiles.items() if not has_real_profile(profile))
 
 
 def worth_decision(

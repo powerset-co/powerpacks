@@ -3,7 +3,7 @@
 Flow::
 
     accepted identities + profiles -> machine detach empty lookups
-    unsure LinkedIns for one person -> machine detach the empty ones when another has content
+    unsure LinkedIns + profiles -> machine detach the ones fetched with nothing on them
     fact worth + non-owner imported messages + real profiles -> parent worth
 
 A parent has a real profile when it is one of the owner's own LinkedIn
@@ -25,7 +25,7 @@ from packs.ingestion.primitives.deep_context.db.worth_views import fact_worth
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import settle_machine_identities
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.enrich.settle_policy import (
-    empty_profile_decision, emptier_candidates, worth_decision,
+    empty_profile_decision, nothing_to_show, worth_decision,
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import stored_imported_people
 
@@ -63,22 +63,21 @@ class SettleEnrichment:
             else:
                 real_profiles.add(link.parent_id)
 
-        # Among the LinkedIns the machine is unsure of for one person, one with nothing on it
-        # loses to one with content: the person checks the fuller one alone.
-        queue = linkedin_queue(self.db)
-        unsure = {link.row_key: link for link in links(self.db, row_keys=tuple(
-            candidate.row_key for row in queue for candidate in row.candidates
+        # A LinkedIn the machine is unsure of is only worth a person's check when there is a
+        # profile to look at: one that was fetched and has nothing on it is detached instead.
+        unsure = links(self.db, row_keys=tuple(
+            candidate.row_key for row in linkedin_queue(self.db) for candidate in row.candidates
             if candidate.pending and not candidate.synthetic
-        ))}
-        unsure_profiles = profile_payloads(self.db, candidate_keys=unsure)
-        for row in queue:
-            keys = [candidate.row_key for candidate in row.candidates if candidate.row_key in unsure]
-            for key in emptier_candidates({key: unsure_profiles.get(key) for key in keys}):
-                decision = empty_profile_decision(
-                    unsure[key], own_connection=row.parent_id in own_connections, profile=unsure_profiles.get(key),
-                )
-                if decision is not None:
-                    settlements.append(decision)
+        ))
+        unsure_profiles = profile_payloads(self.db, candidate_keys=tuple(link.row_key for link in unsure))
+        for link in unsure:
+            profile = unsure_profiles.get(link.row_key)
+            # The LinkedIn a person was imported with stays, whatever its profile holds.
+            if link.raw_import or not nothing_to_show(profile):
+                continue
+            decision = empty_profile_decision(link, own_connection=False, profile=profile)
+            if decision is not None:
+                settlements.append(decision)
         settle_machine_identities(self.db, settlements)
 
         verdicts = fact_worth(self.db)

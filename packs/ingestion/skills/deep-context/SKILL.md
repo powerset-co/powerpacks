@@ -421,10 +421,10 @@ Settlement applies these rules before synthetic assembly:
 - A machine-accepted lookup LinkedIn with a missing, errored, or empty profile
   (no experience and no education) is detached with an empty-profile reason.
   Own `linkedin_csv` connections and human link decisions are preserved.
-- When the machine is unsure between several LinkedIns for one person and at
-  least one has content, the ones with a missing, errored, or empty profile are
-  detached the same way; the person checks the fuller one alone. When all of
-  them are empty, they are left for the person.
+- A LinkedIn the machine is unsure of is detached the same way when its profile
+  was fetched and has nothing on it: a person is only asked to check a LinkedIn
+  that has something to look at. One whose fetch failed waits for the next run,
+  and the LinkedIn a person was imported with is kept.
 - Without a human worth decision, effective Yes/Maybe becomes machine No when
   the parent has no real LinkedIn profile and fewer than `REVIEW_MESSAGE_BAR`
   (25) messages across non-owner imported people. The reason is

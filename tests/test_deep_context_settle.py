@@ -125,7 +125,7 @@ class SettleEnrichmentTest(unittest.TestCase):
         }),))
         return keys
 
-    def test_an_unsure_empty_linkedin_loses_to_one_with_content(self):
+    def test_an_unsure_linkedin_with_nothing_on_it_is_not_shown(self):
         full, empty = self.two_unsure('casey', first='content', second='empty')
         self.assertEqual({c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending}, {full, empty})
         SettleEnrichment(db=self.db).run()
@@ -136,10 +136,19 @@ class SettleEnrichmentTest(unittest.TestCase):
         # The person still checks the one with content.
         self.assertEqual([c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending], [full])
 
-    def test_unsure_linkedins_that_are_all_empty_are_left_for_the_person(self):
-        keys = self.two_unsure('casey', first='empty', second='error')
+    def test_a_person_whose_unsure_linkedins_are_all_empty_leaves_the_queue(self):
+        keys = self.two_unsure('casey', first='empty', second='empty')
+        self.assertEqual(len(linkedin_queue(self.db)), 1)
         SettleEnrichment(db=self.db).run()
-        self.assertEqual([link.machine_action for link in links(self.db, row_keys=tuple(keys))], [None, None])
+        self.assertEqual([link.machine_action for link in links(self.db, row_keys=tuple(keys))], ['detach', 'detach'])
+        self.assertEqual(linkedin_queue(self.db), [])
+
+    def test_an_unsure_linkedin_whose_fetch_failed_waits_for_the_next_fetch(self):
+        empty, failed = self.two_unsure('casey', first='empty', second='error')
+        SettleEnrichment(db=self.db).run()
+        self.assertEqual(links(self.db, row_keys=(empty,))[0].machine_action, 'detach')
+        self.assertIsNone(links(self.db, row_keys=(failed,))[0].machine_action)
+        self.assertEqual([c.row_key for c in linkedin_queue(self.db)[0].candidates if c.pending], [failed])
 
     def test_empty_accepted_retarget_detaches_and_clears_proposal(self):
         key = self.seed()
