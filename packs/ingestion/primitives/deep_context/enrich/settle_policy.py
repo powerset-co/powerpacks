@@ -6,7 +6,8 @@ settlement pass recomputes it from the fact verdict, profiles and messages;
 clearing these parent columns lifts the No when evidence arrives.
 
 Changelog:
-- 2026-10-01: settle empty lookup profiles and parents with too little history.
+- 2026-10-01: settle empty lookup profiles and parents with too little history;
+  an own LinkedIn connection is always worth Yes until a human says No.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR
 REVIEW_MESSAGE_BAR = 25
 EMPTY_PROFILE_REASON = 'LinkedIn profile is empty'
 UNKNOWN_PERSON_REASON = 'not enough to know who this is: no LinkedIn profile and '
+OWN_CONNECTION_REASON = 'own LinkedIn connection'
 
 
 def has_real_profile(profile: ProfileResult | None) -> bool:
@@ -53,9 +55,15 @@ def empty_profile_decision(
 
 def worth_decision(
     *, human_worth: HumanWorth | None, worth: MachineWorth,
-    real_profile: bool, messages: int,
+    own_connection: bool, real_profile: bool, messages: int,
 ) -> NetworkWorthFact | None:
-    if human_worth is not None or worth == MachineWorth.NO:
+    """The parent's settled worth, or None when the worth pass's own verdict stands."""
+    if human_worth is not None:
+        return None
+    # The owner chose to connect with this person: always in, until a human says no.
+    if own_connection:
+        return None if worth == MachineWorth.YES else NetworkWorthFact(MachineWorth.YES.value, OWN_CONNECTION_REASON)
+    if worth == MachineWorth.NO:
         return None
     if real_profile or messages >= REVIEW_MESSAGE_BAR:
         return None

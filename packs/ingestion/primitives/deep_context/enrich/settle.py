@@ -71,6 +71,7 @@ class SettleEnrichment:
             decision = worth_decision(
                 human_worth=HumanWorth(parent.human_worth) if parent.human_worth else None,
                 worth=verdicts[parent.parent_id],
+                own_connection=parent.parent_id in own_connections,
                 real_profile=parent.parent_id in real_profiles,
                 messages=messages[parent.parent_id],
             )

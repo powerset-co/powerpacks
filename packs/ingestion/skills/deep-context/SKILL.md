@@ -449,7 +449,10 @@ Settlement applies two rules before synthetic assembly:
   Own connections and LinkedIns a human kept count as real; other real profiles
   must be accepted, present, and have experience or education. At 25 messages the parent stays reviewable.
 
-The latter decision lives in `parents.machine_worth` / `machine_worth_reason`,
+- An own LinkedIn connection with no human worth decision is always worth Yes,
+  whatever the worth pass said.
+
+These worth decisions live in `parents.machine_worth` / `machine_worth_reason`,
 above facts and below human worth. JEV rewrites facts, so it cannot undo this
 rule. Rerunning settlement clears its No when a real profile arrives or messages
 reach 25. Worth-No parents leave LinkedIn review and later research, and receive

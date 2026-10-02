@@ -295,7 +295,10 @@ profile. Otherwise the profile must be accepted (verify/retarget, Yes/auto),
 present, and contain experience or education. A parent with a real profile or at least 25 messages
 keeps its worth. Effective No and human worth remain unchanged.
 
-Rule 2 writes existing `parents.machine_worth` / `machine_worth_reason` above
+3. An own LinkedIn connection with no human worth decision is always worth Yes,
+   whatever the worth pass said.
+
+Rules 2 and 3 write existing `parents.machine_worth` / `machine_worth_reason` above
 facts and below human worth. A later JEV facts pass cannot undo it. Settlement
 is idempotent and clears its No when a real profile arrives or the message sum
 reaches 25. Worth-No parents leave LinkedIn review and later research and do

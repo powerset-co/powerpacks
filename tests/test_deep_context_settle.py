@@ -126,6 +126,20 @@ class SettleEnrichmentTest(unittest.TestCase):
         # A LinkedIn the human kept is who this person is, whatever its profile holds.
         self.assertEqual(self.worth('human')['effective_worth'], 'yes')
 
+    def test_own_connection_is_always_worth_yes_without_a_human_decision(self):
+        for parent, worth in (('said-no', 'no'), ('said-maybe', 'maybe'), ('said-yes', 'yes')):
+            self.seed(parent, own=True, worth=worth)
+        self.seed('human-no', own=True, worth='yes', human_worth='no')
+        SettleEnrichment(db=self.db).run()
+        for parent in ('said-no', 'said-maybe', 'said-yes'):
+            self.assertEqual(self.worth(parent)['effective_worth'], 'yes')
+        self.assertEqual(self.worth('said-no')['machine_worth_reason'], 'own LinkedIn connection')
+        self.assertEqual(self.worth('human-no')['effective_worth'], 'no')
+        # A connection the worth pass already called yes needs no parent decision.
+        self.assertEqual(
+            tuple(self.db.query("SELECT machine_worth FROM parents WHERE parent_id='said-yes'")[0]), (None,),
+        )
+
     def test_filled_accepted_profile_keeps_worth(self):
         for parent, field in (('work', 'experiences'), ('school', 'education')):
             key = self.seed(parent, accepted=True, worth='maybe')

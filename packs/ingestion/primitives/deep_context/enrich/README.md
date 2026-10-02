@@ -28,6 +28,9 @@ non-owner imported people. Own connections and LinkedIns a human kept count as
 real; other profiles must be accepted, present, and have experience or education. The reason is
 `not enough to know who this is: no LinkedIn profile and N messages`.
 
+An own LinkedIn connection with no human worth decision is always worth Yes
+(`own LinkedIn connection`), whatever the worth pass said.
+
 This decision uses existing parent machine-worth columns, below human worth
 and above facts. JEV owns fact worth and cannot overwrite the parent decision.
 Reruns lift this No when a real profile arrives or messages reach 25. Worth-No

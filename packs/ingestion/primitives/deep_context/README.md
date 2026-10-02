@@ -236,6 +236,9 @@ experience or education.
 Messages sum non-owner imported people's `interaction_counts`. The reason is
 `not enough to know who this is: no LinkedIn profile and N messages`.
 
+An own LinkedIn connection with no human worth decision is always worth Yes
+(`own LinkedIn connection`), whatever the worth pass said.
+
 The decision uses `parents.machine_worth` / `machine_worth_reason`, above facts
 and below human worth, so JEV cannot overwrite it. Reruns clear its No when a
 real profile arrives or messages reach 25. Worth-No parents leave LinkedIn and
