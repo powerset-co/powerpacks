@@ -57,7 +57,7 @@ describe("FinishedPanel", () => {
     const { container, review } = await open()
     expect(lines(container)).toEqual([
       "6 decisions saved",
-      "2 re-research sent; they finish on their own",
+      "Re-research you sent finishes on its own.",
       "Review complete — go back to Codex.",
     ])
     await act(() => Promise.resolve())

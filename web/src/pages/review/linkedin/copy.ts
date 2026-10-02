@@ -54,6 +54,5 @@ export function decisionsSaved(count: number): string {
   return count === 1 ? "1 decision saved" : `${count} decisions saved`
 }
 
-export function researchRunning(count: number): string {
-  return `${count} re-research sent; they finish on their own`
-}
+/** Shown while any re-research is still out; the count would be stale once one lands. */
+export const RESEARCH_RUNNING = "Re-research you sent finishes on its own."
