@@ -1,4 +1,8 @@
-"""Thin official Parallel SDK task-group event-stream client."""
+"""Thin official Parallel SDK task-group event-stream client.
+
+Changelog:
+- 2026-10-02: a read is retried after any error, not only a transport error.
+"""
 
 from __future__ import annotations
 
@@ -109,8 +113,8 @@ class ParallelClient:
                     errors.append(f"{handle} ({run.run_id}): completed without JSON output")
             finished_runs.add(run.run_id)
 
-        # Retry reads only. Recover an ambiguous add_runs POST by listing the
-        # same group's handles on the next invocation.
+        # Retry reads only, whatever stopped them. Recover an ambiguous add_runs
+        # POST by listing the same group's handles on the next invocation.
         def read_runs(*, retire_failed: bool = False) -> set[str]:
             handles: set[str] = set()
             cursor = None
@@ -135,7 +139,7 @@ class ParallelClient:
                                 cursor = event.event_id
                             failures = 0
                     return handles
-                except (httpx.TransportError, APIConnectionError):
+                except Exception:
                     failures += 1
                     if failures >= MAX_READ_FAILURES:
                         raise
@@ -169,7 +173,7 @@ class ParallelClient:
                             cursor = event.event_id
                         if terminal:
                             break
-            except (httpx.TransportError, APIConnectionError):
+            except Exception:
                 failures += 1
                 if failures >= MAX_READ_FAILURES:
                     raise
@@ -177,7 +181,7 @@ class ParallelClient:
                 break
             try:
                 status = self._client.task_group.retrieve(group_id).status
-            except (httpx.TransportError, APIConnectionError):
+            except Exception:
                 failures += 1
                 if failures >= MAX_READ_FAILURES:
                     raise

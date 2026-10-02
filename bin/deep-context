@@ -362,7 +362,8 @@ case "$cmd" in
       fi
       open_review_ui_when_healthy "$review_port" "$review_stage" "$review_run" &
     fi
-    "${PY[@]}" "$PKG.review.reconcile_review_web" serve "${review_args[@]}"
+    # Bash 3.2 (macOS /bin/bash) calls an empty array unbound under `set -u`.
+    "${PY[@]}" "$PKG.review.reconcile_review_web" serve ${review_args[@]+"${review_args[@]}"}
     ;;
   stop|stop-review)
     # Stop only this review server. Refuse while its in-process enrichment run

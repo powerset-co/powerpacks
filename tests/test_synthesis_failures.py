@@ -181,6 +181,31 @@ class SynthesisFailureTests(unittest.TestCase):
             self.assertEqual([row['parent_id'] for row in db.query('SELECT parent_id FROM facts')], ['parent-jordan'])
             self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['parent-casey'])
 
+    def test_build_failure_leaves_one_person_pending_and_stores_the_other(self):
+        synthesize_person = runner.synthesize_person
+
+        async def synthesize(caller, person, **kwargs):
+            if person.person_id == 'parent-casey':
+                raise ValueError('synthetic bad payload')
+            return await synthesize_person(caller, person, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stderr = io.StringIO()
+            with mock.patch.object(runner, 'synthesize_person', side_effect=synthesize), redirect_stderr(stderr):
+                db, node, tally, _, _ = self._run(root, failures=0, second_person=True, paid_only=True)
+            self.assertEqual(tally.people_done, 2)
+            self.assertEqual(tally.errors, 1)
+            self.assertEqual(tally.projected_rows, 1)
+            self.assertEqual(
+                [(failure.person_id, failure.error) for failure in tally.failures],
+                [('parent-casey', 'not built: ValueError: synthetic bad payload')],
+            )
+            self.assertIn('[synthesize] parent-casey: not built: ValueError', stderr.getvalue())
+            self.assertTrue((root / 'facts/parent-jordan.jsonl').is_file())
+            self.assertEqual([row['parent_id'] for row in db.query('SELECT parent_id FROM facts')], ['parent-jordan'])
+            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['parent-casey'])
+
     def test_partial_failure_completes_tags_and_records_unfinished_person(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -25,6 +25,25 @@ class DeepContextCommandsTests(unittest.TestCase):
         self.assertEqual(len(commands), 1)
         self.assertIn("deep_context.realize.export_people", commands[0])
 
+    def test_bare_review_starts_the_server_under_macos_system_bash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = root / "calls"
+            (root / "uv").write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n')
+            # No server is found, probed or waited for: the run never touches a real one.
+            for name in ("lsof", "curl"):
+                (root / name).write_text("#!/bin/sh\nexit 1\n")
+            (root / "sleep").write_text("#!/bin/sh\nexit 0\n")
+            for fake in root.iterdir():
+                fake.chmod(0o755)
+            result = subprocess.run(["/bin/bash", str(ROOT / "bin/deep-context"), "review"], cwd=ROOT,
+                                    env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "CALLS": str(calls)},
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = calls.read_text().splitlines()
+        self.assertEqual(len(commands), 1)
+        self.assertTrue(commands[0].endswith("deep_context.review.reconcile_review_web serve"), commands[0])
+
     def test_maintenance_verbs_are_not_public(self) -> None:
         result = subprocess.run([str(ROOT / 'bin/deep-context'), '--help'], cwd=ROOT,
                                 capture_output=True, text=True, check=True)
