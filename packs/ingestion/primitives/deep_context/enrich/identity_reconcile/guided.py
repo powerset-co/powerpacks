@@ -205,7 +205,6 @@ class GuidedResearch:
                 "applied",
                 research.reason or "research result applied",
                 new_url=url,
-                resolved_pubs=[request.row_key],
             )
         return self.record(
             parent_id,
@@ -262,12 +261,12 @@ class GuidedResearch:
         state: str,  # finer progress code (e.g. "queued", "no_match") — detail_json only
         detail: str = "",
         new_url: str = "",
-        resolved_pubs: list[str] | tuple[str, ...] = (),
         candidate_url: str = "",
     ) -> GuidanceOutcome:
         # The person said the LinkedIn they were shown is wrong. How the retarget ends is saved
         # as their decision before it is reported, which settles the person's other LinkedIns:
         # the person never shows again.
+        resolved_pubs: list[str] = []
         if guidance_state in (GuidanceState.APPLIED, GuidanceState.FAILED) and links(
             self.db, row_keys=(request.row_key,)
         ):

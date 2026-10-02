@@ -3,6 +3,8 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-10-02: a re-research asked for in Check LinkedIn settles the person in the
+  background; the flow waits at review until it lands.
 - 2026-10-01: the agent previews and runs resumable `enrich` before opening
   Check LinkedIn; estimates at most $100 run without asking.
 - 2026-10-01: enrichment follows synthesis without a worth-review stop; local
@@ -181,7 +183,7 @@ and cannot be blocked by the Done page.
 | Profile prefetch | `enrich` runs cache-first profile hydration after research (RapidAPI is credits-based, one call per distinct profile cache miss). The UI stays cache-only. | Shared profile cache and SQLite profile artifacts |
 | Local settlement | Detaches empty machine-accepted lookup LinkedIns, then marks parents with no real profile and fewer than 25 messages worth No unless human worth exists. Re-evaluation lifts that No when evidence arrives. | SQLite machine identity and parent worth |
 | Synthetic assembly | Creates no-LinkedIn research cards for eligible parents; worth No receives none. | SQLite synthetic profiles |
-| LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
+| LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn, describe the right person, or Skip. A description queues a re-research in the background: a LinkedIn it finds that clears the judge is saved, otherwise the person's No is saved, and either settles the person's other LinkedIns, so the person is not shown again. The flow waits at review until every re-research lands. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions; guidance status |
 | Realization | Applies reviewed identities and merges their parents in SQLite, then exports the final roster. Fills profiles from SQLite and makes no provider calls. Synthetic profiles require a reviewed real LinkedIn replacement to be indexed. | SQLite roster, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
 
