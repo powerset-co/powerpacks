@@ -4,6 +4,7 @@ Flow::
 
     accepted identities + profiles -> machine detach empty lookups
     unsure LinkedIns + profiles -> machine detach the ones fetched with nothing on them
+    two addresses, one member id -> machine detach all but the one the person keeps
     fact worth + non-owner imported messages + real profiles -> parent worth
 
 A parent has a real profile when it is one of the owner's own LinkedIn
@@ -25,7 +26,7 @@ from packs.ingestion.primitives.deep_context.db.worth_views import fact_worth
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import settle_machine_identities
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.enrich.settle_policy import (
-    empty_profile_decision, nothing_to_show, worth_decision,
+    empty_profile_decision, nothing_to_show, same_profile_decisions, worth_decision,
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import stored_imported_people
 
@@ -78,6 +79,11 @@ class SettleEnrichment:
             decision = empty_profile_decision(link, own_connection=False, profile=profile)
             if decision is not None:
                 settlements.append(decision)
+        # A person who renamed their LinkedIn is not asked to pick between its two addresses.
+        settlements.extend(same_profile_decisions(
+            [(link, profiles.get(row_key)) for row_key, link in accepted_links.items()],
+            [(link, unsure_profiles.get(link.row_key)) for link in unsure],
+        ))
         settle_machine_identities(self.db, settlements)
 
         verdicts = fact_worth(self.db)

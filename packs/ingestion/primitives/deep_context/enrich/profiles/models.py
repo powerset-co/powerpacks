@@ -44,8 +44,11 @@ def canonicalize_provider_profile(
     )
     echoed_pub = ""
     if profile.get("success") is True:
+        # A profile read back from the store was stamped already: its echo sits beside the
+        # requested identifier, which the normalizer does not carry.
         echoed_pub = (
-            str(profile.get("public_identifier") or "").strip().lower()
+            str(profile_value.get("echoed_public_identifier") or "").strip().lower()
+            or str(profile.get("public_identifier") or "").strip().lower()
             or extract_public_identifier(str(profile.get("linkedin_url") or "")).lower()
         )
         # Agreement (or no echoed identifier): stamp the identity we
@@ -131,6 +134,8 @@ class NormalizedProfile:
     # The person's CURRENT vanity handle when it differs from the requested
     # slug (they renamed their LinkedIn URL); None when they agree.
     echoed_public_identifier: str | None
+    # LinkedIn's own id for the profile: the same behind every address it has had.
+    member_id: str | None
     linkedin_url: str | None
     full_name: str | None
     headline: str | None
@@ -148,6 +153,7 @@ class NormalizedProfile:
             payload.get("success") if isinstance(payload.get("success"), bool) else None,
             text(payload.get("public_identifier")),
             text(payload.get("echoed_public_identifier")) or None,
+            text(payload.get("member_id")) or None,
             text(payload.get("linkedin_url")),
             text(payload.get("full_name")),
             text(payload.get("headline")),

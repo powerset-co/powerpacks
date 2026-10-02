@@ -429,6 +429,11 @@ Settlement applies these rules before synthetic assembly:
   was fetched and has nothing on it: a person is only asked to check a LinkedIn
   that has something to look at. One whose fetch failed waits for the next run,
   and the LinkedIn a person was imported with is kept.
+- Two addresses of one LinkedIn profile (the same member id: the person renamed
+  their LinkedIn) are one LinkedIn. An unsure address is detached when the
+  person already keeps that profile; among unsure ones, the address LinkedIn
+  itself answers to stays and the others are detached with
+  `same LinkedIn profile as <kept>`.
 - Without a human worth decision, effective Yes/Maybe becomes machine No when
   the parent has no real LinkedIn profile and fewer than `REVIEW_MESSAGE_BAR`
   (25) messages across non-owner imported people. The reason is
