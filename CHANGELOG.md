@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.11.0...powerpacks-v3.12.0) (2026-10-02)
+
+
+### Features
+
+* **deep-context:** merge the same name, compare only names that can match ([#655](https://github.com/powerset-co/powerpacks/issues/655)) ([0537484](https://github.com/powerset-co/powerpacks/commit/0537484f09ac0d3fee77fbf3c5f7edd99537790f))
+
 ## [3.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.4...powerpacks-v3.11.0) (2026-10-02)
 
 
