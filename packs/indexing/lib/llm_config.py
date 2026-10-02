@@ -31,7 +31,9 @@ DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 # "flex" bills gpt-5.x chat tokens at ~50% but is a server-side queue: calls
 # routinely take minutes regardless of client concurrency. Interactive paths
 # (Modal onboarding) set POWERPACKS_OPENAI_SERVICE_TIER=default for speed.
-DEFAULT_SERVICE_TIER = "flex"
+FLEX_SERVICE_TIER = "flex"
+STANDARD_SERVICE_TIER = "default"
+DEFAULT_SERVICE_TIER = FLEX_SERVICE_TIER
 
 # Pull concurrency from tier profile (tier_5 default = 256).
 _profile = openai_usage_tier_profile()
@@ -69,7 +71,7 @@ def openai_service_tier() -> str:
 
 def openai_price_multiplier() -> float:
     """Multiplier on CHAT_MODEL_PRICES (standard-tier) for the active tier."""
-    return 0.5 if openai_service_tier() == "flex" else 1.0
+    return 0.5 if openai_service_tier() == FLEX_SERVICE_TIER else 1.0
 
 
 def api_call_kwargs(model: str) -> dict[str, Any]:

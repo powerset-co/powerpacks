@@ -1,4 +1,8 @@
-"""One configured OpenAI Responses caller for Deep Context paid stages."""
+"""One configured OpenAI Responses caller for Deep Context paid stages.
+
+Changelog:
+- 2026-10-02: a request the Flex tier refuses (429) is sent once more on the standard tier.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +13,12 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
 
 from packs.indexing.lib.llm_config import (
     CHAT_MODEL_PRICES_PER_1K_USD,
+    FLEX_SERVICE_TIER,
+    STANDARD_SERVICE_TIER,
     is_reasoning_model,
     openai_price_multiplier,
     openai_service_tier,
@@ -148,14 +154,24 @@ class OpenAIResponsesCaller:
             # config.max_retries transient-status attempts happen inside this
             # one await before it returns or raises; usage below tallies only
             # the response the SDK ultimately hands back.
-            response = await self.client.responses.create(
-                model=self.config.model,
-                input=[
+            request = {
+                "model": self.config.model,
+                "input": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 **self._request_kwargs(schema, schema_name),
-            )
+            }
+            try:
+                response = await self.client.responses.create(**request)
+            except RateLimitError:
+                # Flex is spare capacity: when it has none, the SDK's retries run out within
+                # seconds. The standard tier answers at twice the price.
+                if request.get("service_tier") != FLEX_SERVICE_TIER:
+                    raise
+                response = await self.client.responses.create(
+                    **{**request, "service_tier": STANDARD_SERVICE_TIER}
+                )
         usage = self._usage(response)
         self.usage = self.usage + usage
         return OpenAIResponse(self._payload(response, context), usage)
