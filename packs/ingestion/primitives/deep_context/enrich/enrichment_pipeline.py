@@ -4,12 +4,14 @@ Changelog:
 - 2026-10-01: the synchronous named chain owns progress and terminal receipts.
 - 2026-10-01: the run records where it stands in SQLite, step by step, and what it left
   unfinished when it completes; the flow and the waiting screen read that record.
+- 2026-10-01: a step that raises is run once more before the run fails.
 """
 
 from __future__ import annotations
 
 import threading
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -40,6 +42,15 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
     ReceiptStatus,
 )
 from packs.ingestion.primitives.deep_context.shared.common import ENRICH_MANIFEST
+
+
+# A step that raises is run once more after this wait: every step skips what is already stored,
+# and what stops one is most often a dropped connection.
+STEP_RETRY_SECONDS = 5
+
+
+class ResearchStopped(RuntimeError):
+    """Research declined to run (no approval, a bad budget): running it again changes nothing."""
 
 
 class EnrichmentPipeline:
@@ -131,7 +142,7 @@ class EnrichmentPipeline:
                 errors.append(f"research: {research.message or research.reason or 'failed'}")
         elif research.status.value not in RECONCILE_SUCCESS_STATUSES:
             detail = "; ".join(research.errors) or research.message or research.reason
-            raise RuntimeError(
+            raise ResearchStopped(
                 f"research stopped with status {research.status.value}"
                 f"{f': {detail}' if detail else ''}"
             )
@@ -185,6 +196,19 @@ class EnrichmentPipeline:
             ("synthetic", self._synthetic),
         )
 
+    def _attempt(self, phase: str, step: Callable[[], tuple[str, ...]], errors: list[str]) -> None:
+        """Run one step, and once more if it raises."""
+        try:
+            errors.extend(step())
+        except ResearchStopped:
+            raise
+        except Exception as exc:
+            again = f"{phase}: ran again after {type(exc).__name__}: {exc}"[:300]
+            errors.append(again)
+            print(f"[enrich] {again}", file=sys.stderr, flush=True)
+            time.sleep(STEP_RETRY_SECONDS)
+            errors.extend(step())
+
     def run(self, *, total: int, budget: float, request_fingerprint: str) -> dict[str, object]:
         """Run every step; SQLite and stage outputs decide what needs work."""
         errors: list[str] = []
@@ -211,7 +235,7 @@ class EnrichmentPipeline:
             if self.on_change:
                 self.on_change()
             try:
-                errors.extend(step())
+                self._attempt(phase, step, errors)
             except BaseException as exc:
                 self.last_error = f"enrichment: {type(exc).__name__}: {exc}"
                 self.db.record_enrich_run(

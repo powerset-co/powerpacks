@@ -33,6 +33,9 @@ class EnrichCommandTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.db = Db(self.root / "deep-context.sqlite")
         self.manifest = self.root / "deep-research" / "manifest.json"
+        retry_wait = mock.patch.object(pipeline_module, "STEP_RETRY_SECONDS", 0)
+        retry_wait.start()
+        self.addCleanup(retry_wait.stop)
 
     def pipeline(self, **kwargs):
         return pipeline_module.EnrichmentPipeline(self.db, manifest=self.manifest, **kwargs)
@@ -41,7 +44,7 @@ class EnrichCommandTest(unittest.TestCase):
         value = self.db.query("SELECT value FROM meta WHERE key=?", (ENRICH_RUN_KEY,))[0]["value"]
         return EnrichRun.from_json(value)
 
-    def mock_steps(self, seen, *, fail=None):
+    def mock_steps(self, seen, *, fail=None, fail_once=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
         outcomes = {
@@ -64,7 +67,7 @@ class EnrichCommandTest(unittest.TestCase):
                 self.assertEqual((record.status, record.step), (EnrichRunStatus.RUNNING, phase))
                 self.assertEqual(workflow_state(self.db).next_action, "enrich")
                 seen.append(phase)
-                if phase == fail:
+                if phase == fail or (phase == fail_once and seen.count(phase) == 1):
                     raise RuntimeError("fixture failure")
                 return outcomes[phase]
             stack.enter_context(mock.patch(
@@ -93,11 +96,32 @@ class EnrichCommandTest(unittest.TestCase):
         self.assertEqual(self.run_record().unfinished.judgments, ("candidate:person",))
         self.assertNotEqual(workflow_state(self.db).next_action, "enrich")
 
+    def test_a_step_that_raises_once_is_run_again_and_the_run_completes(self):
+        seen = []
+        self.mock_steps(seen, fail_once="identity")
+        result = self.pipeline().run(total=1, budget=0, request_fingerprint="fixture")
+        self.assertEqual(seen, ["research", "profiles", "identity", "identity", "relationships", "settle", "synthetic"])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["steps"], STEPS)
+        self.assertEqual(result["errors"], ["identity: ran again after RuntimeError: fixture failure"])
+        self.assertEqual(self.run_record().status, EnrichRunStatus.COMPLETED)
+
+    def test_research_that_declines_to_run_is_not_run_again(self):
+        self.mock_steps([])
+        with mock.patch.object(pipeline_module, "ReconcileDeepResearch") as research:
+            research.return_value.run.return_value = SimpleNamespace(
+                status=ReceiptStatus.NEEDS_APPROVAL, errors=(), message="", reason="not approved")
+            with self.assertRaises(pipeline_module.ResearchStopped):
+                self.pipeline().run(total=1, budget=0, request_fingerprint="fixture")
+            self.assertEqual(research.return_value.run.call_count, 1)
+
     def test_failure_propagates_and_retry_starts_at_research(self):
         seen = []
         patches = self.mock_steps(seen, fail="identity")
         with self.assertRaisesRegex(RuntimeError, "fixture failure"):
             self.pipeline().run(total=1, budget=0, request_fingerprint="fixture")
+        # The step was run twice before the run gave up.
+        self.assertEqual(seen, ["research", "profiles", "identity", "identity"])
         failed = json.loads(self.manifest.read_text())
         self.assertEqual((failed["status"], failed["phase"]), ("failed", "identity"))
         self.assertIn("fixture failure", failed["error"])

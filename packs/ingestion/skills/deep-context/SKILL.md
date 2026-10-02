@@ -372,6 +372,7 @@ errors; it does not select work.
 The run also writes where it stands into SQLite (the `enrich_run` row of `meta`):
 its status, the step it is on, its errors, and, when it completes, what it could
 not finish. One person's lookup, fetch or judgment failing does not stop the run.
+A step that crashes is run once more after a few seconds before the run fails.
 A completed run moves the flow on to Check LinkedIn with those left over; the
 next run tries them again. A run that stopped part-way leaves `running` or
 `failed` there, and the next action stays `enrich` until a run completes. The
