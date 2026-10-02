@@ -104,7 +104,13 @@ class ParallelClient:
                         )
                         return
                 if isinstance(output, TaskRunJsonOutput):
-                    on_result(handle, output)
+                    # One answer that cannot be stored leaves that person to be looked up again.
+                    try:
+                        on_result(handle, output)
+                    except Exception as exc:
+                        errors.append(
+                            f"{handle} ({run.run_id}): not stored: {type(exc).__name__}: {exc}"[:300]
+                        )
                 else:
                     errors.append(f"{handle} ({run.run_id}): completed without JSON output")
             finished_runs.add(run.run_id)

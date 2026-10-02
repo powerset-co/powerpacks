@@ -287,6 +287,76 @@ class ProviderTests(unittest.TestCase):
             max_retries=0,
         )
 
+    def test_result_storage_failure_leaves_other_handle_stored(self) -> None:
+        class Events(list):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        handles = ("jordan-bravo", "casey-delta")
+        runs = [
+            TaskRunEvent.model_validate({
+                "type": "task_run.state",
+                "event_id": f"event-{index}",
+                "run": {
+                    "interaction_id": f"interaction-{index}",
+                    "is_active": False,
+                    "processor": "core2x",
+                    "run_id": f"run-{index}",
+                    "status": "completed",
+                    "metadata": {"handle": handle},
+                },
+                "output": provider_output(
+                    linkedin=f"https://www.linkedin.com/in/{handle}-test",
+                ).model_dump(mode="json"),
+            })
+            for index, handle in enumerate(handles, start=1)
+        ]
+        task_group = SimpleNamespace(
+            create=mock.Mock(return_value=SimpleNamespace(task_group_id="group-1")),
+            add_runs=mock.Mock(),
+            events=mock.Mock(return_value=Events([
+                *runs,
+                TaskGroupStatusEvent(
+                    event_id="event-3", type="task_group_status", status=status(completed=2),
+                ),
+            ])),
+            get_runs=mock.Mock(return_value=Events(runs)),
+        )
+        attempted = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def store(handle, output):
+                attempted.append(handle)
+                if handle == "jordan-bravo":
+                    raise OSError("synthetic storage failure")
+                (root / f"{handle}.json").write_text(output.model_dump_json())
+
+            def initialize_client(client, **_kwargs):
+                client.task_group = task_group
+
+            with mock.patch.object(
+                parallel_client.Parallel, "__init__", autospec=True, side_effect=initialize_client,
+            ):
+                errors = parallel_client.ParallelClient("test-key", "https://parallel.test", "beta").execute(
+                    [{"input": {}, "metadata": {"handle": handle}, "processor": "core2x"}
+                     for handle in handles],
+                    SimpleNamespace(batch_size=500, stream_timeout=60, output_dir=root),
+                    lambda _: None,
+                    store,
+                )
+
+            self.assertEqual(attempted, list(handles))
+            self.assertFalse((root / "jordan-bravo.json").exists())
+            saved = json.loads((root / "casey-delta.json").read_text())
+            self.assertEqual(saved["content"]["linkedin_url"], "https://www.linkedin.com/in/casey-delta-test")
+            self.assertEqual(errors, (
+                "jordan-bravo (run-1): not stored: OSError: synthetic storage failure",
+            ))
+
     def test_success_writes_one_provider_artifact_and_projects_basis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

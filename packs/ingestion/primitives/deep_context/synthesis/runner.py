@@ -288,6 +288,23 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
     }
 
 
+def _store_facts(
+    db: Db, config: SynthesisConfig, histories: dict[str, FactHistory], result: SynthesisResult,
+) -> int:
+    """Append this run's record to the parent's facts file and project it; the rows projected."""
+    parent_id = result.person_id
+    path = config.facts_dir / f"{parent_id}.jsonl"
+    history = histories.get(parent_id, FactHistory())
+    records = (*(item.payload() for item in history.records), result.record.as_dict())
+    if path.exists():
+        shutil.copy2(path, path.with_suffix(path.suffix + ".bkup"))
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in records),
+        encoding="utf-8",
+    )
+    return project_parent_fact(db, path, parent_id).synced_rows
+
+
 def run_paid(
     db: Db,
     config: SynthesisConfig,
@@ -308,18 +325,15 @@ def run_paid(
                       file=sys.stderr, flush=True)
             return
         parent_id = result.person_id
-        path = config.facts_dir / f"{parent_id}.jsonl"
-        history = histories.get(parent_id, FactHistory())
-        record = result.record.as_dict()
-        records = (*(item.payload() for item in history.records), record)
-        if path.exists():
-            shutil.copy2(path, path.with_suffix(path.suffix + ".bkup"))
-        path.write_text(
-            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in records),
-            encoding="utf-8",
-        )
-        projection = project_parent_fact(db, path, parent_id)
-        tally.projected_rows += projection.synced_rows
+        # One person's answer that cannot be stored leaves that person for the next run.
+        try:
+            tally.projected_rows += _store_facts(db, config, histories, result)
+        except Exception as exc:
+            failure = SynthesisFailure(parent_id, 0, f"not stored: {type(exc).__name__}: {exc}"[:300])
+            tally.errors += 1
+            tally.failures.append(failure)
+            print(f"[synthesize] {parent_id}: {failure.error}", file=sys.stderr, flush=True)
+            return
         if tally.people_done % 25 == 0:
             print(f"[synthesize] {tally.people_done}/{total} people", file=sys.stderr, flush=True)
 
@@ -466,28 +480,40 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
     load_env()
     usage = JevUsage()
 
+    failed: list[Exception] = []
+
     async def tag_all() -> None:
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
         async def tag(parent_id: str, path: Path) -> None:
             nonlocal usage
             async with semaphore:
-                facts, bundle, timestamp, history = _tagging_inputs(bundles, parent_id, path)
-                result = await jev_worth.classify(
-                    facts=facts,
-                    bundle=bundle,
-                    owner=owner,
-                    reference_date=timestamp[:10],
-                    output_dir=config.facts_dir.parent,
-                    headline=headlines.get(parent_id, ""),
-                    history=history,
-                )
-                _write_worth(path, result, timestamp)
-                project_parent_fact(db, path, parent_id)
+                # One person's worth request failing leaves that person without worth; the
+                # next run asks again.
+                try:
+                    facts, bundle, timestamp, history = _tagging_inputs(bundles, parent_id, path)
+                    result = await jev_worth.classify(
+                        facts=facts,
+                        bundle=bundle,
+                        owner=owner,
+                        reference_date=timestamp[:10],
+                        output_dir=config.facts_dir.parent,
+                        headline=headlines.get(parent_id, ""),
+                        history=history,
+                    )
+                    _write_worth(path, result, timestamp)
+                    project_parent_fact(db, path, parent_id)
+                except Exception as exc:
+                    failed.append(exc)
+                    print(f"[worth] {parent_id}: {type(exc).__name__}: {exc}"[:300], file=sys.stderr, flush=True)
+                    return
                 usage = usage + result.usage
 
         for start in range(0, len(paths), TAG_CHUNK_PEOPLE):
             await asyncio.gather(*(tag(parent_id, path) for parent_id, path in paths[start:start + TAG_CHUNK_PEOPLE]))
 
     asyncio.run(tag_all())
+    # Everyone failing is a broken provider or connection, not a few people.
+    if len(failed) == len(paths):
+        raise failed[0]
     return usage

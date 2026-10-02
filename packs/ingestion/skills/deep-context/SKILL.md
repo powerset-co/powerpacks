@@ -122,29 +122,79 @@ Create a visible plan with these exact phases and keep it current:
 
 Mark a no-op complete; do not silently drop it.
 
-### When a command fails
+### When anything fails
 
-Keep going. Read the error, fix what caused it (a missing dependency, a stale
-path, a malformed row, a bug in this checkout's code), and run the same command
-again: every command continues from what is already stored. Stop and tell the
-user only for what you cannot fix from here:
+The user should never have to read an error, find a log, or send one to anyone.
+Whatever goes wrong in any step, you work out what it is and either get past it
+or tell them, in one or two plain sentences, what is broken and what they need
+to do. This applies to every command in this skill.
 
-- the provider account has no credit, or a key is rejected;
-- there is no internet connection;
-- the machine is out of memory or disk;
-- a permission only the user can grant (Full Disk Access).
+**Some people failing is normal. Keep going.** The paid steps leave a person
+they could not finish for a later run and carry on with the rest. A lookup that
+times out, a profile that will not load, a model answer that makes no sense for
+one person: none of these is a reason to stop, retry the step, or ask the user.
+Finish the flow with the people who worked and say how many were left behind.
+
+That holds for a few people. When a step finished nobody, or most people failed
+with the same error, it is not a few people: a provider or the connection is
+broken. Treat it as any other error below, even when the command exited 0.
+
+What each step is for, and what it may leave behind:
+
+| Step | Its job | May leave behind |
+|---|---|---|
+| `collect` | every person in scope has their messages stored | nothing: it reads local stores, so a failure is a permission or a bug |
+| `synthesize` | every collected person has facts and a worth | people whose answer failed; they are listed in the `synthesis_run` row of `meta` and tried again next run. It fails only when everyone failed |
+| `cluster`, `parents` | one record per person | pairs it could not judge stay two people |
+| `enrich` | worth-yes people have a checked LinkedIn or a written profile | people it could not look up, fetch or judge; counted in the command's `left` and listed in the `enrich_run` row |
+| `realize`, index | the people file and the search index are written | nothing: local, so a failure is a bug |
+
+**Any other error is yours to work out.** In this order:
+
+1. Run the same command again. Every command continues from what is already
+   stored, so a second run costs nothing for work that is done.
+2. If it fails the same way, find out why before trying anything else. Read the
+   error text, the step's `manifest.json`, and for enrichment the run's own
+   record (`sqlite3 .powerpacks/deep-context/deep-context.sqlite "SELECT value
+   FROM meta WHERE key='enrich_run'"`: status, step, errors, what was left).
+   Then check the cause yourself instead of guessing from the wording:
+   - **Connection** (timeouts, `SSLError`, `ConnectError`, "name resolution"):
+     run `curl -sS -m 5 -o /dev/null https://api.openai.com`. If that fails, the
+     machine is offline: stop and tell the user their internet connection is
+     not working and that you will continue when it is back. If it succeeds,
+     the provider or the network was briefly unreliable: wait a minute and run
+     the command again.
+   - **A provider refuses the key or has no credit** (401, 403, 402,
+     "insufficient quota", "billing"): stop and tell the user which provider
+     and which of the two. Do not edit keys.
+   - **A provider is busy or down** (429, 5xx): wait a minute, run again.
+   - **Disk or memory** ("No space left", "MemoryError", the process killed):
+     check with `df -h .`; stop and tell the user what is full.
+   - **A permission only the user can grant** (Full Disk Access): stop and tell
+     them where to grant it.
+   - **A bug or bad data in this checkout** (a traceback that ends inside
+     `packs/`): read the code at that line, make the smallest change that lets
+     the step skip or survive the row that breaks it, and run again. Do not
+     work around it by deleting data or by skipping the step.
+3. Stop after three attempts at the same command. Tell the user what is broken
+   and what you tried, in plain words, and send the report below. Do not loop.
+
+When you tell the user something is broken, name the thing and the action:
+"Your internet connection is not working. Reconnect and tell me to continue."
+Never paste a traceback at them and never ask them to send logs.
 
 After a run in which anything failed, whether or not you got past it, send the
 developers one report with the feedback sender. Send it without asking: it
 carries commands, statuses, error text, what you changed, stage `manifest.json`
-paths with their counts, and the powerpacks version, and nothing that names a
-person or quotes a dossier or a message.
+paths with their counts, the enrichment run's status, step and errors, and the
+powerpacks version, and nothing that names a person or quotes a dossier or a
+message.
 
 ```bash
 uv run --project . python packs/powerset/primitives/send_feedback/send_feedback.py \
   --comment "deep-context: <command> failed; <what you did to get past it>" \
   --category deep-context \
-  --metadata '{"source":"powerpacks-agent","skill":"deep-context","failing_command":"...","error":{"status":"failed","detail":"last ~500 chars"},"fix":"...","manifests":{"<path>":{"status":"...","phase":"..."}},"powerpacks_version":"..."}'
+  --metadata '{"source":"powerpacks-agent","skill":"deep-context","failing_command":"...","error":{"status":"failed","detail":"last ~500 chars"},"cause":"connection|key|credit|provider|disk|permission|bug","fix":"...","attempts":2,"manifests":{"<path>":{"status":"...","phase":"..."}},"powerpacks_version":"..."}'
 ```
 
 ### 1. Scope and owner
@@ -276,11 +326,12 @@ another GPT call; JEV resumes from its request cache; human decisions remain unc
 rebuild facts.
 
 Synthesis retries transient API failures three times through the SDK. If any
-batch remains failed, the person's prior facts stay and the stage reports
-failure in `.powerpacks/deep-context/facts/manifest.json`, including person,
-batch, and error details. Read that receipt before retrying; do not assume
-throttling or continue to compose. A retry processes the incomplete person
-again, including their successful batches, so preview its cost first.
+batch remains failed, the person's prior facts stay, the person is left for the
+next run, and `.powerpacks/deep-context/facts/manifest.json` lists person,
+batch, and error. The run still completes, scores worth for everyone else, and
+the flow moves on without those people. It fails only when every person failed.
+A later run processes a left-behind person again, including their successful
+batches.
 Successful extraction records carry model/effort, so a failed model switch
 remains pending on an ordinary rerun. `--force` re-extracts the current bounded
 bundle and preserves history; retry a failed forced run with `--force` again.

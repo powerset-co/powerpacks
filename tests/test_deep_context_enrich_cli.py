@@ -206,6 +206,7 @@ class EnrichCommandTest(unittest.TestCase):
         payload = json.loads(out.getvalue())
         # The lookup no step did is left for the next run; the flow moves on without it.
         self.assertEqual((code, payload["status"], payload["next_action"]), (0, "completed", "realize"))
+        self.assertEqual(payload["left"], {"lookups": 1, "linkedin_checks": 0, "unsure": 0, "profiles": 0})
         self.assertEqual(run.call_args.kwargs["budget"], .05)
         self.assertIn("[enrich] research", log.getvalue())
 

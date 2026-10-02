@@ -315,7 +315,9 @@ def judge_candidates(db: Db) -> list[LinkSnapshotRow]:
 def research_candidate_urls(db: Db) -> dict[str, str]:
     return {row["candidate_key"]: row["linkedin_url"] for row in db.query(
         "SELECT candidate_key, json_extract(result_json, '$.content.linkedin_url') AS linkedin_url "
-        "FROM research WHERE status='complete' AND candidate_key IS NOT NULL"
+        "FROM research WHERE status='complete' AND candidate_key IS NOT NULL "
+        # A provider answer whose LinkedIn is not text is no LinkedIn.
+        "AND json_type(result_json, '$.content.linkedin_url')='text'"
     )}
 
 

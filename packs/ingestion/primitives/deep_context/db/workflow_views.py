@@ -5,6 +5,8 @@ Changelog:
   the progress names what enrichment still has to do, step by step.
 - 2026-10-01: the enrich command's run record decides when enrichment is finished: what a
   completed run could not finish no longer holds the flow, and an unfinished run does.
+- 2026-10-01: the same for synthesis: parents its latest run could not write facts for no longer
+  hold the flow on `synthesize`.
 - 2026-09-25: a parent with a collected source bundle and no facts queues
   `synthesize`, ahead of every review queue.
 """
@@ -30,9 +32,11 @@ from packs.ingestion.primitives.deep_context.db.view_models import LinkedInProgr
 from packs.ingestion.primitives.deep_context.db.models import (
     ENRICH_RUN_KEY,
     PARENT_WORTH_PREFIX,
+    SYNTHESIS_RUN_KEY,
     EnrichmentWork,
     EnrichRun,
     EnrichRunStatus,
+    SynthesisRun,
 )
 
 
@@ -80,14 +84,23 @@ class WorkflowState:
     state_token: str
 
 
-def _stage_progress(db: Db, *, worth: WorthCounts) -> StageProgress:
-    synthesize_pending = db.query(
+def synthesis_pending(db: Db) -> tuple[str, ...]:
+    """Parents with collected messages and no facts yet."""
+    return tuple(row["parent_id"] for row in db.query(
         """
-SELECT count(DISTINCT a.parent_id) AS n FROM artifacts a
+SELECT DISTINCT a.parent_id FROM artifacts a
 WHERE a.kind='source_bundle' AND a.status='projected'
   AND NOT EXISTS(SELECT 1 FROM facts f WHERE f.parent_id=a.parent_id)
+ORDER BY a.parent_id
 """
-    )[0]["n"]
+    ))
+
+
+def _stage_progress(db: Db, *, worth: WorthCounts) -> StageProgress:
+    # What the latest synthesis run tried and could not finish waits for the next run.
+    runs = db.query("SELECT value FROM meta WHERE key=?", (SYNTHESIS_RUN_KEY,))
+    tried = set(SynthesisRun.from_json(runs[0]["value"]).unfinished) if runs else set()
+    synthesize_pending = len(set(synthesis_pending(db)) - tried)
     linkedin, work = _enrichment_work(db)
     run = _enrich_run(db)
     completed = run is not None and run.status == EnrichRunStatus.COMPLETED

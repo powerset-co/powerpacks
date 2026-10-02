@@ -148,8 +148,9 @@ class ResearchStatus(StrEnum):
     FAILED = "failed"
 
 
-# The `meta` key of the enrich command's run record.
+# The `meta` keys of the run records: what a command's latest run left behind.
 ENRICH_RUN_KEY = "enrich_run"
+SYNTHESIS_RUN_KEY = "synthesis_run"
 
 
 class EnrichRunStatus(StrEnum):
@@ -414,6 +415,23 @@ class EnrichmentWork:
 
     def count(self) -> int:
         return sum(len(keys) for keys in astuple(self))
+
+
+@dataclass(frozen=True)
+class SynthesisRun:
+    """The synthesize command's record of its latest completed run: the `synthesis_run` row in `meta`."""
+
+    errors: tuple[str, ...] = ()
+    # The parents the run tried and could not write facts for. A later run tries them again.
+    unfinished: tuple[str, ...] = ()
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, value: str) -> SynthesisRun:
+        payload = json.loads(value)
+        return cls(tuple(payload["errors"]), tuple(payload["unfinished"]))
 
 
 @dataclass(frozen=True)

@@ -429,10 +429,16 @@ def hydrate_profiles(
             if effective_rpm > 0:
                 starts.append(time.monotonic())
             futures.append(pool.submit(one, item))
-        for future in futures:
-            pub, url, result = future.result()
-            if on_result:
-                on_result(pub, url, result)
+        for (pub, url), future in zip(items, futures, strict=True):
+            # One fetch, or the storing of it, that raises is one failed profile.
+            try:
+                _, _, result = future.result()
+                if on_result:
+                    on_result(pub, url, result)
+            except Exception as exc:
+                counts["failed"] += 1
+                print(f"[profiles] {pub}: {type(exc).__name__}: {exc}"[:300], file=sys.stderr, flush=True)
+                continue
             state = result["state"]
             if state == PROFILE_CONTENT:
                 counts["ok"] += 1

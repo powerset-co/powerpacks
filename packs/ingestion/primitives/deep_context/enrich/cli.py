@@ -8,7 +8,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.gates import exit_code_for_status
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
-from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.ingestion.primitives.deep_context.db.workflow_views import enrichment_work, workflow_state
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
 from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment, minutes_left
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
@@ -42,7 +42,14 @@ def main(argv: list[str] | None = None) -> int:
         if pipeline.last_job is None:
             raise
         payload = pipeline.last_job
-    payload = {**payload, "next_action": workflow_state(db).next_action}
+    # How many people each step left for the next run: the agent weighs this against the errors.
+    left = enrichment_work(db)
+    payload = {
+        **payload,
+        "left": {"lookups": len(left.lookups), "linkedin_checks": len(left.judgments),
+                 "unsure": len(left.questions), "profiles": len(left.synthetic)},
+        "next_action": workflow_state(db).next_action,
+    }
     emit(payload)
     return exit_code_for_status(payload["status"])
 
