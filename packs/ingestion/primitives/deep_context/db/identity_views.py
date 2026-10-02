@@ -2,7 +2,7 @@
 
 Changelog:
 - 2026-10-01: the pending enrichment work is read as keys (`lookups_pending`,
-  `workflow_identity_counts`, `unassembled_research`), so a run can record what it left unfinished.
+  `workflow_identity_progress`, `unassembled_research`), so a run can record what it left unfinished.
 - 2026-09-30: `enrichment_queue` reads research once and identifiers through the person;
   it runs on every review page load and status poll.
 - 2026-10-01: `linkedin_parent_pending` tells the server's queue whether a decided parent has left.
@@ -276,7 +276,7 @@ def lookups_pending(db: Db) -> tuple[str, ...]:
     ))
 
 
-def workflow_identity_counts(db: Db) -> tuple[LinkedInProgress, tuple[str, ...], tuple[str, ...]]:
+def workflow_identity_progress(db: Db) -> tuple[LinkedInProgress, tuple[str, ...], tuple[str, ...]]:
     """LinkedIn review progress, the parents with an unsettled question, and the unjudged LinkedIns."""
     row = db.query(
         LINKEDIN_CTE + ", judge_candidates AS (" + _JUDGE_CANDIDATE_SELECT + ")" + """
@@ -286,25 +286,24 @@ SELECT (SELECT count(*) FROM identity_scope) AS total,
        (SELECT json_group_array(row_key) FROM judge_candidates) AS candidate_keys
 """
     )[0]
-    keys = _json(row["candidate_keys"], [])
-    judged = {key for key, stored in stored_judgments(db, row_keys=keys).items()
-              if stored.verdict.value in VERDICTS}
     total, pending = int(row["total"]), int(row["pending"])
     return (
         LinkedInProgress(total, pending, total - pending),
         tuple(sorted(_json(row["questions"], []))),
-        tuple(sorted(set(keys) - judged)),
+        _unjudged(db, _json(row["candidate_keys"], [])),
     )
+
+
+def _unjudged(db: Db, keys: list[str]) -> tuple[str, ...]:
+    """The LinkedIns among `keys` with no stored verdict the judge stands by."""
+    judged = {key for key, stored in stored_judgments(db, row_keys=tuple(keys)).items()
+              if stored.verdict.value in VERDICTS}
+    return tuple(sorted(set(keys) - judged))
 
 
 def _judge_candidate_keys(db: Db) -> tuple[str, ...]:
     """Real mapped LinkedIns without human or valid machine decisions."""
-    keys = {row["row_key"] for row in db.query(
-        LINKEDIN_CTE + _JUDGE_CANDIDATE_SELECT
-    )}
-    judged = {key for key, stored in stored_judgments(db, row_keys=tuple(keys)).items()
-              if stored.verdict.value in VERDICTS}
-    return tuple(sorted(keys - judged))
+    return _unjudged(db, [row["row_key"] for row in db.query(LINKEDIN_CTE + _JUDGE_CANDIDATE_SELECT)])
 
 
 def judge_candidates(db: Db) -> list[LinkSnapshotRow]:

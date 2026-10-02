@@ -86,13 +86,11 @@ def enrichment_view(
     # The remaining chain prepares profiles, assembles no-match cards, and
     # resolves identity disagreements.
     # The run's record in the store: it completed, and nothing has arrived for it since.
-    applied = not (state.progress.enrichment_pending or state.progress.enrichment_step)
+    applied = not (state.progress.enrichment_untried or state.progress.enrichment_step)
     if applied:
         status, route_state = "completed", "done"
-    elif not total and remaining_judgments:
-        status, route_state = "not_started", "profile_prep_pending"
     elif not total:
-        status, route_state = "completed", "done"
+        status, route_state = "not_started", "profile_prep_pending"
     elif pending:
         status, route_state = ReceiptStatus.NEEDS_APPROVAL, "needs_approval"
     elif plan.reused_completed:

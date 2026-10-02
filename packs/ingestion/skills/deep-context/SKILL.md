@@ -426,8 +426,8 @@ Settlement applies these rules before synthetic assembly:
   (25) messages across non-owner imported people. The reason is
   `not enough to know who this is: no LinkedIn profile and N messages`.
   Own connections and LinkedIns a human kept count as real; other real profiles
-  must be accepted, present, and have experience or education. At 25 messages the parent stays reviewable.
-
+  must be accepted, present, and have experience or education. At 25 messages
+  the parent stays reviewable.
 - An own LinkedIn connection with no human worth decision is always worth Yes,
   whatever the worth pass said.
 

@@ -880,7 +880,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         state = workflow_state(self.db)
 
         self.assertEqual(state.progress.worth_pending, 1)
-        self.assertGreater(state.progress.enrichment_pending, 0)
+        self.assertGreater(state.progress.enrichment_untried, 0)
         self.assertEqual(state.next_action, "enrich")
 
     def test_workflow_with_nothing_pending_realizes(self) -> None:
@@ -916,7 +916,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.add_candidate("fixture", "fixture-link", person_ids=people,
                            linkedin_url="https://linkedin.com/in/jordan-fixture", candidate_origin=1)
         with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
-            self.assertGreater(workflow_state(self.db).progress.enrichment_pending, 0)
+            self.assertGreater(workflow_state(self.db).progress.enrichment_untried, 0)
         statements = [call.args[0] for call in reads.call_args_list]
         self.assertFalse(any(sql.startswith("SELECT * FROM links") for sql in statements))
         self.assertFalse(any("AS emails_json" in sql for sql in statements))

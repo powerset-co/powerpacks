@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import traceback
+from dataclasses import asdict
 from pathlib import Path
 
 from packs.ingestion.primitives.common.gates import exit_code_for_status
@@ -43,11 +44,9 @@ def main(argv: list[str] | None = None) -> int:
             raise
         payload = pipeline.last_job
     # How many people each step left for the next run: the agent weighs this against the errors.
-    left = enrichment_work(db)
     payload = {
         **payload,
-        "left": {"lookups": len(left.lookups), "linkedin_checks": len(left.judgments),
-                 "unsure": len(left.questions), "profiles": len(left.synthetic)},
+        "unfinished": {step: len(keys) for step, keys in asdict(enrichment_work(db)).items()},
         "next_action": workflow_state(db).next_action,
     }
     emit(payload)

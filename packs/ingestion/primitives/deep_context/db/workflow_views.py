@@ -25,7 +25,7 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     lookups_pending,
     unassembled_research,
-    workflow_identity_counts,
+    workflow_identity_progress,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import LinkedInProgress, WorthCounts
@@ -53,13 +53,13 @@ class StageProgress:
     linkedin_pending: int
     linkedin_done: int
     rejected: int
-    # What enrichment still has to do, step by step.
+    # What enrichment still has to do, step by step: everything left, tried or not.
     lookups_pending: int
     judgments_pending: int
     questions_pending: int
     synthetic_pending: int
-    # The part of it that the latest completed run has not already tried.
-    enrichment_pending: int
+    # How much of it the latest completed run has not already tried.
+    enrichment_untried: int
     # The step an unfinished run is on; "" when no run is unfinished.
     enrichment_step: str
 
@@ -180,14 +180,19 @@ SELECT count(DISTINCT parent_id) FROM (
         judgments_pending=len(work.judgments),
         questions_pending=len(work.questions),
         synthetic_pending=len(work.synthetic),
-        enrichment_pending=untried.count(),
+        enrichment_untried=untried.count(),
         enrichment_step="" if run is None or completed else run.step,
     )
 
 
 def _enrichment_work(db: Db) -> tuple[LinkedInProgress, EnrichmentWork]:
-    linkedin, questions, judgments = workflow_identity_counts(db)
-    return linkedin, EnrichmentWork(lookups_pending(db), judgments, questions, unassembled_research(db))
+    linkedin, questions, judgments = workflow_identity_progress(db)
+    return linkedin, EnrichmentWork(
+        lookups=lookups_pending(db),
+        judgments=judgments,
+        questions=questions,
+        synthetic=unassembled_research(db),
+    )
 
 
 def enrichment_work(db: Db) -> EnrichmentWork:
@@ -234,10 +239,10 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
     """Apply the ordered queue predicates and return one deterministic state token."""
     selection, worth = _review_selection(db)
     progress = _stage_progress(db, worth=worth)
-    enrichment_pending = progress.enrichment_pending
+    enrichment_untried = progress.enrichment_untried
     rules = (
         (bool(progress.synthesize_pending), "synthesize"),
-        (bool(enrichment_pending or progress.enrichment_step), "enrich"),
+        (bool(enrichment_untried or progress.enrichment_step), "enrich"),
         (bool(progress.linkedin_pending), "review_linkedin"),
         (True, "realize"),
     )
@@ -247,7 +252,7 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
             {
                 "progress": asdict(progress),
                 "selection": asdict(selection),
-                "enrichment_pending": enrichment_pending,
+                "enrichment_untried": enrichment_untried,
                 "enrichment_running": enrichment_running,
             },
             sort_keys=True,

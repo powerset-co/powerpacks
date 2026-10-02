@@ -1668,7 +1668,7 @@ class TypeScriptPinTests(ReviewApiFixture):
         self.assertEqual(status["pending"], {"lookups": 0, "linkedin_checks": 1, "unsure": 1, "profiles": 0})
         self.assertEqual(
             sum(status["pending"].values()),
-            SqliteReviewAdapter(self.db).snapshot().progress.enrichment_pending,
+            SqliteReviewAdapter(self.db).snapshot().progress.enrichment_untried,
         )
 
 

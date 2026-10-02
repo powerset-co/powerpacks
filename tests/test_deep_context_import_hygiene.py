@@ -15,7 +15,7 @@ EXPECTED_DB_OPERATIONS = {
     "identity_views.decision_parents",
     "identity_views.enrichment_queue",
     "identity_views.lookups_pending",
-    "identity_views.workflow_identity_counts",
+    "identity_views.workflow_identity_progress",
     "identity_views.judge_candidates",
     "identity_views.unassembled_research",
     "identity_views.linkedin_parents",

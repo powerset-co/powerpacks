@@ -11,10 +11,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.config imp
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import RAPIDAPI_RPM_DEFAULT
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import ResearchSelection
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import select_research
-from packs.ingestion.primitives.deep_context.shared.openai_responses import (
-    DEFAULT_OPENAI_CONCURRENCY,
-    estimate_cost_usd,
-)
+from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
 from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
 
 ESTIMATED_JUDGMENT_INPUT_TOKENS = 2000
@@ -26,8 +23,8 @@ LOOKUP_BATCH = 1000
 LOOKUP_BATCH_MINUTES = 15
 LOOKUP_FURTHER_BATCH_MINUTES = 2
 LOOKUP_SHORTEST_MINUTES = 4
-# One round of unsure matches, as wide as the model is called.
-QUESTION_ROUND_MINUTES = 1.5
+# Unsure matches settle at about two a second.
+QUESTIONS_PER_MINUTE = 120
 
 
 @dataclass(frozen=True)
@@ -79,7 +76,5 @@ def minutes_left(progress: StageProgress) -> int:
         lookup_minutes = max(LOOKUP_SHORTEST_MINUTES, first) + further
     # A lookup still out may find a LinkedIn, which is then fetched and judged.
     fetch_minutes = (progress.judgments_pending + lookups) / RAPIDAPI_RPM_DEFAULT
-    question_minutes = (
-        math.ceil(progress.questions_pending / DEFAULT_OPENAI_CONCURRENCY) * QUESTION_ROUND_MINUTES
-    )
+    question_minutes = progress.questions_pending / QUESTIONS_PER_MINUTE
     return math.ceil(lookup_minutes + fetch_minutes + question_minutes)

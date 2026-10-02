@@ -24,7 +24,7 @@ from packs.ingestion.primitives.deep_context.db.worth_views import fact_worth
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import settle_machine_identities
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.enrich.settle_policy import (
-    empty_profile_decision, has_real_profile, worth_decision,
+    empty_profile_decision, worth_decision,
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import stored_imported_people
 
@@ -58,8 +58,8 @@ class SettleEnrichment:
             )
             if decision is not None:
                 settlements.append(decision)
-            # A LinkedIn the human kept is who this person is, whatever its profile holds.
-            elif link.decision_action or has_real_profile(profile):
+            # Kept: an own connection, a LinkedIn the human kept, or a profile with content.
+            else:
                 real_profiles.add(link.parent_id)
         settle_machine_identities(self.db, settlements)
 

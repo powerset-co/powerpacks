@@ -171,7 +171,6 @@ export async function postDecide({ new_url, ...rest }: DecideRequest): Promise<D
   return body<DecideResult>(await post(`${API}decide`, values))
 }
 
-/** Approves the enrichment plan and launches it. A click that reaches this spends money. */
 export interface WorthRequest {
   /** The person's `worth_key`. */
   pub: string

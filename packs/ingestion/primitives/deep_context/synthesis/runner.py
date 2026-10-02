@@ -488,8 +488,7 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
         async def tag(parent_id: str, path: Path) -> None:
             nonlocal usage
             async with semaphore:
-                # One person's worth request failing leaves that person without worth; the
-                # next run asks again.
+                # One person's worth failing leaves their facts as they were; the next run asks again.
                 try:
                     facts, bundle, timestamp, history = _tagging_inputs(bundles, parent_id, path)
                     result = await jev_worth.classify(
@@ -513,7 +512,7 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
             await asyncio.gather(*(tag(parent_id, path) for parent_id, path in paths[start:start + TAG_CHUNK_PEOPLE]))
 
     asyncio.run(tag_all())
-    # Everyone failing is a broken provider or connection, not a few people.
+    # A few people failing is a completed pass; everyone failing fails it.
     if len(failed) == len(paths):
         raise failed[0]
     return usage

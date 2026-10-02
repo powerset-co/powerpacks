@@ -180,8 +180,8 @@ class EnrichCommandTest(unittest.TestCase):
         self.assertEqual(payload["status"], "dry_run")
         self.assertEqual(payload["would_submit"], 1)
         self.assertEqual(payload["profile_fetches"], 1)
-        # The shortest lookup time, plus one round of unsure matches for the attached LinkedIn.
-        self.assertEqual(payload["estimated_minutes"], 6)
+        # The shortest lookup time, plus seconds for the attached LinkedIn's fetch and question.
+        self.assertEqual(payload["estimated_minutes"], 5)
         self.assertEqual(payload["estimated_usd"], payload["parallel_estimated_usd"]
             + payload["judgment_estimated_usd"] + payload["jev_estimated_usd"])
         # Counts only: the plan names nobody.
@@ -206,7 +206,7 @@ class EnrichCommandTest(unittest.TestCase):
         payload = json.loads(out.getvalue())
         # The lookup no step did is left for the next run; the flow moves on without it.
         self.assertEqual((code, payload["status"], payload["next_action"]), (0, "completed", "realize"))
-        self.assertEqual(payload["left"], {"lookups": 1, "linkedin_checks": 0, "unsure": 0, "profiles": 0})
+        self.assertEqual(payload["unfinished"], {"lookups": 1, "judgments": 0, "questions": 0, "synthetic": 0})
         self.assertEqual(run.call_args.kwargs["budget"], .05)
         self.assertIn("[enrich] research", log.getvalue())
 
@@ -352,7 +352,7 @@ class MinutesLeftTest(unittest.TestCase):
             total=0, synthesize_pending=0, worth_total=0, worth_pending=0, worth_yes=0, worth_no=0,
             lookup_ready=0, linkedin_total=0, linkedin_pending=0, linkedin_done=0, rejected=0,
             lookups_pending=lookups, judgments_pending=judgments, questions_pending=questions,
-            synthetic_pending=0, enrichment_pending=0, enrichment_step="",
+            synthetic_pending=0, enrichment_untried=0, enrichment_step="",
         ))
 
     def test_nothing_left_takes_no_time(self):
@@ -367,9 +367,9 @@ class MinutesLeftTest(unittest.TestCase):
         self.assertEqual(self.left(judgments=300), 1)
         self.assertEqual(self.left(judgments=900), 3)
 
-    def test_unsure_matches_go_in_rounds(self):
-        self.assertEqual(self.left(questions=1), 2)
-        self.assertEqual(self.left(questions=65), 3)
+    def test_unsure_matches_settle_at_about_two_a_second(self):
+        self.assertEqual(self.left(questions=120), 1)
+        self.assertEqual(self.left(questions=545), 5)
 
 
 if __name__ == "__main__":

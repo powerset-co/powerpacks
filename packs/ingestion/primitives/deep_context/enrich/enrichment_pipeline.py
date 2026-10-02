@@ -196,18 +196,17 @@ class EnrichmentPipeline:
             ("synthetic", self._synthetic),
         )
 
-    def _attempt(self, phase: str, step: Callable[[], tuple[str, ...]], errors: list[str]) -> None:
-        """Run one step, and once more if it raises."""
+    def _attempt(self, phase: str, step: Callable[[], tuple[str, ...]]) -> tuple[str, ...]:
+        """Run one step, and once more if it raises; the errors it reports."""
         try:
-            errors.extend(step())
+            return step()
         except ResearchStopped:
             raise
         except Exception as exc:
             again = f"{phase}: ran again after {type(exc).__name__}: {exc}"[:300]
-            errors.append(again)
             print(f"[enrich] {again}", file=sys.stderr, flush=True)
             time.sleep(STEP_RETRY_SECONDS)
-            errors.extend(step())
+            return (again, *step())
 
     def run(self, *, total: int, budget: float, request_fingerprint: str) -> dict[str, object]:
         """Run every step; SQLite and stage outputs decide what needs work."""
@@ -235,7 +234,7 @@ class EnrichmentPipeline:
             if self.on_change:
                 self.on_change()
             try:
-                self._attempt(phase, step, errors)
+                errors.extend(self._attempt(phase, step))
             except BaseException as exc:
                 self.last_error = f"enrichment: {type(exc).__name__}: {exc}"
                 self.db.record_enrich_run(

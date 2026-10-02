@@ -99,7 +99,7 @@ class SettleEnrichmentTest(unittest.TestCase):
         for link in links(self.db):
             self.assertEqual(link.machine_action, 'detach')
             self.assertEqual(link.machine_approved, 'auto')
-            self.assertIn('profile is empty', link.machine_reason)
+            self.assertIn('profile is missing or empty', link.machine_reason)
 
     def test_empty_accepted_retarget_detaches_and_clears_proposal(self):
         key = self.seed()
@@ -151,7 +151,7 @@ class SettleEnrichmentTest(unittest.TestCase):
         state = workflow_state(self.db)
         self.assertNotEqual(state.next_action, 'enrich')
         # It is still left to do, and the next run tries it again.
-        self.assertEqual((state.progress.judgments_pending, state.progress.enrichment_pending), (1, 0))
+        self.assertEqual((state.progress.judgments_pending, state.progress.enrichment_untried), (1, 0))
 
     def test_work_that_arrives_after_a_completed_run_is_pending(self):
         self.seed(messages=REVIEW_MESSAGE_BAR)
@@ -162,7 +162,7 @@ class SettleEnrichmentTest(unittest.TestCase):
         self.assertEqual(state.next_action, 'enrich')
         self.assertEqual(enrichment_work(self.db).without(left).judgments, (later,))
         self.assertEqual(state.progress.judgments_pending, 2)
-        self.assertEqual(state.progress.enrichment_pending, enrichment_work(self.db).count() - left.count())
+        self.assertEqual(state.progress.enrichment_untried, enrichment_work(self.db).count() - left.count())
 
     def test_a_run_that_has_not_finished_holds_the_flow(self):
         self.assertNotEqual(workflow_state(self.db).next_action, 'enrich')
@@ -180,7 +180,7 @@ class SettleEnrichmentTest(unittest.TestCase):
         self.db.record_enrich_run(
             EnrichRun(EnrichRunStatus.COMPLETED, 'synthetic', (), EnrichmentWork(judgments=(key,))))
         self.db.record_enrich_run(EnrichRun(EnrichRunStatus.RUNNING, 'research'))
-        self.assertEqual(workflow_state(self.db).progress.enrichment_pending, enrichment_work(self.db).count())
+        self.assertEqual(workflow_state(self.db).progress.enrichment_untried, enrichment_work(self.db).count())
 
     def test_filled_accepted_profile_keeps_worth(self):
         for parent, field in (('work', 'experiences'), ('school', 'education')):

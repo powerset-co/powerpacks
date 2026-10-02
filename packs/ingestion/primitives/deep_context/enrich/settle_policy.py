@@ -24,7 +24,7 @@ from packs.ingestion.primitives.deep_context.synthesis.models import NetworkWort
 from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR
 
 REVIEW_MESSAGE_BAR = 25
-EMPTY_PROFILE_REASON = 'LinkedIn profile is empty'
+EMPTY_PROFILE_REASON = 'LinkedIn profile is missing or empty'
 UNKNOWN_PERSON_REASON = 'not enough to know who this is: no LinkedIn profile and '
 OWN_CONNECTION_REASON = 'own LinkedIn connection'
 

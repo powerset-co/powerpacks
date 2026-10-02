@@ -1,7 +1,6 @@
-/* The Enrich stage's look: the panel, the progress bar and its shimmer, the moving bar under
-   the stage check, and the buttons. The panel's frame, title and text are the shared
-   .empty-state (base.css). The shimmer's reduced-motion rule is the app's (styles/index.css
-   stops every animation). */
+/* The Enrich stage's look: the panel, its mark (the shape, the ring and the dot), and the moving
+   bar under the stage check. The panel's frame, title and text are the shared .empty-state
+   (base.css). Reduced motion is the app's rule (styles/index.css stops every animation). */
 
 .review-page .enrich-state {
   height: 100%;
@@ -207,20 +206,4 @@
     animation: none;
     opacity: 0.65;
   }
-}
-
-.review-page .enrich-state .button {
-  min-width: 180px;
-  margin-top: 36px;
-}
-
-/* The one spend gate in the app: a compact, confident orange pill, 40px tall, 15px type, real
-   breathing room inside. */
-.review-page .enrich-state .button-hero {
-  min-height: 40px;
-  min-width: 200px;
-  padding: 0 28px;
-  font-size: 15px;
-  letter-spacing: 0.01em;
-  margin-top: 36px;
 }
