@@ -1,6 +1,8 @@
 """LinkedIn review, enrichment, and identity receipt projections.
 
 Changelog:
+- 2026-10-01: a LinkedIn whose profile fetch was tried and failed is not pending enrichment
+  work; it waits for the person's check or a later fetch.
 - 2026-09-30: `enrichment_queue` reads research once and identifiers through the person;
   it runs on every review page load and status poll.
 - 2026-10-01: `linkedin_parent_pending` tells the server's queue whether a decided parent has left.
@@ -66,6 +68,14 @@ WHERE l.kind!='synthetic' AND l.decision_action IS NULL
        OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
 """
 
+# A profile fetch that was tried and failed, for the link `{link}`. The identity judge and the
+# relationship review both skip such a link: it is not work an enrichment run can finish.
+_PROFILE_FETCH_FAILED = """EXISTS (
+  SELECT 1 FROM artifacts profile
+  WHERE profile.candidate_key={link}.row_key AND profile.kind='profile' AND profile.status='projected'
+    AND json_extract(profile.payload_json, '$.state')='error'
+)"""
+
 _REVIEW_QUESTIONS_PENDING_SELECT = """
 SELECT count(*) FROM pending_parents p WHERE EXISTS (
   SELECT 1 FROM eligible_links candidate WHERE candidate.parent_id=p.parent_id
@@ -74,6 +84,9 @@ SELECT count(*) FROM pending_parents p WHERE EXISTS (
 ) AND NOT EXISTS (
   SELECT 1 FROM links l WHERE l.parent_id=p.parent_id
     AND json_extract(l.judgment_payload_json, '$.relationship_decision') IS NOT NULL
+) AND NOT EXISTS (
+  SELECT 1 FROM links unread WHERE unread.parent_id=p.parent_id AND unread.decision_action IS NULL
+    AND """ + _PROFILE_FETCH_FAILED.format(link="unread") + """
 )
 """
 
@@ -277,7 +290,8 @@ def workflow_identity_counts(db: Db) -> tuple[LinkedInProgress, int, int]:
 SELECT (SELECT count(*) FROM identity_scope) AS total,
        (SELECT count(*) FROM pending_parents) AS pending,
        (""" + _REVIEW_QUESTIONS_PENDING_SELECT + """) AS questions,
-       (SELECT json_group_array(row_key) FROM judge_candidates) AS candidate_keys
+       (SELECT json_group_array(c.row_key) FROM judge_candidates c
+        WHERE NOT """ + _PROFILE_FETCH_FAILED.format(link="c") + """) AS candidate_keys
 """
     )[0]
     keys = _json(row["candidate_keys"], [])

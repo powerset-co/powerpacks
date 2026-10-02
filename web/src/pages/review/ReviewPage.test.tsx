@@ -333,18 +333,25 @@ describe("ReviewPage: watching the server", () => {
     expect(where()).toBe("/?stage=linkedin")
   })
 
-  it("stays on a screen the server was already past when it opened, and reloads it on a new token", async () => {
+  it("stays on a screen the server was already past when it opened", async () => {
     server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
     renderPage("/?stage=enrich")
-    // The first read is out with the stale token; the read after it carries the server's own,
-    // as a real server's page and status always agree.
-    expect(requests("/api/review/page")).toHaveLength(1)
-    server.pages.enrich = reviewPage("enrich", { state_token: "token-2" })
-    await waitFor(() => expect(requests("/api/review/page")).toHaveLength(2))
-    await waitFor(() => expect(seen.mounts).toBe(2))
+    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+    await Promise.resolve()
     expect(probe("enrich")).toBeTruthy()
     expect(document.querySelector(".stage-complete")).toBeNull()
     expect(where()).toBe("/?stage=enrich")
+  })
+
+  it("keeps the Enrich screen mounted while the store changes under it", async () => {
+    renderPage("/?stage=enrich")
+    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+    server.status = reviewStatus({ state_token: "token-2" })
+    act(() => stream().emit(changeEvent()))
+    await waitFor(() => expect(requests("/api/status")).toHaveLength(2))
+    await Promise.resolve()
+    expect(seen.mounts).toBe(1)
+    expect(requests("/api/review/page")).toHaveLength(1)
   })
 
   it("never moves a preview screen", async () => {
@@ -358,20 +365,22 @@ describe("ReviewPage: watching the server", () => {
     expect(probe("enrich")).toBeTruthy()
   })
 
-  it("reads the screen again when the state token changes under it", async () => {
-    renderPage("/?stage=enrich")
+  it("reads the Done screen again when the state token changes under it", async () => {
+    server.status = reviewStatus({ stage: "done" })
+    renderPage("/?stage=done")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    server.status = reviewStatus({ state_token: "token-2" })
-    server.pages.enrich = reviewPage("enrich", { state_token: "token-2" })
+    server.status = reviewStatus({ stage: "done", state_token: "token-2" })
+    server.pages.done = reviewPage("done", { state_token: "token-2" })
     act(() => stream().emit(changeEvent()))
     await waitFor(() => expect(seen.mounts).toBe(2))
     expect(FakeEventSource.opened).toHaveLength(2)
   })
 
   it("does nothing while a stage-complete action is in flight", async () => {
-    renderPage("/?stage=enrich")
+    server.status = reviewStatus({ stage: "done" })
+    renderPage("/?stage=done")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    server.status = reviewStatus({ state_token: "token-2" })
+    server.status = reviewStatus({ stage: "done", state_token: "token-2" })
     act(() => review().setCompleting(true))
     act(() => stream().emit(changeEvent()))
     await Promise.resolve()

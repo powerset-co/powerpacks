@@ -42,27 +42,25 @@ describe("decideStatus", () => {
     })
   })
 
-  it("reloads on the first read when only the token differs", () => {
-    const status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
-    expect(decideStatus(input({ lastStage: "", status })).action).toEqual({ kind: "reload" })
+  it("reloads Done on the first read when only the token differs", () => {
+    const status = reviewStatus({ stage: "done", state_token: "token-2" })
+    expect(decideStatus(input({ view: "done", lastStage: "", status })).action).toEqual({ kind: "reload" })
   })
 
-  it("never moves backward; a changed token reloads instead", () => {
+  it("never moves backward; a changed token reloads Done instead", () => {
     const back = reviewStatus({ stage: "worth", state_token: "token-2" })
-    expect(decideStatus(input({ status: back }))).toEqual({ action: { kind: "reload" }, lastStage: "worth" })
+    expect(decideStatus(input({ view: "done", lastStage: "done", status: back }))).toEqual({
+      action: { kind: "reload" },
+      lastStage: "worth",
+    })
     expect(decideStatus(input({ status: reviewStatus({ stage: "worth" }) })).action).toEqual({
       kind: "nothing",
     })
   })
 
-  it("never moves a preview screen; a changed token still reloads it", () => {
+  it("never moves a preview screen", () => {
     const ahead = reviewStatus({ stage: "linkedin", state_token: "token-2" })
-    expect(decideStatus(input({ preview: true, status: ahead })).action).toEqual({ kind: "reload" })
-    expect(
-      decideStatus(input({ preview: true, status: reviewStatus({ stage: "linkedin" }) })).action,
-    ).toEqual({
-      kind: "nothing",
-    })
+    expect(decideStatus(input({ preview: true, status: ahead })).action).toEqual({ kind: "nothing" })
   })
 
   it("does not move when the server is at the screen's own stage again", () => {
@@ -70,8 +68,14 @@ describe("decideStatus", () => {
     expect(decision).toEqual({ action: { kind: "nothing" }, lastStage: "enrich" })
   })
 
-  it("reloads when the state token changed under the screen", () => {
-    const decision = decideStatus(input({ status: reviewStatus({ state_token: "token-2" }) }))
+  it("reloads Done when the state token changed under the screen", () => {
+    const decision = decideStatus(
+      input({
+        view: "done",
+        lastStage: "done",
+        status: reviewStatus({ stage: "done", state_token: "token-2" }),
+      }),
+    )
     expect(decision.action).toEqual({ kind: "reload" })
   })
 
@@ -89,5 +93,22 @@ describe("decideStatus", () => {
     expect(decideStatus(input({ status: reviewStatus({ state_token: "" }) })).action).toEqual({
       kind: "nothing",
     })
+  })
+})
+
+describe("decideStatus on the waiting screen", () => {
+  it("does not reload Enrich when the store changes under it: the status itself is what it shows", () => {
+    expect(decideStatus(input({ status: reviewStatus({ state_token: "token-2" }) })).action).toEqual({
+      kind: "nothing",
+    })
+  })
+
+  it("still reloads Done when the store changes under it", () => {
+    const done = input({
+      view: "done",
+      lastStage: "done",
+      status: reviewStatus({ stage: "done", state_token: "token-2" }),
+    })
+    expect(decideStatus(done).action).toEqual({ kind: "reload" })
   })
 })

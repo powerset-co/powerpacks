@@ -709,7 +709,8 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertIsNone(self.db.query("SELECT machine_judgment FROM links WHERE row_key='jordan-bravo'")[0][0])
         retry = PrefetchProfiles(db=self.db, profile_cache_dir=cache).run()
         self.assertEqual(retry.estimated_rapidapi_calls, 1)
-        self.assertEqual(self.adapter().enrichment().state, "profile_prep_pending")
+        # The fetch is tried again by the next run, but it does not hold this one open.
+        self.assertEqual(self.adapter().enrichment().state, "done")
 
     def test_partial_provider_failures_finish_and_report_errors_without_reapproval(self) -> None:
         self.db.decide_worth("worth-parent", "yes")

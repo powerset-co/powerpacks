@@ -50,7 +50,32 @@
   color: var(--foreground);
   font-weight: 600;
 }
+/* Three dots after the line, lit one after another: still at work. They hold their width, so
+   the centred line does not shift as they light. */
+.review-page .enrich-dots i {
+  font-style: normal;
+  opacity: 0.2;
+  animation: enrich-dot 1.4s ease-in-out infinite;
+}
+.review-page .enrich-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.review-page .enrich-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes enrich-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.2;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
 .review-page .enrich-state .enrich-time-left {
+  min-height: 1.5em;
   margin-top: 4px;
   font-size: 13px;
 }

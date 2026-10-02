@@ -37,7 +37,7 @@ const NOTHING: StatusAction = { kind: "nothing" }
 /**
  * Feed-forward: the screen only ever moves FORWARD, and only on a stage change OBSERVED while
  * it was open. A difference that already existed when it opened means the user chose this
- * screen. Otherwise a changed state token reloads the screen's data.
+ * screen. Otherwise a changed state token reloads the screen's data, except on Enrich.
  */
 export function decideStatus(input: StatusInput): StatusDecision {
   const { view, preview, hasDraft, lastStage, status, loadedToken } = input
@@ -49,7 +49,9 @@ export function decideStatus(input: StatusInput): StatusDecision {
   if (!preview && movesForward && observed) {
     return decision(hasDraft ? NOTHING : { kind: "navigate", stage })
   }
-  if (status.state_token && status.state_token !== loadedToken) {
+  // Enrich only waits, and draws what it says from the status itself: a store that changed
+  // under it has nothing for it to read again.
+  if (view !== "enrich" && status.state_token && status.state_token !== loadedToken) {
     return decision(hasDraft ? NOTHING : { kind: "reload" })
   }
   return decision(NOTHING)

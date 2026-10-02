@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { MOVES_ON, STARTING, TITLE } from "./copy"
+import { STARTING, TITLE } from "./copy"
 import { EnrichStage, type Waiting } from "./EnrichStage"
 
 const NOTHING = { lookups: 0, linkedin_checks: 0, unsure: 0, profiles: 0 }
@@ -13,11 +13,11 @@ function waiting(at: number, pending: Partial<Waiting["pending"]>): Waiting {
 afterEach(cleanup)
 
 describe("EnrichStage", () => {
-  it("only waits: its moving shape, nothing to press, and that it moves on by itself", () => {
+  it("only waits: its moving shape, what it is doing, and nothing to press", () => {
     const { container } = render(<EnrichStage waiting={null} />)
     expect(screen.getByRole("heading", { name: TITLE })).toBeTruthy()
     expect(screen.getByText(STARTING)).toBeTruthy()
-    expect(screen.getByText(MOVES_ON)).toBeTruthy()
+    expect(container.querySelector(".enrich-time-left")?.textContent).toBe("")
     expect(container.querySelector(".enrich-shape")).toBeTruthy()
     expect(screen.queryByRole("button")).toBeNull()
   })
@@ -29,11 +29,10 @@ describe("EnrichStage", () => {
     expect(screen.getByText("Checking 300 LinkedIn profiles")).toBeTruthy()
   })
 
-  it("says how long the rest takes once the count has gone down", () => {
-    const { rerender } = render(<EnrichStage waiting={waiting(0, { linkedin_checks: 320 })} />)
-    expect(screen.getByText(MOVES_ON)).toBeTruthy()
-    rerender(<EnrichStage waiting={waiting(60_000, { linkedin_checks: 220 })} />)
-    expect(screen.getByText("about 2 min left")).toBeTruthy()
-    expect(screen.queryByText(MOVES_ON)).toBeNull()
+  it("says how long the rest takes from the first status read on", () => {
+    const { rerender } = render(<EnrichStage waiting={waiting(0, { lookups: 210 })} />)
+    expect(screen.getByText("about 4 min left")).toBeTruthy()
+    rerender(<EnrichStage waiting={waiting(243_000, { linkedin_checks: 181 })} />)
+    expect(screen.getByText("under a minute left")).toBeTruthy()
   })
 })

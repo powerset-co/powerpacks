@@ -8,8 +8,6 @@ export const TITLE = "Working on your network"
 export const STARTING = "Getting started"
 export const FINISHING = "Finishing up"
 
-export const MOVES_ON = "This page moves on when it is done."
-
 function people(count: number): string {
   return count === 1 ? "1 person" : `${count.toLocaleString("en-US")} people`
 }

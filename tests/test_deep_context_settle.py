@@ -15,6 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow, FactRow, IdentityMachineProjection, PersonRow, PersonSourceRow, PersonSourcesProjection,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import project_profile_results
@@ -138,6 +139,15 @@ class SettleEnrichmentTest(unittest.TestCase):
         self.assertEqual(
             tuple(self.db.query("SELECT machine_worth FROM parents WHERE parent_id='said-yes'")[0]), (None,),
         )
+
+    def test_a_linkedin_whose_profile_could_not_be_fetched_does_not_keep_enrichment_pending(self):
+        key = self.seed(messages=REVIEW_MESSAGE_BAR)
+        self.assertEqual(workflow_state(self.db).progress.judgments_pending, 1)
+        # The fetch was tried and failed: the judge has nothing to read, so the run is done with it.
+        self.profile(key, state='error')
+        state = workflow_state(self.db)
+        self.assertEqual(state.progress.judgments_pending, 0)
+        self.assertNotEqual(state.next_action, 'enrich')
 
     def test_filled_accepted_profile_keeps_worth(self):
         for parent, field in (('work', 'experiences'), ('school', 'education')):
