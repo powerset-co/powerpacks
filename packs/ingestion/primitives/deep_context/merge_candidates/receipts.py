@@ -1,6 +1,7 @@
 """SQLite-backed merge survey cache plus human-readable result exports.
 
 Changelog:
+- 2026-10-01: shared mailboxes are left out of the survey.
 - 2026-10-01: accepted merges preserve explicit different-person judgments.
 """
 
@@ -9,6 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from packs.ingestion.primitives.common.contact_fields import is_shared_mailbox
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp, MergeVerdictRow
 from packs.ingestion.primitives.deep_context.db.merge_queries import merge_people
@@ -99,7 +101,8 @@ def split_cached_pairs(
 
 def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
     """Survey current parents without rejudging source-child rejections as aggregates."""
-    people = merge_people(db)
+    # A mailbox an earlier import let in is not a person to merge.
+    people = [person for person in merge_people(db) if not is_shared_mailbox(person.emails, person.phone_digits)]
     parent_by_person = {row.person_id: row.parent_id for row in person_rows(db)}
     stored = merge_verdicts(db)
     rejected = {

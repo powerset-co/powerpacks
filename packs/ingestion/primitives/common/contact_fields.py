@@ -32,6 +32,11 @@ Changelog:
     / is_generic_or_non_person (+ GENERIC_PREFIXES / GENERIC_KEYWORDS /
     BUSINESS_NAME_KEYWORDS) from discover/gmail/msgvault_store — they are generic
     name/email testers, not msgvault-specific. Behavior unchanged.
+  2026-10-01: adds `is_role_address` / `ROLE_ADDRESS_WORDS`, a whole-local-part
+    shared-mailbox test (`ir@` yes, `irene@` no) that deep-context applies where
+    imported contacts enter it. Deletes the uncalled is_likely_person_name /
+    is_generic_or_non_person and their word lists, which matched pieces of an
+    address.
 """
 
 from __future__ import annotations
@@ -258,85 +263,42 @@ def latest_message(record: dict[str, Any]) -> str | None:
     return max(values, default=None)
 
 
-# --- Person-vs-role classification (moved from the retired resolve_queue.py) ---
+# --- Shared mailboxes ---
 
-GENERIC_PREFIXES = {
-    "noreply", "no-reply", "no_reply",
-    "donotreply", "do-not-reply", "do_not_reply",
-    "info", "contact", "support", "help", "hello",
-    "sales", "marketing", "hr", "careers", "jobs",
-    "admin", "administrator", "webmaster", "postmaster",
-    "office", "team", "staff", "general",
-    "billing", "invoices", "payments", "accounts", "accounting",
-    "newsletter", "news", "updates", "notifications",
-    "feedback", "enquiries", "inquiries",
-    "service", "customerservice", "care", "dispatch",
-    "concierge", "reservation", "reservations", "booking", "bookings",
-    "rsvp", "registration", "club", "member", "members", "membership", "memberservices",
-    "optical", "photos", "equity", "futures",
-    "launch", "eat", "pbx", "alumni", "masters", "csi",
-    "studentinfo", "fintechsupport", "casasupport",
-}
+ROLE_ADDRESS_WORDS = frozenset({
+    "accounting", "accounts", "accountspayable", "accountsreceivable", "admin",
+    "ap", "ar", "backoffice", "backofficeops", "billing", "care", "careers",
+    "community", "compliance",
+    "concierge", "contact", "customerservice", "customersupport", "events",
+    "feedback", "filings", "finance", "frontdesk", "help", "helpdesk", "hr",
+    "info", "investorrelations", "investors", "invoice", "invoices", "ir",
+    "legal", "mail", "members", "membership", "office", "onboarding", "operations",
+    "ops", "orders", "partnerships", "payments", "portfolio", "reception",
+    "registration", "rsvp", "sales", "scheduling", "service", "services",
+    "support", "tax", "taxes",
+})
+"""Local parts of shared mailboxes. Deliberately absent: hello, hi, team,
+assistant — real people and solo founders write from those."""
 
-GENERIC_KEYWORDS = {
-    "support", "service", "noreply", "reply", "taskforce",
-    "insurance", "verification", "recognition",
-}
-
-BUSINESS_NAME_KEYWORDS = {
-    "llc", "inc", "corp", "ltd", "team", "services", "service",
-    "spa", "optometry", "electronics", "insurance", "association",
-    "department", "office", "institute", "run", "discount", "massages",
-    "management", "concierge", "dispatch", "accounting", "task force",
-    "hawaii", "waikiki", "aruba", "support", "delivery",
-    "wines", "coffee", "mason", "security", "motors",
-}
+_SHORT_ROLE_LENGTH = 3
+"""A separator-joined local part this short is never a role word (`i.r`)."""
 
 
-def is_likely_person_name(name: str) -> bool:
-    """Return True if the name looks like a real person (first + last)."""
-    if not name:
-        return False
-    clean = re.sub(r'\s*\([^)]*\)', '', name).strip()  # strip parentheticals like (LinkedIn Supplier)
-    clean = re.sub(r'^["\']|["\']$', '', clean).strip()
-    words = clean.split()
-    if len(words) < 2:
-        return False
-    if any(kw in clean.lower() for kw in BUSINESS_NAME_KEYWORDS):
-        return False
-    if '&' in clean:
-        return False
-    # All-caps or all-lower single tokens that aren't name-like
-    if clean == clean.upper() and len(words) <= 2:
-        return False
-    return True
+def is_role_address(email: str) -> bool:
+    """True when the whole local part is a role word (`ir@`, `customer.service@`).
 
-
-def is_generic_or_non_person(email: str) -> bool:
-    """Return True if the email looks like a role/service address, not a person."""
-    if not email or "@" not in email:
+    Never matches a piece of the local part: `irene@` and `kirk.ir@` are people.
+    Separators are dropped only when the joined result is longer than 3
+    characters, so short words must equal the raw local part.
+    """
+    local = email.strip().lower().rsplit("@", 1)[0]
+    if local in ROLE_ADDRESS_WORDS:
         return True
-    local = email.split("@")[0].lower().strip()
-    # Strip plus-addressing
-    local = local.split("+")[0]
-    # Exact prefix match
-    if local in GENERIC_PREFIXES:
-        return True
-    # First segment match (e.g. customer.service@, no-reply@, info-mhi@)
-    base = re.split(r'[.\-_]', local)[0]
-    if base in GENERIC_PREFIXES:
-        return True
-    # Contains generic keyword anywhere
-    for kw in GENERIC_KEYWORDS:
-        if kw in local:
-            return True
-    # Phone-number-like local parts
-    if re.match(r'^\d{7,}$', local):
-        return True
-    # Single character local parts
-    if len(local) <= 1:
-        return True
-    # Local part is just digits (e.g. 2relaxinparadise is fine but pure digits aren't)
-    if re.match(r'^\d+$', local):
-        return True
-    return False
+    joined = re.sub(r"[.\-_]", "", local)
+    return len(joined) > _SHORT_ROLE_LENGTH and joined in ROLE_ADDRESS_WORDS
+
+
+def is_shared_mailbox(emails: Iterable[str], phones: Iterable[str]) -> bool:
+    """True for a contact reachable only at role addresses: a mailbox, not a person."""
+    addresses = tuple(emails)
+    return bool(addresses) and not tuple(phones) and all(is_role_address(email) for email in addresses)

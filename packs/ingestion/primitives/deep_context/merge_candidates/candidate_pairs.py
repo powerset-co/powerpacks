@@ -1,4 +1,4 @@
-"""Generate plausible identity pairs without comparing every parent to every other.
+"""Generate the identity pairs worth a decision without comparing every parent to every other.
 
 "Blocking" is the record-linkage term for bucketing records on shared keys so
 candidate generation avoids an O(N^2) all-pairs comparison. Name keys use:
@@ -7,18 +7,44 @@ candidate generation avoids an O(N^2) all-pairs comparison. Name keys use:
     "j bravo"      -> {"fnli:j|b", "filn:j|bravo", "fn:j"}
 
 The one-character surname also buckets on first name, and both examples land in
-``filn:j|bravo``. Complete bucket keys look like
+``filn:j|bravo``. A name of two or more words also buckets on all its words in
+any order and on its first and last word, so "Bravo, Jordan" meets
+"Jordan Bravo" and "Jordan Alex Bravo". Complete bucket keys look like
 ``email:casey@example.com``, ``local:casey``, ``phone:15550100``, and
 ``nm:filn:j|bravo``.
 
+Two names are the same name when they are the same words in any order, or the
+same first and last name where a middle name is missing on one side or agrees
+on both. The same name is a merge without the pair judge; the judge module
+then asks whether the facts keep the two records apart. Two different middle
+names, a generation suffix on one side (Jr, Sr, III) and one-word names are
+not the same name. A title (Dr, Mr) is not part of a name, and an email
+address saved as the name is no name.
+
+A bucket only proposes a pair. The pair is kept when the two records share a
+phone or a whole email address, or when one name can be a form of the other:
+the same name, a one-word name that is the other's first or last name, or a
+first and a last name that each equal, begin or nearly spell the other's
+("J Bravo", "Jordan B", "Jon Bravo"). A shared first name, a shared last name
+or a shared email handle alone is not kept: "Jordan Bravo" and "Jordan Delta"
+at jordan@ two domains are two people. No bucket joins a one-word name to a
+full name, so "Jordan" meets "Jordan Bravo" only through a shared email handle,
+phone or email: "Jordan" alone could be any Jordan.
+
 Jaro-Winkler follows Winkler's Census record-linkage definition. Its prefix
-weighting is a better fit than Levenshtein distance for given-name spelling and
-nickname candidates; reference-value tests pin this local implementation.
+weighting is a better fit than Levenshtein distance for given-name spelling
+variants; reference-value tests pin this local implementation.
+
+Changelog:
+- 2026-10-01: the same name is a merge without the pair judge. A pair is kept
+  on a shared phone or email or on names that can be forms of each other;
+  whole-name similarity and a shared email handle alone no longer keep one.
 """
 from __future__ import annotations
 
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from itertools import combinations
 from typing import TypeVar
@@ -30,19 +56,27 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergePerson,
 )
 
-# This is the original merge-stage recall gate, not an acceptance threshold.
-# No calibration corpus was recorded; changing it changes which pairs reach the judge.
+# How alike two first names or two last names must spell to be one name's variants.
+# A recall gate, not an acceptance threshold: changing it changes which pairs reach the judge.
 GATE_NAME_SIM = 0.85
 MAX_BLOCKING_BUCKET = 200
 JUDGE_SLAM_DUNK = "slam_dunk"
+SAME_FULL_NAME = "same full name"
+SAME_FIRST_AND_LAST_NAME = "same first and last name, middle names do not differ"
+SAME_NAME_REASONS = frozenset({SAME_FULL_NAME, SAME_FIRST_AND_LAST_NAME})
+# A father and a son: a name carrying one of these is not the same name as one without it.
+GENERATION_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
+TITLES = frozenset({"dr", "mr", "mrs", "ms", "prof"})
+# Below a shared phone or email (0.99), so those join first.
+SAME_NAME_CONFIDENCE = 0.95
 T = TypeVar("T")
 
 
 @dataclass(frozen=True)
 class _BlockingRecord:
     person: MergePerson
+    name_words: tuple[str, ...]
     emails: frozenset[str]
-    email_localparts: frozenset[str]
     phones: frozenset[str]
     bucket_keys: frozenset[str]
 
@@ -99,36 +133,102 @@ def email_localparts(emails: tuple[str, ...]) -> frozenset[str]:
     return frozenset(email.split("@", 1)[0] for email in emails if "@" in email)
 
 
+def name_words(name_key: str) -> tuple[str, ...]:
+    """The words of a name, given name first and titles left out: "bravo, dr jordan" reads as jordan bravo.
+
+    An email address saved as the name has no words. An apostrophe does not
+    split a word: o'bravo is one word, not an initial and a name.
+    """
+    if "@" in name_key:
+        return ()
+    # Composed and decomposed accents are one spelling.
+    composed = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", name_key))
+    family, comma, given = composed.partition(",")
+    ordered = f"{given} {family}" if comma else composed
+    return tuple(word for word in re.findall(r"[^\W\d_]+", ordered.casefold()) if word not in TITLES)
+
+
+def _is_full_name(words: tuple[str, ...]) -> bool:
+    """A first and a last word that are both spelled out, not initials."""
+    return len(words) > 1 and len(words[0]) > 1 and len(words[-1]) > 1
+
+
+def _middle_names_agree(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
+    """Missing on one side, or word for word equal or an initial of the other."""
+    if not first or not second:
+        return True
+    if len(first) != len(second):
+        return False
+    return all(
+        left == right or (1 in (len(left), len(right)) and left[0] == right[0])
+        for left, right in zip(first, second)
+    )
+
+
+def same_name_reason(first: tuple[str, ...], second: tuple[str, ...]) -> str | None:
+    """Why two names' words are one contact's name, or None when the names do not settle it."""
+    if not _is_full_name(first) or not _is_full_name(second):
+        return None
+    if GENERATION_SUFFIXES & set(first) != GENERATION_SUFFIXES & set(second):
+        return None
+    if sorted(first) == sorted(second):
+        return SAME_FULL_NAME
+    if (first[0], first[-1]) != (second[0], second[-1]):
+        return None
+    if not _middle_names_agree(first[1:-1], second[1:-1]):
+        return None
+    return SAME_FIRST_AND_LAST_NAME
+
+
+def _word_forms_match(first: str, second: str) -> bool:
+    """One word equals, begins or nearly spells the other: jordan/j, ben/benjamin, jon/john."""
+    return first.startswith(second) or second.startswith(first) or jaro_winkler(first, second) >= GATE_NAME_SIM
+
+
+def names_can_match(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
+    """Can one name be a form of the other? Decides which pairs are worth a judgment, not the judgment."""
+    if not first or not second:
+        return False
+    if same_name_reason(first, second) or first == second:
+        return True
+    short, long = sorted((first, second), key=len)
+    if len(short) == 1:
+        return short[0] in (long[0], long[-1])
+    return _word_forms_match(first[0], second[0]) and _word_forms_match(first[-1], second[-1])
+
+
 def blocking_name_keys(name_key: str) -> set[str]:
-    """Return first-name/last-initial and first-initial/last-name bucket keys."""
+    """Return the name bucket keys: first/last initial pairs, plus whole-name keys for a full name."""
     joined = re.sub(r"[.\-']+", "", name_key)
     tokens = re.sub(r"[^a-z ]+", " ", joined).split()
-    if not tokens:
-        return set()
-    first, last = tokens[0], tokens[-1]
-    keys = {f"fnli:{first}|{last[0]}", f"filn:{first[0]}|{last}"}
-    if len(tokens) == 1 or len(last) == 1:
-        keys.add(f"fn:{first}")
+    keys: set[str] = set()
+    if tokens:
+        first, last = tokens[0], tokens[-1]
+        keys |= {f"fnli:{first}|{last[0]}", f"filn:{first[0]}|{last}"}
+        if len(tokens) == 1 or len(last) == 1:
+            keys.add(f"fn:{first}")
+    words = name_words(name_key)
+    if _is_full_name(words):
+        keys |= {f"words:{' '.join(sorted(words))}", f"ends:{words[0]}|{words[-1]}"}
     return keys
 
 
 def _blocking_record(person: MergePerson) -> _BlockingRecord:
-    localparts = email_localparts(person.emails)
     keys = {f"email:{email}" for email in person.all_emails}
-    keys |= {f"local:{part}" for part in localparts}
+    keys |= {f"local:{part}" for part in email_localparts(person.emails)}
     keys |= {f"phone:{digits}" for digits in person.all_phones}
     keys |= {f"nm:{key}" for key in blocking_name_keys(person.name_key)}
     return _BlockingRecord(
         person,
+        name_words(person.name_key),
         person.all_emails,
-        localparts,
         person.all_phones,
         frozenset(keys),
     )
 
 
 def generate_pairs(people: list[MergePerson]) -> list[MergePair]:
-    """Block parent rows, then retain pairs sharing identity evidence or a similar name."""
+    """Block parent rows, then keep pairs sharing a phone or email or names that can be one name."""
     records = [_blocking_record(person) for person in people]
     buckets: dict[str, list[int]] = {}
     for index, record in enumerate(records):
@@ -155,31 +255,42 @@ def generate_pairs(people: list[MergePerson]) -> list[MergePair]:
         left, right = records[left_index], records[right_index]
         if (
             left.emails & right.emails
-            or left.email_localparts & right.email_localparts
             or left.phones & right.phones
-            or jaro_winkler(left.person.name_key, right.person.name_key) >= GATE_NAME_SIM
+            or names_can_match(left.name_words, right.name_words)
         ):
             selected.append(MergePair(left.person, right.person))
     return selected
+
+
+def _shared_contact_identifiers(first: MergePerson, second: MergePerson) -> str:
+    phones = sorted(set(first.phone_digits) & set(second.phone_digits))
+    emails = sorted(set(first.emails) & set(second.emails))
+    return ", ".join([format_phone_digits(digits) for digits in phones] + emails)
 
 
 def slam_dunk_verdict(
     first: MergePerson,
     second: MergePerson,
 ) -> MergeDecision | None:
-    if not first.name_key or first.name_key != second.name_key:
+    """A merge without the pair judge: an identical name with a shared phone or email, or the same name."""
+    shared = _shared_contact_identifiers(first, second)
+    if shared and first.name_key and first.name_key == second.name_key:
+        return MergeDecision(
+            same_person=True,
+            confidence=0.99,
+            tone_consistent=True,
+            judge=JUDGE_SLAM_DUNK,
+            reason=f"slam dunk: identical name + shared {shared}",
+        )
+    reason = same_name_reason(name_words(first.name_key), name_words(second.name_key))
+    if reason is None:
         return None
-    phones = sorted(set(first.phone_digits) & set(second.phone_digits))
-    emails = sorted(set(first.emails) & set(second.emails))
-    if not phones and not emails:
-        return None
-    shared = ", ".join([format_phone_digits(digits) for digits in phones] + emails)
     return MergeDecision(
         same_person=True,
-        confidence=0.99,
+        confidence=SAME_NAME_CONFIDENCE,
         tone_consistent=True,
         judge=JUDGE_SLAM_DUNK,
-        reason=f"slam dunk: identical name + shared {shared}",
+        reason=reason,
     )
 
 

@@ -13,6 +13,12 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 Both inputs are `external`: the graph does not model the SQLite projection, and
 `merged/people.csv` is the fan-in import's output.
 
+Shared mailboxes do not enter: a row whose every email is a role address
+(`is_shared_mailbox`: `ir@`, `billing@`, `customer.service@`), with no phone and
+no LinkedIn connection, is dropped by `read_imported_people`. People already in
+the store are carried forward, so this does not remove earlier imports; the
+merge survey leaves those out on its own.
+
 ## Manifest / status
 
 No `manifest.json`; `EnsureParentsManifest` (`source`, `people_projected`) is

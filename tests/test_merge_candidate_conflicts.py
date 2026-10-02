@@ -159,17 +159,27 @@ class MergeConflictTests(unittest.TestCase):
     def test_extracted_shared_office_phone_cannot_skip_the_judge(self):
         from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict
         from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo',
+        first = MergePerson('a', 'a', 'Jordan B', 'jordan b',
                             extra_phones=('15550100100',),
                             evidence=DossierEvidence(from_them=('That is our shared office number.',)))
-        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',))
+        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_phones=('15550100100',))
         self.assertIsNone(slam_dunk_verdict(first, second))
 
     def test_extracted_shared_email_cannot_skip_the_judge(self):
         from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict
-        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', extra_emails=('office@example.com',))
-        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', extra_emails=('office@example.com',))
+        first = MergePerson('a', 'a', 'Jordan B', 'jordan b', extra_emails=('office@example.com',))
+        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_emails=('office@example.com',))
         self.assertIsNone(slam_dunk_verdict(first, second))
+
+    def test_extracted_shared_phone_under_one_full_name_merges_on_the_name_alone(self):
+        from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import SAME_FULL_NAME, slam_dunk_verdict
+        from packs.ingestion.primitives.deep_context.merge_candidates.judge import asks_keep_apart
+        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',))
+        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',))
+        verdict = slam_dunk_verdict(first, second)
+        # The office number is not credited; the name is, and the facts are still read.
+        self.assertEqual(verdict.reason, SAME_FULL_NAME)
+        self.assertTrue(asks_keep_apart(verdict))
 
     def test_shared_direct_contact_email_remains_free(self):
         from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict

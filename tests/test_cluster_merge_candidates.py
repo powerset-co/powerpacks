@@ -37,12 +37,19 @@ from packs.ingestion.primitives.deep_context.db.merge_queries import merge_peopl
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import (
+    SAME_FIRST_AND_LAST_NAME,
+    SAME_FULL_NAME,
     generate_pairs,
+    names_can_match,
+    name_words,
     jaro_winkler,
     slam_dunk_verdict,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_SYSTEM,
+    KEEP_APART_CUTOFF,
+    KEEP_APART_QUESTION,
+    KEEP_APART_REASON,
     NAMES_CUTOFF,
     NAMES_QUESTION,
     NAMES_REASON,
@@ -143,10 +150,59 @@ class TestSlamDunkVerdict(unittest.TestCase):
         b = person("Casey Bravo", phones=["9145550466"])
         self.assertIsNone(slam_dunk_verdict(a, b))
 
-    def test_identical_name_without_shared_identifier_goes_to_the_judge(self):
+    def test_same_full_name_merges_free_without_a_shared_identifier(self):
         a = person("Jordan Bravo", emails=["jordan@example.com"])
         b = person("Jordan Bravo", phones=["9145550466"])
-        self.assertIsNone(slam_dunk_verdict(a, b))
+        verdict = slam_dunk_verdict(a, b)
+        self.assertTrue(verdict.same_person)
+        self.assertEqual((verdict.judge, verdict.reason), ("slam_dunk", SAME_FULL_NAME))
+        self.assertLess(verdict.confidence, 0.99)
+
+    def test_same_full_name_in_another_word_order_merges_free(self):
+        for first, second in (
+            ("Jordan Bravo", "Bravo, Jordan"),
+            ("Jordan Bravo", "Bravo Jordan"),
+            ("Jordan Bravo", "jordan  BRAVO"),
+            ("Jordan O'Bravo", "Jordan O\u2019Bravo"),
+            ("\u00c9mile Bravo", "E\u0301mile Bravo"),     # one accent, composed and decomposed
+            ("Jordan Bravo Jr", "Bravo, Jordan Jr."),     # the same suffix on both sides
+            ("Dr. Jordan Bravo", "Jordan Bravo"),         # a title is not part of the name
+        ):
+            with self.subTest(first=first, second=second):
+                self.assertEqual(slam_dunk_verdict(person(first), person(second)).reason, SAME_FULL_NAME)
+
+    def test_middle_name_on_one_side_or_agreeing_on_both_merges_free(self):
+        for first, second in (
+            ("Jordan Bravo", "Jordan Alex Bravo"),
+            ("Jordan A. Bravo", "Jordan Bravo"),
+            ("Jordan A Bravo", "Jordan Alex Bravo"),
+            ("Bravo, Jordan Alex", "Jordan Bravo"),
+        ):
+            with self.subTest(first=first, second=second):
+                self.assertEqual(
+                    slam_dunk_verdict(person(first), person(second)).reason, SAME_FIRST_AND_LAST_NAME,
+                )
+
+    def test_names_that_do_not_settle_it_go_to_the_judge(self):
+        for first, second in (
+            ("Jordan Alex Bravo", "Jordan Blake Bravo"),   # two different middle names
+            ("Jordan Ann Bravo", "Jordan Anna Bravo"),     # one middle name only begins the other
+            ("Jordan Bravo", "Jordan Bravo Jr"),           # a suffix on one side is another person
+            ("Jordan Bravo", "Jordan Bravo, Sr."),
+            ("Bravo, Jordan", "Bravo, Jordan Jr."),
+            ("Jordan Bravo Jr", "Jordan Bravo Sr"),
+            ("Jordan Bravo", "Jordan Bravo III"),
+            ("Bravo, Dr Jordan", "Dr Bravo"),              # a title is not a first name
+            ("O'Bravo, Jordan", "Jordan Bravo"),           # O'Bravo is one word, not a middle initial
+            ("jordan.bravo@example.com", "jordan.bravo@example.com"),  # an address is not a name
+            ("Jordan", "Jordan"),                          # one-word names
+            ("Jordan B", "Jordan B"),                      # an initial is not a last name
+            ("J Bravo", "J Bravo"),
+            ("Jordan Bravo", "Casey Bravo"),
+            ("Jordan Bravo", "Jordan Bravoski"),
+        ):
+            with self.subTest(first=first, second=second):
+                self.assertIsNone(slam_dunk_verdict(person(first), person(second)))
 
 
 class TestSharedIdentifierNote(unittest.TestCase):
@@ -203,6 +259,69 @@ class TestPairGeneration(unittest.TestCase):
         }
         self.assertIn(frozenset((people[0].person_id, people[1].person_id)), person_pairs)
         self.assertNotIn(frozenset((people[0].person_id, people[2].person_id)), person_pairs)
+
+    def test_same_name_pairs_with_nothing_else_in_common(self):
+        people = [
+            person("Bravo, Jordan", emails=["jb@example.com"]),
+            person("Jordan Bravo", phones=["4155550100"]),
+            person("Jordan Alex Bravo", emails=["alex@example.org"]),
+            person("Casey Delta", emails=["casey@example.com"]),
+        ]
+        self.assertEqual(
+            {(pair.first.name, pair.second.name) for pair in generate_pairs(people)},
+            {("Bravo, Jordan", "Jordan Bravo"), ("Bravo, Jordan", "Jordan Alex Bravo"),
+             ("Jordan Bravo", "Jordan Alex Bravo")},
+        )
+
+    def test_names_that_can_be_one_name(self):
+        for first, second in (
+            ("Jordan Bravo", "Jordan"),             # a one-word name that is the other's first name
+            ("Jordan Bravo", "Bravo"),
+            ("Jordan", "Jordan"),
+            ("Jordan Bravo", "Jordan B"),           # a last initial
+            ("Jordan Bravo", "J Bravo"),            # a first initial
+            ("Benjamin Bravo", "Ben Bravo"),        # a short form that begins the name
+            ("Jon Bravo", "John Bravo"),            # a spelling variant
+            ("Jordan Bravo", "Jordan Bravoski"),
+        ):
+            with self.subTest(first=first, second=second):
+                self.assertTrue(names_can_match(name_words(first.lower()), name_words(second.lower())))
+
+    def test_names_that_cannot_be_one_name(self):
+        for first, second in (
+            ("Jordan Bravo", "Jordan Delta"),       # a shared first name alone
+            ("Jordan Bravo", "Casey Bravo"),        # a shared last name alone
+            ("Jordan Bravo", "Casey"),
+            ("Jordan Bravo", "Riley Delta"),
+            ("Jordan Bravo", ""),
+            ("jordan@example.com", "casey@example.com"),
+        ):
+            with self.subTest(first=first, second=second):
+                self.assertFalse(names_can_match(name_words(first.lower()), name_words(second.lower())))
+
+    def test_one_word_name_meets_a_full_name_only_through_a_shared_handle_or_identifier(self):
+        # "Jordan" alone could be any Jordan: nothing proposes the pair, so nothing is asked.
+        self.assertEqual(generate_pairs([person("Jordan"), person("Jordan Bravo")]), [])
+
+    def test_shared_email_handle_under_two_different_names_is_not_a_pair(self):
+        people = [
+            person("Jordan Bravo", emails=["jordan@example.com"]),
+            person("Jordan Delta", emails=["jordan@example.org"]),
+        ]
+        self.assertEqual(generate_pairs(people), [])
+
+    def test_shared_email_handle_under_a_short_form_of_the_name_is_a_pair(self):
+        people = [
+            person("Jordan Bravo", emails=["jordan@example.com"]),
+            person("jordan", emails=["jordan@example.org"]),
+        ]
+        self.assertEqual(len(generate_pairs(people)), 1)
+
+    def test_shared_first_name_and_a_different_last_name_is_not_a_pair(self):
+        # Whole-name similarity once paired these: the long shared first name carried the score.
+        people = [person("Christopher Bravo"), person("Christopher Brown")]
+        self.assertGreaterEqual(jaro_winkler("christopher bravo", "christopher brown"), 0.85)
+        self.assertEqual(generate_pairs(people), [])
 
     def test_oversized_blocking_bucket_is_reported_and_skipped(self):
         people = [
@@ -437,8 +556,8 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertEqual(payload.pairs_slam_dunk, 1)
 
 
-def scripted_answers(*, p_yes: float = 0.9, names: float = 0.9, fail_on: str | None = None,
-                     fail_names: bool = False):
+def scripted_answers(*, p_yes: float = 0.9, names: float = 0.9, apart: float = 0.1,
+                     fail_on: str | None = None, fail_names: bool = False, fail_apart: bool = False):
     """Fake answer_requests where judge.py binds it; fail on dossiers naming fail_on."""
     calls: list[dict] = []
 
@@ -447,17 +566,25 @@ def scripted_answers(*, p_yes: float = 0.9, names: float = 0.9, fail_on: str | N
         ((digest, request),) = requests.items()
         calls.append(request)
         about_names = "same_name" in request["questions"]
+        about_apart = "keep_apart" in request["questions"]
         if fail_names and about_names:
             raise RuntimeError("Jev HTTP 503; names remain unjudged")
-        if fail_on and not about_names and fail_on in request["state"]["dossier"]:
+        if fail_apart and about_apart:
+            raise RuntimeError("Jev HTTP 503; same-name pair remains unchecked")
+        if fail_on and not about_names and not about_apart and fail_on in request["state"]["dossier"]:
             raise RuntimeError("Jev HTTP 503; candidate remains unscored")
-        answers = {"same_name": {"type": "noul", "noul": names}} if about_names else {
-            "same_person": {
-                "type": "choice",
-                "probabilities": {"yes": p_yes, "no": round(1 - p_yes, 6)},
-            },
-            "tone_consistent": {"type": "noul", "noul": 0.8},
-        }
+        if about_names:
+            answers = {"same_name": {"type": "noul", "noul": names}}
+        elif about_apart:
+            answers = {"keep_apart": {"type": "noul", "noul": apart}}
+        else:
+            answers = {
+                "same_person": {
+                    "type": "choice",
+                    "probabilities": {"yes": p_yes, "no": round(1 - p_yes, 6)},
+                },
+                "tone_consistent": {"type": "noul", "noul": 0.8},
+            }
         response = {
             "model": MODEL_ID,
             "answers": answers,
@@ -715,6 +842,110 @@ class TestJevJudge(unittest.TestCase):
             self.assertEqual(cached["candidate_pairs_to_judge"], 0)
             self.assertGreater(cached["estimated_input_tokens"], 0)
             self.assertLess(cached["estimated_input_tokens"], unjudged)
+
+    def _same_name_node(self, root: Path) -> ClusterMergeCandidates:
+        db = Db(root / "deep-context.sqlite")
+        for person_id, slug, name, phone in (
+            ("a", "jordan-bravo", "Jordan Bravo", "4155550100"),
+            ("b", "bravo-jordan", "Bravo, Jordan", "4155550111"),
+        ):
+            seed_person(db, person_id=person_id, slug=slug, name=name,
+                        facts_path=root / f"{person_id}.jsonl", facts={}, phone=phone)
+        return ClusterMergeCandidates(db=db, dossier_dir=root, output_dir=root,
+                                      out_csv=root / "merge-candidates.csv", out_md=root / "merge-candidates.md")
+
+    def test_same_name_merges_when_the_facts_do_not_keep_the_records_apart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._same_name_node(Path(directory))
+            fake = scripted_answers(apart=0.1)
+            with mock.patch.object(judge, "answer_requests", fake):
+                payload = node.run()
+
+            # The same name is never sent to the pair judge or asked about its names.
+            (request,) = fake.calls
+            self.assertEqual(request["questions"], {"keep_apart": {"type": "noul", "instructions": KEEP_APART_QUESTION}})
+            self.assertIn("CONTACT A", request["state"]["dossier"])
+            self.assertFalse(request["state"]["dossier"].endswith("Are A and B the same person?"))
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual([(row.judge, row.same_person, row.reason, row.accepted) for row in rows],
+                             [("slam_dunk", 1, SAME_FULL_NAME, 1)])
+            self.assertEqual((payload.pairs_slam_dunk, payload.pairs_judged, payload.candidate_pairs), (1, 0, 1))
+
+    def test_same_name_the_facts_keep_apart_is_two_people(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._same_name_node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(apart=KEEP_APART_CUTOFF)):
+                payload = node.run()
+            rows = canonical_snapshot(node.db).merge_verdicts
+            self.assertEqual([(row.judge, row.same_person, row.confidence, row.reason, row.accepted) for row in rows],
+                             [("slam_dunk", 0, 1 - KEEP_APART_CUTOFF, KEEP_APART_REASON, 0)])
+            self.assertEqual(payload.candidate_pairs, 0)
+
+            # Decided: the stored no is reused, and nothing is asked again.
+            again = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", again):
+                payload = node.run()
+            self.assertEqual(again.calls, [])
+            self.assertEqual((payload.pairs_slam_dunk, payload.pairs_reused), (0, 1))
+
+    def test_failed_keep_apart_request_writes_no_verdict_and_is_asked_next_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            node = self._same_name_node(Path(directory))
+            with mock.patch.object(judge, "answer_requests", scripted_answers(fail_apart=True)), \
+                    mock.patch("sys.stderr") as stderr:
+                payload = node.run()
+
+            self.assertEqual(canonical_snapshot(node.db).merge_verdicts, ())
+            self.assertEqual((payload.errors, payload.candidate_pairs), (1, 0))
+            self.assertIn("keep-apart request(s) failed", "".join(
+                str(call.args[0]) for call in stderr.write.call_args_list
+            ))
+
+            with mock.patch.object(judge, "answer_requests", scripted_answers()):
+                payload = node.run()
+            self.assertEqual(payload.errors, 0)
+            self.assertEqual({row.accepted for row in canonical_snapshot(node.db).merge_verdicts}, {1})
+
+    def test_identical_name_with_a_shared_phone_is_not_asked_to_keep_apart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            for person_id in ("a", "b"):
+                seed_person(db, person_id=person_id, slug=f"jordan-{person_id}", name="Jordan Bravo",
+                            facts_path=root / f"{person_id}.jsonl", facts={}, phone="4155550100")
+            node = ClusterMergeCandidates(db=db, dossier_dir=root, output_dir=root,
+                                          out_csv=root / "merge-candidates.csv", out_md=root / "merge-candidates.md")
+            fake = scripted_answers()
+            with mock.patch.object(judge, "answer_requests", fake):
+                node.run()
+            self.assertEqual(fake.calls, [])
+            self.assertEqual({row.accepted for row in canonical_snapshot(node.db).merge_verdicts}, {1})
+
+    def test_dry_run_prices_the_keep_apart_requests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            estimate = self._same_name_node(Path(directory)).estimate()
+            self.assertEqual((estimate["pairs_slam_dunk"], estimate["candidate_pairs_to_judge"]), (1, 0))
+            self.assertGreater(estimate["estimated_input_tokens"], 0)
+
+    def test_shared_mailbox_already_in_the_store_is_left_out_of_the_survey(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            for person_id, email in (("a", "ir@example.com"), ("b", "ir@example.org"), ("c", "casey@example.com")):
+                parent_id = f"parent-{person_id}"
+                db.project_rows((
+                    ParentRow(parent_id, f"parent-worth:{parent_id}", "Investor Relations", person_id),
+                    PersonRow(person_id, parent_id, person_id, person_id, "Investor Relations"),
+                    PersonIdentifiersProjection(person_id, (PersonIdentifierRow(person_id, "email", email, email),)),
+                    ArtifactRow(f"facts:{parent_id}", "facts", parent_id, str(root / f"{person_id}.jsonl"),
+                                "0" * 64, "projected"),
+                    FactRow(parent_id, parent_id, f"facts:{parent_id}", facts_json="{}"),
+                ))
+
+            survey = survey_pairs(db)
+
+            self.assertEqual([person.person_id for person in survey.people], ["c"])
+            self.assertEqual(survey.pairs, [])
 
     def test_cluster_has_no_confidence_override(self):
         with self.assertRaises(SystemExit):
