@@ -241,7 +241,6 @@ class LinkedinFinished:
     linkedin_done: int
     linkedin_complete: bool
     retargets_in_flight: int
-    auto_continue: bool
 
 
 @dataclass(frozen=True)

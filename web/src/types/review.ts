@@ -132,11 +132,9 @@ export interface WorthTablePayload {
 export interface LinkedinFinished {
   synthesize_pending: boolean
   linkedin_done: number
-  /** Nothing pending at all: show the go-back handoff, not Finish. */
+  /** Nothing pending at all: show the go-back handoff. */
   linkedin_complete: boolean
   retargets_in_flight: number
-  /** Finish presses itself once background work settles. */
-  auto_continue: boolean
 }
 
 /** GET /api/review/linkedin-card, and `next` on a decide: exactly one of card / finished. */

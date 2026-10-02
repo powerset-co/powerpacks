@@ -130,7 +130,6 @@ NOT_FINISHED = {
     "linkedin_done": 0,
     "linkedin_complete": False,
     "retargets_in_flight": 0,
-    "auto_continue": True,
 }
 
 
@@ -577,7 +576,6 @@ class SynthesisPendingTests(unittest.TestCase):
                     "linkedin_done": 0,
                     "linkedin_complete": True,
                     "retargets_in_flight": 0,
-                    "auto_continue": False,
                 },
                 "pending": 0,
                 "queue": None,
@@ -918,7 +916,6 @@ class LinkedinRoutesTests(ReviewApiFixture):
                     "linkedin_done": 1,
                     "linkedin_complete": True,
                     "retargets_in_flight": 0,
-                    "auto_continue": False,
                 },
                 "pending": 0,
                 "queue": None,
@@ -1208,7 +1205,6 @@ class DecideTests(ReviewApiFixture):
                 "linkedin_done": 1,
                 "linkedin_complete": True,
                 "retargets_in_flight": 0,
-                "auto_continue": False,
             },
         )
 

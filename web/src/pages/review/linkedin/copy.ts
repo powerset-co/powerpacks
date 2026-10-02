@@ -48,7 +48,7 @@ export function feedbackContext(name: string): string {
   return `Feedback on ${name} — wrong or missing info?`
 }
 
-export const FINISHED = { title: "LinkedIn Profiles Checked", finish: "Finish" } as const
+export const FINISHED = { title: "LinkedIn Profiles Checked" } as const
 
 export function decisionsSaved(count: number): string {
   return `${count} decisions saved`

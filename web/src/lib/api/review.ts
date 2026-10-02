@@ -12,7 +12,6 @@ import type {
   ReviewEvent,
   ReviewPage,
   ReviewStatus,
-  ReviewView,
   WorthCardPayload,
   WorthPendingEntry,
   WorthResult,
@@ -183,11 +182,6 @@ export interface WorthRequest {
 export async function postWorth({ note, ...rest }: WorthRequest): Promise<WorthResult> {
   const values = note === undefined ? rest : { ...rest, note }
   return body<WorthResult>(await post("/worth", values))
-}
-
-/** Marks a stage complete; the caller then runs the stage transition. */
-export async function completeStage(stage: Exclude<ReviewView, "done">): Promise<void> {
-  await post("/complete", { stage })
 }
 
 export interface RetargetRequest {

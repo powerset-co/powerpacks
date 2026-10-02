@@ -29,6 +29,9 @@ are form-encoded, a POST from another origin is refused, and an error is
 `{"error": text}`. What each route answers with is a dataclass in payloads.py.
 
 Changelog:
+  2026-10-02: the finished LinkedIn state no longer asks the page to press Finish
+    (`auto_continue`): /complete changes nothing in the store, so the page pressed it in a
+    loop while a re-research was out.
   2026-10-01: the page carries no step list; worth overrides remain available.
   2026-09-30: created beside the Jinja page.
   2026-10-01: follows #635's review page. The approve label counts the judgment estimate;
@@ -348,13 +351,11 @@ class ReviewApi:
 
     def _linkedin_finished(self, retargets_in_flight: int) -> LinkedinFinished:
         progress = self.adapter.snapshot().progress
-        completed = not progress.linkedin_pending
         return LinkedinFinished(
             synthesize_pending=bool(progress.synthesize_pending),
             linkedin_done=progress.linkedin_done,
-            linkedin_complete=completed,
+            linkedin_complete=not progress.linkedin_pending,
             retargets_in_flight=retargets_in_flight,
-            auto_continue=not completed,
         )
 
     def _decide(self, form: Params) -> DecideResult:

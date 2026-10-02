@@ -161,7 +161,6 @@ export function linkedinFinished(overrides: Partial<LinkedinFinished> = {}): Lin
     linkedin_done: 6,
     linkedin_complete: false,
     retargets_in_flight: 0,
-    auto_continue: true,
     ...overrides,
   }
 }
