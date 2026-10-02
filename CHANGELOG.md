@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.12.0...powerpacks-v3.13.0) (2026-10-02)
+
+
+### Features
+
+* **review:** count the people left above the LinkedIn card ([#665](https://github.com/powerset-co/powerpacks/issues/665)) ([5e78b8f](https://github.com/powerset-co/powerpacks/commit/5e78b8f44f6e5f54f714ab5803a6a522275c1dce))
+
+
+### Bug Fixes
+
+* **deep-context:** resend on the standard tier when Flex refuses ([#669](https://github.com/powerset-co/powerpacks/issues/669)) ([5a8577d](https://github.com/powerset-co/powerpacks/commit/5a8577d736222b17f8dbe778904716a873ccd502))
+* **deep-context:** retry any provider error; open bare review on macOS ([#664](https://github.com/powerset-co/powerpacks/issues/664)) ([d2c5ec7](https://github.com/powerset-co/powerpacks/commit/d2c5ec74b86d9ccadb17f61f4c4d949192df50a4))
+* **deep-context:** show one LinkedIn for a profile with two addresses ([#668](https://github.com/powerset-co/powerpacks/issues/668)) ([1100dab](https://github.com/powerset-co/powerpacks/commit/1100dab0f06b6a3a4fab907357aad0dce99f71ce))
+* **review:** no unconfirmed photo; full summary sentence ([#672](https://github.com/powerset-co/powerpacks/issues/672)) ([c0797fb](https://github.com/powerset-co/powerpacks/commit/c0797fb1afee7f6f0dea7715a7b0d760f48a9c40))
+* **review:** settle a re-research in the background, never ask again ([#670](https://github.com/powerset-co/powerpacks/issues/670)) ([f244339](https://github.com/powerset-co/powerpacks/commit/f244339c7ab589dabb753620e519c02fea81bf3f))
+* **review:** stop Finish pressing itself in a loop during re-research ([#666](https://github.com/powerset-co/powerpacks/issues/666)) ([89530ce](https://github.com/powerset-co/powerpacks/commit/89530ce603b45844202180cf519dc158541517ec))
+
 ## [3.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.11.0...powerpacks-v3.12.0) (2026-10-02)
 
 
