@@ -9,7 +9,7 @@ import {
   type RetargetRequest,
 } from "@/lib/api/review"
 import { STAGE_DONE, TOAST } from "@/lib/review/copy"
-import { STATUS_POLL_MS, wait } from "@/lib/review/timing"
+import { wait } from "@/lib/review/timing"
 import type { DecideResult, LinkedinCardPayload } from "@/types/review"
 
 import { useReview } from "../hooks/useReview"
@@ -24,9 +24,8 @@ export interface Shown {
 /**
  * The LinkedIn queue, one card at a time. The stage reads its first card on mount. A
  * decision's answer carries the next card, read after the write, so a decided person never
- * comes back; a queued re-research reads the next card itself, leaving that person out. With
- * no card to show and re-research still out, the queue is read again every STATUS_POLL_MS:
- * the person comes back as a card, or the queue is done.
+ * comes back; a queued re-research reads the next card itself, leaving that person out. The
+ * re-research settles that person in the background: they never come back as a card.
  */
 export function useLinkedinQueue() {
   const { debug, index, fadeMs, toast, toastError, applyProgress, transition, leaveAndReload } = useReview()
@@ -44,19 +43,6 @@ export function useLinkedinQueue() {
     )
     return () => read.abort()
   }, [debug, index])
-
-  const waiting = Boolean(shown && !shown.payload.card && shown.payload.finished?.retargets_in_flight)
-  useEffect(() => {
-    if (!waiting) return
-    const timer = window.setInterval(() => {
-      // A read that fails is read again at the next tick.
-      fetchLinkedinCard({ debug, index }).then(
-        (payload) => setShown({ payload, phase: "ready" }),
-        () => undefined,
-      )
-    }, STATUS_POLL_MS)
-    return () => window.clearInterval(timer)
-  }, [waiting, debug, index])
 
   const setPhase = (phase: CardPhase) => setShown((current) => current && { ...current, phase })
   const follow = (payload: LinkedinCardPayload) => setShown({ payload, phase: "ready" })
@@ -86,8 +72,6 @@ export function useLinkedinQueue() {
   }
 
   const retarget = async (request: RetargetRequest) => {
-    // The card sits in the debug carousel.
-    const carousel = Boolean(shown?.payload.queue)
     setPhase("retargeting")
     try {
       await postRetarget(request)
@@ -98,7 +82,7 @@ export function useLinkedinQueue() {
     }
 
     toast(TOAST.queued)
-    setPhase("moving")
+    setPhase("deciding")
     const [next] = await Promise.all([
       fetchLinkedinCard({ exclude: [request.parent_slug] }).catch(() => null),
       wait(fadeMs),
@@ -108,14 +92,10 @@ export function useLinkedinQueue() {
       return
     }
 
-    // The next card could not be read. The carousel's screen reads itself again, without the
-    // person now in re-research; elsewhere the card stays and says its re-research is queued.
-    if (carousel) {
-      setPhase("retargeting")
-      leaveAndReload(TOAST.queued)
-      return
-    }
-    setPhase("queued")
+    // The next card could not be read: the screen reads itself again, without the person now
+    // in re-research.
+    setPhase("retargeting")
+    leaveAndReload(TOAST.queued)
   }
 
   const browse = async (position: number) => {

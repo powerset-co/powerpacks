@@ -12,10 +12,9 @@ afterEach(cleanup)
 
 interface Flags {
   disabled?: boolean
-  queued?: boolean
 }
 
-function renderForm({ disabled = false, queued = false }: Flags = {}) {
+function renderForm({ disabled = false }: Flags = {}) {
   const review = spyReview()
   const onFix = vi.fn()
   const onRetarget = vi.fn()
@@ -26,7 +25,6 @@ function renderForm({ disabled = false, queued = false }: Flags = {}) {
         onToggle={vi.fn()}
         field={createRef<HTMLTextAreaElement>()}
         disabled={disabled}
-        queued={queued}
         onFix={onFix}
         onRetarget={onRetarget}
       />
@@ -95,19 +93,6 @@ describe("GuidanceForm", () => {
     expect([field.name, field.maxLength, field.required]).toEqual(["guidance", 2000, true])
     const submit = screen.getByRole<HTMLButtonElement>("button", { name: "Retarget" })
     expect([submit.className, submit.type]).toEqual(["button button-primary", "submit"])
-  })
-
-  it("says the re-research is queued only when told", () => {
-    const quiet = renderForm()
-    const note = must(quiet.container.querySelector<HTMLElement>("form > span"))
-    expect([note.hidden, note.textContent]).toEqual([true, ""])
-    cleanup()
-    const queued = renderForm({ disabled: true, queued: true })
-    const shown = must(queued.container.querySelector<HTMLElement>("form > span"))
-    expect([shown.hidden, shown.textContent]).toEqual([
-      false,
-      "Queued — results apply automatically in the background",
-    ])
   })
 
   it("tells the page while a draft is typed, and no longer once it is gone (X3)", () => {

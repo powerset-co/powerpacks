@@ -37,21 +37,13 @@ const lines = (container: HTMLElement) =>
   [...container.querySelectorAll(".empty-state > p")].map((line) => line.textContent)
 
 describe("FinishedPanel", () => {
-  it("counts the saved decisions while people are still pending (L11)", async () => {
-    finishedQueue({ linkedin_done: 6 })
-    const { container } = await open()
+  it("shows only the title and the hand-back to Codex, and presses nothing (L11)", async () => {
+    finishedQueue()
+    const { container, review } = await open()
     expect(container.querySelector(".linkedin-panel > .empty-state")).toBeTruthy()
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
     expect(container.querySelector(".empty-mark")).toBeNull()
-    expect(lines(container)).toEqual(["6 decisions saved"])
-    expect(screen.queryAllByRole("button")).toEqual([])
-  })
-
-  it("says how much re-research is still running, and presses nothing (L11)", async () => {
-    finishedQueue({ retargets_in_flight: 2 })
-    const { container, review } = await open()
-    expect(lines(container)).toEqual(["6 decisions saved", "2 re-research still running"])
-    expect(screen.queryAllByRole("button")).toEqual([])
+    expect(lines(container)).toEqual(["Review complete — go back to Codex."])
     await act(() => Promise.resolve())
     expect(server.posts(COMPLETE)).toEqual([])
     expect(review.transition).not.toHaveBeenCalled()
@@ -60,9 +52,9 @@ describe("FinishedPanel", () => {
   it("hands back to Codex once everything is decided (L11)", async () => {
     const write = vi.fn(() => Promise.resolve())
     vi.stubGlobal("navigator", { clipboard: { writeText: write } })
-    finishedQueue({ linkedin_complete: true })
+    finishedQueue()
     const { container, review } = await open()
-    expect(lines(container)).toEqual(["6 decisions saved", "Review complete — go back to Codex."])
+    expect(lines(container)).toEqual(["Review complete — go back to Codex."])
     expect(container.querySelector(".handoff-copy code")?.textContent).toBe("Review complete, continue")
     expect(screen.queryByRole("button", { name: "Finish" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))
@@ -72,7 +64,7 @@ describe("FinishedPanel", () => {
 
   it("names the phrase to type when the clipboard refuses (L11)", async () => {
     vi.stubGlobal("navigator", { clipboard: { writeText: () => Promise.reject(new Error("denied")) } })
-    finishedQueue({ linkedin_complete: true })
+    finishedQueue()
     const { review } = await open()
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))
     await waitFor(() =>

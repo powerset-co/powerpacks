@@ -47,7 +47,8 @@ function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
   if (card) {
     return (
       <>
-        {queue ? <CarouselNav queue={queue} onIndex={onBrowse} /> : null}
+        {/* Browsing could reach a card whose decision is out: the arrows wait for this one. */}
+        {queue && phase === "ready" ? <CarouselNav queue={queue} onIndex={onBrowse} /> : null}
         {/* A carousel card is a frame of its own, replaced whole: browsing (and the first
             decision, which leaves the carousel) never plays the swap. */}
         <LinkedinCard
@@ -63,5 +64,5 @@ function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
 
   const finished = must(payload.finished, "the finished state")
   if (finished.synthesize_pending) return <SynthesisPending />
-  return <FinishedPanel finished={finished} />
+  return <FinishedPanel />
 }

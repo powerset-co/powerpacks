@@ -25,15 +25,10 @@ export const OPTION = {
   researchSummary: "Research summary",
 } as const
 
-export function reresearchFailed(note: string): string {
-  return `Re-research failed: ${note}`
-}
-
 export const GUIDANCE = {
   summary: "Wrong person? Provide LinkedIn or re-research",
   placeholder: "Paste a LinkedIn URL to apply it directly, or describe the right person to re-research",
   submit: "Retarget",
-  queued: "Queued — results apply automatically in the background",
 } as const
 
 export const MENU = { toggle: "More actions", mark: "⋯", feedback: "Leave feedback" } as const
@@ -54,11 +49,3 @@ export function feedbackContext(name: string): string {
 }
 
 export const FINISHED = { title: "LinkedIn Profiles Checked" } as const
-
-export function decisionsSaved(count: number): string {
-  return `${count} decisions saved`
-}
-
-export function researchRunning(count: number): string {
-  return `${count} re-research still running`
-}

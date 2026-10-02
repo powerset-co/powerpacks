@@ -238,16 +238,12 @@ class WorthTablePayload:
 @dataclass(frozen=True)
 class LinkedinFinished:
     synthesize_pending: bool
-    linkedin_done: int
-    linkedin_complete: bool
-    retargets_in_flight: int
 
 
 @dataclass(frozen=True)
 class LinkedinCard:
     person: ReviewPerson
     candidates: tuple[ReviewCandidate, ...]
-    failure_note: str
 
 
 @dataclass(frozen=True)

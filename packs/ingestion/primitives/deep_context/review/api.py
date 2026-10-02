@@ -84,7 +84,7 @@ from packs.ingestion.primitives.deep_context.review.feedback import (
     post_feedback_quietly,
     submit_directory_feedback,
 )
-from packs.ingestion.primitives.deep_context.review.models import FeedbackSubmission, GuidanceViewRow
+from packs.ingestion.primitives.deep_context.review.models import FeedbackSubmission
 from packs.ingestion.primitives.deep_context.review.payloads import (
     EXTERNAL_UPDATE_VIEWS,
     TITLES,
@@ -325,9 +325,11 @@ class ReviewApi:
         while True:
             order = self.linkedin.rows()
             queue = [row for row in order if row.slug.lower() not in excluded | inflight]
+            # The people left to check: someone sent to re-research is settled in the background.
+            left = sum(row.slug.lower() not in inflight for row in order)
             if not queue:
                 return LinkedinCardPayload(
-                    card=None, finished=self._linkedin_finished(len(inflight)), pending=len(order), queue=None
+                    card=None, finished=self._linkedin_finished(), pending=left, queue=None
                 )
 
             index = _index(params, len(queue))
@@ -343,20 +345,13 @@ class ReviewApi:
         card = LinkedinCard(
             person=ReviewPerson.from_parent(parent),
             candidates=tuple(ReviewCandidate.from_row(candidate) for candidate in parent.candidates),
-            failure_note=_failed_notes(retargets).get(parent.slug, "").strip(),
         )
         return LinkedinCardPayload(
-            card=card, finished=None, pending=len(order), queue=_debug_position(params, index, len(queue))
+            card=card, finished=None, pending=left, queue=_debug_position(params, index, len(queue))
         )
 
-    def _linkedin_finished(self, retargets_in_flight: int) -> LinkedinFinished:
-        progress = self.adapter.snapshot().progress
-        return LinkedinFinished(
-            synthesize_pending=bool(progress.synthesize_pending),
-            linkedin_done=progress.linkedin_done,
-            linkedin_complete=not progress.linkedin_pending,
-            retargets_in_flight=retargets_in_flight,
-        )
+    def _linkedin_finished(self) -> LinkedinFinished:
+        return LinkedinFinished(synthesize_pending=bool(self.adapter.snapshot().progress.synthesize_pending))
 
     def _decide(self, form: Params) -> DecideResult:
         pub = _value(form, "pub")
@@ -632,17 +627,6 @@ def _phase_view(params: Params) -> str:
     """The stage the URL asks for, or "" when it asks for none."""
     requested = _value(params, "stage").lower()
     return requested if requested in get_args(ReviewView) else ""
-
-
-def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:
-    """Each slug whose latest re-research failed, and why."""
-    latest: dict[str, GuidanceViewRow] = {}
-    for item in items:
-        slug = item.slug.lower()
-        if slug and slug not in latest:
-            latest[slug] = item
-
-    return {slug: item.detail or "the job did not finish" for slug, item in latest.items() if item.state == "failed"}
 
 
 def _index(params: Params, size: int) -> int:

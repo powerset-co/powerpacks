@@ -127,9 +127,6 @@ DECISION_COLUMNS = (
 )
 NOT_FINISHED = {
     "synthesize_pending": False,
-    "linkedin_done": 0,
-    "linkedin_complete": False,
-    "retargets_in_flight": 0,
 }
 
 
@@ -573,9 +570,6 @@ class SynthesisPendingTests(unittest.TestCase):
                 "card": None,
                 "finished": {
                     "synthesize_pending": True,
-                    "linkedin_done": 0,
-                    "linkedin_complete": True,
-                    "retargets_in_flight": 0,
                 },
                 "pending": 0,
                 "queue": None,
@@ -845,7 +839,7 @@ class LinkedinRoutesTests(ReviewApiFixture):
         )
 
     def test_linkedin_card_carries_the_person_and_every_pending_candidate(self) -> None:
-        card = {"person": JORDAN, "candidates": [JORDAN_CANDIDATE], "failure_note": ""}
+        card = {"person": JORDAN, "candidates": [JORDAN_CANDIDATE]}
         self.assertEqual(
             self.payload("/api/review/linkedin-card"), {"card": card, "finished": None, "pending": 1, "queue": None}
         )
@@ -856,28 +850,21 @@ class LinkedinRoutesTests(ReviewApiFixture):
             self.payload("/api/review/linkedin-card")["card"], {**card, "candidates": [JORDAN_CANDIDATE, second]}
         )
 
-    def test_linkedin_card_hides_in_flight_research_and_reports_a_failed_one(self) -> None:
+    def test_linkedin_card_hides_in_flight_research(self) -> None:
         self.store.seed_linkedin_queue()
-        retargets = [
-            self.retarget("jordan-bravo", "researching"),
-            self.retarget("sam-tango", "failed", "Synthetic provider outage"),
-            self.retarget("sam-tango", "failed", "An older synthetic failure"),
-            self.retarget("riley-stone", "failed"),
-        ]
+        retargets = [self.retarget("jordan-bravo", "researching")]
         with mock.patch.object(SqliteReviewAdapter, "retargets", return_value=retargets):
-            notes = {}
+            shown = set()
             for index in (0, 1):
                 payload = self.payload(f"/api/review/linkedin-card?index={index}")
-                self.assertEqual(payload["pending"], 3)
-                notes[payload["card"]["person"]["slug"]] = payload["card"]["failure_note"]
+                self.assertEqual(payload["pending"], 2)
+                shown.add(payload["card"]["person"]["slug"])
             finished = self.payload("/api/review/linkedin-card?exclude=riley-stone,sam-tango")
-        # Jordan is being re-researched: no card. The latest failure is the one reported.
-        self.assertEqual(
-            notes, {"riley-stone": "the job did not finish", "sam-tango": "Synthetic provider outage"}
-        )
+        # Jordan is being re-researched: no card, and not counted as left to check.
+        self.assertEqual(shown, {"riley-stone", "sam-tango"})
         self.assertEqual(
             finished,
-            {"card": None, "finished": {**NOT_FINISHED, "retargets_in_flight": 1}, "pending": 3, "queue": None},
+            {"card": None, "finished": NOT_FINISHED, "pending": 2, "queue": None},
         )
 
     def test_research_landing_mid_request_never_serves_a_blank_card(self) -> None:
@@ -913,9 +900,6 @@ class LinkedinRoutesTests(ReviewApiFixture):
                 "card": None,
                 "finished": {
                     "synthesize_pending": False,
-                    "linkedin_done": 1,
-                    "linkedin_complete": True,
-                    "retargets_in_flight": 0,
                 },
                 "pending": 0,
                 "queue": None,
@@ -1202,9 +1186,6 @@ class DecideTests(ReviewApiFixture):
             written["next"]["finished"],
             {
                 "synthesize_pending": False,
-                "linkedin_done": 1,
-                "linkedin_complete": True,
-                "retargets_in_flight": 0,
             },
         )
 

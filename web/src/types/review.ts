@@ -131,17 +131,13 @@ export interface WorthTablePayload {
 /** What replaces the LinkedIn card when the queue has nothing to show. */
 export interface LinkedinFinished {
   synthesize_pending: boolean
-  linkedin_done: number
-  /** Nothing pending at all: show the go-back handoff. */
-  linkedin_complete: boolean
-  retargets_in_flight: number
 }
 
 /** GET /api/review/linkedin-card, and `next` on a decide: exactly one of card / finished. */
 export interface LinkedinCardPayload {
-  card: { person: ReviewPerson; candidates: ReviewCandidate[]; failure_note: string } | null
+  card: { person: ReviewPerson; candidates: ReviewCandidate[] } | null
   finished: LinkedinFinished | null
-  /** Parents still pending, in-flight re-research included. */
+  /** People left to check, this card included; people out for re-research are not counted. */
   pending: number
   queue: QueuePosition | null
 }

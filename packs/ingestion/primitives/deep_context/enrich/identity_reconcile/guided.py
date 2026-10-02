@@ -1,4 +1,10 @@
-"""Provider execution and canonical identity settlement for guided research."""
+"""Provider execution and canonical identity settlement for guided research.
+
+Changelog:
+- 2026-10-02: a re-research saves its ending as the person's decision: the LinkedIn it found,
+  or their No when it found none. Either settles the person's other LinkedIns, so the
+  person is not asked again.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +26,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     RESEARCH_CONFIRM_THRESHOLD,
     ResearchHandle,
+    ReviewAction,
+    ReviewSource,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.view_models import (
@@ -28,7 +36,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentViewRow,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, research_rows
 from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db import queries as db_queries
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -55,7 +63,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
     filter_already_done,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.schemas.people_schema import normalize_linkedin_url
+from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
 @dataclass(frozen=True)
@@ -197,7 +205,6 @@ class GuidedResearch:
                 "applied",
                 research.reason or "research result applied",
                 new_url=url,
-                resolved_pubs=[request.row_key],
             )
         return self.record(
             parent_id,
@@ -254,9 +261,23 @@ class GuidedResearch:
         state: str,  # finer progress code (e.g. "queued", "no_match") — detail_json only
         detail: str = "",
         new_url: str = "",
-        resolved_pubs: list[str] | tuple[str, ...] = (),
         candidate_url: str = "",
     ) -> GuidanceOutcome:
+        # The person said the LinkedIn they were shown is wrong. How the retarget ends is saved
+        # as their decision before it is reported, which settles the person's other LinkedIns:
+        # the person never shows again.
+        resolved_pubs: list[str] = []
+        if guidance_state in (GuidanceState.APPLIED, GuidanceState.FAILED) and links(
+            self.db, row_keys=(request.row_key,)
+        ):
+            found = guidance_state == GuidanceState.APPLIED
+            resolved_pubs = self.db.decide_identity(
+                request.row_key,
+                ReviewAction.RETARGET.value if found else ReviewAction.DETACH.value,
+                replacement_url=new_url if found else None,
+                replacement_public_identifier=extract_public_identifier(new_url) if found else None,
+                source=ReviewSource.USER_GUIDANCE.value, note=request.guidance,
+            )
         item = GuidanceOutcome(
             slug=request.slug,
             row_key=request.row_key,

@@ -11,10 +11,8 @@ import {
   motionMedia,
   queuePosition,
   reviewCandidate,
-  reviewPerson,
   syntheticCandidate,
 } from "@/testing/review-fixture"
-import { STATUS_POLL_MS } from "@/lib/review/timing"
 import type { LinkedinCardPayload } from "@/types/review"
 
 import {
@@ -127,23 +125,6 @@ describe("LinkedinStage: the card", () => {
     expect(labels(".linkedin-option")).toEqual(["Use this profile", "Use this profile", "Use this profile"])
     expect(container.querySelector(".question")).toBeNull()
     expect(labels(".identity-decision > .binary-actions")).toEqual(["None of these", "Skip"])
-  })
-
-  it("leads a returned card with why its re-research failed (L8)", async () => {
-    const card = {
-      person: reviewPerson(),
-      candidates: [reviewCandidate()],
-      failure_note: "no profile matched",
-    }
-    const { container } = await open(linkedinCard({ card }))
-    const note = must(container.querySelector(".identity-scroll > :first-child"))
-    expect(note.className).toBe("reresearch-failed")
-    expect(note.textContent).toBe("Re-research failed: no profile matched")
-  })
-
-  it("has no failure note on a card that never failed", async () => {
-    const { container } = await open()
-    expect(container.querySelector(".reresearch-failed")).toBeNull()
   })
 
   it("says so when the first card cannot be read", async () => {
@@ -261,7 +242,7 @@ describe("LinkedinStage: a decision", () => {
   it("runs the wordless stage check after the last decision (L10)", async () => {
     const next = linkedinCard({
       card: null,
-      finished: linkedinFinished({ linkedin_complete: true }),
+      finished: linkedinFinished(),
       pending: 0,
     })
     server.answer(`POST ${DECIDE}`, decideResult({ next }))
@@ -286,51 +267,9 @@ describe("LinkedinStage: a decision", () => {
   })
 
   it("counts nothing once there is no card to show", async () => {
-    const finished = linkedinFinished({ linkedin_complete: true })
+    const finished = linkedinFinished()
     const { container } = await open(linkedinCard({ card: null, finished, pending: 0 }))
     expect(container.querySelector(".queue-left")).toBeNull()
-  })
-
-  it("shows the finished state the answer carries while re-research is still out", async () => {
-    const finished = linkedinFinished({ retargets_in_flight: 1 })
-    const next = linkedinCard({ card: null, finished, pending: 1 })
-    server.answer(`POST ${DECIDE}`, decideResult({ next }))
-    const { review } = await open()
-    fireEvent.click(button("Use this profile"))
-    expect(await screen.findByRole("heading", { name: "LinkedIn Profiles Checked" })).toBeTruthy()
-    expect(screen.queryByRole("article")).toBeNull()
-    expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
-    expect(review.transition).not.toHaveBeenCalled()
-  })
-
-  it("reads the queue again while re-research is out, and shows the person who comes back", async () => {
-    const finished = linkedinFinished({ retargets_in_flight: 1 })
-    server.answer(
-      `POST ${DECIDE}`,
-      decideResult({ next: linkedinCard({ card: null, finished, pending: 1 }) }),
-    )
-    const { review } = await open()
-    vi.useFakeTimers()
-    fireEvent.click(button("Use this profile"))
-    await act(() => vi.advanceTimersByTimeAsync(0))
-    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
-
-    // Still out at the first read: the panel stays.
-    server.answer(`GET ${CARD}`, linkedinCard({ card: null, finished, pending: 1 }))
-    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS - 1))
-    expect(server.gets(CARD)).toEqual([CARD])
-    await act(() => vi.advanceTimersByTimeAsync(1))
-    expect(server.gets(CARD)).toEqual([CARD, CARD])
-    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
-
-    // The re-research failed: the person is a card again, and the reading stops.
-    server.answer(`GET ${CARD}`, caseyCard({ pending: 1 }))
-    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS))
-    expect(name()).toBe("Casey Delta")
-    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 3))
-    expect(server.gets(CARD)).toHaveLength(3)
-    expect(server.posts("/complete")).toEqual([])
-    expect(review.transition).not.toHaveBeenCalled()
   })
 })
 
@@ -451,9 +390,9 @@ describe("LinkedinStage: the guidance box", () => {
       },
     ])
     expect(server.posts(DECIDE)).toEqual([])
-    // Only Retarget is off while the request is out; the card has not started to leave.
+    // The card takes no other decision once its re-research is asked for; it has not started to leave.
     expect(button("Retarget").disabled).toBe(true)
-    expect(button("Use this profile").disabled).toBe(false)
+    expect(button("Use this profile").disabled).toBe(true)
     expect(fading()).toBe(false)
     expect(review.toast).not.toHaveBeenCalled()
 
@@ -510,18 +449,15 @@ describe("LinkedinStage: the guidance box", () => {
     expect(button("Retarget").disabled).toBe(false)
   })
 
-  it("keeps the card and says the re-research is queued when the next card cannot be read", async () => {
+  it("reads the screen again when the next card cannot be read, and the card takes no decision", async () => {
     server.answer(`POST ${RETARGET}`, { ok: true })
     const { review } = await open()
     writeGuidance("the founder of Example Labs")
     server.answer(`GET ${CARD}`, errorResponse("review store is locked", 500))
     fireEvent.click(button("Retarget"))
-    expect(await screen.findByText("Queued — results apply automatically in the background")).toBeTruthy()
-    expect([name(), fading()]).toEqual(["Jordan Bravo", false])
-    // The paid request is not offered twice.
-    expect(button("Retarget").disabled).toBe(true)
-    expect(review.toast).toHaveBeenCalledExactlyOnceWith(QUEUED)
-    expect(review.leaveAndReload).not.toHaveBeenCalled()
+    await waitFor(() => expect(review.leaveAndReload).toHaveBeenCalledExactlyOnceWith(QUEUED))
+    // The re-research may still save this person's No: the card cannot be decided meanwhile.
+    expect(live()).toEqual([])
     expect(server.posts(RETARGET)).toHaveLength(1)
   })
 
@@ -598,6 +534,16 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     expect(article().className).toBe("decision-card identity-card")
   })
 
+  it("hides the arrows while the card's re-research request is out, so no other card can be decided", async () => {
+    const held = gate()
+    server.answer(`POST ${RETARGET}`, () => held.answer)
+    await open(first(), debugging())
+    writeGuidance("the founder of Example Labs")
+    fireEvent.click(button("Retarget"))
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Previous" })).toBeNull()
+  })
+
   it("reads the screen again when a queued re-research cannot read the next card", async () => {
     server.answer(`POST ${RETARGET}`, { ok: true })
     const { review } = await open(first(), debugging())
@@ -607,7 +553,6 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     await waitFor(() => expect(review.leaveAndReload).toHaveBeenCalledExactlyOnceWith(QUEUED))
     expect(fading()).toBe(false)
     expect(button("Retarget").disabled).toBe(true)
-    expect(screen.queryByText("Queued — results apply automatically in the background")).toBeNull()
   })
 })
 
