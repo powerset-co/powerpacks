@@ -12,6 +12,15 @@ execution questions. Start with **Choose the network**, including its visible sc
 statement, before company intake or search. A request to preview or review step by
 step still means pause.
 
+## Locate the tools
+
+Run commands from the configured canonical checkout, not the conversation folder
+or installed skill bundle. Prefer `POWERPACKS_REPO_ROOT`, then a current Powerpacks
+checkout, `~/powerpacks`, or `~/workspace/powerpacks`; see [Powerset](../powerset/SKILL.md#canonical-repo-setup).
+Sibling skill links use the installed layout. When reading this repository copy,
+load that named skill from the harness catalog. Read only relevant instructions
+on the happy path, not source, old runs or transcripts.
+
 ## Choose the network
 
 Explicit scope and corrections persist through refinements. Never silently switch
@@ -114,12 +123,6 @@ query/refinement, carrying forward scope and corrections; deep ponds share one r
 
 ## Run the search
 
-Run commands from the configured canonical checkout, not the conversation folder
-or installed skill bundle. Prefer `POWERPACKS_REPO_ROOT`, then a current Powerpacks
-checkout, `~/powerpacks`, or `~/workspace/powerpacks`; see [Powerset](../powerset/SKILL.md#canonical-repo-setup).
-Sibling skill links use the installed layout. When reading this repository copy,
-load that named skill from the harness catalog. Read only relevant instructions
-on the happy path, not source, old runs or transcripts.
 
 - JD/posting/shortlist → [deep-mode.md](deep-mode.md).
 - Local bare name/email/phone/profile lookup → [local-lookup.md](local-lookup.md).
