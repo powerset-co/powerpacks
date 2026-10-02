@@ -238,8 +238,6 @@ class WorthTablePayload:
 @dataclass(frozen=True)
 class LinkedinFinished:
     synthesize_pending: bool
-    linkedin_done: int
-    retargets_in_flight: int
 
 
 @dataclass(frozen=True)

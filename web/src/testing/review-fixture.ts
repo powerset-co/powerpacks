@@ -158,8 +158,6 @@ export function worthTable(overrides: Partial<WorthTablePayload> = {}): WorthTab
 export function linkedinFinished(overrides: Partial<LinkedinFinished> = {}): LinkedinFinished {
   return {
     synthesize_pending: false,
-    linkedin_done: 6,
-    retargets_in_flight: 0,
     ...overrides,
   }
 }

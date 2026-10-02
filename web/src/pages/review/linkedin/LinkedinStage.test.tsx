@@ -273,7 +273,7 @@ describe("LinkedinStage: a decision", () => {
   })
 
   it("shows the finished state the answer carries while re-research is still out", async () => {
-    const finished = linkedinFinished({ retargets_in_flight: 1 })
+    const finished = linkedinFinished()
     const next = linkedinCard({ card: null, finished, pending: 1 })
     server.answer(`POST ${DECIDE}`, decideResult({ next }))
     const { review } = await open()

@@ -127,8 +127,6 @@ DECISION_COLUMNS = (
 )
 NOT_FINISHED = {
     "synthesize_pending": False,
-    "linkedin_done": 0,
-    "retargets_in_flight": 0,
 }
 
 
@@ -572,8 +570,6 @@ class SynthesisPendingTests(unittest.TestCase):
                 "card": None,
                 "finished": {
                     "synthesize_pending": True,
-                    "linkedin_done": 0,
-                    "retargets_in_flight": 0,
                 },
                 "pending": 0,
                 "queue": None,
@@ -868,7 +864,7 @@ class LinkedinRoutesTests(ReviewApiFixture):
         self.assertEqual(shown, {"riley-stone", "sam-tango"})
         self.assertEqual(
             finished,
-            {"card": None, "finished": {**NOT_FINISHED, "retargets_in_flight": 1}, "pending": 2, "queue": None},
+            {"card": None, "finished": NOT_FINISHED, "pending": 2, "queue": None},
         )
 
     def test_research_landing_mid_request_never_serves_a_blank_card(self) -> None:
@@ -904,8 +900,6 @@ class LinkedinRoutesTests(ReviewApiFixture):
                 "card": None,
                 "finished": {
                     "synthesize_pending": False,
-                    "linkedin_done": 1,
-                    "retargets_in_flight": 0,
                 },
                 "pending": 0,
                 "queue": None,
@@ -1192,8 +1186,6 @@ class DecideTests(ReviewApiFixture):
             written["next"]["finished"],
             {
                 "synthesize_pending": False,
-                "linkedin_done": 1,
-                "retargets_in_flight": 0,
             },
         )
 

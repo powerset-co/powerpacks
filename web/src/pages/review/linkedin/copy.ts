@@ -49,10 +49,3 @@ export function feedbackContext(name: string): string {
 }
 
 export const FINISHED = { title: "LinkedIn Profiles Checked" } as const
-
-export function decisionsSaved(count: number): string {
-  return count === 1 ? "1 decision saved" : `${count} decisions saved`
-}
-
-/** Shown while any re-research is still out; the count would be stale once one lands. */
-export const RESEARCH_RUNNING = "Re-research you sent finishes on its own."

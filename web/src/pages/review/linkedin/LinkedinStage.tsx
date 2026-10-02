@@ -63,5 +63,5 @@ function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
 
   const finished = must(payload.finished, "the finished state")
   if (finished.synthesize_pending) return <SynthesisPending />
-  return <FinishedPanel finished={finished} />
+  return <FinishedPanel />
 }

@@ -37,29 +37,13 @@ const lines = (container: HTMLElement) =>
   [...container.querySelectorAll(".empty-state > p")].map((line) => line.textContent)
 
 describe("FinishedPanel", () => {
-  it("counts the saved decisions (L11)", async () => {
-    finishedQueue({ linkedin_done: 6 })
-    const { container } = await open()
+  it("shows only the title and the hand-back to Codex, and presses nothing (L11)", async () => {
+    finishedQueue()
+    const { container, review } = await open()
     expect(container.querySelector(".linkedin-panel > .empty-state")).toBeTruthy()
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
     expect(container.querySelector(".empty-mark")).toBeNull()
-    expect(lines(container)).toEqual(["6 decisions saved", "Review complete — go back to Codex."])
-  })
-
-  it("counts one saved decision in the singular", async () => {
-    finishedQueue({ linkedin_done: 1 })
-    const { container } = await open()
-    expect(lines(container)[0]).toBe("1 decision saved")
-  })
-
-  it("hands back to Codex while re-research is still running, and presses nothing (L11)", async () => {
-    finishedQueue({ retargets_in_flight: 2 })
-    const { container, review } = await open()
-    expect(lines(container)).toEqual([
-      "6 decisions saved",
-      "Re-research you sent finishes on its own.",
-      "Review complete — go back to Codex.",
-    ])
+    expect(lines(container)).toEqual(["Review complete — go back to Codex."])
     await act(() => Promise.resolve())
     expect(server.posts(COMPLETE)).toEqual([])
     expect(review.transition).not.toHaveBeenCalled()
@@ -70,7 +54,7 @@ describe("FinishedPanel", () => {
     vi.stubGlobal("navigator", { clipboard: { writeText: write } })
     finishedQueue()
     const { container, review } = await open()
-    expect(lines(container)).toEqual(["6 decisions saved", "Review complete — go back to Codex."])
+    expect(lines(container)).toEqual(["Review complete — go back to Codex."])
     expect(container.querySelector(".handoff-copy code")?.textContent).toBe("Review complete, continue")
     expect(screen.queryByRole("button", { name: "Finish" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))

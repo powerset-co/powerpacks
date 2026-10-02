@@ -131,8 +131,6 @@ export interface WorthTablePayload {
 /** What replaces the LinkedIn card when the queue has nothing to show. */
 export interface LinkedinFinished {
   synthesize_pending: boolean
-  linkedin_done: number
-  retargets_in_flight: number
 }
 
 /** GET /api/review/linkedin-card, and `next` on a decide: exactly one of card / finished. */
