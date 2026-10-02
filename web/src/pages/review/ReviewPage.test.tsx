@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { must } from "@/lib/must"
+import { ENRICHED_MS } from "@/lib/review/timing"
 import {
   changeEvent,
   errorResponse,
@@ -293,6 +294,8 @@ describe("ReviewPage: watching the server", () => {
       // The agent's run finished: the store is at LinkedIn now.
       server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
       await act(() => vi.advanceTimersByTimeAsync(10_000))
+      // The screen says it is done for a moment, then the review opens.
+      await act(() => vi.advanceTimersByTimeAsync(ENRICHED_MS))
       await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 2000 })
       expect(where()).toBe("/?stage=linkedin")
     } finally {
