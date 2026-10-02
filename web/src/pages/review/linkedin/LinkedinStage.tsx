@@ -40,7 +40,7 @@ interface PanelProps {
 }
 
 function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
-  const { payload, phase, opening } = shown
+  const { payload, phase } = shown
   const { card, queue } = payload
   if (card) {
     return (
@@ -61,5 +61,5 @@ function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
 
   const finished = must(payload.finished, "the finished state")
   if (finished.synthesize_pending) return <SynthesisPending />
-  return <FinishedPanel finished={finished} pressItself={opening && finished.auto_continue} />
+  return <FinishedPanel finished={finished} />
 }

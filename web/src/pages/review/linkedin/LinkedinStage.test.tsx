@@ -14,6 +14,7 @@ import {
   reviewPerson,
   syntheticCandidate,
 } from "@/testing/review-fixture"
+import { STATUS_POLL_MS } from "@/lib/review/timing"
 import type { LinkedinCardPayload } from "@/types/review"
 
 import {
@@ -260,7 +261,7 @@ describe("LinkedinStage: a decision", () => {
   it("runs the wordless stage check after the last decision (L10)", async () => {
     const next = linkedinCard({
       card: null,
-      finished: linkedinFinished({ linkedin_complete: true, auto_continue: false }),
+      finished: linkedinFinished({ linkedin_complete: true }),
       pending: 0,
     })
     server.answer(`POST ${DECIDE}`, decideResult({ next }))
@@ -274,8 +275,8 @@ describe("LinkedinStage: a decision", () => {
     expect(server.posts("/complete")).toEqual([])
   })
 
-  it("shows the finished state the answer carries while re-research is still out, without pressing Finish", async () => {
-    const finished = linkedinFinished({ retargets_in_flight: 1, auto_continue: true })
+  it("shows the finished state the answer carries while re-research is still out", async () => {
+    const finished = linkedinFinished({ retargets_in_flight: 1 })
     const next = linkedinCard({ card: null, finished, pending: 1 })
     server.answer(`POST ${DECIDE}`, decideResult({ next }))
     const { review } = await open()
@@ -284,10 +285,36 @@ describe("LinkedinStage: a decision", () => {
     expect(screen.queryByRole("article")).toBeNull()
     expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
     expect(review.transition).not.toHaveBeenCalled()
-    // Finish presses itself only on the screen's own load.
-    await act(() => Promise.resolve())
+  })
+
+  it("reads the queue again while re-research is out, and shows the person who comes back", async () => {
+    const finished = linkedinFinished({ retargets_in_flight: 1 })
+    server.answer(
+      `POST ${DECIDE}`,
+      decideResult({ next: linkedinCard({ card: null, finished, pending: 1 }) }),
+    )
+    const { review } = await open()
+    vi.useFakeTimers()
+    fireEvent.click(button("Use this profile"))
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
+
+    // Still out at the first read: the panel stays.
+    server.answer(`GET ${CARD}`, linkedinCard({ card: null, finished, pending: 1 }))
+    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS - 1))
+    expect(server.gets(CARD)).toEqual([CARD])
+    await act(() => vi.advanceTimersByTimeAsync(1))
+    expect(server.gets(CARD)).toEqual([CARD, CARD])
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
+
+    // The re-research failed: the person is a card again, and the reading stops.
+    server.answer(`GET ${CARD}`, caseyCard({ pending: 1 }))
+    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS))
+    expect(name()).toBe("Casey Delta")
+    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 3))
+    expect(server.gets(CARD)).toHaveLength(3)
     expect(server.posts("/complete")).toEqual([])
-    expect(button("Finish").disabled).toBe(false)
+    expect(review.transition).not.toHaveBeenCalled()
   })
 })
 

@@ -1,13 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { StrictMode } from "react"
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { jsonResponse, linkedinCard, linkedinFinished, motionMedia } from "@/testing/review-fixture"
-import { ReviewHarness } from "@/testing/review-harness"
+import { linkedinCard, linkedinFinished, motionMedia } from "@/testing/review-fixture"
 import type { LinkedinFinished } from "@/types/review"
 
-import { gate, refusal, renderStage, reviewServer, spyReview } from "./linkedin-fixture"
-import { LinkedinStage } from "./LinkedinStage"
+import { renderStage, reviewServer } from "./linkedin-fixture"
 
 const CARD = "/api/review/linkedin-card"
 const COMPLETE = "/complete"
@@ -26,7 +23,7 @@ afterEach(() => {
 
 /** The queue has nothing to show: the stage opens on the finished state. */
 function finishedQueue(overrides: Partial<LinkedinFinished> = {}) {
-  const finished = linkedinFinished({ auto_continue: false, ...overrides })
+  const finished = linkedinFinished(overrides)
   server.answer(`GET ${CARD}`, linkedinCard({ card: null, finished, pending: 0 }))
 }
 
@@ -36,28 +33,28 @@ async function open() {
   return view
 }
 
-const finish = () => screen.getByRole<HTMLButtonElement>("button", { name: "Finish" })
 const lines = (container: HTMLElement) =>
   [...container.querySelectorAll(".empty-state > p")].map((line) => line.textContent)
 
 describe("FinishedPanel", () => {
-  it("counts the saved decisions and offers Finish while people are still pending (L11)", async () => {
+  it("counts the saved decisions while people are still pending (L11)", async () => {
     finishedQueue({ linkedin_done: 6 })
     const { container } = await open()
     expect(container.querySelector(".linkedin-panel > .empty-state")).toBeTruthy()
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
     expect(container.querySelector(".empty-mark")).toBeNull()
     expect(lines(container)).toEqual(["6 decisions saved"])
-    expect(finish().className).toBe("button button-primary")
-    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull()
-    await act(() => Promise.resolve())
-    expect(server.posts(COMPLETE)).toEqual([])
+    expect(screen.queryAllByRole("button")).toEqual([])
   })
 
-  it("says how much re-research is still running (L11)", async () => {
+  it("says how much re-research is still running, and presses nothing (L11)", async () => {
     finishedQueue({ retargets_in_flight: 2 })
-    const { container } = await open()
+    const { container, review } = await open()
     expect(lines(container)).toEqual(["6 decisions saved", "2 re-research still running"])
+    expect(screen.queryAllByRole("button")).toEqual([])
+    await act(() => Promise.resolve())
+    expect(server.posts(COMPLETE)).toEqual([])
+    expect(review.transition).not.toHaveBeenCalled()
   })
 
   it("hands back to Codex once everything is decided (L11)", async () => {
@@ -85,65 +82,8 @@ describe("FinishedPanel", () => {
     )
   })
 
-  it("marks the stage complete on Finish, once, then runs the wordless stage check (L12)", async () => {
-    const held = gate()
-    server.answer(`POST ${COMPLETE}`, () => held.answer)
-    finishedQueue()
-    const { review } = await open()
-    fireEvent.click(finish())
-    fireEvent.click(finish())
-    expect(server.posts(COMPLETE)).toEqual([{ stage: "linkedin" }])
-    expect([finish().disabled, finish().getAttribute("aria-busy")]).toEqual([true, "true"])
-    expect(review.setCompleting).toHaveBeenCalledExactlyOnceWith(true)
-    expect(review.transition).not.toHaveBeenCalled()
-
-    held.open(jsonResponse({ ok: true }))
-    await waitFor(() => expect(review.transition).toHaveBeenCalledExactlyOnceWith("", "linkedin"))
-    expect(review.toast).not.toHaveBeenCalled()
-    expect(server.posts(COMPLETE)).toHaveLength(1)
-  })
-
-  it("hands Finish back and says why when the stage cannot be completed (L12)", async () => {
-    server.answer(`POST ${COMPLETE}`, refusal("unknown review stage: linkedin", 409))
-    finishedQueue()
-    const { review } = await open()
-    fireEvent.click(finish())
-    await waitFor(() =>
-      expect(review.toastError).toHaveBeenCalledExactlyOnceWith("unknown review stage: linkedin"),
-    )
-    expect([finish().disabled, finish().getAttribute("aria-busy")]).toEqual([false, null])
-    expect(review.setCompleting).toHaveBeenLastCalledWith(false)
-    expect(review.transition).not.toHaveBeenCalled()
-  })
-
-  it("presses Finish itself, once, when the screen opens on it and the server asks (L11)", async () => {
-    server.answer(`POST ${COMPLETE}`, { ok: true })
-    finishedQueue({ auto_continue: true, retargets_in_flight: 1 })
-    const { review } = await open()
-    await waitFor(() => expect(review.transition).toHaveBeenCalledExactlyOnceWith("", "linkedin"))
-    expect(server.posts(COMPLETE)).toEqual([{ stage: "linkedin" }])
-    expect(review.setCompleting).toHaveBeenCalledExactlyOnceWith(true)
-  })
-
-  it("still presses once when React runs its effects twice", async () => {
-    server.answer(`POST ${COMPLETE}`, { ok: true })
-    finishedQueue({ auto_continue: true })
-    const review = spyReview()
-    render(
-      <StrictMode>
-        <ReviewHarness review={review}>
-          <LinkedinStage />
-        </ReviewHarness>
-      </StrictMode>,
-    )
-    await waitFor(() => expect(review.transition).toHaveBeenCalled())
-    await act(() => Promise.resolve())
-    expect(server.posts(COMPLETE)).toEqual([{ stage: "linkedin" }])
-  })
-
   it("shows the synthesis handoff instead when synthesis has not run (S8)", async () => {
-    server.answer(`POST ${COMPLETE}`, { ok: true })
-    finishedQueue({ synthesize_pending: true, auto_continue: true })
+    finishedQueue({ synthesize_pending: true })
     await open()
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Synthesis has not run")
     expect(screen.getByText("bin/deep-context dry")).toBeTruthy()

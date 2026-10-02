@@ -16,7 +16,6 @@ import {
 } from "@/testing/review-fixture"
 
 import {
-  completeStage,
   fetchDossier,
   fetchLinkedinCard,
   fetchReviewPage,
@@ -192,11 +191,8 @@ describe("the review writes", () => {
     )
   })
 
-  it("completes a stage, queues a re-research and opens the sign-in", async () => {
+  it("queues a re-research and opens the sign-in", async () => {
     answer(jsonResponse({ ok: true }))
-    await completeStage("enrich")
-    expect([sent().url, sent().form]).toEqual(["/complete", "stage=enrich"])
-    fetchMock.mockClear()
     await postRetarget({ pub: "jordan-bravo-1", parent_slug: "jordan-bravo", guidance: "the founder" })
     expect([sent().url, sent().form]).toEqual([
       "/retarget",
@@ -246,7 +242,8 @@ describe("the review writes", () => {
     const stale = await refused(postWorth({ pub: "worth-jordan", worth: "yes", parent_slug: "jordan-bravo" }))
     expect([stale.message, stale.http, stale.status]).toEqual(["stale or mismatched person card", 409, ""])
     answer(new Response("", { status: 500 }))
-    expect((await refused(completeStage("worth"))).message).toBe("Could not save")
+    const empty = await refused(postWorth({ pub: "worth-jordan", worth: "yes", parent_slug: "jordan-bravo" }))
+    expect(empty.message).toBe("Could not save")
   })
 })
 
