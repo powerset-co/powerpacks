@@ -34,6 +34,9 @@ Changelog:
   search works out of the box); the import skills no longer index.
 - 2026-09-28: Other-source imports stage candidates for $deep-context (they do
   not re-merge or re-index); checklist falls back to printing without a plan tool.
+- 2026-10-02: Powerset is the default route; Step 1 no longer asks "do you have
+  a Powerset account?" (custom workspace only when the user says so). Step 8
+  runs the user's first search and reports it — that is when setup is done.
 -->
 
 # setup
@@ -67,14 +70,14 @@ Seed the checklist with these exact item titles:
 
 ```
 0. Update Powerpacks (this harness's updater)
-1. Choose credentials (Powerset or prepared Modal workspace)
-2. Log in to Powerset (Powerset route, only if not logged in)
+1. Choose credentials (Powerset unless the user said otherwise)
+2. Log in to Powerset (only if not logged in)
 3. Pull or verify Modal access and provider secrets
 4. Import LinkedIn Connections.csv
 5. Merge all sources
 6. Index the merged network
 7. Validate the search index
-8. Suggest next sources & processing
+8. Run the first search, suggest next sources
 ```
 
 Steps 2 and 3 depend on the Step 1 choice (Step 2 is a no-op on the
@@ -102,9 +105,7 @@ Then:
   Otherwise only invoke the primitives below.
 - **Do not write scripts to do the work.** Reuse the exact primitive commands.
   Plain shell for `cp`/`test`/`wc`/`cat` is fine.
-- **Consent gates (pause for the user):** the Step 1 Powerset-account question
-  (when the request didn't already answer it) and the Powerset browser login
-  (Step 2). The LinkedIn import runs enrichment on Modal (no local key, no
+- **Consent gates (pause for the user):** the Powerset browser login (Step 2). The LinkedIn import runs enrichment on Modal (no local key, no
   extra spend prompt). Everything else runs without asking.
 
 ### Repo root
@@ -138,35 +139,26 @@ cd "$REPO" && bin/update-claude-code    # Claude Code
 cd "$REPO" && adapters/pi/install.sh    # Pi
 ```
 
-### Step 1 — Choose credentials (Powerset or prepared Modal workspace)
+### Step 1 — Choose credentials (Powerset unless the user said otherwise)
 
 The import + index steps need access to a Modal workspace whose sandboxes can
 mount the provider secrets used by the driver. A provisioned Powerset account
-is the supported path. An advanced custom workspace works only when it already
-contains Modal secrets named `powerset-openai` and `powerset-api` (or the
-Powerset API backup override is configured). A local `OPENAI_API_KEY` alone is not
-forwarded into the sandbox. Decide the route in this order:
+is the supported path and the default: take the **Powerset route** without
+asking. The only other route is an advanced custom workspace, taken only when
+the user explicitly said "without Powerset" / "my own workspace"; it works
+only when the workspace already contains Modal secrets named `powerset-openai`
+and `powerset-api` (or the Powerset API backup override is configured). A local
+`OPENAI_API_KEY` alone is not forwarded into the sandbox.
 
-1. **The request already answered it.** "… using my Powerset account" (or any
-   explicit ask to use Powerset) → **Powerset route**, no question. An explicit
-   "without Powerset" / "my own workspace" → **custom-workspace route**, no question.
-2. **Already logged in.** If `.env` exists, check:
+On the Powerset route, check whether the user is already logged in:
 
-   ```bash
-   test -f "$HOME/.powerpacks/credentials.json" && echo "credentials.json: present" || echo "credentials.json: MISSING"
-   cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py whoami
-   ```
+```bash
+test -f "$HOME/.powerpacks/credentials.json" && echo "credentials.json: present" || echo "credentials.json: MISSING"
+cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py whoami
+```
 
-   If `whoami` succeeds, say "already logged in to Powerset as <email> — using
-   that account" and take the **Powerset route**.
-3. **Otherwise ask the user and wait** (consent gate):
-
-   > Do you have a Powerset account you'd like to log in with? It provisions
-   > the supported Modal workspace this setup needs. If not, you need your own
-   > Modal workspace with `powerset-openai` and `powerset-api` secrets
-   > already configured, plus a working token or Modal profile.
-
-   Yes → **Powerset route**. No → **custom-workspace route**.
+If `whoami` succeeds, say "signed in to Powerset as <email>" and Step 2 is a
+no-op.
 
 **Powerset route only** — make sure `.env` carries the hosted Powerset config:
 
@@ -326,10 +318,36 @@ JSON with `status` (`ok`/`fail`/`missing`), per-table row counts,
 `total_people`, `summary`. Pass only on `status: ok` (exit 0); on `fail`/
 `missing` (exit 1) report the `errors`. Echo the `summary`.
 
-### Step 8 — Suggest next sources & processing
+### Step 8 — Run the first search, suggest next sources
 
-LinkedIn is in and searchable. Check which other sources are imported and
-suggest the missing ones (skip the ones already present):
+Setup is done when the user has seen people from their own network, not when
+an index validates. Run one search for them, picking a query from their likely
+world (a role plus a city they'd know, e.g. "founders in San Francisco" — a
+plain people query, no company lookup). Two commands, no question in between
+(the preview gate `$search` asks is skipped here: the query is the agent's,
+and the run skips LLM rerank, so the only spend is the query-expansion call on
+the user's provisioned keys — a few cents):
+
+```bash
+cd "$REPO"
+OUT=".powerpacks/search/first-search"
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
+  --backend local --query "<query>" \
+  --db .powerpacks/search-index/local-search.duckdb --output-dir "$OUT"
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
+  --ledger "$OUT/pipeline.ledger.json" --backend local \
+  --db .powerpacks/search-index/local-search.duckdb --query "<query>" \
+  --payload-json "$OUT/expand_search_request.json" --execute-approved --search-only
+```
+
+`run` prints `artifacts.csv`; read that CSV (`name`, `current_titles`,
+`current_companies`) and show the top five, one line each. Zero rows on a
+non-empty index means try one broader query; `total_people` of 0 in Step 7
+means setup failed — say so and report the Step 4 import summary instead of a
+success message.
+
+Then check which other sources are imported and suggest the missing ones
+(skip the ones already present):
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/status.py status
@@ -349,9 +367,11 @@ suggestions and finish.
 
 ## Done
 
-Report a terse summary: credential route (logged in as <email> + keys pulled,
-or prepared custom Modal workspace verified), LinkedIn imported, merged network of M
-people, index validated, and which follow-up sources were suggested. Remind the
-user that rerunning `$setup` reruns the whole checklist, and that **Gmail**
-(`$import-gmail`) and **iMessage/WhatsApp** (`$import-messages`) are separate
-skills that add their source on top.
+Four lines, then stop:
+
+> Powerpacks is ready. Signed in as <email>.
+> Your network has <M> searchable people.
+> <the Step 8 query> → <top names>
+> Try: "Find backend engineers I know." Add Gmail or iMessage/WhatsApp any time.
+
+`<M>` is `total_people` from Step 7; never a guess.
