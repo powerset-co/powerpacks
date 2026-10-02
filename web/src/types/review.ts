@@ -137,7 +137,7 @@ export interface LinkedinFinished {
 export interface LinkedinCardPayload {
   card: { person: ReviewPerson; candidates: ReviewCandidate[] } | null
   finished: LinkedinFinished | null
-  /** People left to check, this card included; 0 with no card. */
+  /** People left to check, this card included; people out for re-research are not counted. */
   pending: number
   queue: QueuePosition | null
 }

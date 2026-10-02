@@ -82,7 +82,7 @@ export function useLinkedinQueue() {
     }
 
     toast(TOAST.queued)
-    setPhase("moving")
+    setPhase("deciding")
     const [next] = await Promise.all([
       fetchLinkedinCard({ exclude: [request.parent_slug] }).catch(() => null),
       wait(fadeMs),

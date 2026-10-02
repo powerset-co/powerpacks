@@ -271,18 +271,6 @@ describe("LinkedinStage: a decision", () => {
     const { container } = await open(linkedinCard({ card: null, finished, pending: 0 }))
     expect(container.querySelector(".queue-left")).toBeNull()
   })
-
-  it("shows the finished state the answer carries while re-research is still out", async () => {
-    const finished = linkedinFinished()
-    const next = linkedinCard({ card: null, finished, pending: 1 })
-    server.answer(`POST ${DECIDE}`, decideResult({ next }))
-    const { review } = await open()
-    fireEvent.click(button("Use this profile"))
-    expect(await screen.findByRole("heading", { name: "LinkedIn Profiles Checked" })).toBeTruthy()
-    expect(screen.queryByRole("article")).toBeNull()
-    expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
-    expect(review.transition).not.toHaveBeenCalled()
-  })
 })
 
 describe("LinkedinStage: the guidance box", () => {
@@ -544,6 +532,16 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     await waitFor(() => expect(name()).toBe("Casey Delta"))
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     expect(article().className).toBe("decision-card identity-card")
+  })
+
+  it("hides the arrows while the card's re-research request is out, so no other card can be decided", async () => {
+    const held = gate()
+    server.answer(`POST ${RETARGET}`, () => held.answer)
+    await open(first(), debugging())
+    writeGuidance("the founder of Example Labs")
+    fireEvent.click(button("Retarget"))
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Previous" })).toBeNull()
   })
 
   it("reads the screen again when a queued re-research cannot read the next card", async () => {

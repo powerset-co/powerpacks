@@ -3,12 +3,10 @@
 export type CardPhase =
   /** Nothing is out. */
   | "ready"
-  /** A decision is saving. */
+  /** A decision is saving, or the re-research is queued and the next card is being read. */
   | "deciding"
   /** The re-research request is out. */
   | "retargeting"
-  /** Re-research is queued and the next card is being read. */
-  | "moving"
 
 interface CardState {
   /** The contents are faded out and take no clicks. */
@@ -22,5 +20,4 @@ export const CARD: Readonly<Record<CardPhase, CardState>> = {
   ready: { fading: false, locked: false },
   deciding: { fading: true, locked: true },
   retargeting: { fading: false, locked: true },
-  moving: { fading: true, locked: true },
 }

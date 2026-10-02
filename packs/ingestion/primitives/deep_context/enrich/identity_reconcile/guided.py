@@ -1,8 +1,9 @@
 """Provider execution and canonical identity settlement for guided research.
 
 Changelog:
-- 2026-10-02: a re-research that ends without a LinkedIn saves the person's No on the
-  LinkedIn they rejected, so the person is not asked again.
+- 2026-10-02: a re-research saves its ending as the person's decision: the LinkedIn it found,
+  or their No when it found none. Either settles the person's other LinkedIns, so the
+  person is not asked again.
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
     filter_already_done,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.schemas.people_schema import normalize_linkedin_url
+from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
 @dataclass(frozen=True)
@@ -264,6 +265,20 @@ class GuidedResearch:
         resolved_pubs: list[str] | tuple[str, ...] = (),
         candidate_url: str = "",
     ) -> GuidanceOutcome:
+        # The person said the LinkedIn they were shown is wrong. How the retarget ends is saved
+        # as their decision before it is reported, which settles the person's other LinkedIns:
+        # the person never shows again.
+        if guidance_state in (GuidanceState.APPLIED, GuidanceState.FAILED) and links(
+            self.db, row_keys=(request.row_key,)
+        ):
+            found = guidance_state == GuidanceState.APPLIED
+            resolved_pubs = self.db.decide_identity(
+                request.row_key,
+                ReviewAction.RETARGET.value if found else ReviewAction.DETACH.value,
+                replacement_url=new_url if found else None,
+                replacement_public_identifier=extract_public_identifier(new_url) if found else None,
+                source=ReviewSource.USER_GUIDANCE.value, note=request.guidance,
+            )
         item = GuidanceOutcome(
             slug=request.slug,
             row_key=request.row_key,
@@ -281,13 +296,6 @@ class GuidedResearch:
         # carries the full outcome (including the request that produced it)
         # for the FE to render specifics — two representations of the same
         # result, not redundant storage.
-        # The person said the LinkedIn they were shown is wrong. A re-research that ends without
-        # another saves that No before it says it failed, so the person never shows again.
-        if guidance_state == GuidanceState.FAILED and links(self.db, row_keys=(request.row_key,)):
-            self.db.decide_identity(
-                request.row_key, ReviewAction.DETACH.value,
-                source=ReviewSource.USER_GUIDANCE.value, note=request.guidance,
-            )
         detail_json = json.dumps({**item.as_dict(), "request": asdict(request)}, separators=(",", ":"))
         # GuidanceRow's first field (`handle`) is the table's primary key,
         # here passed as plain parent_id rather than a per-candidate
