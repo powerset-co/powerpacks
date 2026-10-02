@@ -6,6 +6,8 @@ answers out, reusing the exact-request cache under `<output_dir>/jev/`.
 question set, then turns the answers into a qualification score.
 
 Changelog:
+  2026-10-02: a request is retried after any error sending it, not only httpx's own;
+    a request that keeps failing names the error.
   2026-09-25: MAX_CONCURRENCY 4 -> 32 after measuring the endpoint's headroom.
   2026-09-25: profile-only request. Request compaction is gone with the per-position
     questions (the request no longer duplicates position bodies), cache records no longer
@@ -245,9 +247,11 @@ async def _request(
                 json=request,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             )
-        except httpx.HTTPError:
+        except Exception as exc:
             if retries == MAX_RETRIES:
-                raise RuntimeError("Jev request failed; ranking stops without a decision") from None
+                raise RuntimeError(
+                    f"Jev request failed ({type(exc).__name__}: {exc}); ranking stops without a decision"
+                ) from None
             await asyncio.sleep(2**retries)
             retries += 1
             continue

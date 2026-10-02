@@ -1,4 +1,5 @@
 """Disconnected provider reads never submit another paid task group."""
+import ssl
 import tempfile
 from pathlib import Path
 import unittest
@@ -36,6 +37,12 @@ class ParallelStreamResumeTests(unittest.TestCase):
         self.params = SimpleNamespace(batch_size=500, stream_timeout=60, output_dir=Path(self.tmp.name))
 
     def test_disconnected_active_stream_reads_same_group_until_terminal(self):
+        self._assert_stream_resumes_after(httpx.RemoteProtocolError('SSE closed'))
+
+    def test_any_stream_error_reads_same_group_until_terminal(self):
+        self._assert_stream_resumes_after(ssl.SSLError('bad record mac'))
+
+    def _assert_stream_resumes_after(self, error):
         active = TaskGroupStatus(is_active=True, num_task_runs=1, task_run_status_counts={'running': 1})
         terminal = TaskGroupStatus(is_active=False, num_task_runs=1, task_run_status_counts={'completed': 1})
         output = TaskRunJsonOutput.model_validate({'type': 'json', 'content': {'real_name': 'Jordan Bravo'}, 'basis': []})
@@ -48,7 +55,7 @@ class ParallelStreamResumeTests(unittest.TestCase):
             add_runs=Mock(),
             events=Mock(side_effect=[Events([
                 TaskGroupStatusEvent(type='task_group_status', event_id='active', status=active),
-                httpx.RemoteProtocolError('SSE closed'),
+                error,
             ]), Events([TaskGroupStatusEvent(type='task_group_status', event_id='done', status=terminal)])]),
             retrieve=Mock(return_value=SimpleNamespace(status=active)),
             get_runs=Mock(return_value=Events([completed])),

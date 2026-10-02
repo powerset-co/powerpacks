@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,7 +54,10 @@ class _Client:
         try:
             if self.pause:
                 await asyncio.sleep(0.01)
-            return self.responses.pop(0)
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return response
         finally:
             self.in_flight -= 1
 
@@ -298,6 +302,20 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(checkpoints), 1)
             with self.assertRaisesRegex(RuntimeError, "without a decision"):
                 await self._score(None, output_dir=Path(directory), api_key=None)
+
+    async def test_any_error_sending_the_request_is_retried(self) -> None:
+        request = self._request()
+        api = _Client(ssl.SSLError("bad record mac"), _Response(200, _payload(request)))
+        with mock.patch.object(jev.asyncio, "sleep", mock.AsyncMock()):
+            result = await self._score(api)
+        self.assertEqual(result["requests"], 2)
+
+    async def test_a_request_that_keeps_failing_names_the_error(self) -> None:
+        api = _Client(*(ssl.SSLError("bad record mac") for _ in range(jev.MAX_RETRIES + 1)))
+        with mock.patch.object(jev.asyncio, "sleep", mock.AsyncMock()):
+            with self.assertRaisesRegex(RuntimeError, "Jev request failed .*SSLError: .*bad record mac"):
+                await self._score(api)
+        self.assertEqual(len(api.calls), jev.MAX_RETRIES + 1)
 
     async def test_malformed_paid_response_records_bounded_unknown_cost(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "malformed JSON"):

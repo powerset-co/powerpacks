@@ -1,6 +1,8 @@
 """OpenAI Responses runner: concurrent per-person batch fan-out, merge, and fixed fact writes.
 
 Changelog:
+  2026-10-02: one person whose dossier cannot be built is recorded and left for the
+      next run; the others carry on.
   2026-09-25: the tagging pass reads each parent's imported LinkedIn headline from
       the roster (parent_headlines) and re-tags a saved non-yes verdict when the
       title is notable; the cached JEV answer makes that free.
@@ -316,6 +318,11 @@ def run_paid(
     total = len(plan.bundles)
     histories = parent_histories(db)
 
+    def on_failure(failure: SynthesisFailure) -> None:
+        tally.errors += 1
+        tally.failures.append(failure)
+        print(f"[synthesize] {failure.person_id}: {failure.error}", file=sys.stderr, flush=True)
+
     def on_result(result: SynthesisResult) -> None:
         tally.record(result)
         if result.errors:
@@ -329,34 +336,37 @@ def run_paid(
         try:
             tally.projected_rows += _store_facts(db, config, histories, result)
         except Exception as exc:
-            failure = SynthesisFailure(parent_id, 0, f"not stored: {type(exc).__name__}: {exc}"[:300])
-            tally.errors += 1
-            tally.failures.append(failure)
-            print(f"[synthesize] {parent_id}: {failure.error}", file=sys.stderr, flush=True)
+            on_failure(SynthesisFailure(parent_id, 0, f"not stored: {type(exc).__name__}: {exc}"[:300]))
             return
         if tally.people_done % 25 == 0:
             print(f"[synthesize] {tally.people_done}/{total} people", file=sys.stderr, flush=True)
 
     async def driver() -> None:
         async with OpenAIResponsesCaller(config.responses) as caller:
-            # Every pending person's task starts immediately; actual concurrent
-            # OpenAI calls are throttled by caller's semaphore
-            # (config.responses.concurrency), not by how many tasks exist here.
-            tasks = [
-                asyncio.create_task(
-                    synthesize_person(
+            async def person(bundle: CollectionBundle) -> None:
+                # One person's dossier that cannot be built leaves that person for the next run.
+                try:
+                    result = await synthesize_person(
                         caller,
                         bundle,
                         config=config,
                         system_prompt=plan.system_prompt,
                     )
-                )
-                for bundle in plan.bundles
-                if bundle.messages
-            ]
+                except Exception as exc:
+                    tally.people_done += 1
+                    on_failure(SynthesisFailure(
+                        bundle.person_id, 0, f"not built: {type(exc).__name__}: {exc}"[:300],
+                    ))
+                    return
+                on_result(result)
+
+            # Every pending person's task starts immediately; actual concurrent
+            # OpenAI calls are throttled by caller's semaphore
+            # (config.responses.concurrency), not by how many tasks exist here.
+            tasks = [asyncio.create_task(person(bundle)) for bundle in plan.bundles if bundle.messages]
             try:
                 for task in asyncio.as_completed(tasks):
-                    on_result(await task)
+                    await task
             finally:
                 # Reached only on interruption (on_result raising, signal, etc).
                 # Any person not yet reported to on_result has no facts.jsonl —
