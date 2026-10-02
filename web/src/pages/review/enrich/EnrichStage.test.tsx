@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { reviewStatus } from "@/testing/review-fixture"
 import type { EnrichStep, ReviewStatus } from "@/types/review"
 
-import { ENRICHED, OPENING_REVIEW, STARTING, TITLE } from "./copy"
+import { ENRICHED, OPENING_REVIEW, READY_TITLE, STARTING, TITLE } from "./copy"
 import { EnrichStage } from "./EnrichStage"
 
 function status(step: EnrichStep, pending: Partial<ReviewStatus["pending"]> = {}, minutes = 0): ReviewStatus {
@@ -66,6 +66,7 @@ describe("EnrichStage", () => {
 
   it("says the run is done, its ring full and still, while the review opens", () => {
     const { container } = render(<EnrichStage done status={status("")} />)
+    expect(screen.getByRole("heading", { name: READY_TITLE })).toBeTruthy()
     expect(screen.getByText(ENRICHED)).toBeTruthy()
     expect(screen.getByText(OPENING_REVIEW)).toBeTruthy()
     expect(ring(container)).toEqual({ done: "3 3", now: null })

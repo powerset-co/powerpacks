@@ -3,7 +3,17 @@ import "../styles/enrich.css"
 import type { ReviewStatus } from "@/types/review"
 
 import { EmptyPanel } from "../shared/EmptyPanel"
-import { doingNow, ENRICHED, OPENING_REVIEW, partOf, PARTS, STARTING, timeLeft, TITLE } from "./copy"
+import {
+  doingNow,
+  ENRICHED,
+  OPENING_REVIEW,
+  partOf,
+  PARTS,
+  READY_TITLE,
+  STARTING,
+  timeLeft,
+  TITLE,
+} from "./copy"
 
 export interface EnrichStageProps {
   /** The latest status read; null until the first arrives. */
@@ -24,7 +34,7 @@ export function EnrichStage({ status, done }: EnrichStageProps) {
 
   return (
     <EmptyPanel
-      title={TITLE}
+      title={done ? READY_TITLE : TITLE}
       className="enrich-state"
       above={
         <span className="enrich-mark" aria-hidden="true">

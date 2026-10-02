@@ -8,6 +8,7 @@ export const TITLE = "Working on your network"
 export const STARTING = "Getting started"
 export const FINISHING = "Finishing up"
 /** The run completed: what the screen says while the review opens. */
+export const READY_TITLE = "Your network is ready"
 export const ENRICHED = "Contacts enriched"
 export const OPENING_REVIEW = "Opening your review"
 
