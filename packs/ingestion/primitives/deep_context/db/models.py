@@ -9,8 +9,9 @@ Changelog:
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, astuple, dataclass
 from enum import StrEnum
 
 IsoTimestamp = str
@@ -144,6 +145,17 @@ class ResearchStatus(StrEnum):
     RUNNING = "running"
     COMPLETE = "complete"
     NO_MATCH = "no_match"
+    FAILED = "failed"
+
+
+# The `meta` keys of the run records: what a command's latest run left behind.
+ENRICH_RUN_KEY = "enrich_run"
+SYNTHESIS_RUN_KEY = "synthesis_run"
+
+
+class EnrichRunStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
     FAILED = "failed"
 
 
@@ -384,6 +396,64 @@ class ArtifactProjection:
     fact: FactRow | None = None
     research: ResearchRow | None = None
     synthetic_profile: SyntheticProfileRow | None = None
+
+
+@dataclass(frozen=True)
+class EnrichmentWork:
+    """What enrichment has left to do, by step, as the keys of the rows that need it."""
+
+    lookups: tuple[str, ...] = ()
+    judgments: tuple[str, ...] = ()
+    questions: tuple[str, ...] = ()
+    synthetic: tuple[str, ...] = ()
+
+    def without(self, other: EnrichmentWork) -> EnrichmentWork:
+        return EnrichmentWork(*(
+            tuple(sorted(set(keys) - set(done)))
+            for keys, done in zip(astuple(self), astuple(other), strict=True)
+        ))
+
+    def count(self) -> int:
+        return sum(len(keys) for keys in astuple(self))
+
+
+@dataclass(frozen=True)
+class SynthesisRun:
+    """The synthesize command's record of its latest completed run: the `synthesis_run` row in `meta`."""
+
+    errors: tuple[str, ...] = ()
+    # The parents the run tried and could not write facts for. A later run tries them again.
+    unfinished: tuple[str, ...] = ()
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, value: str) -> SynthesisRun:
+        payload = json.loads(value)
+        return cls(tuple(payload["errors"]), tuple(payload["unfinished"]))
+
+
+@dataclass(frozen=True)
+class EnrichRun:
+    """The enrich command's record of its latest run: the one `enrich_run` row in `meta`."""
+
+    status: EnrichRunStatus
+    step: str
+    errors: tuple[str, ...] = ()
+    # What a completed run tried and could not finish. A later run tries it again.
+    unfinished: EnrichmentWork = EnrichmentWork()
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, value: str) -> EnrichRun:
+        payload = json.loads(value)
+        return cls(
+            EnrichRunStatus(payload["status"]), payload["step"], tuple(payload["errors"]),
+            EnrichmentWork(**{step: tuple(keys) for step, keys in payload["unfinished"].items()}),
+        )
 
 
 @dataclass(frozen=True)

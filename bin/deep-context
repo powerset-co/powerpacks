@@ -159,6 +159,7 @@ usage: bin/deep-context <command> [args]
   cluster      settle slam-dunk same-person pairs for free, then JEV-judge the
                ambiguous remainder (spends TypeSafe; run `cluster --dry-run` first)
   parents      build canonical parent dossiers (free)
+  enrich       preview (--dry-run) or run resumable enrichment, then report next action
   validate     completeness report (free)
   review       restart the review server and print the staged UI URL once
                /healthz answers. Active enrichment or guided
@@ -213,6 +214,9 @@ for _a in "$@"; do
 done
 
 case "$cmd" in
+  enrich)
+    "${PY[@]}" "$PKG.enrich.cli" "$@"
+    ;;
   owner)
     # Step 0: build owner.json (YOUR bio) from your LinkedIn, cache-first. Run this FIRST so
     # synthesis + the LinkedIn judge can infer shared school/employer/era with each contact.

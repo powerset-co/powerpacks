@@ -1,12 +1,16 @@
-"""Compute review manifests, enrichment state, and explicit spend approval."""
+"""Compute review manifests, enrichment state, and explicit spend approval.
+
+Changelog:
+- 2026-10-01: CLI and review share the enrichment cost calculation.
+- 2026-10-01: the worth stage completes with synthesis; enrichment follows directly.
+"""
 
 from __future__ import annotations
 
 import math
 from dataclasses import replace
 
-from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
-from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
+from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
@@ -19,24 +23,15 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
 from packs.ingestion.primitives.deep_context.manifests.review_manifest import (
     ReviewManifest,
 )
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import (
-    DEFAULT_PROCESSOR,
-)
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
-    selection as research_selection,
-)
 from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentApproval,
     EnrichmentCounts,
     EnrichmentView,
 )
 
-ESTIMATED_JUDGMENT_INPUT_TOKENS = 2000
-
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
     "synthesize": "worth",
-    "review_people": "worth",
     "enrich": "enrich",
     "review_linkedin": "linkedin",
     "realize": "done",
@@ -50,7 +45,6 @@ def enrichment_view(
     *,
     enrichment_running: bool = False,
     running_error: str | None = None,
-    applied_fingerprint: str | None = None,
 ) -> EnrichmentView:
     """Render state from the DB plan plus the one local pipeline thread.
 
@@ -61,18 +55,11 @@ def enrichment_view(
     observability (and the SSE payload source); it is never read here.
     """
     state = state or workflow_state(db)
-    plan = research_selection.select_research(
-        db,
-        processor=DEFAULT_PROCESSOR,
-        fingerprint=state.selection,
-    )
-    remaining_judgments = state.progress.enrichment_pending - len(plan.eligible)
-    # Budget two JEV requests and one possible Sol comparison per candidate.
-    judgment_count = remaining_judgments + len(plan.pending)
-    judgment_estimate = estimate_cost_usd(ESTIMATED_JUDGMENT_INPUT_TOKENS * judgment_count,
-        1500 * judgment_count, "gpt-6.1-sol")
-    jev_estimate = 2 * judgment_count * ESTIMATED_JUDGMENT_INPUT_TOKENS * INPUT_PRICE_PER_MILLION / 1_000_000
-    estimate = plan.estimated_usd + judgment_estimate + jev_estimate
+    estimate_plan = estimate_enrichment(db, state)
+    plan = estimate_plan.research
+    remaining_judgments = estimate_plan.remaining_judgments
+    judgment_estimate = estimate_plan.judgment_estimated_usd
+    estimate = estimate_plan.estimated_usd
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), plan.deduped_total
     # While the local thread runs, live progress IS the plan: every projected
@@ -98,13 +85,12 @@ def enrichment_view(
         )
     # The remaining chain prepares profiles, assembles no-match cards, and
     # resolves identity disagreements.
-    applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
+    # The run's record in the store: it completed, and nothing has arrived for it since.
+    applied = not (state.progress.enrichment_untried or state.progress.enrichment_step)
     if applied:
         status, route_state = "completed", "done"
-    elif not total and remaining_judgments:
-        status, route_state = "not_started", "profile_prep_pending"
     elif not total:
-        status, route_state = "completed", "done"
+        status, route_state = "not_started", "profile_prep_pending"
     elif pending:
         status, route_state = ReceiptStatus.NEEDS_APPROVAL, "needs_approval"
     elif plan.reused_completed:
@@ -156,7 +142,7 @@ def review_manifest(
     progress = state.progress
     enrichment = enrichment or enrichment_view(db, confirm_threshold, state)
     pending = (
-        ("worth", bool(progress.worth_pending)),
+        ("worth", bool(progress.synthesize_pending)),
         ("enrich", enrichment.status != "completed"),
         ("linkedin", bool(progress.linkedin_pending)),
     )

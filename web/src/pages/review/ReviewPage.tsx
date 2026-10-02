@@ -19,8 +19,8 @@ const TOAST_PLACE = "inset-x-0 bottom-6 mx-auto w-fit max-w-[calc(100vw-32px)] t
 /**
  * `/`: the deep-context review flow (worth, Enrich, LinkedIn, done), one screen per URL
  * (`stage`, `view`, `preview`, `debug`, `index`). The page is the user's entry point and
- * stands outside the app shell: its own top bar (brand and the screen's title), the stepper,
- * the stage, and the one toast every control reports to.
+ * stands outside the app shell: its own top bar (brand and the screen's title), the stage, and
+ * the one toast every control reports to.
  */
 export function ReviewPage() {
   const { screen, error, reload, open } = useScreen()

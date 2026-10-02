@@ -307,7 +307,7 @@
 }
 
 /* The locked one-screen layout (base.css): the stage and its panel fill the height the
-   stepper leaves, and a decided pile's list scrolls inside that. */
+   top bar leaves, and a decided pile's list scrolls inside that. */
 @media (min-width: 621px) and (min-height: 600px) {
   .review-page[data-stage="worth"] .worth-stage,
   .review-page[data-stage="worth"] .worth-panel {

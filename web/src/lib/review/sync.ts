@@ -1,7 +1,7 @@
-// What a screen that watches the server does with what it hears: each status read
-// (/api/status) and each /api/events message. Only Enrich and Done watch.
+// What a screen that watches the server does with each status read (/api/status). Only Enrich
+// and Done watch.
 
-import type { ReviewEvent, ReviewStatus, ReviewView } from "@/types/review"
+import type { ReviewStatus, ReviewView } from "@/types/review"
 
 const STAGE_ORDER: readonly ReviewView[] = ["worth", "enrich", "linkedin", "done"]
 
@@ -37,7 +37,7 @@ const NOTHING: StatusAction = { kind: "nothing" }
 /**
  * Feed-forward: the screen only ever moves FORWARD, and only on a stage change OBSERVED while
  * it was open. A difference that already existed when it opened means the user chose this
- * screen. Otherwise a changed state token reloads the screen's data.
+ * screen. Otherwise a changed state token reloads the screen's data, except on Enrich.
  */
 export function decideStatus(input: StatusInput): StatusDecision {
   const { view, preview, hasDraft, lastStage, status, loadedToken } = input
@@ -49,22 +49,10 @@ export function decideStatus(input: StatusInput): StatusDecision {
   if (!preview && movesForward && observed) {
     return decision(hasDraft ? NOTHING : { kind: "navigate", stage })
   }
-  if (status.state_token && status.state_token !== loadedToken) {
+  // Enrich only waits, and draws what it says from the status itself: a store that changed
+  // under it has nothing for it to read again.
+  if (view !== "enrich" && status.state_token && status.state_token !== loadedToken) {
     return decision(hasDraft ? NOTHING : { kind: "reload" })
   }
   return decision(NOTHING)
-}
-
-/** The running enrichment's receipt, as /api/events carries it. */
-export type EnrichmentJob = NonNullable<ReviewEvent["job"]>
-
-/**
- * A mid-run job event with counts updates the Enrich panel in place; every other message
- * (a finished job, a plain change, an unreadable one) re-reads the status. `panelShown` is
- * whether the Enrich panel is on screen to take the numbers.
- */
-export function runningJob(event: ReviewEvent | null, panelShown: boolean): EnrichmentJob | null {
-  const job = event?.job
-  if (!panelShown || !job?.counts || job.status !== "running") return null
-  return job
 }

@@ -1,9 +1,13 @@
 """Realize writes the final roster into canonical SQLite, then exports it."""
 
+import importlib
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context.db.models import LinkRow, WriterSource
 from packs.ingestion.primitives.deep_context.db.queries import imported_people, parents
@@ -12,6 +16,8 @@ from packs.ingestion.primitives.deep_context.enrich.profiles.models import Profi
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import project_profile_results
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
 from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
+from packs.ingestion.primitives.deep_context.realize import export_people
+from packs.ingestion.primitives.enrich import profile_transforms
 from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, generate_person_id
 from packs.shared.csv_io import CsvIO
@@ -43,6 +49,53 @@ def project_profile(db: Db, row_key: str, slug: str, name: str, title: str) -> N
 
 
 class ExportPeopleTests(unittest.TestCase):
+    def test_one_profile_normalization_failure_still_exports_both_people(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            people_csv = base / "merged" / "people.csv"
+            CsvIO.write_dict_rows(people_csv, PEOPLE_SCHEMA_COLUMNS, [
+                imported(id=generate_person_id(slug), public_identifier=slug,
+                         linkedin_url=linkedin(slug), full_name=name, source_channels="linkedin")
+                for slug, name in (("casey-delta", "Casey Delta"), ("jordan-bravo", "Jordan Bravo"))
+            ])
+            db = Db(base / "deep-context.sqlite")
+            EnsureParents(db=db, people_csv=people_csv).run()
+            for slug, name in (("casey-delta", "Casey Delta"), ("jordan-bravo", "Jordan Bravo")):
+                db.decide_identity(slug, "verify")
+                project_profile(db, slug, slug, name, "Engineer")
+            normalize = profile_transforms.normalize_rapidapi
+
+            def fail_casey(raw, public_identifier, linkedin_url):
+                if public_identifier == "casey-delta":
+                    raise ValueError("fixture profile cannot normalize")
+                return normalize(raw, public_identifier, linkedin_url)
+
+            try:
+                with (
+                    mock.patch.object(profile_transforms, "normalize_rapidapi", side_effect=fail_casey) as normalizer,
+                    redirect_stderr(io.StringIO()) as log,
+                ):
+                    # Reload the direct import so the patch stays at the definition.
+                    importlib.reload(export_people)
+                    payload = export_people.ExportPeople(db=db, out_dir=base / "merged").run()
+            finally:
+                importlib.reload(export_people)
+
+            rows = {row["public_identifier"]: row for row in CsvIO.read_dict_rows(people_csv)}
+            self.assertEqual(set(rows), {"casey-delta", "jordan-bravo"})
+            self.assertEqual((payload["status"], payload["rows"]), ("completed", 2))
+            self.assertEqual((payload["profiles_filled"], payload["profiles_missing"]), (1, 1))
+            self.assertEqual(normalizer.call_count, 2)
+            self.assertEqual(rows["casey-delta"]["work_experiences"], "")
+            jordan = rows["jordan-bravo"]
+            self.assertEqual((jordan["current_title"], jordan["current_company"]), ("Engineer", "Example Labs"))
+            self.assertEqual(json.loads(jordan["work_experiences"])[0]["title"], "Engineer")
+            self.assertTrue(json.loads(jordan["education"]))
+            self.assertEqual({row.id: row.to_row() for row in imported_people(db)},
+                             {row["id"]: row for row in rows.values()})
+            self.assertIn(f"[realize] {generate_person_id('casey-delta')}: profile not used: "
+                          "ValueError: fixture profile cannot normalize", log.getvalue())
+
     def test_reviewed_roster_exports_from_sqlite_without_csv_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

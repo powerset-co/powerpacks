@@ -13,7 +13,9 @@ Changelog:
 
 import json
 import hashlib
+import io
 import unittest
+from contextlib import redirect_stderr
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -518,6 +520,76 @@ class HydrateProfilesTests(unittest.TestCase):
         with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""):
             counts = rapid.hydrate_profiles([("jordan-bravo", "https://x")], Path("unused"))
         self.assertEqual(counts, {"wanted": 1, "ok": 0, "failed": 0, "skipped_no_key": 1})
+
+    def test_result_storage_failure_keeps_other_profile(self):
+        delivered = []
+        result = {"state": rapid.PROFILE_CONTENT, "normalized_profile": {"full_name": "Casey Delta"}}
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            errors = io.StringIO()
+
+            def store(pub, _url, payload):
+                delivered.append(pub)
+                if pub == "jordan-bravo":
+                    raise OSError("synthetic storage failure")
+                (root / f"{pub}.json").write_text(json.dumps(payload))
+
+            with (
+                mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value="test-key"),
+                mock.patch.object(rapid.RapidApiClient, "__init__", return_value=None),
+                mock.patch.object(rapid.RapidApiClient, "get_profile", return_value=result) as fetch,
+                redirect_stderr(errors),
+            ):
+                counts = rapid.hydrate_profiles(
+                    [(pub, f"https://www.linkedin.com/in/{pub}")
+                     for pub in ("jordan-bravo", "casey-delta")],
+                    root,
+                    on_result=store,
+                )
+
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(delivered, ["jordan-bravo", "casey-delta"])
+            self.assertFalse((root / "jordan-bravo.json").exists())
+            self.assertEqual(json.loads((root / "casey-delta.json").read_text()), result)
+            self.assertEqual(counts, {"wanted": 2, "ok": 1, "failed": 1, "skipped_no_key": 0})
+            self.assertEqual(errors.getvalue(), "[profiles] jordan-bravo: OSError: synthetic storage failure\n")
+
+    def test_fetch_exception_keeps_other_profile(self):
+        delivered = []
+        result = {"state": rapid.PROFILE_CONTENT, "normalized_profile": {"full_name": "Casey Delta"}}
+
+        def fetch(pub, _url, **_kwargs):
+            if pub == "jordan-bravo":
+                raise ValueError("synthetic fetch failure")
+            return result
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            errors = io.StringIO()
+
+            def store(pub, _url, payload):
+                delivered.append(pub)
+                (root / f"{pub}.json").write_text(json.dumps(payload))
+
+            with (
+                mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value="test-key"),
+                mock.patch.object(rapid.RapidApiClient, "__init__", return_value=None),
+                mock.patch.object(rapid.RapidApiClient, "get_profile", side_effect=fetch) as fetch_call,
+                redirect_stderr(errors),
+            ):
+                counts = rapid.hydrate_profiles(
+                    [(pub, f"https://www.linkedin.com/in/{pub}")
+                     for pub in ("jordan-bravo", "casey-delta")],
+                    root,
+                    on_result=store,
+                )
+
+            self.assertEqual(fetch_call.call_count, 2)
+            self.assertEqual(delivered, ["casey-delta"])
+            self.assertFalse((root / "jordan-bravo.json").exists())
+            self.assertEqual(json.loads((root / "casey-delta.json").read_text()), result)
+            self.assertEqual(counts, {"wanted": 2, "ok": 1, "failed": 1, "skipped_no_key": 0})
+            self.assertEqual(errors.getvalue(), "[profiles] jordan-bravo: ValueError: synthetic fetch failure\n")
 
     def test_counts_ok_and_failed(self):
         calls = []

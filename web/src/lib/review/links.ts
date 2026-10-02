@@ -37,11 +37,6 @@ export function stageHref(stage: ReviewView): string {
   return `${REVIEW_PATH}?stage=${stage}`
 }
 
-/** A stepper step: the stage, opened deliberately. */
-export function stepHref(stage: ReviewView): string {
-  return `${stageHref(stage)}&preview=1`
-}
-
 /** A worth tab; a deliberately opened screen stays one. */
 export function tabHref(tab: WorthTab, preview: boolean): string {
   return `${stageHref("worth")}&view=${tab}${preview ? "&preview=1" : ""}`

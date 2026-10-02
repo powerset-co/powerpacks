@@ -18,6 +18,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourceRow,
     ResearchRow,
     ReviewSource,
+    SynthesisRun,
     SyntheticProfileRow,
     WriterSource,
 )
@@ -34,12 +35,13 @@ from packs.ingestion.primitives.deep_context.db.identity_views import (
     linkedin_parents,
     linkedin_progress,
     linkedin_queue,
+    research_candidate_urls,
     review_questions_pending,
     synthetic_fallback,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.review.feedback import build_feedback_request
-from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.ingestion.primitives.deep_context.db.workflow_views import synthesis_pending, workflow_state
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_rows
 from deep_context_sqlite_test_helpers import (
     project_artifact,
@@ -845,8 +847,44 @@ class DeepContextDbViewTests(unittest.TestCase):
             FactRow("collected", "collected", "facts:collected", machine_worth="maybe"),
         )
         state = workflow_state(self.db)
-        self.assertEqual(state.next_action, "review_people")
+        self.assertEqual(state.next_action, "realize")
         self.assertEqual(state.progress.synthesize_pending, 0)
+
+    def test_a_parent_synthesis_could_not_finish_does_not_hold_the_flow(self) -> None:
+        for parent in ("skipped", "later"):
+            self.add_factsless_parent(parent)
+        bundle = lambda parent: ArtifactRow(
+            f"source_bundle:{parent}", "source_bundle", parent, f"/raw/{parent}.json", f"sha-{parent}", "projected")
+        project_artifact(self.db, bundle("skipped"))
+        self.assertEqual(workflow_state(self.db).next_action, "synthesize")
+        self.assertEqual(synthesis_pending(self.db), ("skipped",))
+
+        # The run tried this parent and could not write its facts: it waits for the next run.
+        self.db.record_synthesis_run(SynthesisRun(("skipped: model answer unusable",), ("skipped",)))
+        state = workflow_state(self.db)
+        self.assertEqual((state.next_action, state.progress.synthesize_pending), ("realize", 0))
+
+        # A parent collected since then is new work.
+        project_artifact(self.db, bundle("later"))
+        state = workflow_state(self.db)
+        self.assertEqual((state.next_action, state.progress.synthesize_pending), ("synthesize", 1))
+
+        # A run that left nobody behind: both are pending again.
+        self.db.record_synthesis_run(SynthesisRun())
+        self.assertEqual(workflow_state(self.db).progress.synthesize_pending, 2)
+
+    def test_maybe_worth_does_not_stop_pending_enrichment(self) -> None:
+        self.add_parent("maybe", "maybe")
+        self.add_parent("research", "yes")
+
+        state = workflow_state(self.db)
+
+        self.assertEqual(state.progress.worth_pending, 1)
+        self.assertGreater(state.progress.enrichment_untried, 0)
+        self.assertEqual(state.next_action, "enrich")
+
+    def test_workflow_with_nothing_pending_realizes(self) -> None:
+        self.assertEqual(workflow_state(self.db).next_action, "realize")
 
     def test_workflow_reuses_selection_for_worth_counts(self):
         self.add_parent("yes", "yes")
@@ -878,12 +916,27 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.add_candidate("fixture", "fixture-link", person_ids=people,
                            linkedin_url="https://linkedin.com/in/jordan-fixture", candidate_origin=1)
         with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
-            self.assertGreater(workflow_state(self.db).progress.enrichment_pending, 0)
+            self.assertGreater(workflow_state(self.db).progress.enrichment_untried, 0)
         statements = [call.args[0] for call in reads.call_args_list]
         self.assertFalse(any(sql.startswith("SELECT * FROM links") for sql in statements))
         self.assertFalse(any("AS emails_json" in sql for sql in statements))
         self.assertFalse(any("SELECT * FROM worth" in sql for sql in statements))
         self.assertEqual(sum("candidate_policy AS" in sql for sql in statements), 1)
+
+    def test_research_candidate_urls_excludes_a_non_text_linkedin_url(self):
+        for slug in ("casey-delta", "jordan-bravo"):
+            people = self.add_parent(slug, "yes")
+            self.add_candidate(slug, slug, person_ids=people)
+        url = "https://www.linkedin.com/in/jordan-bravo"
+        self.db.project_rows((
+            ResearchRow("casey-delta", "casey-delta", "complete", "casey-delta",
+                        result_json=json.dumps({"content": {"linkedin_url": 123}})),
+            ResearchRow("jordan-bravo", "jordan-bravo", "complete", "jordan-bravo",
+                        result_json=json.dumps({"content": {"linkedin_url": url}})),
+        ))
+
+        self.assertEqual(research_candidate_urls(self.db), {"jordan-bravo": url})
+        self.assertEqual(len(self.db.query("SELECT * FROM research WHERE status='complete'")), 2)
 
     def test_enrichment_queue_excludes_only_terminal_research_parents(self):
         for status in ("pending", "running", "complete", "no_match", "failed"):

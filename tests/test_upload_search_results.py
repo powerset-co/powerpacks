@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import io
 import json
 import tempfile
@@ -11,8 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
-from packs.powerset.primitives.send_feedback import send_feedback as http
 from packs.search.primitives.deep_search.results_web import snapshot
+from packs.search.primitives.upload_search_results import upload_search_results as upload
 from packs.search.primitives.upload_search_results.upload_search_results import UploadSearchResults, main
 
 
@@ -29,7 +30,7 @@ class UploadSearchResultsTests(unittest.TestCase):
     def test_signed_out_is_quiet_and_does_not_export_or_upload(self):
         with patch.object(auth, "bearer_token", side_effect=SystemExit("sign in")), \
                 patch.object(snapshot, "export_snapshot") as export, \
-                patch.object(http, "post_json") as post:
+                patch.object(upload, "post_gzip_json") as post:
             self.assertEqual(UploadSearchResults(self.run_dir).run(), {"status": "needs_auth"})
         export.assert_not_called()
         post.assert_not_called()
@@ -39,7 +40,7 @@ class UploadSearchResultsTests(unittest.TestCase):
         with patch.object(auth, "bearer_token", return_value="synthetic-token") as token, \
                 patch.object(auth, "api_base", return_value="https://api.example.com") as base, \
                 patch.object(snapshot, "export_snapshot", return_value=rendered) as export, \
-                patch.object(http, "post_json", return_value=(200, self.response)) as post:
+                patch.object(upload, "post_gzip_json", return_value=self.response) as post:
             result = UploadSearchResults(self.run_dir, env_file=self.env_file).run()
         token.assert_called_once_with(self.env_file)
         base.assert_called_once_with(self.env_file)
@@ -47,6 +48,17 @@ class UploadSearchResultsTests(unittest.TestCase):
         post.assert_called_once_with("https://api.example.com", "/v2/local-searches", "synthetic-token",
                                      {"source_run_id": self.run_dir.name, "snapshot": rendered}, timeout=120)
         self.assertEqual(result, {"status": "uploaded", **self.response})
+
+    def test_body_is_gzip_encoded_json(self):
+        body = {"source_run_id": "example", "snapshot": {"search": {"run_id": "example"}}}
+        response = io.BytesIO(json.dumps(self.response).encode())
+        with patch.object(upload.urllib.request, "urlopen", return_value=response) as urlopen:
+            result = upload.post_gzip_json("https://api.example.com", "/v2/local-searches", "synthetic-token",
+                                           body, timeout=120)
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Content-encoding"), "gzip")
+        self.assertEqual(json.loads(gzip.decompress(request.data)), body)
+        self.assertEqual(result, self.response)
 
     def test_auth_rejection_and_network_failure_are_not_success(self):
         cases = [
@@ -60,7 +72,7 @@ class UploadSearchResultsTests(unittest.TestCase):
             with self.subTest(error=error), \
                     patch.object(auth, "bearer_token", return_value="synthetic-token"), \
                     patch.object(snapshot, "export_snapshot", return_value={"search": {"run_id": "example"}}), \
-                    patch.object(http, "post_json", side_effect=error):
+                    patch.object(upload, "post_gzip_json", side_effect=error):
                 self.assertEqual(UploadSearchResults(self.run_dir).run()["status"], status)
 
     def test_cli_needs_auth_exits_successfully_without_login_prompt(self):
@@ -82,7 +94,7 @@ class UploadSearchResultsTests(unittest.TestCase):
         labels.write_text(json.dumps({"person_id": "person-one", "human": {"score": 4, "scale": 5, "note": "Review"}}) + "\n")
         before = {path.name: path.read_bytes() for path in self.run_dir.iterdir()}
         with patch.object(auth, "bearer_token", return_value="synthetic-token"), \
-                patch.object(http, "post_json", return_value=(200, self.response)) as post:
+                patch.object(upload, "post_gzip_json", return_value=self.response) as post:
             first = UploadSearchResults(self.run_dir).run()
             second = UploadSearchResults(self.run_dir).run()
         self.assertEqual(first, second)

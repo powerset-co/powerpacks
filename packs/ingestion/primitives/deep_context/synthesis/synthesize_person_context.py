@@ -9,6 +9,8 @@ The stage keeps the fixed artifacts and payload contract:
 ``<out-dir>/<parent_id>.jsonl`` plus ``<out-dir>/manifest.json``.
 
 Changelog:
+- 2026-10-01: some people failing is a completed run: worth still runs for the rest and the
+  people left behind are recorded in SQLite. Only everyone failing fails the run.
 - 2026-09-25: `--people-csv` (the fan-in roster) feeds the worth stage's
   notable-title rule; a notable LinkedIn headline is worth yes.
 - 2026-09-25: the default model is gpt-6-luna (DEFAULT_SYNTHESIS_MODEL); the
@@ -38,8 +40,10 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
 )
+from packs.ingestion.primitives.deep_context.db.models import SynthesisRun
 from packs.ingestion.primitives.deep_context.db.queries import parent_fact_counts
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
+from packs.ingestion.primitives.deep_context.db.workflow_views import synthesis_pending
 from packs.ingestion.primitives.deep_context.manifests.synthesize_person_context_manifest import (
     SynthesizePersonContextManifest,
 )
@@ -157,9 +161,20 @@ class SynthesizePersonContext(Node):
         scrub_retired_message_linkedin_facts(self.config.facts_dir)
         plan = self._migrate_parent_cache()
         tally = runner.run_paid(self.db, self.config, plan)
+        # Some people failing is a completed run: they wait for the next one. Everyone failing
+        # is a broken provider or connection, and the run fails.
+        failed_people = {failure.person_id for failure in tally.failures}
+        nobody_finished = bool(failed_people) and len(failed_people) == tally.people_done
         # JEV labels the saved facts after every GPT checkpoint is durable, and
         # re-projects each tagged record so SQLite carries its worth and labels.
-        jev_usage = JevUsage() if tally.errors else runner.tag_saved_facts(self.db, self.config, plan)
+        jev_usage = JevUsage() if nobody_finished else runner.tag_saved_facts(self.db, self.config, plan)
+        if not nobody_finished:
+            attempted = {bundle.person_id for bundle in plan.bundles}
+            self.db.record_synthesis_run(SynthesisRun(
+                errors=tuple(f"{failure.person_id} batch {failure.batch}: {failure.error}"
+                             for failure in tally.failures),
+                unfinished=tuple(sorted(attempted & set(synthesis_pending(self.db)))),
+            ))
         fact_count, without_worth = parent_fact_counts(self.db)
         worth_sync = WorthSyncResult(
             path=str(self.db.db_path),
@@ -171,7 +186,7 @@ class SynthesizePersonContext(Node):
         # OpenAI bills reasoning tokens at the output rate, so combine before costing.
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
-            status=STATUS_FAILED if tally.errors else STATUS_COMPLETED,
+            status=STATUS_FAILED if nobody_finished else STATUS_COMPLETED,
             people=len(plan.bundles),
             people_done=tally.people_done,
             batches_run=tally.batches,
