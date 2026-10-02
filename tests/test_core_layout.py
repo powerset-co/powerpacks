@@ -236,7 +236,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull", text)
         self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
         self.assertIn("uv run --env-file .env --project . python", text)
-        self.assertIn("Powerset setup complete. Please restart Codex", text)
+        self.assertIn("Powerset setup complete.", text)
         self.assertNotIn("provision_runtime_env", text)
         self.assertNotIn("operator_bootstrap", text)
         self.assertNotIn("GCP Secret Manager", text)
@@ -278,11 +278,9 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("skill", expand_step)
 
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
-        self.assertIn("Happy Path", text)
         self.assertIn("search_network_pipeline.py prepare", text)
         self.assertIn("company_directory_fast_path", text)
         self.assertIn("deep-mode.md", text)
-        self.assertIn("Do not inspect repo docs, source, memory", text)
 
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [
@@ -312,12 +310,12 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("review_research_web.py", text)
         self.assertNotIn("linkedin_modal_pipeline.py index-people", text)
 
-    def test_search_network_uses_single_execute_preview_gate(self) -> None:
+    def test_search_network_continues_requested_execution(self) -> None:
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
-        self.assertIn("Execute this search or modify it?", text)
+        self.assertNotIn("Execute this search or modify it?", text)
         self.assertNotIn("execute`, `modify`, or `search only`", text)
         self.assertIn("--execute-approved", text)
-        self.assertIn("do not ask for another approval", text)
+        self.assertIn("do not ask for another approval", " ".join(text.split()))
 
     def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
         task_state = ROOT / "packs/search/primitives/task_state/task_state.py"

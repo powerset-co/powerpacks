@@ -108,7 +108,7 @@ install_skill() {
   rm -rf "$dest"
   mkdir -p "$dest"
 
-  cp -R "$source_skill" "$dest/SKILL.md"
+  cp "$(dirname "$source_skill")/"*.md "$dest/"
   ln -s "$BUNDLE_DIR" "$dest/powerpacks"
 }
 

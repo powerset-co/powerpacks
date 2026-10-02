@@ -23,10 +23,8 @@ Never paste secret env values into chat.
 
 ## Powerpacks Skill Routing
 
-- `$search`, people search, network search, role/title/location/school
-  searches, or company-directory people lookups →
-  `packs/search/skills/search/SKILL.md`
-- job posting URLs, pasted job descriptions, or complex role briefs → `$search`
-  deep mode (`packs/search/skills/search/deep-mode.md`)
-- `$search-company`, company lookup, company IDs, investor/funding/sector or
-  company-set resolution → `packs/search/skills/search-company/SKILL.md`
+People searches, “who do I know for this job?”, posting URLs, pasted JDs,
+“who in my network can help <company>?”, company hiring requests and search
+refinements → `packs/search/skills/search/SKILL.md`. Users need not name a skill.
+The skill owns network defaults, specialist routing and recovery; follow its
+references rather than duplicating those procedures here.

@@ -45,7 +45,7 @@ For read-only set listing, still prefer the canonical repo when available.
 ## Workflow
 
 1. Ensure Powerset setup exists. If credentials or MCP registration are missing,
-   route the user to `$powerset setup`.
+   follow [Powerset setup](../powerset/SKILL.md) yourself, then resume.
 2. Confirm the Powerset Search MCP is installed when needed:
 
 ```bash
@@ -60,7 +60,12 @@ uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py s
    If `POWERPACKS_DEFAULT_SET_ID` is unset, check legacy
    `POWERSET_DEFAULT_SET_ID`.
 
-5. Set the default by ID or name:
+5. Set the default by ID or name only when asked to change the default.
+   “My set”/“my network” means the signed-in user’s Personal Network: follow
+   [account/network health](../powerset/SKILL.md#network-health), including the zero/low
+   count guidance. A temporary search scope does not change `.env`.
+
+   For an explicit default change:
 
 - call MCP `list_sets`
 - resolve the user's `<name>` or `<set_id>` against the returned sets
@@ -71,8 +76,8 @@ uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py s
 POWERPACKS_DEFAULT_SET_ID=<set_id>
 ```
 
-6. After setting, report the selected set name, `set_id`, `person_count`,
-   `member_count`, and `sales_nav_account_count` from MCP. Only run
+6. After setting, report the selected network name and `person_count`; include
+   the signed-in email for Personal Network. Keep IDs internal unless asked. Only run
    `resolve_set_operators` if the user specifically asks to validate local
    TurboPuffer operator scoping.
 
