@@ -25,10 +25,6 @@ export const OPTION = {
   researchSummary: "Research summary",
 } as const
 
-export function reresearchFailed(note: string): string {
-  return `Re-research failed: ${note}`
-}
-
 export const GUIDANCE = {
   summary: "Wrong person? Provide LinkedIn or re-research",
   placeholder: "Paste a LinkedIn URL to apply it directly, or describe the right person to re-research",
@@ -60,5 +56,5 @@ export function decisionsSaved(count: number): string {
 }
 
 export function researchRunning(count: number): string {
-  return `${count} re-research still running`
+  return `${count} re-research still running; they finish on their own`
 }

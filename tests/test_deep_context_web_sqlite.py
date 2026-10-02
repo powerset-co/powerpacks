@@ -34,6 +34,7 @@ from packs.ingestion.primitives.deep_context.db.identity_views import (
     linkedin_queue,
     linkedin_queue_order,
     linkedin_queue_parent,
+    pending_parent_ids,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
@@ -1184,10 +1185,15 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(item.detail, JUDGE_REJECTS["reason"])
         link = query(
             self.db,
-            "SELECT decision_action, replacement_url, machine_action, machine_approved, "
+            "SELECT decision_action, decision_source, replacement_url, machine_action, machine_approved, "
             "machine_judgment, machine_proposed_url FROM links WHERE row_key='jordan-bravo'",
         )[0]
-        self.assertEqual((link["decision_action"], link["replacement_url"]), (None, None))
+        # The person said this LinkedIn is wrong and research found no other: it is not shown again.
+        self.assertEqual(
+            (link["decision_action"], link["decision_source"], link["replacement_url"]),
+            ("detach", "user-guidance", None),
+        )
+        self.assertNotIn("linkedin-parent", pending_parent_ids(self.db))
         self.assertEqual(
             (link["machine_action"], link["machine_approved"], link["machine_judgment"]),
             ("retarget", None, "wrong_person"),

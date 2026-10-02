@@ -159,7 +159,6 @@ export function linkedinFinished(overrides: Partial<LinkedinFinished> = {}): Lin
   return {
     synthesize_pending: false,
     linkedin_done: 6,
-    linkedin_complete: false,
     retargets_in_flight: 0,
     ...overrides,
   }
@@ -169,7 +168,7 @@ export function linkedinFinished(overrides: Partial<LinkedinFinished> = {}): Lin
  *  `{ card: null, finished: linkedinFinished() }` for the empty queue. */
 export function linkedinCard(overrides: Partial<LinkedinCardPayload> = {}): LinkedinCardPayload {
   return {
-    card: { person: reviewPerson(), candidates: [reviewCandidate()], failure_note: "" },
+    card: { person: reviewPerson(), candidates: [reviewCandidate()] },
     finished: null,
     pending: 4,
     queue: null,

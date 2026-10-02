@@ -12,7 +12,7 @@ from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue, linkedin_queue, synthetic_fallback
 from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactRow, EnrichmentWork, EnrichRun, EnrichRunStatus, FactRow, IdentityMachineProjection, PersonRow,
+    ArtifactRow, EnrichmentWork, EnrichRun, EnrichRunStatus, FactRow, GuidanceRow, IdentityMachineProjection, PersonRow,
     PersonSourceRow, PersonSourcesProjection,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -264,6 +264,15 @@ class SettleEnrichmentTest(unittest.TestCase):
         state = workflow_state(self.db)
         self.assertNotEqual(state.next_action, 'enrich')
         self.assertEqual(state.progress.enrichment_step, '')
+
+    def test_a_re_research_still_out_holds_the_flow_at_review(self):
+        self.seed(worth='no', include_link=False)
+        self.assertEqual(workflow_state(self.db).next_action, 'realize')
+        for state in ('pending', 'running'):
+            self.db.project_rows((GuidanceRow('parent', 'parent', 'the founder', state, None, None, None, None),))
+            self.assertEqual(workflow_state(self.db).next_action, 'review_linkedin')
+        self.db.project_rows((GuidanceRow('parent', 'parent', 'the founder', 'failed', None, None, None, None),))
+        self.assertEqual(workflow_state(self.db).next_action, 'realize')
 
     def test_a_run_started_again_tries_everything_left(self):
         key = self.seed(messages=REVIEW_MESSAGE_BAR)

@@ -105,7 +105,7 @@ export function caseyCard(overrides: Partial<LinkedinCardPayload> = {}): Linkedi
     url: "https://www.linkedin.com/in/casey-delta",
   })
   return linkedinCard({
-    card: { person, candidates: [candidate], failure_note: "" },
+    card: { person, candidates: [candidate] },
     pending: 3,
     ...overrides,
   })
@@ -113,7 +113,7 @@ export function caseyCard(overrides: Partial<LinkedinCardPayload> = {}): Linkedi
 
 /** Jordan Bravo with several profiles to pick from. */
 export function severalCard(candidates: ReviewCandidate[]): LinkedinCardPayload {
-  return linkedinCard({ card: { person: reviewPerson(), candidates, failure_note: "" } })
+  return linkedinCard({ card: { person: reviewPerson(), candidates } })
 }
 
 /** The page's `Review` with every action a spy. */

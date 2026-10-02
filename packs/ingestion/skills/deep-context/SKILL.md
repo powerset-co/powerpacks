@@ -459,7 +459,12 @@ For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
 decision. The correction panel accepts a replacement URL or a terminal Skip;
 Skip writes a detach decision, rejects the shown/proposed LinkedIn, and leaves
-the person out of the index for now. Synthetic profiles remain local without
+the person out of the index for now. A description instead of a URL queues a
+re-research in the background: if it finds a LinkedIn that clears the judge,
+that LinkedIn is applied; otherwise the person's No is saved and they keep no
+LinkedIn. The person is not shown again either way, and
+`review-status --wait` holds at `review_linkedin` until every re-research has
+landed. Synthetic profiles remain local without
 requiring LinkedIn review. They are not automatically approved for indexing or
 upload. Existing human decisions, including synthetic profiles retargeted to a
 real LinkedIn, remain authoritative.

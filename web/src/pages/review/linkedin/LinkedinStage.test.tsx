@@ -11,10 +11,8 @@ import {
   motionMedia,
   queuePosition,
   reviewCandidate,
-  reviewPerson,
   syntheticCandidate,
 } from "@/testing/review-fixture"
-import { STATUS_POLL_MS } from "@/lib/review/timing"
 import type { LinkedinCardPayload } from "@/types/review"
 
 import {
@@ -127,23 +125,6 @@ describe("LinkedinStage: the card", () => {
     expect(labels(".linkedin-option")).toEqual(["Use this profile", "Use this profile", "Use this profile"])
     expect(container.querySelector(".question")).toBeNull()
     expect(labels(".identity-decision > .binary-actions")).toEqual(["None of these", "Skip"])
-  })
-
-  it("leads a returned card with why its re-research failed (L8)", async () => {
-    const card = {
-      person: reviewPerson(),
-      candidates: [reviewCandidate()],
-      failure_note: "no profile matched",
-    }
-    const { container } = await open(linkedinCard({ card }))
-    const note = must(container.querySelector(".identity-scroll > :first-child"))
-    expect(note.className).toBe("reresearch-failed")
-    expect(note.textContent).toBe("Re-research failed: no profile matched")
-  })
-
-  it("has no failure note on a card that never failed", async () => {
-    const { container } = await open()
-    expect(container.querySelector(".reresearch-failed")).toBeNull()
   })
 
   it("says so when the first card cannot be read", async () => {
@@ -261,7 +242,7 @@ describe("LinkedinStage: a decision", () => {
   it("runs the wordless stage check after the last decision (L10)", async () => {
     const next = linkedinCard({
       card: null,
-      finished: linkedinFinished({ linkedin_complete: true }),
+      finished: linkedinFinished(),
       pending: 0,
     })
     server.answer(`POST ${DECIDE}`, decideResult({ next }))
@@ -286,7 +267,7 @@ describe("LinkedinStage: a decision", () => {
   })
 
   it("counts nothing once there is no card to show", async () => {
-    const finished = linkedinFinished({ linkedin_complete: true })
+    const finished = linkedinFinished()
     const { container } = await open(linkedinCard({ card: null, finished, pending: 0 }))
     expect(container.querySelector(".queue-left")).toBeNull()
   })
@@ -300,36 +281,6 @@ describe("LinkedinStage: a decision", () => {
     expect(await screen.findByRole("heading", { name: "LinkedIn Profiles Checked" })).toBeTruthy()
     expect(screen.queryByRole("article")).toBeNull()
     expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
-    expect(review.transition).not.toHaveBeenCalled()
-  })
-
-  it("reads the queue again while re-research is out, and shows the person who comes back", async () => {
-    const finished = linkedinFinished({ retargets_in_flight: 1 })
-    server.answer(
-      `POST ${DECIDE}`,
-      decideResult({ next: linkedinCard({ card: null, finished, pending: 1 }) }),
-    )
-    const { review } = await open()
-    vi.useFakeTimers()
-    fireEvent.click(button("Use this profile"))
-    await act(() => vi.advanceTimersByTimeAsync(0))
-    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
-
-    // Still out at the first read: the panel stays.
-    server.answer(`GET ${CARD}`, linkedinCard({ card: null, finished, pending: 1 }))
-    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS - 1))
-    expect(server.gets(CARD)).toEqual([CARD])
-    await act(() => vi.advanceTimersByTimeAsync(1))
-    expect(server.gets(CARD)).toEqual([CARD, CARD])
-    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
-
-    // The re-research failed: the person is a card again, and the reading stops.
-    server.answer(`GET ${CARD}`, caseyCard({ pending: 1 }))
-    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS))
-    expect(name()).toBe("Casey Delta")
-    await act(() => vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 3))
-    expect(server.gets(CARD)).toHaveLength(3)
-    expect(server.posts("/complete")).toEqual([])
     expect(review.transition).not.toHaveBeenCalled()
   })
 })

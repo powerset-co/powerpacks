@@ -8,14 +8,14 @@ interface FinishedPanelProps {
   finished: LinkedinFinished
 }
 
-// The queue has nothing left to show. With every person decided it hands back to Codex;
-// while re-research is still out it says so, and the stage reads the queue again by itself.
+// The queue has nothing left to show: hand back to Codex. A re-research still out settles its
+// person in the background, and the agent waits for it before going on.
 export function FinishedPanel({ finished }: FinishedPanelProps) {
   return (
     <EmptyPanel title={FINISHED.title}>
       <p>{decisionsSaved(finished.linkedin_done)}</p>
       {finished.retargets_in_flight ? <p>{researchRunning(finished.retargets_in_flight)}</p> : null}
-      {finished.linkedin_complete ? <GoBack /> : null}
+      <GoBack />
     </EmptyPanel>
   )
 }

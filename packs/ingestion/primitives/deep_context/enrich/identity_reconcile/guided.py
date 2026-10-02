@@ -1,4 +1,9 @@
-"""Provider execution and canonical identity settlement for guided research."""
+"""Provider execution and canonical identity settlement for guided research.
+
+Changelog:
+- 2026-10-02: a re-research that ends without a LinkedIn saves the person's No on the
+  LinkedIn they rejected, so the person is not asked again.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +25,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     RESEARCH_CONFIRM_THRESHOLD,
     ResearchHandle,
+    ReviewAction,
+    ReviewSource,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.view_models import (
@@ -28,7 +35,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentViewRow,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, research_rows
 from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db import queries as db_queries
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -274,6 +281,13 @@ class GuidedResearch:
         # carries the full outcome (including the request that produced it)
         # for the FE to render specifics — two representations of the same
         # result, not redundant storage.
+        # The person said the LinkedIn they were shown is wrong. A re-research that ends without
+        # another saves that No before it says it failed, so the person never shows again.
+        if guidance_state == GuidanceState.FAILED and links(self.db, row_keys=(request.row_key,)):
+            self.db.decide_identity(
+                request.row_key, ReviewAction.DETACH.value,
+                source=ReviewSource.USER_GUIDANCE.value, note=request.guidance,
+            )
         detail_json = json.dumps({**item.as_dict(), "request": asdict(request)}, separators=(",", ":"))
         # GuidanceRow's first field (`handle`) is the table's primary key,
         # here passed as plain parent_id rather than a per-candidate

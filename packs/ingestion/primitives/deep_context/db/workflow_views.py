@@ -1,6 +1,8 @@
 """Queue-derived Deep Context workflow state.
 
 Changelog:
+- 2026-10-02: a re-research still out holds the flow at `review_linkedin`, so nothing is
+  realized before its answer lands.
 - 2026-10-01: synthesis runs straight into enrichment without a worth-review stop;
   the progress names what enrichment still has to do, step by step.
 - 2026-10-01: the enrich command's run record decides when enrichment is finished: what a
@@ -36,6 +38,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     EnrichmentWork,
     EnrichRun,
     EnrichRunStatus,
+    GuidanceState,
     SynthesisRun,
 )
 
@@ -240,10 +243,14 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
     selection, worth = _review_selection(db)
     progress = _stage_progress(db, worth=worth)
     enrichment_untried = progress.enrichment_untried
+    retargets_out = db.query(
+        "SELECT count(*) FROM guidance WHERE state IN (?, ?)",
+        (GuidanceState.PENDING.value, GuidanceState.RUNNING.value),
+    )[0][0]
     rules = (
         (bool(progress.synthesize_pending), "synthesize"),
         (bool(enrichment_untried or progress.enrichment_step), "enrich"),
-        (bool(progress.linkedin_pending), "review_linkedin"),
+        (bool(progress.linkedin_pending or retargets_out), "review_linkedin"),
         (True, "realize"),
     )
     action = next(action for matched, action in rules if matched)
@@ -254,6 +261,7 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
                 "selection": asdict(selection),
                 "enrichment_untried": enrichment_untried,
                 "enrichment_running": enrichment_running,
+                "retargets_out": retargets_out,
             },
             sort_keys=True,
             default=str,

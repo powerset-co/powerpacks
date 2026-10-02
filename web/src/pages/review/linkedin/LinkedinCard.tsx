@@ -11,7 +11,7 @@ import type { LinkedinCardPayload, LinkedinDecision, ReviewCandidate } from "@/t
 import { DecisionCard } from "../shared/DecisionCard"
 import { PersonCard } from "../shared/PersonCard"
 import { ScrollRegion } from "../shared/ScrollRegion"
-import { DECISION, feedbackContext, OPTIONS_INTRO, QUESTION, reresearchFailed } from "./copy"
+import { DECISION, feedbackContext, OPTIONS_INTRO, QUESTION } from "./copy"
 import { FeedbackPopover } from "./FeedbackPopover"
 import { GuidanceForm } from "./GuidanceForm"
 import { LinkedinOption } from "./LinkedinOption"
@@ -44,7 +44,7 @@ export function LinkedinCard(props: LinkedinCardProps) {
 }
 
 function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) {
-  const { person, candidates, failure_note } = card
+  const { person, candidates } = card
   // The person's own facts, the guidance box and Skip all speak for the first candidate.
   const first = must(candidates[0], "the card's first candidate")
   const several = candidates.length > 1
@@ -75,7 +75,6 @@ function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) 
         onFeedback={() => setFeedbackAt(popoverPlace(must(menu.current, "the person menu")))}
       />
       <ScrollRegion>
-        {failure_note ? <div className="reresearch-failed">{reresearchFailed(failure_note)}</div> : null}
         <PersonCard person={person} candidate={first} personOnly={several} />
         {several ? (
           <>
