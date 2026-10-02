@@ -64,6 +64,15 @@ class DossierFactsTest(unittest.TestCase):
         })
         self.assertEqual(headline(merged), "Engineer at Example Labs")
 
+    def test_headline_keeps_the_whole_relationship_sentence(self) -> None:
+        relationship = (
+            "Former teammate from Example Labs who still trades notes with the owner "
+            "about hiring, fundraising and the robotics meetup they run together."
+        )
+        merged = SynthesizedFacts.from_payload({"relationship_to_owner": relationship})
+        self.assertIsNotNone(merged)
+        self.assertEqual(headline(merged), relationship)
+
     def test_rendered_dossier_bytes_stay_pinned(self) -> None:
         meta = CollectionBundle.from_payload({
             "person_id": "person-a", "full_name": "Jordan Bravo",

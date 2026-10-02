@@ -14,8 +14,8 @@ interface PersonCardProps {
   person: ReviewPerson
   /** The profile shown with the person; null when the parent has none. */
   candidate: ReviewCandidate | null
-  /** The person alone (a card with several candidates): the parent's name, the contact and the
-   *  dossier; the LinkedIn link and facts belong to each option. */
+  /** The person alone (a card with several candidates): the parent's name and initials, the
+   *  contact and the dossier; the picture, LinkedIn link and facts belong to each option. */
   personOnly?: boolean
   /** Load the dossier under the facts. A holder that draws it under its own heading (an
    *  opened decision row) turns it off. */
@@ -32,7 +32,7 @@ export function PersonCard({ person, candidate, personOnly = false, dossier = tr
   return (
     <>
       <div className="profile-card">
-        <ReviewAvatar person={person} candidate={candidate} />
+        <ReviewAvatar person={person} candidate={facts} />
         <div className="profile-copy">
           {person.sources.length ? (
             <div className="eyebrow-row">
