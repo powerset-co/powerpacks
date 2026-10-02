@@ -12,6 +12,11 @@ export const DECISION = {
   skip: "Skip",
 } as const
 
+/** Over the card: the people still to check, this one included. */
+export function leftToCheck(count: number): string {
+  return `${count} left`
+}
+
 export const OPTIONS_INTRO = "We found more than one possible profile — pick the right one."
 
 export const OPTION = {

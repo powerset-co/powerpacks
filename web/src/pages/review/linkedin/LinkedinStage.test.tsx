@@ -275,6 +275,22 @@ describe("LinkedinStage: a decision", () => {
     expect(server.posts("/complete")).toEqual([])
   })
 
+  it("counts the people left above the card, and recounts on the next card", async () => {
+    server.answer(`POST ${DECIDE}`, decideResult({ next: caseyCard() }))
+    const { container } = await open()
+    const left = () => container.querySelector(".linkedin-stage > .queue-left")?.textContent
+    expect(left()).toBe("4 left")
+    fireEvent.click(button("Use this profile"))
+    await waitFor(() => expect(name()).toBe("Casey Delta"))
+    expect(left()).toBe("3 left")
+  })
+
+  it("counts nothing once there is no card to show", async () => {
+    const finished = linkedinFinished({ linkedin_complete: true })
+    const { container } = await open(linkedinCard({ card: null, finished, pending: 0 }))
+    expect(container.querySelector(".queue-left")).toBeNull()
+  })
+
   it("shows the finished state the answer carries while re-research is still out", async () => {
     const finished = linkedinFinished({ retargets_in_flight: 1 })
     const next = linkedinCard({ card: null, finished, pending: 1 })

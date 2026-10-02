@@ -6,17 +6,19 @@ import { must } from "@/lib/must"
 import { CarouselNav } from "../shared/CarouselNav"
 import { EmptyPanel } from "../shared/EmptyPanel"
 import { SynthesisPending } from "../shared/SynthesisPending"
+import { leftToCheck } from "./copy"
 import { FinishedPanel } from "./FinishedPanel"
 import { LinkedinCard } from "./LinkedinCard"
 import { useLinkedinQueue } from "./useLinkedinQueue"
 
-// The LinkedIn stage: the queue's card in its swap panel, or what stands in for it once the
-// queue is empty. It takes no props: its cards come from its own reads, and the screen's
+// The LinkedIn stage: the count of people left, over the queue's card in its swap panel, or
+// what stands in for the card once the queue is empty. It takes no props: its cards come from its own reads, and the screen's
 // settings from `useReview()`.
 export function LinkedinStage() {
   const { shown, failure, decide, retarget, browse } = useLinkedinQueue()
   return (
     <div className="linkedin-stage">
+      {shown?.payload.card ? <p className="queue-left">{leftToCheck(shown.payload.pending)}</p> : null}
       <div className="linkedin-panel" aria-busy={!shown && !failure ? true : undefined}>
         {failure ? (
           <EmptyPanel title={LOAD_FAILED}>
