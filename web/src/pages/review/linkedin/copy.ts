@@ -51,9 +51,9 @@ export function feedbackContext(name: string): string {
 export const FINISHED = { title: "LinkedIn Profiles Checked" } as const
 
 export function decisionsSaved(count: number): string {
-  return `${count} decisions saved`
+  return count === 1 ? "1 decision saved" : `${count} decisions saved`
 }
 
 export function researchRunning(count: number): string {
-  return `${count} re-research still running; they finish on their own`
+  return `${count} re-research sent; they finish on their own`
 }

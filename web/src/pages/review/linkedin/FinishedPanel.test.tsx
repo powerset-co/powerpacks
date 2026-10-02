@@ -46,12 +46,18 @@ describe("FinishedPanel", () => {
     expect(lines(container)).toEqual(["6 decisions saved", "Review complete — go back to Codex."])
   })
 
+  it("counts one saved decision in the singular", async () => {
+    finishedQueue({ linkedin_done: 1 })
+    const { container } = await open()
+    expect(lines(container)[0]).toBe("1 decision saved")
+  })
+
   it("hands back to Codex while re-research is still running, and presses nothing (L11)", async () => {
     finishedQueue({ retargets_in_flight: 2 })
     const { container, review } = await open()
     expect(lines(container)).toEqual([
       "6 decisions saved",
-      "2 re-research still running; they finish on their own",
+      "2 re-research sent; they finish on their own",
       "Review complete — go back to Codex.",
     ])
     await act(() => Promise.resolve())

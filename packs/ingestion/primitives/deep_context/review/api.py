@@ -325,9 +325,11 @@ class ReviewApi:
         while True:
             order = self.linkedin.rows()
             queue = [row for row in order if row.slug.lower() not in excluded | inflight]
+            # The people left to check: someone sent to re-research is settled in the background.
+            left = sum(row.slug.lower() not in inflight for row in order)
             if not queue:
                 return LinkedinCardPayload(
-                    card=None, finished=self._linkedin_finished(len(inflight)), pending=len(order), queue=None
+                    card=None, finished=self._linkedin_finished(len(inflight)), pending=left, queue=None
                 )
 
             index = _index(params, len(queue))
@@ -345,7 +347,7 @@ class ReviewApi:
             candidates=tuple(ReviewCandidate.from_row(candidate) for candidate in parent.candidates),
         )
         return LinkedinCardPayload(
-            card=card, finished=None, pending=len(order), queue=_debug_position(params, index, len(queue))
+            card=card, finished=None, pending=left, queue=_debug_position(params, index, len(queue))
         )
 
     def _linkedin_finished(self, retargets_in_flight: int) -> LinkedinFinished:

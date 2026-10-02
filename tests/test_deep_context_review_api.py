@@ -861,14 +861,14 @@ class LinkedinRoutesTests(ReviewApiFixture):
             shown = set()
             for index in (0, 1):
                 payload = self.payload(f"/api/review/linkedin-card?index={index}")
-                self.assertEqual(payload["pending"], 3)
+                self.assertEqual(payload["pending"], 2)
                 shown.add(payload["card"]["person"]["slug"])
             finished = self.payload("/api/review/linkedin-card?exclude=riley-stone,sam-tango")
-        # Jordan is being re-researched: no card.
+        # Jordan is being re-researched: no card, and not counted as left to check.
         self.assertEqual(shown, {"riley-stone", "sam-tango"})
         self.assertEqual(
             finished,
-            {"card": None, "finished": {**NOT_FINISHED, "retargets_in_flight": 1}, "pending": 3, "queue": None},
+            {"card": None, "finished": {**NOT_FINISHED, "retargets_in_flight": 1}, "pending": 2, "queue": None},
         )
 
     def test_research_landing_mid_request_never_serves_a_blank_card(self) -> None:
