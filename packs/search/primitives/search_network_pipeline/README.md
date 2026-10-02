@@ -16,8 +16,10 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 ```
 
 `prepare` runs `expand_search_request`, writes `expand_search_request.json`,
-emits a compact preview, and returns an `execute_command` to run after the user
-chooses `execute`. For company-directory-only requests, `prepare` emits
+emits a compact preview, and returns an `execute_command`. The agent checks the
+compiled filters against the request and continues, unless the user requested only
+a preview. `--set-id` binds the selected network in the prepared payload without
+changing the saved default; local preparation ignores remote network selection. For company-directory-only requests, `prepare` emits
 `status: company_directory_fast_path` with the tool request to follow.
 
 ```bash
@@ -26,9 +28,8 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
   --payload-json .powerpacks/search/payload.json
 ```
 
-The standard user-facing flow has one approval gate before this runner: show the
-extracted search preview and ask whether to modify or execute it. Once the user
-chooses execute, call the runner with `--execute-approved`:
+The requested search authorizes normal execution. The returned command includes
+`--execute-approved`; do not add a conversational approval gate:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \

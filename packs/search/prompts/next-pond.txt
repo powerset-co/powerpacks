@@ -22,7 +22,7 @@ Other families use a conventional occupation owning final work or a JD-accepted 
 Remote is not a location; omit geography when none is required. Keep every current location unchanged, including OR alternatives. Change geography only when the user explicitly requests it.
 
 Actions:
-- stop: shortlist sufficient.
+- stop: at least five unique candidates have overall scores >=4 in shortlist.overall_at_least_4. Below that, propose another valid pond or corpus_sparse if no supported population remains.
 - ranking_fix: right population, wrong ordering/scoring.
 - refine_current_pond: stricter subset; never drop X.
 - add_adjacent_pond: broadening or one credible adjacent occupation or feeder.

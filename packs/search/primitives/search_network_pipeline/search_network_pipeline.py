@@ -1138,6 +1138,8 @@ def cmd_prepare(args):
         if prompts_dir: cmd += ["--prompts-dir",prompts_dir]
         expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
         payload=payload_from_expand_output(expand)
+        if getattr(args,"set_id",None):
+            payload.setdefault("role_search_filters", {})["set_id"]=args.set_id
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
         pinned_bands=pinned_bands_from_args(args)
@@ -1167,7 +1169,7 @@ def cmd_prepare(args):
         emit({
             "primitive":"search_network_pipeline",
             "status":"preview_ready" if not issues else "blocked_user_action",
-            "message":"Show preview and ask: Execute this search or modify it?" if not issues else "Regenerate or modify extraction before retrieval.",
+            "message":"Continue with execute_command unless the user requested only a preview." if not issues else "Regenerate or modify extraction before retrieval.",
             "query":args.query,
             "payload_json":str(payload_json),
             "expand_json":str(expand_json),
@@ -1224,6 +1226,7 @@ def cmd_prepare_local(args):
             "primitive":"search_network_pipeline",
             "status":"preview_ready",
             "mode":"local_duckdb",
+            "message":"Continue with execute_command unless the user requested only a preview.",
             "query":args.query,
             "duckdb":str(db_path),
             "payload_json":str(payload_json),
@@ -1306,6 +1309,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
     p.add_argument("--query",required=True)
+    p.add_argument("--set-id",help="Powerset network UUID to bind to this search payload; ignored for the local backend. Does not change the saved default.")
     p.add_argument("--env-file",default=".env")
     p.add_argument("--output-dir")
     p.add_argument("--expand-prompts-dir",help="Reviewed complete query-expansion prompt bundle")

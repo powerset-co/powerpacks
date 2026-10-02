@@ -468,7 +468,85 @@ class TestFetchJd(unittest.TestCase):
 
 
 class TestFetchJDAshby(unittest.TestCase):
-    """fetch_ashby early-outs (no network in either case)."""
+    """Ashby public board and posting intake, with HTTP mocked."""
+
+    def test_list_openings_cli_writes_real_compact_rows(self):
+        board = {"jobs": [{
+            "title": "Senior Engineer", "location": "New York",
+            "secondaryLocations": [{"location": "London"}, {"location": "New York"}],
+            "department": "Engineering", "team": "Platform", "isListed": True,
+            "jobUrl": "https://jobs.ashbyhq.com/example/posted-id",
+            "descriptionHtml": "Full JD excluded from discovery",
+        }, {
+            "title": "Unlisted opening", "isListed": False,
+        }]}
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(board).encode()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "roles.json"
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["fetch_jd", "--list-openings", "--url",
+                    "https://jobs.ashbyhq.com/example", "--out", str(out)]), \
+                 mock.patch.object(fj.urllib.request, "urlopen", return_value=response) as http, \
+                 contextlib.redirect_stdout(stdout):
+                fj.main()
+            result = json.loads(out.read_text())
+            self.assertEqual(json.loads(stdout.getvalue()), result)
+            self.assertFalse((Path(d) / "source.json").exists())
+        self.assertEqual(http.call_args.args[0].full_url,
+                         "https://api.ashbyhq.com/posting-api/job-board/example")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["source_url"], "https://jobs.ashbyhq.com/example")
+        self.assertEqual(result["jobs"], [{
+            "title": "Senior Engineer", "locations": ["New York", "London"],
+            "department": "Engineering", "team": "Platform",
+            "jobUrl": "https://jobs.ashbyhq.com/example/posted-id",
+        }])
+
+    def test_list_openings_rejects_unsupported_url_without_http(self):
+        with mock.patch.object(fj.urllib.request, "urlopen") as http:
+            for url in ["https://jobs.lever.co/example", "https://jobs.ashbyhq.com/example/job"]:
+                with self.subTest(url=url), self.assertRaisesRegex(ValueError, "official.*board URL"):
+                    fj.list_openings(url)
+            http.assert_not_called()
+
+    def test_list_openings_cli_reports_failure_without_empty_result_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "roles.json"
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["fetch_jd", "--list-openings", "--url",
+                    "https://jobs.ashbyhq.com/example", "--out", str(out)]), \
+                 mock.patch.object(fj, "fetch_ashby_board", side_effect=fj.urllib.error.URLError("blocked")), \
+                 contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as error:
+                fj.main()
+            self.assertEqual(error.exception.code, 1)
+            self.assertFalse(out.exists())
+            self.assertEqual(json.loads(stdout.getvalue())["status"], "failed")
+
+    def test_empty_board_is_valid_but_missing_jobs_is_an_error(self):
+        for board in [{"jobs": []}, {"error": "unknown company"}]:
+            with self.subTest(board=board):
+                response = mock.MagicMock()
+                response.__enter__.return_value.read.return_value = json.dumps(board).encode()
+                with mock.patch.object(fj.urllib.request, "urlopen", return_value=response):
+                    if "jobs" in board:
+                        self.assertEqual(fj.list_openings("https://jobs.ashbyhq.com/example")["count"], 0)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "jobs list"):
+                            fj.list_openings("https://jobs.ashbyhq.com/example")
+
+    def test_posting_intake_reuses_board_fetch(self):
+        job_id = "2e718684-4f75-4a99-8d6b-3b6bd44e4228"
+        with mock.patch.object(fj, "fetch_ashby_board", return_value={"jobs": [{
+            "id": job_id, "title": "Engineer", "descriptionHtml": "<p>Build software</p>",
+            "location": "New York", "department": "Engineering",
+        }]}) as board:
+            text, title, metadata = fj.fetch_ashby(f"https://jobs.ashbyhq.com/example/{job_id}")
+        board.assert_called_once_with("example", timeout=30)
+        self.assertEqual(title, "Engineer")
+        self.assertIn("Build software", text)
+        self.assertIn("Locations: New York", text)
+        self.assertEqual(metadata["department"], "Engineering")
 
     def test_non_ashby_host_returns_none(self):
         fj = _load("fetch_jd")

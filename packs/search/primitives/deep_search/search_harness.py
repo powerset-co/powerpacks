@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Editable result-driven search harness built from the ordinary search pipeline.
 
-The reviewed JD and initial queries are the one pre-search checkpoint. After
-approval, each pond is query -> compiled payload -> reviewed payload -> run ->
-one diagnosis and next move. Score bands are display-only and the loop is capped
-at four ponds.
+Each pond is query -> compiled payload -> reviewed payload -> run -> next move.
+Automatic continuation targets five unique candidates rated overall 4 or 5,
+within the existing four-pond cap and the user's search constraints.
 """
 from __future__ import annotations
 
@@ -438,6 +437,52 @@ def build_saved_search_summary(results: Mapping[str, Any], run_dir: Path) -> dic
         related_runs=related)
 
 
+def overall_counts(summary: Mapping[str, Any]) -> dict[str, int]:
+    scores = [(row.get("candidate_judgment") or {}).get("overall_score")
+              for rows in (summary.get("groups") or {}).values() for row in rows]
+    return {f"overall_at_least_{threshold}": sum(
+        score is not None and score >= threshold for score in scores)
+        for threshold in (3, 4)}
+
+
+def command_summary(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
+    status = results["status"]
+    summary = build_search_summary(results, 0)
+    next_action = {
+        "ready_to_compile": "compile-pond", "awaiting_payload_review": "review-payload",
+        "ready_to_run": "run-pond", "ready_to_rerank": "run-pond",
+        "awaiting_diagnosis": "decide --autonomous",
+        "completed": "present_results",
+    }[status]
+    ranked = sorted(
+        (row for rows in (summary.get("groups") or {}).values() for row in rows),
+        key=lambda row: (row.get("candidate_judgment") or {}).get("overall_score") or 0,
+        reverse=True,
+    )
+    preview = []
+    for row in ranked[:5]:
+        judgment = row.get("candidate_judgment") or {}
+        reasons = [str((judgment.get(dimension) or {}).get("why") or "")[:300]
+                   for dimension in ("domain", "opportunity")]
+        preview.append({
+            **{key: str(row.get(key) or "")[:300]
+               for key in ("name", "title", "company", "linkedin_url")},
+            "overall_score": judgment.get("overall_score"),
+            "reason": " ".join(reason for reason in reasons if reason) or str(row.get("why") or "")[:600],
+        })
+    return {
+        "status": status, "backend": (results.get("retrieval") or {}).get("backend"),
+        "current_pond": max((int(row["pond_n"]) for row in results.get("iterations") or []), default=0),
+        "deduped_candidate_count": summary.get("deduped_candidate_count", 0),
+        **overall_counts(summary), "next": next_action, "top_candidates": preview,
+        "pending_query": results.get("pending_query"),
+        "pending_payload": (results.get("pending_payload") or {}).get("payload_json"),
+        "terminal_reason": (((results.get("iterations") or [{}])[-1].get("next_move") or {}).get("rationale")
+                            if status == "completed" else None),
+        "results": str(run_dir / "results.json"), "manifest": str(run_dir / "manifest.json"),
+    }
+
+
 SHORTLIST_FIELDS = ("Rank", "Name", "LinkedIn URL", "Current Role", "Current Company",
                     "Source", "Channel", "Rationale")
 
@@ -806,7 +851,8 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     if results.get("status") != "ready_to_compile" or not results.get("pending_query"):
         raise ValueError("search has no query ready to compile")
     pond_n = max((int(row.get("pond_n") or 0) for row in results.get("iterations") or []), default=0) + 1
-    if pond_n > MAX_PONDS:
+    previous = (results.get("iterations") or [{}])[-1]
+    if pond_n > MAX_PONDS and (previous.get("human_override") or {}).get("choice") != 2:
         raise ValueError("search already reached the four-pond cap")
     query = str(results["pending_query"]["query"])
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
@@ -1570,7 +1616,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     results["pending_payload"] = None
     if pond_n >= MAX_PONDS and not pending.get("rerank_only"):
         iteration["next_move"] = {"action": "stop", "next_query": None,
-                                  "rationale": "Four-pond cap reached; candidate quality is unreviewed."}
+                                  "rationale": "Automatic search stopped at the four-pond cap."}
         results["status"] = "completed"
     else:
         results["status"] = "awaiting_diagnosis"
@@ -1660,15 +1706,16 @@ def next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
         ],
         "frozen_initial_queries_remaining": remaining,
         "relaxation_order": [
-            "prefer one change at a time, but geography and population may change together",
+            "change population while preserving explicit user constraints",
             "the network is predominantly US-based, so expect non-US local ponds to be thin",
-            "for non-US roles, widen country to region to global early and consider relocation-plausible US candidates",
+            "change geography only when the user explicitly requests it",
             "broaden to someone who could feasibly do the work or a feeder career when useful",
             "never relax the defining capability",
             "use corpus_sparse when the available network is the limit",
         ],
         "human_diagnosis": ({"category": diagnosis, "note": note or None}
-                            if diagnosis else None),
+                            if diagnosis or note else None),
+        "shortlist": overall_counts(build_search_summary(results, 0)),
         "user_requested_another_round": user_requested_another_round,
         "retrieved_precedents": retrieve_next_moves(
             title=str(results.get("title") or ""), brief=results.get("brief") or {},
@@ -1726,6 +1773,8 @@ def propose_next_move(
 ) -> tuple[dict[str, Any], str, dict[str, Any]]:
     """Run the production next-pond request, validation, retry, and fallback."""
     client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
+    if not user_continue:
+        prompt += "\nAutomatic search runs each pond once. Choose a new pond or corpus_sparse; never ranking_fix."
     messages = [{"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(context, indent=2)}]
     raw = ""
@@ -1777,14 +1826,24 @@ def propose_next_move(
         conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
         stopping_on_continue = (user_continue and
                                 proposal["action"] in {"stop", "corpus_sparse"})
+        premature_stop = (proposal["action"] == "stop" and
+                          context["shortlist"]["overall_at_least_4"] < 5)
+        automatic_rerank = not user_continue and proposal["action"] == "ranking_fix"
         if (not duplicate_query and not invalid_source and
-                not conflicting_diagnosis and not stopping_on_continue):
+                not conflicting_diagnosis and not stopping_on_continue and
+                not premature_stop and not automatic_rerank):
             break
         if attempt == 0:
             rejection = (
                 "Reject that move because the user explicitly requested another round. Return a "
                 "non-stopping action; stop and corpus_sparse are not allowed."
                 if stopping_on_continue else
+                "Fewer than five unique candidates have overall ratings of 4 or 5. Propose another "
+                "valid pond within the user's constraints, or corpus_sparse if those populations are exhausted."
+                if premature_stop else
+                "Automatic search runs each pond once. Propose a new pond within the user's "
+                "constraints or corpus_sparse; ranking_fix is not allowed."
+                if automatic_rerank else
                 "Reject that next_query because it duplicates a query already in pond_chain. "
                 "Return a query with different normalized full text."
                 if duplicate_query else
@@ -1800,32 +1859,11 @@ def propose_next_move(
                 {"role": "user", "content": rejection},
             ])
             continue
-        if stopping_on_continue:
-            current_query = str(iteration["query"])
-            matches = list(re.finditer(r"\s+in\s+", current_query, flags=re.I))
-            widened = (current_query[:matches[-1].start()].strip() if matches else
-                       f"{current_query} globally")
+        if stopping_on_continue or premature_stop or duplicate_query or automatic_rerank:
             proposal = {
                 "diagnosis": selected or proposal["diagnosis"],
-                "action": "widen_geography", "next_query": widened,
-                "source": _source_occupation(current_query) or "inferred",
-                "rationale": ("The user requested another round; widened geography after two "
-                              "stopping proposals."),
-            }
-        elif duplicate_query:
-            filters = (iteration.get("input") or {}).get("filters") or {}
-            bounded = any(filters.get(field) for field in LOCATION_FIELDS)
-            matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))
-            widened = str(iteration["query"])[:matches[-1].start()].strip() if bounded and matches else ""
-            proposal = {
-                "diagnosis": selected or proposal["diagnosis"],
-                "action": "widen_geography" if widened else "stop",
-                "next_query": widened or None,
-                "source": _source_occupation(iteration["query"]) if widened else None,
-                "rationale": ("Both proposals duplicated a searched query; widened the current "
-                              "pond's geography instead."
-                              if widened else
-                              "Both proposals duplicated a searched query and geography was already unbounded."),
+                "action": "corpus_sparse", "next_query": None, "source": None,
+                "rationale": "No new valid pond was proposed after two attempts; kept the user's constraints.",
             }
         else:
             proposal = {
@@ -1865,6 +1903,17 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             "proposal": None,
             "actual": {"diagnosis": selected, "action": "stop", "next_query": None},
             "changed": True,
+        }
+        results["status"] = "completed"
+        _save(results, run_dir)
+        return run_dir / "results.json"
+    enough = overall_counts(build_search_summary(results, 0))["overall_at_least_4"] >= 5
+    capped = int(iteration["pond_n"]) >= MAX_PONDS
+    if autonomous and (capped or enough):
+        iteration["next_move"] = {
+            "action": "stop", "next_query": None, "source": None,
+            "rationale": ("Four-pond cap reached." if capped else
+                          "Found at least five unique candidates with overall ratings of 4 or 5."),
         }
         results["status"] = "completed"
         _save(results, run_dir)
@@ -2001,7 +2050,7 @@ def main() -> None:
         path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
                       note=args.note, autonomous=args.autonomous, model=args.model,
                       reasoning_effort=args.reasoning_effort)
-    print(json.dumps({"status": "completed", "results": str(path)}, indent=2))
+    print(json.dumps(command_summary(_read_json(path), run_dir), indent=2))
 
 
 if __name__ == "__main__":

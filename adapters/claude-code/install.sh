@@ -55,7 +55,7 @@ install_skill() {
   rm -rf "$dest"
   mkdir -p "$dest/powerpacks"
 
-  cp -R "$source_skill" "$dest/SKILL.md"
+  cp "$(dirname "$source_skill")/"*.md "$dest/"
   copy_powerpacks_bundle "$dest"
 
   cat > "$dest/powerpacks/README.claude-code-install.md" <<EOF
