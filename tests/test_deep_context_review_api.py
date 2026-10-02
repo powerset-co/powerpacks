@@ -447,8 +447,8 @@ class ReviewPageTests(ReviewApiFixture):
         # Each driver moves the store one stage on; the page with no stage lands there.
         stores = (
             (
-                "worth", lambda: None, ("worth", "review"), pending,
-                steps((False, 1), (False, 0), (False, 1)), progress(1, 1, 0, 1), approval,
+                "enrich", lambda: None, ("enrich", ""), pending,
+                steps((True, 1), (False, 0), (False, 1)), progress(1, 1, 0, 1), approval,
             ),
             (
                 "enrich", self.store.reach_enrich, ("enrich", ""), emptied,
@@ -491,6 +491,14 @@ class ReviewPageTests(ReviewApiFixture):
         page = self.payload("/api/review/page?stage=enrich")
         self.assertEqual((page["view"], page["progress"]["worth_pending"]), ("enrich", 1))
         self.assertEqual(page["enrichment"]["mode"], "approval")
+
+    def test_review_decisions_step_is_done_after_synthesis_with_maybe_parents(self) -> None:
+        page = self.payload("/api/review/page")
+
+        self.assertEqual(page["view"], "enrich")
+        self.assertEqual(len(page["steps"]), 3)
+        self.assertEqual(page["steps"][0], steps((True, 1), (False, 0), (False, 1))[0])
+        self.assertIn("worth", SqliteReviewAdapter(self.db).manifest().completed_stages)
 
     def test_unknown_api_paths_are_a_json_404(self) -> None:
         for method in ("GET", "POST"):

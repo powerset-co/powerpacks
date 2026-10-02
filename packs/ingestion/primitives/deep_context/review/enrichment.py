@@ -1,4 +1,8 @@
-"""Compute review manifests, enrichment state, and explicit spend approval."""
+"""Compute review manifests, enrichment state, and explicit spend approval.
+
+Changelog:
+- 2026-10-01: the worth stage completes with synthesis; enrichment follows directly.
+"""
 
 from __future__ import annotations
 
@@ -36,7 +40,6 @@ ESTIMATED_JUDGMENT_INPUT_TOKENS = 2000
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
     "synthesize": "worth",
-    "review_people": "worth",
     "enrich": "enrich",
     "review_linkedin": "linkedin",
     "realize": "done",
@@ -156,7 +159,7 @@ def review_manifest(
     progress = state.progress
     enrichment = enrichment or enrichment_view(db, confirm_threshold, state)
     pending = (
-        ("worth", bool(progress.worth_pending)),
+        ("worth", bool(progress.synthesize_pending)),
         ("enrich", enrichment.status != "completed"),
         ("linkedin", bool(progress.linkedin_pending)),
     )

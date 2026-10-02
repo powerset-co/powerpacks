@@ -3,6 +3,9 @@
 Created: 2026-07-13
 
 Changelog:
+- 2026-10-01: enrichment follows synthesis without a worth-review stop; local
+  settlement detaches empty lookup profiles and marks insufficient identity
+  evidence worth No before synthetic assembly.
 - 2026-10-01: the review page is the React app's page at `/` (`web/src/pages/review`); the
   Jinja page is deleted. The browser-observer notes describe it.
 - 2026-09-28: the post-review block is stop → realize. Realize writes the
@@ -34,7 +37,7 @@ LinkedIns, and rebuilds the canonical network and search index.
 The durable product flow is:
 
 ```text
-messages -> dossiers -> review uncertain people -> enrich Yes -> verify LinkedIn -> people.csv -> index
+messages -> dossiers -> enrich -> check LinkedIn -> realize -> people.csv -> index
 ```
 
 This guide explains the product, review experience, file-state contract, and
@@ -53,8 +56,9 @@ enrichment, review, realization, and indexing behavior now lives in
   wacli store.
 - **Core context output:** one synthesized Markdown dossier per person, with
   lookup indexes for name, email, and phone.
-- **People decision:** the model assigns Yes/Maybe/No. Only genuine uncertainty
-  appears in the main review queue; Yes and No remain visible and editable.
+- **People decision:** the model assigns Yes/Maybe/No. Worth review is optional;
+  Yes and No remain editable. Maybe never blocks enrichment. Review Decisions
+  reports done after synthesis; the API keeps exactly three review steps.
 - **Enrichment:** Parallel research runs for effective-Yes parents without a
   LinkedIn or completed research. Completed research, including no-match, is
   reused. Every mapped real LinkedIn without a human or machine verdict is judged.
@@ -76,16 +80,14 @@ flowchart TD
     D --> E{"Preview + approve OpenAI synthesis"}
     E --> F["Synthesize facts + worth from messages, compose dossiers, validate"]
     F --> G["Judge duplicate pairs and build canonical parents"]
-    G --> J["People UI: review only Maybe; edit Yes / No"]
-    J --> K{"People review complete"}
-    K --> K1["App builds the preview in-process"]
+    G --> K1["App builds the preview in-process"]
     K1 --> L["Enrich page shows the exact estimate"]
     L --> M{"Approve exact net-new Parallel estimate in UI, unless zero"}
     M --> M1["App runs the approved lookup in-process"]
-    M1 --> N["Completed work is reused; app chains assemble + prefetch"]
-    N --> O["Assemble no-LinkedIn research cards"]
-    O --> P{"User clicks Continue"}
-    P --> Q["LinkedIn UI: verify, replace, or Skip"]
+    M1 --> N["Prefetch profiles, judge identities, review relationships"]
+    N --> S["Settle empty profiles and insufficient identity evidence"]
+    S --> O["Assemble eligible no-LinkedIn research cards"]
+    O --> Q["LinkedIn UI: verify, replace, or Skip"]
     Q --> R{"LinkedIn review complete"}
     R --> R1["Agent's wait returns realize"]
     R1 --> T["Apply reviewed identities in SQLite + export merged people.csv"]
@@ -96,8 +98,8 @@ flowchart TD
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
-    class E,K,M,P,R,U gate;
-    class A,B,D,F,G,J,K1,L,M1,O,Q,R1,T local;
+    class E,M,R,U gate;
+    class A,B,D,F,G,K1,L,M1,S,O,Q,R1,T local;
     class N cloud;
     class V output;
 ```
@@ -176,10 +178,12 @@ browser button and cannot be blocked by the Done page.
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs with JEV (one request per pair, merge at p(yes) ≥ 0.5 when JEV also answers that the two names can be one contact's), caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
 | LinkedIn judging | After cache-first profile preparation, enrichment judges mapped attached and researched links lacking a decision. Existing human and valid machine decisions are kept. | SQLite identity verdicts |
-| People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
+| Optional worth review | Shows model-Maybe parents and editable Yes/No. Human worth writes the parent row and remains authoritative. Maybe does not stop enrichment; Review Decisions is done after synthesis. | SQLite human worth |
 | Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
 | Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |
 | Profile prefetch | The review app runs profile hydration automatically after research completes (RapidAPI is credits-based, one call per distinct profile cache miss). The UI stays cache-only. | Shared profile cache and SQLite profile artifacts |
+| Local settlement | Detaches empty machine-accepted lookup LinkedIns, then marks parents with no real profile and fewer than 25 messages worth No unless human worth exists. Re-evaluation lifts that No when evidence arrives. | SQLite machine identity and parent worth |
+| Synthetic assembly | Creates no-LinkedIn research cards for eligible parents; worth No receives none. | SQLite synthetic profiles |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
 | Realization | Applies reviewed identities and merges their parents in SQLite, then exports the final roster. Fills profiles from SQLite and makes no provider calls. Synthetic profiles require a reviewed real LinkedIn replacement to be indexed. | SQLite roster, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
@@ -201,13 +205,14 @@ bin/deep-context validate
 bin/deep-context cluster --dry-run # free slam-dunk count + ambiguous-pair estimate
 bin/deep-context cluster           # settle slam dunks, then JEV-judge the remainder
 bin/deep-context parents
-bin/deep-context review worth
+bin/deep-context review
 ```
 
 After the browser opens, the agent blocks on
 `bin/deep-context review-status --wait` and acts on what it returns. The review
-app runs preview, approved enrichment, synthetic assembly, and profile prefetch
-itself.
+app runs preview and the approved research → profile prefetch → identity judge →
+relationship review → local settlement → synthetic assembly chain itself.
+The workflow sequence is `synthesize` → `enrich` → `review_linkedin` → `realize`.
 
 After LinkedIn review:
 
@@ -257,25 +262,49 @@ The durable worth authority is the parent row in
 `.powerpacks/deep-context/deep-context.sqlite`; legacy `review.csv` is read only
 at the one-time seed boundary.
 
-- Synthesis writes one machine worth verdict into `facts/<parent_id>.jsonl`
-  and projects it onto that parent.
+- Synthesis writes machine worth into `facts/<parent_id>.jsonl` and SQLite
+  facts. Effective worth reads human worth, then `parents.machine_worth`, then
+  the best machine verdict on the parent's facts, otherwise Maybe.
 - Each canonical parent has one human-worth override in SQLite. On a parent
   merge, the newest human worth decision wins; re-review is recovery.
 - Model Yes starts in the Yes table.
 - Model No, human No, and legacy Exclude share the No table.
 - Model Maybe is the only main review queue.
 - Human Yes/No is sticky and authoritative.
-- The user may continue with unresolved Maybes. They remain reviewable later,
-  but do not block enrichment and are excluded from lookup until marked Yes.
+- Worth review is optional (`bin/deep-context review worth`); unresolved Maybes
+  do not stop enrichment. Research still selects effective Yes only.
 - On a normal repeated full run, only missing/Maybe dossier worth is rescored.
   Machine Yes/No and human Yes/No are reused.
 - The enrichment selection is the current effective Yes table: model Yes unless
   a human removed it, plus anyone a human added.
 
+## Local settlement
+
+After relationship review and before synthetic assembly, settlement applies:
+
+1. A machine-accepted lookup LinkedIn whose fetched profile is missing, errored,
+   or has neither experience nor education is detached with an empty-profile
+   reason. An own `linkedin_csv` connection and a human link decision are kept.
+2. Without human worth, effective Yes/Maybe becomes machine No when the parent
+   has no real LinkedIn profile and fewer than `REVIEW_MESSAGE_BAR = 25`
+   messages. Messages sum `interaction_counts` across non-owner imported people.
+   The reason is `not enough to know who this is: no LinkedIn profile and N messages`.
+
+An own imported connection or a LinkedIn a human kept counts as a real LinkedIn
+profile. Otherwise the profile must be accepted (verify/retarget, Yes/auto),
+present, and contain experience or education. A parent with a real profile or at least 25 messages
+keeps its worth. Effective No and human worth remain unchanged.
+
+Rule 2 writes existing `parents.machine_worth` / `machine_worth_reason` above
+facts and below human worth. A later JEV facts pass cannot undo it. Settlement
+is idempotent and clears its No when a real profile arrives or the message sum
+reaches 25. Worth-No parents leave LinkedIn review and later research and do
+not receive synthetic profiles.
+
 ## LinkedIn decisions
 
-The LinkedIn stage never asks whether the person belongs in the network; that
-was already decided in People review.
+The LinkedIn stage checks identity for parents still worth Yes/Maybe after
+settlement. Worth remains editable in the optional worth view.
 
 For a proposed or existing LinkedIn:
 
@@ -421,6 +450,7 @@ Not every request needs the full workflow:
 | Attached-LinkedIn identity judge (research) | [`enrich/identity_reconcile/judge.py`](../primitives/deep_context/enrich/identity_reconcile/judge.py) |
 | Review UI and deterministic status | [`review/reconcile_review_web.py`](../primitives/deep_context/review/reconcile_review_web.py) |
 | Parallel enrichment | [`enrich/research_reconcile/reconcile_deep_research.py`](../primitives/deep_context/enrich/research_reconcile/reconcile_deep_research.py) |
+| Local identity and worth settlement | [`enrich/settle.py`](../primitives/deep_context/enrich/settle.py) |
 | No-LinkedIn research cards | [`enrich/synthetic/assemble.py`](../primitives/deep_context/enrich/synthetic/assemble.py) |
 | LinkedIn review profile prefetch | [`enrich/profiles/prefetch.py`](../primitives/deep_context/enrich/profiles/prefetch.py) |
 | Realization (final roster + people.csv export) | [`realize/export_people.py`](../primitives/deep_context/realize/export_people.py) |

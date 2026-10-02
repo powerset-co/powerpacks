@@ -29,6 +29,7 @@ are form-encoded, a POST from another origin is refused, and an error is
 `{"error": text}`. What each route answers with is a dataclass in payloads.py.
 
 Changelog:
+  2026-10-01: Review Decisions completes with synthesis; worth overrides remain available.
   2026-09-30: created beside the Jinja page.
   2026-10-01: follows #635's review page. The approve label counts the judgment estimate;
     candidates carry `avatar_url`; a pile page no longer hydrates profiles, so
@@ -248,7 +249,7 @@ class ReviewApi:
         synthesized = not progress.synthesize_pending
         steps = (
             ReviewStep(
-                1, "Review Decisions", "worth", synthesized and not progress.worth_pending, progress.worth_pending
+                1, "Review Decisions", "worth", synthesized, progress.worth_pending
             ),
             ReviewStep(
                 2, "Enrich Contacts", "enrich", synthesized and enrichment.status == "completed",

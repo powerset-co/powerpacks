@@ -6,6 +6,7 @@ stage, `/people`, `/searches`. Before a deep-context store exists it serves the 
 alone, and `/` goes to `/searches`. `status` prints what the agent should do next.
 
 Changelog:
+- 2026-10-01: status routes synthesis directly to enrichment without worth review.
 - 2026-10-01: the review is the React page at `/`; before a store exists `/` still
   redirects to /searches, ahead of the shell.
 - 2026-09-30: the directory stage is gone; bare `serve` opens the current review stage.
@@ -116,7 +117,6 @@ def workflow_status(**_: object) -> dict[str, object]:
     payload = api.workflow_status()
     commands = {
         "synthesize": "bin/deep-context dry",
-        "review_people": "bin/deep-context review",
         "enrich": "wait for the user to approve Enrich Contacts in the review UI",
         "review_linkedin": "wait for LinkedIn Yes/No decisions in the review UI",
         "realize": "bin/deep-context stop && bin/deep-context realize",

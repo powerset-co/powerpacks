@@ -23,6 +23,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging i
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import select_research
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import DEFAULT_PROCESSOR
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
+from packs.ingestion.primitives.deep_context.enrich.settle import SettleEnrichment
 from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
@@ -37,7 +38,7 @@ from packs.ingestion.primitives.deep_context.shared.common import ENRICH_MANIFES
 
 
 class EnrichmentPipeline:
-    """One approved research -> profile -> judge -> synthetic chain."""
+    """One approved research -> profile -> judge -> relationships -> settle -> synthetic chain."""
 
     def __init__(
         self,
@@ -146,6 +147,7 @@ class EnrichmentPipeline:
                 errors.extend(f"relationships: {item['parent_id']}: {item['error']}" for item in reviews["errors"])
             else:
                 errors.append(f"relationships: {reviews.get('error') or reviews['status']}")
+        SettleEnrichment(db=self.db).run()
         AssembleSyntheticProfile(db=self.db).run()
         for error in errors:
             print(f"[enrichment] {error}", file=sys.stderr, flush=True)

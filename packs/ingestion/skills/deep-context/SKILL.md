@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, asks the user only about uncertain additions, runs one budget-gated lookup for the editable Yes decisions plus eligible wrong-link recovery, verifies found LinkedIns, then realizes the approved network and index.
+description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, runs one budget-gated enrichment chain without a worth-review stop, settles empty profiles and insufficient identity evidence, verifies remaining uncertain LinkedIns, then realizes the approved network and index.
 ---
 
 # deep-context
@@ -12,7 +12,7 @@ resolution, synthetic-profile, realization, and validation behavior lives here.
 The durable flow is:
 
 ```text
-messages -> dossiers -> review uncertain people -> lookup Added -> LinkedIn Yes/No -> people.csv -> index
+messages -> dossiers -> enrich -> check LinkedIn -> realize -> people.csv -> index
 ```
 
 All paths are fixed and overwritten in place. Do not add run ids, ledgers, or a
@@ -111,9 +111,6 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
-[People] Wait for review to complete
-[People] Review people worth adding to network
-[Match] Confirm imported LinkedIn matches the person
 [Match] App runs enrichment + profile prep after in-UI approval
 [LinkedIn] Review LinkedIn profiles we found for network
 [Match] Apply approved replacement LinkedIns
@@ -247,10 +244,10 @@ Approve?` and wait for a yes before running. Either way, run the exact command
 printed by `dry` — do not invent a different scope. Synthesis extracts facts.
 JEV then answers the 34 share-label and 7 worth questions together, storing
 `network_worth` and `labels` in each `facts/<parent_id>.jsonl` and explicitly
-projecting that completed payload into SQLite. The one parent-owned machine
-worth value and optional human override are read and written through the same
-SQLite row. Existing facts are reused without another GPT call; JEV resumes from
-its request cache; human decisions remain unchanged. Use `--force` explicitly to
+projecting that completed payload into SQLite facts. Effective worth reads the
+human override first, then the parent machine decision from enrichment, then
+the best machine verdict on the parent's facts. Existing facts are reused without
+another GPT call; JEV resumes from its request cache; human decisions remain unchanged. Use `--force` explicitly to
 rebuild facts.
 
 Synthesis retries transient API failures three times through the SDK. If any
@@ -318,7 +315,7 @@ with message context before any paid identity lookup. A candidate merged into an
 existing person does not reappear in the People queue or paid lookup; the
 merge folds its email/phone/channel metadata onto the kept LinkedIn.
 
-### 5. People decision gate
+### 5. Enrichment without a worth stop
 
 A contact-only person (email/phone only, no LinkedIn) can enter paid research
 when worth is Yes. Existing LinkedIns and completed research, including
@@ -328,11 +325,14 @@ identity decisions enter the identity judge before LinkedIn review.
 Launch the local UI once in a background terminal:
 
 ```bash
-bin/deep-context review worth
+bin/deep-context review
 ```
 
 Opening review serves the current SQLite review. The app shows the existing
-worth and identity queues; it does not reset human choices or call providers.
+worth and identity queues without resetting human choices or calling providers.
+Worth review is optional: `review worth` still lets
+the user override Yes/Maybe/No. The three review steps remain; Review Decisions
+is done once synthesis is complete, even when Maybe parents remain.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
 read of canonical SQLite (no daemons, no sockets, no thread ids; it always
@@ -343,14 +343,12 @@ bin/deep-context review-status --wait --timeout 900
 ```
 
 It queries canonical SQLite every five seconds and returns the current queue-derived
-`next_action`: pending worth parents -> `review_people`; uncovered effective-Yes
-parents -> `enrich`; pending LinkedIn candidates -> `review_linkedin`; otherwise
-`realize`. The app itself runs everything in between:
+`next_action`: pending synthesis -> `synthesize`; pending enrichment -> `enrich`;
+pending LinkedIn candidates -> `review_linkedin`; otherwise `realize`.
+Maybe worth never stops this sequence. The app itself runs everything in between:
 preview, approved enrichment, from-cache continuation, synthetic assembly,
 and profile prefetch. On timeout the wait returns `status: waiting` with the
-current human-wait action — just run it again. Mark
-`[People] Wait for review to complete` complete once the
-first wait is running.
+current human-wait action — just run it again.
 
 The UI is the user's control surface for review and approval. It records choices
 in canonical SQLite. Enrichment writes its fixed artifacts, projects their full
@@ -375,11 +373,8 @@ The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action
 per row: No from the Yes table and Yes from the No table.
 Model Yes starts in Yes; model No, user No, and legacy Exclude share No.
-When the final Maybe is answered, the server writes People completion
-automatically. The completion endpoint does not reject unresolved Maybes, but
-the UI adds no separate skip control. The browser then opens Enrich Contacts,
-where an indeterminate "Preparing enrichment" bar remains visible until the
-next projected SQLite state arrives.
+These edits do not gate enrichment. The current workflow opens Enrich Contacts
+after synthesis; Review Decisions already reports done.
 
 The wait command is the read-only deterministic primitive — it queries SQLite
 and emits one `next_action`; it does not mutate files, open a
@@ -402,7 +397,7 @@ is pending, current, or allowed to run.
 
 The review app runs the whole mid-flow itself, in-process, when the user acts:
 
-- **People review completes** → the app builds the free preview
+- **Synthesis is complete** → the app builds the free preview
   (`reconcile-deep-research --dry-run`) and the Enrich Contacts page renders
   the exact `Approve $X.XX` estimate (gross eligible, completed-result reuse,
   net-new submissions, budget). When net-new is zero the button reads
@@ -412,8 +407,9 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
   app runs the approved Parallel pass with exactly that budget cap.
 - **Research completes** → the app hydrates missing LinkedIn profiles, runs JEV
   identity checks, and uses GPT-6.1 Sol to resolve remaining disagreements.
-  Completed paid results are reused. It then assembles synthetic profiles for
-  people without an accepted LinkedIn.
+  Completed paid results are reused. Relationship review runs next, followed by
+  the local settlement rules below, then synthetic profiles for eligible people
+  without an accepted LinkedIn.
 
 The agent runs NONE of these steps while the app owns them. Files remain the
 durable provider outputs, but the writer projects every downstream payload into
@@ -440,6 +436,24 @@ When you report lookup progress to the user, phrase it as "Parallel tasked with
 N net-new lookups" and use the enrichment manifest's running/completed counts. Do not call
 the approved budget a "cap" or restate the dollar amount in status updates — the
 approval already happened, so the number is noise.
+
+Settlement applies two rules before synthetic assembly:
+
+- A machine-accepted lookup LinkedIn with a missing, errored, or empty profile
+  (no experience and no education) is detached with an empty-profile reason.
+  Own `linkedin_csv` connections and human link decisions are preserved.
+- Without a human worth decision, effective Yes/Maybe becomes machine No when
+  the parent has no real LinkedIn profile and fewer than `REVIEW_MESSAGE_BAR`
+  (25) messages across non-owner imported people. The reason is
+  `not enough to know who this is: no LinkedIn profile and N messages`.
+  Own connections and LinkedIns a human kept count as real; other real profiles
+  must be accepted, present, and have experience or education. At 25 messages the parent stays reviewable.
+
+The latter decision lives in `parents.machine_worth` / `machine_worth_reason`,
+above facts and below human worth. JEV rewrites facts, so it cannot undo this
+rule. Rerunning settlement clears its No when a real profile arrives or messages
+reach 25. Worth-No parents leave LinkedIn review and later research, and receive
+no synthetic profile.
 
 ### 7. LinkedIn decision gate
 

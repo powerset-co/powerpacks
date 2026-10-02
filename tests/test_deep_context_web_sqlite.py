@@ -81,10 +81,13 @@ from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult, ProfileTarget
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import RapidApiClient
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
+from packs.powerset.primitives.send_feedback.send_feedback import SendFeedback
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
 )
@@ -160,6 +163,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         for patcher in (
             mock.patch.object(RapidApiClient, "get_profile", refuse_paid_call),
             mock.patch.object(OpenAIResponsesCaller, "__init__", refuse_paid_call),
+            mock.patch.object(SendFeedback, "run", return_value={"status": "submitted"}),
         ):
             patcher.start()
             cls.addClassCleanup(patcher.stop)
@@ -361,7 +365,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
     def test_attached_only_enters_enrichment_without_research(self) -> None:
         status, workflow = self.json_request("GET", "/api/status")
         self.assertEqual(status, 200)
-        self.assertEqual(workflow["next_action"], "review_people")
+        self.assertEqual(workflow["next_action"], "enrich")
         self.db.decide_worth("worth-parent", "no")
         status, workflow = self.json_request("GET", "/api/status")
         self.assertEqual(status, 200)
@@ -512,7 +516,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             wraps=review_adapter.workflow_state,
         ) as workflow_state:
             payload = self.adapter().workflow_status()
-        self.assertEqual(payload["next_action"], "review_people")
+        self.assertEqual(payload["next_action"], "enrich")
         self.assertEqual(workflow_state.call_count, 1)
 
     def test_review_startup_binds_without_calculating_workflow_queues(self) -> None:
@@ -559,6 +563,16 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 machine_proposed_public_identifier="casey-delta",
                 source=WriterSource.DEEP_RESEARCH.value,
             ),))
+            url = "https://www.linkedin.com/in/casey-delta"
+            profile = ProfileResult.from_payload("casey-delta", url, {
+                "state": "content", "normalized_profile": {
+                    "success": True, "full_name": "Casey Delta",
+                    "experiences": [{"title": "Engineer", "company_name": "Bravo Labs"}],
+                },
+            })
+            projection.project_profile_results(self.db, ((ProfileTarget(
+                "casey-delta", url, "candidate:email:casey@example.com", "worth-parent",
+            ), profile),), self.root / "profile-cache")
             return {"status": "completed"}
 
         pipeline = enrichment_pipeline.EnrichmentPipeline(
@@ -583,6 +597,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertNotIn("worth-parent", {row.parent_id for row in linkedin_queue_order(self.db)})
 
     def test_cached_enrichment_launches_only_after_explicit_approval(self) -> None:
+        self.db.replace_imported_people((PeopleRow.model_validate({
+            "id": "linkedin-person", "full_name": "Jordan Bravo",
+            "interaction_counts": json.dumps({"imessage": 25}),
+        }),))
         self.db.decide_worth("worth-parent", "yes")
         with self.db.transaction() as conn:
             conn.execute(
@@ -656,6 +674,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 
         self.db.decide_worth("worth-parent", "no")
+        self.db.replace_imported_people((PeopleRow.model_validate({
+            "id": "linkedin-person", "full_name": "Jordan Bravo",
+            "interaction_counts": json.dumps({"imessage": 25}),
+        }),))
         cache = self.root / "profile-cache"
         with (
             mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as research,
@@ -690,6 +712,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
 
     def test_partial_provider_failures_finish_and_report_errors_without_reapproval(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
+        self.db.replace_imported_people((PeopleRow.model_validate({
+            "id": "linkedin-person", "full_name": "Jordan Bravo",
+            "interaction_counts": json.dumps({"imessage": 25}),
+        }),))
         with (
             mock.patch.object(enrichment_pipeline, "ReconcileDeepResearch") as research,
             mock.patch.object(enrichment_pipeline, "PrefetchProfiles") as profiles,

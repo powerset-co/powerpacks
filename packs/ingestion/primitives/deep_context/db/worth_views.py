@@ -1,13 +1,15 @@
 """Canonical worth rows, review queue, and counts.
 
 Changelog:
+- 2026-10-01: `fact_worth` reads the winning JEV verdict before parent settlement.
 - 2026-09-25: `worth_row(db, key)` reads one row; the decision handler no longer loads every worth row.
 """
 
 from __future__ import annotations
 
 from packs.ingestion.primitives.deep_context.db._view_rows import _worth_counts, _worth_rows
-from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
+from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
+from packs.ingestion.primitives.deep_context.db.models import MachineWorth, PARENT_WORTH_PREFIX
 from packs.ingestion.primitives.deep_context.db.view_models import WorthCounts, WorthRow
 from packs.ingestion.primitives.deep_context.db.store import Db
 
@@ -28,3 +30,16 @@ def worth_queue(db: Db) -> list[WorthRow]:
 
 def worth_counts(db: Db) -> WorthCounts:
     return _worth_counts(db)
+
+
+def fact_worth(db: Db) -> dict[str, MachineWorth]:
+    """Winning fact verdicts for settlement to recompute its parent decision."""
+    return {
+        row['parent_id']: MachineWorth(row['machine_worth'])
+        for row in db.query(WORTH_CTE + """
+SELECT w.parent_id, COALESCE(f.machine_worth, 'maybe') AS machine_worth
+FROM worth w
+JOIN ranked_facts ranked ON ranked.parent_id=w.parent_id AND ranked.worth_rank=1
+JOIN facts f ON f.subject_key=ranked.subject_key
+""")
+    }

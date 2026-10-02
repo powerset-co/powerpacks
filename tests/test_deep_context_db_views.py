@@ -845,8 +845,21 @@ class DeepContextDbViewTests(unittest.TestCase):
             FactRow("collected", "collected", "facts:collected", machine_worth="maybe"),
         )
         state = workflow_state(self.db)
-        self.assertEqual(state.next_action, "review_people")
+        self.assertEqual(state.next_action, "realize")
         self.assertEqual(state.progress.synthesize_pending, 0)
+
+    def test_maybe_worth_does_not_stop_pending_enrichment(self) -> None:
+        self.add_parent("maybe", "maybe")
+        self.add_parent("research", "yes")
+
+        state = workflow_state(self.db)
+
+        self.assertEqual(state.progress.worth_pending, 1)
+        self.assertGreater(state.progress.enrichment_pending, 0)
+        self.assertEqual(state.next_action, "enrich")
+
+    def test_workflow_with_nothing_pending_realizes(self) -> None:
+        self.assertEqual(workflow_state(self.db).next_action, "realize")
 
     def test_workflow_reuses_selection_for_worth_counts(self):
         self.add_parent("yes", "yes")

@@ -1,6 +1,7 @@
 """Queue-derived Deep Context workflow state.
 
 Changelog:
+- 2026-10-01: synthesis runs straight into enrichment without a worth-review stop.
 - 2026-09-25: a parent with a collected source bundle and no facts queues
   `synthesize`, ahead of every review queue.
 """
@@ -183,7 +184,6 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
     enrichment_pending = progress.enrichment_pending
     rules = (
         (bool(progress.synthesize_pending), "synthesize"),
-        (bool(progress.worth_pending), "review_people"),
         (bool(enrichment_pending), "enrich"),
         (bool(progress.linkedin_pending), "review_linkedin"),
         (True, "realize"),
