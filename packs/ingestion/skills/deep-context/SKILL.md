@@ -124,8 +124,8 @@ Mark a no-op complete; do not silently drop it.
 
 ### When anything fails
 
-Use common sense. Every command prints its error and continues from what is
-already stored, so:
+Use common sense. Every command prints its error, and running it again
+continues from what is already stored, so:
 
 - **A few people failing is fine.** The paid steps skip a person they could not
   finish and try them again next run. Carry on and say how many were left.
@@ -136,7 +136,8 @@ already stored, so:
   key, no credit, a full disk, a permission to grant: say what is broken and
   what to do, in a sentence. Never paste a traceback or ask for logs.
 - **Do not loop.** Three attempts at one command, then stop and say where it
-  stands. A step that finished nobody is an error even when it exited 0.
+  stands. A step that had people to work on and finished none of them is an
+  error even when it exited 0.
 
 After a run in which anything failed, whether or not you got past it, send the
 developers one report with the feedback sender. Send it without asking: it
