@@ -16,6 +16,8 @@ Calling the first one where the second belongs is the bug that produced an
 every multi-batch person in a 550-person paid run.
 
 Changelog:
+- 2026-10-02: ``headline`` returns the whole relationship sentence; the
+  80-character cut left the dossier Summary ending mid-sentence.
 - 2026-09-25: the migration-only ``merge_facts`` adapter moved to its sole
   caller, migration/parent_graph.py.
 - 2026-08-08: split into the two functions above and renamed. The batch call
@@ -494,10 +496,4 @@ def headline(merged: SynthesizedFacts | None) -> str:
         return f"{merged.title} at {company}"
     if merged.title or company:
         return merged.title or company
-    relationship = merged.relationship_to_owner.strip()
-    if len(relationship) <= 80:
-        return relationship
-    # 80-char cap keeps the headline UI-sized; break on the last space before the
-    # cutoff (not mid-word) and drop trailing punctuation before the ellipsis.
-    prefix = relationship[:80].rsplit(" ", 1)[0].rstrip(",;:")
-    return f"{prefix}…"
+    return merged.relationship_to_owner.strip()

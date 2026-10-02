@@ -119,9 +119,9 @@ describe("PersonCard", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Jordan B")
     expect(screen.queryByRole("link")).toBeNull()
     expect(facts()).toEqual([["Contact", "jordan@example.com · +15550100"]])
-    expect(container.querySelector(".avatar img")?.getAttribute("src")).toBe(
-      "https://media.example.com/jordan-bravo.jpg",
-    )
+    // No option is confirmed yet, so the avatar draws the parent's initials, not an option's photo.
+    expect(container.querySelector(".avatar img")).toBeNull()
+    expect(container.querySelector(".avatar")?.textContent).toBe("JB")
     expect(container.querySelector(".details .dossier-text")).toBeTruthy()
   })
 
