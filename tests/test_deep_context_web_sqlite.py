@@ -661,10 +661,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             status, workflow = self.json_request("GET", "/api/status")
             self.assertEqual(workflow["stage"], "linkedin")
             self.assertEqual(workflow["next_action"], "review_linkedin")
-            # Enrich is done: its step counts nobody and its panel asks for nothing.
+            # Enrich is done: its panel asks for nothing.
             status, page = self.json_request("GET", "/api/review/page?stage=enrich")
             self.assertEqual(status, 200)
-            self.assertEqual((page["steps"][1]["complete"], page["steps"][1]["count"]), (True, 0))
             self.assertEqual(page["enrichment"]["mode"], "completed")
         self.assertEqual(reconcile.call_count, 1)
         self.assertGreaterEqual(reconcile.call_args.kwargs["budget"], 0.0)

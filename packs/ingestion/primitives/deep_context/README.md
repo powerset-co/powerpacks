@@ -258,8 +258,7 @@ research queues and receive no synthetic profile.
 
 `next_action` follows `synthesize` → `enrich` → `review_linkedin` → `realize`,
 derived only from queue predicates. Worth review remains optional and Maybe
-does not block enrichment. The API keeps three review steps; Review Decisions
-is done once synthesis is complete. There is no
+does not block enrichment. The page carries no step list. There is no
 `stage_state` or durable spend approval: approval is the budget flag passed to
 the launched work, a process-local flag prevents duplicate submission, and the
 fixed enrichment manifest remains display-only stage progress.

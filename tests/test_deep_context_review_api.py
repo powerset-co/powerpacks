@@ -77,7 +77,6 @@ from packs.ingestion.primitives.deep_context.review.payloads import (
     ReviewCandidate,
     ReviewPage,
     ReviewPerson,
-    ReviewStep,
     ReviewView,
     WorthCardPayload,
     WorthDetails,
@@ -200,19 +199,6 @@ def candidate(row_key: str, name: str, *, url: str = "") -> dict:
         "synthetic": False,
         "avatar_url": "",
     }
-
-
-def steps(worth: tuple[bool, int], enrich: tuple[bool, int], linkedin: tuple[bool, int]) -> list[dict]:
-    """The stepper as JSON, from each step's (complete, count)."""
-    drawn = (
-        (1, "Review Decisions", "worth", worth),
-        (2, "Enrich Contacts", "enrich", enrich),
-        (3, "Check LinkedIn", "linkedin", linkedin),
-    )
-    return [
-        {"number": number, "label": label, "stage": stage, "complete": complete, "count": count}
-        for number, label, stage, (complete, count) in drawn
-    ]
 
 
 def progress(pending: int, yes: int, no: int, linkedin: int, done: int = 0, rejected: int = 0, unsynthesized: int = 0) -> dict:
@@ -448,22 +434,22 @@ class ReviewPageTests(ReviewApiFixture):
         stores = (
             (
                 "enrich", lambda: None, ("enrich", ""), pending,
-                steps((True, 1), (False, 0), (False, 1)), progress(1, 1, 0, 1), approval,
+                progress(1, 1, 0, 1), approval,
             ),
             (
                 "enrich", self.store.reach_enrich, ("enrich", ""), emptied,
-                steps((True, 0), (False, 0), (False, 1)), progress(0, 1, 1, 1, rejected=1), approval,
+                progress(0, 1, 1, 1, rejected=1), approval,
             ),
             (
                 "linkedin", self.store.reach_linkedin, ("linkedin", ""), emptied,
-                steps((True, 0), (True, 0), (False, 1)), progress(0, 1, 1, 1, rejected=1), COMPLETED_PANEL,
+                progress(0, 1, 1, 1, rejected=1), COMPLETED_PANEL,
             ),
             (
                 "done", self.store.reach_done, ("done", ""), emptied,
-                steps((True, 0), (True, 0), (True, 0)), progress(0, 1, 1, 0, done=1, rejected=1), COMPLETED_PANEL,
+                progress(0, 1, 1, 0, done=1, rejected=1), COMPLETED_PANEL,
             ),
         )
-        for current, drive, landing, worth_stage, stepper, counts, panel in stores:
+        for current, drive, landing, worth_stage, counts, panel in stores:
             drive()
             _, status = self.get_json("/api/status")
             self.assertEqual(status["stage"], current)
@@ -477,7 +463,6 @@ class ReviewPageTests(ReviewApiFixture):
                             "view": view,
                             "tab": tab,
                             "title": title,
-                            "steps": stepper,
                             "progress": counts,
                             "enrichment": panel,
                             # The token the page compares with /api/status to see a change.
@@ -492,12 +477,10 @@ class ReviewPageTests(ReviewApiFixture):
         self.assertEqual((page["view"], page["progress"]["worth_pending"]), ("enrich", 1))
         self.assertEqual(page["enrichment"]["mode"], "approval")
 
-    def test_review_decisions_step_is_done_after_synthesis_with_maybe_parents(self) -> None:
+    def test_worth_is_complete_after_synthesis_with_maybe_parents(self) -> None:
         page = self.payload("/api/review/page")
 
-        self.assertEqual(page["view"], "enrich")
-        self.assertEqual(len(page["steps"]), 3)
-        self.assertEqual(page["steps"][0], steps((True, 1), (False, 0), (False, 1))[0])
+        self.assertEqual((page["view"], page["progress"]["worth_pending"]), ("enrich", 1))
         self.assertIn("worth", SqliteReviewAdapter(self.db).manifest().completed_stages)
 
     def test_unknown_api_paths_are_a_json_404(self) -> None:
@@ -574,7 +557,6 @@ class SynthesisPendingTests(unittest.TestCase):
                         "view": view,
                         "tab": tab,
                         "title": title,
-                        "steps": steps((False, 0), (False, 0), (False, 0)),
                         "progress": progress(0, 0, 0, 0, unsynthesized=1),
                         "enrichment": COMPLETED_PANEL,
                         "needs_synthesis": needs_synthesis,
@@ -1419,8 +1401,6 @@ class EnrichmentPanelTests(ReviewApiFixture):
             page["enrichment"],
             {"mode": "approval", "completed": 0, "total": 0, "approval_label": f"Approve ${estimate:.2f}", "error": ""},
         )
-        # One person to research: the step is not complete and counts them.
-        self.assertEqual((page["steps"][1]["complete"], page["steps"][1]["count"]), (False, 1))
 
     def test_judgments_alone_are_an_approval_of_their_estimate(self) -> None:
         # Nothing to research (Casey is a no), but Jordan's LinkedIn still has to be judged.
@@ -1430,7 +1410,6 @@ class EnrichmentPanelTests(ReviewApiFixture):
         page = self.payload("/api/review/page")
         panel = page["enrichment"]
         self.assertEqual((panel["mode"], panel["approval_label"]), ("approval", f"Approve ${estimate:.2f}"))
-        self.assertEqual((page["steps"][1]["complete"], page["steps"][1]["count"]), (False, 0))
 
 
 class ApproveEnrichmentTests(ReviewApiFixture):
@@ -1586,7 +1565,6 @@ class TypeScriptPinTests(ReviewApiFixture):
         shapes = {
             "DecisionProgress": DecisionProgress,
             "PageProgress": PageProgress,
-            "ReviewStep": ReviewStep,
             "EnrichmentPanel": EnrichmentPanel,
             "ReviewPage": ReviewPage,
             "ReviewPerson": ReviewPerson,
@@ -1631,8 +1609,6 @@ class TypeScriptPinTests(ReviewApiFixture):
         self.assertEqual(set(page), fields("ReviewPage"))
         self.assertEqual(set(page["progress"]), fields("PageProgress"))
         self.assertEqual(set(page["enrichment"]), fields("EnrichmentPanel"))
-        for step in page["steps"]:
-            self.assertEqual(set(step), fields("ReviewStep"))
 
         worth = self.payload("/api/review/worth-card?debug=1")
         self.assertEqual(set(worth), fields("WorthCardPayload"))

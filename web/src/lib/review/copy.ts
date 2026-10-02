@@ -9,7 +9,8 @@ export function documentTitle(title: string): string {
   return `${title} · Powerpacks`
 }
 
-export const STEPPER_LABEL = "Progress"
+/** The check a finished panel draws. */
+export const COMPLETE_MARK = "✓"
 
 /** The name a card shows when nobody has one. */
 export const UNNAMED = "This person"

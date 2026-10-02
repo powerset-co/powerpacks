@@ -331,8 +331,7 @@ bin/deep-context review
 Opening review serves the current SQLite review. The app shows the existing
 worth and identity queues without resetting human choices or calling providers.
 Worth review is optional: `review worth` still lets
-the user override Yes/Maybe/No. The three review steps remain; Review Decisions
-is done once synthesis is complete, even when Maybe parents remain.
+the user override Yes/Maybe/No. The page shows no step list.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
 read of canonical SQLite (no daemons, no sockets, no thread ids; it always
@@ -374,7 +373,7 @@ with Yes/No. The Yes and No tabs are paginated, editable tables with one action
 per row: No from the Yes table and Yes from the No table.
 Model Yes starts in Yes; model No, user No, and legacy Exclude share No.
 These edits do not gate enrichment. The current workflow opens Enrich Contacts
-after synthesis; Review Decisions already reports done.
+after synthesis.
 
 The wait command is the read-only deterministic primitive — it queries SQLite
 and emits one `next_action`; it does not mutate files, open a

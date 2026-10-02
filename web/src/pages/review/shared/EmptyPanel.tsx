@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-import { COMPLETE_MARK } from "@/lib/review/steps"
+import { COMPLETE_MARK } from "@/lib/review/copy"
 import { cn } from "@/lib/utils"
 
 interface EmptyPanelProps {

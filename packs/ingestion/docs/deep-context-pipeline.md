@@ -57,8 +57,7 @@ enrichment, review, realization, and indexing behavior now lives in
 - **Core context output:** one synthesized Markdown dossier per person, with
   lookup indexes for name, email, and phone.
 - **People decision:** the model assigns Yes/Maybe/No. Worth review is optional;
-  Yes and No remain editable. Maybe never blocks enrichment. Review Decisions
-  reports done after synthesis; the API keeps exactly three review steps.
+  Yes and No remain editable. Maybe never blocks enrichment.
 - **Enrichment:** Parallel research runs for effective-Yes parents without a
   LinkedIn or completed research. Completed research, including no-match, is
   reused. Every mapped real LinkedIn without a human or machine verdict is judged.
@@ -178,7 +177,7 @@ browser button and cannot be blocked by the Done page.
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs with JEV (one request per pair, merge at p(yes) ≥ 0.5 when JEV also answers that the two names can be one contact's), caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
 | LinkedIn judging | After cache-first profile preparation, enrichment judges mapped attached and researched links lacking a decision. Existing human and valid machine decisions are kept. | SQLite identity verdicts |
-| Optional worth review | Shows model-Maybe parents and editable Yes/No. Human worth writes the parent row and remains authoritative. Maybe does not stop enrichment; Review Decisions is done after synthesis. | SQLite human worth |
+| Optional worth review | Shows model-Maybe parents and editable Yes/No. Human worth writes the parent row and remains authoritative. Maybe does not stop enrichment. | SQLite human worth |
 | Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
 | Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |
 | Profile prefetch | The review app runs profile hydration automatically after research completes (RapidAPI is credits-based, one call per distinct profile cache miss). The UI stays cache-only. | Shared profile cache and SQLite profile artifacts |

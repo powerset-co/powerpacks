@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { must } from "@/lib/must"
 import {
   changeEvent,
-  decisionProgress,
   enrichmentPanel,
   errorResponse,
   FakeEventSource,
@@ -75,7 +74,6 @@ const probe = (stage: string) => document.querySelector(`[data-probe='${stage}']
 const probeProps = (stage: string): unknown =>
   JSON.parse(must(probe(stage), `the ${stage} stage`).textContent)
 const stream = () => must(FakeEventSource.opened[0], "the event stream")
-const stepText = () => screen.getAllByRole("link").map((link) => link.textContent)
 
 function Where() {
   const location = useLocation()
@@ -200,7 +198,7 @@ describe("ReviewPage: each screen", () => {
     expect(brand.textContent).toBe("POWERPACKS")
     expect(brand.getAttribute("href")).toBe("/?stage=worth")
     expect(container.querySelector("[data-nav]")).toBeNull()
-    expect(screen.getAllByRole("navigation")).toHaveLength(1)
+    expect(screen.queryAllByRole("navigation")).toHaveLength(0)
   })
 
   it("says so when the screen cannot load", async () => {
@@ -210,63 +208,6 @@ describe("ReviewPage: each screen", () => {
       expect(screen.getByRole("heading", { name: "Could not load the review" })).toBeTruthy(),
     )
     expect(screen.getByText("review store is locked")).toBeTruthy()
-  })
-})
-
-describe("ReviewPage: the stepper", () => {
-  it("shows the three steps with their counts and lights the screen's step", async () => {
-    server.pages.enrich = reviewPage("enrich", {
-      progress: pageProgress({ worth_pending: 0, linkedin_pending: 4 }),
-    })
-    renderPage("/?stage=enrich")
-    await waitFor(() => expect(probe("enrich")).toBeTruthy())
-    expect(stepText()).toEqual([
-      "POWERPACKS",
-      "✓Review Decisions",
-      "2Enrich Contacts",
-      "3Check LinkedIn4 left",
-    ])
-    expect(screen.getByRole("link", { name: /Enrich Contacts/ }).className).toBe("step active")
-  })
-
-  it("repaints the step badges from a click response without reading the page again", async () => {
-    renderPage("/?stage=worth")
-    await waitFor(() => expect(probe("worth")).toBeTruthy())
-    expect(stepText().slice(1)).toEqual([
-      "1Review Decisions3 left",
-      "2Enrich Contacts",
-      "3Check LinkedIn4 left",
-    ])
-    act(() =>
-      review().applyProgress(decisionProgress({ worth_pending: 2, worth_yes: 6, linkedin_pending: 0 })),
-    )
-    expect(stepText().slice(1)).toEqual(["1Review Decisions2 left", "2Enrich Contacts", "3Check LinkedIn"])
-    expect(review().progress).toMatchObject({ worth_pending: 2, worth_yes: 6, worth_no: 2, linkedin_done: 6 })
-    expect(requests("/api/review/page")).toHaveLength(1)
-    expect(seen.mounts).toBe(1)
-  })
-
-  it("opens a step's stage in place: the URL changes and the page is read again", async () => {
-    renderPage("/?stage=worth")
-    await waitFor(() => expect(probe("worth")).toBeTruthy())
-    fireEvent.click(screen.getByRole("link", { name: /Check LinkedIn/ }))
-    await waitFor(() => expect(probe("linkedin")).toBeTruthy())
-    expect(probe("worth")).toBeNull()
-    expect(where()).toBe("/?stage=linkedin&preview=1")
-    expect(requests("/api/review/page")).toEqual([
-      "/api/review/page?stage=worth",
-      "/api/review/page?stage=linkedin",
-    ])
-    expect(review().preview).toBe(true)
-    expect(document.title).toBe("Check LinkedIn · Powerpacks")
-  })
-
-  it("reads the page again for a link to the screen already open", async () => {
-    renderPage("/?stage=worth&preview=1")
-    await waitFor(() => expect(probe("worth")).toBeTruthy())
-    fireEvent.click(screen.getByRole("link", { name: /Review Decisions/ }))
-    await waitFor(() => expect(requests("/api/review/page")).toHaveLength(2))
-    await waitFor(() => expect(seen.mounts).toBe(2))
   })
 })
 
@@ -338,8 +279,8 @@ describe("ReviewPage: watching the server", () => {
   it("closes the stream when the screen changes to one that does not watch", async () => {
     renderPage("/?stage=enrich")
     await waitFor(() => expect(probe("enrich")).toBeTruthy())
-    fireEvent.click(screen.getByRole("link", { name: /Check LinkedIn/ }))
-    await waitFor(() => expect(probe("linkedin")).toBeTruthy())
+    fireEvent.click(screen.getByRole("link", { name: "POWERPACKS" }))
+    await waitFor(() => expect(probe("worth")).toBeTruthy())
     expect(FakeEventSource.opened).toHaveLength(1)
     expect(stream().closed).toBe(true)
   })

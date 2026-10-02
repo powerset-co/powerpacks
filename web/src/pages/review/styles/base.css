@@ -1,4 +1,4 @@
-/* The review page's shared look: the shell, top bar, stepper, stage, cards, the person card
+/* The review page's shared look: the shell, top bar, stage, cards, the person card
    and its facts, buttons, empty states, the scroll cue, the handoff copy, the carousel and
    the transitions. The worth, enrich and linkedin blocks live beside this file (worth.css,
    enrich.css, linkedin.css).
@@ -67,70 +67,6 @@
   width: min(100% - 40px, 760px);
   margin: 0 auto;
   padding: 32px 0 96px;
-}
-
-.review-page .stepper {
-  display: grid;
-  grid-template-columns: max-content 1fr max-content 1fr max-content;
-  align-items: center;
-  gap: 14px;
-  margin: 0 0 24px;
-}
-
-.review-page .step {
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
-}
-.review-page .step:hover {
-  color: var(--foreground);
-}
-
-.review-page .step > span {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--background);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.review-page .step small {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.review-page .step.active {
-  color: var(--foreground);
-}
-.review-page .step.active > span {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: white;
-}
-.review-page .step.complete > span {
-  border-color: var(--primary);
-  color: var(--primary);
-}
-.review-page .step.complete {
-  color: var(--foreground);
-}
-
-.review-page .step-line {
-  height: 1px;
-  background: var(--border);
 }
 
 /* The card frame. It is the feedback popover's positioning host too, hence relative. */
@@ -669,25 +605,15 @@
 }
 
 /* A window tall and wide enough locks the page to one screen: the stage fills what the top
-   bar and stepper leave, and a card scrolls inside itself. */
+   bar leaves, and a card scrolls inside itself. */
 @media (min-width: 621px) and (min-height: 600px) {
   .review-page .review-main {
     height: calc(90dvh - var(--topbar-height));
     margin: 5dvh auto;
     padding: 12px 0;
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     overflow: hidden;
-  }
-
-  .review-page .stepper {
-    gap: 10px;
-    margin: 0 0 28px;
-  }
-
-  .review-page .step > span {
-    width: 26px;
-    height: 26px;
   }
 
   .review-page .stage,
@@ -762,21 +688,6 @@
   .review-page .review-main {
     width: min(100% - 28px, 760px);
     padding: 34px 0 112px;
-  }
-  .review-page .stepper {
-    gap: 8px;
-    margin: 26px 0 28px;
-  }
-  .review-page .step {
-    gap: 7px;
-    font-size: 11px;
-  }
-  .review-page .step > span {
-    width: 26px;
-    height: 26px;
-  }
-  .review-page .step-line {
-    min-width: 10px;
   }
   .review-page .decision-card {
     padding: 22px 18px 20px;

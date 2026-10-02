@@ -22,15 +22,6 @@ export interface PageProgress extends DecisionProgress {
   synthesize_pending: number
 }
 
-/** One stepper step. It draws its check when `complete` and `count` is 0; else its number. */
-export interface ReviewStep {
-  number: 1 | 2 | 3
-  label: string
-  stage: Exclude<ReviewView, "done">
-  complete: boolean
-  count: number
-}
-
 export type EnrichmentMode = "running" | "approval" | "completed" | "failed" | "preparing"
 
 /** The Enrich screen's one panel. */
@@ -53,7 +44,6 @@ export interface ReviewPage {
   /** The worth tab, "" on every other screen. */
   tab: WorthTab | ""
   title: string
-  steps: [ReviewStep, ReviewStep, ReviewStep]
   progress: PageProgress
   enrichment: EnrichmentPanel
   state_token: string
