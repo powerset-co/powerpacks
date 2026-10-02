@@ -12,8 +12,11 @@ function status(step: EnrichStep, pending: Partial<ReviewStatus["pending"]> = {}
   return reviewStatus({ step, pending: { ...nothing, ...pending }, minutes_left: minutes })
 }
 
-function ring(container: HTMLElement): (string | null)[] {
-  return [...container.querySelectorAll(".enrich-ring circle")].map((arc) => arc.getAttribute("class"))
+/** How many parts of the ring are filled, and which part breathes; null where there is none. */
+function ring(container: HTMLElement): { done: string | null; now: string | null } {
+  const arc = (name: string, attribute: string) =>
+    container.querySelector(`.enrich-ring .${name}`)?.getAttribute(attribute) ?? null
+  return { done: arc("done", "stroke-dasharray"), now: arc("now", "stroke-dashoffset") }
 }
 
 afterEach(cleanup)
@@ -26,7 +29,7 @@ describe("EnrichStage", () => {
     expect(container.querySelector(".enrich-time-left")?.textContent).toBe("")
     expect(container.querySelector(".enrich-shape")).toBeTruthy()
     expect(container.querySelector(".enrich-orbit")).toBeTruthy()
-    expect(ring(container)).toEqual([null, null, null])
+    expect(ring(container)).toEqual({ done: null, now: null })
     expect(screen.queryByRole("button")).toBeNull()
   })
 
@@ -54,11 +57,11 @@ describe("EnrichStage", () => {
 
   it("fills the ring part by part as the run passes them", () => {
     const { container, rerender } = render(<EnrichStage status={status("research")} />)
-    expect(ring(container)).toEqual(["now", null, null])
+    expect(ring(container)).toEqual({ done: null, now: "0" })
     rerender(<EnrichStage status={status("profiles")} />)
-    expect(ring(container)).toEqual(["done", "now", null])
+    expect(ring(container)).toEqual({ done: "1 3", now: "-1" })
     rerender(<EnrichStage status={status("settle")} />)
-    expect(ring(container)).toEqual(["done", "done", "now"])
+    expect(ring(container)).toEqual({ done: "2 3", now: "-2" })
   })
 
   it("says about how long the rest takes, as the server estimates it", () => {

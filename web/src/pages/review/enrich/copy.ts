@@ -8,8 +8,8 @@ export const TITLE = "Working on your network"
 export const STARTING = "Getting started"
 export const FINISHING = "Finishing up"
 
-/** The run's steps as the three parts the ring shows, in order. */
-export const PARTS = ["Look up", "Check LinkedIn", "Settle"] as const
+/** The ring shows the run in three parts: look up, check LinkedIn, settle. */
+export const PARTS = 3
 
 const PART_OF_STEP: Record<Exclude<EnrichStep, "">, number> = {
   research: 0,

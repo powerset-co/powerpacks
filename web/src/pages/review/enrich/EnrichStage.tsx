@@ -16,6 +16,7 @@ export interface EnrichStageProps {
 // while empty, so nothing jumps when it arrives.
 export function EnrichStage({ status }: EnrichStageProps) {
   const part = status ? partOf(status.step) : -1
+  const ring = { cx: 56, cy: 56, r: 52, pathLength: PARTS }
 
   return (
     <EmptyPanel
@@ -24,17 +25,11 @@ export function EnrichStage({ status }: EnrichStageProps) {
       above={
         <span className="enrich-mark" aria-hidden="true">
           <svg className="enrich-ring" viewBox="0 0 112 112">
-            {PARTS.map((name, index) => (
-              <circle
-                key={name}
-                className={index < part ? "done" : index === part ? "now" : undefined}
-                cx="56"
-                cy="56"
-                r="52"
-                pathLength={300}
-                strokeDashoffset={-index * 100}
-              />
-            ))}
+            <circle {...ring} />
+            {part > 0 ? <circle {...ring} className="done" strokeDasharray={`${part} ${PARTS}`} /> : null}
+            {part >= 0 ? (
+              <circle {...ring} className="now" strokeDasharray={`1 ${PARTS}`} strokeDashoffset={-part} />
+            ) : null}
           </svg>
           <span className="enrich-orbit" />
           <span className="enrich-shape" />

@@ -17,8 +17,9 @@
   height: 112px;
   margin-bottom: 8px;
 }
-/* The ring: one unbroken circle, a third of it for each part of the run, starting at the top. A
-   part the run has passed is filled, the one it is on breathes, and the rest wait. */
+/* The ring: one unbroken circle, a third of it for each part of the run, starting at the top.
+   The parts the run has passed are filled, the one it is on breathes, and the rest wait. The
+   filled line ends round. */
 .review-page .enrich-ring {
   position: absolute;
   inset: 0;
@@ -28,14 +29,13 @@
   fill: none;
   stroke: var(--secondary);
   stroke-width: 3;
-  stroke-dasharray: 100 200;
-  transition: stroke 400ms ease;
 }
-.review-page .enrich-ring circle.done {
-  stroke: var(--primary);
-}
+.review-page .enrich-ring circle.done,
 .review-page .enrich-ring circle.now {
   stroke: var(--primary);
+  stroke-linecap: round;
+}
+.review-page .enrich-ring circle.now {
   animation: enrich-ring-now 1.6s ease-in-out infinite;
 }
 @keyframes enrich-ring-now {
