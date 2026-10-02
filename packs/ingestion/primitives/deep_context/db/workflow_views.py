@@ -3,6 +3,8 @@
 Changelog:
 - 2026-10-01: synthesis runs straight into enrichment without a worth-review stop;
   the progress names what enrichment still has to do, step by step.
+- 2026-10-01: the enrich command's run record decides when enrichment is finished: what a
+  completed run could not finish no longer holds the flow, and an unfinished run does.
 - 2026-09-25: a parent with a collected source bundle and no facts queues
   `synthesize`, ahead of every review queue.
 """
@@ -19,13 +21,19 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_GATE_REJECTED,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import (
-    enrichment_pending,
+    lookups_pending,
     unassembled_research,
     workflow_identity_counts,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.view_models import WorthCounts
-from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
+from packs.ingestion.primitives.deep_context.db.view_models import LinkedInProgress, WorthCounts
+from packs.ingestion.primitives.deep_context.db.models import (
+    ENRICH_RUN_KEY,
+    PARENT_WORTH_PREFIX,
+    EnrichmentWork,
+    EnrichRun,
+    EnrichRunStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -41,12 +49,15 @@ class StageProgress:
     linkedin_pending: int
     linkedin_done: int
     rejected: int
-    # What enrichment still has to do, step by step; `enrichment_pending` is their sum.
+    # What enrichment still has to do, step by step.
     lookups_pending: int
     judgments_pending: int
     questions_pending: int
     synthetic_pending: int
+    # The part of it that the latest completed run has not already tried.
     enrichment_pending: int
+    # The step an unfinished run is on; "" when no run is unfinished.
+    enrichment_step: str
 
 
 @dataclass(frozen=True)
@@ -77,8 +88,10 @@ WHERE a.kind='source_bundle' AND a.status='projected'
   AND NOT EXISTS(SELECT 1 FROM facts f WHERE f.parent_id=a.parent_id)
 """
     )[0]["n"]
-    linkedin, review_questions, judge_candidates = workflow_identity_counts(db)
-    lookups, synthetic = enrichment_pending(db), unassembled_research(db)
+    linkedin, work = _enrichment_work(db)
+    run = _enrich_run(db)
+    completed = run is not None and run.status == EnrichRunStatus.COMPLETED
+    untried = work.without(run.unfinished) if completed else work
     total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
     counts = db.query(
         WORTH_CTE
@@ -150,12 +163,28 @@ SELECT count(DISTINCT parent_id) FROM (
         linkedin_pending=linkedin.pending,
         linkedin_done=linkedin.done,
         rejected=int(counts["rejected"]),
-        lookups_pending=lookups,
-        judgments_pending=judge_candidates,
-        questions_pending=review_questions,
-        synthetic_pending=synthetic,
-        enrichment_pending=lookups + judge_candidates + review_questions + synthetic,
+        lookups_pending=len(work.lookups),
+        judgments_pending=len(work.judgments),
+        questions_pending=len(work.questions),
+        synthetic_pending=len(work.synthetic),
+        enrichment_pending=untried.count(),
+        enrichment_step="" if run is None or completed else run.step,
     )
+
+
+def _enrichment_work(db: Db) -> tuple[LinkedInProgress, EnrichmentWork]:
+    linkedin, questions, judgments = workflow_identity_counts(db)
+    return linkedin, EnrichmentWork(lookups_pending(db), judgments, questions, unassembled_research(db))
+
+
+def enrichment_work(db: Db) -> EnrichmentWork:
+    """What enrichment has left to do, by step."""
+    return _enrichment_work(db)[1]
+
+
+def _enrich_run(db: Db) -> EnrichRun | None:
+    rows = db.query("SELECT value FROM meta WHERE key=?", (ENRICH_RUN_KEY,))
+    return EnrichRun.from_json(rows[0]["value"]) if rows else None
 
 
 def _review_selection(db: Db) -> tuple[ReviewSelection, WorthCounts]:
@@ -195,7 +224,7 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
     enrichment_pending = progress.enrichment_pending
     rules = (
         (bool(progress.synthesize_pending), "synthesize"),
-        (bool(enrichment_pending), "enrich"),
+        (bool(enrichment_pending or progress.enrichment_step), "enrich"),
         (bool(progress.linkedin_pending), "review_linkedin"),
         (True, "realize"),
     )

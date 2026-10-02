@@ -189,12 +189,18 @@ export interface EnrichPending {
   profiles: number
 }
 
+/** The step an enrichment run is on, in the order it takes them; "" when none is running. */
+export type EnrichStep = "" | "research" | "profiles" | "identity" | "relationships" | "settle" | "synthetic"
+
 /** GET /api/status. */
 export interface ReviewStatus {
   stage: ReviewView
   next_action: string
   state_token: string
+  step: EnrichStep
   pending: EnrichPending
+  /** About how long the rest of enrichment takes; 0 is under a minute. */
+  minutes_left: number
 }
 
 /** One /api/events message. `job` is the running enrichment's last receipt, else null. */

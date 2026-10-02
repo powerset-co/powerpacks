@@ -14,7 +14,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 from deep_context_sqlite_test_helpers import seed_identity
+from packs.ingestion.primitives.deep_context.db.models import ENRICH_RUN_KEY, EnrichRun, EnrichRunStatus
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress, workflow_state
+from packs.ingestion.primitives.deep_context.enrich.estimate import minutes_left
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline as pipeline_module
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.review import cli as review_cli
@@ -34,6 +37,10 @@ class EnrichCommandTest(unittest.TestCase):
     def pipeline(self, **kwargs):
         return pipeline_module.EnrichmentPipeline(self.db, manifest=self.manifest, **kwargs)
 
+    def run_record(self):
+        value = self.db.query("SELECT value FROM meta WHERE key=?", (ENRICH_RUN_KEY,))[0]["value"]
+        return EnrichRun.from_json(value)
+
     def mock_steps(self, seen, *, fail=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
@@ -52,6 +59,10 @@ class EnrichCommandTest(unittest.TestCase):
             def step(*args, phase=phase, **kwargs):
                 receipt = json.loads(self.manifest.read_text())
                 self.assertEqual((receipt["status"], receipt["phase"]), ("running", phase))
+                # The store says the same, for the flow and the waiting screen to read.
+                record = self.run_record()
+                self.assertEqual((record.status, record.step), (EnrichRunStatus.RUNNING, phase))
+                self.assertEqual(workflow_state(self.db).next_action, "enrich")
                 seen.append(phase)
                 if phase == fail:
                     raise RuntimeError("fixture failure")
@@ -70,6 +81,17 @@ class EnrichCommandTest(unittest.TestCase):
         self.assertEqual(result["errors"], [])
         receipt = json.loads(self.manifest.read_text())
         self.assertEqual((receipt["status"], receipt["phase"]), ("completed", "synthetic"))
+        self.assertEqual(self.run_record(), EnrichRun(EnrichRunStatus.COMPLETED, "synthetic"))
+
+    def test_a_completed_run_records_what_it_left_and_the_flow_moves_on(self):
+        # A LinkedIn to judge that no step of this run gets judged.
+        seed_identity(self.db, parent_id="parent", person_id="person", row_key="candidate:person",
+            name="Jordan Bravo", machine_worth="yes", linkedin_url="https://www.linkedin.com/in/jordan-bravo")
+        self.assertEqual(workflow_state(self.db).next_action, "enrich")
+        self.mock_steps([])
+        self.pipeline().run(total=1, budget=0, request_fingerprint="fixture")
+        self.assertEqual(self.run_record().unfinished.judgments, ("candidate:person",))
+        self.assertNotEqual(workflow_state(self.db).next_action, "enrich")
 
     def test_failure_propagates_and_retry_starts_at_research(self):
         seen = []
@@ -79,6 +101,10 @@ class EnrichCommandTest(unittest.TestCase):
         failed = json.loads(self.manifest.read_text())
         self.assertEqual((failed["status"], failed["phase"]), ("failed", "identity"))
         self.assertIn("fixture failure", failed["error"])
+        record = self.run_record()
+        self.assertEqual((record.status, record.step), (EnrichRunStatus.FAILED, "identity"))
+        self.assertIn("fixture failure", record.errors[-1])
+        self.assertEqual(workflow_state(self.db).next_action, "enrich")
         patches.close()
         seen.clear()
         self.mock_steps(seen)
@@ -108,7 +134,6 @@ class EnrichCommandTest(unittest.TestCase):
         self.assertEqual(seen, STEPS)
         self.assertFalse(pipeline.running())
         self.assertIsNone(pipeline.last_error)
-        self.assertIsNotNone(pipeline.applied_fingerprint)
 
     def test_dry_run_writes_no_stage_output_and_has_one_total(self):
         from packs.ingestion.primitives.deep_context.enrich import cli
@@ -131,6 +156,8 @@ class EnrichCommandTest(unittest.TestCase):
         self.assertEqual(payload["status"], "dry_run")
         self.assertEqual(payload["would_submit"], 1)
         self.assertEqual(payload["profile_fetches"], 1)
+        # The shortest lookup time, plus one round of unsure matches for the attached LinkedIn.
+        self.assertEqual(payload["estimated_minutes"], 6)
         self.assertEqual(payload["estimated_usd"], payload["parallel_estimated_usd"]
             + payload["judgment_estimated_usd"] + payload["jev_estimated_usd"])
         # Counts only: the plan names nobody.
@@ -153,7 +180,8 @@ class EnrichCommandTest(unittest.TestCase):
         ):
             code = cli.main(["--db", str(self.db.db_path), "--manifest", str(self.manifest)])
         payload = json.loads(out.getvalue())
-        self.assertEqual((code, payload["status"], payload["next_action"]), (0, "completed", "enrich"))
+        # The lookup no step did is left for the next run; the flow moves on without it.
+        self.assertEqual((code, payload["status"], payload["next_action"]), (0, "completed", "realize"))
         self.assertEqual(run.call_args.kwargs["budget"], .05)
         self.assertIn("[enrich] research", log.getvalue())
 
@@ -291,6 +319,32 @@ class EnrichCommandTest(unittest.TestCase):
                 name="Riley Echo", machine_worth="yes", include_link=False)
             plan = estimate_enrichment(self.db).research
             self.assertEqual([row.parent_id for row in plan.pending], ["new"])
+
+
+class MinutesLeftTest(unittest.TestCase):
+    def left(self, *, lookups=0, judgments=0, questions=0):
+        return minutes_left(StageProgress(
+            total=0, synthesize_pending=0, worth_total=0, worth_pending=0, worth_yes=0, worth_no=0,
+            lookup_ready=0, linkedin_total=0, linkedin_pending=0, linkedin_done=0, rejected=0,
+            lookups_pending=lookups, judgments_pending=judgments, questions_pending=questions,
+            synthetic_pending=0, enrichment_pending=0, enrichment_step="",
+        ))
+
+    def test_nothing_left_takes_no_time(self):
+        self.assertEqual(self.left(), 0)
+
+    def test_lookups_take_a_quarter_hour_a_thousand_and_never_under_a_few_minutes(self):
+        self.assertEqual(self.left(lookups=25), 5)
+        self.assertEqual(self.left(lookups=1000), 19)
+        self.assertEqual(self.left(lookups=3000), 29)
+
+    def test_profiles_are_fetched_at_the_provider_rate(self):
+        self.assertEqual(self.left(judgments=300), 1)
+        self.assertEqual(self.left(judgments=900), 3)
+
+    def test_unsure_matches_go_in_rounds(self):
+        self.assertEqual(self.left(questions=1), 2)
+        self.assertEqual(self.left(questions=65), 3)
 
 
 if __name__ == "__main__":

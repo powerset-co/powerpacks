@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context.db.workflow_views import (
 from packs.ingestion.primitives.deep_context.manifests.review_manifest import (
     ReviewManifest,
 )
+from packs.ingestion.primitives.deep_context.enrich.estimate import minutes_left
 from packs.ingestion.primitives.deep_context.review.enrichment import (
     STAGES,
     STAGE_BY_ACTION,
@@ -101,9 +102,6 @@ class SqliteReviewAdapter:
     def _last_error(self) -> str | None:
         return self.pipeline.last_error if self.pipeline is not None else None
 
-    def _applied_fingerprint(self) -> str | None:
-        return getattr(self.pipeline, "applied_fingerprint", None)
-
     def snapshot(self, *, enrichment_running: bool | None = None) -> WorkflowState:
         if enrichment_running is None:
             enrichment_running = self._running()
@@ -143,7 +141,6 @@ class SqliteReviewAdapter:
             state,
             enrichment_running=enrichment_running,
             running_error=running_error,
-            applied_fingerprint=self._applied_fingerprint(),
         )
 
     def set_worth(self, key: str, value: str, note: str = "") -> None:
@@ -255,22 +252,20 @@ class SqliteReviewAdapter:
         if enrichment_running is None:
             enrichment_running = self._running()
         workflow = self.snapshot(enrichment_running=enrichment_running)
-        action = workflow.next_action
-        if action == "enrich" and self.enrichment(
-            workflow, enrichment_running=enrichment_running,
-        ).state == "done":
-            action = "review_linkedin" if workflow.progress.linkedin_pending else "realize"
+        progress = workflow.progress
         return {
             "primitive": "reconcile_review_web",
             "ok": True,
-            "stage": STAGE_BY_ACTION[action],
-            "next_action": action,
+            "stage": STAGE_BY_ACTION[workflow.next_action],
+            "next_action": workflow.next_action,
             "state_token": workflow.state_token,
-            # What the waiting screen says is still being done.
+            # What the waiting screen shows: the step the run is on, what is left, about how long.
+            "step": progress.enrichment_step,
             "pending": {
-                "lookups": workflow.progress.lookups_pending,
-                "linkedin_checks": workflow.progress.judgments_pending,
-                "unsure": workflow.progress.questions_pending,
-                "profiles": workflow.progress.synthetic_pending,
+                "lookups": progress.lookups_pending,
+                "linkedin_checks": progress.judgments_pending,
+                "unsure": progress.questions_pending,
+                "profiles": progress.synthetic_pending,
             },
+            "minutes_left": minutes_left(progress),
         }

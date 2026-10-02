@@ -385,7 +385,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 "ok",
                 "stage",
                 "next_action",
+                "step",
                 "pending",
+                "minutes_left",
                 "state_token",
             },
         )
@@ -748,7 +750,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 status, workflow = self.json_request("GET", "/api/status")
                 self.assertEqual(workflow["stage"], "linkedin")
             self.assertEqual(research.return_value.run.call_count, 1)
-        self.assertEqual(self.adapter().enrichment().state, "needs_approval")
+        # The store holds the run's record: a restarted server still knows it finished, and
+        # what it could not finish waits for the next run.
+        self.assertEqual(self.adapter().enrichment().state, "done")
 
     def test_unapproved_research_stops_the_enrichment_chain(self) -> None:
         self.db.decide_worth("worth-parent", "yes")

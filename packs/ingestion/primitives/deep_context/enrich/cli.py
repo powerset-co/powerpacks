@@ -10,7 +10,7 @@ from packs.ingestion.primitives.common.gates import exit_code_for_status
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
-from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment
+from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment, minutes_left
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, ENRICH_MANIFEST, emit, load_env
 
@@ -22,11 +22,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     db = open_existing_db(args.db)
-    estimate = estimate_enrichment(db)
+    state = workflow_state(db)
+    estimate = estimate_enrichment(db, state)
     if args.dry_run:
         profiles = PrefetchProfiles(db=db, fetch=False).run()
         emit({"status": "dry_run", **estimate.to_payload(),
-            "profile_fetches": profiles.estimated_rapidapi_calls})
+            "profile_fetches": profiles.estimated_rapidapi_calls,
+            "estimated_minutes": minutes_left(state.progress)})
         return 0
 
     load_env()

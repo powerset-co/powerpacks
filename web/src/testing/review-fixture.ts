@@ -211,7 +211,9 @@ export function reviewStatus(overrides: Partial<ReviewStatus> = {}): ReviewStatu
     stage: "enrich",
     next_action: "enrich",
     state_token: "token-1",
+    step: "",
     pending: { lookups: 0, linkedin_checks: 0, unsure: 0, profiles: 0 },
+    minutes_left: 0,
     ...overrides,
   }
 }

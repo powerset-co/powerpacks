@@ -1,8 +1,8 @@
 """LinkedIn review, enrichment, and identity receipt projections.
 
 Changelog:
-- 2026-10-01: a LinkedIn whose profile fetch was tried and failed is not pending enrichment
-  work; it waits for the person's check or a later fetch.
+- 2026-10-01: the pending enrichment work is read as keys (`lookups_pending`,
+  `workflow_identity_counts`, `unassembled_research`), so a run can record what it left unfinished.
 - 2026-09-30: `enrichment_queue` reads research once and identifiers through the person;
   it runs on every review page load and status poll.
 - 2026-10-01: `linkedin_parent_pending` tells the server's queue whether a decided parent has left.
@@ -68,25 +68,14 @@ WHERE l.kind!='synthetic' AND l.decision_action IS NULL
        OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
 """
 
-# A profile fetch that was tried and failed, for the link `{link}`. The identity judge and the
-# relationship review both skip such a link: it is not work an enrichment run can finish.
-_PROFILE_FETCH_FAILED = """EXISTS (
-  SELECT 1 FROM artifacts profile
-  WHERE profile.candidate_key={link}.row_key AND profile.kind='profile' AND profile.status='projected'
-    AND json_extract(profile.payload_json, '$.state')='error'
-)"""
-
-_REVIEW_QUESTIONS_PENDING_SELECT = """
-SELECT count(*) FROM pending_parents p WHERE EXISTS (
+_REVIEW_QUESTIONS_PENDING_FROM = """
+FROM pending_parents p WHERE EXISTS (
   SELECT 1 FROM eligible_links candidate WHERE candidate.parent_id=p.parent_id
     AND candidate.kind!='synthetic'
     AND (COALESCE(candidate.linkedin_url, '')!='' OR COALESCE(candidate.machine_proposed_url, '')!='')
 ) AND NOT EXISTS (
   SELECT 1 FROM links l WHERE l.parent_id=p.parent_id
     AND json_extract(l.judgment_payload_json, '$.relationship_decision') IS NOT NULL
-) AND NOT EXISTS (
-  SELECT 1 FROM links unread WHERE unread.parent_id=p.parent_id AND unread.decision_action IS NULL
-    AND """ + _PROFILE_FETCH_FAILED.format(link="unread") + """
 )
 """
 
@@ -280,25 +269,32 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
     ]
 
 
-def enrichment_pending(db: Db) -> int:
-    return int(db.query(WORTH_CTE + "SELECT count(*) " + _ENRICHMENT_QUEUE_FROM)[0][0])
+def lookups_pending(db: Db) -> tuple[str, ...]:
+    """The parents `enrichment_queue` would send to research."""
+    return tuple(row["parent_id"] for row in db.query(
+        WORTH_CTE + "SELECT w.parent_id " + _ENRICHMENT_QUEUE_FROM + " ORDER BY w.parent_id"
+    ))
 
 
-def workflow_identity_counts(db: Db) -> tuple[LinkedInProgress, int, int]:
+def workflow_identity_counts(db: Db) -> tuple[LinkedInProgress, tuple[str, ...], tuple[str, ...]]:
+    """LinkedIn review progress, the parents with an unsettled question, and the unjudged LinkedIns."""
     row = db.query(
         LINKEDIN_CTE + ", judge_candidates AS (" + _JUDGE_CANDIDATE_SELECT + ")" + """
 SELECT (SELECT count(*) FROM identity_scope) AS total,
        (SELECT count(*) FROM pending_parents) AS pending,
-       (""" + _REVIEW_QUESTIONS_PENDING_SELECT + """) AS questions,
-       (SELECT json_group_array(c.row_key) FROM judge_candidates c
-        WHERE NOT """ + _PROFILE_FETCH_FAILED.format(link="c") + """) AS candidate_keys
+       (SELECT json_group_array(p.parent_id) """ + _REVIEW_QUESTIONS_PENDING_FROM + """) AS questions,
+       (SELECT json_group_array(row_key) FROM judge_candidates) AS candidate_keys
 """
     )[0]
     keys = _json(row["candidate_keys"], [])
-    judged = sum(stored.verdict.value in VERDICTS
-                 for stored in stored_judgments(db, row_keys=keys).values())
+    judged = {key for key, stored in stored_judgments(db, row_keys=keys).items()
+              if stored.verdict.value in VERDICTS}
     total, pending = int(row["total"]), int(row["pending"])
-    return LinkedInProgress(total, pending, total - pending), int(row["questions"]), len(keys) - judged
+    return (
+        LinkedInProgress(total, pending, total - pending),
+        tuple(sorted(_json(row["questions"], []))),
+        tuple(sorted(set(keys) - judged)),
+    )
 
 
 def _judge_candidate_keys(db: Db) -> tuple[str, ...]:
@@ -323,8 +319,8 @@ def research_candidate_urls(db: Db) -> dict[str, str]:
     )}
 
 
-def unassembled_research(db: Db) -> int:
-    """Count usable, unambiguous no-match parents without synthetic review cards."""
+def unassembled_research(db: Db) -> tuple[str, ...]:
+    """Usable, unambiguous no-match parents without synthetic review cards."""
     rows = db.query(
         WORTH_CTE + """
 SELECT r.parent_id, r.result_json,
@@ -339,7 +335,7 @@ SELECT r.parent_id, r.result_json,
         result = ResearchResult.from_json(row["result_json"])
         if result and result.usable and (not result.linkedin_url or row["research_link_rejected"]):
             counts[row["parent_id"]] = counts.get(row["parent_id"], 0) + 1
-    return sum(count == 1 for count in counts.values())
+    return tuple(sorted(parent_id for parent_id, count in counts.items() if count == 1))
 
 
 def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
@@ -445,4 +441,4 @@ def pending_parent_ids(db: Db) -> frozenset[str]:
 
 def review_questions_pending(db: Db) -> int:
     """Unresolved parents whose review questions have not been selected yet."""
-    return int(db.query(LINKEDIN_CTE + _REVIEW_QUESTIONS_PENDING_SELECT)[0][0])
+    return int(db.query(LINKEDIN_CTE + "SELECT count(*) " + _REVIEW_QUESTIONS_PENDING_FROM)[0][0])

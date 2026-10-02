@@ -12,10 +12,11 @@ from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue, linkedin_queue, synthetic_fallback
 from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactRow, FactRow, IdentityMachineProjection, PersonRow, PersonSourceRow, PersonSourcesProjection,
+    ArtifactRow, EnrichmentWork, EnrichRun, EnrichRunStatus, FactRow, IdentityMachineProjection, PersonRow,
+    PersonSourceRow, PersonSourcesProjection,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.ingestion.primitives.deep_context.db.workflow_views import enrichment_work, workflow_state
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import project_profile_results
@@ -140,14 +141,46 @@ class SettleEnrichmentTest(unittest.TestCase):
             tuple(self.db.query("SELECT machine_worth FROM parents WHERE parent_id='said-yes'")[0]), (None,),
         )
 
-    def test_a_linkedin_whose_profile_could_not_be_fetched_does_not_keep_enrichment_pending(self):
+    def test_what_a_completed_run_could_not_finish_does_not_hold_the_flow(self):
         key = self.seed(messages=REVIEW_MESSAGE_BAR)
-        self.assertEqual(workflow_state(self.db).progress.judgments_pending, 1)
-        # The fetch was tried and failed: the judge has nothing to read, so the run is done with it.
-        self.profile(key, state='error')
+        self.assertEqual(workflow_state(self.db).next_action, 'enrich')
+        # The run tried this LinkedIn and could not judge it, whatever the reason.
+        left = enrichment_work(self.db)
+        self.assertEqual(left.judgments, (key,))
+        self.db.record_enrich_run(EnrichRun(EnrichRunStatus.COMPLETED, 'synthetic', ('identity: 1 deferred',), left))
         state = workflow_state(self.db)
-        self.assertEqual(state.progress.judgments_pending, 0)
         self.assertNotEqual(state.next_action, 'enrich')
+        # It is still left to do, and the next run tries it again.
+        self.assertEqual((state.progress.judgments_pending, state.progress.enrichment_pending), (1, 0))
+
+    def test_work_that_arrives_after_a_completed_run_is_pending(self):
+        self.seed(messages=REVIEW_MESSAGE_BAR)
+        left = enrichment_work(self.db)
+        self.db.record_enrich_run(EnrichRun(EnrichRunStatus.COMPLETED, 'synthetic', (), left))
+        later = self.seed('later', messages=REVIEW_MESSAGE_BAR)
+        state = workflow_state(self.db)
+        self.assertEqual(state.next_action, 'enrich')
+        self.assertEqual(enrichment_work(self.db).without(left).judgments, (later,))
+        self.assertEqual(state.progress.judgments_pending, 2)
+        self.assertEqual(state.progress.enrichment_pending, enrichment_work(self.db).count() - left.count())
+
+    def test_a_run_that_has_not_finished_holds_the_flow(self):
+        self.assertNotEqual(workflow_state(self.db).next_action, 'enrich')
+        for status in (EnrichRunStatus.RUNNING, EnrichRunStatus.FAILED):
+            self.db.record_enrich_run(EnrichRun(status, 'settle'))
+            state = workflow_state(self.db)
+            self.assertEqual((state.next_action, state.progress.enrichment_step), ('enrich', 'settle'))
+        self.db.record_enrich_run(EnrichRun(EnrichRunStatus.COMPLETED, 'synthetic'))
+        state = workflow_state(self.db)
+        self.assertNotEqual(state.next_action, 'enrich')
+        self.assertEqual(state.progress.enrichment_step, '')
+
+    def test_a_run_started_again_tries_everything_left(self):
+        key = self.seed(messages=REVIEW_MESSAGE_BAR)
+        self.db.record_enrich_run(
+            EnrichRun(EnrichRunStatus.COMPLETED, 'synthetic', (), EnrichmentWork(judgments=(key,))))
+        self.db.record_enrich_run(EnrichRun(EnrichRunStatus.RUNNING, 'research'))
+        self.assertEqual(workflow_state(self.db).progress.enrichment_pending, enrichment_work(self.db).count())
 
     def test_filled_accepted_profile_keeps_worth(self):
         for parent, field in (('work', 'experiences'), ('school', 'education')):

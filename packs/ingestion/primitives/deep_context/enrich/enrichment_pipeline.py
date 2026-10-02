@@ -2,6 +2,8 @@
 
 Changelog:
 - 2026-10-01: the synchronous named chain owns progress and terminal receipts.
+- 2026-10-01: the run records where it stands in SQLite, step by step, and what it left
+  unfinished when it completes; the flow and the waiting screen read that record.
 """
 
 from __future__ import annotations
@@ -11,8 +13,13 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.db.models import (
+    RESEARCH_CONFIRM_THRESHOLD,
+    EnrichRun,
+    EnrichRunStatus,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.workflow_views import enrichment_work
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import EnrichmentProgress
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
@@ -20,8 +27,6 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.coordinat
     ReconcileDeepResearch,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import judge_mapped_candidates
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import select_research
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import DEFAULT_PROCESSOR
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
 from packs.ingestion.primitives.deep_context.enrich.settle import SettleEnrichment
 from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
@@ -61,10 +66,6 @@ class EnrichmentPipeline:
         # The most recent run's failure text, if any — in memory only; a
         # restart forgets it and the approve button returns.
         self.last_error: str | None = None
-        # Fingerprint of the last chain that finished cleanly in this process.
-        # The review view reads it to offer stage Continue instead of a $0
-        # rerun of the cached chain; a restart forgets it and reruns once.
-        self.applied_fingerprint: str | None = None
 
     def running(self) -> bool:
         return self._running.locked()
@@ -169,7 +170,6 @@ class EnrichmentPipeline:
 
     def _synthetic(self) -> tuple[str, ...]:
         AssembleSyntheticProfile(db=self.db).run()
-        self.applied_fingerprint = select_research(self.db, processor=DEFAULT_PROCESSOR).request_fingerprint
         return ()
 
     def steps(
@@ -202,6 +202,7 @@ class EnrichmentPipeline:
 
         for phase, step in self.steps(budget, progress):
             steps.append(phase)
+            self.db.record_enrich_run(EnrichRun(EnrichRunStatus.RUNNING, phase, tuple(errors)))
             self._write(
                 ReceiptStatus.RUNNING, request_fingerprint, total, budget,
                 phase=phase, errors=tuple(errors), steps=tuple(steps),
@@ -213,6 +214,9 @@ class EnrichmentPipeline:
                 errors.extend(step())
             except BaseException as exc:
                 self.last_error = f"enrichment: {type(exc).__name__}: {exc}"
+                self.db.record_enrich_run(
+                    EnrichRun(EnrichRunStatus.FAILED, phase, (*errors, self.last_error))
+                )
                 self._write(
                     ReceiptStatus.FAILED, request_fingerprint, total, budget,
                     phase=phase, error=self.last_error, errors=tuple(errors),
@@ -221,6 +225,10 @@ class EnrichmentPipeline:
                 raise
 
         self.last_error = None
+        # Whatever is still left was tried and did not finish; it no longer holds the flow.
+        self.db.record_enrich_run(
+            EnrichRun(EnrichRunStatus.COMPLETED, phase, tuple(errors), enrichment_work(self.db))
+        )
         payload = self._write(
             "completed", request_fingerprint, total, budget, completed=total,
             phase=phase, errors=tuple(errors), steps=tuple(steps),

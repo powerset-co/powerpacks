@@ -8,12 +8,52 @@
   min-height: 380px;
 }
 
-/* The waiting screen's one moving thing: a soft shape that slowly changes form and turns, so
-   the page reads as at work. */
+/* The waiting screen's mark: the shape, inside a ring of three parts. */
+.review-page .enrich-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+  margin-bottom: 8px;
+}
+/* The ring: one arc for each part of the run, starting at the top. A part the run has passed is
+   filled, the one it is on breathes, and the rest wait. */
+.review-page .enrich-ring {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+.review-page .enrich-ring circle {
+  fill: none;
+  stroke: var(--secondary);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 92 208;
+  transition: stroke 400ms ease;
+}
+.review-page .enrich-ring circle.done {
+  stroke: var(--primary);
+}
+.review-page .enrich-ring circle.now {
+  stroke: var(--primary);
+  animation: enrich-ring-now 1.6s ease-in-out infinite;
+}
+@keyframes enrich-ring-now {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The one thing that always moves: a soft shape that slowly changes form and turns, so the page
+   reads as at work. */
 .review-page .enrich-shape {
   width: 76px;
   height: 76px;
-  margin-bottom: 8px;
   border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
   background: radial-gradient(
     circle at 32% 28%,

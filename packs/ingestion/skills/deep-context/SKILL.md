@@ -349,8 +349,9 @@ bin/deep-context enrich --dry-run
 ```
 
 The read-only plan lists net-new Parallel lookups and cost, profile fetches,
-judgment estimates, and one `estimated_usd` total. Run automatically without
-asking when `estimated_usd` is at most $100. Ask first only above $100. Then run:
+judgment estimates, one `estimated_usd` total, and `estimated_minutes`, a rough
+time for the run. Tell the user that time. Run automatically without asking when
+`estimated_usd` is at most $100. Ask first only above $100. Then run:
 
 ```bash
 bin/deep-context enrich
@@ -367,6 +368,14 @@ completed work in SQLite and provider artifacts on disk. It is safe to run after
 any later import: each step processes only pending work. There are no separate
 checkpoints. One enrichment `manifest.json` reports `status`, `phase`, and
 errors; it does not select work.
+
+The run also writes where it stands into SQLite (the `enrich_run` row of `meta`):
+its status, the step it is on, its errors, and, when it completes, what it could
+not finish. One person's lookup, fetch or judgment failing does not stop the run.
+A completed run moves the flow on to Check LinkedIn with those left over; the
+next run tries them again. A run that stopped part-way leaves `running` or
+`failed` there, and the next action stays `enrich` until a run completes. The
+waiting screen reads the same row.
 
 Then open the review, which lands on Check LinkedIn:
 

@@ -1,32 +1,56 @@
-// The Enrich stage's words: the agent is doing the work, and this page says what is left.
+// The Enrich stage's words: the agent is doing the work, and this page says where it is.
 
-import type { EnrichPending } from "@/types/review"
+import type { EnrichPending, EnrichStep } from "@/types/review"
 
 export const TITLE = "Working on your network"
 
-/** Before the first status read, and when nothing is counted as left. */
+/** Before the run's first step, and through its last ones. */
 export const STARTING = "Getting started"
 export const FINISHING = "Finishing up"
 
-function people(count: number): string {
-  return count === 1 ? "1 person" : `${count.toLocaleString("en-US")} people`
+/** The run's steps as the three parts the ring shows, in order. */
+export const PARTS = ["Look up", "Check LinkedIn", "Settle"] as const
+
+const PART_OF_STEP: Record<Exclude<EnrichStep, "">, number> = {
+  research: 0,
+  profiles: 1,
+  identity: 1,
+  relationships: 2,
+  settle: 2,
+  synthetic: 2,
 }
 
-/** What is being done now: the first step, in the order the run takes them, with anything left. */
-export function doingNow(pending: EnrichPending): string {
-  if (pending.lookups) return `Looking up ${people(pending.lookups)}`
-  if (pending.linkedin_checks) {
-    const profiles = pending.linkedin_checks === 1 ? "profile" : "profiles"
-    return `Checking ${pending.linkedin_checks.toLocaleString("en-US")} LinkedIn ${profiles}`
+/** The part of the ring the run is on; -1 before it starts. */
+export function partOf(step: EnrichStep): number {
+  return step === "" ? -1 : PART_OF_STEP[step]
+}
+
+/** "people", or how many of them when the store counts any: "1 person", "1,653 people". */
+function counted(count: number, one: string, many: string): string {
+  if (!count) return many
+  return count === 1 ? `1 ${one}` : `${count.toLocaleString("en-US")} ${many}`
+}
+
+/** What the run is doing on this step, with how many are left where the store counts them. */
+export function doingNow(step: EnrichStep, pending: EnrichPending): string {
+  switch (step) {
+    case "":
+      return STARTING
+    case "research":
+      return `Looking up ${counted(pending.lookups, "person", "people")}`
+    case "profiles":
+    case "identity":
+      return `Checking ${counted(pending.linkedin_checks, "LinkedIn profile", "LinkedIn profiles")}`
+    case "relationships":
+      if (!pending.unsure) return "Settling the unsure matches"
+      return `Settling the unsure matches for ${counted(pending.unsure, "person", "people")}`
+    case "settle":
+    case "synthetic":
+      return FINISHING
   }
-  if (pending.unsure) return `Settling the unsure matches for ${people(pending.unsure)}`
-  if (pending.profiles) return `Writing profiles for ${people(pending.profiles)} with no LinkedIn`
-  return FINISHING
 }
 
-export const UNDER_A_MINUTE = "under a minute left"
-
-/** The rest of the work, in whole minutes. */
-export function aboutMinutesLeft(minutes: number): string {
-  return `about ${minutes} min left`
+/** The rest of the work, in whole minutes as the server estimates them. */
+export function timeLeft(minutes: number): string {
+  return minutes ? `about ${minutes} min left` : "under a minute left"
 }

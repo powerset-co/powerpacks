@@ -45,7 +45,6 @@ def enrichment_view(
     *,
     enrichment_running: bool = False,
     running_error: str | None = None,
-    applied_fingerprint: str | None = None,
 ) -> EnrichmentView:
     """Render state from the DB plan plus the one local pipeline thread.
 
@@ -86,7 +85,8 @@ def enrichment_view(
         )
     # The remaining chain prepares profiles, assembles no-match cards, and
     # resolves identity disagreements.
-    applied = applied_fingerprint is not None and applied_fingerprint == plan.request_fingerprint
+    # The run's record in the store: it completed, and nothing has arrived for it since.
+    applied = not (state.progress.enrichment_pending or state.progress.enrichment_step)
     if applied:
         status, route_state = "completed", "done"
     elif not total and remaining_judgments:

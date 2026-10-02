@@ -1,52 +1,54 @@
 import "../styles/enrich.css"
 
-import { useState } from "react"
+import type { ReviewStatus } from "@/types/review"
 
 import { EmptyPanel } from "../shared/EmptyPanel"
-import { doingNow, STARTING, TITLE } from "./copy"
-import { type Reading, timeLeft } from "./progress"
-
-/** What the latest status read said is left, and when it was read. */
-export type Waiting = Reading
+import { doingNow, partOf, PARTS, STARTING, timeLeft, TITLE } from "./copy"
 
 export interface EnrichStageProps {
   /** The latest status read; null until the first arrives. */
-  waiting: Waiting | null
+  status: ReviewStatus | null
 }
 
-interface Shown {
-  waiting: Waiting | null
-  /** The first reading on this screen: the lookups' pace is measured from it. */
-  start: Waiting | null
-  left: string
-}
-
-// The Enrich stage: the agent runs the enrichment, and this screen only waits. It says what is
-// being done and how long the rest takes, from each status read the page makes; the page moves
-// on to LinkedIn when the store does. The time left keeps its line while empty, so nothing jumps
-// when it arrives.
-export function EnrichStage({ waiting }: EnrichStageProps) {
-  const [shown, setShown] = useState<Shown>({ waiting: null, start: null, left: "" })
-  if (waiting && waiting !== shown.waiting) {
-    const start = shown.start ?? waiting
-    setShown({ waiting, start, left: timeLeft(start, waiting) })
-  }
+// The Enrich stage: the agent runs the enrichment, and this screen only waits. Everything it
+// says comes from the latest status read: the step the run is on, what is left, and about how
+// long. The page moves on to LinkedIn when the run completes. The time left keeps its line
+// while empty, so nothing jumps when it arrives.
+export function EnrichStage({ status }: EnrichStageProps) {
+  const part = status ? partOf(status.step) : -1
 
   return (
     <EmptyPanel
       title={TITLE}
       className="enrich-state"
-      above={<span className="enrich-shape" aria-hidden="true" />}
+      above={
+        <span className="enrich-mark" aria-hidden="true">
+          <svg className="enrich-ring" viewBox="0 0 112 112">
+            {PARTS.map((name, index) => (
+              <circle
+                key={name}
+                className={index < part ? "done" : index === part ? "now" : undefined}
+                cx="56"
+                cy="56"
+                r="52"
+                pathLength={300}
+                strokeDashoffset={-(index * 100 + 4)}
+              />
+            ))}
+          </svg>
+          <span className="enrich-shape" />
+        </span>
+      }
     >
       <p className="enrich-doing">
-        {waiting ? doingNow(waiting.pending) : STARTING}
+        {status ? doingNow(status.step, status.pending) : STARTING}
         <span className="enrich-dots" aria-hidden="true">
           <i>.</i>
           <i>.</i>
           <i>.</i>
         </span>
       </p>
-      <p className="enrich-time-left">{shown.left}</p>
+      <p className="enrich-time-left">{status ? timeLeft(status.minutes_left) : ""}</p>
     </EmptyPanel>
   )
 }
