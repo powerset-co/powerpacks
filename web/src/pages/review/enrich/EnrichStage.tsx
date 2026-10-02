@@ -32,7 +32,7 @@ export function EnrichStage({ status }: EnrichStageProps) {
                 cy="56"
                 r="52"
                 pathLength={300}
-                strokeDashoffset={-(index * 100 + 4)}
+                strokeDashoffset={-index * 100}
               />
             ))}
           </svg>
