@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.4...powerpacks-v3.11.0) (2026-10-02)
+
+
+### Features
+
+* **deep-context:** the agent runs enrichment; no worth stop, one review screen ([#660](https://github.com/powerset-co/powerpacks/issues/660)) ([4dc2ff5](https://github.com/powerset-co/powerpacks/commit/4dc2ff5e4b48edda8efc811aec002dc0b991229f))
+
+
+### Bug Fixes
+
+* **search:** gzip hosted search uploads ([#661](https://github.com/powerset-co/powerpacks/issues/661)) ([d51d872](https://github.com/powerset-co/powerpacks/commit/d51d872618eb93f17d5a68886a63475fa6a20343))
+
 ## [3.10.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.10.3...powerpacks-v3.10.4) (2026-10-01)
 
 
