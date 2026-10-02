@@ -5,10 +5,9 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { must } from "@/lib/must"
+import { ENRICHED_MS } from "@/lib/review/timing"
 import {
   changeEvent,
-  decisionProgress,
-  enrichmentPanel,
   errorResponse,
   FakeEventSource,
   jsonResponse,
@@ -16,7 +15,6 @@ import {
   pageProgress,
   reviewPage,
   reviewStatus,
-  runningEvent,
 } from "@/testing/review-fixture"
 import type { ReviewPage as ReviewPageData, ReviewStatus } from "@/types/review"
 
@@ -45,7 +43,7 @@ vi.mock("./worth/WorthStage", () => ({
   WorthStage: (props: WorthStageProps) => <Probe stage="worth" props={props} />,
 }))
 vi.mock("./enrich/EnrichStage", () => ({
-  EnrichStage: (props: EnrichStageProps) => <Probe stage="enrich" props={props} />,
+  EnrichStage: ({ done }: EnrichStageProps) => <Probe stage="enrich" props={{ done }} />,
 }))
 vi.mock("./linkedin/LinkedinStage", () => ({
   LinkedinStage: () => <Probe stage="linkedin" props={{}} />,
@@ -75,7 +73,6 @@ const probe = (stage: string) => document.querySelector(`[data-probe='${stage}']
 const probeProps = (stage: string): unknown =>
   JSON.parse(must(probe(stage), `the ${stage} stage`).textContent)
 const stream = () => must(FakeEventSource.opened[0], "the event stream")
-const stepText = () => screen.getAllByRole("link").map((link) => link.textContent)
 
 function Where() {
   const location = useLocation()
@@ -158,11 +155,9 @@ describe("ReviewPage: each screen", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Enrich Contacts")
   })
 
-  it("gives the Enrich stage its panel", async () => {
-    const enrichment = enrichmentPanel({ mode: "running", completed: 2, total: 9 })
-    server.pages.enrich = reviewPage("enrich", { enrichment })
+  it("shows the Enrich stage under its title", async () => {
     renderPage("/?stage=enrich")
-    await waitFor(() => expect(probeProps("enrich")).toEqual({ enrichment, job: null }))
+    await waitFor(() => expect(probe("enrich")).toBeTruthy())
     expect(document.title).toBe("Enrich Contacts · Powerpacks")
   })
 
@@ -200,7 +195,7 @@ describe("ReviewPage: each screen", () => {
     expect(brand.textContent).toBe("POWERPACKS")
     expect(brand.getAttribute("href")).toBe("/?stage=worth")
     expect(container.querySelector("[data-nav]")).toBeNull()
-    expect(screen.getAllByRole("navigation")).toHaveLength(1)
+    expect(screen.queryAllByRole("navigation")).toHaveLength(0)
   })
 
   it("says so when the screen cannot load", async () => {
@@ -210,63 +205,6 @@ describe("ReviewPage: each screen", () => {
       expect(screen.getByRole("heading", { name: "Could not load the review" })).toBeTruthy(),
     )
     expect(screen.getByText("review store is locked")).toBeTruthy()
-  })
-})
-
-describe("ReviewPage: the stepper", () => {
-  it("shows the three steps with their counts and lights the screen's step", async () => {
-    server.pages.enrich = reviewPage("enrich", {
-      progress: pageProgress({ worth_pending: 0, linkedin_pending: 4 }),
-    })
-    renderPage("/?stage=enrich")
-    await waitFor(() => expect(probe("enrich")).toBeTruthy())
-    expect(stepText()).toEqual([
-      "POWERPACKS",
-      "✓Review Decisions",
-      "2Enrich Contacts",
-      "3Check LinkedIn4 left",
-    ])
-    expect(screen.getByRole("link", { name: /Enrich Contacts/ }).className).toBe("step active")
-  })
-
-  it("repaints the step badges from a click response without reading the page again", async () => {
-    renderPage("/?stage=worth")
-    await waitFor(() => expect(probe("worth")).toBeTruthy())
-    expect(stepText().slice(1)).toEqual([
-      "1Review Decisions3 left",
-      "2Enrich Contacts",
-      "3Check LinkedIn4 left",
-    ])
-    act(() =>
-      review().applyProgress(decisionProgress({ worth_pending: 2, worth_yes: 6, linkedin_pending: 0 })),
-    )
-    expect(stepText().slice(1)).toEqual(["1Review Decisions2 left", "2Enrich Contacts", "3Check LinkedIn"])
-    expect(review().progress).toMatchObject({ worth_pending: 2, worth_yes: 6, worth_no: 2, linkedin_done: 6 })
-    expect(requests("/api/review/page")).toHaveLength(1)
-    expect(seen.mounts).toBe(1)
-  })
-
-  it("opens a step's stage in place: the URL changes and the page is read again", async () => {
-    renderPage("/?stage=worth")
-    await waitFor(() => expect(probe("worth")).toBeTruthy())
-    fireEvent.click(screen.getByRole("link", { name: /Check LinkedIn/ }))
-    await waitFor(() => expect(probe("linkedin")).toBeTruthy())
-    expect(probe("worth")).toBeNull()
-    expect(where()).toBe("/?stage=linkedin&preview=1")
-    expect(requests("/api/review/page")).toEqual([
-      "/api/review/page?stage=worth",
-      "/api/review/page?stage=linkedin",
-    ])
-    expect(review().preview).toBe(true)
-    expect(document.title).toBe("Check LinkedIn · Powerpacks")
-  })
-
-  it("reads the page again for a link to the screen already open", async () => {
-    renderPage("/?stage=worth&preview=1")
-    await waitFor(() => expect(probe("worth")).toBeTruthy())
-    fireEvent.click(screen.getByRole("link", { name: /Review Decisions/ }))
-    await waitFor(() => expect(requests("/api/review/page")).toHaveLength(2))
-    await waitFor(() => expect(seen.mounts).toBe(2))
   })
 })
 
@@ -338,25 +276,47 @@ describe("ReviewPage: watching the server", () => {
   it("closes the stream when the screen changes to one that does not watch", async () => {
     renderPage("/?stage=enrich")
     await waitFor(() => expect(probe("enrich")).toBeTruthy())
-    fireEvent.click(screen.getByRole("link", { name: /Check LinkedIn/ }))
-    await waitFor(() => expect(probe("linkedin")).toBeTruthy())
+    fireEvent.click(screen.getByRole("link", { name: "POWERPACKS" }))
+    await waitFor(() => expect(probe("worth")).toBeTruthy())
     expect(FakeEventSource.opened).toHaveLength(1)
     expect(stream().closed).toBe(true)
   })
 
-  it("hands a running job's numbers to the Enrich stage without reading the status", async () => {
-    renderPage("/?stage=enrich")
-    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    act(() => stream().emit({ ...runningEvent(3, 12), replay: true }))
-    expect(probeProps("enrich")).toMatchObject({
-      job: { status: "running", counts: { total: 12, completed: 3 } },
-    })
-    act(() => stream().emit(runningEvent(4, 12)))
-    expect(probeProps("enrich")).toMatchObject({ job: { counts: { completed: 4 } } })
-    expect(requests("/api/status")).toHaveLength(1)
+  it("reads the status again every ten seconds on Enrich, and moves on when the store has", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      renderPage("/?stage=enrich")
+      await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+      expect(requests("/api/status")).toHaveLength(2)
+      expect(probe("enrich")).toBeTruthy()
+
+      // The agent's run finished: the store is at LinkedIn now.
+      server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+      // The screen says it is done for a moment, then the review opens.
+      await act(() => vi.advanceTimersByTimeAsync(ENRICHED_MS))
+      await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 2000 })
+      expect(where()).toBe("/?stage=linkedin")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it("reads the status on every connect, every other event and every unreadable one", async () => {
+  it("does not poll on Done", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      server.status = reviewStatus({ stage: "done" })
+      renderPage("/?stage=done")
+      await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+      await act(() => vi.advanceTimersByTimeAsync(30_000))
+      expect(requests("/api/status")).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("reads the status on every connect, every event and every unreadable one", async () => {
     renderPage("/?stage=enrich")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
     act(() => stream().open())
@@ -367,36 +327,37 @@ describe("ReviewPage: watching the server", () => {
     await waitFor(() => expect(requests("/api/status")).toHaveLength(4))
   })
 
-  it("re-reads the status for a running job on Done: there is no panel to take it", async () => {
-    server.status = reviewStatus({ stage: "done" })
-    renderPage("/?stage=done")
-    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    act(() => stream().emit(runningEvent()))
-    await waitFor(() => expect(requests("/api/status")).toHaveLength(2))
-  })
-
   it("moves forward on a stage change observed while the screen was open", async () => {
     renderPage("/?stage=enrich")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
     server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
     act(() => stream().emit(changeEvent()))
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Contacts Enriched" })).toBeTruthy())
-    await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 2000 })
+    // No check in between: the Enrich screen itself says the run is done, then the review opens.
+    await waitFor(() => expect(probeProps("enrich")).toEqual({ done: true }))
+    expect(document.querySelector(".stage-complete")).toBeNull()
+    await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 4000 })
     expect(where()).toBe("/?stage=linkedin")
   })
 
-  it("stays on a screen the server was already past when it opened, and reloads it on a new token", async () => {
+  it("stays on a screen the server was already past when it opened", async () => {
     server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
     renderPage("/?stage=enrich")
-    // The first read is out with the stale token; the read after it carries the server's own,
-    // as a real server's page and status always agree.
-    expect(requests("/api/review/page")).toHaveLength(1)
-    server.pages.enrich = reviewPage("enrich", { state_token: "token-2" })
-    await waitFor(() => expect(requests("/api/review/page")).toHaveLength(2))
-    await waitFor(() => expect(seen.mounts).toBe(2))
+    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+    await Promise.resolve()
     expect(probe("enrich")).toBeTruthy()
     expect(document.querySelector(".stage-complete")).toBeNull()
     expect(where()).toBe("/?stage=enrich")
+  })
+
+  it("keeps the Enrich screen mounted while the store changes under it", async () => {
+    renderPage("/?stage=enrich")
+    await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
+    server.status = reviewStatus({ state_token: "token-2" })
+    act(() => stream().emit(changeEvent()))
+    await waitFor(() => expect(requests("/api/status")).toHaveLength(2))
+    await Promise.resolve()
+    expect(seen.mounts).toBe(1)
+    expect(requests("/api/review/page")).toHaveLength(1)
   })
 
   it("never moves a preview screen", async () => {
@@ -410,24 +371,22 @@ describe("ReviewPage: watching the server", () => {
     expect(probe("enrich")).toBeTruthy()
   })
 
-  it("reads the screen again when the state token changes under it", async () => {
-    renderPage("/?stage=enrich")
+  it("reads the Done screen again when the state token changes under it", async () => {
+    server.status = reviewStatus({ stage: "done" })
+    renderPage("/?stage=done")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    server.status = reviewStatus({ state_token: "token-2" })
-    server.pages.enrich = reviewPage("enrich", {
-      state_token: "token-2",
-      enrichment: enrichmentPanel({ mode: "running", completed: 1, total: 9 }),
-    })
+    server.status = reviewStatus({ stage: "done", state_token: "token-2" })
+    server.pages.done = reviewPage("done", { state_token: "token-2" })
     act(() => stream().emit(changeEvent()))
-    await waitFor(() => expect(probeProps("enrich")).toMatchObject({ enrichment: { mode: "running" } }))
-    expect(seen.mounts).toBe(2)
+    await waitFor(() => expect(seen.mounts).toBe(2))
     expect(FakeEventSource.opened).toHaveLength(2)
   })
 
   it("does nothing while a stage-complete action is in flight", async () => {
-    renderPage("/?stage=enrich")
+    server.status = reviewStatus({ stage: "done" })
+    renderPage("/?stage=done")
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
-    server.status = reviewStatus({ state_token: "token-2" })
+    server.status = reviewStatus({ stage: "done", state_token: "token-2" })
     act(() => review().setCompleting(true))
     act(() => stream().emit(changeEvent()))
     await Promise.resolve()
@@ -459,6 +418,6 @@ describe("ReviewPage: watching the server", () => {
     await waitFor(() => expect(requests("/api/status")).toHaveLength(2))
     server.status = reviewStatus({ stage: "linkedin" })
     act(() => review().syncStatus())
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Contacts Enriched" })).toBeTruthy())
+    await waitFor(() => expect(probeProps("enrich")).toEqual({ done: true }))
   })
 })

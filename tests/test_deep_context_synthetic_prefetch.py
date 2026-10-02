@@ -226,7 +226,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
         from packs.ingestion.primitives.deep_context.db import identity_views
         self._write_no_linkedin_result()
         with mock.patch.object(identity_views, "synthetic_fallback", side_effect=AssertionError("full cards loaded")):
-            self.assertEqual(unassembled_research(self.db), 1)
+            self.assertEqual(len(unassembled_research(self.db)), 1)
 
     def test_approved_real_identity_prunes_redundant_machine_synthetic(self):
         self._write_no_linkedin_result()
@@ -239,7 +239,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             "real-jordan", machine_action="verify", machine_approved="auto",
             machine_judgment="confirmed", source=WriterSource.RECONCILE.value,
         )))
-        self.assertEqual(unassembled_research(self.db), 0)
+        self.assertEqual(len(unassembled_research(self.db)), 0)
         result = AssembleSyntheticProfile(db=self.db).run()
         self.assertEqual(result.counts.built, 0)
         self.assertEqual(result.counts.pruned_stale_machine_rows, 1)
@@ -253,7 +253,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             source=WriterSource.RECONCILE.value,
         ),))
         self.db.decide_identity("real-jordan", "verify", approved="yes")
-        self.assertEqual(unassembled_research(self.db), 0)
+        self.assertEqual(len(unassembled_research(self.db)), 0)
         self.assertEqual(AssembleSyntheticProfile(db=self.db).run().counts.built, 0)
 
     def test_real_winner_preserves_existing_human_synthetic_decision(self):
@@ -299,10 +299,10 @@ class SyntheticPrefetchTest(unittest.TestCase):
         )
         self._write_no_linkedin_result()
         with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
-            self.assertEqual(unassembled_research(self.db), 2)
+            self.assertEqual(len(unassembled_research(self.db)), 2)
         self.assertLessEqual(reads.call_count, 2)
         AssembleSyntheticProfile(db=self.db).run()
-        self.assertEqual(unassembled_research(self.db), 0)
+        self.assertEqual(len(unassembled_research(self.db)), 0)
 
     def test_empty_profile_completes_but_provider_error_blocks_review(self) -> None:
         self.db.project_rows((LinkRow(

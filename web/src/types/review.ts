@@ -22,15 +22,6 @@ export interface PageProgress extends DecisionProgress {
   synthesize_pending: number
 }
 
-/** One stepper step. It draws its check when `complete` and `count` is 0; else its number. */
-export interface ReviewStep {
-  number: 1 | 2 | 3
-  label: string
-  stage: Exclude<ReviewView, "done">
-  complete: boolean
-  count: number
-}
-
 export type EnrichmentMode = "running" | "approval" | "completed" | "failed" | "preparing"
 
 /** The Enrich screen's one panel. */
@@ -53,7 +44,6 @@ export interface ReviewPage {
   /** The worth tab, "" on every other screen. */
   tab: WorthTab | ""
   title: string
-  steps: [ReviewStep, ReviewStep, ReviewStep]
   progress: PageProgress
   enrichment: EnrichmentPanel
   state_token: string
@@ -187,11 +177,30 @@ export interface ApproveResult {
   enrichment: EnrichmentPanel
 }
 
+/** What enrichment still has to do, counted from the store: the waiting screen's words. */
+export interface EnrichPending {
+  /** People still to look up. */
+  lookups: number
+  /** Found LinkedIns the judge has not checked. */
+  linkedin_checks: number
+  /** People whose unsure matches are still to be resolved. */
+  unsure: number
+  /** People with no LinkedIn whose profile is still to be written. */
+  profiles: number
+}
+
+/** The step an enrichment run is on, in the order it takes them; "" when none is running. */
+export type EnrichStep = "" | "research" | "profiles" | "identity" | "relationships" | "settle" | "synthetic"
+
 /** GET /api/status. */
 export interface ReviewStatus {
   stage: ReviewView
   next_action: string
   state_token: string
+  step: EnrichStep
+  pending: EnrichPending
+  /** About how long the rest of enrichment takes; 0 is under a minute. */
+  minutes_left: number
 }
 
 /** One /api/events message. `job` is the running enrichment's last receipt, else null. */

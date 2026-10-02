@@ -1,6 +1,12 @@
 """Queue-derived Deep Context workflow state.
 
 Changelog:
+- 2026-10-01: synthesis runs straight into enrichment without a worth-review stop;
+  the progress names what enrichment still has to do, step by step.
+- 2026-10-01: the enrich command's run record decides when enrichment is finished: what a
+  completed run could not finish no longer holds the flow, and an unfinished run does.
+- 2026-10-01: the same for synthesis: parents its latest run could not write facts for no longer
+  hold the flow on `synthesize`.
 - 2026-09-25: a parent with a collected source bundle and no facts queues
   `synthesize`, ahead of every review queue.
 """
@@ -17,13 +23,21 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_GATE_REJECTED,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import (
-    enrichment_pending,
+    lookups_pending,
     unassembled_research,
-    workflow_identity_counts,
+    workflow_identity_progress,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.view_models import WorthCounts
-from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
+from packs.ingestion.primitives.deep_context.db.view_models import LinkedInProgress, WorthCounts
+from packs.ingestion.primitives.deep_context.db.models import (
+    ENRICH_RUN_KEY,
+    PARENT_WORTH_PREFIX,
+    SYNTHESIS_RUN_KEY,
+    EnrichmentWork,
+    EnrichRun,
+    EnrichRunStatus,
+    SynthesisRun,
+)
 
 
 @dataclass(frozen=True)
@@ -39,7 +53,15 @@ class StageProgress:
     linkedin_pending: int
     linkedin_done: int
     rejected: int
-    enrichment_pending: int
+    # What enrichment still has to do, step by step: everything left, tried or not.
+    lookups_pending: int
+    judgments_pending: int
+    questions_pending: int
+    synthetic_pending: int
+    # How much of it the latest completed run has not already tried.
+    enrichment_untried: int
+    # The step an unfinished run is on; "" when no run is unfinished.
+    enrichment_step: str
 
 
 @dataclass(frozen=True)
@@ -62,15 +84,27 @@ class WorkflowState:
     state_token: str
 
 
-def _stage_progress(db: Db, *, worth: WorthCounts) -> StageProgress:
-    synthesize_pending = db.query(
+def synthesis_pending(db: Db) -> tuple[str, ...]:
+    """Parents with collected messages and no facts yet."""
+    return tuple(row["parent_id"] for row in db.query(
         """
-SELECT count(DISTINCT a.parent_id) AS n FROM artifacts a
+SELECT DISTINCT a.parent_id FROM artifacts a
 WHERE a.kind='source_bundle' AND a.status='projected'
   AND NOT EXISTS(SELECT 1 FROM facts f WHERE f.parent_id=a.parent_id)
+ORDER BY a.parent_id
 """
-    )[0]["n"]
-    linkedin, review_questions, judge_candidates = workflow_identity_counts(db)
+    ))
+
+
+def _stage_progress(db: Db, *, worth: WorthCounts) -> StageProgress:
+    # What the latest synthesis run tried and could not finish waits for the next run.
+    runs = db.query("SELECT value FROM meta WHERE key=?", (SYNTHESIS_RUN_KEY,))
+    tried = set(SynthesisRun.from_json(runs[0]["value"]).unfinished) if runs else set()
+    synthesize_pending = len(set(synthesis_pending(db)) - tried)
+    linkedin, work = _enrichment_work(db)
+    run = _enrich_run(db)
+    completed = run is not None and run.status == EnrichRunStatus.COMPLETED
+    untried = work.without(run.unfinished) if completed else work
     total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
     counts = db.query(
         WORTH_CTE
@@ -142,8 +176,33 @@ SELECT count(DISTINCT parent_id) FROM (
         linkedin_pending=linkedin.pending,
         linkedin_done=linkedin.done,
         rejected=int(counts["rejected"]),
-        enrichment_pending=unassembled_research(db) + review_questions + judge_candidates + enrichment_pending(db),
+        lookups_pending=len(work.lookups),
+        judgments_pending=len(work.judgments),
+        questions_pending=len(work.questions),
+        synthetic_pending=len(work.synthetic),
+        enrichment_untried=untried.count(),
+        enrichment_step="" if run is None or completed else run.step,
     )
+
+
+def _enrichment_work(db: Db) -> tuple[LinkedInProgress, EnrichmentWork]:
+    linkedin, questions, judgments = workflow_identity_progress(db)
+    return linkedin, EnrichmentWork(
+        lookups=lookups_pending(db),
+        judgments=judgments,
+        questions=questions,
+        synthetic=unassembled_research(db),
+    )
+
+
+def enrichment_work(db: Db) -> EnrichmentWork:
+    """What enrichment has left to do, by step."""
+    return _enrichment_work(db)[1]
+
+
+def _enrich_run(db: Db) -> EnrichRun | None:
+    rows = db.query("SELECT value FROM meta WHERE key=?", (ENRICH_RUN_KEY,))
+    return EnrichRun.from_json(rows[0]["value"]) if rows else None
 
 
 def _review_selection(db: Db) -> tuple[ReviewSelection, WorthCounts]:
@@ -180,11 +239,10 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
     """Apply the ordered queue predicates and return one deterministic state token."""
     selection, worth = _review_selection(db)
     progress = _stage_progress(db, worth=worth)
-    enrichment_pending = progress.enrichment_pending
+    enrichment_untried = progress.enrichment_untried
     rules = (
         (bool(progress.synthesize_pending), "synthesize"),
-        (bool(progress.worth_pending), "review_people"),
-        (bool(enrichment_pending), "enrich"),
+        (bool(enrichment_untried or progress.enrichment_step), "enrich"),
         (bool(progress.linkedin_pending), "review_linkedin"),
         (True, "realize"),
     )
@@ -194,7 +252,7 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
             {
                 "progress": asdict(progress),
                 "selection": asdict(selection),
-                "enrichment_pending": enrichment_pending,
+                "enrichment_untried": enrichment_untried,
                 "enrichment_running": enrichment_running,
             },
             sort_keys=True,

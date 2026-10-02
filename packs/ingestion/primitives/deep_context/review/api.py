@@ -29,6 +29,7 @@ are form-encoded, a POST from another origin is refused, and an error is
 `{"error": text}`. What each route answers with is a dataclass in payloads.py.
 
 Changelog:
+  2026-10-01: the page carries no step list; worth overrides remain available.
   2026-09-30: created beside the Jinja page.
   2026-10-01: follows #635's review page. The approve label counts the judgment estimate;
     candidates carry `avatar_url`; a pile page no longer hydrates profiles, so
@@ -101,7 +102,6 @@ from packs.ingestion.primitives.deep_context.review.payloads import (
     ReviewCandidate,
     ReviewPage,
     ReviewPerson,
-    ReviewStep,
     ReviewView,
     SignInResult,
     WorthCall,
@@ -244,26 +244,10 @@ class ReviewApi:
         if view == "worth":
             tab = requested_tab.lower() if requested_tab.lower() in get_args(WorthTab) else "review"
 
-        # Strict sequence: no step is complete while synthesis is pending.
-        synthesized = not progress.synthesize_pending
-        steps = (
-            ReviewStep(
-                1, "Review Decisions", "worth", synthesized and not progress.worth_pending, progress.worth_pending
-            ),
-            ReviewStep(
-                2, "Enrich Contacts", "enrich", synthesized and enrichment.status == "completed",
-                enrichment.counts.pending,
-            ),
-            ReviewStep(
-                3, "Check LinkedIn", "linkedin", synthesized and not progress.linkedin_pending,
-                progress.linkedin_pending,
-            ),
-        )
         return ReviewPage(
             view=view,
             tab=tab,
             title=TITLES[view],
-            steps=steps,
             progress=PageProgress.from_stage(progress),
             enrichment=EnrichmentPanel.from_view(enrichment),
             state_token=state.state_token,

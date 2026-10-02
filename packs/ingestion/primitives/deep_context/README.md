@@ -3,6 +3,10 @@
 Created: 2026-08-06
 
 Changelog:
+- 2026-10-01: `enrich` runs the shared resumable chain from the agent CLI before
+  LinkedIn review, with one progress manifest.
+- 2026-10-01: synthesis advances to enrichment without worth review; settlement
+  detaches empty lookup profiles and decides insufficient identity evidence No.
 - 2026-09-28: `realize/export_people.py` writes the final roster into SQLite
   and exports people.csv from it; the directory.csv / retarget-people.csv
   round trip is gone.
@@ -58,13 +62,14 @@ flowchart TD
   sqlite --> dossier["compose_dossier → dossiers/&lt;slug&gt;.md"]
 
   sqlite --> views["db/views — named SQL policy\n(worth queue, identity scope, progress)"]
-  views --> web["review/ — worth → enrich → linkedin"]
+  views --> web["review/ — Check LinkedIn; optional worth overrides"]
   web --> decide["db/store.decide_worth / decide_identity"]
   decide --> sqlite
 
-  sqlite --> research["enrich/research_reconcile + parallel_research\nParallel.ai + RapidAPI + shared judge"]
-  research --> receipt["manifest.json\nwrite-only stats receipt"]
-  research --> sqlite
+  sqlite --> research["bin/deep-context enrich\nresearch → profiles → identity → relationships"]
+  research --> receipt["manifest.json\nstatus + phase + errors"]
+  research --> settle["local settlement — empty lookup profiles, worth No below 25 messages"]
+  settle --> sqlite
 
   sqlite --> realize["realize/export_people\nfinal roster in SQLite → people.csv → index build"]
 ```
@@ -113,12 +118,10 @@ progress but do not decide whether a task is complete.
    research results key on their canonical dossier plus optional guidance;
    profile fetches cache per public identifier. A rename or
    re-cluster must never re-bill work whose evidence didn't change.
-5. **Spend gates are explicit flags**, not state machines. Every paid stage
-   has a free `--dry-run`/estimate path. The one in-primitive gate is deep
-   research's `--approve`/`--budget`: without approval it emits
-   `status: "needs_approval"` in its JSON and exits 20; failed or invalid
-   requests exit 1. The other paid stages gate by skill convention
-   (dry-run first), not in code.
+5. **Spend follows the skill's cost rules**, not state machines. Every paid stage
+   has a free estimate path. The agent runs `enrich --dry-run`, then `enrich`
+   without asking when the total is at most $100 and asks first above $100. The command sets
+   research's budget to the plan's Parallel estimate; it has no approval flag.
 6. **Human decisions are machine-untouchable.** Machine writers use
    `project_identity`/machine columns only; `decision_*` and `human_worth*`
    columns are written solely through `db/store.decide_identity` /
@@ -172,8 +175,8 @@ flowchart LR
    next run instead of caching as done.
 4. **Output:** appended extraction records in `facts/<parent_id>.jsonl` — merged facts (employers,
    title, school, topics, identifiers, relationship_category, `is_owner`),
-   the `network_worth` verdict (yes/maybe/no + reason) that seeds the worth
-   review, `final_confidence`, usage tokens, stop reason, and the fingerprint.
+   the `network_worth` verdict (yes/maybe/no + reason), `final_confidence`, usage
+   tokens, stop reason, and the fingerprint.
    Each successful extraction records body-free message hashes, dates, channels,
    directions, and model/effort. Collection excludes consumed hashes before caps;
    tied dates, backfill, and capped overflow stay eligible. The first collection
@@ -195,7 +198,7 @@ flowchart LR
 | `collection/` | source readiness, per-channel reads, collection planning, bundle assembly | msgvault, chat.db, wacli, SQLite | `raw/*.json`, receipt |
 | `synthesis/` | synthesis selection/runner plus dossier composition and validation | SQLite artifacts, `raw/` | `facts/*.jsonl`, dossiers, receipts |
 | `merge_candidates/` | same-person blocking/judging, accepted merge application, parent rendering | facts, SQLite | merge proposals, cached verdicts, `parents/*.md` |
-| `enrich/` | Parallel research, profile hydration, identity judging, synthetic fallback | SQLite queue, provider caches | research artifacts, SQLite verdicts |
+| `enrich/` | research, profiles, identity and relationship judging, local settlement, synthetic profiles | SQLite queue, provider caches | research artifacts, SQLite identities and parent worth |
 | `review/` | worth and identity web review, guided retarget, and restart | named SQLite views | human decisions via `db/store` |
 | `realize/` | free, local: reviewed identities → final SQLite roster → people.csv | SQLite (roster, decisions, projected profiles) | SQLite roster, merged/people.csv |
 | `migration/` | `seed.py`: identifier-keyed carry-over of legacy merges, raw bundles, facts, human decisions and research onto cold parents; `legacy.py`: the retired whole-graph import | legacy artifacts, SQLite | SQLite merges/bundles/facts/decisions/research, `raw/`, `facts/`, `reconcile/deep-research/` |
@@ -207,23 +210,48 @@ flowchart LR
 ## Enrichment, in detail
 
 ```mermaid
-flowchart TD
-  yes["effective-Yes\nwithout usable LinkedIn"] --> research["Parallel research\nproposal + reasoning"]
-  guided["user guidance"] --> research
-  research -- proposal --> hydrate["one profile hydration policy"]
-  research -- no usable link --> synth["synthetic fallback"]
-  hydrate --> judge["one identity judge\nDossierEvidence + profile"]
-  judge -- confident --> verified["verified parent identity\n→ SQLite"]
-  judge -- wrong --> research
-  judge -- nothing left --> synth
+flowchart LR
+  research[research] --> profiles[profiles]
+  profiles --> judge[identity]
+  judge --> relationships[relationships]
+  relationships --> settle[settle]
+  settle --> synthetic[synthetic]
 ```
 
+`EnrichmentPipeline.run` executes the named sequence directly; the review server
+wraps the same sequence in its thread. `bin/deep-context enrich --dry-run` uses
+shared estimate code without writes. `enrich` writes the one enrichment receipt
+before each step (`status: running`, `phase`), at completion (`completed`,
+non-fatal errors), or on a raised exception (`failed`, phase and error).
+
+Reruns start from research and reuse completed SQLite/provider artifacts. Running after a later
+import processes pending work without separate checkpoints.
+
 Batch research runs only on effective-Yes parents, gated in SQL before paid work.
-Attached links are not machine-judged. Batch-research and guided entry points
-share the same evidence packet, prompt, thresholds, async judge pool, and
-strict SQLite settlement. Cleared machine decisions are
-recorded and hydrated at judge time; a settlement without the exact judge-input
-fingerprint is rejected.
+Mapped links without a decision enter the identity judge. Human decisions are
+kept. Batch-research and guided entry points share the evidence packet, prompt,
+thresholds, async judge pool, and strict SQLite settlement. Cleared machine
+decisions are recorded and hydrated at judge time; a settlement without the
+exact judge-input fingerprint is rejected.
+
+The local step after relationship review detaches machine-accepted lookup links
+whose fetched profile is missing, errored, or has no experience and no education.
+Own `linkedin_csv` connections and human link decisions are preserved.
+
+Without human worth, a Yes/Maybe parent with no real LinkedIn profile and fewer
+than `REVIEW_MESSAGE_BAR = 25` messages becomes machine No. A real profile is an
+own connection, a LinkedIn a human kept, or an accepted, present profile with
+experience or education.
+Messages sum non-owner imported people's `interaction_counts`. The reason is
+`not enough to know who this is: no LinkedIn profile and N messages`.
+
+An own LinkedIn connection with no human worth decision is always worth Yes
+(`own LinkedIn connection`), whatever the worth pass said.
+
+The decision uses `parents.machine_worth` / `machine_worth_reason`, above facts
+and below human worth, so JEV cannot overwrite it. Reruns clear its No when a
+real profile arrives or messages reach 25. Worth-No parents leave LinkedIn and
+research queues and receive no synthetic profile.
 
 ## Paid surfaces
 
@@ -231,16 +259,18 @@ fingerprint is rejected.
 |---|---|---|---|
 | Fact synthesis | OpenAI (`gpt-5.2`) | `input_evidence_fingerprint` + `SYNTHESIS_VERSION` | estimate → run |
 | Merge pair judge | JEV (`jev-1.13.0`, TypeSafe) | judged pair + evidence, then the two names alone for a pair judged the same person; exact request under `jev/` | dry-run estimate before cluster |
-| Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | `needs_approval` + explicit approve |
+| Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | enrich plan → skill $100 rule → run |
 | Profile hydration | RapidAPI | public identifier | cache-first everywhere |
 | LinkedIn evidence judge | OpenAI | `judgment_fingerprint` | sticky verdicts, re-judge only on new evidence |
 
 ## Workflow state
 
-`next_action` is derived only from queue predicates. There is no
-`stage_state` or durable spend approval: approval is the budget flag passed to
-the launched work, a process-local flag prevents duplicate submission, and the
-fixed enrichment manifest remains display-only stage progress.
+`next_action` follows `synthesize` → `enrich` → `review_linkedin` → `realize`,
+derived only from queue predicates. Worth review remains optional and Maybe
+does not block enrichment. `enrich` is an agent action, so `review-status --wait`
+returns immediately when it is pending. After `parents`, the agent previews and
+runs enrichment, then opens Check LinkedIn. The fixed enrichment manifest
+reports progress; SQLite and saved provider results determine pending work.
 
 ## Conventions
 

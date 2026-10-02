@@ -1,11 +1,159 @@
-/* The Enrich stage's look: the panel, the progress bar and its shimmer, the moving bar under
-   the stage check, and the buttons. The panel's frame, title and text are the shared
-   .empty-state (base.css). The shimmer's reduced-motion rule is the app's (styles/index.css
-   stops every animation). */
+/* The Enrich stage's look: the panel, its mark (the shape, the ring and the dot), and the moving
+   bar under the stage check. The panel's frame, title and text are the shared .empty-state
+   (base.css). Reduced motion is the app's rule (styles/index.css stops every animation). */
 
 .review-page .enrich-state {
   height: 100%;
   min-height: 380px;
+}
+
+/* The waiting screen's mark: the shape, inside a ring of three parts that a dot circles. */
+.review-page .enrich-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+  margin-bottom: 8px;
+}
+/* The ring: one unbroken circle, a third of it for each part of the run, starting at the top.
+   The parts the run has passed are filled, the one it is on breathes, and the rest wait. The
+   filled line ends round. */
+.review-page .enrich-ring {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+.review-page .enrich-ring circle {
+  fill: none;
+  stroke: var(--secondary);
+  stroke-width: 3;
+}
+.review-page .enrich-ring circle.done,
+.review-page .enrich-ring circle.now {
+  stroke: var(--primary);
+  stroke-linecap: round;
+}
+/* The filled line grows to its new length, and closes the circle when the run completes. */
+.review-page .enrich-ring circle.done {
+  transition: stroke-dasharray 500ms ease;
+}
+.review-page .enrich-ring circle.now {
+  animation: enrich-ring-now 1.6s ease-in-out infinite;
+}
+@keyframes enrich-ring-now {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* A dot that circles the ring with a fading tail behind it: the run is alive, whatever part it
+   is on. The tail is a sweep of colour cut down to the ring's own line. */
+.review-page .enrich-orbit {
+  position: absolute;
+  inset: 0;
+  animation: enrich-orbit 2.6s linear infinite;
+}
+.review-page .enrich-orbit::before {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: conic-gradient(
+    transparent 0deg 230deg,
+    color-mix(in srgb, var(--primary) 75%, transparent) 360deg
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+}
+.review-page .enrich-orbit::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary) 45%, white);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--primary) 70%, transparent);
+}
+@keyframes enrich-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A soft shape that slowly changes form and turns, so the page reads as at work. */
+.review-page .enrich-shape {
+  width: 76px;
+  height: 76px;
+  border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  background: radial-gradient(
+    circle at 32% 28%,
+    color-mix(in srgb, var(--primary) 62%, white),
+    var(--primary) 68%
+  );
+  box-shadow: 0 0 44px color-mix(in srgb, var(--primary) 38%, transparent);
+  animation:
+    enrich-shape-form 7s ease-in-out infinite,
+    enrich-shape-turn 13s linear infinite;
+}
+@keyframes enrich-shape-form {
+  0%,
+  100% {
+    border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  }
+  33% {
+    border-radius: 61% 39% 44% 56% / 55% 62% 38% 45%;
+  }
+  66% {
+    border-radius: 37% 63% 55% 45% / 62% 38% 60% 40%;
+  }
+}
+@keyframes enrich-shape-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.review-page .enrich-state p {
+  max-width: 420px;
+}
+.review-page .enrich-state .enrich-doing {
+  color: var(--foreground);
+  font-weight: 600;
+}
+/* Three dots after the line, lit one after another: still at work. They hold their width, so
+   the centred line does not shift as they light. */
+.review-page .enrich-dots i {
+  font-style: normal;
+  opacity: 0.2;
+  animation: enrich-dot 1.4s ease-in-out infinite;
+}
+.review-page .enrich-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.review-page .enrich-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes enrich-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.2;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.review-page .enrich-state .enrich-time-left {
+  min-height: 1.5em;
+  margin-top: 4px;
+  font-size: 13px;
 }
 
 .review-page .enrich-progress {
@@ -58,20 +206,4 @@
     animation: none;
     opacity: 0.65;
   }
-}
-
-.review-page .enrich-state .button {
-  min-width: 180px;
-  margin-top: 36px;
-}
-
-/* The one spend gate in the app: a compact, confident orange pill, 40px tall, 15px type, real
-   breathing room inside. */
-.review-page .enrich-state .button-hero {
-  min-height: 40px;
-  min-width: 200px;
-  padding: 0 28px;
-  font-size: 15px;
-  letter-spacing: 0.01em;
-  margin-top: 36px;
 }

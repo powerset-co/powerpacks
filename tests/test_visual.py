@@ -322,8 +322,8 @@ class ReviewVisualTests(unittest.TestCase):
             page.set_viewport_size(VIEWPORT)
 
             page.goto(self.base + "/?stage=enrich&preview=1")
-            expect(page.locator(".enrich-state .button")).to_contain_text("Approve $")
-            self._shot(page, "enrich-approval")
+            expect(page.locator(".enrich-state .enrich-shape")).to_be_visible()
+            self._shot(page, "enrich-waiting")
 
             self.store.reach_linkedin()
             page.goto(self.base + "/?stage=linkedin")

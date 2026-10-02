@@ -1,6 +1,7 @@
 """Narrow projector and domain-transaction API for Deep Context SQLite.
 
 Changelog:
+- 2026-10-01: `record_enrich_run` and `record_synthesis_run` keep each command's run record in `meta`.
 - 2026-09-30: stores open in WAL, so a long read (the status poll) no longer
   blocks a decision's commit; stores from before v3.8.2 get the research
   index in place.
@@ -28,6 +29,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePeopleProjection,
     DerivedResetCounts,
+    ENRICH_RUN_KEY,
+    EnrichRun,
+    SYNTHESIS_RUN_KEY,
+    SynthesisRun,
     FactRow,
     GuidanceRow,
     HUMAN_DECISION_SOURCES,
@@ -505,6 +510,22 @@ class Db:
                 + " AND decision_action IS NULL AND decision_approved IS NULL",
                 params,
             ).rowcount
+
+    def record_enrich_run(self, run: EnrichRun) -> None:
+        """Overwrite the one row that says where the enrich command's latest run stands."""
+        self._record_run(ENRICH_RUN_KEY, run.to_json())
+
+    def record_synthesis_run(self, run: SynthesisRun) -> None:
+        """Overwrite the one row that says what the synthesize command's latest run left."""
+        self._record_run(SYNTHESIS_RUN_KEY, run.to_json())
+
+    def _record_run(self, key: str, value: str) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
 
     def replace_merge_verdicts(self, rows: tuple[MergeVerdictRow, ...]) -> None:
         """Upsert the current merge survey without evicting unrelated paid cache.

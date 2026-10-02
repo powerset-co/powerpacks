@@ -72,15 +72,6 @@ class PageProgress(DecisionProgress):
 
 
 @dataclass(frozen=True)
-class ReviewStep:
-    number: Literal[1, 2, 3]
-    label: str
-    stage: Literal["worth", "enrich", "linkedin"]
-    complete: bool
-    count: int
-
-
-@dataclass(frozen=True)
 class EnrichmentPanel:
     """The Enrich screen's one panel: which of its five states the store is in."""
 
@@ -119,7 +110,6 @@ class ReviewPage:
     view: ReviewView
     tab: WorthTab | Literal[""]
     title: str
-    steps: tuple[ReviewStep, ReviewStep, ReviewStep]
     progress: PageProgress
     enrichment: EnrichmentPanel
     state_token: str

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { readScreenQuery, stageHref, stepHref, tabHref } from "./links"
+import { readScreenQuery, stageHref, tabHref } from "./links"
 
 describe("the page's URLs", () => {
   it("reads the query names", () => {
@@ -17,10 +17,6 @@ describe("the page's URLs", () => {
     expect(readScreenQuery("")).toEqual({ stage: "", view: "", preview: false, debug: false, index: 0 })
     expect(readScreenQuery("?preview=true&debug=yes&index=x").preview).toBe(false)
     expect(readScreenQuery("?index=-2").index).toBe(0)
-  })
-
-  it("links a step as a deliberately opened stage", () => {
-    expect(stepHref("enrich")).toBe("/?stage=enrich&preview=1")
   })
 
   it("opens a stage transition's screen without preview", () => {

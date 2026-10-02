@@ -16,7 +16,6 @@ import type {
   ReviewPage,
   ReviewPerson,
   ReviewStatus,
-  ReviewStep,
   ReviewView,
   WorthCardPayload,
   WorthPendingEntry,
@@ -92,39 +91,7 @@ const TITLES: Readonly<Record<ReviewView, string>> = {
   done: "All Set",
 }
 
-/** The three steps as the page route builds them from the progress: nothing complete while
- *  synthesis is pending, each count the stage's pending people. */
-export function reviewSteps(
-  progress: PageProgress = pageProgress(),
-  enrichment: EnrichmentPanel = enrichmentPanel(),
-): [ReviewStep, ReviewStep, ReviewStep] {
-  const synthesized = !progress.synthesize_pending
-  return [
-    {
-      number: 1,
-      label: "Review Decisions",
-      stage: "worth",
-      complete: synthesized && !progress.worth_pending,
-      count: progress.worth_pending,
-    },
-    {
-      number: 2,
-      label: "Enrich Contacts",
-      stage: "enrich",
-      complete: synthesized && enrichment.mode === "completed",
-      count: 0,
-    },
-    {
-      number: 3,
-      label: "Check LinkedIn",
-      stage: "linkedin",
-      complete: synthesized && !progress.linkedin_pending,
-      count: progress.linkedin_pending,
-    },
-  ]
-}
-
-/** One screen. The title, tab, steps and `external_updates` follow the view unless overridden. */
+/** One screen. The title, tab and `external_updates` follow the view unless overridden. */
 export function reviewPage(view: ReviewView = "worth", overrides: Partial<ReviewPage> = {}): ReviewPage {
   const progress = overrides.progress ?? pageProgress()
   const enrichment = overrides.enrichment ?? enrichmentPanel()
@@ -132,7 +99,6 @@ export function reviewPage(view: ReviewView = "worth", overrides: Partial<Review
     view,
     tab: view === "worth" ? "review" : "",
     title: TITLES[view],
-    steps: reviewSteps(progress, enrichment),
     progress,
     enrichment,
     state_token: "token-1",
@@ -241,7 +207,15 @@ export function approveResult(overrides: Partial<EnrichmentPanel> = {}): Approve
 }
 
 export function reviewStatus(overrides: Partial<ReviewStatus> = {}): ReviewStatus {
-  return { stage: "enrich", next_action: "approve_enrichment", state_token: "token-1", ...overrides }
+  return {
+    stage: "enrich",
+    next_action: "enrich",
+    state_token: "token-1",
+    step: "",
+    pending: { lookups: 0, linkedin_checks: 0, unsure: 0, profiles: 0 },
+    minutes_left: 0,
+    ...overrides,
+  }
 }
 
 /** A mid-run enrichment event: `completed` of `total` lookups done. */

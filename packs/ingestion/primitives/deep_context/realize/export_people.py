@@ -29,6 +29,7 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json
@@ -135,8 +136,13 @@ class ExportPeople:
         needed = [row for row in merged.values() if row["public_identifier"] in accepted_slugs and not has_work_history(row)]
         for row in needed:
             result = profiles.get(row["public_identifier"])
-            raw = result.raw_payload() if result else None
-            fill_profile_columns(row, normalize_rapidapi(raw, row["public_identifier"], row["linkedin_url"]))
+            # One profile that cannot be read leaves that person's row as it is.
+            try:
+                raw = result.raw_payload() if result else None
+                fill_profile_columns(row, normalize_rapidapi(raw, row["public_identifier"], row["linkedin_url"]))
+            except Exception as exc:
+                print(f"[realize] {row['id']}: profile not used: {type(exc).__name__}: {exc}"[:300],
+                      file=sys.stderr, flush=True)
 
         parents_before = len(set(parent_of.values()))
         group_parent = self._merge_families(merged, families, parent_of)

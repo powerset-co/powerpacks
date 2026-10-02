@@ -1,6 +1,7 @@
 """SQL relations shared by the Deep Context review projections.
 
 Changelog:
+- 2026-10-01: a parent's settled worth precedes its facts' worth.
 - 2026-10-01: `PARENT_SELECT` carries the person's emails and phones across every merged
   record (the review card's Contact line), beside their sources.
 - 2026-09-30: `LINKEDIN_QUEUE_ORDER_SELECT` names the queue's parents in `PARENT_ORDER`
@@ -44,13 +45,15 @@ WITH eligible_links AS (
 ), worth AS (
   SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
          p.human_worth, p.human_worth_note, p.human_worth_source, p.human_worth_at,
-         COALESCE(r.machine_worth, 'maybe') AS machine_worth,
-         COALESCE(r.machine_worth_reason, '') AS machine_worth_reason,
-         CASE WHEN r.machine_worth IS NULL THEN 'default' ELSE 'llm' END AS machine_source,
+         COALESCE(p.machine_worth, r.machine_worth, 'maybe') AS machine_worth,
+         CASE WHEN p.machine_worth IS NOT NULL THEN COALESCE(p.machine_worth_reason, '')
+              ELSE COALESCE(r.machine_worth_reason, '') END AS machine_worth_reason,
+         CASE WHEN p.machine_worth IS NOT NULL THEN 'code'
+              WHEN r.machine_worth IS NULL THEN 'default' ELSE 'llm' END AS machine_source,
          -- The winning fact carries the machine verdict's identity, so its
          -- synthesized facts hold that person's share labels.
          r.facts_json AS machine_facts_json,
-         COALESCE(p.human_worth, r.machine_worth, 'maybe') AS effective_worth,
+         COALESCE(p.human_worth, p.machine_worth, r.machine_worth, 'maybe') AS effective_worth,
          (SELECT json_group_array(person_id) FROM (
             SELECT person_id FROM people
             WHERE parent_id=p.parent_id AND is_owner=0

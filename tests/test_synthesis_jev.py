@@ -1,9 +1,11 @@
 """Worth tagging reuses paid synthesis and never sends worth back to GPT."""
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -48,6 +50,71 @@ BUNDLE = {
 
 
 class SynthesisJevTests(unittest.TestCase):
+    def test_one_worth_failure_preserves_its_facts_and_tags_the_other_person(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, db, paths = self._two_people_facts(root)
+            before = paths[0].read_bytes()
+            stderr = io.StringIO()
+
+            async def classify(**kwargs):
+                if kwargs['facts'].facts.canonical_name == 'Jordan Bravo':
+                    raise RuntimeError('synthetic worth failure')
+                return self._answer()
+
+            with patch.object(runner.jev_worth, 'classify', AsyncMock(side_effect=classify)) as judge, \
+                    redirect_stderr(stderr):
+                usage = runner.tag_saved_facts(db, node.config, node._plan())
+            self.assertEqual(judge.await_count, 2)
+            self.assertEqual(usage.people, 1)
+            self.assertEqual(paths[0].read_bytes(), before)
+            self.assertFalse(paths[0].with_suffix('.jsonl.bkup').exists())
+            self.assertNotIn('network_worth', json.loads(paths[0].read_text())['facts'])
+            self.assertEqual(json.loads(paths[1].read_text())['facts']['network_worth']['decision'], 'yes')
+            stored = {row['parent_id']: row['machine_worth']
+                      for row in db.query('SELECT parent_id, machine_worth FROM facts')}
+            self.assertEqual(stored['p2'], 'yes')
+            self.assertNotEqual(stored['p1'], 'yes')
+            with patch.object(runner.jev_worth, 'estimate', return_value=WorthEstimate(cached=True)):
+                self.assertEqual(
+                    runner._tagging_paths(db, node.config, {}, node._plan().owner, headlines={}),
+                    [('p1', paths[0].resolve())],
+                )
+            self.assertIn('[worth] p1: RuntimeError: synthetic worth failure', stderr.getvalue())
+
+    def test_all_worth_failures_propagate_the_first_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, db, paths = self._two_people_facts(root)
+            before = [path.read_bytes() for path in paths]
+            first = RuntimeError('first synthetic worth failure')
+            second = ValueError('second synthetic worth failure')
+            stderr = io.StringIO()
+            with patch.object(runner.jev_worth, 'classify', AsyncMock(side_effect=[first, second])) as judge, \
+                    redirect_stderr(stderr):
+                with self.assertRaises(RuntimeError) as raised:
+                    runner.tag_saved_facts(db, node.config, node._plan())
+            self.assertIs(raised.exception, first)
+            self.assertEqual(judge.await_count, 2)
+            self.assertEqual([path.read_bytes() for path in paths], before)
+            for path in paths:
+                self.assertFalse(path.with_suffix('.jsonl.bkup').exists())
+                self.assertNotIn('network_worth', json.loads(path.read_text())['facts'])
+            self.assertFalse(any(row['machine_worth'] == 'yes'
+                                 for row in db.query('SELECT machine_worth FROM facts')))
+            self.assertEqual(len(runner._tagging_paths(db, node.config, {}, node._plan().owner, headlines={})), 2)
+            self.assertIn('RuntimeError: first synthetic worth failure', stderr.getvalue())
+            self.assertIn('ValueError: second synthetic worth failure', stderr.getvalue())
+            self.assertIn('[worth] p1:', stderr.getvalue())
+            self.assertIn('[worth] p2:', stderr.getvalue())
+
+    def _two_people_facts(self, root: Path):
+        node, db = self._node(root, bundle=None)
+        db.project_rows((ParentRow('p2', 'p2'), PersonRow('person-2', 'p2')))
+        paths = [self._write_facts(root, facts={'canonical_name': 'Jordan Bravo'}),
+                 self._write_facts(root, facts={'canonical_name': 'Casey Bravo'}, parent_id='p2')]
+        return node, db, paths
+
     def test_gpt_prompt_and_schema_do_not_judge_worth(self) -> None:
         self.assertNotIn("network_worth", prompting.SYSTEM_PROMPT)
         self.assertNotIn("network_worth", prompting.FACT_SCHEMA["properties"])
@@ -354,13 +421,14 @@ class SynthesisJevTests(unittest.TestCase):
         *,
         facts: dict,
         artifact: bool = True,
+        parent_id: str = "p1",
     ) -> Path:
         facts_dir = root / "facts"
         facts_dir.mkdir(exist_ok=True)
-        path = facts_dir / "p1.jsonl"
+        path = facts_dir / f"{parent_id}.jsonl"
         path.write_text(json.dumps({"synthesis_version": "old", "facts": facts}) + "\n", encoding="utf-8")
         if artifact:
-            self._project(root, path)
+            self._project(root, path, parent_id=parent_id)
         return path
 
     def _mark_facts_cached(self, root: Path, node) -> None:
@@ -378,9 +446,9 @@ class SynthesisJevTests(unittest.TestCase):
         path.write_text(json.dumps(record) + "\n", encoding="utf-8")
         self._project(root, path)
 
-    def _project(self, root: Path, path: Path) -> None:
+    def _project(self, root: Path, path: Path, *, parent_id: str = "p1") -> None:
         database = Db(root / "deep-context.sqlite")
-        project_parent_fact(database, path, "p1")
+        project_parent_fact(database, path, parent_id)
 
 
 if __name__ == "__main__":
