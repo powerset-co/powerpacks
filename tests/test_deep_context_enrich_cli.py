@@ -4,6 +4,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -181,9 +182,9 @@ class EnrichCommandTest(unittest.TestCase):
         self.assertIn("fixture deferred", payload["errors"][0])
 
     def test_bin_dispatches_to_real_cli_without_uv_or_providers(self):
-        # The runner's existing uv invocation uses the prescribed test Python.
+        # A stand-in `uv` hands the runner's `uv run --project . python` to this test's Python.
         shim = self.root / "uv"
-        shim.write_text('#!/bin/sh\nshift 4\nexec /Users/arthur/workspace/powerpacks/.venv/bin/python "$@"\n')
+        shim.write_text(f'#!/bin/sh\nshift 4\nexec {sys.executable} "$@"\n')
         shim.chmod(0o755)
         result = subprocess.run(["bash", "bin/deep-context", "enrich", "--dry-run",
             "--db", str(self.db.db_path), "--manifest", str(self.manifest)],
