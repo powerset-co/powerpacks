@@ -1,4 +1,4 @@
-/* The LinkedIn stage's look: the stage and its swap panel, the question and its Skip link,
+/* The LinkedIn stage's look: the stage, its count and its swap panel, the question and its Skip link,
    the profile options, the guidance box, the failed re-research note, the person menu and the
    feedback popover. Loaded after base.css (LinkedinStage imports it), under the same
    .review-page root. */
@@ -6,6 +6,17 @@
 /* The debug carousel's arrows sit against the stage. */
 .review-page .linkedin-stage {
   position: relative;
+}
+
+/* The people left to check: a quiet line over the card's right corner. */
+.review-page .queue-left {
+  margin: 0 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .review-page .identity-decision {
