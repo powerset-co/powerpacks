@@ -35,6 +35,10 @@
   stroke: var(--primary);
   stroke-linecap: round;
 }
+/* The filled line grows to its new length, and closes the circle when the run completes. */
+.review-page .enrich-ring circle.done {
+  transition: stroke-dasharray 500ms ease;
+}
 .review-page .enrich-ring circle.now {
   animation: enrich-ring-now 1.6s ease-in-out infinite;
 }

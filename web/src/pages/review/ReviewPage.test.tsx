@@ -18,6 +18,7 @@ import {
 import type { ReviewPage as ReviewPageData, ReviewStatus } from "@/types/review"
 
 import type { DoneStageProps } from "./done/DoneStage"
+import type { EnrichStageProps } from "./enrich/EnrichStage"
 import { useReview, type Review } from "./hooks/useReview"
 import { ReviewPage } from "./ReviewPage"
 import type { WorthStageProps } from "./worth/WorthStage"
@@ -41,7 +42,7 @@ vi.mock("./worth/WorthStage", () => ({
   WorthStage: (props: WorthStageProps) => <Probe stage="worth" props={props} />,
 }))
 vi.mock("./enrich/EnrichStage", () => ({
-  EnrichStage: () => <Probe stage="enrich" props={{}} />,
+  EnrichStage: ({ done }: EnrichStageProps) => <Probe stage="enrich" props={{ done }} />,
 }))
 vi.mock("./linkedin/LinkedinStage", () => ({
   LinkedinStage: () => <Probe stage="linkedin" props={{}} />,
@@ -328,8 +329,10 @@ describe("ReviewPage: watching the server", () => {
     await waitFor(() => expect(requests("/api/status")).toHaveLength(1))
     server.status = reviewStatus({ stage: "linkedin", state_token: "token-2" })
     act(() => stream().emit(changeEvent()))
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Contacts Enriched" })).toBeTruthy())
-    await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 2000 })
+    // No check in between: the Enrich screen itself says the run is done, then the review opens.
+    await waitFor(() => expect(probeProps("enrich")).toEqual({ done: true }))
+    expect(document.querySelector(".stage-complete")).toBeNull()
+    await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 3000 })
     expect(where()).toBe("/?stage=linkedin")
   })
 
@@ -412,6 +415,6 @@ describe("ReviewPage: watching the server", () => {
     await waitFor(() => expect(requests("/api/status")).toHaveLength(2))
     server.status = reviewStatus({ stage: "linkedin" })
     act(() => review().syncStatus())
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Contacts Enriched" })).toBeTruthy())
+    await waitFor(() => expect(probeProps("enrich")).toEqual({ done: true }))
   })
 })

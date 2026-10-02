@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { useReducedMotion } from "@/hooks/useReducedMotion"
-import { STAGE_DONE } from "@/lib/review/copy"
 import { stageHref } from "@/lib/review/links"
-import { fadeMs, STAGE_CHECK_MS } from "@/lib/review/timing"
+import { ENRICHED_MS, fadeMs, STAGE_CHECK_MS } from "@/lib/review/timing"
 import type { DecisionProgress, PageProgress, ReviewStatus, ReviewView } from "@/types/review"
 
 import type { Review } from "./useReview"
@@ -75,7 +74,17 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
     [say, reload, fade],
   )
 
-  const onForward = useCallback((stage: ReviewView) => transition(STAGE_DONE.enrich, stage), [transition])
+  /** The run completed while the Enrich screen watched: it says so, then the next screen opens. */
+  const [enriched, setEnriched] = useState(false)
+  const onForward = useCallback(
+    (stage: ReviewView) => {
+      if (gone.current) return
+      completing.current = true
+      setEnriched(true)
+      timers.current.push(window.setTimeout(() => open(stageHref(stage)), ENRICHED_MS))
+    },
+    [open],
+  )
   /** The latest status read: what the waiting screen shows. */
   const [status, setStatus] = useState<ReviewStatus | null>(null)
   const { syncStatus, noteServerStage } = useServerWatch({
@@ -133,5 +142,5 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
     ],
   )
 
-  return { review, progress, check, leaving, status }
+  return { review, progress, check, leaving, status, enriched }
 }

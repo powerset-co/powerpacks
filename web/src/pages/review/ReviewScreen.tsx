@@ -24,7 +24,7 @@ interface ReviewScreenProps {
 // time. A stage transition replaces the stage with the check until the next screen loads.
 export function ReviewScreen({ screen, toast, reload, open }: ReviewScreenProps) {
   const { page } = screen
-  const { review, check, leaving, status } = useScreenReview({
+  const { review, check, leaving, status, enriched } = useScreenReview({
     screen,
     toast,
     reload,
@@ -34,20 +34,30 @@ export function ReviewScreen({ screen, toast, reload, open }: ReviewScreenProps)
     <main className="review-main">
       <section className={cn("stage", leaving && "leaving")} aria-live="polite">
         <ReviewContext.Provider value={review}>
-          {check === null ? <Stage page={page} status={status} /> : <StageCheck message={check} />}
+          {check === null ? (
+            <Stage page={page} status={status} enriched={enriched} />
+          ) : (
+            <StageCheck message={check} />
+          )}
         </ReviewContext.Provider>
       </section>
     </main>
   )
 }
 
-function Stage({ page, status }: { page: ReviewPage; status: ReviewStatus | null }) {
+interface StageProps {
+  page: ReviewPage
+  status: ReviewStatus | null
+  enriched: boolean
+}
+
+function Stage({ page, status, enriched }: StageProps) {
   if (page.needs_synthesis) return <SynthesisPending />
   switch (page.view) {
     case "worth":
       return <WorthStage tab={page.tab === "" ? "review" : page.tab} />
     case "enrich":
-      return <EnrichStage status={status} />
+      return <EnrichStage status={status} done={enriched} />
     case "linkedin":
       return <LinkedinStage />
     case "done":

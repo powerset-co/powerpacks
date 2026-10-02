@@ -1,7 +1,5 @@
 // The review page's words that more than one screen shows; a stage's own live beside the stage.
 
-import type { ReviewView } from "@/types/review"
-
 export const BRAND = "POWERPACKS"
 
 /** The browser tab: "Add People · Powerpacks". */
@@ -45,10 +43,10 @@ export const SCROLL_DOWN = "Scroll down"
 export const CAROUSEL = { previous: "Previous", next: "Next" } as const
 
 /** The words under the check when a stage finishes. LinkedIn's check stands alone: the
- *  finished screen it opens carries the words. */
-export const STAGE_DONE: Readonly<Record<Exclude<ReviewView, "done">, string>> = {
+ *  finished screen it opens carries the words. Enrich has no check: its own screen says it
+ *  is done. */
+export const STAGE_DONE: Readonly<Record<"worth" | "linkedin", string>> = {
   worth: "People Reviewed",
-  enrich: "Contacts Enriched",
   linkedin: "",
 }
 

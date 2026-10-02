@@ -7,6 +7,9 @@ export const TITLE = "Working on your network"
 /** Before the run's first step, and through its last ones. */
 export const STARTING = "Getting started"
 export const FINISHING = "Finishing up"
+/** The run completed: what the screen says while the review opens. */
+export const ENRICHED = "Contacts enriched"
+export const OPENING_REVIEW = "Opening your review"
 
 /** The ring shows the run in three parts: look up, check LinkedIn, settle. */
 export const PARTS = 3
