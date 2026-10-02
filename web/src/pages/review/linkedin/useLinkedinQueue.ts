@@ -72,8 +72,6 @@ export function useLinkedinQueue() {
   }
 
   const retarget = async (request: RetargetRequest) => {
-    // The card sits in the debug carousel.
-    const carousel = Boolean(shown?.payload.queue)
     setPhase("retargeting")
     try {
       await postRetarget(request)
@@ -94,14 +92,10 @@ export function useLinkedinQueue() {
       return
     }
 
-    // The next card could not be read. The carousel's screen reads itself again, without the
-    // person now in re-research; elsewhere the card stays and says its re-research is queued.
-    if (carousel) {
-      setPhase("retargeting")
-      leaveAndReload(TOAST.queued)
-      return
-    }
-    setPhase("queued")
+    // The next card could not be read: the screen reads itself again, without the person now
+    // in re-research.
+    setPhase("retargeting")
+    leaveAndReload(TOAST.queued)
   }
 
   const browse = async (position: number) => {

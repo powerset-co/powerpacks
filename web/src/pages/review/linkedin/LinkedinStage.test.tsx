@@ -402,9 +402,9 @@ describe("LinkedinStage: the guidance box", () => {
       },
     ])
     expect(server.posts(DECIDE)).toEqual([])
-    // Only Retarget is off while the request is out; the card has not started to leave.
+    // The card takes no other decision once its re-research is asked for; it has not started to leave.
     expect(button("Retarget").disabled).toBe(true)
-    expect(button("Use this profile").disabled).toBe(false)
+    expect(button("Use this profile").disabled).toBe(true)
     expect(fading()).toBe(false)
     expect(review.toast).not.toHaveBeenCalled()
 
@@ -461,18 +461,15 @@ describe("LinkedinStage: the guidance box", () => {
     expect(button("Retarget").disabled).toBe(false)
   })
 
-  it("keeps the card and says the re-research is queued when the next card cannot be read", async () => {
+  it("reads the screen again when the next card cannot be read, and the card takes no decision", async () => {
     server.answer(`POST ${RETARGET}`, { ok: true })
     const { review } = await open()
     writeGuidance("the founder of Example Labs")
     server.answer(`GET ${CARD}`, errorResponse("review store is locked", 500))
     fireEvent.click(button("Retarget"))
-    expect(await screen.findByText("Queued — results apply automatically in the background")).toBeTruthy()
-    expect([name(), fading()]).toEqual(["Jordan Bravo", false])
-    // The paid request is not offered twice.
-    expect(button("Retarget").disabled).toBe(true)
-    expect(review.toast).toHaveBeenCalledExactlyOnceWith(QUEUED)
-    expect(review.leaveAndReload).not.toHaveBeenCalled()
+    await waitFor(() => expect(review.leaveAndReload).toHaveBeenCalledExactlyOnceWith(QUEUED))
+    // The re-research may still save this person's No: the card cannot be decided meanwhile.
+    expect(live()).toEqual([])
     expect(server.posts(RETARGET)).toHaveLength(1)
   })
 
@@ -558,7 +555,6 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     await waitFor(() => expect(review.leaveAndReload).toHaveBeenCalledExactlyOnceWith(QUEUED))
     expect(fading()).toBe(false)
     expect(button("Retarget").disabled).toBe(true)
-    expect(screen.queryByText("Queued — results apply automatically in the background")).toBeNull()
   })
 })
 

@@ -13,10 +13,8 @@ interface GuidanceFormProps {
   onToggle: (open: boolean) => void
   /** The textarea, so "No" / "None of these" can put the caret in it. */
   field: RefObject<HTMLTextAreaElement>
-  /** Retarget is off: a request for this card is out, or its re-research is already queued. */
+  /** Retarget is off: the card takes no decision. */
   disabled: boolean
-  /** Re-research is queued, and the card is still here to say so. */
-  queued: boolean
   /** The text held a LinkedIn profile URL: apply it (free). */
   onFix: (url: string) => void
   /** Any other text: re-research the person from it (paid). */
@@ -25,15 +23,7 @@ interface GuidanceFormProps {
 
 // The guidance box: one collapsed box, two routes. A pasted LinkedIn URL applies directly; a
 // description of the right person goes to re-research. `routeGuidance` decides.
-export function GuidanceForm({
-  open,
-  onToggle,
-  field,
-  disabled,
-  queued,
-  onFix,
-  onRetarget,
-}: GuidanceFormProps) {
+export function GuidanceForm({ open, onToggle, field, disabled, onFix, onRetarget }: GuidanceFormProps) {
   const { setGuidanceDraft } = useReview()
   const [text, setText] = useState("")
   const typed = Boolean(text.trim())
@@ -79,7 +69,6 @@ export function GuidanceForm({
         <button className="button button-primary" type="submit" disabled={disabled}>
           {GUIDANCE.submit}
         </button>
-        <span hidden={!queued}>{queued ? GUIDANCE.queued : null}</span>
       </form>
     </details>
   )

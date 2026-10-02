@@ -48,7 +48,7 @@ function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) 
   // The person's own facts, the guidance box and Skip all speak for the first candidate.
   const first = must(candidates[0], "the card's first candidate")
   const several = candidates.length > 1
-  const { locked, retargetOff, queuedNote } = CARD[phase]
+  const { locked } = CARD[phase]
 
   const menu = useRef<HTMLDivElement>(null)
   const guidance = useRef<HTMLTextAreaElement>(null)
@@ -133,8 +133,7 @@ function CardContents({ card, phase, onDecide, onRetarget }: LinkedinCardProps) 
           open={guidanceOpen}
           onToggle={setGuidanceOpen}
           field={guidance}
-          disabled={retargetOff}
-          queued={queuedNote}
+          disabled={locked}
           onFix={(url) =>
             onDecide(
               { pub: first.row_key, decision: "fix", new_url: url, parent_slug: person.slug },

@@ -29,7 +29,6 @@ export const GUIDANCE = {
   summary: "Wrong person? Provide LinkedIn or re-research",
   placeholder: "Paste a LinkedIn URL to apply it directly, or describe the right person to re-research",
   submit: "Retarget",
-  queued: "Queued — results apply automatically in the background",
 } as const
 
 export const MENU = { toggle: "More actions", mark: "⋯", feedback: "Leave feedback" } as const

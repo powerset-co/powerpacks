@@ -9,24 +9,18 @@ export type CardPhase =
   | "retargeting"
   /** Re-research is queued and the next card is being read. */
   | "moving"
-  /** Re-research is queued but the next card could not be read: this card stays. */
-  | "queued"
 
 interface CardState {
   /** The contents are faded out and take no clicks. */
   fading: boolean
-  /** Every button on the card is off. */
+  /** Every button on the card is off. A card whose re-research is asked for takes no other
+   *  decision: the re-research may save the person's No on it. */
   locked: boolean
-  /** Retarget is off: the paid request is sent once per card. */
-  retargetOff: boolean
-  /** The guidance box says the re-research is queued. */
-  queuedNote: boolean
 }
 
 export const CARD: Readonly<Record<CardPhase, CardState>> = {
-  ready: { fading: false, locked: false, retargetOff: false, queuedNote: false },
-  deciding: { fading: true, locked: true, retargetOff: true, queuedNote: false },
-  retargeting: { fading: false, locked: false, retargetOff: true, queuedNote: false },
-  moving: { fading: true, locked: false, retargetOff: true, queuedNote: false },
-  queued: { fading: false, locked: false, retargetOff: true, queuedNote: true },
+  ready: { fading: false, locked: false },
+  deciding: { fading: true, locked: true },
+  retargeting: { fading: false, locked: true },
+  moving: { fading: true, locked: true },
 }
