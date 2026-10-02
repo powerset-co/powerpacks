@@ -175,10 +175,14 @@ class CoreLayoutTests(unittest.TestCase):
 
     def test_install_skill_distinguishes_install_auth_and_provisioning_urls(self) -> None:
         text = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
-        self.assertIn("using my Powerset account", text)
-        self.assertIn("Its Steps 1-3 authenticate the Powerset user", text)
-        self.assertIn("Do not run a\n     separate `$powerset setup`", text)
-        self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
+        # The install sentence is the whole onboarding: no second sentence,
+        # no account question, no Gmail-tools question, straight into setup.
+        self.assertIn("Do not stop here and do not wait for a\nsecond sentence", text)
+        self.assertIn("bin/bootstrap | bash\n", text)
+        self.assertNotIn("--powerset", text.split("-->", 1)[1])
+        self.assertNotIn("ASK:", text)
+        self.assertIn("Read `setup/SKILL.md`", text)
+        self.assertIn("ends with their first search", text)
         self.assertIn("https://powerset.dev/powerpacks", text)
         self.assertIn("https://search-api-7wk4uhe77q-uw.a.run.app", text)
         self.assertIn("Auth0 audience identifier only: `https://api.powerset.dev`", text)
@@ -193,12 +197,16 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("POWERPACKS_API_BASE_URL", hosted_env)
         self.assertNotIn("POWERSET_API_URL=https://api.powerset.dev", hosted_env)
 
-    def test_setup_skill_asks_about_powerset_account(self) -> None:
+    def test_setup_skill_defaults_to_powerset_and_ends_with_a_search(self) -> None:
         text = (ROOT / "packs/ingestion/skills/setup/SKILL.md").read_text()
-        # Step 1 is an explicit choice, not a silent Powerset default.
-        self.assertIn("Do you have a Powerset account you'd like to log in with?", text)
+        # Step 1 takes the Powerset route without asking; custom only on request.
+        self.assertNotIn("Do you have a Powerset account", text)
+        self.assertIn("take the **Powerset route** without\nasking", text)
         self.assertIn("custom-workspace route", text)
-        self.assertIn("1. Choose credentials (Powerset or prepared Modal workspace)", text)
+        self.assertIn("1. Choose credentials (Powerset unless the user said otherwise)", text)
+        # Done means the user saw people from their own network.
+        self.assertIn("8. Run the first search, suggest next sources", text)
+        self.assertIn("search_network_pipeline.py prepare", text)
         # Powerset route initializes .env from the hosted template.
         self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
         # Powerset keys are verified after provisioning.
@@ -226,7 +234,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("RAPIDAPI_KEY=", env_template)
 
         installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
-        self.assertIn("only when the user chose Powerset", installer)
+        self.assertIn("creates `.env` from the Powerset template", installer)
 
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()

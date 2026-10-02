@@ -6,6 +6,8 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-10-02: Missing machine tools install here via `bin/bootstrap --tools`
+  (install no longer asks about them).
 - 2026-09-28: Step 4 adds Step 2 accounts missing from `desired_emails` as OAuth
   test users before any grant (a new second account's consent failed without
   it). Step 3 drops the removed `--init-db` flag.
@@ -136,8 +138,11 @@ stored `accounts`. This is a **local configuration/presence check only**: an
 account can appear here even when Google has revoked or expired its refresh
 token. If `oauth_configured` is true and the db exists, Step 3 is a no-op. Do
 not call an account healthy until Step 4's explicit `auth-check` passes. Step 3
-also needs `gcloud`, `node`/`npm`, and Chrome; if any is missing, run
-install-powerpacks Step 1.3 first.
+also needs `gcloud`, `node`/`npm`, and Chrome. If any is missing, tell the
+user "Gmail import needs a few free tools (msgvault, gcloud, node, Chrome);
+installing them with Homebrew" and run `cd "$REPO" && bin/bootstrap --tools`;
+if its last line starts with `NEEDS YOU:`, show that line word for word, wait,
+and run it again.
 
 ### Step 2 — Ask which Gmail accounts to link (and how far back to sync)
 

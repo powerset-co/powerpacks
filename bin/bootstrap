@@ -8,26 +8,30 @@
 #   DONE: ...        installed; continue with the user's ask
 #   NEEDS YOU: ...   a step needs the human (a click, a password); show the line
 #                    word for word, wait, then run the same command again
-#   ASK: ...         one yes/no question for the user; rerun with the flag it names
 #   STOP: ...        wrong place to run this; show the line, do not continue
 #   FAILED: ...      something broke; show the line
 #
 # Safe to run again: every step is skipped once done.
 #
-#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools]
+#   bootstrap [--harness codex|claude-code|pi|all] [--tools]
 #
 #   --harness   which agent's skills folder to install into; default: every one
 #               found on this Mac (both Claude Code and Codex when none is found)
-#   --powerset  the user named their Powerset account: create .env from the template
-#   --tools     install the Gmail-import tools (msgvault, gcloud, node, Chrome)
-#               through Homebrew; --no-tools skips the check; neither = check only
+#   --tools     also install the Gmail-import tools (msgvault, gcloud, node,
+#               Chrome) through Homebrew; $import-gmail passes this when it
+#               finds one missing. Install itself never asks about them.
 #
-# Exit codes: 0 done or ASK; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
+# Exit codes: 0 done; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
 #
 # Created: 2026-09-30
 # Changelog:
 #   2026-09-30: created. Replaces the six-step prose in install-powerpacks/SKILL.md
 #     so a small model can install by running one command and reading one line.
+#   2026-10-02: .env is always created from the Powerset template (the hosted
+#     account is the default; --powerset is accepted and ignored for SKILL.md
+#     copies installed before 3.14 — delete once no install predates it). The
+#     Gmail-tools check and its ASK line moved out of install: --tools installs,
+#     nothing else looks; --no-tools is accepted and ignored for the same reason.
 set -euo pipefail
 
 REPO_URL="${POWERPACKS_REPO_URL:-https://github.com/powerset-co/powerpacks.git}"
@@ -36,16 +40,14 @@ CHROME_APP="/Applications/Google Chrome.app"
 HOMEBREW_INSTALL='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
 
 harness="auto"
-powerset=0
-tools="check"
+tools=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --harness) harness="${2:-}"; shift 2 ;;
-    --powerset) powerset=1; shift ;;
-    --tools) tools="install"; shift ;;
-    --no-tools) tools="skip"; shift ;;
+    --tools) tools=1; shift ;;
+    --powerset|--no-tools) shift ;;
     *)
-      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools]" >&2
+      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--tools]" >&2
       exit 2
       ;;
   esac
@@ -109,24 +111,18 @@ for h in "${harnesses[@]}"; do
 done
 rm -f "$log"
 
-# 5. A Powerset user gets the hosted config; an existing .env is theirs and is
-#    never touched.
-if [[ "$powerset" == 1 && ! -f "$root/.env" ]]; then
+# 5. The hosted Powerset config; an existing .env is theirs and is never touched.
+if [[ ! -f "$root/.env" ]]; then
   cp "$root/packs/powerset/templates/env.powerset.example" "$root/.env"
   chmod 600 "$root/.env"
   say "created $root/.env from the Powerset template"
 fi
 
-# 6. Gmail import needs four tools. Installing them is the one thing the user
-#    should hear about before it happens, so a plain check ends in one question.
-if [[ "$tools" != skip ]]; then
+# 6. Gmail import needs four tools; $import-gmail asks for them with --tools.
+if [[ "$tools" == 1 ]]; then
   missing=()
   for t in msgvault gcloud node npm; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
   [[ -d "$CHROME_APP" ]] || missing+=(chrome)
-  if [[ ${#missing[@]} -gt 0 && "$tools" == check ]]; then
-    echo "ASK: Gmail import needs these free tools, which are not installed yet: ${missing[*]}. Ask the user: \"May I install them with Homebrew? It's free and takes a few minutes.\" Yes: run this again with --tools. No: run this again with --no-tools."
-    exit 0
-  fi
   if [[ ${#missing[@]} -gt 0 ]]; then
     command -v brew >/dev/null 2>&1 || needs_you "Homebrew is needed to install ${missing[*]}, and only you can install it because it asks for your Mac password. Open Terminal, paste this line, press Return, and type your password when asked: $HOMEBREW_INSTALL   (from https://brew.sh). When it finishes, tell me and I'll continue."
     for t in "${missing[@]}"; do
@@ -141,4 +137,4 @@ if [[ "$tools" != skip ]]; then
   fi
 fi
 
-echo "DONE: Powerpacks is installed for ${harnesses[*]} from $root. Continue with the user's ask: read the matching skill file in this agent's skills folder (for example setup/SKILL.md) and follow it."
+echo "DONE: Powerpacks is installed for ${harnesses[*]} from $root. Continue in this session: read setup/SKILL.md in this agent's skills folder and follow it."

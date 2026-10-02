@@ -17,15 +17,11 @@ Tell your agent (Codex, Claude Code, ...) one sentence:
 > Download and install the Powerpacks skill from
 > https://powerset.dev/powerpacks
 
-Then just say what you want — the skill clones this repo, installs everything
-for your harness, and keeps going in the same session:
-
-> Use Powerpacks to set up my local network search using my Powerset account.
-
-That initializes the public hosted config, signs in to Powerset, pulls the
-provisioned runtime keys for that user, and then builds the local LinkedIn
-network index. The shorter `Use Powerpacks to set up my local network search`
-prompt remains supported.
+That is the whole onboarding. The skill clones this repo, installs everything
+for your harness, signs you in to Powerset, pulls your provisioned runtime
+keys, imports your LinkedIn `Connections.csv`, builds the local index, and
+runs your first search — all in the same session. It stops only for the
+Powerset browser login and the LinkedIn export.
 
 ### Other install paths
 
@@ -264,12 +260,12 @@ run sets up the runtime at `~/powerpacks`:
 
 The second door runs `bin/bootstrap` for the user. It clones or reuses the checkout, pins it to the newest
 release, installs the skills for every agent found on the Mac, and ends with
-one line (`DONE:`, `NEEDS YOU:`, `ASK:`, `STOP:` or `FAILED:`) that says what
-to do next. Safe to run again.
+one line (`DONE:`, `NEEDS YOU:`, `STOP:` or `FAILED:`) that says what to do
+next. Safe to run again.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
-# flags: --harness codex|claude-code|pi|all, --powerset, --tools, --no-tools
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash
+# flags: --harness codex|claude-code|pi|all, --tools
 ```
 
 The top-level `install.sh` dispatches to a per-host adapter. **All adapters
