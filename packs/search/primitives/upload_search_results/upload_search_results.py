@@ -3,14 +3,21 @@
 
 The API stores the renderer's data privately and upserts by owner/run ID.
 Rerunning refreshes the snapshot without altering local results or labels.
+The body is sent gzip-encoded: each pond adds ~15 MB of JSON, and the API caps
+the wire size at 25 MiB.
+
+Changelog:
+- 2026-10-01: gzip the upload body (multi-pond runs exceeded the 25 MiB cap).
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import sys
 import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +26,27 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
-from packs.powerset.primitives.send_feedback import send_feedback as http
 from packs.search.primitives.deep_search.results_web import snapshot
 
 UPLOAD_PATH = "/v2/local-searches"
 UPLOAD_TIMEOUT_SECONDS = 120
 HTTP_UNAUTHORIZED = 401
+GZIP_LEVEL = 6
+
+
+def post_gzip_json(base: str, path: str, token: str, body: dict[str, Any], *,
+                   timeout: int) -> dict[str, Any]:
+    """POST one gzip-encoded JSON body; returns the parsed response."""
+    request = urllib.request.Request(
+        base + path,
+        data=gzip.compress(json.dumps(body, ensure_ascii=False).encode("utf-8"), GZIP_LEVEL),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                 "Content-Encoding": "gzip", "Accept": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        raw = response.read().decode("utf-8")
+    return json.loads(raw) if raw else {}
 
 
 class UploadSearchResults:
@@ -44,8 +66,8 @@ class UploadSearchResults:
             return {"status": "failed", "error": f"Cannot export search: {exc}"}
         body = {"source_run_id": rendered["search"]["run_id"], "snapshot": rendered}
         try:
-            _, response = http.post_json(auth.api_base(self.env_file), UPLOAD_PATH, token,
-                                         body, timeout=UPLOAD_TIMEOUT_SECONDS)
+            response = post_gzip_json(auth.api_base(self.env_file), UPLOAD_PATH, token,
+                                      body, timeout=UPLOAD_TIMEOUT_SECONDS)
         except urllib.error.HTTPError as exc:
             if exc.code == HTTP_UNAUTHORIZED:
                 return {"status": "needs_auth"}
