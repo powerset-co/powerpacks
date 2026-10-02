@@ -332,7 +332,7 @@ describe("ReviewPage: watching the server", () => {
     // No check in between: the Enrich screen itself says the run is done, then the review opens.
     await waitFor(() => expect(probeProps("enrich")).toEqual({ done: true }))
     expect(document.querySelector(".stage-complete")).toBeNull()
-    await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 3000 })
+    await waitFor(() => expect(probe("linkedin")).toBeTruthy(), { timeout: 4000 })
     expect(where()).toBe("/?stage=linkedin")
   })
 

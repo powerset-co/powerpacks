@@ -9,7 +9,7 @@ export const STATUS_POLL_MS = 10_000
 /** The stage check holds this long before the next screen loads; not an animation wait. */
 export const STAGE_CHECK_MS = 650
 /** The Enrich screen says it is done for this long, its ring full, before the review opens. */
-export const ENRICHED_MS = 1400
+export const ENRICHED_MS = 2400
 /** A card's contents (or a row, or the stage) fade out for this long before the swap
  *  (styles/base.css and worth.css fade for the same 100 ms, and a new card's contents fade in
  *  for 180 ms). */
