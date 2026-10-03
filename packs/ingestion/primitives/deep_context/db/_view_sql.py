@@ -13,6 +13,7 @@ Changelog:
 
 from __future__ import annotations
 
+from packs.ingestion.primitives.deep_context.db.models import PARENT_DOSSIER_ARTIFACT_PREFIX
 
 WORTH_CTE = """
 WITH eligible_links AS (
@@ -195,6 +196,14 @@ LINKEDIN_CTE = (
 
 PARENT_ORDER = "ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id"
 
+PARENT_DOSSIER_SELECT = f"""
+SELECT a2.artifact_key FROM artifacts a2
+WHERE a2.parent_id=p.parent_id AND a2.kind='dossier' AND a2.status='projected'
+  AND a2.person_id IS NULL AND a2.candidate_key IS NULL
+  AND a2.artifact_key IN ('dossier:'||a2.parent_id, '{PARENT_DOSSIER_ARTIFACT_PREFIX}'||a2.parent_id)
+ORDER BY a2.projected_at DESC, (a2.artifact_key='dossier:'||a2.parent_id) DESC
+LIMIT 1
+"""
 
 PARENT_SELECT = """
 SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
@@ -221,10 +230,7 @@ SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
 FROM parents p
 JOIN worth w USING(parent_id)
 LEFT JOIN artifacts a ON a.artifact_key=(
-  SELECT a2.artifact_key FROM artifacts a2
-  WHERE a2.parent_id=p.parent_id AND a2.kind='dossier' AND a2.status='projected'
-    AND a2.artifact_key='dossier:'||a2.parent_id
-  LIMIT 1
+""" + PARENT_DOSSIER_SELECT + """
 )
 {where}
 """ + PARENT_ORDER + "\n"

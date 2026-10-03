@@ -1,4 +1,4 @@
-"""Typed file-writer boundaries for parent-owned Deep Context artifacts.
+"""Project contact evidence and derived parent artifacts into SQLite.
 
 Changelog:
 - 2026-09-25: ProjectionValue, the legacy import's door to these policies, went with legacy.py.
@@ -62,14 +62,27 @@ def _content_type(data: bytes) -> str:
     return "application/octet-stream"
 
 
-def project_parent_fact(db: Db, path: Path, parent_id: str) -> ParentFactProjection:
-    """Project one synthesis output owned directly by its canonical parent."""
+def project_parent_fact(db: Db, path: Path, parent_id: str, *, artifact_key: str | None = None,
+                        excluded_person_ids: tuple[str, ...] = ()) -> ParentFactProjection:
+    """Project parent facts without removing preserved extraction artifacts."""
+    projection = _project_fact(db, path, parent_id, None, artifact_key or f"facts:{parent_id}")
+    if excluded_person_ids:
+        with db.transaction() as conn:
+            conn.executemany("DELETE FROM facts WHERE parent_id=? AND person_id=?",
+                             ((parent_id, person_id) for person_id in excluded_person_ids))
+    return projection
+
+
+def project_person_fact(db: Db, path: Path, person_id: str) -> ParentFactProjection:
+    """Keep a contact's extraction owned by that contact across parent merges."""
+    parent_id = db.query("SELECT parent_id FROM people WHERE person_id=?", (person_id,))[0]["parent_id"]
+    return _project_fact(db, path, parent_id, person_id, f"facts:{person_id}")
+
+
+def _project_fact(db: Db, path: Path, parent_id: str, person_id: str | None, artifact_key: str) -> ParentFactProjection:
     path = Path(path)
     if not path.is_file():
-        changed = db.project_rows((
-            ArtifactReplacement(ArtifactKind.FACTS.value, (), parent_id=parent_id),
-        ))
-        return ParentFactProjection(parent_id, changed, 0)
+        raise ProjectionError(f"facts file is missing: {path}")
     data = path.read_bytes()
     records = [
         json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
@@ -82,28 +95,25 @@ def project_parent_fact(db: Db, path: Path, parent_id: str) -> ParentFactProject
     decision: str | None = (
         raw_decision if raw_decision in NETWORK_WORTH_VALUES else None
     )
-    artifact_key = f"facts:{parent_id}"
     projected = db.project_rows((
-        ArtifactReplacement(
-            ArtifactKind.FACTS.value,
-            (ArtifactRow(
-                artifact_key=artifact_key,
-                kind=ArtifactKind.FACTS.value,
-                parent_id=parent_id,
-                path=str(path.resolve()),
-                input_fingerprint=clean_text(
-                    parsed.input_evidence_fingerprint if parsed else None
-                ),
-                content_fingerprint=_sha256(data),
-                status=ProjectionStatus.PROJECTED.value,
-                payload_json=json.dumps(record, separators=(",", ":")),
-                projected_at=now_iso(),
-            ),),
+        ArtifactRow(
+            artifact_key=artifact_key,
+            kind=ArtifactKind.FACTS.value,
             parent_id=parent_id,
+            person_id=person_id,
+            path=str(path.resolve()),
+            input_fingerprint=clean_text(
+                parsed.input_evidence_fingerprint if parsed else None
+            ),
+            content_fingerprint=_sha256(data),
+            status=ProjectionStatus.PROJECTED.value,
+            payload_json=json.dumps(record, separators=(",", ":")),
+            projected_at=now_iso(),
         ),
         FactRow(
-            subject_key=parent_id,
+            subject_key=person_id or parent_id,
             parent_id=parent_id,
+            person_id=person_id,
             artifact_key=artifact_key,
             machine_worth=decision,
             machine_worth_reason=worth.reason or None if worth else None,
@@ -117,16 +127,30 @@ def project_parent_fact(db: Db, path: Path, parent_id: str) -> ParentFactProject
             projected_at=now_iso(),
         ),
     ))
+    if artifact_key == f"parent-facts:{parent_id}":
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM facts WHERE parent_id=? AND person_id IS NULL AND subject_key!=?",
+                         (parent_id, parent_id))
     return ParentFactProjection(parent_id, projected, int(decision is None))
 
 
 def project_parent_source_bundle(db: Db, path: Path, parent_id: str) -> ProjectionResult:
-    """Project one parent bundle, or remove its projection when absent."""
+    """Project a derived parent bundle."""
+    return _project_source_bundle(db, path, parent_id, None)
+
+
+def project_person_source_bundle(db: Db, path: Path, person_id: str) -> ProjectionResult:
+    """Project one contact bundle under its stable contact owner."""
+    parent_id = db.query("SELECT parent_id FROM people WHERE person_id=?", (person_id,))[0]["parent_id"]
+    return _project_source_bundle(db, path, parent_id, person_id)
+
+
+def _project_source_bundle(db: Db, path: Path, parent_id: str, person_id: str | None) -> ProjectionResult:
     path = Path(path)
     if not path.is_file():
         changed = db.project_rows((
             ArtifactReplacement(
-                ArtifactKind.SOURCE_BUNDLE.value, (), parent_id=parent_id,
+                ArtifactKind.SOURCE_BUNDLE.value, (), **({"person_id": person_id} if person_id else {"parent_id": parent_id}),
             ),
         ))
         return ProjectionResult("collect_person_context", "projected", 0, changed)
@@ -139,12 +163,14 @@ def project_parent_source_bundle(db: Db, path: Path, parent_id: str) -> Projecti
         raise ProjectionError(f"invalid JSON artifact {path.name}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ProjectionError(f"JSON artifact must be an object: {path.name}")
-    if str(payload.get("person_id") or "").strip().lower() != parent_id:
-        raise ProjectionError(f"source bundle owner mismatch: source-bundle:{parent_id}")
+    subject = person_id or parent_id
+    if str(payload.get("person_id") or "").strip().lower() != subject:
+        raise ProjectionError(f"source bundle owner mismatch: source-bundle:{subject}")
     changed = db.project_rows((ArtifactRow(
-        artifact_key=f"source-bundle:{parent_id}",
+        artifact_key=f"source-bundle:{subject}",
         kind=ArtifactKind.SOURCE_BUNDLE.value,
         parent_id=parent_id,
+        person_id=person_id,
         path=str(path.resolve()),
         content_fingerprint=_sha256(data),
         status=ProjectionStatus.PROJECTED.value,

@@ -187,6 +187,90 @@ class SeedFixture(unittest.TestCase):
 
 
 class SeedTests(SeedFixture):
+    def test_seed_preserves_original_contact_fact_ownership_after_family_merge(self) -> None:
+        paths = [self.legacy / f"deep-context/facts/{subject}.jsonl" for subject in (
+            "person-jordan", "candidate:email:casey@example.com",
+        )]
+        originals = {path: path.read_bytes() for path in paths}
+        db = self.cold_store()
+        self.seed(db)
+        family = next(row.parent_id for row in queries.people(db) if row.person_id == "person-jordan")
+        facts = {row.person_id: row for row in queries.facts(db) if row.person_id}
+        for path in paths:
+            subject = path.stem
+            self.assertIn(subject, facts)
+            fact = facts[subject]
+            self.assertEqual((fact.subject_key, fact.parent_id), (subject, family))
+            artifact = db.query("SELECT * FROM artifacts WHERE artifact_key=?", (fact.artifact_key,))[0]
+            self.assertEqual((artifact["person_id"], artifact["parent_id"]), (subject, family))
+            self.assertTrue(Path(artifact["path"]).is_file())
+            self.assertEqual(path.read_bytes(), originals[path])
+            self.assertEqual(json.loads(artifact["payload_json"])["facts"], json.loads(originals[path])["facts"])
+
+    def test_seeded_candidate_keeps_only_original_contact_membership(self) -> None:
+        review = self.legacy / "network-import/overrides/review.csv"
+        with review.open("a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=REVIEW_COLUMNS).writerow({
+                "public_identifier": "candidate:email:jordan@example.com", "person_id": "person-jordan",
+                "action": "detach", "approved": "yes", "source": "deep-context-review",
+                "updated_at": "2026-09-06T00:00:00Z",
+            })
+        db = self.cold_store()
+        self.seed(db)
+        people = db.query("SELECT person_id FROM candidate_people WHERE row_key=?",
+                          ("candidate:email:jordan@example.com",))
+        self.assertEqual([row["person_id"] for row in people], ["person-jordan"])
+
+    def test_seed_keeps_all_extractions_for_one_contact_from_legacy_aliases(self) -> None:
+        path = self.legacy / "deep-context/facts/jordan-bravo.jsonl"
+        older = json.loads(_facts_record("Jordan Bravo", "2026-08-01T00:00:00Z"))
+        older["facts"]["employers"] = [{"name": "Synthetic Company", "role": "Engineer", "status": "past"}]
+        path.write_text(json.dumps(older) + "\n", encoding="utf-8")
+        db = self.cold_store()
+        manifest = self.seed(db)
+        artifact = db.query("SELECT payload_json FROM artifacts WHERE artifact_key='facts:person-jordan'")[0]
+        history = json.loads(artifact["payload_json"])
+        self.assertEqual(len(history["records"]), 2)
+        self.assertIn("Synthetic Company", {employer["name"] for employer in history["facts"]["employers"]})
+        self.assertEqual(manifest.facts_duplicate_dropped, 0)
+
+    def test_seed_candidate_identifier_retains_contact_without_legacy_person_id(self) -> None:
+        review = self.legacy / "network-import/overrides/review.csv"
+        with review.open("a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=REVIEW_COLUMNS).writerow({
+                "public_identifier": "candidate:email:jordan@example.com",
+                "action": "detach", "approved": "yes", "source": "deep-context-review",
+            })
+        db = self.cold_store()
+        self.seed(db)
+        people = db.query("SELECT person_id FROM candidate_people WHERE row_key=?",
+                          ("candidate:email:jordan@example.com",))
+        self.assertEqual([row["person_id"] for row in people], ["person-jordan"])
+
+    def test_seed_keeps_mixed_parent_history_separate_from_contact_facts(self) -> None:
+        path = self.legacy / "deep-context/facts/parent-000000000001.jsonl"
+        path.write_text(_facts_record("Mixed legacy family", "2026-10-01T00:00:00Z"), encoding="utf-8")
+        db = self.cold_store()
+        self.seed(db)
+        facts = queries.facts(db)
+        self.assertEqual({row.person_id for row in facts if row.person_id}, {
+            "person-jordan", "candidate:email:casey@example.com", "candidate:phone:+15550100",
+        })
+        mixed = next(row for row in facts if row.person_id is None)
+        self.assertEqual(json.loads(mixed.facts_json)["canonical_name"], "Mixed legacy family")
+
+    def test_in_place_seed_leaves_original_contact_files_unchanged(self) -> None:
+        paths = list((self.legacy / "deep-context/facts").glob("*.jsonl"))
+        paths += list((self.legacy / "deep-context/raw").glob("*.json"))
+        originals = {path: path.read_bytes() for path in paths}
+        db = self.cold_store()
+        Seed(db=db, legacy_root=self.legacy,
+             facts_dir=self.legacy / "deep-context/facts",
+             raw_dir=self.legacy / "deep-context/raw").run()
+        self.assertEqual({path: path.read_bytes() for path in paths}, originals)
+        artifacts = [row for row in queries.artifacts(db) if row.kind in ("facts", "source_bundle")]
+        self.assertTrue(all(Path(row.path).parent.name == "seed" for row in artifacts))
+
     def test_saved_verify_merges_source_with_imported_linkedin_before_copying_decision(self) -> None:
         review = self.legacy / "network-import/overrides/review.csv"
         with review.open("a", newline="") as handle:
@@ -300,15 +384,16 @@ class SeedTests(SeedFixture):
         family = parent_of["person-jordan"]
         self.assertEqual(parent_of["candidate:email:casey@example.com"], family)
 
-        facts = {row.parent_id: row for row in queries.facts(db)}
-        self.assertEqual(set(facts), {family, parent_of["candidate:phone:+15550100"]})
-        self.assertEqual(json.loads(facts[family].facts_json)["canonical_name"], "Jordan Bravo")
-        self.assertEqual(facts[parent_of["candidate:phone:+15550100"]].machine_worth, "maybe")
+        facts = {row.person_id: row for row in queries.facts(db)}
+        self.assertEqual(set(facts), {"person-jordan", "candidate:email:casey@example.com", "candidate:phone:+15550100"})
+        self.assertEqual(json.loads(facts["person-jordan"].facts_json)["canonical_name"], "Jordan Bravo")
+        self.assertEqual(json.loads(facts["candidate:email:casey@example.com"].facts_json)["canonical_name"], "Casey Alpha")
+        self.assertEqual(facts["candidate:phone:+15550100"].machine_worth, "maybe")
         self.assertEqual(
             (manifest.facts_carried, manifest.facts_duplicate_dropped, manifest.facts_unmatched),
-            (2, 1, 1),
+            (3, 0, 1),
         )
-        self.assertTrue((self.deep_context / f"facts/{family}.jsonl").is_file())
+        self.assertTrue((self.deep_context / "facts/person-jordan.jsonl").is_file())
 
         riley = next(row for row in parents if row.parent_id == parent_of["candidate:phone:+15550100"])
         self.assertEqual((riley.human_worth, riley.human_worth_note), ("no", "spam line"))
@@ -325,20 +410,19 @@ class SeedTests(SeedFixture):
         self.assertEqual((manifest.identity_carried, manifest.identity_unmatched), (1, 1))
         self.assertEqual(manifest.machine_review_rows_not_carried, 1)
 
-        # The family's raw bundle rides along so compose has message evidence; the
-        # sibling's bundle lands on the same parent and is dropped as the older one.
+        # Each contact keeps its own bundle after the family merges.
         self.assertEqual(
             (manifest.bundles_carried, manifest.bundles_duplicate_dropped, manifest.bundles_unmatched),
-            (1, 1, 0),
+            (2, 0, 0),
         )
         bundle = db.query(
             "SELECT person_id, payload_json, path FROM artifacts WHERE kind='source_bundle' AND parent_id=?",
             (family,),
         )
-        self.assertEqual(len(bundle), 1)
-        self.assertIsNone(bundle[0]["person_id"])
-        self.assertEqual(json.loads(bundle[0]["payload_json"])["person_id"], family)
-        self.assertEqual(Path(bundle[0]["path"]), (self.deep_context / f"raw/{family}.json").resolve())
+        self.assertEqual({row["person_id"] for row in bundle}, {"person-jordan", "candidate:email:casey@example.com"})
+        for row in bundle:
+            self.assertEqual(json.loads(row["payload_json"])["person_id"], row["person_id"])
+            self.assertEqual(Path(row["path"]), (self.deep_context / f'raw/{row["person_id"]}.json').resolve())
         self.assertEqual(manifest.synthetic_rows_not_carried, 1)
 
         morgan = parent_of["person-morgan"]

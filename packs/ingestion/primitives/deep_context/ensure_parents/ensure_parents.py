@@ -1,6 +1,7 @@
 """Project the live imported-person roster into stable SQLite parent families.
 
 Changelog:
+- 2026-10-02: preserve original contacts from the fan-in's recorded source CSVs.
 - 2026-09-25: the CLI creates the canonical store when it is missing; this is
   the first cold step, so nothing else has to create it.
 """
@@ -23,6 +24,11 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
     project_imported_people,
     read_imported_people,
 )
+from packs.ingestion.primitives.deep_context.ensure_parents.source_people import (
+    project_source_people,
+    read_source_people,
+    retain_source_identifiers,
+)
 from packs.ingestion.primitives.deep_context.manifests.ensure_parents_manifest import (
     EnsureParentsManifest,
 )
@@ -35,6 +41,7 @@ class EnsureParents(Node):
     name = "deep_ensure_parents"
     inputs = (
         Artifact(path=str(DEFAULT_PEOPLE_CSV), external=True, required=False),
+        Artifact(path=str(DEFAULT_PEOPLE_CSV.parent / "manifest.json"), external=True, required=False),
         Artifact(path=str(CANONICAL_DB), external=True),
     )
     outputs = ()
@@ -48,10 +55,13 @@ class EnsureParents(Node):
     def bindings(self) -> dict[str, str]:
         return {
             str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
+            str(DEFAULT_PEOPLE_CSV.parent / "manifest.json"): str(self.people_csv.parent / "manifest.json"),
             str(CANONICAL_DB): str(self.db.db_path),
         }
 
     def execute(self) -> EnsureParentsManifest:
+        imported = read_imported_people(self.people_csv)
+        sources = read_source_people(self.people_csv)
         repair, removed, historical = scrub_deep_context(self.db)
         if removed:
             print(f'[deep-context] invalidated {removed} Harmonic profile artifacts', file=sys.stderr)
@@ -61,8 +71,9 @@ class EnsureParents(Node):
         if historical.repaired or historical.unresolved:
             print(f'[deep-context] restored {len(historical.repaired)} historical merged parents; '
                   f'{len(historical.unresolved)} unresolved', file=sys.stderr)
-        imported = read_imported_people(self.people_csv)
+        project_source_people(self.db, sources, imported)
         projected = project_imported_people(self.db, imported)
+        retain_source_identifiers(self.db, sources)
         return EnsureParentsManifest(
             status="completed",
             people_projected=projected,

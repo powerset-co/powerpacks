@@ -23,13 +23,14 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonIdentifierRow,
     PersonRow,
 )
-from packs.ingestion.primitives.deep_context.db.queries import typed_rows, artifacts
+from packs.ingestion.primitives.deep_context.db.queries import typed_rows, artifacts, imported_people, people, identifiers
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CollectionSourceRow,
     DossierEvidenceRows,
 )
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 def dossier_evidence_rows(
@@ -129,7 +130,7 @@ def dossier_message_count(db: Db, parent_id: str) -> int:
 
 
 def collection_sources(db: Db) -> tuple[CollectionSourceRow, ...]:
-    """Read message-bearing parents and aggregate their typed lookup keys."""
+    """Read each contact's own message-store lookup keys."""
     message_channels = tuple(sorted(MESSAGE_CHANNELS))
     placeholders = ",".join("?" for _ in message_channels)
     names: dict[str, str] = {}
@@ -138,9 +139,8 @@ def collection_sources(db: Db) -> tuple[CollectionSourceRow, ...]:
     channels: dict[str, set[str]] = {}
     for row in db.query(
         f"""
-SELECT p.parent_id, p.display_name, pi.kind, pi.normalized_value, ps.source
-FROM parents p
-JOIN people pe USING(parent_id)
+SELECT pe.person_id, pe.display_name, pi.kind, pi.normalized_value, ps.source
+FROM people pe
 JOIN person_identifiers pi USING(person_id)
 JOIN person_sources ps USING(person_id)
 WHERE pe.is_owner=0
@@ -150,51 +150,25 @@ WHERE pe.is_owner=0
       WHERE message_source.person_id=pe.person_id
         AND message_source.source IN ({placeholders})
   )
-ORDER BY p.parent_id, pi.kind, pi.normalized_value, ps.source
+ORDER BY pe.person_id, pi.kind, pi.normalized_value, ps.source
 """,
         message_channels,
     ):
-        parent_id = str(row["parent_id"])
-        names.setdefault(parent_id, str(row["display_name"] or ""))
+        person_id = str(row["person_id"])
+        names.setdefault(person_id, str(row["display_name"] or ""))
         target = emails if row["kind"] == "email" else phones
-        target.setdefault(parent_id, set()).add(str(row["normalized_value"]))
-        channels.setdefault(parent_id, set()).add(str(row["source"]))
+        target.setdefault(person_id, set()).add(str(row["normalized_value"]))
+        channels.setdefault(person_id, set()).add(str(row["source"]))
     return tuple(
         CollectionSourceRow(
-            parent_id,
-            names[parent_id],
-            tuple(sorted(emails.get(parent_id, set()))),
-            tuple(sorted(phones.get(parent_id, set()))),
-            tuple(sorted(channels.get(parent_id, set()))),
+            person_id,
+            names[person_id],
+            tuple(sorted(emails.get(person_id, set()))),
+            tuple(sorted(phones.get(person_id, set()))),
+            tuple(sorted(channels.get(person_id, set()))),
         )
-        for parent_id in names
+        for person_id in names
     )
-
-
-def collection_bundle_parent_ids(db: Db) -> frozenset[str]:
-    """Parent ids that currently own a projected source-bundle artifact.
-
-    A scalar id set, not a full bundle-payload parse: the collection stage's
-    orphan sweep only needs to know WHICH parents have a bundle, never their
-    message bodies.
-    """
-    return frozenset(
-        str(row["parent_id"])
-        for row in db.query(
-            "SELECT parent_id FROM artifacts WHERE kind=? AND status='projected' AND person_id IS NULL",
-            (ArtifactKind.SOURCE_BUNDLE.value,),
-        )
-    )
-
-
-def existing_parent_ids(db: Db) -> frozenset[str]:
-    """Every canonical parent id currently on record.
-
-    The collection stage orphan sweep's other half: a bundle is stale when
-    its parent_id is absent from this set — never merely because a run's
-    message-channel selection (collection_sources) happened to skip it.
-    """
-    return frozenset(str(row["parent_id"]) for row in db.query("SELECT parent_id FROM parents"))
 
 
 def collection_bundle_group_message_count(db: Db) -> int:
@@ -218,10 +192,47 @@ WHERE a.kind=? AND a.status='projected' AND a.person_id IS NULL
     return int(rows[0]["n"]) if rows else 0
 
 
-def parent_histories(db: Db) -> dict[str, FactHistory]:
-    """All extraction records follow their current parent after a merge."""
+def singleton_people(db: Db) -> dict[str, str]:
+    """Parent histories are contact evidence only for one-contact families."""
+    return {row['parent_id']: row['person_id'] for row in db.query(
+        "SELECT parent_id,person_id FROM people GROUP BY parent_id HAVING count(*)=1")}
+
+
+def aggregate_people(db: Db) -> frozenset[str]:
+    """Metadata aggregates whose copied message keys belong to actual source contacts."""
+    return aggregate_people_from_rows(people(db), identifiers(db), imported_people(db))
+
+
+def aggregate_people_from_rows(people_rows: tuple[PersonRow, ...],
+                               identifier_rows: tuple[PersonIdentifierRow, ...],
+                               imported_rows: tuple[PeopleRow, ...]) -> frozenset[str]:
+    """Share aggregate ownership policy with the read-only identity audit."""
+    parent_of = {row.person_id: row.parent_id for row in people_rows}
+    keyed = {row.person_id for row in identifier_rows if row.kind in {'email', 'phone'}}
+    aggregates = set()
+    for row in imported_rows:
+        aliases = json.loads(row.superseded_person_ids or '[]')
+        source_parents = {parent_of[person] for person in aliases
+                          if person.startswith('candidate:') and person in keyed and person in parent_of}
+        aggregates.update(person for person in (row.id, *aliases)
+                          if not person.startswith('candidate:') and person not in keyed
+                          and parent_of.get(person) in source_parents)
+    return frozenset(aggregates)
+
+
+def person_histories(db: Db) -> dict[str, FactHistory]:
+    """Contact extraction coverage; mixed parent histories prove no child facts."""
+    singleton = singleton_people(db)
+    rows = artifacts(db, kind='facts', status='projected')
     grouped: dict[str, list] = {}
-    for row in artifacts(db, kind="facts", status="projected"):
+    for row in sorted(rows, key=lambda item: bool(item.person_id)):
+        if row.artifact_key.startswith('parent-facts:'):
+            continue
+        person_id = row.person_id
+        if person_id is None:
+            person_id = singleton.get(row.parent_id)
+            if person_id is None:
+                continue
         history = FactHistory.from_payload(json.loads(row.payload_json or '{}'))
-        grouped.setdefault(row.parent_id, []).extend(item.payload() for item in history.records)
-    return {parent: FactHistory.from_records(records) for parent, records in grouped.items()}
+        grouped.setdefault(person_id, []).extend(item.payload() for item in history.records)
+    return {person: FactHistory.from_records(records) for person, records in grouped.items()}

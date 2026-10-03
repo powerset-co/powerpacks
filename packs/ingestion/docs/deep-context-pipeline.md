@@ -172,8 +172,8 @@ and cannot be blocked by the Done page.
 | Stage | What it does | Main result |
 | --- | --- | --- |
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. `ensure-parents` projects the fan-in export into stable parents (creating the store on a fresh install); on an install with pre-SQLite artifacts, `seed` then carries its merges, raw bundles, facts, human decisions and Parallel results onto those parents by identifier, once. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON, SQLite parents, `owner.json` |
-| Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are always included. | `raw/<parent_id>.json`, SQLite projection, receipt |
-| Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, except that a notable imported LinkedIn headline (CEO or any chief officer, founder, president, chair, partner, managing director) is Yes. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
+| Collection | Reads Gmail and message bodies separately using each contact's own identifiers. The default depth is `--deep-cap 1600`; small iMessage groups are always included. Parent display bundles are derived from the contact bundles. | `raw/<person_id>.json`, derived `raw/parents/<parent_id>.json`, SQLite projection, receipt |
+| Synthesis | Sends bounded contact message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Contact histories remain independent across parent merges. Worth uses message context/identifiers only, never LinkedIn, except that a notable imported LinkedIn headline (CEO or any chief officer, founder, president, chair, partner, managing director) is Yes. Unchanged fingerprints cost $0. | `facts/<person_id>.jsonl`, derived `facts/parents/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Pairs parents that share a phone or email or whose names can be forms of one name. The same name merges unless JEV finds the facts keep the two records apart; the rest go to the JEV pair judge (one request per pair, merge at p(yes) ≥ 0.5 when JEV also answers that the two names can be one contact's). Caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
 | LinkedIn judging | After cache-first profile preparation, enrichment judges mapped attached and researched links lacking a decision. Existing human and valid machine decisions are kept. | SQLite identity verdicts |
@@ -263,7 +263,7 @@ The durable worth authority is the parent row in
 `.powerpacks/deep-context/deep-context.sqlite`; legacy `review.csv` is read only
 at the one-time seed boundary.
 
-- Synthesis writes machine worth into `facts/<parent_id>.jsonl` and SQLite
+- Synthesis writes machine worth into `facts/<person_id>.jsonl` and SQLite
   facts. Effective worth reads human worth, then `parents.machine_worth`, then
   the best machine verdict on the parent's facts, otherwise Maybe.
 - Each canonical parent has one human-worth override in SQLite. On a parent

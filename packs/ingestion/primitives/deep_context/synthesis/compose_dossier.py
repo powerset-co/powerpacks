@@ -118,7 +118,7 @@ class ComposeDossier(Node):
 
         # Only parent-owned facts are dossier sources; synthesis/normalization.py
         # migrates any remaining legacy child-owned rows before this stage runs.
-        facts: dict[str, FactRow] = {row.parent_id: row for row in fact_rows(self.db, parent_owned=True)}
+        facts: dict[str, FactRow] = {row.parent_id: row for row in sorted(fact_rows(self.db, parent_owned=True), key=lambda item: item.artifact_key.startswith("parent-facts:"))}
         facts_artifacts = artifact_rows(
             self.db,
             kind=ArtifactKind.FACTS.value,

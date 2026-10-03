@@ -35,9 +35,9 @@ class DossierEvidenceRows:
 
 @dataclass(frozen=True)
 class CollectionSourceRow:
-    """One message-bearing parent and its observed store lookup keys."""
+    """One message-bearing contact and its observed store lookup keys."""
 
-    parent_id: str
+    person_id: str
     display_name: str
     emails: tuple[str, ...]
     phones: tuple[str, ...]

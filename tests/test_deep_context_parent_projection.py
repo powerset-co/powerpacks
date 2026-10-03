@@ -95,10 +95,14 @@ class ParentProjectionTest(unittest.TestCase):
                 "kind: parent\n"
                 "singleton: true\n"
                 'children: ["jordan-a"]\n'
+                'needs_review: []\n'
                 'emails: ["jordan@example.com"]\n'
                 'phones: ["+15550100"]\n'
+                'confidence: 0.0\n'
                 "---\n\n# Jordan Bravo\n\n"
-                "Single identity — no duplicates detected. Full context in [[jordan-a]].\n"
+                "## Identifiers\n\n"
+                "- jordan@example.com\n"
+                "- +15550100\n\n"
             ))
             parent_dossier = next(
                 row
@@ -381,7 +385,7 @@ class ParentProjectionTest(unittest.TestCase):
             )[0][0]
 
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_parent",
                 side_effect=AssertionError("unchanged parent must not render"),
             ):
                 second = BuildParents(db=db, parents_dir=parents_dir).execute()
@@ -456,9 +460,8 @@ class ParentProjectionTest(unittest.TestCase):
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
             self.assertEqual(result.parents_changed, 1)
-            # The old singleton contract intentionally does not derive a summary
-            # from structured facts, but the input signal still advances.
-            self.assertEqual(jordan.read_bytes(), jordan_before)
+            self.assertNotEqual(jordan.read_bytes(), jordan_before)
+            self.assertIn("Engineer", jordan.read_text())
             self.assertNotEqual(
                 query(
                     db,
@@ -470,7 +473,7 @@ class ParentProjectionTest(unittest.TestCase):
             self.assertEqual(casey.read_bytes(), casey_before)
             self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_parent",
                 side_effect=AssertionError("advanced input signal must converge"),
             ):
                 converged = BuildParents(db=db, parents_dir=parents_dir).execute()

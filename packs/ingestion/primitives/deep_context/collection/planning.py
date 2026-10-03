@@ -11,19 +11,11 @@ from packs.ingestion.primitives.deep_context.db.queries import artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 
-def source_parents(db: Db) -> list[Person]:
-    """Return one message-store lookup subject per canonical parent.
-
-    Selection requires a person_sources row tagged with a message channel
-    (see db.context_queries.collection_sources) — a parent with no such row
-    is legitimately excluded here while still being a real parent. The
-    collection stage's orphan sweep checks parents-table existence (see
-    db.context_queries.existing_parent_ids), never this selection, so an
-    unselected parent's bundle survives.
-    """
+def source_people(db: Db) -> list[Person]:
+    """Return one message-store lookup subject per contact."""
     return [
         Person(
-            row.parent_id,
+            row.person_id,
             row.display_name,
             emails=list(row.emails),
             phones=list(row.phones),
@@ -34,16 +26,7 @@ def source_parents(db: Db) -> list[Person]:
 
 
 def projected_bundles(db: Db) -> dict[str, CollectionBundle]:
-    """Parse parent-owned bundle payloads once at the SQLite artifact boundary.
-
-    This is the parse-at-the-boundary point: raw JSON becomes typed
-    CollectionBundles here, once, and every caller downstream takes typed
-    values. A payload that fails to parse is skipped, not raised. Callers
-    that only need to know WHICH parents have a bundle (not their message
-    bodies) should use db.context_queries.collection_bundle_parent_ids
-    instead — this parses every message body of every parent into memory and
-    holds it for the caller's lifetime.
-    """
+    """Read parent display bundles from projected artifacts."""
     bundles: dict[str, CollectionBundle] = {}
     for artifact in artifacts(
         db,

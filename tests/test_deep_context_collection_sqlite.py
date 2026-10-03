@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -98,10 +97,10 @@ class SqliteCollectionTest(unittest.TestCase):
             result = self._collector().execute()
 
         self.assertEqual((result.people_total, result.people_with_context), (1, 1))
-        bundle_path = self.root / "raw/parent-1.json"
+        bundle_path = self.root / "raw/person-1.json"
         bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
-        artifact = artifacts(self.db, kind="source_bundle")[0]
-        self.assertIsNone(artifact.person_id)
+        artifact = artifacts(self.db, kind="source_bundle", parent_owned=False)[0]
+        self.assertEqual(artifact.person_id, "person-1")
         self.assertEqual(artifact.parent_id, "parent-1")
         self.assertEqual(json.loads(artifact.payload_json or "{}"), bundle)
         self.assertNotIn("collected_at", bundle)
@@ -111,7 +110,7 @@ class SqliteCollectionTest(unittest.TestCase):
         )
         self.assertEqual(
             hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
-            "f2dbef0cd2c3949ac5f082bdffc5674f50c4b0bcf230ee5adcce18a60b60471c",
+            "065bb17fca0c31b904baba6d0a6f37be8e3df2bec18c93c43400ebc01cdd3058",
         )
         projected_bundle = CollectionBundle.from_payload(bundle)
         self.assertIsNotNone(projected_bundle)
@@ -221,7 +220,7 @@ class SqliteCollectionTest(unittest.TestCase):
                 payload.pop(field)
                 self.assertIsNone(MessageEntry.from_payload(payload))
 
-    def test_collect_removes_projection_when_current_bundle_disappears(self) -> None:
+    def test_collect_retains_legacy_bundle_when_contact_has_no_current_messages(self) -> None:
         bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(
@@ -257,8 +256,8 @@ class SqliteCollectionTest(unittest.TestCase):
         ):
             self._collector().execute()
 
-        self.assertFalse(bundle_path.exists())
-        self.assertFalse(artifacts(self.db, kind="source_bundle"))
+        self.assertTrue(bundle_path.exists())
+        self.assertTrue(artifacts(self.db, kind="source_bundle"))
 
     def test_projected_bundle_is_recollected_without_artifact_file(self) -> None:
         bundle_path = self.root / "raw/parent-1.json"
@@ -299,14 +298,14 @@ class SqliteCollectionTest(unittest.TestCase):
 
         collect.assert_called_once()
         self.assertEqual(result.people_with_context, 0)
-        self.assertFalse(artifacts(self.db, kind="source_bundle"))
+        self.assertTrue(artifacts(self.db, kind="source_bundle"))
 
     def test_parent_without_message_source_keeps_its_bundle(self) -> None:
         """Narrowing this run's selection must not be destructive (no --limit needed).
 
         parent-1 collects a bundle once, then loses its only message-channel
         person_source (e.g. an unrelated source edit) so it's no longer
-        selected by source_parents — but its parents row is untouched. The
+        selected by source_people — but its parents row is untouched. The
         orphan sweep must leave the existing bundle alone.
         """
         message = MessageEntry.of(
@@ -334,7 +333,7 @@ class SqliteCollectionTest(unittest.TestCase):
         ):
             self._collector().execute()
 
-        bundle_path = self.root / "raw/parent-1.json"
+        bundle_path = self.root / "raw/person-1.json"
         self.assertTrue(bundle_path.exists())
         self.assertTrue(artifacts(self.db, kind="source_bundle"))
 
@@ -369,88 +368,6 @@ class SqliteCollectionTest(unittest.TestCase):
         self.assertTrue(bundle_path.exists())
         self.assertTrue(artifacts(self.db, kind="source_bundle"))
 
-    def test_orphan_sweep_removes_bundle_whose_parent_no_longer_exists(self) -> None:
-        """A bundle is an orphan only once its parent row is actually gone.
-
-        Foreign-key enforcement (parents -> artifacts, ON DELETE CASCADE)
-        makes a dangling source_bundle artifact impossible to reach through
-        the public API, so the "parent is gone" state is forced directly —
-        the same technique
-        test_deep_context_db_parent_merge.test_merge_checks_foreign_keys_before_commit
-        uses to reach an FK-violating state on purpose.
-        """
-        message = MessageEntry.of(
-            MessageChannel.IMESSAGE,
-            "2026-08-06T12:00:00Z",
-            from_me=False,
-            text="Synthetic hello",
-        )
-        with (
-            mock.patch.object(
-                collect_person_context.context_sources,
-                "probe_chat_db",
-                return_value=ChatDbProbe(False, False, 0, 0, None),
-            ),
-            mock.patch.object(
-                collect_person_context.context_sources.ContextSources,
-                "collect_person",
-                return_value=([message], 1),
-            ),
-            mock.patch.object(
-                collect_person_context.context_sources.ContextSources,
-                "imessage_groups",
-                return_value=[],
-            ),
-        ):
-            self._collector().execute()
-
-        bundle_path = self.root / "raw/parent-1.json"
-        self.assertTrue(bundle_path.exists())
-        self.assertTrue(artifacts(self.db, kind="source_bundle"))
-
-        # Deleting only `parents` with foreign keys enforced would cascade the
-        # source_bundle artifact away too (parents -> artifacts is itself
-        # ON DELETE CASCADE), which would make it disappear from
-        # bundle_parent_ids() and defeat the fixture. Foreign keys are
-        # dropped for this raw connection so the whole family (parent,
-        # person, identifiers, sources) can be removed while the
-        # artifacts row is deliberately left behind, dangling — the state
-        # the orphan sweep exists to clean up.
-        raw = sqlite3.connect(self.db.db_path)
-        try:
-            raw.execute("PRAGMA foreign_keys=OFF")
-            raw.execute("DELETE FROM person_sources WHERE person_id=?", ("person-1",))
-            raw.execute("DELETE FROM person_identifiers WHERE person_id=?", ("person-1",))
-            raw.execute("DELETE FROM people WHERE person_id=?", ("person-1",))
-            raw.execute("DELETE FROM parents WHERE parent_id=?", ("parent-1",))
-            raw.commit()
-        finally:
-            raw.close()
-
-        with (
-            mock.patch.object(
-                collect_person_context.context_sources,
-                "probe_chat_db",
-                return_value=ChatDbProbe(False, False, 0, 0, None),
-            ),
-            mock.patch.object(
-                collect_person_context.context_sources.ContextSources,
-                "collect_person",
-                return_value=([], 0),
-            ),
-            mock.patch.object(
-                collect_person_context.context_sources.ContextSources,
-                "imessage_groups",
-                return_value=[],
-            ),
-        ):
-            result = self._collector().execute()
-
-        self.assertEqual(result.people_total, 0)
-        self.assertEqual(result.orphan_bundles_removed, 1)
-        self.assertFalse(bundle_path.exists())
-        self.assertFalse(artifacts(self.db, kind="source_bundle"))
-
     def test_collection_skips_owner_member_without_hiding_family(self) -> None:
         self.db.project_rows(
             (
@@ -475,9 +392,9 @@ class SqliteCollectionTest(unittest.TestCase):
             )
         )
 
-        people = planning.source_parents(self.db)
+        people = planning.source_people(self.db)
 
-        self.assertEqual([person.person_id for person in people], ["parent-1"])
+        self.assertEqual([person.person_id for person in people], ["person-1"])
         self.assertEqual(people[0].emails, [])
         self.assertEqual(people[0].phones, ["+15550100"])
         self.assertEqual(people[0].source_channels, ["imessage", "linkedin_csv"])

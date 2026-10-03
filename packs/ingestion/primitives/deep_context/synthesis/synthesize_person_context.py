@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""[2/4] Synthesize structured facts from each canonical parent's message bundle.
+"""[2/4] Synthesize structured facts from each contact's message bundle.
 
 This is the stable node and CLI surface. Selection/cache policy, prompt
 rendering, paid Responses execution, and SQLite projection live in their
 concrete single-concern modules under ``deep_context/synthesis`` and ``db``.
 
 The stage keeps the fixed artifacts and payload contract:
-``<out-dir>/<parent_id>.jsonl`` plus ``<out-dir>/manifest.json``.
+``<out-dir>/<person_id>.jsonl`` plus ``<out-dir>/manifest.json``.
 
 Changelog:
 - 2026-10-01: some people failing is a completed run: worth still runs for the rest and the
@@ -66,7 +66,7 @@ DEFAULT_MAX_RETRIES = 3
 
 
 class SynthesizePersonContext(Node):
-    """Build per-parent facts with checkpointed, bounded OpenAI Responses calls."""
+    """Build contact facts with checkpointed, bounded OpenAI Responses calls."""
 
     name = "deep_synthesize"
     inputs = (
@@ -135,9 +135,6 @@ class SynthesizePersonContext(Node):
             self.db,
             raw_dir=self.config.raw_dir,
             facts_dir=self.config.facts_dir,
-            system_prompt=system_prompt,
-            chunk_chars=self.config.chunk_chars,
-            max_batches=self.config.max_batches,
         )
         return self._plan(system_prompt)
 
@@ -148,7 +145,7 @@ class SynthesizePersonContext(Node):
         return payload
 
     def execute(self) -> SynthesizePersonContextManifest:
-        """The paid path: migrates cached parent bundles, then bills OpenAI for
+        """The paid path: preserves contact caches, then bills OpenAI for
         every pending person via runner.run_paid. Reached only through
         run() -> Node.run(), which also writes the manifest and records the
         facts/*.jsonl output artifacts; there is no needs_approval gate here —
@@ -175,6 +172,9 @@ class SynthesizePersonContext(Node):
                              for failure in tally.failures),
                 unfinished=tuple(sorted(attempted & set(synthesis_pending(self.db)))),
             ))
+        normalization.normalize_parent_cache(
+            self.db, raw_dir=self.config.raw_dir, facts_dir=self.config.facts_dir,
+        )
         fact_count, without_worth = parent_fact_counts(self.db)
         worth_sync = WorthSyncResult(
             path=str(self.db.db_path),

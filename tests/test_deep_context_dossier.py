@@ -362,7 +362,7 @@ class ComposeDossierTest(unittest.TestCase):
             ).execute()
             first = BuildParents(db=db, parents_dir=parents).execute()
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_parent",
                 side_effect=AssertionError("healed parent artifact must converge"),
             ):
                 second = BuildParents(db=db, parents_dir=parents).execute()

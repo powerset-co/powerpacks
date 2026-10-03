@@ -35,6 +35,12 @@ Use the narrow path when the user names one:
   `bin/deep-context lookup ...` (free, read-only).
 - `$deep-context check` -> run only `bin/deep-context check` (free); report
   `next_command` and stop.
+- `$deep-context audit` -> run only `bin/deep-context audit` (free, read-only).
+  Findings distinguish broken ownership, identity review, and missing independent
+  facts; a finding is not a verdict that two contacts are different people.
+- `$deep-context heal`, "repair bad merges", or "recover contact facts" ->
+  follow [Contact recovery](recovery.md). Do not start paid synthesis or research
+  from a repair request without a scoped estimate and approval.
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
@@ -188,8 +194,8 @@ bin/deep-context check
 ```
 
 `seed` is free and local. It merges the cold parents a legacy same-person
-family spans, re-owns each legacy raw bundle and facts record to its cold
-parent, replays the human worth and LinkedIn decisions from
+family spans while retaining each attributable bundle and facts history under
+its original contact. Mixed parent histories remain separate. It replays the human worth and LinkedIn decisions from
 `overrides/review.csv`, and projects Parallel research results and matching
 cached profiles onto the current candidates. Machine review rows and dossiers
 are not carried. Unmatched worth and identity decisions remain in the legacy files; the
@@ -218,8 +224,12 @@ The store's state picks one of three starts; there is no mode flag:
   every decision are kept, and a contact the refresh omitted is not deleted.
   New unresolved contacts enter the worth and lookup queues like any other.
 
-After `ensure-parents`, every stage reads SQLite only; `realize` is the one
-place a CSV is written again.
+After `ensure-parents`, stages use SQLite projections; legacy recovery also
+reads original facts files. `realize` writes the final people CSV.
+Run `bin/deep-context audit` after preparation and again at completion.
+Report structural defects, identity review signals and incomplete contact
+history separately; follow [Contact recovery](recovery.md) for findings.
+An audit finding alone does not authorize paid work or prove a bad identity.
 
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
 source. Stop on unreadable iMessage Full Disk Access.
@@ -274,7 +284,7 @@ cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
 printed by `dry` — do not invent a different scope. Synthesis extracts facts.
 JEV then answers the 34 share-label and 7 worth questions together, storing
-`network_worth` and `labels` in each `facts/<parent_id>.jsonl` and explicitly
+`network_worth` and `labels` in each contact's `facts/<person_id>.jsonl` and explicitly
 projecting that completed payload into SQLite facts. Effective worth reads the
 human override first, then the parent machine decision from enrichment, then
 the best machine verdict on the parent's facts. Existing facts are reused without
@@ -584,6 +594,7 @@ still-unresolved Yes people explicitly.
 ```text
 .powerpacks/deep-context/raw/                    ephemeral sampled bodies + manifest
 .powerpacks/deep-context/facts/                  extracted facts + manifest
+.powerpacks/deep-context/facts/parents/          derived parent facts; original contact files remain
 .powerpacks/deep-context/dossiers/               dossiers + index
 .powerpacks/deep-context/parents/                canonical people + manifest
 .powerpacks/deep-context/reconcile/deep-research/<handle>/00_parallel_result.json

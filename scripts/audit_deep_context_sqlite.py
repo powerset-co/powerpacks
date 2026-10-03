@@ -3,8 +3,8 @@
 
 Durable stage artifacts remain useful for inspection and paid-work reuse. The
 only general artifact reader is ``migration/seed.py``
-(legacy trees); ``imported_people.py`` is the one current input boundary for the
-import fan-in's people.csv. Current writers
+(legacy trees); ``ensure_parents`` reads the current fan-in people.csv and its
+recorded original source contacts at named input boundaries. Current writers
 parse just-written outputs into frozen projection rows at a named boundary and
 write through ``Db.project_rows``; all later consumers hydrate from SQLite.
 """
@@ -31,6 +31,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 PACKAGE = REPO / "packs/ingestion/primitives/deep_context"
 SEED_READER = PACKAGE / "migration/seed.py"
 IMPORTED_PEOPLE_READER = PACKAGE / "ensure_parents/imported_people.py"
+SOURCE_PEOPLE_READER = PACKAGE / "ensure_parents/source_people.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
 DB_PACKAGE = PACKAGE / "db"
 MIGRATION_PACKAGE = PACKAGE / "migration"
@@ -338,6 +339,14 @@ def _allowed_file_read(
         return True
     called = _name(call.func)
     scope = _scope(call, parents)
+    if path == SOURCE_PEOPLE_READER and scope == "read_source_people" and called == "manifest_path.read_text":
+        return any(
+            isinstance(node, ast.Assign)
+            and _scope(node, parents) == scope
+            and any(isinstance(target, ast.Name) and target.id == "manifest_path" for target in node.targets)
+            and ast.unparse(node.value) == "people_csv.parent / 'manifest.json'"
+            for node in ast.walk(tree)
+        )
     if (
         relative == "packs/ingestion/primitives/deep_context/manifests/enrichment_receipt.py"
         and scope == "EnrichmentReceipt.write"
@@ -492,11 +501,12 @@ def audit_source(path: Path, source: str) -> list[Violation]:
         if isinstance(node, ast.Call):
             raw_called = _name(node.func)
             called = _resolved_name(node.func, aliases)
-            if _is_csv_reader(node, aliases) and path not in {SEED_READER, IMPORTED_PEOPLE_READER}:
+            source_input = path == SOURCE_PEOPLE_READER and _scope(node, parents) == "read_source_people"
+            if _is_csv_reader(node, aliases) and path not in {SEED_READER, IMPORTED_PEOPLE_READER} and not source_input:
                 add(
                     node,
                     "csv-input-boundary",
-                    "only migration/seed.py and imported_people.py may parse CSV",
+                    "CSV parsing belongs to migration/seed.py and EnsureParents input boundaries",
                 )
             if called.rsplit(".", 1)[-1] in FORBIDDEN_HELPERS:
                 add(node, "no-file-state-helper", called)
@@ -583,7 +593,7 @@ def audit() -> list[Violation]:
             for node in ast.walk(tree)
         ):
             csv_readers.append(path)
-    expected_csv_readers = sorted((SEED_READER, IMPORTED_PEOPLE_READER))
+    expected_csv_readers = sorted((SEED_READER, IMPORTED_PEOPLE_READER, SOURCE_PEOPLE_READER))
     if csv_readers != expected_csv_readers:
         violations.append(Violation(
             _relative(PACKAGE),

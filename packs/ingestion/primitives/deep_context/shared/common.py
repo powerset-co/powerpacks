@@ -224,7 +224,7 @@ def slugify(name: str, person_id: str) -> str:
 
 @dataclass
 class Person:
-    # Opaque lookup key, not one id type: collection.planning.source_parents fills this
+    # Opaque lookup key, not one id type: collection.planning.source_people fills this
     # with a canonical parent_id (message-store reads run per merged identity); logbook
     # fills it with a raw people.csv row id — logbook has no parent/child merge concept.
     person_id: str

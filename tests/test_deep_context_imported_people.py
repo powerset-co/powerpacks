@@ -60,7 +60,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         CsvIO.write_dict_rows(self.csv, FIELDS, rows)
 
     def test_roster_survives_removing_import_csv(self) -> None:
-        from packs.ingestion.primitives.deep_context.synthesis.runner import parent_headlines
+        from packs.ingestion.primitives.deep_context.synthesis.runner import person_headlines
 
         self.write([{"id": "person-1", "full_name": "Jordan Bravo", "headline": "Founder",
                      "source_channels": "linkedin_csv", "public_identifier": "jordan-bravo"}])
@@ -68,7 +68,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.csv.rename(self.csv.with_suffix(".csv.bkup"))
         self.assertEqual(queries.imported_people(self.db)[0].headline, "Founder")
         self.assertEqual(queries.imported_people(self.db)[0].id, "person-1")
-        self.assertEqual(list(parent_headlines(self.db).values()), ["Founder"])
+        self.assertEqual(list(person_headlines(self.db).values()), ["Founder"])
         self.assertEqual(ShareEvidence(self.db).load()[0].full_name, "Jordan Bravo")
 
     def test_imported_link_is_reviewable_after_reset_and_reruns_preserve_decisions(self) -> None:

@@ -1,8 +1,8 @@
 """Parse the imported people boundary once and project it into canonical SQLite.
 
-``people.csv`` is the one live input owned by the import fan-in. This module is
-its only Deep Context reader. It converts rows to frozen values at the boundary,
-then get-or-creates stable parent ownership before message collection starts.
+The fan-in's ``people.csv`` owns the aggregate roster. This module converts its
+rows to frozen values, then get-or-creates stable parent ownership before message
+collection starts. ``source_people`` preserves the recorded original contacts.
 Everything downstream reads the SQLite roster, including the headline used by
 the notable-title rule.
 

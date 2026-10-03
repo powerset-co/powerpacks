@@ -4,7 +4,7 @@ Changelog:
   2026-10-02: one person whose dossier cannot be built is recorded and left for the
       next run; the others carry on.
   2026-09-25: the tagging pass reads each parent's imported LinkedIn headline from
-      the roster (parent_headlines) and re-tags a saved non-yes verdict when the
+      the roster (person_headlines) and re-tags a saved non-yes verdict when the
       title is notable; the cached JEV answer makes that free.
 """
 
@@ -34,17 +34,16 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageObservation
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, OwnerProfile
-from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
-from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as stored_facts, people as person_rows
+from packs.ingestion.primitives.deep_context.db.projectors import project_person_fact
+from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as stored_facts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
-    ImportedPerson,
     stored_imported_people,
 )
 from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.deep_context.synthesis.facts import collapse_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
-from packs.ingestion.primitives.deep_context.db.context_queries import parent_histories
+from packs.ingestion.primitives.deep_context.db.context_queries import aggregate_people, person_histories, singleton_people
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     JevUsage,
@@ -214,7 +213,7 @@ async def synthesize_person(
 def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
     encoder = tiktoken.get_encoding("o200k_base")
     owner = plan.owner
-    bundles = selection.effective_parent_bundles(db)
+    bundles = selection.effective_person_bundles(db)
     total_tokens = total_batches = people = 0
     jev_cost = 0.0
     jev_people = 0
@@ -247,11 +246,12 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
             for batch in person_batches
         )
         total_batches += len(person_batches)
-    headlines = parent_headlines(db)
+    headlines = person_headlines(db)
+    histories = person_histories(db)
     for parent_id, path in _tagging_paths(db, config, bundles, owner, headlines=headlines):
         if parent_id in synthesized_ids:
             continue
-        facts, bundle, timestamp, history = _tagging_inputs(bundles, parent_id, path)
+        facts, bundle, timestamp, history = _tagging_inputs(bundles, parent_id, path, history=histories[parent_id])
         request = build_request(
             facts=facts,
             bundle=bundle,
@@ -293,10 +293,10 @@ def estimate(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, 
 def _store_facts(
     db: Db, config: SynthesisConfig, histories: dict[str, FactHistory], result: SynthesisResult,
 ) -> int:
-    """Append this run's record to the parent's facts file and project it; the rows projected."""
-    parent_id = result.person_id
-    path = config.facts_dir / f"{parent_id}.jsonl"
-    history = histories.get(parent_id, FactHistory())
+    """Append this contact's extraction history and return the projected row count."""
+    person_id = result.person_id
+    path = config.facts_dir / f"{person_id}.jsonl"
+    history = histories.get(person_id, FactHistory())
     records = (*(item.payload() for item in history.records), result.record.as_dict())
     if path.exists():
         shutil.copy2(path, path.with_suffix(path.suffix + ".bkup"))
@@ -304,7 +304,7 @@ def _store_facts(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in records),
         encoding="utf-8",
     )
-    return project_parent_fact(db, path, parent_id).synced_rows
+    return project_person_fact(db, path, person_id).synced_rows
 
 
 def run_paid(
@@ -316,7 +316,7 @@ def run_paid(
     if not plan.bundles:
         return tally
     total = len(plan.bundles)
-    histories = parent_histories(db)
+    histories = person_histories(db)
 
     def on_failure(failure: SynthesisFailure) -> None:
         tally.errors += 1
@@ -387,12 +387,16 @@ TAG_CHUNK_PEOPLE = 200
 
 def _tagging_inputs(
     bundles: dict[str, CollectionBundle], parent_id: str, path: Path,
+    *, history: FactHistory | None = None,
 ) -> tuple[WorthFacts, CollectionBundle | None, str, FactHistory]:
     # Keep historical envelope fields and fact order at the file boundary.
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    history = FactHistory.from_records(records)
+    if history is None:
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        history = FactHistory.from_records(records)
     record = history.payload()
-    timestamp = str(record.get("updated_at") or datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat())
+    timestamp = str(record.get("updated_at") or (
+        datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) if path.is_file() else datetime.now(timezone.utc)
+    ).isoformat())
     return WorthFacts.from_payload(record["facts"]), bundles.get(parent_id), timestamp, history
 
 
@@ -410,26 +414,9 @@ def _write_worth(path: Path, result: WorthResult, timestamp: str) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def parent_headlines(db: Db) -> dict[str, str]:
-    """Each parent's imported LinkedIn headline, read once from the roster.
-
-    A parent takes the first non-empty headline among its members, members with
-    a public identifier first; a parent with no roster row or no headline is
-    absent from the map.
-    """
-    roster = {person.person_id: person for person in stored_imported_people(db)}
-    members: dict[str, list[ImportedPerson]] = {}
-    for row in person_rows(db):
-        person = roster.get(str(row.person_id))
-        if person is not None:
-            members.setdefault(str(row.parent_id), []).append(person)
-    headlines: dict[str, str] = {}
-    for parent_id, people in members.items():
-        ordered = sorted(people, key=lambda person: (not person.public_identifier, person.person_id))
-        headline = next((person.headline for person in ordered if person.headline), "")
-        if headline:
-            headlines[parent_id] = headline
-    return headlines
+def person_headlines(db: Db) -> dict[str, str]:
+    """Contact headlines from the canonical imported roster."""
+    return {person.person_id: person.headline for person in stored_imported_people(db) if person.headline}
 
 
 def _needs_tagging(
@@ -456,21 +443,27 @@ def _tagging_paths(
     paths: list[tuple[str, Path]] = []
     projected = {
         row.artifact_key: row
-        for row in artifacts(db, kind=ArtifactKind.FACTS.value, status="projected", parent_owned=True)
+        for row in artifacts(db, kind=ArtifactKind.FACTS.value, status="projected")
     }
-    for fact in stored_facts(db, parent_owned=True):
+    rows = stored_facts(db)
+    contact_ids = {row.person_id for row in rows if row.person_id}
+    singleton = singleton_people(db)
+    aggregate_ids = aggregate_people(db)
+    histories = person_histories(db)
+    for fact in rows:
+        person_id = fact.person_id or singleton.get(fact.parent_id)
+        if person_id is None or person_id in aggregate_ids or (fact.person_id is None and person_id in contact_ids):
+            continue
         artifact = projected.get(fact.artifact_key)
-        if artifact is None:
+        if artifact is None or artifact.artifact_key.startswith('parent-facts:'):
             continue
         path = Path(artifact.path)
-        if not path.is_file():
-            continue
-        facts, bundle, timestamp, history = _tagging_inputs(bundles, fact.parent_id, path)
+        facts, bundle, timestamp, history = _tagging_inputs(bundles, person_id, path, history=histories[person_id])
         if not facts.facts.present:
             continue
         request = build_request(facts=facts, bundle=bundle, owner=owner, reference_date=timestamp[:10], history=history)
-        if _needs_tagging(config, facts.facts, request, headline=headlines.get(fact.parent_id, "")):
-            paths.append((fact.parent_id, path))
+        if _needs_tagging(config, facts.facts, request, headline=headlines.get(person_id, "")):
+            paths.append((person_id, path))
     return paths
 
 
@@ -482,8 +475,8 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
     and machine_worth carry the new worth and labels.
     """
     owner = plan.owner
-    bundles = selection.effective_parent_bundles(db)
-    headlines = parent_headlines(db)
+    bundles = selection.effective_person_bundles(db)
+    headlines = person_headlines(db)
     paths = _tagging_paths(db, config, bundles, owner, headlines=headlines)
     if not paths:
         return JevUsage()
@@ -511,7 +504,7 @@ def tag_saved_facts(db: Db, config: SynthesisConfig, plan: SynthesisPlan) -> Jev
                         history=history,
                     )
                     _write_worth(path, result, timestamp)
-                    project_parent_fact(db, path, parent_id)
+                    project_person_fact(db, path, parent_id)
                 except Exception as exc:
                     failed.append(exc)
                     print(f"[worth] {parent_id}: {type(exc).__name__}: {exc}"[:300], file=sys.stderr, flush=True)

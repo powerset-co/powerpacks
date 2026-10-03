@@ -1,11 +1,7 @@
-"""Collect bounded Gmail, iMessage, and WhatsApp context per SQLite parent.
+"""Collect one bounded Gmail/iMessage/WhatsApp bundle per contact.
 
-Each parent is processed independently: its messages are pooled, written to a
-fixed raw JSON bundle, and projected into SQLite before the next parent
-starts, so no message body is retained past the parent being processed —
-only a scalar set of parent ids carries across the loop, for the
-after-the-fact orphan sweep. The stage writes one display-only manifest;
-downstream stages read the SQLite projection.
+Contact artifacts keep their person_id through parent merges. Parent bundles
+are derived display inputs; extraction reads the contact-owned bundles.
 """
 
 from __future__ import annotations
@@ -27,11 +23,9 @@ from packs.ingestion.primitives.deep_context.shared.common import (
 )
 from packs.ingestion.primitives.deep_context.db.context_queries import (
     collection_bundle_group_message_count,
-    collection_bundle_parent_ids,
-    existing_parent_ids,
-    parent_histories,
+    person_histories,
 )
-from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
+from packs.ingestion.primitives.deep_context.db.projectors import project_person_source_bundle
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.manifests.collect_person_context_manifest import (
     CollectPersonContextManifest,
@@ -45,7 +39,7 @@ DEFAULT_DEEP_CAP = context_sources.CHAT_MESSAGE_CAP
 
 
 class CollectPersonContext(Node):
-    """Write and project one bounded message bundle per SQLite parent."""
+    """Write and project one bounded message bundle per SQLite contact."""
 
     name = "deep_collect"
     inputs = (
@@ -99,13 +93,8 @@ class CollectPersonContext(Node):
     def execute(self) -> CollectPersonContextManifest:
         started = time.monotonic()
         db = self.db
-        if not self.dry_run:
-            # No-op on a clean install: works from cached artifact payloads only,
-            # opens no message store, so it never re-bills.
-            normalize_cached_bundles(db, self.out_dir)
-        histories = parent_histories(db)
-        people = planning.source_parents(db)
-        bundle_ids = set(collection_bundle_parent_ids(db))
+        histories = person_histories(db)
+        people = planning.source_people(db)
 
         readiness = self.sources.readiness(people=people)
         chat_probe = readiness.chat_db
@@ -134,12 +123,6 @@ class CollectPersonContext(Node):
                 groups = self.sources.imessage_groups(person)
                 thread_participants = self.sources.thread_participants(person)
                 if not messages and not groups:
-                    if not self.dry_run:
-                        bundle_path.unlink(missing_ok=True)
-                        # Absent path -> projector deletes the SQLite row (see
-                        # projectors.py), clearing any earlier bundle for this parent.
-                        project_parent_source_bundle(db, bundle_path, person.person_id)
-                        bundle_ids.discard(person.person_id)
                     continue
                 with_context += 1
                 total_messages += len(messages)
@@ -159,24 +142,14 @@ class CollectPersonContext(Node):
                 )
                 payload = bundle.to_payload()
                 write_json(bundle_path, payload)
-                project_parent_source_bundle(db, bundle_path, person.person_id)
-                bundle_ids.add(person.person_id)
+                project_person_source_bundle(db, bundle_path, person.person_id)
                 if with_context % 25 == 0:
                     print(f"[collect] {with_context} bundles written", file=sys.stderr, flush=True)
         finally:
             self.sources.close()
 
-        orphan_person_ids: set[str] = set()
         if not self.dry_run:
-            # A bundle is orphaned when its parent row is gone, never merely
-            # because this run's message-channel selection (source_parents)
-            # happened to skip it — narrowing selection must not be destructive.
-            orphan_person_ids = bundle_ids - existing_parent_ids(db)
-            for parent_id in orphan_person_ids:
-                path = self.out_dir / f"{parent_id}.json"
-                path.unlink(missing_ok=True)
-                project_parent_source_bundle(db, path, parent_id)
-
+            normalize_cached_bundles(db, self.out_dir)
         retained_group_messages = collection_bundle_group_message_count(db)
         group_bodies_present = retained_group_messages > 0
         # a run too fast to measure must not divide by zero
@@ -195,7 +168,7 @@ class CollectPersonContext(Node):
             ms_per_contact=round(elapsed_s / people_total * 1000, 2) if people_total else 0,
             deep_cap_per_person=self.deep_cap,
             max_group_size=self.max_group_size,
-            orphan_bundles_removed=len(orphan_person_ids),
+            orphan_bundles_removed=0,
             msgvault_available=self.msgvault_db.exists(),
             chat_db_available=self.chat_db.exists(),
             chat_db_probe=chat_probe_payload,
@@ -223,7 +196,7 @@ class CollectPersonContext(Node):
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Collect per-parent message bodies (Gmail + chat DMs + small iMessage groups)."
+        description="Collect per-contact message bodies (Gmail + chat DMs + small iMessage groups)."
     )
     p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--out-dir", default=str(RAW_DIR))

@@ -1,14 +1,15 @@
 # deep_context/collection — `deep_collect`
 
 `deep_collect` (`CollectPersonContext`) writes and projects one bounded message
-bundle per SQLite parent. It is the one declared node in this package.
+bundle per SQLite contact using that contact's own email and phone identifiers.
+Derived parent bundles serve dossier display. It is the one declared node in this package.
 
 Pipeline-wide context: [deep-context-pipeline.md](../../../docs/deep-context-pipeline.md)
 and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 
 | node | reads | writes | manifest |
 |---|---|---|---|
-| `deep_collect` | `deep-context/deep-context.sqlite` (external, optional), `~/.msgvault/msgvault.db` (external, optional), `~/Library/Messages/chat.db` (external, optional), `messages/wacli/wacli.db` (external, optional) | `deep-context/raw/{parent_id}.json` (optional) | `deep-context/raw/manifest.json` (`CollectPersonContextManifest`) |
+| `deep_collect` | `deep-context/deep-context.sqlite` (external, optional), `~/.msgvault/msgvault.db` (external, optional), `~/Library/Messages/chat.db` (external, optional), `messages/wacli/wacli.db` (external, optional) | `deep-context/raw/{person_id}.json` and derived `deep-context/raw/parents/{parent_id}.json` (optional) | `deep-context/raw/manifest.json` (`CollectPersonContextManifest`) |
 
 ## Manifest / status
 

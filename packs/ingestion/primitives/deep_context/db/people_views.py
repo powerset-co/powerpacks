@@ -9,7 +9,7 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _hydrate_parents,
     _json,
 )
-from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_SELECT, WORTH_CTE
+from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_DOSSIER_SELECT, PARENT_SELECT, WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentLookupRow,
@@ -74,7 +74,12 @@ WITH exact_name_people AS (
   FROM matched_people_raw GROUP BY person_id, parent_id
 ), matched_parents_raw AS (
   SELECT parent_id, min(match_order) + 1 AS match_order
-  FROM matched_people WHERE match_order < 30 GROUP BY parent_id
+  FROM matched_people mp
+  WHERE match_order < 30 OR NOT EXISTS (
+    SELECT 1 FROM artifacts a
+    WHERE a.person_id=mp.person_id AND a.kind='dossier' AND a.status='projected'
+  )
+  GROUP BY parent_id
   UNION ALL
   SELECT parent_id, 30 FROM exact_name_parents
   UNION ALL
@@ -136,11 +141,7 @@ WITH exact_name_people AS (
           ))
   FROM matched_parents mp JOIN parents p USING(parent_id)
   JOIN artifacts a ON a.artifact_key=(
-    SELECT a2.artifact_key FROM artifacts a2
-    WHERE a2.parent_id=p.parent_id AND a2.person_id IS NULL
-      AND a2.candidate_key IS NULL AND a2.kind='dossier' AND a2.status='projected'
-      AND a2.artifact_key='dossier:'||a2.parent_id
-    LIMIT 1
+    {PARENT_DOSSIER_SELECT}
   )
   WHERE p.display_slug IS NOT NULL
 )

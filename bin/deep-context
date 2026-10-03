@@ -147,6 +147,7 @@ usage: bin/deep-context <command> [args]
 
   owner        build owner.json from YOUR LinkedIn (run first)
   check        readiness check (sources, Full Disk Access, keys)
+  audit        report identity ownership and independent facts coverage (read-only)
   ensure-parents  project the current imported people into stable SQLite parents
                (creates the store on a fresh install)
   seed         carry legacy decisions, facts and Parallel results onto the cold
@@ -224,6 +225,9 @@ case "$cmd" in
     ;;
   check)
     "${PY[@]}" "$PKG.shared.check_readiness" "$@"
+    ;;
+  audit)
+    "${PY[@]}" "$PKG.db.audit_identity" "$@"
     ;;
   ensure-parents)
     "${PY[@]}" "$PKG.ensure_parents.ensure_parents" "$@"

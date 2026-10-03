@@ -54,6 +54,7 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
 )
+from packs.ingestion.primitives.deep_context.synthesis.normalization import normalize_parent_cache
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import accepted_edges, connected_components
 from packs.ingestion.primitives.deep_context.manifests.build_parents_manifest import (
     BuildParentsManifest,
@@ -63,7 +64,7 @@ from packs.ingestion.primitives.deep_context.ensure_parents.assignment import lo
 from packs.ingestion.primitives.deep_context.merge_candidates.models import ChildEntry, ParentPlan
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
 
-PARENT_RENDER_CONTRACT = "parent-dossier-v1"
+PARENT_RENDER_CONTRACT = "parent-dossier-v2"
 
 
 def _accepted_components(db: Db) -> tuple[tuple[str, ...], ...]:
@@ -97,7 +98,11 @@ def _parent_plans(db: Db) -> tuple[tuple[ParentPlan, ...], int]:
     for row in person_rows(db):
         people_by_parent[row.parent_id].append(row)
     facts_by_parent: dict[str, list[FactRecord]] = defaultdict(list)
-    for row in fact_rows(db):
+    rows = fact_rows(db)
+    aggregate_parents = {row.parent_id for row in rows if row.artifact_key == f"parent-facts:{row.parent_id}"}
+    for row in rows:
+        if row.parent_id in aggregate_parents and row.artifact_key != f"parent-facts:{row.parent_id}":
+            continue
         payload = parse_json_object(row.facts_json)
         if payload:
             record: FactRecord | None = FactRecord.from_payload({"facts": payload})
@@ -198,6 +203,9 @@ class BuildParents(Node):
                 self.db.merge_parents(survivor, absorbed)
                 parents_merged += 1
 
+        if parents_merged:
+            normalize_parent_cache(self.db, raw_dir=self.db.db_path.parent / 'raw',
+                                   facts_dir=self.db.db_path.parent / 'facts')
         plans, owner_excluded = _parent_plans(self.db)
         prior_artifacts: dict[str, list[ArtifactRow]] = defaultdict(list)
         for row in artifact_rows(self.db, kind=ArtifactKind.DOSSIER.value):
@@ -249,7 +257,7 @@ class BuildParents(Node):
                     )
                 continue
 
-            body = parent_rendering.render_singleton(plan) if singleton else parent_rendering.render_parent(plan)
+            body = parent_rendering.render_parent(plan)
             data = body.encode()
             fingerprint = hashlib.sha256(data).hexdigest()
             artifact = ArtifactRow(

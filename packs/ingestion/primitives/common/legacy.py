@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 import csv
 import hashlib
 import json
+import shutil
 import sqlite3
 import sys
 from typing import Any, TYPE_CHECKING
@@ -68,8 +69,9 @@ def is_harmonic_bootstrap(source: object) -> bool:
 
 def scrub_deep_context(db: Db) -> tuple[MergeRepairReport, int, MergeRepairReport]:
     """Run pending data repairs in order before the calling stage does work."""
-    from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_merged_parents
+    from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_candidate_memberships, _repair_merged_parents
 
+    _repair_candidate_memberships(db)
     merged = _repair_merged_parents(db)
     harmonic = _scrub_harmonic_profiles(db)
     historical = _scrub_historical_merges(db)
@@ -395,17 +397,58 @@ def ensure_owner_phones(owner_json: Path) -> bool:
     return True
 
 
+def restore_contact_facts(db: Db, facts_dir: Path) -> int:
+    """2026-10-02: recover root contact caches; remove after pre-v4 installs."""
+    from packs.ingestion.primitives.deep_context.db.projectors import project_person_fact
+    from packs.ingestion.primitives.deep_context.db.queries import artifacts, people
+    from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
+
+    members = {}
+    for row in people(db):
+        members.setdefault(row.parent_id, []).append(row.person_id)
+    originals = artifacts(db, kind='facts', status='projected')
+    contact_ids = {row.person_id for row in originals if row.person_id}
+    restored = set()
+    for family in members.values():
+        for person_id in family:
+            path = Path(facts_dir) / f'{person_id}.jsonl'
+            if person_id not in contact_ids and path.is_file():
+                project_person_fact(db, path, person_id)
+                contact_ids.add(person_id)
+                restored.add(person_id)
+    contacts = {row.person_id: FactHistory.from_payload(json.loads(row.payload_json or '{}'))
+                for row in artifacts(db, kind='facts', status='projected') if row.person_id}
+    for row in originals:
+        if row.person_id or row.artifact_key.startswith('parent-facts:'):
+            continue
+        family = members.get(row.parent_id, [])
+        if len(family) != 1:
+            continue
+        person_id = family[0]
+        parent_history = FactHistory.from_payload(json.loads(row.payload_json or '{}'))
+        contact_history = contacts.get(person_id, FactHistory())
+        history = FactHistory.from_records(item.payload() for old in (parent_history, contact_history)
+                                           for item in old.records)
+        if history == contact_history:
+            continue
+        path = Path(facts_dir) / 'seed' / f'{person_id}.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        backup = path.with_suffix('.jsonl.bkup')
+        if path.exists() and not backup.exists():
+            shutil.copy2(path, backup)
+        path.write_text(''.join(item.serialized + '\n' for item in history.records), encoding='utf-8')
+        project_person_fact(db, path, person_id)
+        contacts[person_id] = history
+        restored.add(person_id)
+    return len(restored)
+
+
 def _scrub_historical_merges(db: Db) -> MergeRepairReport:
     """2026-10-01: restore original child evidence; remove after pre-v4 installs."""
-    from packs.ingestion.primitives.deep_context.db.merge_repair import (
-        HISTORICAL_MERGE_MIGRATION, MergeRepairReport, _repair_historical_merges,
-    )
+    from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_historical_merges
     from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
     from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 
-    version = db.query("SELECT value FROM meta WHERE key='data_migration_version'")
-    if version and int(version[0]['value']) >= HISTORICAL_MERGE_MIGRATION:
-        return MergeRepairReport()
     facts_dir = db.db_path.parent / 'facts'
     histories = {}
     for row in db.query('SELECT person_id,parent_id FROM people'):

@@ -12,13 +12,12 @@ from packs.ingestion.primitives.deep_context.shared.common import owner_backgrou
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, OwnerProfile
 from packs.ingestion.primitives.deep_context.db.queries import (
     artifacts,
-    facts,
     owner_profile,
     parents,
     people,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.context_queries import parent_histories
+from packs.ingestion.primitives.deep_context.db.context_queries import aggregate_people, person_histories, singleton_people
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisPlan
 
@@ -28,7 +27,10 @@ def effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
     source_artifacts = artifacts(db, kind=ArtifactKind.SOURCE_BUNDLE.value, status="projected")
     bundles: dict[str, CollectionBundle] = {}
     children: dict[str, list[CollectionBundle]] = {}
+    contact_parents = {row.parent_id for row in source_artifacts if row.person_id}
     for row in source_artifacts:
+        if row.person_id is None and row.parent_id in contact_parents:
+            continue
         bundle = CollectionBundle.from_payload(parse_json_object(row.payload_json))
         if bundle is not None:
             children.setdefault(str(row.parent_id), []).append(bundle)
@@ -42,25 +44,20 @@ def effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
     return bundles
 
 
-def _stored_legacy_fingerprint(db: Db, pid: str) -> str:
-    """The real evidence fingerprint recorded on a parent's legacy child FACTS artifacts.
-
-    ``input_fingerprint`` postdates the legacy per-child layout, so on every
-    install seen so far this returns "" for every legacy parent — and "" can
-    never equal a live-computed hash, so the caller correctly treats that
-    parent as pending (spend) instead of fabricating a match. Returns the
-    first non-empty value only so a parent that DOES carry one (a legacy
-    artifact re-projected after this field started being written) still gets
-    the fast-path skip it has always earned.
-    """
-    return next(
-        (
-            str(row.input_fingerprint)
-            for row in artifacts(db, kind=ArtifactKind.FACTS.value, parent_id=pid, parent_owned=False)
-            if row.input_fingerprint
-        ),
-        "",
-    )
+def effective_person_bundles(db: Db) -> dict[str, CollectionBundle]:
+    """Read contact-owned bundles; only singleton parent bundles are reusable."""
+    singleton = singleton_people(db)
+    aggregate_ids = aggregate_people(db)
+    rows = artifacts(db, kind=ArtifactKind.SOURCE_BUNDLE.value, status="projected")
+    bundles = {}
+    for row in sorted(rows, key=lambda item: bool(item.person_id)):
+        person_id = row.person_id or singleton.get(row.parent_id)
+        if person_id is None or person_id in aggregate_ids:
+            continue
+        bundle = CollectionBundle.from_payload(parse_json_object(row.payload_json))
+        if bundle is not None:
+            bundles[person_id] = replace(bundle, person_id=person_id)
+    return bundles
 
 
 def pending_target_bundles(
@@ -74,38 +71,23 @@ def pending_target_bundles(
     reasoning_effort: str = "",
 ) -> list[CollectionBundle]:
     """Use successful per-record coverage and config; retain old fingerprint caches."""
+    singleton = singleton_people(db)
     cached = {
-        str(row.parent_id): (
+        str(row.person_id or singleton.get(row.parent_id, "")): (
             str(row.input_fingerprint or ""),
             str(json.loads(row.payload_json or "{}").get("synthesis_version") or ""),
         )
-        for row in artifacts(db, kind=ArtifactKind.FACTS.value, parent_owned=True)
+        for row in sorted(artifacts(db, kind=ArtifactKind.FACTS.value, status="projected"), key=lambda item: bool(item.person_id))
+        if not row.artifact_key.startswith('parent-facts:') and (row.person_id or row.parent_id in singleton)
     }
-    histories = parent_histories(db)
-    effective_bundles = effective_parent_bundles(db)
-    child_fact_parents = {str(row.parent_id) for row in facts(db, parent_owned=False)}
-    # A parent with child-owned facts but no parent-owned FACTS artifact (legacy
-    # per-child layout) borrows a cache entry from a REAL fingerprint recorded on
-    # one of those legacy artifacts, if any exists. It almost never does (see
-    # _stored_legacy_fingerprint), so this parent falls through to the loop
-    # below with no cache entry at all and is correctly treated as pending —
-    # never a fabricated match against whatever the current bundle happens to be.
-    for pid in child_fact_parents - cached.keys():
-        fingerprint = _stored_legacy_fingerprint(db, pid)
-        if fingerprint:
-            cached[pid] = (fingerprint, prompting.SYNTHESIS_VERSION)
+    histories = person_histories(db)
+    effective_bundles = effective_person_bundles(db)
     bundles: list[CollectionBundle] = []
-    person_rows = people(db)
-    member_parents = {str(row.parent_id) for row in person_rows}
-    non_owner_parents = {str(row.parent_id) for row in person_rows if not row.is_owner}
-    # Parents whose every person row is the owner: the owner is never a subject
-    # of their own dossier, and collection planning already excludes them — this
-    # guards cached bundles that predate that exclusion (an earlier layout).
-    owner_only_parents = member_parents - non_owner_parents
+    owner_ids = {row.person_id for row in people(db) if row.is_owner}
     # Deterministic work order: a partial or interrupted run resumes in the same
     # sequence every time instead of whatever dict/artifact-scan order produced.
     for pid, bundle in sorted(effective_bundles.items()):
-        if pid in owner_only_parents:
+        if pid in owner_ids:
             continue
         history = histories.get(pid)
         if history and history.processed:

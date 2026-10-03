@@ -48,6 +48,36 @@ class _Repair:
     sibling_decisions: tuple[str, ...]
 
 
+def _candidate_owners(row_key, people, child_owner, identifier_owners):
+    owners = {child_owner[row['person_id']] for row in people}
+    if not owners and row_key in child_owner:
+        return {child_owner[row_key]}
+    if not owners and row_key.startswith(('candidate:email:', 'candidate:phone:')):
+        _, kind, value = row_key.split(':', 2)
+        normalize = canonicalize_phone if kind == 'phone' else normalize_email
+        owners = identifier_owners.get((kind, normalize(value)), set()).copy()
+    return owners
+
+
+def _repair_candidate_memberships(db: Db) -> int:
+    """Restore missing source membership only when its same-parent child is proved."""
+    restored = 0
+    with db.transaction() as conn:
+        links = list(conn.execute('SELECT row_key,parent_id FROM links WHERE NOT EXISTS (SELECT 1 FROM candidate_people cp WHERE cp.row_key=links.row_key)'))
+        for link in links:
+            children = {row['person_id']: row['person_id'] for row in conn.execute('SELECT person_id FROM people WHERE parent_id=?', (link['parent_id'],))}
+            identifier_owners = defaultdict(set)
+            for row in conn.execute('SELECT pi.person_id,pi.kind,pi.normalized_value FROM person_identifiers pi JOIN people p ON p.person_id=pi.person_id WHERE p.parent_id=?', (link['parent_id'],)):
+                normalize = canonicalize_phone if row['kind'] == 'phone' else normalize_email
+                identifier_owners[row['kind'], normalize(row['normalized_value'])].add(row['person_id'])
+            owners = _candidate_owners(link['row_key'], (), children, identifier_owners)
+            if len(owners) != 1:
+                continue
+            conn.execute('INSERT INTO candidate_people(row_key,person_id,parent_id) VALUES (?,?,?)', (link['row_key'], owners.pop(), link['parent_id']))
+            restored += 1
+    return restored
+
+
 def _artifact_owner(row, child_owner, link_owner, original_owner):
     if row['person_id'] is not None:
         return child_owner[row['person_id']]
@@ -113,11 +143,7 @@ def _plan(conn, parent_id, verdicts):
             identifier_owners[row['kind'], normalize(row['normalized_value'])].add(owner)
     link_owner = {}
     for link in conn.execute('SELECT row_key FROM links WHERE parent_id=?', (parent_id,)):
-        owners = {child_owner[row['person_id']] for row in conn.execute('SELECT person_id FROM candidate_people WHERE row_key=?', (link['row_key'],))}
-        if not owners and link['row_key'].startswith(('candidate:email:', 'candidate:phone:')):
-            _, kind, value = link['row_key'].split(':', 2)
-            normalize = canonicalize_phone if kind == 'phone' else normalize_email
-            owners = identifier_owners.get((kind, normalize(value)), set()).copy()
+        owners = _candidate_owners(link['row_key'], conn.execute('SELECT person_id FROM candidate_people WHERE row_key=?', (link['row_key'],)), child_owner, identifier_owners)
         if len(owners) != 1:
             raise ValueError('candidate has no unique child owner')
         link_owner[link['row_key']] = owners.pop()
@@ -243,15 +269,17 @@ def _repair_historical_merges(db: Db, histories: dict[str, FactHistory]) -> Merg
     original fact parents qualify. Missing child evidence or ambiguous candidate
     ownership leaves the entire family unchanged.
     """
-    version = db.query("SELECT value FROM meta WHERE key='data_migration_version'")
-    if version and int(version[0]['value']) >= HISTORICAL_MERGE_MIGRATION:
-        return MergeRepairReport()
     plans = []
     unresolved = []
     for family in db.query("SELECT parent_id FROM links WHERE kind='pub' GROUP BY parent_id HAVING COUNT(DISTINCT public_identifier)>1"):
         parent = family['parent_id']
         children = db.query('SELECT person_id,display_name FROM people WHERE parent_id=?', (parent,))
         owners = {row['person_id']: mint_parent_id((row['person_id'],)) for row in children}
+        # Archived original facts prove this family already underwent recovery;
+        # a subsequent accepted merge belongs to the current merge judge.
+        archived = tuple('facts:' + owner + ':pre-merge-repair' for owner in owners.values())
+        if db.query('SELECT 1 FROM artifacts WHERE artifact_key IN (SELECT value FROM json_each(?)) LIMIT 1', (json.dumps(archived),)):
+            continue
         originals = {row['subject_key'] for row in db.query('SELECT subject_key FROM facts WHERE parent_id=? AND person_id IS NULL', (parent,))}
         incompatible = any(_given_names_differ(a['display_name'], b['display_name']) for a, b in combinations(children, 2))
         if not incompatible and len(originals.intersection(owners.values())) < 2:
@@ -259,9 +287,13 @@ def _repair_historical_merges(db: Db, histories: dict[str, FactHistory]) -> Merg
         if any(person not in histories or not histories[person].records for person in owners):
             unresolved.append((parent, 'original child facts missing'))
             continue
+        identifier_owners = defaultdict(set)
+        for row in db.query('SELECT pi.person_id,pi.kind,pi.normalized_value FROM person_identifiers pi JOIN people p ON p.person_id=pi.person_id WHERE p.parent_id=?', (parent,)):
+            normalize = canonicalize_phone if row['kind'] == 'phone' else normalize_email
+            identifier_owners[row['kind'], normalize(row['normalized_value'])].add(owners[row['person_id']])
         links = {}
         for row in db.query('SELECT row_key FROM links WHERE parent_id=?', (parent,)):
-            matches = {owners[r['person_id']] for r in db.query('SELECT person_id FROM candidate_people WHERE row_key=?', (row['row_key'],)) if r['person_id'] in owners}
+            matches = _candidate_owners(row['row_key'], db.query('SELECT person_id FROM candidate_people WHERE row_key=?', (row['row_key'],)), owners, identifier_owners)
             if len(matches) != 1:
                 break
             links[row['row_key']] = matches.pop()
@@ -290,7 +322,7 @@ def _repair_historical_merges(db: Db, histories: dict[str, FactHistory]) -> Merg
                 conn.execute('UPDATE parents SET display_name=?,display_slug=? WHERE parent_id=?', (name, slugify(name, owner), owner))
             # The paid payload remains in artifacts and the backup. Its mixed
             # facts projection cannot safely identify any individual child.
-            conn.execute('DELETE FROM facts WHERE parent_id=?', (parent,))
+            conn.execute('DELETE FROM facts WHERE parent_id=? AND person_id IS NULL', (parent,))
             for row in artifacts:
                 owner = owners.get(row['person_id']) or links.get(row['candidate_key'])
                 if owner:
@@ -298,10 +330,12 @@ def _repair_historical_merges(db: Db, histories: dict[str, FactHistory]) -> Merg
                 else:
                     conn.execute("UPDATE artifacts SET status='failed',error='mixed ownership before merge repair',input_fingerprint=NULL WHERE artifact_key=?", (row['artifact_key'],))
             for person, owner in owners.items():
+                conn.execute('UPDATE facts SET parent_id=? WHERE person_id=?', (owner, person))
                 conn.execute('UPDATE people SET parent_id=?,parent_slug=(SELECT display_slug FROM parents WHERE parent_id=?),display_name=? WHERE person_id=?', (owner, owner, histories[person].facts.canonical_name or next(row['display_name'] for row in children if row['person_id'] == person), person))
             for key, owner in links.items():
                 conn.execute('UPDATE links SET parent_id=? WHERE row_key=?', (owner, key))
                 conn.execute('UPDATE candidate_people SET parent_id=? WHERE row_key=?', (owner, key))
+                conn.execute('INSERT OR IGNORE INTO candidate_people(row_key,person_id,parent_id) VALUES (?,?,?)', (key, next(person for person, original in owners.items() if original == owner), owner))
             for table, rows in (('research', research), ('guidance', guidance)):
                 for row in rows:
                     conn.execute(f'UPDATE {table} SET parent_id=? WHERE handle=?', (links[row['candidate_key']], row['handle']))

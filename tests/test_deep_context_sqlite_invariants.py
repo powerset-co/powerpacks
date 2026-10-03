@@ -124,6 +124,26 @@ def rows(path):
         self.assertIn("json.load in rows", violations[1].detail)
         self.assertIn("path.read_text in rows", violations[2].detail)
 
+    def test_source_import_boundary_reads_only_its_fan_in_manifest_and_csvs(self) -> None:
+        source = """from packs.shared.csv_io import CsvIO
+
+def read_source_people(people_csv, path):
+    manifest_path = people_csv.parent / 'manifest.json'
+    manifest = manifest_path.read_text()
+    return manifest, CsvIO.read_dict_rows(path)
+"""
+        relative = "ensure_parents/source_people.py"
+        self.assertEqual(self.audit_source(relative, source), [])
+        other_scope = source.replace("def read_source_people(", "def consumer(")
+        self.assertEqual([row.rule for row in self.audit_source(relative, other_scope)],
+                         ["artifact-file-read", "csv-input-boundary"])
+        other_artifact = source.replace("'manifest.json'", "'dossier.json'")
+        self.assertEqual([row.rule for row in self.audit_source(relative, other_artifact)],
+                         ["artifact-file-read"])
+        other_read = source.replace("manifest_path.read_text()", "path.read_text()")
+        self.assertEqual([row.rule for row in self.audit_source(relative, other_read)],
+                         ["artifact-file-read"])
+
     def test_alias_audit_ignores_reassigned_local_names(self) -> None:
         violations = self.audit_source(
             "consumer.py",
