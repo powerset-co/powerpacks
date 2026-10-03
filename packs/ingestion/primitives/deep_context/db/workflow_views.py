@@ -99,19 +99,19 @@ def synthesis_pending(db: Db) -> tuple[str, ...]:
     bundles = effective_person_bundles(db)
     pending = {row["person_id"] for row in db.query(
         """
-SELECT DISTINCT pe.person_id FROM artifacts a JOIN people pe ON
+SELECT DISTINCT pe.person_id FROM artifacts a JOIN people pe ON pe.parent_id=a.parent_id AND (
   pe.person_id=a.person_id OR (
-    a.person_id IS NULL AND pe.parent_id=a.parent_id
+    a.person_id IS NULL
     AND (SELECT count(*) FROM people family WHERE family.parent_id=a.parent_id)=1
-  )
+  ))
 WHERE a.kind='source_bundle' AND a.status='projected'
   AND pe.is_owner=0
   AND NOT EXISTS (
-    SELECT 1 FROM facts f WHERE f.person_id=pe.person_id OR (
-      f.person_id IS NULL AND f.parent_id=pe.parent_id
+    SELECT 1 FROM facts f WHERE f.parent_id=pe.parent_id AND (f.person_id=pe.person_id OR (
+      f.person_id IS NULL
       AND f.artifact_key NOT LIKE 'parent-facts:%'
       AND (SELECT count(*) FROM people family WHERE family.parent_id=pe.parent_id)=1
-    )
+    ))
   )
 ORDER BY pe.person_id
 """
