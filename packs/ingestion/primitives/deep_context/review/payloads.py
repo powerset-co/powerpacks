@@ -295,6 +295,12 @@ class RetargetResult:
 
 
 @dataclass(frozen=True)
+class ResumeResult:
+    ok: bool
+    resumed: int
+
+
+@dataclass(frozen=True)
 class SignInResult:
     ok: bool
     status: str
@@ -312,6 +318,7 @@ Payload = (
     | WorthResult
     | CompleteResult
     | RetargetResult
+    | ResumeResult
     | SignInResult
 )
 

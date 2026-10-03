@@ -106,6 +106,8 @@ class GuidedRetargetWorker:
         return item
 
     def resume(self) -> int:
+        if self._thread and self._thread.is_alive():
+            return 0
         resumed = 0
         for row in guidance_rows(self.db):
             if row.state not in ACTIVE_GUIDANCE_STATES:

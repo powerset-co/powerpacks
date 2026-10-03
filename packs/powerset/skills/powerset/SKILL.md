@@ -53,7 +53,7 @@ $powerset help                  show this help
 
 For mutating commands (`$powerset setup`, `$powerset login`, `$powerset env
 pull`, `$powerset sets use`, `$powerset mcp install`, and `$powerset create
-oauth app`), first resolve and enter the canonical non-`.codex` Powerpacks repo.
+oauth app`), first resolve and enter the installed Powerpacks repo.
 This ensures `.env` and any local Powerpacks state are written under the
 installed checkout such as `~/powerpacks`, not under an agent skill bundle like
 `~/.codex/powerpacks`.
@@ -61,7 +61,7 @@ installed checkout such as `~/powerpacks`, not under an agent skill bundle like
 Prefer, in order:
 
 1. `$POWERPACKS_REPO_ROOT` if it points to a Powerpacks repo;
-2. current working directory if it is a Powerpacks repo and not under `.codex`;
+2. current working directory if it is a Powerpacks repo and not a legacy skill bundle;
 3. `~/powerpacks`;
 4. `~/workspace/powerpacks`.
 
@@ -69,7 +69,7 @@ Prefer, in order:
 resolve_powerpacks_root() {
   for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
     [[ -n "$candidate" ]] || continue
-    [[ "$candidate" != *"/.codex/"* ]] || continue
+    [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
       printf '%s\n' "$candidate"
       return 0
@@ -78,7 +78,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No canonical non-.codex Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
   exit 1
 }
 cd "$repo"

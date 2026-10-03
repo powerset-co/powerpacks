@@ -43,7 +43,8 @@ from packs.ingestion.primitives.deep_context.db.models import PersonRow, ReviewA
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import load_assignment
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, slugify
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.shared.common import slugify
 from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapidapi
 from packs.ingestion.primitives.imports.merge_people import (
     fill_profile_columns,

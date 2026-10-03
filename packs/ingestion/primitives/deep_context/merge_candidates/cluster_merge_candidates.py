@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     DOSSIER_DIR,
     ROOT,
     emit,

@@ -28,7 +28,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ShareDecisionRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.pipeline.contract import (
     STATUS_COMPLETED,
     Artifact,

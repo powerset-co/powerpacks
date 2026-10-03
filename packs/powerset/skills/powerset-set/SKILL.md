@@ -18,14 +18,14 @@ It only manages local set scope:
 
 ## Canonical repo setup
 
-For `$powerset sets use <id|name>`, resolve and enter the canonical non-`.codex`
+For `$powerset sets use <id|name>`, resolve and enter the installed
 Powerpacks repo before writing `.env`:
 
 ```bash
 resolve_powerpacks_root() {
   for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
     [[ -n "$candidate" ]] || continue
-    [[ "$candidate" != *"/.codex/"* ]] || continue
+    [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
       printf '%s\n' "$candidate"
       return 0
@@ -34,7 +34,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No canonical non-.codex Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
   exit 1
 }
 cd "$repo"

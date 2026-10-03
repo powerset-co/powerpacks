@@ -258,6 +258,33 @@ class IngestionMessagesContractTests(unittest.TestCase):
         options = parser.parse_args(["discover", "--include-whatsapp"])
         self.assertFalse(hasattr(options, "wacli_sync_mode"))
 
+    def test_discovery_reuses_explicit_whatsapp_store_without_opening_qr_page(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td) / "existing-linked-store"
+            with mock.patch.object(
+                extract_whatsapp.WhatsAppExtractor, "run", autospec=True,
+                return_value={"status": "completed"},
+            ) as run:
+                discovery = discover_messages.MessagesDiscovery(
+                    out_dir=Path(td) / "discover", include_whatsapp=True,
+                    wacli_store=store, open_qr_page=False,
+                )
+                channel = discovery.selected[0]
+                result = channel.execute()
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(run.call_args.args[0].store, store)
+            self.assertTrue(run.call_args.kwargs["no_open_qr_page"])
+            self.assertEqual(channel.bindings()[channel.inputs[0].path], str(store / "wacli.db"))
+
+    def test_whatsapp_channel_keeps_default_store_and_browser_behavior(self) -> None:
+        with mock.patch.object(
+            extract_whatsapp.WhatsAppExtractor, "run", autospec=True,
+            return_value={"status": "completed"},
+        ) as run:
+            whats_app_channel.WhatsAppChannel(other_enabled=False).execute()
+        self.assertEqual(run.call_args.args[0].store, whats_app_channel.DEFAULT_STORE)
+        self.assertFalse(run.call_args.kwargs["no_open_qr_page"])
+
     def test_messages_import_is_fixed_output_and_stateless(self) -> None:
         path = INGESTION / "primitives/imports/messages/importer.py"
         text = path.read_text(encoding="utf-8").lower()

@@ -7,8 +7,8 @@ import math
 import sys
 
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     emit,
 )
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db

@@ -13,7 +13,7 @@ import argparse
 import json
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.db.models import (
     HUMAN_DECISION_SOURCES,
     ResetReviewCounts,

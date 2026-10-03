@@ -4,6 +4,8 @@ Change log:
 
 - 2026-10-01: the Review page (`/review`) and its routes, folders and fixtures.
 - 2026-10-01: the Review page is `/`; the Jinja page it replaced is deleted.
+- 2026-10-02: `/install` shows installation, sign-in, search access, and network
+  checks from the bootstrap manifest, including waiting and skipped steps.
 
 # web
 
@@ -17,7 +19,8 @@ node, so every source change must be rebuilt and the rebuilt `dist/` committed w
 One React root: `src/main.tsx` mounts `App`, whose shell renders the top bar once and
 the routed page below it, so pages switch without a document reload. The router claims
 `/people`, `/searches` and `/searches/run?run_id=…`, and `/` (the review flow) outside the
-shell; the server answers each with the app page (`packs/shared/web/app.py` `PAGE_PATHS`).
+shell; `/install` is the installer status page. The server answers each with the
+app page (`packs/shared/web/app.py` `PAGE_PATHS`).
 
 ## Build
 
