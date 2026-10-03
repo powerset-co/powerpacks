@@ -125,7 +125,7 @@ def stub_mapped_identity_judge(answer):
     def results(tasks, **kwargs):
         from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import jev_judge
         return [IdentityJudgeResult(IdentityVerdict.from_payload(answer), IdentityUsage(), '',
-            jev_judge.judgment_fingerprint(task, urls, kwargs['reference_date']))
+            jev_judge.judgment_fingerprint(task, urls))
             for task, urls in zip(tasks, kwargs['imported_urls'], strict=True)]
     return mock.patch.object(judging.jev_judge, 'judge_batch', side_effect=results)
 

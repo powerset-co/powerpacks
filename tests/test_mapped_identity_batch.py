@@ -1,5 +1,7 @@
 """Mapped identity preparation reads each parent's evidence once per batch."""
 import json
+import importlib
+from datetime import date
 import tempfile
 import unittest
 from dataclasses import replace
@@ -44,7 +46,7 @@ class MappedIdentityBatchTests(unittest.TestCase):
 
 
 class MappedIdentityUrlCacheTests(unittest.TestCase):
-    def test_first_research_request_and_settled_rerun_reuse_exact_judgment(self):
+    def test_first_research_request_and_next_day_settled_rerun_reuse_exact_judgment(self):
         for original_url in ('https://linkedin.com/in/jordan-bravo',
                              'https://www.linkedin.com/in/jordan-bravo/'):
             with self.subTest(url=original_url), tempfile.TemporaryDirectory() as directory:
@@ -65,20 +67,26 @@ class MappedIdentityUrlCacheTests(unittest.TestCase):
                         'experiences': ['Engineer @ Oriel Robotics'], 'source': 'cache'})
 
                 requests = []
-                def answer(tasks, *, imported_urls, reference_date, **kwargs):
-                    requests.extend(judging.jev_judge._requests(task, urls, reference_date)
+                def answer(tasks, *, imported_urls, **kwargs):
+                    requests.extend(judging.jev_judge._requests(task, urls)
                                     for task, urls in zip(tasks, imported_urls))
                     return [IdentityJudgeResult(
                         IdentityVerdict.from_payload({'verdict': 'needs_review', 'confidence': .6}),
-                        IdentityUsage(), '', judging.jev_judge.judgment_fingerprint(task, urls, reference_date))
+                        IdentityUsage(), '', judging.jev_judge.judgment_fingerprint(task, urls))
                         for task, urls in zip(tasks, imported_urls)]
 
-                with patch.object(judging, 'linkedin_view', side_effect=hydrated), patch.object(
-                    judging.jev_judge, 'judge_batch', side_effect=answer) as paid:
-                    first = judging.judge_mapped_candidates(db)
-                    second = judging.judge_mapped_candidates(db)
+                with patch.object(judging.jev_judge, 'judge_batch', side_effect=answer) as paid:
+                    with patch('datetime.date') as calendar:
+                        calendar.today.return_value = date(2026, 10, 3)
+                        importlib.reload(judging)
+                        with patch.object(judging, 'linkedin_view', side_effect=hydrated):
+                            first = judging.judge_mapped_candidates(db)
+                            calendar.today.return_value = date(2026, 10, 4)
+                            second = judging.judge_mapped_candidates(db)
+                    importlib.reload(judging)
                 self.assertEqual(first.judge_calls, 1)
                 self.assertEqual((second.judge_calls, second.cached_verdicts), (0, 1))
                 paid.assert_called_once()
+                self.assertEqual(requests[0]['network']['state']['reference_date'], '')
                 self.assertEqual(requests[0]['network']['state']['profile']['linkedin_url'],
                                  'https://www.linkedin.com/in/jordan-bravo')

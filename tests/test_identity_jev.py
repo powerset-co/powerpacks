@@ -3,6 +3,7 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityTask, JudgeProfile
@@ -14,6 +15,29 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import je
 
 
 class IdentityJevTest(unittest.TestCase):
+    def test_both_policies_require_an_independent_connection_without_network_defaults(self):
+        for view in ("network", "association"):
+            policy = jev_judge._QUESTIONS[view].policy
+            with self.subTest(view=view):
+                self.assertIn("affirmative independently attributable contact-to-profile connection", policy)
+                self.assertNotIn("confirm by default", policy)
+                self.assertNotIn("accept by default", policy)
+                self.assertNotIn("Prefer the plausible known-network match", policy)
+                self.assertIn("external research excerpt", policy)
+                self.assertIn("work-email domain", policy)
+        self.assertNotIn("known-network prior", jev_judge._QUESTIONS["network"].questions["identity"]["criteria"]["confirmed"])
+        self.assertNotIn("known-network prior", jev_judge._QUESTIONS["association"].questions["association"]["criteria"]["yes"])
+
+    def test_policy_change_invalidates_the_exact_machine_verdict(self):
+        task = IdentityTask(DossierEvidence(name="Jordan Bravo"), JudgeProfile.from_payload({
+            "full_name": "Jordan Bravo", "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+            "has_profile": True,
+        }))
+        before = jev_judge.judgment_fingerprint(task, ())
+        revised = replace(jev_judge._QUESTIONS["network"], policy="Revised independent connection policy")
+        with patch.dict(jev_judge._QUESTIONS, {"network": revised}):
+            self.assertNotEqual(before, jev_judge.judgment_fingerprint(task, ()))
+
     def test_supported_match_is_accepted_but_conflicting_identity_escalates(self):
         yes = {
             'competing_identity': {'noul': 0.01}, 'concrete_conflict': {'noul': 0.01},
@@ -125,11 +149,11 @@ class IdentityJevTest(unittest.TestCase):
             "full_name": "Jordan Bravo", "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
             "has_profile": True,
         }))
-        requests = jev_judge._requests(task, (), "2026-10-01")
+        requests = jev_judge._requests(task, ())
         client = _Client(_Response(200, {"model": "invalid"}),
                          _Response(200, _payload(requests["association"])))
         with tempfile.TemporaryDirectory() as directory:
-            kwargs = dict(imported_urls=[()], output_dir=Path(directory), reference_date="2026-10-01")
+            kwargs = dict(imported_urls=[()], output_dir=Path(directory))
             with patch.dict("os.environ", {"TYPESAFE_API_KEY": "synthetic-test-key"}), \
                  patch.object(jev.httpx, "AsyncClient", return_value=client), \
                  patch.object(jev, "append_usage_row"):
@@ -151,10 +175,10 @@ class IdentityJevTest(unittest.TestCase):
             "full_name": "Jordan Bravo", "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
             "has_profile": True,
         }))
-        requests = jev_judge._requests(task, (), "2026-10-01")
+        requests = jev_judge._requests(task, ())
         client = _Client(*(_Response(200, _payload(request)) for request in requests.values()))
         with tempfile.TemporaryDirectory() as directory:
-            kwargs = dict(imported_urls=[()], output_dir=Path(directory), reference_date="2026-10-01")
+            kwargs = dict(imported_urls=[()], output_dir=Path(directory))
             with patch.dict("os.environ", {"TYPESAFE_API_KEY": "synthetic-test-key"}), \
                  patch.object(jev.httpx, "AsyncClient", return_value=client), \
                  patch.object(jev, "append_usage_row"):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date
 from pathlib import Path
 from typing import Callable
 
@@ -261,7 +260,7 @@ def _research_result(
     return ResearchResult.from_json(row.result_json) if row is not None else None
 
 
-def mapped_identity_tasks(db: Db) -> list[tuple[LinkSnapshotRow, IdentityTask, tuple[str, ...], str, IdentityJudgeResult | None]]:
+def mapped_identity_tasks(db: Db) -> list[tuple[LinkSnapshotRow, IdentityTask, tuple[str, ...], IdentityJudgeResult | None]]:
     """Prepare current requests once for both the spend estimate and execution."""
     candidates = judge_candidates(db)
     if not candidates:
@@ -282,7 +281,6 @@ def mapped_identity_tasks(db: Db) -> list[tuple[LinkSnapshotRow, IdentityTask, t
         del evidence_rows
     prepared = []
     stored = queries.stored_judgments(db)
-    reference_date = date.today().isoformat()
     for row in candidates:
         projected = profiles.get(row.row_key)
         if projected is not None and projected.state == PROFILE_ERROR:
@@ -303,11 +301,11 @@ def mapped_identity_tasks(db: Db) -> list[tuple[LinkSnapshotRow, IdentityTask, t
         profile = replace(profile, linkedin_url=normalize_linkedin_url(profile.linkedin_url))
         evidence = evidence_by_parent[row.parent_id]
         task = judge.research_proposal_task(evidence, profile) if origin == IdentityOrigin.RESEARCH else judge.IdentityTask(evidence, profile, origin)
-        fingerprint = jev_judge.judgment_fingerprint(task, known_urls.get(row.parent_id, ()), reference_date)
+        fingerprint = jev_judge.judgment_fingerprint(task, known_urls.get(row.parent_id, ()))
         previous = stored.get(row.row_key)
         outcome = (IdentityJudgeResult(previous.verdict, IdentityUsage(), "", fingerprint)
                    if judgment_policy.reuses_stored_verdict(previous, fingerprint, force=False) else None)
-        prepared.append((row, task, known_urls.get(row.parent_id, ()), reference_date, outcome))
+        prepared.append((row, task, known_urls.get(row.parent_id, ()), outcome))
     return prepared
 
 
@@ -323,12 +321,11 @@ def judge_mapped_candidates(
     results = jev_judge.judge_batch(
         [task for _, task, *_ in pending], imported_urls=[urls for _, _, urls, *_ in pending],
         output_dir=db.db_path.parent / "reconcile" / "identity", on_done=heartbeat,
-        reference_date=pending[0][3],
     ) if pending else []
     settlements = []
     errors = 0
     completed = [(*item[:-1], outcome) for item, outcome in zip(pending, results, strict=True)]
-    for row, task, _, _, outcome in (*completed, *cached):
+    for row, task, _, outcome in (*completed, *cached):
         url, origin = task.linkedin.linkedin_url, task.origin
         verdict = outcome.verdict
         if verdict is None:

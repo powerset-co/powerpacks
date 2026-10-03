@@ -92,7 +92,7 @@ class ProfileSourceNamesTests(unittest.TestCase):
         self.profile()
         def answer(tasks, **kwargs):
             return [IdentityJudgeResult(CONFIRMED, IdentityUsage(), "", jev_judge.judgment_fingerprint(
-                task, urls, kwargs["reference_date"])) for task, urls in zip(tasks, kwargs["imported_urls"], strict=True)]
+                task, urls)) for task, urls in zip(tasks, kwargs["imported_urls"], strict=True)]
         with patch.object(judging.jev_judge, "judge_batch", side_effect=answer) as provider:
             self.assertGreater(estimate_enrichment(self.db).remaining_judgments, 0)
             self.assertEqual(judging.judge_mapped_candidates(self.db).judge_calls, 1)
@@ -119,8 +119,8 @@ class ProfileSourceNamesTests(unittest.TestCase):
         before = judging.mapped_identity_tasks(self.db)[0]
         self.db.replace_imported_people((self.source.model_copy(update={"primary_email": "changed@example.test"}),))
         after = judging.mapped_identity_tasks(self.db)[0]
-        self.assertNotEqual(jev_judge.judgment_fingerprint(before[1], before[2], before[3]),
-                            jev_judge.judgment_fingerprint(after[1], after[2], after[3]))
+        self.assertNotEqual(jev_judge.judgment_fingerprint(before[1], before[2]),
+                            jev_judge.judgment_fingerprint(after[1], after[2]))
 
     def test_research_retarget_cannot_accept_wrong_name_without_profile_cache(self):
         self.research()

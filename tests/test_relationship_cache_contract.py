@@ -30,6 +30,14 @@ class RelationshipCacheContractTests(unittest.TestCase):
         call.assert_not_called()
         self.assertEqual(self.db.db_path.read_bytes(), before)
 
+    def test_policy_requires_a_connection_instead_of_a_default_name_match(self):
+        self.assertIn("affirmative independently attributable contact-to-profile connection", relationship.SYSTEM_PROMPT)
+        self.assertIn("external research excerpt", relationship.SYSTEM_PROMPT)
+        self.assertIn("work-email domain", relationship.SYSTEM_PROMPT)
+        self.assertNotIn("accept the match unless", relationship.SYSTEM_PROMPT)
+        self.assertNotIn("should remain associated unless", relationship.SYSTEM_PROMPT)
+        self.assertNotIn("compatible professional context can also support yes", relationship.SYSTEM_PROMPT)
+
     def test_unchanged_complete_request_reuses_without_a_call(self):
         self.cache()
         result, call = self.fixture.run_stage(self.answer)

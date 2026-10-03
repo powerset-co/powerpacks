@@ -320,7 +320,7 @@ class ReviewStore:
             verdict = IdentityVerdict.from_payload({"verdict": "needs_review", "confidence": .5,
                                                    "reason": "Synthetic colleague needs human review"})
             return [IdentityJudgeResult(verdict, IdentityUsage(), "", judging.jev_judge.judgment_fingerprint(
-                task, urls, kwargs["reference_date"])) for task, urls in zip(tasks, kwargs["imported_urls"], strict=True)]
+                task, urls)) for task, urls in zip(tasks, kwargs["imported_urls"], strict=True)]
         with mock.patch.object(judging.jev_judge, "judge_batch", side_effect=answered):
             judging.judge_mapped_candidates(self.db)
         decisions = []
