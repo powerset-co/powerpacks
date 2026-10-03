@@ -1,14 +1,17 @@
 """Run selected local imports and show their progress on the install page.
 
-Source manifests own reuse. This flow stops for choices, OS permissions, login,
-or a failed primitive; it never starts enrichment, provider calls, or uploads.
+Source manifests own reuse. Gmail authorization and Messages permission checks
+continue in this process; missing setup or failed primitives stop the flow.
+It never starts enrichment, provider calls, or uploads.
 """
 from __future__ import annotations
 
 import argparse
 import os
 import shlex
+import time
 import traceback
+from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
 
@@ -46,31 +49,51 @@ _SOURCE_STEPS = {
 }
 _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
+_DEFAULT_SOURCES = (Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
+_PERMISSION_WAIT_SECONDS = 900
+_PERMISSION_POLL_SECONDS = 2
 
 
 class SourceOnboarding:
     def __init__(self, root: Path, *, sources: tuple[str, ...],
                  gmail_emails: tuple[str, ...] = (), sync_after: str = "",
-                 wacli_store: Path | None = None, refresh: bool = False) -> None:
+                 wacli_store: Path | None = None, refresh: bool = False,
+                 skip_sources: tuple[str, ...] = ()) -> None:
         self.root = root.resolve()
-        self.sources = tuple(sorted(dict.fromkeys(Source(source) for source in sources),
+        self.status = InstallStatus(self.root)
+        previous = self.status.read()
+        command = shlex.split(previous["retry_command"])
+        saved = _parser().parse_args(command[1:] if Path(command[0]).name == "onboard" else [])
+        self.sources = tuple(sorted(dict.fromkeys(Source(source) for source in
+                                    (sources or saved.source or _DEFAULT_SOURCES)),
                                     key=lambda source: source is Source.LINKEDIN))
         if Source.SKIP in self.sources and len(self.sources) != 1:
             raise ValueError("Choose sources or skip, not both")
-        self.gmail_emails = gmail_emails
-        self.sync_after = sync_after
+        skip_sources = skip_sources if sources else (*saved.skip_source, *skip_sources)
+        self.skip_sources = tuple(dict.fromkeys(Source(source) for source in skip_sources))
+        if Source.SKIP in self.skip_sources or not set(self.skip_sources) <= set(self.sources):
+            raise ValueError("Skip only a selected source")
+        self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
+        if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
+            if previous.get("account_email"):
+                self.gmail_emails = (previous["account_email"],)
+            else:
+                home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
+                configured = accounts.VaultHealth.from_status(accounts.status_payload(home)).stored_emails - {""}
+                if len(configured) == 1:
+                    self.gmail_emails = tuple(configured)
+        self.sync_after = sync_after or saved.sync_after or (
+            (date.today() - timedelta(days=365)).isoformat() if Source.GMAIL in self.sources else "")
+        wacli_store = wacli_store or saved.wacli_store
         self.wacli_store = wacli_store or self.root / DEFAULT_STORE
-        self.refresh = refresh
-        self.status = InstallStatus(self.root)
+        self.refresh = refresh or (not sources and saved.refresh)
         self.step = InstallStep.SOURCES
-        previous = self.status.read()
         history = [step for step in previous.get("plan", []) if step not in PROCESSING_STEPS
                    and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
-        next_steps = ()
-        if self.sources == (Source.SKIP,):
+        if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
-        elif self.sources:
-            next_steps = PROCESSING_STEPS
+        else:
+            next_steps = tuple(step for step in PROCESSING_STEPS if step is not InstallStep.REVIEW)
         self.plan = list(dict.fromkeys([
             *history, InstallStep.SOURCES.value,
             *(step.value for source in self.sources for step in _SOURCE_STEPS[source]),
@@ -78,21 +101,23 @@ class SourceOnboarding:
         args = [str(self.root / "bin/onboard")]
         for source in self.sources:
             args.extend(("--source", source.value))
-        for email in gmail_emails:
+        for email in self.gmail_emails:
             args.extend(("--gmail-email", email))
-        if sync_after:
-            args.extend(("--sync-after", sync_after))
+        if self.sync_after:
+            args.extend(("--sync-after", self.sync_after))
         if wacli_store is not None:
             args.extend(("--wacli-store", str(wacli_store)))
-        if refresh:
+        if self.refresh:
             args.append("--refresh")
+        for source in self.skip_sources:
+            args.extend(("--skip-source", source.value))
         self.retry_command = shlex.join(args)
 
     def _write(self, step: InstallStep, state: InstallState, message: str,
-               action: dict | None = None) -> dict:
+               action: dict | None = None, *, pid: int | None = None) -> dict:
         self.step = step
         return self.status.write(step=step, status=state, message=message,
-                                 pid=os.getpid(), retry_command=self.retry_command,
+                                 pid=os.getpid() if pid is None else pid, retry_command=self.retry_command,
                                  plan=self.plan, action=action)
 
     def _result(self, step: InstallStep, payload: dict, action: dict | None = None) -> bool:
@@ -101,7 +126,7 @@ class SourceOnboarding:
             return True
         state = InstallState.WAITING if payload["status"] in _WAITING else InstallState.FAILED
         self._write(step, state, payload.get("message") or payload.get("reason") or "This step needs attention",
-                    {**(action or {}), "details": payload})
+                    {**(action or {}), "details": payload}, pid=0 if state is InstallState.WAITING else None)
         return False
 
     def _tools(self, source: Source, step: InstallStep) -> bool:
@@ -126,10 +151,10 @@ class SourceOnboarding:
         return bool(requested) and all(coverage.get(email.lower(), False) for email in self.gmail_emails)
 
     def _gmail(self) -> bool:
-        if not self.gmail_emails or not self.sync_after:
+        if not self.gmail_emails:
             self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING,
-                        "Which Gmail accounts and how far back?",
-                        {"kind": "gmail", "text": "Tell me in chat which accounts and how many years of mail to use."})
+                        "Which Gmail account should I use?",
+                        {"kind": "gmail", "text": "Which Gmail account should I use?"}, pid=0)
             return False
         if not self._tools(Source.GMAIL, InstallStep.GMAIL_TOOLS):
             return False
@@ -137,13 +162,31 @@ class SourceOnboarding:
         home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
         local = accounts.status_payload(home)
         oauth = "uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py"
-        if not local["config"]["oauth_configured"] or not local["database"]["exists"]:
+        if not local["config"]["oauth_configured"]:
             self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, "Connect Gmail",
                         {"kind": "gmail", "text": "Set up Gmail access in your browser",
                          "command": f"{oauth} browser-setup --email {shlex.quote(self.gmail_emails[0])} --add-account",
-                         "details": local})
+                         "details": local}, pid=0)
             return False
-        health = accounts.check_accounts_payload(home, list(self.gmail_emails))
+        if local["database"]["exists"]:
+            health = accounts.check_accounts_payload(home, list(self.gmail_emails))
+            if health["status"] == "error":
+                return self._result(InstallStep.GMAIL_LOGIN, health, {"kind": "gmail"})
+            checks = health.get("accounts", [])
+        else:
+            checks = [accounts.check_account(home, email, stored=False).record()
+                      for email in accounts.normalize_email_list(list(self.gmail_emails))]
+            health = local
+        authorize = [check for check in checks if check["status"] in {"missing_token", "reauthorization_required"}]
+        for check in authorize:
+            action = {"kind": "gmail", "text": f"Connect {check['email']} in your browser", "details": check}
+            self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, "Connect Gmail", action)
+            result = accounts.add_account(home, check["email"], "", headless=False,
+                                          force=check["status"] == "reauthorization_required")
+            if not self._result(InstallStep.GMAIL_LOGIN, result, action):
+                return False
+        if authorize:
+            health = accounts.check_accounts_payload(home, list(self.gmail_emails))
         if not self._result(InstallStep.GMAIL_LOGIN, health,
                             {"kind": "gmail", "text": "Connect Gmail in your browser",
                              "command": "; ".join(item["authorize_command"] for item in health.get("accounts", [])
@@ -168,9 +211,19 @@ class SourceOnboarding:
         imessage = source is Source.IMESSAGE
         if imessage:
             self._write(InstallStep.IMESSAGE_ACCESS, InstallState.RUNNING, "Checking Messages access")
-            if not self._result(InstallStep.IMESSAGE_ACCESS, IMessageExtractor().check(strict=True),
-                                {"kind": "permission", "text": "Allow access to Messages",
-                                 "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"}):
+            extractor = IMessageExtractor()
+            access = extractor.check(strict=True)
+            action = {"kind": "permission", "text": "Allow access to Messages",
+                      "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"}
+            chat = access.get("chat_db", {})
+            if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
+                self._write(InstallStep.IMESSAGE_ACCESS, InstallState.WAITING, "Allow access to Messages",
+                            {**action, "details": access})
+                deadline = time.monotonic() + _PERMISSION_WAIT_SECONDS
+                while access["status"] == "blocked_user_action" and time.monotonic() < deadline:
+                    time.sleep(_PERMISSION_POLL_SECONDS)
+                    access = extractor.check(strict=True)
+            if not self._result(InstallStep.IMESSAGE_ACCESS, access, action):
                 return False
             sync_step = import_step = InstallStep.IMESSAGE_IMPORT
         else:
@@ -211,19 +264,26 @@ class SourceOnboarding:
         previous = self.status.read()
         active = previous["status"] == InstallState.RUNNING or (
             previous["status"] == InstallState.WAITING
-            and previous["step"] in {InstallStep.ACCOUNT, InstallStep.WHATSAPP_LOGIN})
+            and previous["installer_pid"] > 0
+            and previous["step"] in {InstallStep.ACCOUNT, InstallStep.GMAIL_LOGIN,
+                                     InstallStep.IMESSAGE_ACCESS, InstallStep.WHATSAPP_LOGIN})
         if active and previous["installer_pid"] != os.getpid():
             return previous
         try:
             if Path.cwd() != self.root:
                 raise ValueError(f"Run bin/onboard from {self.root}")
-            if not self.sources:
-                return self._write(InstallStep.SOURCES, InstallState.WAITING, "Add your contacts",
-                                   {"kind": "sources", "text": "Choose Gmail, Messages, WhatsApp, LinkedIn, or skip in chat."})
             self._write(InstallStep.SOURCES, InstallState.COMPLETED, "Sources selected")
-            if self.sources == (Source.SKIP,):
+            for source in self.sources:
+                for step in _SOURCE_STEPS[source]:
+                    if source in self.skip_sources:
+                        self._write(step, InstallState.SKIPPED, "Skipped for now")
+                    elif previous.get("steps", {}).get(step.value, {}).get("status") == InstallState.SKIPPED:
+                        self._write(step, InstallState.WAITING, "Not started")
+            if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
                 return self._write(InstallStep.READY, InstallState.COMPLETED, "Powerpacks is installed")
             for source in self.sources:
+                if source in self.skip_sources:
+                    continue
                 if source is Source.GMAIL and not self._gmail():
                     return self.status.read()
                 if source in {Source.IMESSAGE, Source.WHATSAPP} and not self._messages(source):
@@ -233,7 +293,7 @@ class SourceOnboarding:
                     if not csv.is_file():
                         return self._write(InstallStep.LINKEDIN, InstallState.WAITING, "Waiting for your LinkedIn export",
                                            {"kind": "linkedin", "text": "Request your connections, then send me the CSV in chat.",
-                                            "url": "https://www.linkedin.com/mypreferences/d/download-my-data"})
+                                            "url": "https://www.linkedin.com/mypreferences/d/download-my-data"}, pid=0)
                     self._write(InstallStep.LINKEDIN, InstallState.COMPLETED, "LinkedIn export ready")
             imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
             counts = {item.source: item.stats["people"] for item in imports
@@ -241,7 +301,7 @@ class SourceOnboarding:
             message = " · ".join(f"{source.title()}: {count:,} contacts" for source, count in counts.items()) or "Sources are ready"
             return self._write(InstallStep.DEEP_CONTEXT, InstallState.WAITING, message,
                                {"kind": "processing", "text": "Ready to build your network",
-                                "command": "bin/deep-context check", "details": {"counts": counts}})
+                                "command": "bin/deep-context check", "details": {"counts": counts}}, pid=0)
         except Exception as exc:
             self.status.directory.mkdir(parents=True, exist_ok=True)
             with self.status.log_path.open("a", encoding="utf-8") as log:
@@ -250,17 +310,24 @@ class SourceOnboarding:
                                {"details": {"error_type": type(exc).__name__, "error": str(exc)}})
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", choices=[source.value for source in Source], action="append", default=[])
+    parser.add_argument("--skip-source", choices=[source.value for source in Source if source is not Source.SKIP],
+                        action="append", default=[], help="Skip a selected source for now")
     parser.add_argument("--gmail-email", action="append", default=[])
     parser.add_argument("--sync-after", default="")
     parser.add_argument("--wacli-store", type=Path)
     parser.add_argument("--refresh", action="store_true", help="Sync selected sources instead of reusing imported contacts")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = _parser().parse_args()
     payload = SourceOnboarding(Path.cwd(), sources=tuple(args.source),
                                gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
-                               wacli_store=args.wacli_store, refresh=args.refresh).run()
+                               wacli_store=args.wacli_store, refresh=args.refresh,
+                               skip_sources=tuple(args.skip_source)).run()
     emit(payload)
     raise SystemExit({"completed": 0, "waiting": 10, "running": 10, "failed": 1}[payload["status"]])
 

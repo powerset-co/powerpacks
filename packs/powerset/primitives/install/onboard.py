@@ -180,7 +180,9 @@ class Onboarding:
     def choose_network(self, networks: list[Network], account: dict) -> Network | None:
         selected_id = self.config.get("POWERPACKS_DEFAULT_SET_ID") or self.config.get("POWERSET_DEFAULT_SET_ID")
         if selected_id:
-            return next((network for network in networks if network.id == selected_id), None)
+            selected = next((network for network in networks if network.id == selected_id), None)
+            if selected:
+                return selected
         owned = []
         for network in networks:
             if network.is_personal and network.role == "owner":
@@ -207,6 +209,7 @@ class Onboarding:
         name = "Personal Network" if selected.is_personal and selected.name == "Personal Connections" else selected.name
         self.progress(InstallStep.NETWORK, InstallState.RUNNING, f"Checking {name} for {self.email}",
                       network_name=name, person_count=selected.person_count)
+        keys.write_env(self.env_path, {"POWERPACKS_DEFAULT_SET_ID": selected.id})
         if selected.person_count == 0:
             return self.waiting(f"{name} for {self.email} has 0 people. Tell me in chat whether to switch "
                                 "accounts or connect your contacts." + alternative_message)
@@ -217,11 +220,9 @@ class Onboarding:
         if not contacts["leads"] or int(count["count"]) < 1:
             return self.waiting(f"{name} for {self.email} has {selected.person_count:,} people, but its searchable "
                                 "profiles are not ready. Ask me in chat to check the network before searching.")
-        keys.write_env(self.env_path, {"POWERPACKS_DEFAULT_SET_ID": selected.id})
         warning = (" This is a small network; you may want another network or account." if selected.person_count < 10 else "")
         message = f"{name} for {self.email} is ready: {selected.person_count:,} people in this network." + warning
         self.progress(InstallStep.NETWORK, InstallState.COMPLETED, message)
-        self.progress(InstallStep.READY, InstallState.COMPLETED, message)
         print(f"DONE: {message} Ask me to find someone.", flush=True)
         return 0
 
@@ -260,14 +261,31 @@ class Onboarding:
 
 
 def main() -> None:
+    from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--harness", action="append", required=True)
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--retry-command", default="bin/bootstrap --powerset --no-tools")
-    args = parser.parse_args()
-    raise SystemExit(Onboarding(args.root, harnesses=args.harness, pid=args.pid,
-                                retry_command=args.retry_command).run())
+    args, source_args = parser.parse_known_args()
+    sources = _parser().parse_args(source_args)
+    onboarding = Onboarding(args.root, harnesses=args.harness, pid=args.pid,
+                            retry_command=args.retry_command)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = onboarding.run()
+    if code not in (0, NEEDS_YOU) or not onboarding.email:
+        print(output.getvalue(), end="", flush=True)
+        raise SystemExit(code)
+    payload = SourceOnboarding(args.root, sources=tuple(sources.source),
+                               gmail_emails=tuple(sources.gmail_email), sync_after=sources.sync_after,
+                               wacli_store=sources.wacli_store, refresh=sources.refresh,
+                               skip_sources=tuple(sources.skip_source)).run()
+    prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
+    message = (payload.get("action") or {}).get("text") or payload.get("message", "Setup stopped")
+    print(f"{prefix[payload['status']]}: {message}", flush=True)
+    raise SystemExit({"completed": 0, "waiting": NEEDS_YOU, "running": NEEDS_YOU, "failed": 1}[payload["status"]])
 
 
 if __name__ == "__main__":

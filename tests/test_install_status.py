@@ -62,6 +62,18 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["steps"]["account"]["status"], "failed")
 
+    def test_live_source_wait_is_interrupted_when_its_owner_dies(self) -> None:
+        for step in (InstallStep.GMAIL_LOGIN, InstallStep.IMESSAGE_ACCESS):
+            with self.subTest(step=step):
+                self.status.write(step=step, status=InstallState.WAITING,
+                                  message="Waiting for access", pid=99999999)
+                self.assertEqual(self.status.read()["status"], "failed")
+
+    def test_missing_configuration_wait_has_no_running_owner(self) -> None:
+        self.status.write(step=InstallStep.GMAIL_LOGIN, status=InstallState.WAITING,
+                          message="Set up Gmail access", pid=0, action={"kind": "gmail"})
+        self.assertEqual(self.status.read()["status"], "waiting")
+
     def test_empty_network_wait_remains_actionable_after_installer_exit(self) -> None:
         self.status.write(step=InstallStep.NETWORK, status=InstallState.WAITING,
                           message="Choose another account or connect contacts", pid=99999999)
@@ -130,6 +142,23 @@ class InstallStatusTests(unittest.TestCase):
         record = self.status.read()
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["steps"]["account"]["status"], "failed")
+
+
+    def test_processing_transition_does_not_claim_previous_run_completed(self) -> None:
+        self.status.write(step=InstallStep.ENRICH, status=InstallState.RUNNING,
+                          message="Enriching", pid=os.getpid())
+        self.status.write(step=InstallStep.INDEX, status=InstallState.WAITING,
+                          message="Ready", pid=os.getpid())
+        self.assertEqual(self.status.read()["steps"]["enrich"]["status"], "running")
+
+    def test_source_restart_clears_every_processing_stage_including_review(self) -> None:
+        for step in (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.REVIEW,
+                     InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY):
+            self.status.write(step=step, status=InstallState.COMPLETED,
+                              message="Done", pid=os.getpid())
+        self.status.write(step=InstallStep.SOURCES, status=InstallState.WAITING,
+                          message="Choose sources", pid=os.getpid())
+        self.assertEqual(list(self.status.read()["steps"]), ["sources"])
 
 
 if __name__ == "__main__":

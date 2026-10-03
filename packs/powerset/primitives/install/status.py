@@ -42,6 +42,8 @@ class InstallStep(str, Enum):
     WHATSAPP_IMPORT = "whatsapp_import"
     LINKEDIN = "linkedin"
     DEEP_CONTEXT = "deep_context"
+    ENRICH = "enrich"
+    REVIEW = "review"
     INDEX = "index"
     VALIDATE = "validate"
     READY = "ready"
@@ -58,11 +60,14 @@ STEP_LABELS = {
     "imessage_import": "Add iMessage contacts", "whatsapp_tools": "Prepare WhatsApp",
     "whatsapp_login": "Link WhatsApp", "whatsapp_sync": "Sync WhatsApp",
     "whatsapp_import": "Add WhatsApp contacts", "linkedin": "Get LinkedIn export",
-    "deep_context": "Learn about your contacts", "index": "Build your search index",
+    "deep_context": "Discovering your contacts", "enrich": "Enriching your contacts",
+    "review": "Waiting for your review",
+    "index": "Build your search index",
     "validate": "Check your search", "ready": "Ready",
 }
 DEFAULT_PLAN = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
-PROCESSING_STEPS = (InstallStep.DEEP_CONTEXT, InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY)
+PROCESSING_STEPS = (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.REVIEW,
+                    InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY)
 
 
 @dataclass(frozen=True)
@@ -107,7 +112,8 @@ class InstallStatus:
         previous = {} if step is InstallStep.RUNTIME and status is InstallState.RUNNING else self.read()
         steps = previous.get("steps", {})
         previous_step = previous.get("step")
-        if previous_step != step and previous.get("status") == InstallState.RUNNING:
+        if (previous_step != step and previous.get("status") == InstallState.RUNNING
+                and previous_step not in PROCESSING_STEPS):
             steps[previous_step] = {"status": InstallState.COMPLETED.value,
                                     "message": previous["message"]}
         if step is InstallStep.SOURCES:
@@ -145,7 +151,9 @@ class InstallStatus:
                                     installer_pid=0, log_path=str(self.log_path),
                                     retry_command="bin/bootstrap").to_payload()
         if manifest.status is InstallState.RUNNING or (
-            manifest.status is InstallState.WAITING and manifest.step in {InstallStep.ACCOUNT, InstallStep.WHATSAPP_LOGIN}
+            manifest.status is InstallState.WAITING and manifest.installer_pid > 0
+            and manifest.step in {InstallStep.ACCOUNT, InstallStep.GMAIL_LOGIN,
+                                  InstallStep.IMESSAGE_ACCESS, InstallStep.WHATSAPP_LOGIN}
         ):
             try:
                 os.kill(manifest.installer_pid, 0)

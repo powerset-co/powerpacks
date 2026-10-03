@@ -1,5 +1,6 @@
 """Keep one ordinary deep-context path and hide retired maintenance verbs."""
 import os
+import shutil
 import tempfile
 import subprocess
 import unittest
@@ -66,3 +67,36 @@ class DeepContextCommandsTests(unittest.TestCase):
     def test_rejudge_is_not_a_synthesis_flag(self) -> None:
         with self.assertRaises(SystemExit):
             build_parser().parse_args(['--rejudge'])
+
+
+    def test_processing_dispatch_uses_one_wrapper_and_skips_help_and_previews(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "bin").mkdir()
+            shutil.copy2(ROOT / "bin/deep-context", root / "bin/deep-context")
+            (root / ".powerpacks/install").mkdir(parents=True)
+            manifest = root / ".powerpacks/install/manifest.json"
+            manifest.write_text("existing install status")
+            (root / ".venv/bin").mkdir(parents=True)
+            fake = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n'
+            for executable in (root / "uv", root / ".venv/bin/python"):
+                executable.write_text(fake)
+                executable.chmod(0o755)
+            calls = root / "calls"
+            env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "CALLS": str(calls)}
+            for command in ("ensure-parents", "seed", "collect", "synthesize", "compose", "cluster", "parents",
+                            "enrich", "finish-reviews", "assemble-synthetic", "profile-prefetch", "reconcile-deep-research",
+                            "review-status", "realize"):
+                arguments = ["--fetch"] if command == "profile-prefetch" else ["--wait"] if command == "review-status" else []
+                result = subprocess.run([str(root / "bin/deep-context"), command, *arguments],
+                                        env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"install.progress --command {command} --", calls.read_text().splitlines()[-1])
+            for command, arguments in (("enrich", ["--dry-run"]), ("enrich", ["--help"]),
+                                       ("collect", ["--dry-run"]), ("dry", [])):
+                result = subprocess.run([str(root / "bin/deep-context"), command, *arguments],
+                                        env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if command != "dry":
+                    self.assertNotIn("install.progress", calls.read_text().splitlines()[-1])
+            self.assertEqual(manifest.read_text(), "existing install status")
