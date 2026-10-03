@@ -201,7 +201,9 @@ SELECT a2.artifact_key FROM artifacts a2
 WHERE a2.parent_id=p.parent_id AND a2.kind='dossier' AND a2.status='projected'
   AND a2.person_id IS NULL AND a2.candidate_key IS NULL
   AND a2.artifact_key IN ('dossier:'||a2.parent_id, '{PARENT_DOSSIER_ARTIFACT_PREFIX}'||a2.parent_id)
-ORDER BY a2.projected_at DESC, (a2.artifact_key='dossier:'||a2.parent_id) DESC
+ORDER BY instr(COALESCE(json_extract(a2.payload_json, '$.body'), ''),
+               'Single identity — no duplicates detected. Full context in [[')>0,
+         a2.projected_at DESC, (a2.artifact_key='dossier:'||a2.parent_id) DESC
 LIMIT 1
 """
 
