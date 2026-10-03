@@ -113,6 +113,10 @@ class InstallController:
                 if action.get("kind") != "linkedin":
                     raise ValueError("No LinkedIn export is needed right now")
                 subprocess.run(["open", "https://www.linkedin.com/mypreferences/d/download-my-data"], check=True)
+            elif path == "/api/install/review":
+                if InstallStatus(self.root).read()["step"] != InstallStep.REVIEW:
+                    raise ValueError("No review is needed right now")
+                subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
             else:
                 handler._json({"error": "Unknown setup action"}, HTTPStatus.NOT_FOUND)
                 return True

@@ -150,12 +150,11 @@ for _a in "$@"; do
   if [[ "$_a" == "-h" || "$_a" == "--help" ]]; then wants_help=1; fi
 done
 
+if [[ "$cmd" == "review-status" && -x "$ROOT/.venv/bin/python" ]]; then
+  PY=("$ROOT/.venv/bin/python" -m)
+fi
 if [[ -f "$ROOT/.powerpacks/install/manifest.json" && "$wants_help" == 0 && " $* " != *" --dry-run "* ]]; then
-  case "$cmd" in
-    collect|synthesize|compose|cluster|parents|enrich|realize|ensure-parents|seed)
-      PY+=(packs.powerset.primitives.install.progress --command "$cmd" --)
-      ;;
-  esac
+  PY+=(packs.powerset.primitives.install.progress --command "$cmd" --)
 fi
 
 case "$cmd" in
@@ -297,11 +296,7 @@ case "$cmd" in
     # querying the canonical database every five seconds — the entire agent-handoff
     # mechanism, deliberately primitive so it always works. Prefer the
     # already-provisioned repo interpreter; keep uv as the setup fallback.
-    if [[ -x "$ROOT/.venv/bin/python" ]]; then
-      "$ROOT/.venv/bin/python" -m "$PKG.review.reconcile_review_web" status "$@"
-    else
-      "${PY[@]}" "$PKG.review.reconcile_review_web" status "$@"
-    fi
+    "${PY[@]}" "$PKG.review.reconcile_review_web" status "$@"
     ;;
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches. Every

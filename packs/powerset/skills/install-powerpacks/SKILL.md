@@ -208,14 +208,26 @@ keeps the source skipped; if the user asks to resume it, remove only its
 
 When sources are ready, the page points to processing. Follow the installed
 `deep-context` skill when the user requested it, retaining this server and tab.
-Its normal processing commands update this installation manifest while it
-exists. Successful realization advances to indexing; the normal Modal
+Its normal commands update the same installation manifest. The page groups
+each source into one Syncing row, then shows Discover, Enrich, optional Review,
+and Build Index. Collection, synthesis, and duplicate resolution are Discover;
+research and identity matching are Enrich. SQLite decides whether Review is
+needed and when it is complete. Retain the status pane; open the existing
+review in the default browser when needed, then use `review-status --wait` to
+continue when the real queue clears. Realization prepares indexing; the normal Modal
 `index-people` command mirrors cloud phases into the same page and advances to
 validation after download. The search validator alone marks Ready on success.
 Do not replace the status tab or claim the chain finished at the imports handoff.
 Read the free estimate and obtain the required permission before any paid
 processing or upload. Never emulate completion as a real result; label a
 requested demonstration as simulated.
+
+Failures do not reset completed work. The page polls again after a connection
+failure; restart its server only if health fails or server code changed while
+idle. Enrichment retries a crashed step once after five seconds, then records
+failure. Inspect that failure and rerun the exact command using saved artifacts.
+If Modal disconnected after dispatch, inspect the existing run and use its
+`download --wait` command rather than dispatching another paid job blindly.
 
 ## Finish with verified readiness
 

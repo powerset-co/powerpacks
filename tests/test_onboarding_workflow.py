@@ -295,7 +295,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['step'], 'imessage_access')
         for step in ('deep_context', 'index', 'validate', 'ready'):
             self.assertNotIn(step, result['steps'])
-        self.assertEqual(result['plan'][-4:], ['deep_context', 'index', 'validate', 'ready'])
+        self.assertEqual(result['plan'][-5:], ['deep_context', 'enrich', 'index', 'validate', 'ready'])
         self.assert_preserved()
 
     def test_external_reinstall_keeps_live_work_and_qr_wait_untouched(self):
@@ -436,7 +436,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['action']['details']['counts'], {'gmail': 12, 'messages': 8})
         self.assertEqual(result['person_count'], 91)
         self.assertEqual(result['message'], 'Gmail: 12 contacts · Messages: 8 contacts')
-        self.assertEqual(result['plan'][-4:], ['deep_context', 'index', 'validate', 'ready'])
+        self.assertEqual(result['plan'][-5:], ['deep_context', 'enrich', 'index', 'validate', 'ready'])
 
     def test_fresh_gmail_waits_for_oauth_app_before_any_account_sync(self):
         with patch.object(accounts, 'status_payload', return_value={

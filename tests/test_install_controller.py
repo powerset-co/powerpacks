@@ -74,6 +74,18 @@ class InstallControllerTests(unittest.TestCase):
         self.assertEqual(request.status, 202)
         self.assertEqual(run.call_args_list[1].args[0], ["open", "-R", "/Applications/Example.app"])
 
+    def test_review_opens_existing_review_in_default_browser_only_when_needed(self):
+        request = Request({})
+        with patch("subprocess.run") as run:
+            self.controller.post(request, "/api/install/review")
+            self.assertEqual(request.status, 400)
+            run.assert_not_called()
+            InstallStatus(self.root).write(step=InstallStep.REVIEW, status=InstallState.WAITING,
+                                           message="Waiting for your review", pid=os.getpid())
+            self.controller.post(request, "/api/install/review")
+            self.assertEqual(request.status, 202)
+            run.assert_called_once_with(["open", "http://127.0.0.1:8899/?stage=linkedin"], check=True)
+
     def test_only_current_waiting_qr_is_served(self):
         from packs.ingestion.primitives.deep_context.review.cli import _persistent_handler
 

@@ -38,7 +38,7 @@ afterEach(() => {
 })
 
 describe("installation progress", () => {
-  it("combines source preparation and imports into link and sync steps", async () => {
+  it("combines each source into one syncing step while preserving waits and failures", async () => {
     const plan = [
       "imessage_access",
       "imessage_import",
@@ -65,15 +65,15 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { client } = mount()
-    await screen.findByText("Link Gmail")
+    await screen.findByText("Syncing Gmail")
     expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toBe(
-      "Link iMessageDoneSync iMessageDoneLink WhatsAppDoneSync WhatsAppDoneLink GmailWaitingSync GmailNext",
+      "Syncing iMessageDoneSyncing WhatsAppDoneSyncing GmailWaiting",
     )
     status = { ...status, step: "gmail_tools", status: "completed" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await waitFor(() =>
       expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-        "Link GmailWorking",
+        "Syncing GmailWorking",
       ),
     )
     for (const step of plan) {
@@ -82,15 +82,13 @@ describe("installation progress", () => {
       await waitFor(() => {
         const row = screen.getByRole("list").querySelector('[aria-current="step"]')
         expect(row?.textContent).toContain("Needs a fix")
-        expect(row?.textContent).toContain(
-          step.includes("tools") || step.includes("login") || step.includes("access") ? "Link" : "Sync",
-        )
+        expect(row?.textContent).toContain("Syncing")
       })
     }
   })
 
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
-    let status: InstallStatus = { ...INSTALL, step: "deep_context", message: "Preparing contacts" }
+    let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) =>
@@ -145,13 +143,28 @@ describe("installation progress", () => {
       "sources",
       "imessage_access",
       "imessage_import",
+      "whatsapp_tools",
+      "whatsapp_login",
+      "whatsapp_sync",
+      "whatsapp_import",
+      "gmail_tools",
+      "gmail_login",
+      "gmail_sync",
+      "gmail_import",
+      "deep_context",
+      "enrich",
+      "review",
+      "index",
+      "validate",
+      "ready",
     ]
     const status = {
       ...INSTALL,
       plan,
-      step: "sources",
+      step: "review",
+      status: "waiting",
       steps: Object.fromEntries(
-        plan.slice(0, 7).map((step) => [step, { status: "completed", message: "Done" }]),
+        plan.slice(0, plan.indexOf("review")).map((step) => [step, { status: "completed", message: "Done" }]),
       ),
     }
     vi.stubGlobal(
@@ -159,7 +172,7 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { container } = mount()
-    const history = await screen.findByRole("button", { name: "2 tasks completed" })
+    const history = await screen.findByRole("button", { name: "1 tasks completed" })
     expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(7)
     expect(
       screen
@@ -167,8 +180,77 @@ describe("installation progress", () => {
         .filter((node) => node.closest("li")?.getAttribute("aria-hidden") === "false").length,
     ).toBe(1)
     fireEvent.click(history)
-    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(9)
+    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(8)
     expect(history.getAttribute("aria-expanded")).toBe("true")
+  })
+
+  it("shows review only when needed and completes the index row after validation", async () => {
+    let status: InstallStatus = {
+      ...INSTALL,
+      plan: ["deep_context", "enrich", "index", "validate", "ready"],
+      step: "enrich",
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(url === "/api/status" ? { stage: "enrich", step: "", pending: {} } : status),
+          ),
+        ),
+      ),
+    )
+    const { client } = mount()
+    await screen.findByText("Enriching your contacts")
+    expect(screen.queryByText("Waiting for your review")).toBeNull()
+    status = {
+      ...status,
+      plan: ["deep_context", "enrich", "review", "index", "validate", "ready"],
+      step: "review",
+      status: "waiting",
+      action: { kind: "review" },
+      steps: {
+        deep_context: { status: "completed", message: "Done" },
+        enrich: { status: "completed", message: "Done" },
+      },
+    }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await screen.findByRole("button", { name: "Review contacts" })
+    expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+      "Waiting for your reviewWaiting",
+    )
+    status = {
+      ...status,
+      step: "validate",
+      status: "running",
+      action: null,
+      steps: {
+        ...status.steps,
+        review: { status: "completed", message: "Done" },
+        index: { status: "completed", message: "Done" },
+      },
+    }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await screen.findByText("Review completed")
+    expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+      "Building your search indexWorking",
+    )
+    status = {
+      ...status,
+      step: "ready",
+      status: "completed",
+      steps: {
+        ...status.steps,
+        validate: { status: "completed", message: "Done" },
+        ready: { status: "completed", message: "Done" },
+      },
+    }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await waitFor(() =>
+      expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+        "Building your search indexDone",
+      ),
+    )
   })
 
   it("submits chosen sources without starting unselected imports", async () => {
@@ -304,7 +386,7 @@ describe("installation progress", () => {
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByText("casey@example.com")
     expect(screen.getByText("Personal Network · 0 people")).toBeTruthy()
-    expect(screen.getByText("Skipped")).toBeTruthy()
+    expect(screen.getByText("Installing Powerpacks")).toBeTruthy()
     expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
 
     status = {

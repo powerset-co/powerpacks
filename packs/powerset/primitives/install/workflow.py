@@ -89,7 +89,7 @@ class SourceOnboarding:
         if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
         else:
-            next_steps = PROCESSING_STEPS
+            next_steps = tuple(step for step in PROCESSING_STEPS if step is not InstallStep.REVIEW)
         self.plan = list(dict.fromkeys([
             *history, InstallStep.SOURCES.value,
             *(step.value for source in self.sources for step in _SOURCE_STEPS[source]),

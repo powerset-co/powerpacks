@@ -23,6 +23,9 @@ const DEFAULT_LABELS: Record<string, string> = {
   credentials: "Connect search",
   connection: "Connect your agent",
   network: "Check your network",
+  deep_context: "Discovering your contacts",
+  enrich: "Enriching your contacts",
+  review: "Waiting for your review",
 }
 const TITLES: Record<InstallState, string> = {
   running: "Setting up Powerpacks",
@@ -40,19 +43,29 @@ const STATUS_LABELS: Record<InstallState, string> = {
 }
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
-const SOURCE_STEPS = [
-  { key: "imessage_access", label: "Link iMessage", steps: ["imessage_access"] },
-  { key: "imessage_import", label: "Sync iMessage", steps: ["imessage_import"] },
-  { key: "whatsapp_login", label: "Link WhatsApp", steps: ["whatsapp_tools", "whatsapp_login"] },
-  { key: "whatsapp_sync", label: "Sync WhatsApp", steps: ["whatsapp_sync", "whatsapp_import"] },
-  { key: "gmail_login", label: "Link Gmail", steps: ["gmail_tools", "gmail_login"] },
-  { key: "gmail_sync", label: "Sync Gmail", steps: ["gmail_sync", "gmail_import"] },
+const STEP_GROUPS = [
+  { key: "install", label: "Installing Powerpacks", steps: [...DEFAULT_STEPS, "tools"] },
+  {
+    key: "whatsapp",
+    label: "Syncing WhatsApp",
+    steps: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"],
+  },
+  { key: "imessage", label: "Syncing iMessage", steps: ["imessage_access", "imessage_import"] },
+  {
+    key: "gmail",
+    label: "Syncing Gmail",
+    steps: ["gmail_tools", "gmail_login", "gmail_sync", "gmail_import"],
+  },
+  { key: "index", label: "Building your search index", steps: ["index", "validate", "ready"] },
 ]
 
 function installSteps(data?: InstallStatus) {
   const plan = data?.plan ?? DEFAULT_STEPS
   return plan.flatMap((step) => {
-    const group = SOURCE_STEPS.find((group) => group.steps.includes(step))
+    if (step === "sources") return []
+    const group = STEP_GROUPS.find(
+      (group) => group.steps.includes(step) && (group.key !== "index" || plan.includes("index")),
+    )
     const members = group ? plan.filter((step) => group.steps.includes(step)) : [step]
     if (step !== members[0]) return []
     const current = members.includes(data?.step ?? "")
@@ -73,7 +86,10 @@ function installSteps(data?: InstallStatus) {
     return [
       {
         key: group?.key ?? step,
-        label: group?.label ?? data?.labels?.[step] ?? DEFAULT_LABELS[step] ?? step,
+        label:
+          step === "review" && status === "completed"
+            ? "Review completed"
+            : (group?.label ?? data?.labels?.[step] ?? DEFAULT_LABELS[step] ?? step),
         current,
         status,
       },
@@ -94,7 +110,7 @@ export function InstallPage() {
   const { data: processing } = useQuery({
     queryKey: ["review-status"],
     queryFn: ({ signal }) => fetchStatus(signal),
-    enabled: data?.step === "deep_context" && data.status === "running",
+    enabled: data?.step === "enrich" && data.status === "running",
     refetchInterval: 5_000,
     retry: false,
   })
@@ -106,11 +122,13 @@ export function InstallPage() {
         ? "Powerpacks is ready"
         : data?.status === "waiting" && data.step === "account"
           ? "Waiting for you to sign in"
-          : data?.status === "waiting" && data.action?.kind === "processing"
-            ? "Your contacts are saved"
-            : data
-              ? TITLES[data.status]
-              : "Opening Powerpacks"
+          : data?.status === "waiting" && data.step === "review"
+            ? "Waiting for your review"
+            : data?.status === "waiting" && data.action?.kind === "processing"
+              ? "Your contacts are saved"
+              : data
+                ? TITLES[data.status]
+                : "Opening Powerpacks"
   const steps = installSteps(data)
   const completed = steps.filter((step) => DONE.has(step.status ?? ""))
   const folded = completed.slice(0, -VISIBLE_COMPLETED)
@@ -154,7 +172,7 @@ export function InstallPage() {
                 ? "Reconnecting automatically…"
                 : failed
                   ? "Your progress is saved. I can check this step and retry."
-                  : data?.step === "deep_context" &&
+                  : data?.step === "enrich" &&
                       data.status === "running" &&
                       processing?.stage === "enrich" &&
                       processing.step
@@ -225,6 +243,14 @@ export function InstallPage() {
               <p>
                 {action.text ?? "Your contacts are saved. I’ll check what’s needed to make them searchable."}
               </p>
+            ) : null}
+            {action.kind === "review" ? (
+              <div>
+                <button type="button" onClick={() => void open("review")}>
+                  Review contacts
+                </button>
+                <p>I’ll continue when your review is complete.</p>
+              </div>
             ) : null}
             {actionError ? <p role="alert">{actionError}</p> : null}
           </section>

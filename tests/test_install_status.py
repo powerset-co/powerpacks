@@ -132,5 +132,22 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["steps"]["account"]["status"], "failed")
 
 
+    def test_processing_transition_does_not_claim_previous_run_completed(self) -> None:
+        self.status.write(step=InstallStep.ENRICH, status=InstallState.RUNNING,
+                          message="Enriching", pid=os.getpid())
+        self.status.write(step=InstallStep.INDEX, status=InstallState.WAITING,
+                          message="Ready", pid=os.getpid())
+        self.assertEqual(self.status.read()["steps"]["enrich"]["status"], "running")
+
+    def test_source_restart_clears_every_processing_stage_including_review(self) -> None:
+        for step in (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.REVIEW,
+                     InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY):
+            self.status.write(step=step, status=InstallState.COMPLETED,
+                              message="Done", pid=os.getpid())
+        self.status.write(step=InstallStep.SOURCES, status=InstallState.WAITING,
+                          message="Choose sources", pid=os.getpid())
+        self.assertEqual(list(self.status.read()["steps"]), ["sources"])
+
+
 if __name__ == "__main__":
     unittest.main()
