@@ -43,18 +43,20 @@ def prefer_cached_profile(
     research_profile: JudgeProfile,
     cached_profile: JudgeProfile,
 ) -> JudgeProfile:
-    """Use the hydrated LinkedIn profile while retaining research rationale."""
+    """Use fetched profile evidence and actual research citations, never research claims."""
     if cached_profile.experiences or cached_profile.education:
         return replace(
             cached_profile,
             reason=research_profile.reason,
             _present=cached_profile._present | {"reason"},
         )
-    return replace(
-        research_profile,
-        source=RESEARCH_PROFILE_SOURCE,
-        _present=research_profile._present | {"source"},
-    )
+    return JudgeProfile.from_payload({
+        "public_identifier": research_profile.public_identifier,
+        "linkedin_url": research_profile.linkedin_url,
+        "reason": research_profile.reason,
+        "source": RESEARCH_PROFILE_SOURCE,
+        "has_profile": False,
+    })
 
 
 def _bullets(items: tuple[str, ...] | list[str], empty: str) -> str:
@@ -129,7 +131,7 @@ def identity_judge_prompt(
     if evidence.dossier:
         contact += f"\n\nFULL DOSSIER FACTS (synthesized from messages):\n{evidence.dossier}"
     profile_label = (
-        "RESEARCH-DERIVED CANDIDATE CLAIMS (not fetched LinkedIn profile evidence)"
+        "RESEARCH PROPOSAL (no fetched LinkedIn profile evidence)"
         if profile.source == RESEARCH_PROFILE_SOURCE else "LINKEDIN"
     )
     linked = (
@@ -149,7 +151,7 @@ def identity_judge_prompt(
             "Interview or referral context does not prove employment; evaluate the dates."
         )
         if profile.reason:
-            speculative += f"\nCached research claims (not independently verified): {profile.reason}"
+            speculative += f"\nResearch source citations (URLs, titles and excerpts): {profile.reason}"
     return contact + linked + speculative + "\n\nIs this the same human?"
 
 

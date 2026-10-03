@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import tests.test_deep_context_identity_disagreements as fixtures
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship as relationship
 from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.deep_context.db.models import ResearchRow
 
 
 class RelationshipCacheContractTests(unittest.TestCase):
@@ -37,6 +38,30 @@ class RelationshipCacheContractTests(unittest.TestCase):
         self.assertNotIn("accept the match unless", relationship.SYSTEM_PROMPT)
         self.assertNotIn("should remain associated unless", relationship.SYSTEM_PROMPT)
         self.assertNotIn("compatible professional context can also support yes", relationship.SYSTEM_PROMPT)
+
+    def test_research_input_contains_only_actual_citations(self):
+        output = {"type": "json", "content": {"real_name": "Jordan Bravo", "summary": "INVENTED normalized biography",
+                              "work_experience": [], "education": []},
+                  "basis": [{"field": "summary", "reasoning": "INVENTED email-to-employer bridge",
+                             "citations": [{"url": "https://example.com/jordan", "title": "Jordan bio",
+                                            "excerpts": ["Jordan Bravo founded Oriel."]}]}]}
+        self.db.project_rows((ResearchRow("jordan", "jordan", "complete", result_json=json.dumps(output)),))
+        _, call = self.cache()
+        prompt = call.call_args.kwargs["user_prompt"]
+        self.assertNotIn("INVENTED normalized biography", prompt)
+        self.assertNotIn("INVENTED email-to-employer bridge", prompt)
+        self.assertIn("https://example.com/jordan", prompt)
+        self.assertIn("Jordan bio", prompt)
+        self.assertIn("Jordan Bravo founded Oriel.", prompt)
+        output["content"]["summary"] = "Different uncited biography"
+        output["basis"][0]["reasoning"] = "Different invented connection"
+        self.db.project_rows((ResearchRow("jordan", "jordan", "complete", result_json=json.dumps(output)),))
+        result, call = self.fixture.run_stage(self.answer)
+        self.assertEqual((result["calls"], result["reused"]), (0, 1))
+        call.assert_not_called()
+        output["basis"][0]["citations"][0]["excerpts"] = ["Jordan Bravo founded ExampleWorks."]
+        self.db.project_rows((ResearchRow("jordan", "jordan", "complete", result_json=json.dumps(output)),))
+        self.assert_pending()
 
     def test_unchanged_complete_request_reuses_without_a_call(self):
         self.cache()

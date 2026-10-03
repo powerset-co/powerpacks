@@ -31,6 +31,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate
     RelationshipDecision, cache_relationship_judgment, finish_reviews,
 )
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, emit
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, source_evidence
@@ -126,8 +127,8 @@ class ReviewRelationships:
                     "network_worth": parse_json_object(row.facts_json).get("network_worth")}
                     for row in facts(self.db, parent_id=parent_id)],
                 candidates=[profiles[url] for url in sorted(profiles)],
-                research=[parse_json_object(row.result_json) for row in research_rows(self.db, parent_id=parent_id)
-                    if row.result_json])
+                research=[result.identity_citations() for row in research_rows(self.db, parent_id=parent_id)
+                    if (result := ResearchResult.from_json(row.result_json)) is not None])
             prompt = json.dumps(context, ensure_ascii=False, sort_keys=True)
             request = {"model": self.config.model, "effort": self.config.effort,
                 "system_prompt": SYSTEM_PROMPT, "user_prompt": prompt,
