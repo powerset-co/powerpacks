@@ -10,7 +10,7 @@ import { errorText } from "@/lib/api/http"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import { doingNow } from "@/pages/review/enrich/copy"
-import type { InstallState } from "@/types/install"
+import type { InstallState, InstallStatus } from "@/types/install"
 
 import { SourceChoice } from "./SourceChoice"
 
@@ -40,6 +40,44 @@ const STATUS_LABELS: Record<InstallState, string> = {
 }
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
+const SOURCE_STEPS = [
+  { key: "whatsapp_login", label: "Link WhatsApp", steps: ["whatsapp_tools", "whatsapp_login"] },
+  { key: "whatsapp_sync", label: "Sync WhatsApp", steps: ["whatsapp_sync", "whatsapp_import"] },
+  { key: "gmail_login", label: "Link Gmail", steps: ["gmail_tools", "gmail_login"] },
+  { key: "gmail_sync", label: "Sync Gmail", steps: ["gmail_sync", "gmail_import"] },
+]
+
+function installSteps(data?: InstallStatus) {
+  const plan = data?.plan ?? DEFAULT_STEPS
+  return plan.flatMap((step) => {
+    const group = SOURCE_STEPS.find((group) => group.steps.includes(step))
+    const members = group ? plan.filter((step) => group.steps.includes(step)) : [step]
+    if (step !== members[0]) return []
+    const current = members.includes(data?.step ?? "")
+    const states = members.map((step) => data?.steps[step]?.status)
+    const latest = [...states].reverse().find((state) => state != null)
+    const complete = states.every((state) => DONE.has(state ?? ""))
+    const status: InstallState | undefined = current
+      ? group && DONE.has(data?.status ?? "") && !complete
+        ? "running"
+        : data?.status
+      : complete
+        ? states.every((state) => state === "skipped")
+          ? "skipped"
+          : "completed"
+        : latest && DONE.has(latest)
+          ? "running"
+          : latest
+    return [
+      {
+        key: group?.key ?? step,
+        label: group?.label ?? data?.labels?.[step] ?? DEFAULT_LABELS[step] ?? step,
+        current,
+        status,
+      },
+    ]
+  })
+}
 
 export function InstallPage() {
   const { data, error } = useQuery({
@@ -71,11 +109,11 @@ export function InstallPage() {
             : data
               ? TITLES[data.status]
               : "Opening Powerpacks"
-  const steps = data?.plan ?? DEFAULT_STEPS
-  const completed = steps.filter((step) => DONE.has(data?.steps[step]?.status ?? ""))
+  const steps = installSteps(data)
+  const completed = steps.filter((step) => DONE.has(step.status ?? ""))
   const folded = completed.slice(0, -VISIBLE_COMPLETED)
-  const currentIndex = steps.indexOf(data?.step ?? "")
-  const next = steps.slice(currentIndex + 1).find((step) => !data?.steps[step])
+  const currentIndex = steps.findIndex((step) => step.current)
+  const next = steps.slice(currentIndex + 1).find((step) => !step.status)
   const action = data?.action
   useEffect(() => {
     document.title = `${title} · Powerpacks`
@@ -208,14 +246,14 @@ export function InstallPage() {
             ) : null}
             <ol className="install-steps" aria-label="Setup steps">
               {steps.map((step) => {
-                const progress = data.steps[step]
-                const current = data.step === step
-                const done = DONE.has(progress?.status ?? "")
+                const progress = step.status
+                const current = step.current
+                const done = DONE.has(progress ?? "")
                 const hidden =
                   (folded.includes(step) && !expanded) || (!progress && !current && step !== next)
                 return (
                   <li
-                    key={step}
+                    key={step.key}
                     data-folded={hidden}
                     data-done={done}
                     aria-hidden={hidden}
@@ -223,20 +261,14 @@ export function InstallPage() {
                   >
                     <div className="install-step-row">
                       <span className="install-step-mark" aria-hidden="true">
-                        {progress?.status === "completed"
-                          ? "✓"
-                          : progress?.status === "skipped"
-                            ? "−"
-                            : current
-                              ? "•"
-                              : "○"}
+                        {progress === "completed" ? "✓" : progress === "skipped" ? "−" : current ? "•" : "○"}
                       </span>
-                      <span>{data.labels?.[step] ?? DEFAULT_LABELS[step] ?? step}</span>
+                      <span>{step.label}</span>
                       <span className="install-step-status">
                         {current && failed
                           ? STATUS_LABELS.failed
                           : progress
-                            ? STATUS_LABELS[progress.status]
+                            ? STATUS_LABELS[progress]
                             : current
                               ? STATUS_LABELS[data.status]
                               : "Next"}

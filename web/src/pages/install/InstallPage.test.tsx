@@ -38,6 +38,53 @@ afterEach(() => {
 })
 
 describe("installation progress", () => {
+  it("combines source preparation and imports into link and sync steps", async () => {
+    const plan = [
+      "whatsapp_tools",
+      "whatsapp_login",
+      "whatsapp_sync",
+      "whatsapp_import",
+      "gmail_tools",
+      "gmail_login",
+      "gmail_sync",
+      "gmail_import",
+    ]
+    let status: InstallStatus = {
+      ...INSTALL,
+      plan,
+      step: "gmail_login",
+      status: "waiting",
+      steps: Object.fromEntries(
+        plan.slice(0, 5).map((step) => [step, { status: "completed", message: "Done" }]),
+      ),
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    const { client } = mount()
+    await screen.findByText("Link Gmail")
+    expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toBe(
+      "Link WhatsAppDoneSync WhatsAppDoneLink GmailWaitingSync GmailNext",
+    )
+    status = { ...status, step: "gmail_tools", status: "completed" }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await waitFor(() =>
+      expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+        "Link GmailWorking",
+      ),
+    )
+    for (const step of plan) {
+      status = { ...status, step, status: "failed", steps: {} }
+      await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+      await waitFor(() => {
+        const row = screen.getByRole("list").querySelector('[aria-current="step"]')
+        expect(row?.textContent).toContain("Needs a fix")
+        expect(row?.textContent).toContain(step.includes("tools") || step.includes("login") ? "Link" : "Sync")
+      })
+    }
+  })
+
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
     let status: InstallStatus = { ...INSTALL, step: "deep_context", message: "Preparing contacts" }
     vi.stubGlobal(
