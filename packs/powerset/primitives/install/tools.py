@@ -21,6 +21,9 @@ class ImportSource(str, Enum):
     WHATSAPP = "whatsapp"
 
 
+HOMEBREW_INSTALL_COMMAND = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+
 class ImportTools:
     def __init__(self, *, sources: tuple[str, ...]) -> None:
         self.sources = tuple(ImportSource(source) for source in sources)
@@ -49,7 +52,8 @@ class ImportTools:
             brew = shutil.which("brew")
             if not brew:
                 return {"status": "needs_user_action",
-                        "message": "Homebrew needs your Mac password. Install it from https://brew.sh, then tell me to continue."}
+                        "message": "Your Mac password is needed to prepare import tools.",
+                        "command": HOMEBREW_INSTALL_COMMAND}
             for name, args in packages:
                 shell.progress(f"Installing {name}.")
                 result = shell.run_command([brew, "install", *args], timeout=900)

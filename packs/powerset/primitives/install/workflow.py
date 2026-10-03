@@ -106,7 +106,8 @@ class SourceOnboarding:
 
     def _tools(self, source: Source, step: InstallStep) -> bool:
         self._write(step, InstallState.RUNNING, "Preparing import tools")
-        return self._result(step, ImportTools(sources=(source.value,)).run())
+        payload = ImportTools(sources=(source.value,)).run()
+        return self._result(step, payload, {"command": payload["command"]} if "command" in payload else None)
 
     def _gmail_covered(self, current: import_common.ImportManifest) -> bool:
         manifest = Path(current.input.get("discovery_manifest", ".powerpacks/network-import/discover/gmail/manifest.json"))

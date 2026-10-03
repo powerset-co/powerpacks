@@ -81,6 +81,14 @@ class SourceOnboardingTests(unittest.TestCase):
         self.tools.assert_not_called()
         self.assert_preserved()
 
+    def test_missing_tools_give_agent_the_command(self):
+        self.tools.return_value = {'status': 'needs_user_action', 'message': 'Mac password needed',
+                                   'command': 'prepare-tools'}
+        result = SourceOnboarding(self.root, sources=('whatsapp',)).run()
+        self.assertEqual(result['step'], 'whatsapp_tools')
+        self.assertEqual(result['status'], 'waiting')
+        self.assertEqual(result['action']['command'], 'prepare-tools')
+
     def test_new_source_setup_clears_previous_processing_completion(self):
         status = InstallStatus(self.root)
         for step in (InstallStep.DEEP_CONTEXT, InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY):

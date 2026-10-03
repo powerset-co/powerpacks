@@ -51,6 +51,8 @@ class ImportToolsTests(unittest.TestCase):
         result = tools.ImportTools(sources=("whatsapp",)).run()
         self.assertEqual(result["status"], "needs_user_action")
         self.assertIn("password", result["message"])
+        self.assertIn("raw.githubusercontent.com/Homebrew/install/HEAD/install.sh", result["command"])
+        self.assertNotIn("Install it", result["message"])
 
     @patch.object(shell, "run_command", return_value=shell.CommandResult(ok=True))
     @patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True})
