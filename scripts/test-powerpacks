@@ -17,6 +17,8 @@ fi
 # Deep Context tests import their synthetic helper from the tests directory, so
 # that directory stays on PYTHONPATH.
 export PYTHONPATH="$ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
+# Search fixtures load .env; keep their uncached department checks offline.
+export TYPESAFE_API_KEY=""
 
 # Baseline suites, then the SQLite Deep Context and share rewrite suites.
 exec "$UV_BIN" run --project . python -m unittest \
