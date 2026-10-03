@@ -63,6 +63,7 @@ from packs.ingestion.primitives.discover.messages.channels.whats_app_channel imp
     WHATSAPP_CONTACTS,
     WhatsAppChannel,
 )
+from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS  # noqa: E402
 
@@ -128,6 +129,8 @@ class MessagesDiscovery(Node):
         wacli_max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
         include_imessage: bool = False,
         include_whatsapp: bool = False,
+        wacli_store: Path = DEFAULT_STORE,
+        open_qr_page: bool = True,
     ) -> None:
         # Channel selection is EXPLICIT: the --include-* flags ARE the selection
         # (no accounts.json fallback). Neither enabled -> the skipped manifest path.
@@ -148,7 +151,8 @@ class MessagesDiscovery(Node):
         # contacts from its last run instead of dropping them.
         imessage = IMessageChannel(other_enabled=self.selection.include_whatsapp)
         whatsapp = WhatsAppChannel(other_enabled=self.selection.include_imessage,
-                                   max_messages=wacli_max_messages)
+                                   max_messages=wacli_max_messages,
+                                   wacli_store=wacli_store, open_qr_page=open_qr_page)
         self.channels: list[MessageChannel] = [imessage, whatsapp]
         self.selected: list[MessageChannel] = [
             channel for channel, include in ((imessage, self.selection.include_imessage),

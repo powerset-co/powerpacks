@@ -21,14 +21,14 @@
 }
 .install-page .install-steps {
   display: grid;
-  gap: 16px;
+  gap: 0;
   padding: 20px 0;
   margin: 0;
   list-style: none;
   font-size: 13px;
   color: var(--muted);
 }
-.install-page .install-steps li {
+.install-page .install-step-row {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
@@ -75,4 +75,123 @@
 }
 .install-page .install-details p {
   margin: 12px 0 0;
+}
+
+.install-page .install-steps li {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 220ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 200ms,
+    margin 220ms,
+    visibility 220ms;
+  margin-bottom: 16px;
+}
+.install-page .install-step-row {
+  min-height: 0;
+  overflow: hidden;
+}
+.install-page .install-steps li[data-folded="true"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-bottom: 0;
+  visibility: hidden;
+}
+.install-page .install-history {
+  font-size: 12px;
+  color: var(--muted);
+}
+.install-page .install-action {
+  margin: 12px 0 24px;
+  font-size: 13px;
+}
+.install-page .install-choice fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.install-page .install-choice legend {
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+.install-page .install-source-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.install-page .install-source-options label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.install-page .install-gmail-choice {
+  margin-top: 20px;
+  display: grid;
+  gap: 12px;
+}
+.install-page .install-gmail-choice label {
+  display: grid;
+  gap: 6px;
+}
+.install-page .install-gmail-choice input,
+.install-page .install-gmail-choice select {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--foreground);
+  padding: 10px 12px;
+  width: 100%;
+}
+.install-page .install-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+.install-page .install-action button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.install-page .install-buttons button[type="submit"] {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+.install-page .install-action button:disabled {
+  opacity: 0.5;
+}
+.install-page .install-action p {
+  color: var(--muted);
+  margin: 12px 0;
+}
+.install-page .install-qr {
+  text-align: center;
+}
+.install-page .install-qr img {
+  width: 224px;
+  height: 224px;
+  padding: 12px;
+  background: white;
+  border-radius: 10px;
+  margin: 0 auto;
+}
+.install-page .install-permission code {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-bottom: 16px;
+}
+.install-page .install-details pre {
+  white-space: pre-wrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .install-page .install-steps li {
+    transition: none;
+  }
+}
+
+.install-page .install-index-progress {
+  width: 100%;
+  accent-color: var(--primary);
 }

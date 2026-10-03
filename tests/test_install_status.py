@@ -108,6 +108,20 @@ class InstallStatusTests(unittest.TestCase):
         self.assertIsNone(record["account_email"])
         self.assertIsNone(record["person_count"])
 
+    def test_source_wait_keeps_install_history_and_clears_action_on_resume(self) -> None:
+        self.status.write(step=InstallStep.SKILLS, status=InstallState.COMPLETED,
+                          message="Installed", pid=os.getpid())
+        plan = ["skills", "sources", "whatsapp_login", "whatsapp_sync"]
+        self.status.write(step=InstallStep.WHATSAPP_LOGIN, status=InstallState.WAITING,
+                          message="Scan with WhatsApp", pid=os.getpid(), plan=plan,
+                          action={"kind": "qr"})
+        self.assertEqual(self.status.read()["action"], {"kind": "qr"})
+        self.status.write(step=InstallStep.WHATSAPP_SYNC, status=InstallState.RUNNING,
+                          message="Syncing", pid=os.getpid())
+        self.assertIsNone(self.status.read()["action"])
+        self.assertEqual(self.status.read()["plan"], plan)
+        self.assertEqual(self.status.read()["steps"]["skills"]["status"], "completed")
+
     def test_waiting_step_does_not_advance_to_completed_on_failure(self) -> None:
         self.status.write(step=InstallStep.ACCOUNT, status=InstallState.WAITING,
                           message="Waiting for sign-in", pid=os.getpid())

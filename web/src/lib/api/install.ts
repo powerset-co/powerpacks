@@ -6,3 +6,12 @@ export async function fetchInstall(signal: AbortSignal): Promise<InstallStatus> 
   if (!response.ok) throw await failure(response, "Couldn't read installation progress")
   return body<InstallStatus>(response)
 }
+
+export async function installAction(action: string, values: object = {}): Promise<void> {
+  const response = await fetch(`/api/install/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(values),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't continue setup")
+}

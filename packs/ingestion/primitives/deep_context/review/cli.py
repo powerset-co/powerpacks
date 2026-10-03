@@ -41,6 +41,9 @@ from pathlib import Path
 
 from packs.shared.web.app import AppRoutes
 from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB, has_parents
+from packs.powerset.primitives.install.controller import InstallController, permission_app
+from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.index_progress import read_index_progress
 
 _PRIMITIVE = "reconcile_review_web"
 _START_TIMEOUT_SECONDS = 10
@@ -158,6 +161,14 @@ def _stage(args: argparse.Namespace, root: Path) -> str:
     return args.stage or ("" if (root / CANONICAL_DB).is_file() else "searches")
 
 
+def _load_project_packages(root: Path) -> None:
+    # Bootstrap and the project environment use the same pinned Python.
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    packages = root / ".venv" / "lib" / version / "site-packages"
+    if packages.is_dir() and str(packages) not in sys.path:
+        site.addsitedir(str(packages))
+
+
 def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRequestHandler]:
     """Serve built assets immediately; mount the existing APIs once their inputs exist."""
     app = AppRoutes()
@@ -171,11 +182,7 @@ def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRe
         with mount_lock:
             if mounted_review:
                 return mounted
-            # The pinned bootstrap interpreter and the project environment share Python.
-            version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-            packages = root / ".venv" / "lib" / version / "site-packages"
-            if packages.is_dir() and str(packages) not in sys.path:
-                site.addsitedir(str(packages))
+            _load_project_packages(root)
             ready = has_parents(root / CANONICAL_DB)
             path = root / CANONICAL_DB
             if mounted is not None and not ready:
@@ -195,6 +202,8 @@ def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRe
             else:
                 mounted = searches_only_handler()
             return mounted
+
+    install = InstallController(root)
 
     class Handler(BaseHTTPRequestHandler):
         def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -228,9 +237,28 @@ def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRe
                 self._json(identity)
                 return
             if parsed.path == "/api/install":
-                from packs.powerset.primitives.install.status import InstallStatus
-
-                self._json(InstallStatus(root).read())
+                record = InstallStatus(root).read()
+                if record["step"] == "index":
+                    record["index_progress"] = read_index_progress(root, record["updated_at"])
+                action = record.get("action")
+                if action and action.get("kind") == "permission":
+                    action["app_path"] = permission_app()
+                qr = install.qr(record)
+                if qr:
+                    action["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"
+                self._json(record)
+                return
+            if parsed.path == "/api/install/qr":
+                body = install.qr_image()
+                if body is None:
+                    self._json({"error": "Waiting for a fresh QR code"}, HTTPStatus.NOT_FOUND)
+                    return
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             if parsed.path in {"/", "/api/status"} and not mounted_review:
                 try:
@@ -253,6 +281,9 @@ def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRe
             self._dispatch("do_GET")
 
         def do_POST(self) -> None:  # noqa: N802
+            _load_project_packages(root)
+            if install.post(self, urllib.parse.urlparse(self.path).path):
+                return
             self._dispatch("do_POST")
 
         def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
@@ -280,9 +311,13 @@ def cmd_start(args: argparse.Namespace) -> None:
         command.extend(["--stage", args.stage])
     if args.confirm_threshold is not None:
         command.extend(["--confirm-threshold", str(args.confirm_threshold)])
+    environment = dict(os.environ)
+    app = permission_app()
+    if app:
+        environment["POWERPACKS_PERMISSION_APP"] = app
     with (directory / "server.log").open("ab") as log:
         process = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL,
-                                   stdout=log, stderr=log, start_new_session=True)
+                                   stdout=log, stderr=log, start_new_session=True, env=environment)
     deadline = time.monotonic() + _START_TIMEOUT_SECONDS
     while time.monotonic() < deadline and process.poll() is None:
         live = _health(args.host, args.port)

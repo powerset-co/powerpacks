@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -89,6 +90,24 @@ class ReviewLifecycleTests(unittest.TestCase):
         self.assertIn('bin/setup-python', error.exception.read().decode())
         error.exception.close()
         self.assertEqual(self.get('/install')[0], 200)
+
+    def test_cold_server_accepts_source_choices_after_dependencies_arrive(self):
+        result = self.start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.addCleanup(self.stop, json.loads(result.stdout)['pid'])
+        (self.root / '.venv').symlink_to(ROOT / '.venv', target_is_directory=True)
+        request = urllib.request.Request(self.base + '/api/install/sources',
+                                         data=json.dumps({'sources': [], 'skip': True}).encode(),
+                                         headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(request, timeout=3) as response:
+            self.assertEqual(response.status, 202)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = json.loads(self.get('/api/install')[1])
+            if status['status'] in {'completed', 'failed'}:
+                break
+            time.sleep(0.05)
+        self.assertEqual((status['status'], status['step']), ('completed', 'ready'), status)
 
     def test_unsupported_store_reports_recovery_without_breaking_install_page(self):
         import sqlite3

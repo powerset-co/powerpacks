@@ -8,7 +8,6 @@
 #   DONE: ...        installed; continue with the user's ask
 #   NEEDS YOU: ...   a step needs the human (a click, a password); show the line
 #                    word for word, wait, then run the same command again
-#   ASK: ...         one yes/no question for the user; rerun with the flag it names
 #   STOP: ...        wrong place to run this; show the line, do not continue
 #   FAILED: ...      something broke; show the line
 #
@@ -19,10 +18,10 @@
 #   --harness   which agent's skills folder to install into; default: every one
 #               found on this Mac (both Claude Code and Codex when none is found)
 #   --powerset  connect the account, prepare credentials, and verify network search
-#   --tools     install the Gmail-import tools (msgvault, gcloud, node, Chrome)
-#               through Homebrew; --no-tools skips the check; neither = check only
+#   --tools     prepare Gmail and WhatsApp import tools (no login or sync)
+#               --no-tools (default) keeps hosted setup light
 #
-# Exit codes: 0 done or ASK; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
+# Exit codes: 0 done; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
 #
 # Created: 2026-09-30
 # Changelog:
@@ -32,12 +31,10 @@ set -euo pipefail
 
 REPO_URL="${POWERPACKS_REPO_URL:-https://github.com/powerset-co/powerpacks.git}"
 DEFAULT_ROOT="$HOME/powerpacks"
-CHROME_APP="/Applications/Google Chrome.app"
-HOMEBREW_INSTALL='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
 
 harness="auto"
 powerset=0
-tools="check"
+tools="skip"
 port=8765
 bootstrap_args=("$@")
 retry_command="bin/bootstrap"
@@ -132,7 +129,7 @@ if [[ "$bootstrap_source" != "$root/bin/bootstrap" ]]; then
     # The downloaded launcher must not hand off to an old installed launcher.
     # Keep local work intact; the channel helper switches without --force.
     if ! git -C "$root" diff --quiet || ! git -C "$root" diff --cached --quiet; then
-      needs_you "Local code changes in $root need to be saved before updating. Ask me to inspect git status and preserve them, then retry."
+      failed "Local code changes in $root need to be saved before updating. Ask me to inspect git status and preserve them, then retry."
     fi
     say "checking for the current Powerpacks release"
     if ! git -C "$root" fetch --quiet --tags origin; then
@@ -153,7 +150,7 @@ if [[ "$bootstrap_source" != "$root/bin/bootstrap" ]]; then
     if git -C "$root" rev-parse --verify --quiet "$selected_branch" >/dev/null && \
        [[ -z "$(git -C "$root" branch -r --contains "$selected_branch")" && \
           -z "$(git -C "$root" tag --points-at "$selected_branch" --list 'powerpacks-v*')" ]]; then
-      needs_you "The $selected_branch branch has local commits. Ask me to preserve that work before updating, then retry."
+      failed "The $selected_branch branch has local commits. Ask me to preserve that work before updating, then retry."
     fi
     "$root/bin/powerpacks-channel" --checkout "$root" >/dev/null \
       || failed "Could not select the Powerpacks release. Ask me to inspect the Git error above and preserve any local files before retrying."
@@ -231,37 +228,19 @@ if [[ "$powerset" == 1 && ! -f "$root/.env" ]]; then
   say "created $root/.env from the Powerset template"
 fi
 
-# 6. Gmail import needs four tools. Installing them is the one thing the user
-#    should hear about before it happens, so a plain check ends in one question.
-if [[ "$tools" != skip ]]; then
-  progress tools running "Checking Gmail tools"
-  missing=()
-  for t in msgvault gcloud node npm; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
-  [[ -d "$CHROME_APP" ]] || missing+=(chrome)
-  if [[ ${#missing[@]} -gt 0 && "$tools" == check ]]; then
-    finish_progress waiting "Powerpacks skills are installed. Answer in chat whether to install the optional free Gmail tools."
-    echo "ASK: Gmail import needs these free tools, which are not installed yet: ${missing[*]}. Ask the user: \"May I install them with Homebrew? It's free and takes a few minutes.\" Yes: run this again with --tools. No: run this again with --no-tools."
-    exit 0
-  fi
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    command -v brew >/dev/null 2>&1 || needs_you "Homebrew is needed to install ${missing[*]}, and only you can install it because it asks for your Mac password. Open Terminal, paste this line, press Return, and type your password when asked: $HOMEBREW_INSTALL   (from https://brew.sh). When it finishes, tell me and I'll continue."
-    for t in "${missing[@]}"; do
-      say "installing $t"
-      case "$t" in
-        msgvault) message="Preparing Gmail import" ;;
-        gcloud) message="Preparing Gmail sign-in" ;;
-        node|npm) message="Installing Gmail support" ;;
-        chrome) message="Installing Google Chrome" ;;
-      esac
-      progress tools running "$message"
-      case "$t" in
-        msgvault) curl -fsSL https://msgvault.io/install.sh | bash >>"$log" 2>&1 || needs_you "msgvault did not install. Open Terminal and paste: curl -fsSL https://msgvault.io/install.sh | bash   Then tell me and I'll continue." ;;
-        gcloud) brew install --cask gcloud-cli >>"$log" 2>&1 || needs_you "gcloud did not install. Open Terminal and paste: brew install --cask gcloud-cli   (it may ask for your password). Then tell me and I'll continue." ;;
-        node|npm) command -v node >/dev/null 2>&1 || brew install node >>"$log" 2>&1 || needs_you "node did not install. Open Terminal and paste: brew install node   Then tell me and I'll continue." ;;
-        chrome) brew install --cask google-chrome >>"$log" 2>&1 || needs_you "Google Chrome did not install. Open Terminal and paste: brew install --cask google-chrome   (it may ask for your password). Then tell me and I'll continue." ;;
-      esac
-    done
-  fi
+# 6. Optional binaries are prepared without login or syncing any contacts.
+if [[ "$tools" == install ]]; then
+  progress tools running "Preparing contact import"
+  code=0
+  tool_result="$(cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.tools \
+    --source gmail --source whatsapp 2>>"$log")" || code=$?
+  echo "$tool_result" >>"$log"
+  tool_message="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["message"])' <<<"$tool_result")"
+  case "$code" in
+    0) progress tools completed "$tool_message" ;;
+    10) needs_you "$tool_message" ;;
+    *) failed "$tool_message Check $log; I can diagnose this and retry." ;;
+  esac
 fi
 
 if [[ "$powerset" == 1 ]]; then

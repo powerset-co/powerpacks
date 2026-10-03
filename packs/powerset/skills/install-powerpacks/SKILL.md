@@ -2,11 +2,10 @@
 name: install-powerpacks
 description: Set up Powerpacks from one pasted URL. Install locally, open live progress, connect the user's Powerset account, and verify their network in the same session. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
 license: MIT
-allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap *)
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.2.0
+  version: 1.3.0
   summary: Install, connect your account, and check your network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -17,8 +16,8 @@ metadata:
 
 # Set up Powerpacks
 
-<!-- Changelog: 2026-10-02 — one script owns installation, account connection,
-network checks, and real progress; the agent handles human actions and recovery. -->
+<!-- Changelog: 2026-10-03 — keep optional source imports and recovery on the
+same page after installation; the agent resumes existing primitives. -->
 
 The user pastes:
 
@@ -26,8 +25,10 @@ The user pastes:
 
 Carry that request through to a working account and a verified network. Do not
 stop after saving this file, ask them to type another skill, or hand them an
-installation checklist. The script does the work; you watch its progress,
-handle anything requiring the user, and recover from failures.
+installation checklist. The scripts do the work; you watch progress,
+handle routine recovery, and involve the user only for choices or actions
+requiring them. Open with: "I’ll set this up here. Feel free to ask questions or
+tell me what you want as it runs."
 
 ## Run one command
 
@@ -63,11 +64,13 @@ mail and messages.
 
 - Explicit "install only", "don't log in", or custom/local-only setup: omit
   `--powerset`. Follow that narrower request; don't report account readiness.
-- Keep `--no-tools` for initial setup. Gmail tools are installed only if the
-  user later asks to connect Gmail. Don't delay first use with optional imports.
+- Keep `--no-tools` for initial setup. Selected source imports prepare their
+  own tools afterward. Optional imports never delay first use of hosted search.
 - Reruns update the existing checkout within its selected release channel and
   preserve configuration and network data. Fresh installs follow the published
-  release. Do not switch channels or edit application code to repair setup.
+  release, not the current PR or `main`. When explicitly testing a PR, run its
+  checkout's `bin/bootstrap` instead of the public launcher and verify its commit.
+  Do not switch channels or edit application code to repair setup.
 
 ## Show the live page
 
@@ -86,9 +89,9 @@ system's default browser; do not pass `--no-browser` or open sign-in or callback
 URLs in the in-app browser. If automatic launch fails, use `open "<sign-in URL>"`
 on the printed URL. The user completes sign-in there while progress stays here.
 
-The animation and step labels come from the script's
-`.powerpacks/install/manifest.json`. The page shows installing, waiting for
-sign-in, skipped login, search connection, network check, and completion.
+The animation and step labels come from
+`.powerpacks/install/manifest.json` and the source primitives' existing artifacts.
+Installation, source imports, and processing share the same page.
 Never fabricate progress, write the manifest by hand, or treat the animation as
 proof of success. The page stays open after the command ends.
 
@@ -103,9 +106,8 @@ and the saved progress; do not start a second installer while it is running.
 
 | Script result | Agent action |
 | --- | --- |
-| `DONE:` | Verify the saved result and give the account/network summary below. Continue any search the user already requested. |
+| `DONE:` | Verify account/search readiness, then run `bin/onboard` from the printed checkout to show optional source choices. Continue any already-requested search without requiring imports. |
 | `NEEDS YOU:` | Show the single action needed. During browser login the script waits and continues automatically. If the script has exited, resume it after the action. |
-| `ASK:` | Answer from the user's existing request where possible. Optional Gmail tools are unnecessary for initial setup; rerun with `--no-tools`. |
 | `STOP:` | Explain where to run the instruction. Do not continue in the wrong environment. |
 | `FAILED:` | Read the saved error, fix the cause within the authorized setup, and rerun. Don't ask "should I try to fix it?" |
 
@@ -144,27 +146,66 @@ Internal IDs, "sets", provider keys, MCP, and database names belong in
 troubleshooting details. Say "your personal network", the network's actual
 name, and the signed-in email in normal conversation.
 
+## Continue on the same page
+
+After bootstrap completes, run `<repo>/bin/onboard`. It shows optional Gmail,
+iMessage, WhatsApp, and LinkedIn choices without reading those sources. Choices
+can arrive in chat or on the right panel; use an existing answer instead of
+asking twice. The user may skip. A working hosted account remains usable while
+local setup waits for a choice, login, or file.
+
+For chat choices, run the same script with one `--source gmail|imessage|whatsapp|linkedin`
+per selected source, or `--source skip`. Gmail also needs repeatable
+`--gmail-email <address>` and `--sync-after <YYYY-MM-DD>` from the user's selected
+accounts and history window. Ask for missing choices together; never guess an
+account. The script installs only the selected sources' tools and reuses existing
+imports. Use `--refresh` only when the user asks to sync again.
+
+Watch the saved manifest and the original process. If a panel action already
+started it, follow that process rather than launching a duplicate. When it exits
+waiting or failed, read `action` and the saved error:
+
+- Run the relevant `action.command` from the checkout yourself within the chosen
+  source's scope. Handle dependency repairs, OAuth app preparation, and retries;
+  don't hand commands or skill names to the user.
+- Browser sign-in stays outside the progress pane. Let the login primitive open
+  the system browser; if needed, open its URL there. Only the user completes
+  account sign-in, consent screens, or a WhatsApp QR scan. The page shows the QR.
+- For Messages permission, POST the same server's `/api/install/permissions`
+  endpoint. It opens Full Disk Access and highlights the detected app in Finder
+  when available. Tell the user which app was actually identified; don't assume
+  Terminal, Ghostty, or Codex. The user grants access, then you retry.
+- For LinkedIn, open the export URL in the system browser and wait for the CSV
+  in chat. Preserve any existing input before replacing it. Receiving the CSV
+  does not authorize paid processing or an upload.
+
+After the action, rerun the manifest's `retry_command` with the same exact source,
+account, history, and store choices. Existing files and sessions are reused;
+never log out, clear stores, or delete data to rehearse a fresh install. Repair a
+failed step and retry it; if the same failure persists, explain the remaining
+cause and the single action needed. Leave technical details on the page.
+
+When sources are ready, the page points to processing. Follow the installed
+`deep-context` skill when the user requested it, retaining this server and tab.
+Read the free estimate and obtain the required permission before any paid
+processing or upload. Never emulate completion as a real result; label a
+requested demonstration as simulated.
+
 ## Finish with verified readiness
 
-`DONE` for local installation alone does not mean a network is ready. Use the
-script's successful account and network checks. For example, with real values:
+Installation, hosted search, imported sources, and a built local index are
+separate results. Report only the verified ones in a short line:
 
-> Powerpacks is ready. You're signed in as <email>.
-> <network name> has <N> people, and search is working.
-> Try: "Find backend engineers in my network."
+> Powerpacks is ready. Signed in as <email>; <network> has <N> people.
 
-If something needs the user, state that instead of "ready". An empty personal
-network is not successful personal-network onboarding. Never invent a count
-or call every contact searchable just because the network list reports it.
+A local-only installation needs no account. A missing or empty hosted network
+isn't proof of usable search. Source imports aren't proof of a built index.
+Don't call all contacts searchable merely because a network list reports them.
 
 If the original request included a search, read the installed `search/SKILL.md`
 and do it now, preserving the requested network. Read newly installed skills
 directly in this session; no restart or new user command is needed.
 
-Existing hosted networks can be usable immediately. A fresh install may need
-downloads and a human login, so do not promise a one-minute completion time.
-LinkedIn imports and local index builds are separate, longer work: use `setup`
-only when the user requested a local LinkedIn network. Gmail and messages use
-`import-gmail` and `import-messages`; processing uses `deep-context`. Explain
-any actual file or permission needed in ordinary words. Don't run all imports
-as a prerequisite to using an already-searchable network.
+Existing hosted networks can work immediately. First downloads and human login
+take longer; source syncing and index building can take much longer. Show actual
+progress and keep the page open, without promising a completion time.

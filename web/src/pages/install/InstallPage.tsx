@@ -2,14 +2,28 @@ import "../review/styles/base.css"
 import "./install.css"
 
 import { useQuery } from "@tanstack/react-query"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 
-import { fetchInstall } from "@/lib/api/install"
+import { fetchInstall, installAction } from "@/lib/api/install"
+import { fetchStatus } from "@/lib/api/review"
+import { errorText } from "@/lib/api/http"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
-import type { InstallState, InstallStep } from "@/types/install"
+import { doingNow } from "@/pages/review/enrich/copy"
+import type { InstallState } from "@/types/install"
 
-const POLL_MS = 1_500
+import { SourceChoice } from "./SourceChoice"
+
+const DEFAULT_STEPS = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
+const DEFAULT_LABELS: Record<string, string> = {
+  runtime: "Prepare your Mac",
+  dependencies: "Install Powerpacks",
+  skills: "Add your skills",
+  account: "Sign in",
+  credentials: "Connect search",
+  connection: "Connect your agent",
+  network: "Check your network",
+}
 const TITLES: Record<InstallState, string> = {
   running: "Setting up Powerpacks",
   waiting: "One thing to finish",
@@ -17,83 +31,158 @@ const TITLES: Record<InstallState, string> = {
   completed: "Powerpacks is installed",
   skipped: "Setting up Powerpacks",
 }
-const STEPS: { step: InstallStep; label: string }[] = [
-  { step: "runtime", label: "Prepare your Mac" },
-  { step: "dependencies", label: "Install what Powerpacks needs" },
-  { step: "skills", label: "Add Powerpacks to your agent" },
-  { step: "account", label: "Sign in to Powerset" },
-  { step: "credentials", label: "Connect search services" },
-  { step: "connection", label: "Connect your agent to Powerset" },
-  { step: "network", label: "Check your network" },
-]
 const STATUS_LABELS: Record<InstallState, string> = {
-  running: "In progress",
-  waiting: "Waiting for you",
+  running: "Working",
+  waiting: "Waiting",
   failed: "Needs a fix",
   completed: "Done",
   skipped: "Skipped",
 }
+const DONE = new Set(["completed", "skipped"])
+const VISIBLE_COMPLETED = 5
 
 export function InstallPage() {
   const { data, error } = useQuery({
     queryKey: ["install"],
     queryFn: ({ signal }) => fetchInstall(signal),
-    refetchInterval: POLL_MS,
+    refetchInterval: 1_500,
+    retry: false,
+  })
+  const [expanded, setExpanded] = useState(false)
+  const [actionError, setActionError] = useState("")
+  const failed = data?.status === "failed" || data?.index_progress?.status === "failed"
+  const { data: processing } = useQuery({
+    queryKey: ["review-status"],
+    queryFn: ({ signal }) => fetchStatus(signal),
+    enabled: data?.step === "deep_context" && data.status === "running",
+    refetchInterval: 5_000,
     retry: false,
   })
   const title = error
     ? "Reconnecting to Powerpacks"
-    : data?.status === "completed" && data.network_name && (data.person_count ?? 0) > 0
-      ? "Powerpacks is ready"
-      : data?.status === "waiting" && data.step === "account"
-        ? "Waiting for you to sign in"
-        : data
-          ? TITLES[data.status]
-          : "Opening Powerpacks"
-  const running = !error && data?.status === "running"
-  const steps = data?.steps.tools
-    ? [...STEPS.slice(0, 3), { step: "tools" as const, label: "Prepare Gmail import" }, ...STEPS.slice(3)]
-    : STEPS
-  const part = steps.filter(({ step }) =>
-    ["completed", "skipped"].includes(data?.steps[step]?.status ?? ""),
-  ).length
-
+    : failed
+      ? TITLES.failed
+      : data?.status === "completed" && data.network_name && (data.person_count ?? 0) > 0
+        ? "Powerpacks is ready"
+        : data?.status === "waiting" && data.step === "account"
+          ? "Waiting for you to sign in"
+          : data?.status === "waiting" && data.action?.kind === "processing"
+            ? "Your contacts are saved"
+            : data
+              ? TITLES[data.status]
+              : "Opening Powerpacks"
+  const steps = data?.plan ?? DEFAULT_STEPS
+  const completed = steps.filter((step) => DONE.has(data?.steps[step]?.status ?? ""))
+  const folded = completed.slice(0, -VISIBLE_COMPLETED)
+  const currentIndex = steps.indexOf(data?.step ?? "")
+  const next = steps.slice(currentIndex + 1).find((step) => !data?.steps[step])
+  const action = data?.action
   useEffect(() => {
     document.title = `${title} · Powerpacks`
   }, [title])
-
+  async function open(action: string) {
+    try {
+      await installAction(action)
+    } catch (caught) {
+      setActionError(errorText(caught))
+    }
+  }
   return (
-    <div className="review-page install-page" data-status={error ? "disconnected" : data?.status}>
+    <div
+      className="review-page install-page"
+      data-status={error ? "disconnected" : failed ? "failed" : data?.status}
+    >
       <header className="topbar">
         <span className="brand">POWERPACKS</span>
         <h1 className="topbar-title">Getting started</h1>
         <span />
       </header>
       <main className="install-main">
-        <section aria-live="polite" aria-atomic="true">
-          <EmptyPanel title={title} above={<EnrichMark part={part} parts={steps.length} running={running} />}>
+        <section aria-live="polite">
+          <EmptyPanel
+            title={title}
+            above={
+              <EnrichMark
+                part={completed.length}
+                parts={Math.max(steps.length, 1)}
+                running={!error && !failed && data?.status === "running"}
+              />
+            }
+          >
             <p className="install-message">
               {error
-                ? "The page will reconnect automatically. If it stays here, tell me in chat so I can check the server."
-                : data?.status === "failed"
-                  ? "This step didn't finish. Your completed work is saved."
-                  : (data?.message ?? "Reading your installation progress…")}
+                ? "Reconnecting automatically…"
+                : failed
+                  ? "Your progress is saved. I can check this step and retry."
+                  : data?.step === "deep_context" && processing?.stage === "enrich"
+                    ? doingNow(processing.step, processing.pending)
+                    : data?.step === "index" && data.index_progress
+                      ? data.index_progress.message
+                      : (data?.message ?? "Reading your progress…")}
             </p>
-            {data?.status !== "waiting" ? (
-              <p className="install-note">
-                {error
-                  ? "You can keep this page open."
-                  : data?.status === "completed"
-                    ? data.network_name
-                      ? 'Try asking in chat: "Find backend engineers."'
-                      : "Installation is complete. Account connection was not requested."
-                    : data?.status === "failed"
-                      ? "Your agent can read the saved error and retry this step. Check chat for the next action."
-                      : "You can stay here. I'll let you know when I need you."}
-              </p>
-            ) : null}
+            <p className="install-note">
+              {data?.status === "completed"
+                ? "You can keep asking here in chat."
+                : "I’ll keep going. Ask questions or give me input in chat."}
+            </p>
           </EmptyPanel>
+          {data?.step === "index" && data.index_progress?.progress != null && !failed ? (
+            <progress
+              className="install-index-progress"
+              aria-label="Search index progress"
+              max={1}
+              value={data.index_progress.progress}
+            />
+          ) : null}
         </section>
+        {data?.status === "waiting" && action ? (
+          <section className="install-action">
+            {action.kind === "sources" || (action.kind === "gmail" && !action.command) ? (
+              <SourceChoice key={action.kind} data={data} />
+            ) : null}
+            {action.kind === "gmail" && action.command ? (
+              <p>Finish connecting Gmail in your browser. I’ll continue here.</p>
+            ) : null}
+            {action.kind === "qr" ? (
+              <div className="install-qr">
+                {action.qr_url ? (
+                  <img src={action.qr_url} alt="Scan this QR code to link WhatsApp" />
+                ) : (
+                  <p>Getting your QR code…</p>
+                )}
+                <p>WhatsApp → Settings → Linked devices → Link a device</p>
+              </div>
+            ) : null}
+            {action.kind === "permission" ? (
+              <div className="install-permission">
+                <p>
+                  Enable Full Disk Access for{" "}
+                  <strong>
+                    {action.app_path?.split("/").pop()?.replace(".app", "") ?? "the app running this session"}
+                  </strong>
+                  .
+                </p>
+                {action.app_path ? <code>{action.app_path}</code> : null}
+                <button type="button" onClick={() => void open("permissions")}>
+                  Open settings &amp; show the app
+                </button>
+                <p>Drag the highlighted app into Full Disk Access, enable it, then tell me here.</p>
+              </div>
+            ) : null}
+            {action.kind === "linkedin" ? (
+              <div>
+                <button type="button" onClick={() => void open("linkedin")}>
+                  Open LinkedIn
+                </button>
+                <p>Send me Connections.csv here when it arrives.</p>
+              </div>
+            ) : null}
+            {action.kind === "processing" ? (
+              <p>Your contacts are saved. I’ll check what’s needed to make them searchable.</p>
+            ) : null}
+            {actionError ? <p role="alert">{actionError}</p> : null}
+          </section>
+        ) : null}
         {data ? (
           <div className="install-account">
             {data.account_email ? <p>{data.account_email}</p> : null}
@@ -106,42 +195,72 @@ export function InstallPage() {
           </div>
         ) : null}
         {data ? (
-          <ol className="install-steps" aria-label="Setup steps">
-            {steps.map(({ step, label }) => {
-              const progress = data.steps[step]
-              const done = progress?.status === "completed"
-              const current = data.step === step
-              return (
-                <li key={step} data-done={done} aria-current={current ? "step" : undefined}>
-                  <span className="install-step-mark" aria-hidden="true">
-                    {done ? "✓" : progress?.status === "skipped" ? "−" : current ? "•" : "○"}
-                  </span>
-                  <div>
-                    <span>{label}</span>
-                    {progress?.status === "skipped" ? (
-                      <p className="install-step-message">{progress.message}</p>
-                    ) : null}
-                  </div>
-                  <span className="install-step-status">
-                    {progress ? STATUS_LABELS[progress.status] : "Not started"}
-                  </span>
-                </li>
-              )
-            })}
-          </ol>
-        ) : null}
-        {data ? (
-          <details className="install-details">
-            <summary>Details for troubleshooting</summary>
-            {data.status === "failed" ? <p>{data.message}</p> : null}
-            <p>
-              Install log: <code>{data.log_path}</code>
-            </p>
-            <p>
-              Retry: <code>{data.retry_command}</code>
-            </p>
-            <p>You can ask me to check these in chat.</p>
-          </details>
+          <>
+            {folded.length > 0 ? (
+              <button
+                className="install-history"
+                type="button"
+                aria-expanded={expanded}
+                onClick={() => setExpanded(!expanded)}
+              >
+                {expanded ? "Hide earlier steps" : `${folded.length} earlier steps done`}
+              </button>
+            ) : null}
+            <ol className="install-steps" aria-label="Setup steps">
+              {steps.map((step) => {
+                const progress = data.steps[step]
+                const current = data.step === step
+                const done = DONE.has(progress?.status ?? "")
+                const hidden =
+                  (folded.includes(step) && !expanded) || (!progress && !current && step !== next)
+                return (
+                  <li
+                    key={step}
+                    data-folded={hidden}
+                    data-done={done}
+                    aria-hidden={hidden}
+                    aria-current={current ? "step" : undefined}
+                  >
+                    <div className="install-step-row">
+                      <span className="install-step-mark" aria-hidden="true">
+                        {progress?.status === "completed"
+                          ? "✓"
+                          : progress?.status === "skipped"
+                            ? "−"
+                            : current
+                              ? "•"
+                              : "○"}
+                      </span>
+                      <span>{data.labels?.[step] ?? DEFAULT_LABELS[step] ?? step}</span>
+                      <span className="install-step-status">
+                        {current && failed
+                          ? STATUS_LABELS.failed
+                          : progress
+                            ? STATUS_LABELS[progress.status]
+                            : current
+                              ? STATUS_LABELS[data.status]
+                              : "Next"}
+                      </span>
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
+            <details className="install-details">
+              <summary>Details</summary>
+              {failed ? <p>{data.index_progress?.message ?? data.message}</p> : null}
+              <p>
+                Log: <code>{data.log_path}</code>
+              </p>
+              <p>
+                Retry: <code>{data.retry_command}</code>
+              </p>
+              {action?.details ? <pre>{JSON.stringify(action.details, null, 2)}</pre> : null}
+              {data.index_progress?.payload ? (
+                <pre>{JSON.stringify(data.index_progress.payload, null, 2)}</pre>
+              ) : null}
+            </details>
+          </>
         ) : null}
       </main>
     </div>

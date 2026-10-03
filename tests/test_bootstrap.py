@@ -2,7 +2,7 @@
 
 Every case runs the real script with a fake HOME, a fake repo (a stub install.sh
 that records its arguments) and stub tools on PATH. The contract under test is
-the last line of output: DONE, NEEDS YOU, ASK, STOP or FAILED, so an agent can
+the last line of output: DONE, NEEDS YOU, STOP or FAILED, so an agent can
 act on it without reading anything else.
 """
 from __future__ import annotations
@@ -167,21 +167,37 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("Install", last_line(proc))
         self.assertEqual(self.sandbox.installed(), [])
 
-    def test_missing_tools_are_listed_as_a_question_not_installed(self) -> None:
+    def test_optional_tools_do_not_prompt_by_default(self) -> None:
         proc = self.sandbox.run(home_dirs=(".codex",))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertTrue(last_line(proc).startswith("ASK: "))
-        self.assertIn("msgvault", last_line(proc))
-        self.assertIn("--tools", last_line(proc))
-        self.assertEqual(self.sandbox.installed(), ["codex"])
-        self.assertEqual(self.sandbox.progress()["status"], "waiting")
-        self.assertEqual(self.sandbox.progress()["step"], "tools")
+        self.assertTrue(last_line(proc).startswith("DONE: "))
+        self.assertNotIn("ASK:", proc.stdout)
 
-    def test_tools_without_homebrew_asks_the_human_for_the_password_step(self) -> None:
-        proc = self.sandbox.run("--tools", home_dirs=(".codex",))
+    def test_tools_call_source_preparation_and_complete(self) -> None:
+        write(self.sandbox.repo / "packs/powerset/primitives/install/tools.py",
+              'from pathlib import Path\n'
+              'import sys\n'
+              f'Path({str(self.sandbox.root / "tools-args")!r}).write_text(" ".join(sys.argv[1:]))\n'
+              'print(\'{"status":"ok","message":"Contact import tools are ready"}\')\n')
+        proc = self.sandbox.run("--tools", "--harness", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual((self.sandbox.root / "tools-args").read_text(), "--source gmail --source whatsapp")
+        self.assertEqual(self.sandbox.progress()["steps"]["tools"]["status"], "completed")
+
+    def test_failed_tool_download_is_for_agent_recovery(self) -> None:
+        write(self.sandbox.repo / "packs/powerset/primitives/install/tools.py",
+              'import sys\nprint(\'{"status":"failed","message":"Download was interrupted"}\')\nsys.exit(1)\n')
+        proc = self.sandbox.run("--tools", "--harness", "codex")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertTrue(last_line(proc).startswith("FAILED: "))
+        self.assertEqual(self.sandbox.progress()["status"], "failed")
+
+    def test_tools_password_action_is_preserved(self) -> None:
+        write(self.sandbox.repo / "packs/powerset/primitives/install/tools.py",
+              'import sys\nprint(\'{"status":"needs_user_action","message":"Install Homebrew from https://brew.sh"}\')\nsys.exit(10)\n')
+        proc = self.sandbox.run("--tools", "--harness", "codex")
         self.assertEqual(proc.returncode, 10)
         self.assertTrue(last_line(proc).startswith("NEEDS YOU: "))
-        self.assertIn("brew.sh", last_line(proc))
         self.assertEqual(self.sandbox.progress()["status"], "waiting")
 
     def test_installer_failure_is_persisted_with_recovery_log(self) -> None:
@@ -441,7 +457,8 @@ class PublishedBootstrapTests(unittest.TestCase):
         self.publish()
         write(self.checkout / "packs/search/skills/search/SKILL.md", "local changes")
         result = self.launch()
-        self.assertEqual(result.returncode, 10, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertTrue(last_line(result).startswith("FAILED: "))
         self.assertIn("Local code changes", result.stdout)
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), original)
         self.assertEqual((self.checkout / "packs/search/skills/search/SKILL.md").read_text(), "local changes")
@@ -488,7 +505,8 @@ class PublishedBootstrapTests(unittest.TestCase):
         self.git(self.checkout, "commit", "-m", "local-only work")
         original = self.git(self.checkout, "rev-parse", "HEAD")
         result = self.launch()
-        self.assertEqual(result.returncode, 10, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertTrue(last_line(result).startswith("FAILED: "))
         self.assertIn("local commits", result.stdout)
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), original)
 

@@ -29,7 +29,39 @@ class InstallStep(str, Enum):
     CREDENTIALS = "credentials"
     CONNECTION = "connection"
     NETWORK = "network"
+    SOURCES = "sources"
+    GMAIL_TOOLS = "gmail_tools"
+    GMAIL_LOGIN = "gmail_login"
+    GMAIL_SYNC = "gmail_sync"
+    GMAIL_IMPORT = "gmail_import"
+    IMESSAGE_ACCESS = "imessage_access"
+    IMESSAGE_IMPORT = "imessage_import"
+    WHATSAPP_TOOLS = "whatsapp_tools"
+    WHATSAPP_LOGIN = "whatsapp_login"
+    WHATSAPP_SYNC = "whatsapp_sync"
+    WHATSAPP_IMPORT = "whatsapp_import"
+    LINKEDIN = "linkedin"
+    DEEP_CONTEXT = "deep_context"
+    INDEX = "index"
+    VALIDATE = "validate"
     READY = "ready"
+
+
+STEP_LABELS = {
+    "runtime": "Prepare your Mac", "dependencies": "Install Powerpacks",
+    "skills": "Add your skills", "tools": "Prepare import tools",
+    "account": "Sign in", "credentials": "Connect search",
+    "connection": "Connect your agent", "network": "Check your network",
+    "sources": "Choose your contacts", "gmail_tools": "Prepare Gmail",
+    "gmail_login": "Connect Gmail", "gmail_sync": "Sync Gmail",
+    "gmail_import": "Add Gmail contacts", "imessage_access": "Connect iMessage",
+    "imessage_import": "Add iMessage contacts", "whatsapp_tools": "Prepare WhatsApp",
+    "whatsapp_login": "Link WhatsApp", "whatsapp_sync": "Sync WhatsApp",
+    "whatsapp_import": "Add WhatsApp contacts", "linkedin": "Get LinkedIn export",
+    "deep_context": "Learn about your contacts", "index": "Build your search index",
+    "validate": "Check your search", "ready": "Ready",
+}
+DEFAULT_PLAN = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
 
 
 @dataclass(frozen=True)
@@ -41,20 +73,23 @@ class _InstallManifest:
     log_path: str
     retry_command: str
     steps: dict[str, dict[str, str]] = field(default_factory=dict)
+    plan: list[str] = field(default_factory=lambda: list(DEFAULT_PLAN))
+    action: dict | None = None
     account_email: str | None = None
     network_name: str | None = None
     person_count: int | None = None
     primitive: str = "powerpacks_install"
 
     def to_payload(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "labels": STEP_LABELS}
 
     @classmethod
     def from_record(cls, record: dict) -> "_InstallManifest":
         return cls(step=InstallStep(record["step"]), status=InstallState(record["status"]),
                    message=record["message"], installer_pid=int(record["installer_pid"]),
                    log_path=record["log_path"], retry_command=record["retry_command"],
-                   steps=record.get("steps", {}), account_email=record.get("account_email"),
+                   steps=record.get("steps", {}), plan=record.get("plan", list(DEFAULT_PLAN)),
+                   action=record.get("action"), account_email=record.get("account_email"),
                    network_name=record.get("network_name"), person_count=record.get("person_count"))
 
 
@@ -66,7 +101,8 @@ class InstallStatus:
 
     def write(self, *, step: InstallStep, status: InstallState, message: str, pid: int,
               retry_command: str = "bin/bootstrap", account_email: str | None = None,
-              network_name: str | None = None, person_count: int | None = None) -> dict:
+              network_name: str | None = None, person_count: int | None = None,
+              plan: list[str] | None = None, action: dict | None = None) -> dict:
         previous = {} if step is InstallStep.RUNTIME and status is InstallState.RUNNING else self.read()
         steps = previous.get("steps", {})
         previous_step = previous.get("step")
@@ -77,6 +113,8 @@ class InstallStatus:
         manifest = _InstallManifest(step=step, status=status, message=message,
                                     installer_pid=pid, log_path=str(self.log_path),
                                     retry_command=retry_command, steps=steps,
+                                    plan=plan if plan is not None else previous.get("plan", list(DEFAULT_PLAN)),
+                                    action=action,
                                     account_email=account_email if account_email is not None else previous.get("account_email"),
                                     network_name=network_name if network_name is not None else previous.get("network_name"),
                                     person_count=person_count if person_count is not None else previous.get("person_count"))
@@ -88,20 +126,23 @@ class InstallStatus:
     def read(self) -> dict:
         if not self.manifest_path.exists():
             return _InstallManifest(step=InstallStep.RUNTIME, status=InstallState.WAITING,
-                                    message="Waiting for installation to start. Tell me in chat to install Powerpacks.",
+                                    message="Starting Powerpacks",
                                     installer_pid=0, log_path=str(self.log_path),
                                     retry_command="bin/bootstrap").to_payload()
         try:
             record = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             manifest = _InstallManifest.from_record(record)
             record["steps"] = manifest.steps
+            record["plan"] = manifest.plan
+            record["labels"] = STEP_LABELS
+            record["action"] = manifest.action
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return _InstallManifest(step=InstallStep.RUNTIME, status=InstallState.FAILED,
                                     message="Installation status could not be read. Ask the agent to check the installation log and rerun bin/bootstrap.",
                                     installer_pid=0, log_path=str(self.log_path),
                                     retry_command="bin/bootstrap").to_payload()
         if manifest.status is InstallState.RUNNING or (
-            manifest.status is InstallState.WAITING and manifest.step is InstallStep.ACCOUNT
+            manifest.status is InstallState.WAITING and manifest.step in {InstallStep.ACCOUNT, InstallStep.WHATSAPP_LOGIN}
         ):
             try:
                 os.kill(manifest.installer_pid, 0)
