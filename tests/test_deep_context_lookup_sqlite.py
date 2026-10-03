@@ -34,6 +34,30 @@ from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class PersonLookupSqliteTest(unittest.TestCase):
+    def test_unavailable_exact_name_does_not_hide_available_partial_name_dossiers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / 'deep-context.sqlite')
+            db.project_rows((
+                ParentRow('unavailable-parent', 'parent-worth:unavailable-parent', 'Jordan Bravo', 'unavailable'),
+                PersonRow('unavailable-person', 'unavailable-parent', 'unavailable-child', 'unavailable', 'Jordan Bravo'),
+                ParentRow('available-parent', 'parent-worth:available-parent', 'Jordan Bravo Jr.', 'available'),
+                PersonRow('available-person', 'available-parent', 'available-child', 'available', 'Jordan Bravo Jr.'),
+                ArtifactRow('dossier:available-parent', 'dossier', 'available-parent', 'available.md', 'fixture', 'projected',
+                            payload_json=json.dumps({'body': '# Jordan Bravo Jr.\nKnown context.'})),
+            ))
+            result = PersonLookup(db=db, name='Jordan Bravo').run()
+            self.assertEqual(result.status, 'found')
+            self.assertEqual([match.slug for match in result.matches], ['available'])
+            db.project_rows((
+                ParentRow('other-parent', 'parent-worth:other-parent', 'Jordan Bravo Sr.', 'other'),
+                PersonRow('other-person', 'other-parent', 'other-child', 'other', 'Jordan Bravo Sr.'),
+                ArtifactRow('dossier:other-parent', 'dossier', 'other-parent', 'other.md', 'fixture', 'projected',
+                            payload_json=json.dumps({'body': '# Jordan Bravo Sr.\nDistinct context.'})),
+            ))
+            self.assertEqual({match.slug for match in PersonLookup(db=db, name='Jordan Bravo').run().matches}, {'available', 'other'})
+            self.assertEqual(PersonLookup(db=db, email='unavailable@example.com').run().status, 'no_match')
+
     def test_build_parents_dossiers_reach_lookup_cli_and_detail(self) -> None:
         for children in (1, 2):
             with self.subTest(children=children), tempfile.TemporaryDirectory() as directory:

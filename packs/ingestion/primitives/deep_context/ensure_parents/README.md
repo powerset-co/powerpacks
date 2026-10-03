@@ -24,7 +24,7 @@ The declared inputs are `external`: the graph does not model the SQLite projecti
 | file | role | reads | writes |
 |---|---|---|---|
 | `ensure_parents.py` | stage entry | imported and source people | SQLite projections |
-| `imported_people.py` | aggregate roster projection | fan-in people | SQLite roster and families |
+| `imported_people.py` | source roster projection | imported people | SQLite roster and existing families |
 | `source_people.py` | original contact ownership | actual source paths in fan-in manifest | SQLite people, identifiers, sources |
 | `assignment.py` | stable parent election | existing parents and people | none |
 | `models.py` | parent election values | typed arguments | none |
@@ -33,8 +33,11 @@ The fan-in manifest records which source CSVs were actually read. A recorded
 source that has disappeared fails visibly. Legacy/custom exports without that
 manifest retain the aggregate-only projection; original source ownership cannot
 be recovered from superseded IDs alone. Source files are never rewritten.
-Copied identifiers are removed from an aggregate only when an actual original
-contact owns them in the same parent. The export roster retains its full union.
+Recovered source identifiers and channels replace copied aggregate metadata.
+Known derived aggregate rows lose source ownership; their paid artifacts remain.
+Realization keeps individual contacts in SQLite and unions only the exported
+parent row. Reading that export reuses SQLite source rows rather than importing
+the union as a contact.
 
 Shared mailboxes do not enter: a row whose every email is a role address
 (`is_shared_mailbox`: `ir@`, `billing@`, `customer.service@`), with no phone and

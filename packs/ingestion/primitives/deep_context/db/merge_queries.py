@@ -20,6 +20,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     identifiers as identifier_rows,
     parents as parent_rows,
     people as person_rows,
+    imported_people,
     owner_profile,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -100,6 +101,7 @@ class _Roster:
     facts: dict[str, FactRow]
     identifiers: dict[str, dict[str, list[str]]]
     members: dict[str, list[PersonRow]]
+    names: dict[str, str]
     owner_emails: set[str]
     owner_phones: set[str]
 
@@ -118,6 +120,7 @@ class _Roster:
             facts={row.parent_id: row for row in fact_rows(db, parent_owned=True) if row.parent_id},
             identifiers=identifiers,
             members=members,
+            names={row.id: row.full_name for row in imported_people(db)},
             owner_emails=identifier_emails(owner.emails if owner else ()) | {
                 value
                 for person_id in owner_ids
@@ -138,7 +141,10 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
     if not parent_members or fact is None:
         return None
     member_ids = tuple(row.person_id for row in parent_members)
-    representative = parent_members[0]
+    source_members = [row for row in parent_members if row.person_id in roster.names]
+    if not source_members:
+        return None
+    representative = next((row for row in source_members if roster.names[row.person_id]), source_members[0])
     try:
         fact_payload = SynthesizedFacts.from_payload(json.loads(fact.facts_json or "{}"))
     except json.JSONDecodeError:
@@ -159,7 +165,7 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
     } - roster.owner_phones))
     extra_emails = tuple(sorted(identifier_emails(owned.emails) - set(emails) - roster.owner_emails))
     extra_phones = tuple(sorted(identifier_phones(owned.phones) - set(phones) - roster.owner_phones))
-    name = parent.display_name or fact_payload.canonical_name
+    name = roster.names[representative.person_id]
     return MergePerson(
         parent_id=parent.parent_id,
         slug=parent.display_slug or representative.child_slug or parent.parent_id,

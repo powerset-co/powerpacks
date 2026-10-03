@@ -187,17 +187,126 @@ class SeedFixture(unittest.TestCase):
 
 
 class SeedTests(SeedFixture):
-    def test_seed_preserves_original_contact_fact_ownership_after_family_merge(self) -> None:
+    def test_legacy_index_and_machine_verdicts_do_not_merge_cold_contacts(self) -> None:
+        legacy_dc = self.legacy / "deep-context"
+        for filename, columns, row in (
+            ("merge-candidates.csv", ["slug_a", "slug_b"],
+             {"slug_a": "casey-child", "slug_b": "morgan-child"}),
+            ("merge-verdicts.csv", ["slug_a", "slug_b", "same_person"],
+             {"slug_a": "casey-child", "slug_b": "morgan-child", "same_person": "true"}),
+        ):
+            CsvIO.write_dict_rows(legacy_dc / filename, columns, [row])
+        db = self.cold_store()
+        before = {row.person_id: row.parent_id for row in queries.people(db)}
+        manifest = self.seed(db)
+        self.assertEqual({row.person_id: row.parent_id for row in queries.people(db)}, before)
+        self.assertEqual(manifest.merges_applied, 0)
+
+    def test_seeded_contact_facts_reach_merge_selection_as_separate_people(self) -> None:
+        from packs.ingestion.primitives.deep_context.db.merge_queries import merge_people
+        from packs.ingestion.primitives.deep_context.synthesis.normalization import normalize_parent_cache
+
+        db = self.cold_store()
+        self.seed(db)
+        normalize_parent_cache(db, raw_dir=self.deep_context / "raw", facts_dir=self.deep_context / "facts")
+        selected = {row.person_id: row for row in merge_people(db)}
+        jordan = selected["person-jordan"]
+        casey = selected["candidate:email:casey@example.com"]
+        self.assertNotEqual(jordan.parent_id, casey.parent_id)
+        self.assertEqual(jordan.member_person_ids, ("person-jordan",))
+        self.assertEqual(casey.member_person_ids, ("candidate:email:casey@example.com",))
+        self.assertEqual((jordan.name, casey.name), ("Jordan Bravo", "Casey Alpha"))
+
+    def test_unknown_and_generated_identity_sources_are_withheld(self) -> None:
+        review = self.legacy / "network-import/overrides/review.csv"
+        rows = [row for row in CsvIO.read_dict_rows(review) if row["public_identifier"] != "jordan-bravo"]
+        for source in ("legacy-sibling-settle", "unknown-old-source"):
+            with self.subTest(source=source):
+                self.db_path = self.deep_context / f"{source}.sqlite"
+                CsvIO.write_dict_rows(review, REVIEW_COLUMNS, [*rows, {
+                    "public_identifier": "jordan-bravo", "person_id": "person-jordan",
+                    "linkedin_url": JORDAN_URL, "action": "detach", "approved": "yes", "source": source,
+                }])
+                db = self.cold_store()
+                manifest = self.seed(db)
+                self.assertIsNone(db.query("SELECT decision_source FROM links WHERE row_key='jordan-bravo'")[0][0])
+                self.assertEqual(manifest.identity_unmatched, 2)
+
+    def test_mixed_parent_decisions_and_facts_are_withheld_with_one_matching_child(self) -> None:
+        rows = [row for row in CsvIO.read_dict_rows(self.people_csv)
+                if row["id"] != "candidate:email:casey@example.com"]
+        CsvIO.write_dict_rows(self.people_csv, list(rows[0]), rows)
+        review = self.legacy / "network-import/overrides/review.csv"
+        with review.open("a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=REVIEW_COLUMNS).writerow({
+                "public_identifier": "parent-worth:parent-000000000001", "network_worth": "no",
+                "source": "deep-context-review", "updated_at": "2026-09-06T00:00:00Z",
+            })
+        (self.legacy / "deep-context/facts/parent-000000000001.jsonl").write_text(
+            _facts_record("Mixed family", "2026-09-06T00:00:00Z"))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        parent_id = next(row.parent_id for row in queries.people(db) if row.person_id == "person-jordan")
+        self.assertIsNone(next(row.human_worth for row in queries.parents(db) if row.parent_id == parent_id))
+        self.assertFalse(any(row.person_id is None for row in queries.facts(db)))
+        self.assertEqual(manifest.worth_two_plus, 1)
+        self.assertEqual(manifest.facts_two_plus, 1)
+
+    def test_extracted_owned_email_does_not_assign_unmatched_contact_facts(self) -> None:
+        path = self.legacy / "deep-context/facts/person-unmatched.jsonl"
+        record = json.loads(_facts_record("Another Person", "2026-09-06T00:00:00Z"))
+        record["facts"]["owned_identifiers"] = {"emails": ["morgan@example.com"], "phones": [], "urls": []}
+        path.write_text(json.dumps(record) + "\n")
+        db = self.cold_store()
+        manifest = self.seed(db)
+        self.assertFalse(any(row.person_id == "person-morgan" for row in queries.facts(db)))
+        self.assertEqual(manifest.facts_unmatched, 2)
+        self.assertEqual(json.loads(path.read_text()), record)
+
+    def test_mixed_parent_research_is_not_reowned_to_its_only_remaining_child(self) -> None:
+        rows = [row for row in CsvIO.read_dict_rows(self.people_csv)
+                if row["id"] != "candidate:email:casey@example.com"]
+        CsvIO.write_dict_rows(self.people_csv, list(rows[0]), rows)
+        path = self.legacy / "deep-context/reconcile/deep-research/jordan-bravo-parent/00_parallel_result.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"type": "json", "content": {"linkedin_url": JORDAN_URL}}))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        jordan = next(row.parent_id for row in queries.people(db) if row.person_id == "person-jordan")
+        self.assertFalse(db.query("SELECT 1 FROM research WHERE parent_id=?", (jordan,)))
+        self.assertEqual(manifest.research_two_plus, 1)
+        self.assertTrue(path.is_file())
+
+    def test_provider_research_identifiers_do_not_assign_an_unmatched_result(self) -> None:
+        path = self.legacy / "deep-context/reconcile/deep-research/unmatched-handle/00_parallel_result.json"
+        path.parent.mkdir()
+        payload = {
+            "type": "json",
+            "content": {"real_name": "Taylor Foxtrot", "linkedin_url": "https://www.linkedin.com/in/taylor-foxtrot"},
+            "social": {"primary_email": "avery@example.com"},
+        }
+        path.write_text(json.dumps(payload))
+        db = self.cold_store()
+        manifest = self.seed(db)
+        self.assertEqual(manifest.research_carried, 1)
+        self.assertEqual(manifest.research_unmatched, 1)
+        research = db.query("SELECT parent_id FROM research")
+        morgan = next(row.parent_id for row in queries.people(db) if row.person_id == "person-morgan")
+        self.assertEqual([row["parent_id"] for row in research], [morgan])
+        self.assertEqual(json.loads(path.read_text()), payload)
+
+    def test_seed_preserves_separate_original_contact_fact_ownership(self) -> None:
         paths = [self.legacy / f"deep-context/facts/{subject}.jsonl" for subject in (
             "person-jordan", "candidate:email:casey@example.com",
         )]
         originals = {path: path.read_bytes() for path in paths}
         db = self.cold_store()
         self.seed(db)
-        family = next(row.parent_id for row in queries.people(db) if row.person_id == "person-jordan")
+        parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
         facts = {row.person_id: row for row in queries.facts(db) if row.person_id}
         for path in paths:
             subject = path.stem
+            family = parent_of[subject]
             self.assertIn(subject, facts)
             fact = facts[subject]
             self.assertEqual((fact.subject_key, fact.parent_id), (subject, family))
@@ -247,17 +356,19 @@ class SeedTests(SeedFixture):
                           ("candidate:email:jordan@example.com",))
         self.assertEqual([row["person_id"] for row in people], ["person-jordan"])
 
-    def test_seed_keeps_mixed_parent_history_separate_from_contact_facts(self) -> None:
+    def test_seed_leaves_mixed_parent_history_unprojected(self) -> None:
         path = self.legacy / "deep-context/facts/parent-000000000001.jsonl"
         path.write_text(_facts_record("Mixed legacy family", "2026-10-01T00:00:00Z"), encoding="utf-8")
         db = self.cold_store()
-        self.seed(db)
+        original = path.read_bytes()
+        manifest = self.seed(db)
         facts = queries.facts(db)
         self.assertEqual({row.person_id for row in facts if row.person_id}, {
             "person-jordan", "candidate:email:casey@example.com", "candidate:phone:+15550100",
         })
-        mixed = next(row for row in facts if row.person_id is None)
-        self.assertEqual(json.loads(mixed.facts_json)["canonical_name"], "Mixed legacy family")
+        self.assertFalse(any(row.person_id is None for row in facts))
+        self.assertEqual(manifest.facts_two_plus, 1)
+        self.assertEqual(path.read_bytes(), original)
 
     def test_in_place_seed_leaves_original_contact_files_unchanged(self) -> None:
         paths = list((self.legacy / "deep-context/facts").glob("*.jsonl"))
@@ -271,7 +382,7 @@ class SeedTests(SeedFixture):
         artifacts = [row for row in queries.artifacts(db) if row.kind in ("facts", "source_bundle")]
         self.assertTrue(all(Path(row.path).parent.name == "seed" for row in artifacts))
 
-    def test_saved_verify_merges_source_with_imported_linkedin_before_copying_decision(self) -> None:
+    def test_saved_verify_does_not_merge_source_with_another_persons_linkedin(self) -> None:
         review = self.legacy / "network-import/overrides/review.csv"
         with review.open("a", newline="") as handle:
             csv.DictWriter(handle, fieldnames=REVIEW_COLUMNS).writerow({
@@ -280,11 +391,12 @@ class SeedTests(SeedFixture):
                 "source": "deep-context-review", "updated_at": "2026-09-06T00:00:00Z",
             })
         db = self.cold_store()
-        self.seed(db)
+        manifest = self.seed(db)
         parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
-        self.assertEqual(parent_of["person-jordan"], parent_of["candidate:phone:+15550100"])
+        self.assertNotEqual(parent_of["person-jordan"], parent_of["candidate:phone:+15550100"])
         self.assertEqual(db.query("SELECT decision_action FROM links WHERE row_key='jordan-bravo'")[0][0], "verify")
-        parent = next(row for row in queries.parents(db) if row.parent_id == parent_of["person-jordan"])
+        self.assertEqual(manifest.identity_two_plus, 1)
+        parent = next(row for row in queries.parents(db) if row.parent_id == parent_of["candidate:phone:+15550100"])
         self.assertEqual(parent.human_worth, "no")
 
     def test_saved_detach_does_not_merge_source_or_detach_other_persons_linkedin(self) -> None:
@@ -370,19 +482,19 @@ class SeedTests(SeedFixture):
         self.assertEqual(seed._slug("https://www.linkedin.com/in/jordan%2Dbravo/"), "jordan-bravo")
         self.assertEqual(seed._slug("candidate:email:casey@example.com"), "")
 
-    def test_merges_first_then_facts_decisions_and_research_land_by_identifier(self) -> None:
+    def test_facts_decisions_and_research_land_without_importing_family_merges(self) -> None:
         db = self.cold_store()
         self.assertEqual(len(queries.parents(db)), 5)
 
         manifest = self.seed(db)
 
         self.assertEqual(manifest.status, "completed")
-        self.assertEqual(manifest.merges_applied, 1)
+        self.assertEqual(manifest.merges_applied, 0)
         parents = queries.parents(db)
-        self.assertEqual(len(parents), 4)
+        self.assertEqual(len(parents), 5)
         parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
         family = parent_of["person-jordan"]
-        self.assertEqual(parent_of["candidate:email:casey@example.com"], family)
+        self.assertNotEqual(parent_of["candidate:email:casey@example.com"], family)
 
         facts = {row.person_id: row for row in queries.facts(db)}
         self.assertEqual(set(facts), {"person-jordan", "candidate:email:casey@example.com", "candidate:phone:+15550100"})
@@ -410,17 +522,17 @@ class SeedTests(SeedFixture):
         self.assertEqual((manifest.identity_carried, manifest.identity_unmatched), (1, 1))
         self.assertEqual(manifest.machine_review_rows_not_carried, 1)
 
-        # Each contact keeps its own bundle after the family merges.
+        # Each contact keeps its own bundle and parent.
         self.assertEqual(
             (manifest.bundles_carried, manifest.bundles_duplicate_dropped, manifest.bundles_unmatched),
             (2, 0, 0),
         )
         bundle = db.query(
-            "SELECT person_id, payload_json, path FROM artifacts WHERE kind='source_bundle' AND parent_id=?",
-            (family,),
+            "SELECT person_id, parent_id, payload_json, path FROM artifacts WHERE kind='source_bundle'",
         )
         self.assertEqual({row["person_id"] for row in bundle}, {"person-jordan", "candidate:email:casey@example.com"})
         for row in bundle:
+            self.assertEqual(row["parent_id"], parent_of[row["person_id"]])
             self.assertEqual(json.loads(row["payload_json"])["person_id"], row["person_id"])
             self.assertEqual(Path(row["path"]), (self.deep_context / f'raw/{row["person_id"]}.json').resolve())
         self.assertEqual(manifest.synthetic_rows_not_carried, 1)

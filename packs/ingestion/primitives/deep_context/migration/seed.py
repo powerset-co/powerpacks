@@ -7,21 +7,22 @@ An install that predates the SQLite store keeps its old artifacts under its
 phone, LinkedIn public identifier) onto those parents, in
 this order:
 
-  1. merges: legacy same-person families (index.json multi-child parents and
-     accepted merge verdicts) and human Verify Yes matches
-  2. raw bundles: each legacy message bundle, owned by its original contact so
+  1. raw bundles: each legacy message bundle, owned by its original contact so
      compose has evidence before the next collect
-  3. facts: each legacy extraction, retaining its original contact ownership
-  4. Parallel research results whose LinkedIn URLs agree for the cold parent
-  5. human decisions from review.csv: worth marks and identity clicks
-  6. cached LinkedIn profiles associated with those candidates
+  2. facts: each legacy extraction, retaining its original contact ownership
+  3. Parallel research results whose LinkedIn URLs agree for the cold parent
+  4. uniquely attributable human decisions from review.csv
+  5. cached LinkedIn profiles associated with those candidates
 
-Machine review rows, dossiers, synthetic rows and avatars are not carried.
+Legacy families and merge verdicts do not approve merges. Machine review rows,
+dossiers, synthetic rows and avatars are not carried.
 A record whose identifiers hit no cold parent, or two, is
 counted and left alone. A seeded store records `meta.seeded_at` and refuses
 a second run.
 
 Changelog:
+- 2026-10-03: seed preserves contact evidence without importing family merges;
+  ambiguous parent decisions and unsupported identity sources are withheld.
 - 2026-10-02: contact facts and bundles remain separate after legacy merges;
   seeded candidates retain their original contact membership.
 - 2026-09-25: raw bundles ride along when the legacy tree still has them;
@@ -76,13 +77,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchStatus,
     ResearchHandle,
     ReviewAction,
-    ReviewSource,
     WriterSource,
     row_kind_for_key,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import (
-    project_parent_fact,
-    project_parent_source_bundle,
     project_person_fact,
     project_person_source_bundle,
 )
@@ -121,8 +119,6 @@ LEGACY_DEEP_CONTEXT = Path("deep-context")
 LEGACY_INDEX_JSON = LEGACY_DEEP_CONTEXT / "index.json"
 LEGACY_FACTS_DIR = LEGACY_DEEP_CONTEXT / "facts"
 LEGACY_RAW_DIR = LEGACY_DEEP_CONTEXT / "raw"
-LEGACY_MERGE_VERDICTS_CSV = LEGACY_DEEP_CONTEXT / "merge-verdicts.csv"
-LEGACY_MERGE_CANDIDATES_CSV = LEGACY_DEEP_CONTEXT / "merge-candidates.csv"
 LEGACY_RESEARCH_DIR = LEGACY_DEEP_CONTEXT / "reconcile/deep-research"
 LEGACY_PEOPLE_CSV = Path("network-import/merged/people.csv")
 LEGACY_REVIEW_CSV = Path("network-import/overrides/review.csv")
@@ -177,6 +173,7 @@ def human_worth_mark(row: dict[str, str]) -> str | None:
     excluded = (
         _text(row.get("action")).lower() == ReviewAction.EXCLUDE.value
         and _text(row.get("approved")).lower() == ApprovedState.YES.value
+        and row.get("source") in HUMAN_DECISION_SOURCES
     )
     return HumanWorth.NO.value if excluded else None
 
@@ -225,19 +222,6 @@ def _json_object(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _last_record(path: Path) -> dict[str, Any]:
-    """The last legacy JSON object line, used to resolve missing source keys."""
-    record: dict[str, Any] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            record = parsed
-    return record
-
-
 @dataclass
 class Ids:
     """Normalized identifiers of one legacy row, per kind."""
@@ -265,13 +249,11 @@ class Ids:
 
 
 class ColdIndex:
-    """Original contact identifiers resolve to current parents as seed merges them."""
+    """Original contact identifiers resolve evidence to its cold owner."""
 
     def __init__(self, db: Db) -> None:
         self.parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
         self.slug_of = {row.parent_id: str(row.display_slug or "") for row in queries.parents(db)}
-        self.linkedin_parents: set[str] = set()
-        self._survivor: dict[str, str] = {}
         self.index: dict[str, dict[str, set[str]]] = {kind: defaultdict(set) for kind in KINDS}
         for row in queries.identifiers(db):
             self.index[row.kind][row.normalized_value].add(row.person_id)
@@ -281,42 +263,26 @@ class ColdIndex:
             person_id = row.id.lower()
             value = _slug(row.public_identifier)
             if value and person_id in self.parent_of:
-                parent_id = self.parent_of[person_id]
                 self.index[LINKEDIN][value].add(person_id)
-                self.linkedin_parents.add(parent_id)
-
-    def current(self, parent_id: str) -> str:
-        while parent_id in self._survivor:
-            parent_id = self._survivor[parent_id]
-        return parent_id
-
-    def merge(self, survivor: str, absorbed: str) -> None:
-        self._survivor[absorbed] = survivor
-        if absorbed in self.linkedin_parents:
-            self.linkedin_parents.add(survivor)
 
     def resolve(self, ids: Ids) -> set[str]:
         people: set[str] = set()
         for kind in KINDS:
             for value in ids.values[kind]:
                 people |= self.index[kind].get(value, set())
-        return {self.current(self.parent_of[person_id]) for person_id in people}
+        return {self.parent_of[person_id] for person_id in people}
 
     def decide(self, primary: Ids, secondary: Ids) -> set[str]:
         """Key-first: the identifiers the artifact is keyed on decide; the
         looked-up ones are consulted only when the key finds nothing."""
         return self.resolve(primary) or self.resolve(secondary)
 
-    def _people(self, subject: str, primary: Ids, secondary: Ids) -> set[str]:
+    def _people(self, subject: str, ids: Ids) -> set[str]:
         """An original contact key owns its extraction before inferred identifiers."""
         if subject in self.parent_of:
             return {subject}
-        for ids in (primary, secondary):
-            people = {person_id for kind in KINDS for value in ids.values[kind]
-                      for person_id in self.index[kind].get(value, ())}
-            if people:
-                return people
-        return set()
+        return {person_id for kind in KINDS for value in ids.values[kind]
+                for person_id in self.index[kind].get(value, ())}
 
 
 class LegacyTree:
@@ -410,26 +376,6 @@ class LegacyTree:
             ids.add(PHONE, value)
         return ids
 
-    def families(self) -> list[list[Ids]]:
-        """Every legacy same-person family as the identifiers of its members."""
-        families = [
-            [self.slug_ids(child) for child in raw.get("children") or []]
-            for raw in self.index_parents.values()
-            if len(raw.get("children") or []) > 1
-        ]
-        accepted = {
-            frozenset({row.get("slug_a", ""), row.get("slug_b", "")})
-            for row in _csv_rows(self.root / LEGACY_MERGE_CANDIDATES_CSV)
-        }
-        for row in _csv_rows(self.root / LEGACY_MERGE_VERDICTS_CSV):
-            pair = frozenset({row.get("slug_a", ""), row.get("slug_b", "")})
-            if row.get("same_person", "").lower() == "true" and pair in accepted:
-                families.append([self.slug_ids(row["slug_a"]), self.slug_ids(row["slug_b"])])
-        for row in self.review:
-            if human_identity_decision(row) == (ReviewAction.VERIFY.value, ApprovedState.YES.value):
-                families.append([self.key_ids(row.get("public_identifier", "")), self.key_ids(row.get("person_id", ""))])
-        return families
-
     def facts_files(self) -> list[Path]:
         return sorted((self.root / LEGACY_FACTS_DIR).glob("*.jsonl"))
 
@@ -462,7 +408,7 @@ class _Tally:
     unmatched: int = 0
 
     def one(self, parents: set[str]) -> str | None:
-        """The single resolved parent, counting the misses."""
+        """The single resolved owner, counting the misses."""
         if len(parents) == 1:
             return next(iter(parents))
         if parents:
@@ -508,7 +454,6 @@ class Seed(Node):
             raise SeedRefused("store holds no people; run ensure-parents first")
         legacy = LegacyTree(self.legacy_root)
 
-        merges, ambiguous = self._merge_families(cold, legacy)
         bundles = self._carry_bundles(cold, legacy)
         facts = self._carry_facts(cold, legacy)
         research = self._carry_research(cold, legacy)
@@ -521,8 +466,6 @@ class Seed(Node):
         return SeedManifest(
             status="completed",
             legacy_root=str(self.legacy_root),
-            merges_applied=merges,
-            families_ambiguous=ambiguous,
             bundles_carried=bundles.carried,
             bundles_duplicate_dropped=bundles.duplicate_dropped,
             bundles_two_plus=bundles.two_plus,
@@ -547,27 +490,8 @@ class Seed(Node):
             seeded_at=seeded_at,
         )
 
-    def _merge_families(self, cold: ColdIndex, legacy: LegacyTree) -> tuple[int, int]:
-        """Merge the cold parents a legacy family spans; a member that itself
-        spans two cold parents makes the family ambiguous and it is skipped."""
-        merges = ambiguous = 0
-        for members in legacy.families():
-            resolved = [cold.resolve(ids) for ids in members]
-            if any(len(parents) > 1 for parents in resolved):
-                ambiguous += 1
-                continue
-            parents = {parent_id for hit in resolved for parent_id in hit}
-            if len(parents) < 2:
-                continue
-            survivor = min(parents, key=lambda parent_id: (parent_id not in cold.linkedin_parents, parent_id))
-            for absorbed in sorted(parents - {survivor}):
-                self.db.merge_parents(survivor, absorbed)
-                cold.merge(survivor, absorbed)
-                merges += 1
-        return merges, ambiguous
-
     def _carry_bundles(self, cold: ColdIndex, legacy: LegacyTree) -> _Tally:
-        """Carry contact bundles separately; already-mixed bundles remain parent-owned."""
+        """Carry contact bundles separately; mixed legacy parents stay unprojected."""
         tally = _Tally()
         chosen: dict[str, tuple[str, Path, dict[str, Any]]] = {}
         for path in legacy.bundle_files():
@@ -576,11 +500,12 @@ class Seed(Node):
                 tally.unmatched += 1
                 continue
             subject = path.stem.lower()
+            if len(legacy.children_of_parent_id.get(subject, ())) > 1:
+                tally.two_plus += 1
+                continue
             ids = legacy.key_ids(subject)
             ids.update(legacy.raw_ids(subject))
-            people = cold._people(subject, ids, ids) if len(legacy.children_of_parent_id.get(subject, ())) < 2 else set()
-            person_id = next(iter(people)) if len(people) == 1 else None
-            owner = person_id or tally.one(cold.resolve(ids))
+            owner = tally.one(cold._people(subject, ids))
             if owner is None:
                 continue
             collected_at = _text(payload.get("collected_at"))
@@ -598,10 +523,7 @@ class Seed(Node):
                 target = self.raw_dir / "seed" / target.name
                 target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            if owner in cold.parent_of:
-                project_person_source_bundle(self.db, target, owner)
-            else:
-                project_parent_source_bundle(self.db, target, owner)
+            project_person_source_bundle(self.db, target, owner)
         tally.carried = len(chosen)
         return tally
 
@@ -610,21 +532,12 @@ class Seed(Node):
         chosen: dict[str, list[Path]] = {}
         for path in legacy.facts_files():
             subject = path.stem.lower()
+            if len(legacy.children_of_parent_id.get(subject, ())) > 1:
+                tally.two_plus += 1
+                continue
             primary = legacy.key_ids(subject)
             primary.update(legacy.raw_ids(subject))
-            secondary = primary.copy()
-            record = _last_record(path)
-            facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
-            owned = facts.get("owned_identifiers") if isinstance(facts.get("owned_identifiers"), dict) else {}
-            for value in owned.get("emails") or []:
-                secondary.add(EMAIL, value)
-            for value in owned.get("phones") or []:
-                secondary.add(PHONE, value)
-            for value in owned.get("urls") or []:
-                secondary.add(LINKEDIN, value)
-            people = cold._people(subject, primary, secondary) if len(legacy.children_of_parent_id.get(subject, ())) < 2 else set()
-            person_id = next(iter(people)) if len(people) == 1 else None
-            owner = person_id or tally.one(cold.decide(primary, secondary))
+            owner = tally.one(cold._people(subject, primary))
             if owner is None:
                 continue
             chosen.setdefault(owner, []).append(path)
@@ -651,10 +564,7 @@ class Seed(Node):
                 lines[-1] = json.dumps(record, ensure_ascii=False)
             data = ("\n".join(lines) + "\n").encode("utf-8")
             target.write_bytes(data)
-            if owner in cold.parent_of:
-                project_person_fact(self.db, target, owner)
-            else:
-                project_parent_fact(self.db, target, owner)
+            project_person_fact(self.db, target, owner)
         tally.carried = len(chosen)
         return tally
 
@@ -665,11 +575,19 @@ class Seed(Node):
             key = row.get("public_identifier", "").lower()
             mark = human_worth_mark(row)
             decision = human_identity_decision(row)
+            if decision is not None and row.get("source") not in HUMAN_DECISION_SOURCES:
+                identity.unmatched += 1
+                decision = None
             if mark is None and decision is None:
                 machine_rows += 1
                 continue
-            primary = legacy.key_ids(key)
             person_id = row.get("person_id", "").lower()
+            if any(len(legacy.children_of_parent_id.get(subject.removeprefix(PARENT_WORTH_PREFIX), ())) > 1
+                   for subject in (key, person_id)):
+                worth.two_plus += int(mark is not None)
+                identity.two_plus += int(decision is not None)
+                continue
+            primary = legacy.key_ids(key)
             if person_id:
                 primary.update(legacy.key_ids(person_id))
             secondary = primary.copy()
@@ -733,7 +651,7 @@ class Seed(Node):
                 approved=approved,
                 replacement_url=replacement_url,
                 replacement_public_identifier=replacement_public_identifier,
-                source=source if source in HUMAN_DECISION_SOURCES else ReviewSource.REVIEW.value,
+                source=source,
                 decided_at=row.get("updated_at") or None,
             )
         except StoreError as exc:
@@ -783,6 +701,10 @@ class Seed(Node):
         tally = _Tally()
         grouped: dict[str, list[tuple[dict[str, Any], str]]] = {}
         for legacy_handle, path in legacy.research_results():
+            children = (legacy.index_parents.get(legacy_handle) or {}).get("children") or []
+            if len(children) > 1:
+                tally.two_plus += 1
+                continue
             payload = _json_object(path)
             try:
                 native = native_research_payload(payload, legacy_handle)
@@ -790,18 +712,13 @@ class Seed(Node):
                 tally.unmatched += 1
                 continue
             primary = Ids()
-            for child in (legacy.index_parents.get(legacy_handle) or {}).get("children") or []:
+            for child in children:
                 primary.update(legacy.slug_ids(child))
             metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
             source = _text(metadata.get("source_identifier"))
             primary.add(EMAIL if "@" in source else PHONE, source)
-            secondary = primary.copy()
-            social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
-            secondary.add(EMAIL, social.get("primary_email"))
-            secondary.add(PHONE, social.get("primary_phone"))
             linkedin_url = _text(native["content"].get("linkedin_url"))
-            secondary.add(LINKEDIN, linkedin_url)
-            parent_id = tally.one(cold.decide(primary, secondary))
+            parent_id = tally.one(cold.resolve(primary))
             if parent_id is None:
                 continue
             grouped.setdefault(parent_id, []).append((native, linkedin_url))

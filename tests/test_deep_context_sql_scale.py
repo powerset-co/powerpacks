@@ -37,6 +37,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates import judge
 from packs.ingestion.primitives.deep_context.merge_candidates.models import MergePairCandidate, MergePerson
 from packs.ingestion.primitives.deep_context.review import api as review_api
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 # One id bound once must clear SQLite's 32,766-variable limit; bound twice, half that.
 ONCE = 33_000
@@ -267,6 +268,8 @@ class MergeSurveyTests(unittest.TestCase):
                 ))
                 for i in range(count) if i % 7 == 0
             ))
+            db.replace_imported_people(tuple(PeopleRow(id=f"person-{i}", full_name=f"Jordan {i}")
+                                             for i in range(count)))
             batches: list[int] = []
             narrow = merge_queries.dossier_evidence_rows
 

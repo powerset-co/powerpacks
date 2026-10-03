@@ -63,29 +63,31 @@ class SourceContactsTests(unittest.TestCase):
         before = self.gmail.read_bytes(), self.messages.read_bytes()
         self.project()
         people = queries.people(self.db)
-        self.assertEqual({row.person_id for row in people}, {self.first, self.second, self.aggregate})
-        self.assertEqual(len({row.parent_id for row in people}), 1)
+        self.assertEqual({row.person_id for row in people}, {self.first, self.second})
+        self.assertEqual(len({row.parent_id for row in people}), 2)
         self.assertEqual(self.identifiers(), {
             self.first: {("email", "jordan@example.com")},
             self.second: {("phone", "+15550100123")},
         })
         self.assertEqual({row.person_id for row in collection_sources(self.db)}, {self.first, self.second})
         roster = queries.imported_people(self.db)
-        self.assertEqual(len(roster), 1)
-        self.assertEqual((roster[0].primary_email, roster[0].primary_phone), ("jordan@example.com", "+15550100123"))
+        self.assertEqual(len(roster), 2)
+        by_id = {row.id: row for row in roster}
+        self.assertEqual(by_id[self.first].primary_email, "jordan@example.com")
+        self.assertEqual(by_id[self.second].primary_phone, "+15550100123")
         self.assertEqual(before, (self.gmail.read_bytes(), self.messages.read_bytes()))
 
     def test_warm_source_refresh_updates_original_contact_identifiers(self) -> None:
         self.write_sources()
         self.project()
-        parent = queries.people(self.db)[0].parent_id
+        parents = {row.person_id: row.parent_id for row in queries.people(self.db)}
         self.write_sources(phone="+15550100456")
         self.project()
         self.assertEqual(self.identifiers(), {
             self.first: {("email", "jordan@example.com"), ("phone", "+15550100456")},
             self.second: {("phone", "+15550100123")},
         })
-        self.assertEqual({row.parent_id for row in queries.people(self.db)}, {parent})
+        self.assertEqual({row.person_id: row.parent_id for row in queries.people(self.db)}, parents)
 
     def test_same_contact_in_two_sources_remains_one_original_contact(self) -> None:
         self.write_sources()
@@ -94,7 +96,7 @@ class SourceContactsTests(unittest.TestCase):
             "source_channels": "imessage", "source_artifacts": '["messages/contacts.csv"]',
         }])
         self.project()
-        self.assertEqual({row.person_id for row in queries.people(self.db)}, {self.first, self.aggregate})
+        self.assertEqual({row.person_id for row in queries.people(self.db)}, {self.first})
         self.assertEqual({row.source for row in queries.sources(self.db, person_id=self.first)}, {"gmail_msgvault", "imessage"})
         self.assertEqual([row.person_id for row in collection_sources(self.db)], [self.first])
 
@@ -121,7 +123,7 @@ class SourceContactsTests(unittest.TestCase):
         self.write_sources()
         self.messages.rename(self.messages.with_suffix(".csv.bkup"))
         self.project()
-        self.assertEqual({row.person_id for row in queries.people(self.db)}, {self.first, self.aggregate})
+        self.assertEqual({row.person_id for row in queries.people(self.db)}, {self.first})
 
     def test_legacy_csv_without_manifest_keeps_existing_projection(self) -> None:
         people = self.root / "legacy.csv"

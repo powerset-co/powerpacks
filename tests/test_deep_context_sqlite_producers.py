@@ -253,7 +253,8 @@ class SqliteProducerTests(unittest.TestCase):
 
         result, rows = self.export()
         self.assertEqual(result["accepted_identities"], 0)
-        self.assertEqual(rows[0]["public_identifier"], "alice")
+        self.assertEqual(rows[0]["public_identifier"], "")
+        self.assertEqual(row["public_identifier"], "alice")
 
     def test_machine_settlement_rejects_a_missing_judge_fingerprint(self) -> None:
         with self.assertRaisesRegex(StoreError, "lacks decision fingerprint"):
@@ -360,7 +361,7 @@ class SqliteProducerTests(unittest.TestCase):
             row["linkedin_url"],
             "https://www.linkedin.com/in/alice-human-choice",
         )
-        self.assertEqual(row["full_name"], "")
+        self.assertEqual(row["full_name"], "Alice Example")
 
     def test_synthesis_projects_fixed_facts_artifact(self) -> None:
         facts_dir = self.root / "facts"

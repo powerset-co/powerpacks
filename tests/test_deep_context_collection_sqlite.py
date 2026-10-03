@@ -121,7 +121,7 @@ class SqliteCollectionTest(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
             ),
-            "8f08a9cb251dcfad07b16e76d6070f10b6992b03e186068604e8da79213b0de3",
+            "111fdccfb012c228d36b78bead0d532e452f2e772f251994023e0334e3b0c2c2",
         )
 
     def test_gmail_payload_round_trip_preserves_synthesis_fingerprint(self) -> None:
@@ -190,7 +190,7 @@ class SqliteCollectionTest(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
             ),
-            "ceebc4256c576aad7b2a60857dde9835d144ad03f9d78942f3821780ad359eed",
+            "a1ae819bb92b3787e17b63f02878e2f4bb57a47345617f0fef5b70f5dabac90b",
         )
 
     def test_message_payload_parser_accepts_only_persisted_channels(self) -> None:

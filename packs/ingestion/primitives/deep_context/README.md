@@ -46,14 +46,14 @@ flowchart TD
   end
 
   stores --> readers["collection/context_sources.py — configured per-channel readers\n(email scoring/dedup; chat recency caps)"]
-  readers --> collect["collect_person_context\nper-parent crawl, caps + privacy policy"]
-  collect --> bundles["raw/&lt;parent_id&gt;.json bundles\n(ephemeral, gitignored)"]
+  readers --> collect["collect_person_context\nper-contact crawl, caps + privacy policy"]
+  collect --> bundles["raw/&lt;person_id&gt;.json bundles\n(ephemeral, gitignored)"]
 
   bundles --> select["synthesis/selection\nfingerprint skip via SQLite artifacts"]
   sqlite[("deep-context.sqlite\nTHE record")] --> select
   select --> runner["synthesis/runner\nbatched OpenAI calls, adaptive stop"]
-  runner --> factsf["facts/&lt;parent_id&gt;.jsonl\n(facts + worth verdict + fingerprint)"]
-  factsf --> pfacts["db/projectors.project_parent_fact"]
+  runner --> factsf["facts/&lt;person_id&gt;.jsonl\n(facts + worth verdict + fingerprint)"]
+  factsf --> pfacts["db/projectors.project_person_fact"]
   pfacts --> sqlite
 
   sqlite --> cluster["merge_candidates\nparent blocking + one JEV pair judge\nSQLite verdict cache"]
@@ -89,6 +89,17 @@ results as they arrive and select remaining work on rerun; manifests report
 progress but do not decide whether a task is complete.
 
 ## Contracts
+
+Identity joins belong to the merge stage. Import projects source contacts; seed
+reuses attributable evidence without restoring old families; profile approval
+and export do not merge separate parents. Extracted identifiers remain fallible
+claims, not source keys. Exact-name source-identifier matches can merge locally;
+other compatible names need affirmative evidence from the pair judge.
+Incompatible names and unresolved ownership remain separate for review.
+SQLite retains one roster row per source contact. Realization applies the exact
+profile association to that row; only the exported CSV aggregates an existing
+parent. Re-importing that export uses the stored source rows, so another
+contact's email cannot become the representative contact's source identifier.
 
 1. **SQLite is the record.** `deep-context.sqlite` (schema in `db/schema.py`)
    holds canonical people, parents, identifiers, facts, identity candidates,
@@ -137,7 +148,7 @@ progress but do not decide whether a task is complete.
 ```mermaid
 flowchart LR
   import[imported people] --> ensure["ensure parents\nget-or-create, stable ids"]
-  ensure --> collect["collect messages\nper parent"]
+  ensure --> collect["collect messages\nper contact"]
   collect --> changed{"new messages?\nbundle fingerprint"}
   changed -- no --> skip["skip — cached facts, $0"]
   changed -- yes --> llm["synthesize facts\n1–3 calls normally"]
@@ -146,34 +157,34 @@ flowchart LR
   pair -- judged or confirmed --> merge["merge parents\none transaction, id survives"]
 ```
 
-**Unit of work:** one canonical parent and the union of all child identifiers.
+**Unit of work:** one source contact and its own source identifiers. Parent facts
+are derived from the child histories; grouping does not change extraction ownership.
 
 1. **Collect** (`collection/collect_person_context.py` +
    `collection/context_sources.py` + `collection/email_context.py`): construct
    one source set per run. Gmail uses the shared
    msgvault store with signal scoring, near-duplicate removal, and
    breadth-before-depth thread windowing; iMessage/WhatsApp deliberately use
-   recency caps only. Each parent receives the union of its children's
-   identifiers and one bounded bundle. True totals are recorded so capping is
-   honest. Output: `raw/<parent_id>.json` bundle (messages + identity).
-2. **Select** (`synthesis/selection.py`): a parent is pending iff its cached
+   recency caps only. Each source contact receives its own identifiers
+   and one bounded bundle. True totals are recorded so capping is
+   honest. Output: `raw/<person_id>.json` bundle (messages + identity).
+2. **Select** (`synthesis/selection.py`): a contact is pending iff its cached
    facts artifact in SQLite has a different `input_evidence_fingerprint` or an
    older `SYNTHESIS_VERSION` (a hash of the prompt/schema/policy constants —
-   bumping any of those re-opens everyone deliberately). Unchanged parents are
+   bumping any of those re-opens everyone deliberately). Unchanged contacts are
    skipped: no tokens spent.
 3. **Run** (`synthesis/runner.py`): messages are chunked into batches of
    `--chunk-chars` (default 9,000 chars, capped at `--max-batches` = 20 per
    person). Every batch renders independently (no prior-profile context) and
    runs concurrently — one OpenAI Responses call each (default model
-   `gpt-5.2`, strict JSON schema `synthesis/fact_schema.json`, system prompt
-   carries the owner identity block); on the real install 86.5% of people have
-   exactly one batch, so most parents cost 1 call. A person with more than one
+   `gpt-6-luna`, strict JSON schema `synthesis/fact_schema.json`, system prompt
+   carries the owner identity block); on the real install saved measurements are corpus-specific; one batch costs one call. A person with more than one
    batch merges their independent results deterministically
    (`synthesis/facts.py:merge_fact_records`) — no extra LLM call. Retries:
    exponential backoff, 6 attempts on retryable errors. A person whose every
    batch errors or comes back empty is not persisted, so it retries on the
    next run instead of caching as done.
-4. **Output:** appended extraction records in `facts/<parent_id>.jsonl` — merged facts (employers,
+4. **Output:** appended extraction records in `facts/<person_id>.jsonl` — merged facts (employers,
    title, school, topics, identifiers, relationship_category, `is_owner`),
    the `network_worth` verdict (yes/maybe/no + reason), `final_confidence`, usage
    tokens, stop reason, and the fingerprint.
@@ -184,7 +195,8 @@ flowchart LR
    Failed extraction advances nothing. Force re-extracts only the current bounded
    bundle while retaining every earlier extraction. Parent merges union records
    and coverage. JEV judges accumulated facts and interaction metadata.
-   `db/projectors.project_parent_fact` projects exact uncapped unions into parent-owned `facts` + `artifacts` rows;
+   `db/projectors.project_person_fact` projects contact-owned `facts` and `artifacts`;
+   normalization derives parent facts without deleting the original contact histories;
    downstream reads SQLite, not the JSONL.
 5. **Estimate** (`--dry-run`): tiktoken-counted cost in USD, no spend — every
    person's batches all run (no adaptive stop), so there's one real number,
@@ -201,7 +213,7 @@ flowchart LR
 | `enrich/` | research, profiles, identity and relationship judging, local settlement, synthetic profiles | SQLite queue, provider caches | research artifacts, SQLite identities and parent worth |
 | `review/` | worth and identity web review, guided retarget, and restart | named SQLite views | human decisions via `db/store` |
 | `realize/` | free, local: reviewed identities → final SQLite roster → people.csv | SQLite (roster, decisions, projected profiles) | SQLite roster, merged/people.csv |
-| `migration/` | `seed.py`: identifier-keyed carry-over of legacy merges, raw bundles, facts, human decisions and research onto cold parents; `legacy.py`: the retired whole-graph import | legacy artifacts, SQLite | SQLite merges/bundles/facts/decisions/research, `raw/`, `facts/`, `reconcile/deep-research/` |
+| `migration/` | `seed.py`: source-keyed carry-over of attributable raw bundles, facts, direct human decisions and research; old family merges are not restored; `legacy.py`: the retired whole-graph import | legacy artifacts, SQLite | SQLite merges/bundles/facts/decisions/research, `raw/`, `facts/`, `reconcile/deep-research/` |
 | `shared/` | common paths, readiness, owner, lookup, and dossier evidence | varies | owner cache where applicable |
 | `manifests/` | one public receipt model per stage contract | — | serialized stage receipts |
 | `db/` | THE record, typed reads, policy views, and transactional writes | — | `deep-context.sqlite` |
@@ -257,7 +269,7 @@ research queues and receive no synthetic profile.
 
 | Surface | Provider | Cache key | Gate |
 |---|---|---|---|
-| Fact synthesis | OpenAI (`gpt-5.2`) | `input_evidence_fingerprint` + `SYNTHESIS_VERSION` | estimate → run |
+| Fact synthesis | OpenAI (`gpt-6-luna` default) | `input_evidence_fingerprint` + `SYNTHESIS_VERSION` | estimate → run |
 | Merge pair judge | JEV (`jev-1.13.0`, TypeSafe) | judged pair + evidence, then the two names alone for a pair judged the same person; exact request under `jev/` | dry-run estimate before cluster |
 | Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | enrich plan → skill $100 rule → run |
 | Profile hydration | RapidAPI | public identifier | cache-first everywhere |

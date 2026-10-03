@@ -37,12 +37,21 @@ def person_lookup(
         f"""
 WITH exact_name_people AS (
   SELECT pe.person_id, pe.parent_id
-  FROM people pe
+  FROM people pe JOIN parents p USING(parent_id)
   WHERE ?!='' AND lower(trim(pe.display_name))=?
+    AND EXISTS (
+      SELECT 1 FROM artifacts a
+      WHERE a.kind='dossier' AND a.status='projected' AND (
+        (a.person_id=pe.person_id AND pe.child_slug IS NOT NULL)
+        OR (p.display_slug IS NOT NULL AND a.artifact_key=({PARENT_DOSSIER_SELECT}))
+      )
+    )
 ), exact_name_parents AS (
   SELECT p.parent_id
   FROM parents p
   WHERE ?!='' AND lower(trim(p.display_name))=?
+    AND p.display_slug IS NOT NULL
+    AND ({PARENT_DOSSIER_SELECT}) IS NOT NULL
 ), phone_identifier_digits AS (
   SELECT pi.person_id, replace(pi.normalized_value, '+', '') AS digits
   FROM person_identifiers pi

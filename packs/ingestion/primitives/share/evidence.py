@@ -15,6 +15,7 @@ Changelog:
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
@@ -26,8 +27,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ParentSnapshotRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import stored_imported_people
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import ImportedPerson, stored_imported_people
+from packs.ingestion.primitives.imports.merge_people import merge_group
 from packs.ingestion.primitives.share.models import NO_MESSAGES, MessageStats, PersonEvidence
+from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
 
 def _overlaps(facts: dict[str, Any] | None) -> frozenset[str]:
@@ -78,31 +81,41 @@ class ShareEvidence:
     def load(self) -> list[PersonEvidence]:
         parent_of_person = {row.person_id: row.parent_id for row in queries.people(self.db)}
         parents = {row.parent_id: row for row in queries.parents(self.db)}
-        parent_facts = {row.parent_id: row for row in queries.facts(self.db, parent_owned=True)}
+        parent_facts = {row.parent_id: row for row in sorted(
+            queries.facts(self.db, parent_owned=True), key=lambda row: row.artifact_key.startswith("parent-facts:"),
+        )}
         dossiers = self._artifacts(ArtifactKind.DOSSIER.value, lambda payload: str(payload.get("body") or ""))
         bundles = self._artifacts(ArtifactKind.SOURCE_BUNDLE.value, lambda payload: payload)
         children: dict[str, list[str]] = {}
         for person_id, parent_id in parent_of_person.items():
             children.setdefault(parent_id, []).append(person_id)
 
-        people: list[PersonEvidence] = []
+        groups: dict[str, list[ImportedPerson]] = {}
         for imported in stored_imported_people(self.db):
-            identities = {imported.person_id, *imported.superseded_person_ids}
-            parent_ids = {parent_of_person[key] for key in identities if key in parent_of_person}
-            for parent_id in parent_ids:
-                identities.update(children.get(parent_id, ()))
-            parent_id = next(iter(sorted(parent_ids)), "")
+            groups.setdefault(parent_of_person[imported.person_id], []).append(imported)
+
+        people: list[PersonEvidence] = []
+        for parent_id, imported in groups.items():
+            person_id = imported[0].person_id
+            merged = merge_group(person_id, [person.index_row.model_copy(update={
+                "source_channels": ",".join(person.source_channels),
+            }) for person in imported])
+            channels = tuple(filter(None, merged["source_channels"].split(",")))
+            aliases = tuple(dict.fromkeys(
+                key for key in (*json.loads(merged["superseded_person_ids"] or "[]"), *children[parent_id])
+                if key != person_id and parent_of_person.get(key, parent_id) == parent_id
+            ))
             facts = _facts_payload(parent_facts.get(parent_id))
             people.append(
                 PersonEvidence(
-                    person_id=imported.person_id,
-                    public_identifier=imported.public_identifier or None,
-                    full_name=imported.display_name,
-                    source_channels=imported.source_channels,
-                    interaction_counts=imported.interaction_counts,
-                    last_interaction=imported.last_interaction or None,
-                    superseded_person_ids=imported.superseded_person_ids,
-                    network_worth=self._worth(parents.get(parent_id), facts, imported.source_channels),
+                    person_id=person_id,
+                    public_identifier=merged["public_identifier"] or None,
+                    full_name=parents[parent_id].display_name or merged["full_name"],
+                    source_channels=channels,
+                    interaction_counts=parse_interaction_counts(merged["interaction_counts"]),
+                    last_interaction=merged["last_interaction"] or None,
+                    superseded_person_ids=aliases,
+                    network_worth=self._worth(parents[parent_id], facts, channels),
                     dossier=dossiers.get(parent_id) or None,
                     facts=facts,
                     shared_overlaps=_overlaps(facts),
@@ -114,7 +127,8 @@ class ShareEvidence:
     def _artifacts(self, kind: str, extract: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
         """Map parent_id -> extracted payload, preferring the parent's own artifact."""
         index: dict[str, Any] = {}
-        rows = sorted(queries.artifacts(self.db, kind=kind), key=lambda row: row.person_id is not None)
+        rows = sorted(queries.artifacts(self.db, kind=kind, status="projected"),
+                      key=lambda row: (row.person_id is None, row.projected_at or "", row.artifact_key.startswith("dossier:")))
         for row in rows:
             value = extract(parse_json_object(row.payload_json))
             if value in (None, "", [], {}):

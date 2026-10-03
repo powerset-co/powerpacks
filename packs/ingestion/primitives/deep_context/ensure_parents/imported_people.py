@@ -1,8 +1,8 @@
 """Parse the imported people boundary once and project it into canonical SQLite.
 
-The fan-in's ``people.csv`` owns the aggregate roster. This module converts its
-rows to frozen values, then get-or-creates stable parent ownership before message
-collection starts. ``source_people`` preserves the recorded original contacts.
+The input boundary converts source rows to frozen values, then get-or-creates
+stable parent ownership before message collection starts. Old profile aliases
+cannot join contacts; only existing SQLite parent assignments group these rows.
 Everything downstream reads the SQLite roster, including the headline used by
 the notable-title rule.
 
@@ -47,10 +47,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
-from packs.ingestion.primitives.deep_context.db.identity_policy import (
-    AFFIRMATIVE_MACHINE_ACTIONS,
-    AFFIRMATIVE_MACHINE_APPROVALS,
-)
 from packs.ingestion.primitives.deep_context.db.queries import (
     identifiers as identifier_rows,
     parents as parent_rows,
@@ -229,69 +225,30 @@ def _components(
     people: tuple[ImportedPerson, ...],
     parent_by_person: dict[str, str],
 ) -> tuple[tuple[ImportedPerson, ...], ...]:
-    """Group input rows that already touch the same identity or parent."""
-    owner_by_token: dict[str, int] = {}
-    parent = list(range(len(people)))
-
-    def root(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    def union(left: int, right: int) -> None:
-        left_root, right_root = root(left), root(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
-    for index, person in enumerate(people):
-        aliases = (person.person_id, *person.superseded_person_ids)
-        tokens = [f"person:{value}" for value in aliases]
-        tokens.extend(f"parent:{parent_id}" for value in aliases if (parent_id := parent_by_person.get(value)))
-        for token in tokens:
-            owner = owner_by_token.setdefault(token, index)
-            union(index, owner)
-    grouped: dict[int, list[ImportedPerson]] = {}
-    for index, person in enumerate(people):
-        grouped.setdefault(root(index), []).append(person)
-    return tuple(tuple(grouped[key]) for key in sorted(grouped))
+    """Group only people already assigned to the same SQLite parent."""
+    grouped: dict[str, list[ImportedPerson]] = {}
+    for person in people:
+        key = parent_by_person.get(person.person_id, person.person_id)
+        grouped.setdefault(key, []).append(person)
+    return tuple(tuple(group) for group in grouped.values())
 
 
 def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int:
-    """Get or create imported people, incrementally joining prior families."""
+    """Update each imported person without treating old aliases as a merge."""
     if not imported:
         return 0
     current = {row.id: row for row in stored_people_rows(db)}
-    canonical_by_alias = {
-        alias: row.id
-        for row in current.values()
-        for alias in _superseded(row.superseded_person_ids)
-    }
-    incoming_ids = {canonical_by_alias.get(person.person_id, person.person_id) for person in imported}
-    represented_ids = set(incoming_ids)
-    represented_ids.update(alias for person in imported for alias in person.superseded_person_ids)
+    incoming_ids = {person.person_id for person in imported}
     combined_rows: list[PeopleRow] = []
     for person in imported:
-        source = person.index_row
-        original_id = person.person_id
-        canonical_id = canonical_by_alias.get(original_id, original_id)
-        prior = current.get(canonical_id)
-        prior_aliases = [current[alias] for alias in person.superseded_person_ids
-                         if alias in current and alias != canonical_id]
-        source = source.model_copy(update={
-            "id": canonical_id,
-            "full_name": person.display_name,
-            "public_identifier": prior.public_identifier if canonical_id != original_id and prior else person.public_identifier,
-            "linkedin_url": prior.linkedin_url if canonical_id != original_id and prior else person.linkedin_url,
-            "superseded_person_ids": json.dumps((*person.superseded_person_ids, original_id)
-                                               if canonical_id != original_id else person.superseded_person_ids),
+        source = person.index_row.model_copy(update={
+            "id": person.person_id, "full_name": person.display_name,
+            "public_identifier": person.public_identifier, "linkedin_url": person.linkedin_url,
+            "superseded_person_ids": json.dumps(person.superseded_person_ids),
         })
-        if prior and canonical_id != original_id and person.public_identifier != prior.public_identifier:
-            carry = {column: getattr(source, column)
-                     for column in ("id", "superseded_person_ids", "source_artifacts", *CONTACT_CARRY_COLUMNS)}
-            carry.update(public_identifier=prior.public_identifier, linkedin_url=prior.linkedin_url)
-            source = PeopleRow.model_validate(carry)
-        previous = ([prior] if prior is not None else []) + prior_aliases
+        canonical_id = person.person_id
+        prior = current.get(canonical_id)
+        previous = [prior] if prior is not None else []
         if previous:
             previous = [
                 PeopleRow.model_validate({
@@ -310,38 +267,20 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             )
             source = PeopleRow.model_validate(merged)
         combined_rows.append(source)
-    combined_rows.extend(row for key, row in current.items() if key not in represented_ids)
+    combined_rows.extend(row for key, row in current.items()
+                         if key not in incoming_ids and not incoming_ids.intersection(_superseded(row.superseded_person_ids)))
     imported = _imported_people(tuple(combined_rows))
     existing_people = {row.person_id: row for row in person_rows(db)}
-    existing_links = {row.row_key: row for row in links(db)}
-    people_by_parent: dict[str, list[str]] = {}
-    for person in existing_people.values():
-        people_by_parent.setdefault(person.parent_id, []).append(person.person_id)
-    # A realized LinkedIn keeps the people its SQLite decision already belongs to.
-    approved_people: dict[str, list[str]] = {}
-    for row in review_rows(db, include_worth=False):
-        slug = row.new_public_identifier or row.public_identifier
-        if slug and row.action in AFFIRMATIVE_MACHINE_ACTIONS and row.approved in AFFIRMATIVE_MACHINE_APPROVALS:
-            approved_people.setdefault(slug, []).extend(people_by_parent[existing_links[row.key].parent_id])
-    imported = tuple(
-        replace(person, superseded_person_ids=(*person.superseded_person_ids, *approved_people.get(person.public_identifier, ())))
-        for person in imported
-    )
     parent_by_person = {row.person_id: row.parent_id for row in existing_people.values()}
     parent_slugs = {row.parent_id: row.display_slug for row in parent_rows(db)}
     assignment = load_assignment(db)
     target_by_input: dict[str, str] = {}
-    component_targets: list[tuple[tuple[ImportedPerson, ...], str, tuple[str, ...]]] = []
+    component_targets: list[tuple[tuple[ImportedPerson, ...], str]] = []
     new_parents: list[ParentRow] = []
 
     for component in _components(imported, parent_by_person):
-        aliases = tuple(
-            dict.fromkeys(value for person in component for value in (person.person_id, *person.superseded_person_ids))
-        )
-        touched_parents = tuple(
-            dict.fromkeys(parent_by_person[value] for value in aliases if value in parent_by_person)
-        )
-        child_slugs = tuple(existing_people[value].child_slug for value in aliases if value in existing_people)
+        child_slugs = tuple(existing_people[person.person_id].child_slug for person in component
+                            if person.person_id in existing_people)
         target = assignment.resolve(child_slugs, tuple(person.person_id for person in component))
         if target not in parent_slugs:
             representative = component[0]
@@ -355,15 +294,12 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             )
             new_parents.append(parent)
             parent_slugs[target] = parent.display_slug
-        component_targets.append((component, target, touched_parents))
+        component_targets.append((component, target))
 
     # One projection avoids a full foreign-key audit per new parent on large imports.
     if new_parents:
         db.project_rows(tuple(new_parents))
-    for component, target, touched_parents in component_targets:
-        for old_parent in touched_parents:
-            if old_parent != target:
-                db.merge_parents(target, old_parent)
+    for component, target in component_targets:
         for person in component:
             target_by_input[person.person_id] = target
 
@@ -440,13 +376,15 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
         # rows own their verdicts, including retargets realized under a new id.
         slug = person.public_identifier
         url = person.linkedin_url or (f"https://www.linkedin.com/in/{slug}" if slug else "")
-        if slug and slug not in existing_links and (parent_id, slug) not in represented_slugs:
+        if slug and (parent_id, slug) not in represented_slugs:
+            row_key = slug if slug not in existing_links else f"{slug}:{person.person_id}"
             projection_rows.extend((
-                LinkRow(slug, parent_id, slug, RowKind.PUB.value, url, person.display_name,
+                LinkRow(row_key, parent_id, slug, RowKind.PUB.value, url, person.display_name,
                         source=WriterSource.RECONCILE.value, updated_at=now_iso()),
-                CandidatePeopleProjection(slug, (CandidatePersonRow(slug, person.person_id, parent_id),)),
+                CandidatePeopleProjection(row_key, (CandidatePersonRow(row_key, person.person_id, parent_id),)),
             ))
             represented_slugs.add((parent_id, slug))
+            existing_links[row_key] = projection_rows[-2]
         if not slug and person.person_id.startswith("candidate:") and person.person_id not in existing_links:
             kind = RowKind.CANDIDATE_EMAIL if ":email:" in person.person_id else RowKind.CANDIDATE_PHONE
             projection_rows.extend((

@@ -10,7 +10,9 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.queries import people as sqlite_people, identifiers as sqlite_identifiers
+from packs.ingestion.primitives.deep_context.db.queries import (
+    people as sqlite_people, identifiers as sqlite_identifiers, imported_people as sqlite_roster,
+)
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
@@ -78,6 +80,7 @@ class DeepContextHandoffTests(unittest.TestCase):
             gmail.run()
             messages.run()
             inputs = [gmail.people_csv, messages.people_csv]
+            source_ids = {person.person_id for path in inputs for person in read_imported_people(path)}
             originals = {path: path.read_bytes() for path in [account_people, contacts, *inputs]}
             directory = root / "directory.csv"
             for known in (False, True):
@@ -99,7 +102,10 @@ class DeepContextHandoffTests(unittest.TestCase):
                 db = Db(root / f"context-{known}.sqlite")
                 EnsureParents(db=db, people_csv=merger.people_csv).run()
                 self.assertEqual({row.person_id for row in sqlite_people(db)},
-                                 {person.person_id for person in people})
+                                 source_ids)
+                source_casey = next(row for row in sqlite_roster(db) if row.primary_email == "casey@example.com")
+                self.assertEqual((source_casey.id, source_casey.public_identifier),
+                                 ("candidate:email:casey@example.com", ""))
                 self.assertEqual({row.normalized_value for row in sqlite_identifiers(db)},
                                  {"casey@example.com", "unnamed@example.com", "+15550100123"})
                 rows = CsvIO.read_dict_rows(merger.people_csv)

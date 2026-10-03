@@ -2,6 +2,8 @@
 """Detect and judge same-person pairs from canonical SQLite evidence.
 
 Changelog:
+- 2026-10-02: same-name pairs without a source identifier tie use the positive
+  pair judge; extracted identifiers cannot propose incompatible names.
 - 2026-10-01: the same name merges free of charge once JEV finds nothing in
   the facts that keeps the two records apart.
 - 2026-10-01: a pair judged the same person is also asked whether its two
@@ -36,13 +38,10 @@ from packs.ingestion.primitives.deep_context.jev_worth.runner import estimate as
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_LLM,
     SAME_PERSON_CUTOFF,
-    asks_keep_apart,
     asks_names,
-    check_keep_apart,
     check_names,
     judge_pairs,
     judge_request,
-    keep_apart_request,
     names_request,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.models import MergeUsage, PairSurvey
@@ -130,10 +129,6 @@ class ClusterMergeCandidates(Node):
             estimate_request(names_request(pair.first, pair.second), output_dir=self.output_dir).input_tokens
             for pair in (*survey.to_judge, *(v for v in survey.reused if asks_names(v.decision)))
         )
-        input_tokens += sum(
-            estimate_request(keep_apart_request(pair.first, pair.second), output_dir=self.output_dir).input_tokens
-            for pair in survey.slam if asks_keep_apart(pair.decision)
-        )
         return {
             "source": "cluster_merge_candidates",
             "status": "dry_run",
@@ -168,10 +163,7 @@ class ClusterMergeCandidates(Node):
         verdicts, names_usage, names_errors = check_names(
             verdicts, output_dir=self.output_dir, concurrency=self.concurrency,
         )
-        verdicts, apart_usage, apart_errors = check_keep_apart(
-            verdicts, output_dir=self.output_dir, concurrency=self.concurrency,
-        )
-        usage = usage + names_usage + apart_usage
+        usage = usage + names_usage
         confirmed, clusters = render_results(
             out_csv=self.out_csv,
             out_md=self.out_md,
@@ -189,7 +181,7 @@ class ClusterMergeCandidates(Node):
             pairs_total=len(survey.pairs),
             pairs_slam_dunk=len(survey.slam),
             pairs_judged=len(to_judge) - errors,
-            errors=errors + names_errors + apart_errors,
+            errors=errors + names_errors,
             pairs_reused=len(survey.reused),
             candidate_pairs=len(confirmed),
             clusters=len(clusters),

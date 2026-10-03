@@ -9,7 +9,9 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.db.models import LinkRow, WriterSource
+from packs.ingestion.primitives.deep_context.db.models import (
+    CandidatePeopleProjection, CandidatePersonRow, LinkRow, WriterSource,
+)
 from packs.ingestion.primitives.deep_context.db.queries import imported_people, parents
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult, ProfileTarget
@@ -55,7 +57,7 @@ class ExportPeopleTests(unittest.TestCase):
             people_csv = base / "merged" / "people.csv"
             CsvIO.write_dict_rows(people_csv, PEOPLE_SCHEMA_COLUMNS, [
                 imported(id=generate_person_id(slug), public_identifier=slug,
-                         linkedin_url=linkedin(slug), full_name=name, source_channels="linkedin")
+                         linkedin_url=linkedin(slug), full_name=name, source_channels="linkedin_csv")
                 for slug, name in (("casey-delta", "Casey Delta"), ("jordan-bravo", "Jordan Bravo"))
             ])
             db = Db(base / "deep-context.sqlite")
@@ -91,8 +93,9 @@ class ExportPeopleTests(unittest.TestCase):
             self.assertEqual((jordan["current_title"], jordan["current_company"]), ("Engineer", "Example Labs"))
             self.assertEqual(json.loads(jordan["work_experiences"])[0]["title"], "Engineer")
             self.assertTrue(json.loads(jordan["education"]))
-            self.assertEqual({row.id: row.to_row() for row in imported_people(db)},
-                             {row["id"]: row for row in rows.values()})
+            self.assertEqual({row.id for row in imported_people(db)}, {row["id"] for row in rows.values()})
+            self.assertEqual({row.id: row.full_name for row in imported_people(db)},
+                             {generate_person_id("casey-delta"): "Casey Delta", generate_person_id("jordan-bravo"): "Jordan Bravo"})
             self.assertIn(f"[realize] {generate_person_id('casey-delta')}: profile not used: "
                           "ValueError: fixture profile cannot normalize", log.getvalue())
 
@@ -104,7 +107,7 @@ class ExportPeopleTests(unittest.TestCase):
                 imported(id=generate_person_id("jordan-bravo"), public_identifier="jordan-bravo",
                          linkedin_url=linkedin("jordan-bravo"), full_name="Jordan Bravo", headline="Engineer",
                          work_experiences=JORDAN_WORK, education=JORDAN_EDUCATION,
-                         rapidapi_response='{"full_name": "Jordan Bravo"}', source_channels="linkedin"),
+                         rapidapi_response='{"full_name": "Jordan Bravo"}', source_channels="linkedin_csv"),
                 imported(id=generate_person_id("casey-wrong"), public_identifier="casey-wrong",
                          linkedin_url=linkedin("casey-wrong"), full_name="Casey Delta", headline="Wrong person",
                          current_company="Wrong Co", work_experiences=WRONG_WORK,
@@ -120,7 +123,7 @@ class ExportPeopleTests(unittest.TestCase):
                          full_name="Sam Fox", work_experiences=WRONG_WORK, primary_email="sam@example.com",
                          all_emails='["sam@example.com"]', source_channels="gmail"),
                 imported(id=generate_person_id("pat-gray"), public_identifier="pat-gray", linkedin_url=linkedin("pat-gray"),
-                         full_name="Pat Gray", work_experiences=WRONG_WORK, source_channels="linkedin"),
+                         full_name="Pat Gray", work_experiences=WRONG_WORK, source_channels="linkedin_csv"),
                 imported(id="candidate:phone:+15550103", full_name="Riley Stone", primary_phone="+15550103",
                          all_phones='["+15550103"]', source_channels="whatsapp"),
             ])
@@ -132,6 +135,7 @@ class ExportPeopleTests(unittest.TestCase):
             db.project_rows((LinkRow("robin-echo", robin_parent, "robin-echo", "pub", linkedin("robin-echo"),
                                      "Robin Echo", machine_action="verify", machine_approved="auto",
                                      candidate_origin=True, source=WriterSource.RECONCILE.value),))
+            db.project_rows((CandidatePeopleProjection("robin-echo", (CandidatePersonRow("robin-echo", "candidate:phone:+15550102", robin_parent),)),))
             project_profile(db, "robin-echo", "robin-echo", "Robin Echo", "Designer")
             db.decide_identity("casey-wrong", "retarget", replacement_url=linkedin("casey-delta"),
                                replacement_public_identifier="casey-delta")
@@ -141,6 +145,7 @@ class ExportPeopleTests(unittest.TestCase):
             riley_parent = db.query("SELECT parent_id FROM people WHERE person_id='candidate:phone:+15550103'")[0][0]
             db.project_rows((LinkRow("synthetic:riley", riley_parent, "synthetic:riley", "synthetic",
                                      source=WriterSource.RECONCILE.value),))
+            db.project_rows((CandidatePeopleProjection("synthetic:riley", (CandidatePersonRow("synthetic:riley", "candidate:phone:+15550103", riley_parent),)),))
             db.decide_identity("synthetic:riley", "retarget", replacement_url=linkedin("riley-stone"),
                                replacement_public_identifier="riley-stone")
             db.decide_worth(robin_parent, "yes")
@@ -156,8 +161,10 @@ class ExportPeopleTests(unittest.TestCase):
             after_people = db.query("SELECT * FROM people ORDER BY person_id")
             self.assertTrue(set(map(tuple, before_people)) <= set(map(tuple, after_people)))
             parent_of = {row["person_id"]: row["parent_id"] for row in after_people}
-            self.assertEqual(parent_of[generate_person_id("robin-echo")], robin_parent)
-            self.assertEqual({row.id: row.to_row() for row in imported_people(db)}, rows)
+            self.assertEqual(parent_of["candidate:phone:+15550102"], robin_parent)
+            self.assertEqual({row.id for row in imported_people(db)}, set(rows))
+            self.assertEqual(next(row.primary_phone for row in imported_people(db) if row.id == "candidate:phone:+15550102"),
+                             "+15550102")
 
             ShareList(db=db, out_dir=base / "share").run()
             shared = {row["person_id"] for row in db.query("SELECT person_id FROM share")}
@@ -173,29 +180,29 @@ class ExportPeopleTests(unittest.TestCase):
         self.assertEqual((jordan["work_experiences"], jordan["education"]), (JORDAN_WORK, JORDAN_EDUCATION))
         self.assertEqual(jordan["rapidapi_response"], '{"full_name": "Jordan Bravo"}')
 
-        casey = rows[generate_person_id("casey-delta")]
+        casey = rows[generate_person_id("casey-wrong")]
         self.assertEqual(casey["public_identifier"], "casey-delta")
         self.assertEqual([item["title"] for item in json.loads(casey["work_experiences"])], ["Founder"])
         self.assertEqual((casey["primary_email"], casey["primary_phone"]), ("casey@example.com", "+15550101"))
         self.assertEqual(casey["interaction_counts"], '{"gmail": 12}')
-        self.assertIn(generate_person_id("casey-wrong"), json.loads(casey["superseded_person_ids"]))
+        self.assertEqual(casey["superseded_person_ids"], "")
         self.assertEqual((casey["rapidapi_response"], casey["entity_urn"]), ("", ""))
 
-        robin = rows[generate_person_id("robin-echo")]
+        robin = rows["candidate:phone:+15550102"]
         self.assertEqual(robin["primary_phone"], "+15550102")
         self.assertEqual([item["title"] for item in json.loads(robin["work_experiences"])], ["Designer"])
-        self.assertIn("candidate:phone:+15550102", json.loads(robin["superseded_person_ids"]))
+        self.assertEqual(robin["superseded_person_ids"], "")
 
-        sam = rows["candidate:email:sam@example.com"]
+        sam = rows[generate_person_id("sam-fox")]
         self.assertEqual((sam["public_identifier"], sam["work_experiences"]), ("", ""))
         exported = json.dumps(list(rows.values()))
         for gone in ("casey-wrong", "Wrong Co", "sam-fox", "pat-gray"):
             self.assertNotIn(gone, exported)
-        riley = rows[generate_person_id("riley-stone")]
+        riley = rows["candidate:phone:+15550103"]
         self.assertEqual((riley["public_identifier"], riley["primary_phone"]), ("riley-stone", "+15550103"))
         self.assertEqual(len(rows), 5)
 
-    def test_retarget_onto_an_existing_person_merges_both_families(self) -> None:
+    def test_retarget_onto_an_existing_profile_keeps_families_separate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             people_csv = base / "merged" / "people.csv"
@@ -219,19 +226,19 @@ class ExportPeopleTests(unittest.TestCase):
                                replacement_public_identifier="jordan-new")
 
             payload = ExportPeople(db=db, out_dir=base / "merged").run()
-            (row,) = CsvIO.read_dict_rows(people_csv)
+            rows = {row["id"]: row for row in CsvIO.read_dict_rows(people_csv)}
             families = db.query("SELECT DISTINCT parent_id FROM people")
-            (survivor,) = parents(db)
+            old = next(row for row in parents(db) if row.parent_id == old_parent)
             again = ExportPeople(db=db, out_dir=base / "merged").run()
             self.assertEqual(db.query("PRAGMA foreign_key_check"), [])
 
         self.assertEqual(payload["status"], "completed")
-        self.assertEqual(row["id"], generate_person_id("jordan-new"))
-        self.assertEqual((row["primary_email"], row["primary_phone"]), ("jordan@example.test", "+15550102"))
-        self.assertEqual(row["work_experiences"], JORDAN_WORK)
-        self.assertEqual(len(families), 1)
-        self.assertEqual(survivor.human_worth, "yes")
-        self.assertEqual((again["rows"], again["accepted_identities"]), (1, 1))
+        self.assertEqual(set(rows), {generate_person_id("jordan-old"), generate_person_id("jordan-new")})
+        self.assertEqual(rows[generate_person_id("jordan-old")]["primary_email"], "jordan@example.test")
+        self.assertEqual(rows[generate_person_id("jordan-new")]["primary_phone"], "+15550102")
+        self.assertEqual(len(families), 2)
+        self.assertEqual(old.human_worth, "yes")
+        self.assertEqual((again["rows"], again["accepted_identities"]), (2, 1))
 
     def test_an_empty_roster_refuses_to_export(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

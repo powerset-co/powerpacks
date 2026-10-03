@@ -1,4 +1,4 @@
-"""Identity prompts retain observed contact handles and message-shared links."""
+"""Identity prompts retain source contact handles and descriptive mentioned links."""
 
 import json
 import tempfile
@@ -49,7 +49,7 @@ class IdentityEvidenceIdentifiersTests(unittest.TestCase):
             })),
         ))
 
-    def test_parent_handles_and_shared_link_reach_actual_judge_prompt(self):
+    def test_parent_handles_and_mentioned_link_reach_actual_judge_prompt(self):
         evidence = DossierEvidence.from_db(self.db, ("jordan-email",))
         profile = JudgeProfile(linkedin_url="https://linkedin.com/in/jordan-bravo")
         for origin in (IdentityOrigin.ATTACHED, IdentityOrigin.RESEARCH):
@@ -58,17 +58,18 @@ class IdentityEvidenceIdentifiersTests(unittest.TestCase):
                 self.assertIn("jordan@example.com", prompt)
                 self.assertIn("+15550100", prompt)
                 self.assertNotIn("casey@example.com", prompt)
-                self.assertIn("MATCHES", prompt)
-                self.assertIn("work-email DOMAIN", prompt)
+                self.assertIn("Mentioned identifiers: https://www.linkedin.com/in/jordan-bravo/", prompt)
+                self.assertNotIn("MATCHES", prompt)
+                self.assertNotIn("own messages", prompt)
 
-    def test_different_shared_link_is_visible_without_claiming_ownership(self):
+    def test_different_mentioned_link_is_visible_without_claiming_ownership(self):
         evidence = DossierEvidence.from_parent_db(self.db, "jordan")
         prompt = identity_judge_prompt(
             evidence, JudgeProfile(linkedin_url="https://linkedin.com/in/jordan-namesake"),
             IdentityOrigin.RESEARCH, "",
         )
-        self.assertIn("DIFFERS", prompt)
-        self.assertIn("third party", prompt)
+        self.assertNotIn("DIFFERS", prompt)
+        self.assertNotIn("own messages", prompt)
         self.assertIn("https://www.linkedin.com/in/jordan-bravo", prompt)
 
     def test_changed_contact_handle_invalidates_judge_cache(self):

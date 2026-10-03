@@ -8,6 +8,7 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_merged_parents
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class MergeRepairTests(unittest.TestCase):
@@ -32,6 +33,8 @@ class MergeRepairTests(unittest.TestCase):
             for a,b,same,score,accepted in [('person-a',self.ids[2],1,.8,1),('person-b',self.ids[2],1,.7,1),('person-a','person-b',0,.9,0)]:
                 a,b=sorted((a,b))
                 c.execute("INSERT INTO merge_verdicts VALUES (?,?,?,?,?,'llm',?,?,1,'',?,'2026-01-02T00:00:00Z')", (a,b,a,b,'signature',same,score,accepted))
+        self.db.replace_imported_people(tuple(PeopleRow(id=row['person_id'], full_name=row['display_name'])
+                                             for row in self.db.query('SELECT person_id,display_name FROM people')))
 
     def test_repair_preserves_child_facts_phone_and_human_decisions(self):
         before = [tuple(r) for r in self.db.query('SELECT row_key,decision_action,decision_approved,decision_source FROM links ORDER BY row_key')]
@@ -39,7 +42,7 @@ class MergeRepairTests(unittest.TestCase):
         self.assertEqual(len(report.repaired), 1)
         self.assertEqual(report.unresolved, ())
         owners = {r['person_id']:r['parent_id'] for r in self.db.query('SELECT person_id,parent_id FROM people')}
-        self.assertEqual(owners['person-a'], owners['candidate:phone:+15550100100'])
+        self.assertEqual(owners['candidate:phone:+15550100100'], mint_parent_id(('candidate:phone:+15550100100',)))
         self.assertEqual(len({owners[person] for person in self.ids}), 3)
         self.assertEqual(self.db.query('SELECT count(*) n FROM merge_verdicts WHERE accepted=1')[0]['n'], 0)
         self.assertEqual(before, [tuple(r) for r in self.db.query('SELECT row_key,decision_action,decision_approved,decision_source FROM links ORDER BY row_key')])
@@ -118,7 +121,7 @@ class MergeRepairTests(unittest.TestCase):
                 c.execute("INSERT INTO merge_verdicts VALUES (?,?,?,?,?,'llm',1,.9,1,'',1,'2026-01-02T00:00:00Z')", (a,b,a,b,'signature'))
         report = _repair_merged_parents(self.db)
         self.assertEqual(report.unresolved, ())
-        self.assertEqual(self.db.query('SELECT count(*) n FROM parents')[0]['n'], 9)
+        self.assertEqual(self.db.query('SELECT count(*) n FROM parents')[0]['n'], 10)
         self.assertEqual(self.db.query('SELECT count(*) n FROM merge_verdicts WHERE accepted=1')[0]['n'], 0)
 
     def test_merged_context_machine_confirmation_is_invalidated(self):
@@ -132,14 +135,14 @@ class MergeRepairTests(unittest.TestCase):
         self.assertEqual(report.machine_verdicts_cleared, 1)
         self.assertEqual(self.db.query("SELECT decision_action FROM links WHERE row_key='person-a'")[0]['decision_action'], 'verify')
 
-    def test_cross_parent_sibling_decision_is_removed_supported_one_remains(self):
+    def test_cross_parent_sibling_decisions_without_source_proof_are_removed(self):
         with self.db.transaction() as c:
             c.execute("UPDATE links SET decided_at='2026-01-01T00:00:00Z'")
             c.execute("UPDATE links SET decision_action='detach',decision_source='sibling-settle' WHERE row_key IN ('person-b','candidate:phone:+15550100100')")
         report = _repair_merged_parents(self.db)
-        self.assertEqual(report.sibling_decisions_cleared, 1)
+        self.assertEqual(report.sibling_decisions_cleared, 2)
         self.assertIsNone(self.db.query("SELECT decision_action FROM links WHERE row_key='person-b'")[0]['decision_action'])
-        self.assertEqual(self.db.query("SELECT decision_source FROM links WHERE row_key='candidate:phone:+15550100100'")[0]['decision_source'], 'sibling-settle')
+        self.assertIsNone(self.db.query("SELECT decision_source FROM links WHERE row_key='candidate:phone:+15550100100'")[0]['decision_source'])
 
     def test_paid_premerge_candidate_membership_preserves_original_join(self):
         with self.db.transaction() as c:
@@ -428,7 +431,7 @@ class MigrationSequenceTests(unittest.TestCase):
         report, removed, historical = scrub_deep_context(self.db)
         self.assertEqual(len(report.repaired), 1)
         self.assertEqual(removed, 0)
-        self.assertEqual(historical.unresolved, ((self.parents['person-a'], 'original child facts missing'),))
+        self.assertEqual(historical.unresolved, ())
         self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
         self.assertEqual(scrub_deep_context(self.db)[0].repaired, ())
 
@@ -439,7 +442,7 @@ class MigrationSequenceTests(unittest.TestCase):
                 legacy.scrub_deep_context(self.db)
             historical.assert_not_called()
         self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '1')
-        self.assertEqual(len({r['parent_id'] for r in self.db.query('SELECT parent_id FROM people')}), 3)
+        self.assertEqual(len({r['parent_id'] for r in self.db.query('SELECT parent_id FROM people')}), 4)
         legacy.scrub_deep_context(self.db)
         self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
 

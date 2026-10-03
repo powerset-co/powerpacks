@@ -6,6 +6,7 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.db.merge_queries import merge_people
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import generate_pairs
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class MergeOwnerIdentifiersTests(unittest.TestCase):
@@ -22,6 +23,8 @@ class MergeOwnerIdentifiersTests(unittest.TestCase):
                     conn.execute("INSERT INTO artifacts(artifact_key,kind,parent_id,path,content_fingerprint,status) VALUES (?,'facts',?,'/facts.jsonl','paid-hash','projected')", ('facts:'+person,person))
                     payload = json.dumps({'canonical_name':name,'owned_identifiers':{'emails':['owner@example.com'],'phones':['(555) 010-0200']}})
                     conn.execute('INSERT INTO facts(subject_key,parent_id,artifact_key,facts_json) VALUES (?,?,?,?)', (person,person,'facts:'+person,payload))
+            db.replace_imported_people((PeopleRow(id='person-a', full_name='Casey Charlie'),
+                                        PeopleRow(id='person-b', full_name='Taylor Delta')))
             self.assertEqual(db.query('SELECT count(*) n FROM people WHERE is_owner=1')[0]['n'], 0)
             people = merge_people(db)
             self.assertEqual(len(people), 2)

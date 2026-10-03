@@ -164,6 +164,9 @@ class IdentityInvariantTest(unittest.TestCase):
                     ),
                 )
             )
+        rows.append(CandidatePeopleProjection("original", tuple(
+            CandidatePersonRow("original", f"child-{index}", "family") for index in range(5)
+        )))
         db.project_rows(tuple(rows))
         db.replace_imported_people(tuple(
             PeopleRow(id=f"child-{index}", primary_email=f"child-{index}@example.test") for index in range(5)

@@ -2,7 +2,9 @@
 
 Use the existing SQLite store and source artifacts. Preserve original contact
 facts and explicit human decisions; a seeded machine merge remains a machine
-decision. Do not reset the store or introduce another ledger.
+decision. Keep a golden copy before replaying changes; do not introduce another
+ledger. A cold rebuild on a separate copy can reuse facts without inheriting
+the old family membership.
 
 ## Inspect before changing identity
 
@@ -11,6 +13,18 @@ children, identifiers, facts, artifacts, merge verdicts and human decisions.
 Check the complete `deep-context/facts/` directory, including person-ID files
 and original-parent files. A missing SQLite child facts row does not prove its
 paid extraction is absent from disk.
+
+For a population audit, enumerate every multi-child parent, including families
+with matching names and no audit warnings. The structural audit does not certify
+identity. Review original contact histories separately; a combined parent
+dossier cannot independently validate the grouping that produced it. Inspect
+old `index.json`, merge-verdicts/candidates CSVs and review rows as well as
+SQLite: seed may have imported a verdict's result without its original row.
+
+Trace three separate questions: what the source says, what extraction claimed,
+and what code or saved verdict joined the contacts. Record an unknown cause
+when the original input or decision is missing. A saved model reason proves
+what the model claimed, not that its identifier attribution was correct.
 
 Separate these cases:
 
@@ -31,6 +45,22 @@ facts, identifier context, saved verdict reasons and human choices. Require
 source references for each proposed decision. Do not substitute a confidence
 score for that evidence or override an explicit human decision silently.
 
+Use five review outcomes: supported same person, supported separate people,
+profile attachment concern, organization/shared mailbox, and insufficient
+evidence. Keep uncertain contacts separate. A different career or country alone
+does not prove a wrong profile. A source contact-book name conflict disqualifies
+an extracted phone/email as identity evidence until resolved. Absence from an
+older contact book is not a conflicting name. Do not promote an extracted
+identifier into source ownership merely because another extraction repeats it.
+
+Human profile approval is an association to that exact candidate, not approval
+of every member of an inherited family. Salvage a direct decision only when its
+original contact and scope are unique. Generated sibling-settle decisions and
+unsupported legacy source labels do not establish a human click; mixed parent
+worth decisions remain preserved but unapplied when their intended person is
+unknown. New seed imports withhold these cases and report the existing unmatched
+or ambiguous counts.
+
 ## Repair and verify
 
 Use a copied store and sibling facts for the first replay. Preserve the original
@@ -43,6 +73,12 @@ Run `bin/deep-context ensure-parents --db <store> --people-csv <people.csv>`,
 then repeat the audit. Verify contact membership, original facts and paid
 payloads, explicit human decisions, and foreign keys. Run again: repaired
 ownership must remain unchanged and unresolved cases must still be reported.
+
+For a cold comparison, run the old and new code against identical copied input
+files and record any path rebinding or missing source. Block provider calls for
+offline replay. Applying a saved verdict reproduces its effect; it does not
+measure a fresh judge's accuracy. Validate known wrong merges and supported
+duplicates, and report aliases that the conservative rules leave separate.
 
 Rebuild derived dossiers only when their facts are correctly attributed.
 `parents` renders saved facts even without a retained raw bundle; `compose`

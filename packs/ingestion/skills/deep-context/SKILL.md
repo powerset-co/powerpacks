@@ -193,9 +193,10 @@ bin/deep-context seed
 bin/deep-context check
 ```
 
-`seed` is free and local. It merges the cold parents a legacy same-person
-family spans while retaining each attributable bundle and facts history under
-its original contact. Mixed parent histories remain separate. It replays the human worth and LinkedIn decisions from
+`seed` is free and local. It retains each attributable bundle and facts history
+under its original contact without restoring legacy family merges. Mixed
+parent histories stay in the original files until ownership is resolved.
+It replays uniquely attributable direct human worth and LinkedIn decisions from
 `overrides/review.csv`, and projects Parallel research results and matching
 cached profiles onto the current candidates. Machine review rows and dossiers
 are not carried. Unmatched worth and identity decisions remain in the legacy files; the
@@ -330,13 +331,14 @@ bin/deep-context validate
 
 ### 4. Duplicate people
 
-Identity resolves cheapest evidence first so one human is one review and one
-dossier. The cluster stage merges an identical name with a shared phone or
-email locally, merges the same name unless JEV finds the facts keep the two
-records apart, reuses cached decisions, and sends only the remainder (a short
-or variant form of a name, or a shared phone or email under two names) to the
-JEV pair judge (about $0.0001 per pair). A shared first name, last name or
-email handle alone is not compared. Preview the complete stage first:
+Identity resolves cheapest evidence first. The cluster stage merges an
+identical name with a shared source contact phone or email locally. Other
+compatible names require a positive JEV pair judgment and the names check;
+a matching name alone is not an accepted merge. Extracted contact details
+cannot create a pair or a free merge, and a shared identifier cannot override
+incompatible names. Reuse only decisions matching the current evidence and
+policy. A shared first name, last name or email handle alone is not compared.
+Preview the complete stage first:
 
 ```bash
 bin/deep-context cluster --dry-run
@@ -352,8 +354,8 @@ bin/deep-context parents
 ```
 
 `parents` is free and idempotent — run it after clustering so the canonical
-layer always matches the accepted merges. Report `pairs_slam_dunk` (matched on
-the name or a shared identifier, before the keep-apart check), `pairs_reused`,
+layer always matches the accepted merges. Report `pairs_slam_dunk` (identical
+name and a shared source identifier), `pairs_reused`,
 and `pairs_judged`.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
@@ -497,7 +499,9 @@ bin/deep-context realize
 
 `realize` applies every verified or retargeted LinkedIn (including a pasted
 LinkedIn on a synthetic card) and every detach to the SQLite roster, then
-exports `.powerpacks/network-import/merged/people.csv` from that same roster.
+exports one row per existing parent to
+`.powerpacks/network-import/merged/people.csv`. SQLite keeps the individual
+source-contact rows; an exported parent is never re-imported as source ownership.
 Each accepted LinkedIn fills its work history, education and headline from the
 profile already projected into SQLite; realize never calls a provider. Report
 `rows`, `profiles_filled` and `profiles_missing` in one line. When

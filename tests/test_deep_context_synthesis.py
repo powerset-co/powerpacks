@@ -114,12 +114,12 @@ class DeepContextSynthesisTests(unittest.TestCase):
             hashlib.sha256(canonical).hexdigest(),
             "b108f626a394f8bbbf33522a2d26b1b8840e87799e2b6473d6fafe8036139583",
         )
-        self.assertEqual(prompting.SYNTHESIS_VERSION, "52b1189e667e")
+        self.assertEqual(prompting.SYNTHESIS_VERSION, "b2374192ab73")
 
     def test_bundle_evidence_fingerprint_serialization_is_pinned(self) -> None:
         self.assertEqual(
             self.fingerprint({"person_id": "p1", "messages": []}),
-            "943e8f23c0f4f8cece9b64d0f4f0f91e25a1d6e1556a68c1c0fcecb1a030bef3",
+            "29147dc630d142f206efde2fe4174b9217da1e1df104d596e7e70a6f6bdf46c5",
         )
         self.assertEqual(
             self.fingerprint(
@@ -135,7 +135,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     "messages_available": 1,
                 }
             ),
-            "b05a916ea5a16e54c5d4274976ea2702c396dca3c3ed640d616c17df72ed37ef",
+            "2d4aa62178a7e5918af8a50697bce0a3a9b4603c36a0523eeaf341d6edbc9f75",
         )
 
     def test_terminal_provider_failure_returns_no_fabricated_facts(self) -> None:

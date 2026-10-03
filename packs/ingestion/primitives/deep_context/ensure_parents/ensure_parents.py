@@ -1,4 +1,4 @@
-"""Project the live imported-person roster into stable SQLite parent families.
+"""Project original source contacts into stable SQLite parent families.
 
 Changelog:
 - 2026-10-02: preserve original contacts from the fan-in's recorded source CSVs.
@@ -25,7 +25,6 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
     read_imported_people,
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.source_people import (
-    project_source_people,
     read_source_people,
     retain_source_identifiers,
 )
@@ -36,7 +35,7 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node
 
 
 class EnsureParents(Node):
-    """Get-or-create stable parents for every row in the current fan-in export."""
+    """Get or create stable parents for the current source contacts."""
 
     name = "deep_ensure_parents"
     inputs = (
@@ -61,7 +60,7 @@ class EnsureParents(Node):
 
     def execute(self) -> EnsureParentsManifest:
         imported = read_imported_people(self.people_csv)
-        sources = read_source_people(self.people_csv)
+        sources = read_source_people(self.people_csv, self.db)
         repair, removed, historical = scrub_deep_context(self.db)
         if removed:
             print(f'[deep-context] invalidated {removed} Harmonic profile artifacts', file=sys.stderr)
@@ -71,9 +70,8 @@ class EnsureParents(Node):
         if historical.repaired or historical.unresolved:
             print(f'[deep-context] restored {len(historical.repaired)} historical merged parents; '
                   f'{len(historical.unresolved)} unresolved', file=sys.stderr)
-        project_source_people(self.db, sources, imported)
-        projected = project_imported_people(self.db, imported)
-        retain_source_identifiers(self.db, sources)
+        projected = project_imported_people(self.db, sources or imported)
+        retain_source_identifiers(self.db, sources, imported)
         return EnsureParentsManifest(
             status="completed",
             people_projected=projected,

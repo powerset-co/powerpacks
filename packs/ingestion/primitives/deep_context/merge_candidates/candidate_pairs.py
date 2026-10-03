@@ -13,29 +13,23 @@ any order and on its first and last word, so "Bravo, Jordan" meets
 ``email:casey@example.com``, ``local:casey``, ``phone:15550100``, and
 ``nm:filn:j|bravo``.
 
-Two names are the same name when they are the same words in any order, or the
-same first and last name where a middle name is missing on one side or agrees
-on both. The same name is a merge without the pair judge; the judge module
-then asks whether the facts keep the two records apart. Two different middle
-names, a generation suffix on one side (Jr, Sr, III) and one-word names are
-not the same name. A title (Dr, Mr) is not part of a name, and an email
-address saved as the name is no name.
+Name compatibility only selects pairs; it never establishes identity. An
+identical normalized name and a shared source contact email or phone is the
+only free merge. All other selected pairs need a positive identity judgment.
+Extracted identifier claims do not create pairs. A source email or phone can
+propose a pair only when the names can match; a shared office number cannot
+join two incompatible staff names.
 
-A bucket only proposes a pair. The pair is kept when the two records share a
-phone or a whole email address, or when one name can be a form of the other:
-the same name, a one-word name that is the other's first or last name, or a
-first and a last name that each equal, begin or nearly spell the other's
-("J Bravo", "Jordan B", "Jon Bravo"). A shared first name, a shared last name
-or a shared email handle alone is not kept: "Jordan Bravo" and "Jordan Delta"
-at jordan@ two domains are two people. No bucket joins a one-word name to a
-full name, so "Jordan" meets "Jordan Bravo" only through a shared email handle,
-phone or email: "Jordan" alone could be any Jordan.
+One-word names meet full names only through source email handles or source
+contact identifiers. A first name alone could name many contacts.
 
 Jaro-Winkler follows Winkler's Census record-linkage definition. Its prefix
 weighting is a better fit than Levenshtein distance for given-name spelling
 variants; reference-value tests pin this local implementation.
 
 Changelog:
+- 2026-10-02: source identifiers and compatible names select pairs; the same
+  name alone never accepts one.
 - 2026-10-01: the same name is a merge without the pair judge. A pair is kept
   on a shared phone or email or on names that can be forms of each other;
   whole-name similarity and a shared email handle alone no longer keep one.
@@ -63,12 +57,9 @@ MAX_BLOCKING_BUCKET = 200
 JUDGE_SLAM_DUNK = "slam_dunk"
 SAME_FULL_NAME = "same full name"
 SAME_FIRST_AND_LAST_NAME = "same first and last name, middle names do not differ"
-SAME_NAME_REASONS = frozenset({SAME_FULL_NAME, SAME_FIRST_AND_LAST_NAME})
 # A father and a son: a name carrying one of these is not the same name as one without it.
 GENERATION_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 TITLES = frozenset({"dr", "mr", "mrs", "ms", "prof"})
-# Below a shared phone or email (0.99), so those join first.
-SAME_NAME_CONFIDENCE = 0.95
 T = TypeVar("T")
 
 
@@ -76,8 +67,6 @@ T = TypeVar("T")
 class _BlockingRecord:
     person: MergePerson
     name_words: tuple[str, ...]
-    emails: frozenset[str]
-    phones: frozenset[str]
     bucket_keys: frozenset[str]
 
 
@@ -214,21 +203,19 @@ def blocking_name_keys(name_key: str) -> set[str]:
 
 
 def _blocking_record(person: MergePerson) -> _BlockingRecord:
-    keys = {f"email:{email}" for email in person.all_emails}
+    keys = {f"email:{email}" for email in person.emails}
     keys |= {f"local:{part}" for part in email_localparts(person.emails)}
-    keys |= {f"phone:{digits}" for digits in person.all_phones}
+    keys |= {f"phone:{digits}" for digits in person.phone_digits}
     keys |= {f"nm:{key}" for key in blocking_name_keys(person.name_key)}
     return _BlockingRecord(
         person,
         name_words(person.name_key),
-        person.all_emails,
-        person.all_phones,
         frozenset(keys),
     )
 
 
 def generate_pairs(people: list[MergePerson]) -> list[MergePair]:
-    """Block parent rows, then keep pairs sharing a phone or email or names that can be one name."""
+    """Pair compatible names through name buckets or source contact identifiers."""
     records = [_blocking_record(person) for person in people]
     buckets: dict[str, list[int]] = {}
     for index, record in enumerate(records):
@@ -253,11 +240,7 @@ def generate_pairs(people: list[MergePerson]) -> list[MergePair]:
     selected: list[MergePair] = []
     for left_index, right_index in sorted(candidates):
         left, right = records[left_index], records[right_index]
-        if (
-            left.emails & right.emails
-            or left.phones & right.phones
-            or names_can_match(left.name_words, right.name_words)
-        ):
+        if names_can_match(left.name_words, right.name_words):
             selected.append(MergePair(left.person, right.person))
     return selected
 
@@ -272,7 +255,7 @@ def slam_dunk_verdict(
     first: MergePerson,
     second: MergePerson,
 ) -> MergeDecision | None:
-    """A merge without the pair judge: an identical name with a shared phone or email, or the same name."""
+    """Merge an identical name with a shared source contact phone or email."""
     shared = _shared_contact_identifiers(first, second)
     if shared and first.name_key and first.name_key == second.name_key:
         return MergeDecision(
@@ -282,16 +265,7 @@ def slam_dunk_verdict(
             judge=JUDGE_SLAM_DUNK,
             reason=f"slam dunk: identical name + shared {shared}",
         )
-    reason = same_name_reason(name_words(first.name_key), name_words(second.name_key))
-    if reason is None:
-        return None
-    return MergeDecision(
-        same_person=True,
-        confidence=SAME_NAME_CONFIDENCE,
-        tone_consistent=True,
-        judge=JUDGE_SLAM_DUNK,
-        reason=reason,
-    )
+    return None
 
 
 def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[T]]:

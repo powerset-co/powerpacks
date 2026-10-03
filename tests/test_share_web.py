@@ -22,7 +22,6 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import read_imported_people
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
-from packs.ingestion.primitives.share.models import HumanTags
 from packs.ingestion.primitives.share.questions import build_questions
 from packs.ingestion.primitives.share.share_list import ShareList
 from packs.ingestion.primitives.share.store import TagStore
@@ -138,6 +137,20 @@ class ShareWebFixture(unittest.TestCase):
 
 
 class RowModelTests(ShareWebFixture):
+    def test_existing_human_child_decision_wins_over_machine_parent_member(self) -> None:
+        labels = person_labels(self.db)
+        label = next(row for row in labels if row.person_id == "person-b")
+        self.db.replace_share_rows(
+            (*labels, dataclasses.replace(label, person_id="person-e")),
+            (*share_decisions(self.db), ShareDecisionRow(
+                person_id="person-e", share="no", reason="human_private", source="human", updated_at="x")),
+        )
+        self.db.upsert_person_tag(PersonTagRow(person_id="person-e", tags="private", note="human choice", updated_at="x"))
+        row = next(row for row in self.people.load() if row.parent_id == "parent-bbbb")
+        self.assertEqual((row.share, row.reason, row.share_source, row.tags),
+                         ("no", "human_private", "human", ("private",)))
+        self.assertEqual(self.people.detail("parent-bbbb").note, "human choice")
+
     def test_rows_join_roster_labels_and_decision(self) -> None:
         rows = {row.parent_id: row for row in self.people.load()}
         self.assertEqual(sorted(rows), ["parent-aaaa", "parent-bbbb", "parent-cccc", "parent-dddd"])
@@ -234,7 +247,7 @@ class DecisionWriteTests(ShareWebFixture):
         decided = decide_tags(self.db, self.people, {"parent-bbbb": frozenset({"share"}), "parent-cccc": frozenset({"share"})})
         self.assertEqual({parent: [(row.person_id, row.share, row.reason, row.source) for row in rows]
                           for parent, rows in decided.items()},
-                         {"parent-bbbb": [("person-b", "yes", "human_share", "human"), ("person-e", "yes", "human_share", "human")],
+                         {"parent-bbbb": [("person-b", "yes", "human_share", "human")],
                           "parent-cccc": [("person-c", "yes", "human_share", "human")]})
         table = _decisions(self.db)
         self.assertEqual(table["person-a"][1], "worth_yes")

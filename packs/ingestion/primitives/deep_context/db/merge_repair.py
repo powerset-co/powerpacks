@@ -101,37 +101,21 @@ def _plan(conn, parent_id, verdicts):
                    if (minted := mint_parent_id((row['person_id'],))) in originals}
     if set(child_owner.values()) != originals or parent_id not in originals:
         raise ValueError('original fact parents do not match founding children')
-    tokens = defaultdict(set)
-    for row in facts:
-        if row['person_id'] is not None:
-            continue
-        owned = json.loads(row['facts_json'] or '{}').get('owned_identifiers', {})
-        for kind, field, normalizer in [('email', 'emails', normalize_email), ('phone', 'phones', canonicalize_phone)]:
-            for value in owned.get(field, []):
-                normalized = normalizer(value)
-                if normalized:
-                    tokens[kind, normalized].add(row['subject_key'])
     for child in children:
         person = child['person_id']
         if person in child_owner:
             continue
         matches = set()
-        for row in conn.execute('SELECT kind,normalized_value FROM person_identifiers WHERE person_id=?', (person,)):
-            normalize = canonicalize_phone if row['kind'] == 'phone' else normalize_email
-            matches.update(tokens.get((row['kind'], normalize(row['normalized_value'])), ()))
-        if len(matches) != 1:
-            source_owners = set()
-            for row in conn.execute(
-                'SELECT DISTINCT cp.row_key FROM candidate_people cp JOIN artifacts a '
-                'ON a.candidate_key=cp.row_key WHERE cp.person_id=? '
-                'AND a.projected_at<?', (person, min(accepted_at)),
-            ):
-                known = {child_owner[item['person_id']] for item in conn.execute(
-                    'SELECT person_id FROM candidate_people WHERE row_key=?', (row['row_key'],),
-                ) if item['person_id'] in child_owner}
-                if len(known) == 1:
-                    source_owners.update(known)
-            matches = source_owners
+        for row in conn.execute(
+            'SELECT DISTINCT cp.row_key FROM candidate_people cp JOIN artifacts a '
+            'ON a.candidate_key=cp.row_key WHERE cp.person_id=? '
+            'AND a.projected_at<?', (person, min(accepted_at)),
+        ):
+            known = {child_owner[item['person_id']] for item in conn.execute(
+                'SELECT person_id FROM candidate_people WHERE row_key=?', (row['row_key'],),
+            ) if item['person_id'] in child_owner}
+            if len(known) == 1:
+                matches.update(known)
         child_owner[person] = matches.pop() if len(matches) == 1 else mint_parent_id((person,))
     owner_by_original = {original: original for original in originals}
     if len(set(child_owner.values())) < 2:

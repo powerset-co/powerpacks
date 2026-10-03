@@ -3,126 +3,150 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import now_iso
+from pydantic import TypeAdapter
+
+from packs.ingestion.primitives.common.contact_fields import emails_from_row
+from packs.ingestion.primitives.discover.gmail.extract_gmail import people_rows_from_msgvault
+from packs.ingestion.primitives.discover.gmail.msgvault.util import MsgvaultContactRow
 from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentifierKind,
-    ParentRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
-    PersonRow,
     PersonSourceRow,
     PersonSourcesProjection,
-    WriterSource,
+    SourceChannel,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     ImportedPerson,
     _imported_people,
     _is_shared_mailbox,
-    _superseded,
+    stored_imported_people,
 )
-from packs.ingestion.primitives.deep_context.shared.common import slugify
-from packs.ingestion.primitives.imports.merge_people import MergePeopleManifest
+from packs.ingestion.primitives.imports.merge_people import MergePeopleInput, merge_group
+from packs.ingestion.schemas.candidates_schema import candidate_key_for
+from packs.ingestion.schemas.people_schema import CONTACT_CARRY_COLUMNS, parse_jsonish
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.shared.csv_io import CsvIO
 
 
-def read_source_people(people_csv: Path) -> tuple[ImportedPerson, ...]:
-    """Read only actual inputs named by the corresponding typed fan-in manifest."""
+def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
+    """Read recorded source contacts, or the retained source roster after export."""
     manifest_path = people_csv.parent / "manifest.json"
     if not manifest_path.is_file():
         return ()
     payload = json.loads(manifest_path.read_text())
+    if payload.get("primitive") == "deep_context_export_people":
+        return stored_imported_people(db)
     if payload.get("stage") != "merge_people":
         return ()
-    manifest = MergePeopleManifest.model_validate(payload, extra="ignore")
+    inputs = MergePeopleInput.model_validate(payload["input"])
+    input_rows = TypeAdapter(dict[str, int]).validate_python(payload["stats"]["input_rows"])
     rows = []
-    for source in manifest.input.people_csvs:
-        if source not in manifest.stats.input_rows:
+    restored = 0
+    unnamed = 0
+    gmail_contacts: dict[Path, dict[str, MsgvaultContactRow]] = {}
+    restored_contacts: dict[str, dict[Path, MsgvaultContactRow]] = {}
+    for source in inputs.people_csvs:
+        if source not in input_rows:
             continue
         path = Path(source)
         if not path.is_file():
             raise FileNotFoundError(f"fan-in source people CSV missing: {path}")
+        source_root = next((parent.parent for parent in path.parents if parent.name == ".powerpacks"), path.parent)
         for raw in CsvIO.read_dict_rows(path):
             row = PeopleRow.model_validate(raw)
-            if row.id.startswith("candidate:"):
-                rows.append(row)
+            if row.source_channels == SourceChannel.GMAIL.value and not row.id.startswith("candidate:"):
+                key = candidate_key_for(row.primary_email)
+                if not key:
+                    print("[deep-context] Gmail source contact has no primary email; original ownership unresolved",
+                          file=sys.stderr)
+                    continue
+                contact = {column: getattr(row, column) for column in (
+                    *CONTACT_CARRY_COLUMNS, "first_name", "last_name", "full_name", "source_artifacts",
+                    "public_identifier", "linkedin_url",
+                )}
+                names = set()
+                for value in parse_jsonish(row.source_artifacts, []):
+                    artifact = Path(value)
+                    if artifact.name != "gmail_contacts_aggregated.csv":
+                        continue
+                    if not artifact.is_absolute():
+                        artifact = source_root / artifact
+                    if artifact not in gmail_contacts:
+                        originals = tuple(MsgvaultContactRow.from_row(item)
+                                          for item in CsvIO.read_dict_rows(artifact)) if artifact.is_file() else ()
+                        gmail_contacts[artifact] = {item.email.strip().lower(): item for item in originals}
+                    original = gmail_contacts[artifact].get(row.primary_email.strip().lower())
+                    if original and original.display_name.strip():
+                        names.add(original.display_name.strip())
+                    for email in emails_from_row(row.to_row()):
+                        if email == key.removeprefix("email:"):
+                            continue
+                        if original := gmail_contacts[artifact].get(email):
+                            restored_contacts.setdefault(email, {})[artifact] = original
+                name = next(iter(names)) if len(names) == 1 else ""
+                unnamed += not bool(name)
+                contact.update(id=f"candidate:{key}", full_name=name, first_name="", last_name="", primary_email=key.removeprefix("email:"),
+                               all_emails=json.dumps([key.removeprefix("email:")]), primary_phone="", all_phones="")
+                row = PeopleRow.model_validate(contact)
+                restored += 1
+            rows.append(row)
+    existing_ids = {row.id for row in rows}
+    recovered = 0
+    for email, originals in restored_contacts.items():
+        candidate_id = f"candidate:{candidate_key_for(email)}"
+        if candidate_id in existing_ids:
+            continue
+        source_rows = tuple(PeopleRow.model_validate(item) for item in people_rows_from_msgvault(
+            tuple(originals.values()), [str(path) for path in originals],
+        ))
+        contact = merge_group(candidate_id, list(source_rows))
+        names = {original.display_name.strip() for original in originals.values() if original.display_name.strip()}
+        contact.update(full_name=next(iter(names)) if len(names) == 1 else "",
+                       first_name="", last_name="", superseded_person_ids="")
+        unnamed += len(names) != 1
+        rows.append(PeopleRow.model_validate(contact))
+        recovered += 1
+    if recovered:
+        print(f"[deep-context] restored {recovered} additional original Gmail source contacts", file=sys.stderr)
+    if restored:
+        print(f"[deep-context] restored {restored} Gmail source contact keys; legacy lookup aliases omitted", file=sys.stderr)
+    if unnamed:
+        print(f"[deep-context] {unnamed} historical Gmail contact names unresolved; lookup names omitted", file=sys.stderr)
     return tuple(person for person in _imported_people(tuple(rows)) if not _is_shared_mailbox(person))
 
 
-def project_source_people(db: Db, people: tuple[ImportedPerson, ...], imported: tuple[ImportedPerson, ...]) -> None:
-    """Keep source ownership under the original contact id on cold and warm imports."""
-    if not people:
-        return
-    existing = {row.person_id: row for row in queries.people(db)}
-    parents = {row.parent_id: row for row in queries.parents(db)}
-    source_parent = {}
-    for row in imported:
-        aliases = (row.person_id, *row.superseded_person_ids)
-        parent_id = next((existing[value].parent_id for value in aliases if value in existing),
-                         mint_parent_id((row.person_id,)))
-        source_parent.update((value, parent_id) for value in aliases)
-    identifiers: dict[str, dict[tuple[str, str], PersonIdentifierRow]] = {}
-    for row in queries.identifiers(db):
-        identifiers.setdefault(row.person_id, {})[(row.kind, row.normalized_value)] = row
-    sources: dict[str, dict[str, PersonSourceRow]] = {}
-    for row in queries.sources(db):
-        sources.setdefault(row.person_id, {})[row.source] = row
-    projections = []
-    for person in people:
-        prior = existing.get(person.person_id)
-        parent_id = prior.parent_id if prior else source_parent.get(person.person_id, mint_parent_id((person.person_id,)))
-        if parent_id not in parents:
-            parent = ParentRow(parent_id, f"parent-worth:{parent_id}", person.display_name,
-                               slugify(person.display_name, parent_id),
-                               source=WriterSource.PARENT_WORTH.value, updated_at=now_iso())
-            parents[parent_id] = parent
-            projections.append(parent)
-        projection = (
-            replace(prior, display_name=person.display_name or prior.display_name, updated_at=now_iso())
-            if prior else PersonRow(person.person_id, parent_id, slugify(person.display_name, person.person_id),
-                                     parents[parent_id].display_slug, person.display_name, updated_at=now_iso())
-        )
-        projections.append(projection)
-        owned = identifiers.setdefault(person.person_id, {})
-        for kind, values in ((IdentifierKind.EMAIL.value, person.emails), (IdentifierKind.PHONE.value, person.phones)):
-            for value in values:
-                owned[(kind, value)] = PersonIdentifierRow(person.person_id, kind, value, value)
-        projections.append(PersonIdentifiersProjection(person.person_id, tuple(owned.values())))
-        channels = sources.setdefault(person.person_id, {})
-        for channel in person.source_channels:
-            channels[channel] = PersonSourceRow(person.person_id, channel)
-        projections.append(PersonSourcesProjection(person.person_id, tuple(channels.values())))
-    db.project_rows(tuple(projections))
-
-
-def retain_source_identifiers(db: Db, people: tuple[ImportedPerson, ...]) -> None:
-    """Remove copied lookup keys from an aggregate when its source contact owns them."""
+def retain_source_identifiers(db: Db, people: tuple[ImportedPerson, ...], imported: tuple[ImportedPerson, ...]) -> None:
+    """Project exact source ownership; copied aggregate identifiers are not aliases."""
     if not people:
         return
     source_ids = {person.person_id for person in people}
+    current_people = {row.person_id: row for row in queries.people(db)}
+    db.project_rows(tuple(replace(current_people[person.person_id], display_name=person.display_name)
+                          for person in people))
+    db.project_rows(tuple(
+        PersonIdentifiersProjection(person.person_id, tuple(
+            PersonIdentifierRow(person.person_id, kind, value, value)
+            for kind, values in ((IdentifierKind.EMAIL.value, person.emails),
+                                 (IdentifierKind.PHONE.value, person.phones)) for value in values
+        )) for person in people
+    ))
+    db.project_rows(tuple(PersonSourcesProjection(person.person_id, tuple(
+        PersonSourceRow(person.person_id, channel) for channel in person.source_channels
+    )) for person in people))
+    current = {row.id: row for row in queries.imported_people(db)}
+    current.update((person.person_id, person.index_row) for person in people)
     aggregate_ids = set()
-    for row in queries.imported_people(db):
-        aliases = _superseded(row.superseded_person_ids)
-        if not source_ids.intersection(aliases):
-            continue
-        aggregate_ids.update(value for value in (row.id, *aliases)
+    for row in imported:
+        aliases = row.superseded_person_ids
+        aggregate_ids.update(value for value in (row.person_id, *aliases)
                              if value not in source_ids and not value.startswith("candidate:"))
-    parent_of = {row.person_id: row.parent_id for row in queries.people(db)}
-    identifiers = queries.identifiers(db)
-    represented = {(parent_of[row.person_id], row.kind, row.normalized_value)
-                   for row in identifiers if row.person_id in source_ids}
-    by_person: dict[str, list[PersonIdentifierRow]] = {}
-    for row in identifiers:
-        if row.person_id not in aggregate_ids:
-            continue
-        by_person.setdefault(row.person_id, [])
-        if (parent_of[row.person_id], row.kind, row.normalized_value) not in represented:
-            by_person[row.person_id].append(row)
-    db.project_rows(tuple(PersonIdentifiersProjection(person_id, tuple(rows))
-                          for person_id, rows in by_person.items()))
+    db.replace_imported_people(tuple(row for key, row in current.items() if key not in aggregate_ids))
+    db.project_rows(tuple(PersonIdentifiersProjection(person_id, ())
+                          for person_id in aggregate_ids.intersection(current_people)))

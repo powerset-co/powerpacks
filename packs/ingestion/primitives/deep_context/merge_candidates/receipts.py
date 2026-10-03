@@ -35,7 +35,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
 )
 from packs.shared.csv_io import CsvIO
 
-IDENTITY_CONTRACT_VERSION = "owned-identifiers-v2"
+IDENTITY_CONTRACT_VERSION = "source-identifiers-positive-evidence-v3"
 _JUDGE_VERSION = hashlib.sha1(f"{IDENTITY_CONTRACT_VERSION}\x1e{JUDGE_SYSTEM}".encode("utf-8")).hexdigest()[:8]
 
 
