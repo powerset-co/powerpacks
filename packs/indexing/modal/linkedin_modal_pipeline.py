@@ -389,7 +389,12 @@ def watch_run(label: str, progress: PipelineProgress, stage_id: str, message_pre
             phase = payload.get("phase")
             if phase != last_phase:
                 last_phase = phase
-                progress.event(stage_id, f"{message_prefix}: {phase}", payload={"phase": phase})
+                message = {
+                    "seed": "Preparing your contacts", "estimate": "Checking what needs updating",
+                    "pipeline": "Building your search records", "refresh-cache": "Saving reusable results",
+                    "duckdb": "Preparing search", "persist": "Saving your search index", "done": "Finishing up",
+                }.get(phase, message_prefix)
+                progress.event(stage_id, message, payload={"phase": phase})
             if payload.get("status") in ("completed", "failed"):
                 return payload
         time.sleep(3)
@@ -531,7 +536,6 @@ GMAIL_STAGES = [
     {"id": "importing", "label": "Loading enriched contacts"},
     {"id": "indexing", "label": "Building search index"},
 ]
-GMAIL_PROGRESS_DIR = LOCAL_POWERPACKS / "runs/setup-gmail-modal"
 GMAIL_INDEX_LABEL = "gmail-index"
 
 
@@ -560,7 +564,7 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     if not people_path.exists():
         raise SystemExit(f"missing people.csv: {people_path}")
     rows = people_csv_rows(people_path)
-    progress = PipelineProgress(GMAIL_PROGRESS_DIR, GMAIL_STAGES, GMAIL_VERTICAL)
+    progress = PipelineProgress(Path.cwd() / ".powerpacks/runs/setup-gmail-modal", GMAIL_STAGES, GMAIL_VERTICAL)
     # Enrich already happened locally (Parallel) before this command runs.
     progress.event("enriching", "Enriched contacts locally", status="completed", payload={"contacts": rows})
 
@@ -596,12 +600,12 @@ def cmd_index_people(args: argparse.Namespace) -> int:
         progress.event("indexing", f"Indexing failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
 
-    dl = argparse.Namespace(label=GMAIL_INDEX_LABEL, dest=args.dest, wait=False)
+    dest = Path(args.dest).expanduser() if args.dest else Path.cwd() / ".powerpacks/search-index"
+    dl = argparse.Namespace(label=GMAIL_INDEX_LABEL, dest=str(dest), wait=False)
     code = cmd_download(dl)
     if code != 0:
         progress.event("indexing", "Download failed", status="failed")
         return code
-    dest = Path(args.dest) if args.dest else LOCAL_POWERPACKS / "search-index"
     result = {"people_csv": str(people_path), "contacts": rows,
               "duckdb": str(dest / "local-search.duckdb")}
     progress.event("indexing", "Search index is ready", status="completed", progress=1.0, payload=result)
@@ -1059,6 +1063,14 @@ def main() -> int:
     dl.add_argument("--wait", action="store_true", help="poll runs/<label>/status.json until the run finishes")
 
     args = ap.parse_args()
+    if args.cmd == "index-people":
+        from packs.powerset.primitives.install.progress import run_with_progress
+        from packs.powerset.primitives.install.status import InstallStep
+        def run_index() -> int:
+            require_modal_credentials()
+            return cmd_index_people(args)
+        return run_with_progress(Path.cwd(), InstallStep.INDEX, "Building your search index",
+                                 [sys.executable, *sys.argv], run_index)
     require_modal_credentials()
     return {"pipeline": cmd_pipeline, "import-linkedin": cmd_import_linkedin, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 

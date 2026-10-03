@@ -154,7 +154,10 @@ export function InstallPage() {
                 ? "Reconnecting automatically…"
                 : failed
                   ? "Your progress is saved. I can check this step and retry."
-                  : data?.step === "deep_context" && processing?.stage === "enrich"
+                  : data?.step === "deep_context" &&
+                      data.status === "running" &&
+                      processing?.stage === "enrich" &&
+                      processing.step
                     ? doingNow(processing.step, processing.pending)
                     : data?.step === "index" && data.index_progress
                       ? data.index_progress.message
@@ -177,8 +180,9 @@ export function InstallPage() {
         </section>
         {data?.status === "waiting" && action ? (
           <section className="install-action">
-            {action.kind === "sources" || (action.kind === "gmail" && !action.command) ? (
-              <SourceChoice key={action.kind} data={data} />
+            {action.kind === "sources" ? <SourceChoice key={action.kind} data={data} /> : null}
+            {action.kind === "gmail" && !action.command ? (
+              <p>Tell me which Gmail account to use in chat.</p>
             ) : null}
             {action.kind === "gmail" && action.command ? (
               <p>Finish connecting Gmail in your browser. I’ll continue here.</p>
@@ -218,7 +222,9 @@ export function InstallPage() {
               </div>
             ) : null}
             {action.kind === "processing" ? (
-              <p>Your contacts are saved. I’ll check what’s needed to make them searchable.</p>
+              <p>
+                {action.text ?? "Your contacts are saved. I’ll check what’s needed to make them searchable."}
+              </p>
             ) : null}
             {actionError ? <p role="alert">{actionError}</p> : null}
           </section>
@@ -243,7 +249,7 @@ export function InstallPage() {
                 aria-expanded={expanded}
                 onClick={() => setExpanded(!expanded)}
               >
-                {expanded ? "Hide earlier steps" : `${folded.length} earlier steps done`}
+                {expanded ? "Hide completed tasks" : `${folded.length} tasks completed`}
               </button>
             ) : null}
             <ol className="install-steps" aria-label="Setup steps">

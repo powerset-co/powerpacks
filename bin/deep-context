@@ -150,6 +150,14 @@ for _a in "$@"; do
   if [[ "$_a" == "-h" || "$_a" == "--help" ]]; then wants_help=1; fi
 done
 
+if [[ -f "$ROOT/.powerpacks/install/manifest.json" && "$wants_help" == 0 && " $* " != *" --dry-run "* ]]; then
+  case "$cmd" in
+    collect|synthesize|compose|cluster|parents|enrich|realize|ensure-parents|seed)
+      PY+=(packs.powerset.primitives.install.progress --command "$cmd" --)
+      ;;
+  esac
+fi
+
 case "$cmd" in
   enrich)
     "${PY[@]}" "$PKG.enrich.cli" "$@"

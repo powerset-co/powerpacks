@@ -16,8 +16,8 @@ metadata:
 
 # Set up Powerpacks
 
-<!-- Changelog: 2026-10-03 — keep optional source imports and recovery on the
-same page after installation; the agent resumes existing primitives. -->
+<!-- Changelog: 2026-10-03 — continue with default source imports on the same
+page; preserve source, account, and history choices on retries. -->
 
 The user pastes:
 
@@ -26,7 +26,7 @@ The user pastes:
 Carry that request through to a working account and a verified network. Do not
 stop after saving this file, ask them to type another skill, or hand them an
 installation checklist. The scripts do the work; you watch progress,
-handle routine recovery, and involve the user only for choices or actions
+handle routine recovery, and involve the user only for missing identity or actions
 requiring them. Open with: "I’ll set this up here. Feel free to ask questions or
 tell me what you want as it runs."
 
@@ -58,14 +58,14 @@ agent instructions into the user's unrelated projects.
 This installs Powerpacks, preserves existing configuration, connects the
 Powerset account, checks access to search, and checks the selected network.
 Already-valid login is skipped. The normal pasted instruction authorizes this
-setup, including local credential configuration. Browser sign-in still belongs
-to the user. It does not authorize uploading contacts, paid research, or reading
-mail and messages.
+setup, including local credential configuration and the default local Gmail,
+iMessage, and WhatsApp imports below. Browser sign-in still belongs to the user.
+It does not authorize uploading contacts or paid research.
 
 - Explicit "install only", "don't log in", or custom/local-only setup: omit
   `--powerset`. Follow that narrower request; don't report account readiness.
-- Keep `--no-tools` for initial setup. Selected source imports prepare their
-  own tools afterward. Optional imports never delay first use of hosted search.
+- Keep `--no-tools` for initial setup. Source imports prepare their own tools
+  afterward. Hosted search is usable while local imports continue.
 - Reruns update the existing checkout within its selected release channel and
   preserve configuration and network data. Fresh installs follow the published
   release, not the current PR or `main`. When explicitly testing a PR, run its
@@ -106,7 +106,7 @@ and the saved progress; do not start a second installer while it is running.
 
 | Script result | Agent action |
 | --- | --- |
-| `DONE:` | Verify account/search readiness, then run `bin/onboard` from the printed checkout to show optional source choices. Continue any already-requested search without requiring imports. |
+| `DONE:` | Verify account/search readiness, inform the user of the default imports below, and run `bin/onboard` from the printed checkout immediately. Continue any already-requested search. Respect an explicit install-only request. |
 | `NEEDS YOU:` | Show the single action needed. During browser login the script waits and continues automatically. If the script has exited, resume it after the action. |
 | `STOP:` | Explain where to run the instruction. Do not continue in the wrong environment. |
 | `FAILED:` | Read the saved error, fix the cause within the authorized setup, and rerun. Don't ask "should I try to fix it?" |
@@ -127,11 +127,10 @@ Specific recovery:
   access and refresh the agent connection. Don't force a session restart merely
   because newly registered tools aren't visible yet. Never claim a connection
   works until its check succeeds.
-- **Personal network has 0 people:** name the actual signed-in email and ask:
-  "Your personal network for <email> is empty. Would you like to use another
-  account or connect your contacts?" An account switch uses the installed
-  `auth.py login --force-account` primitive, then reruns onboarding. Don't guess
-  another identity or silently switch to a shared network.
+- **Personal network has 0 people:** name the actual signed-in email and continue
+  the default contact imports. If the user requests an account switch, use the
+  installed `auth.py login --force-account` primitive, then rerun onboarding.
+  Don't guess another identity or silently switch to a shared network.
 - **Personal network has 1–9 people:** continue when search works; mention the
   count and that another account or network may contain more people. This is a
   suggestion, not a gate. If all accessible networks are empty, say so.
@@ -148,18 +147,24 @@ name, and the signed-in email in normal conversation.
 
 ## Continue on the same page
 
-After bootstrap completes, run `<repo>/bin/onboard`. It shows optional Gmail,
-iMessage, WhatsApp, and LinkedIn choices without reading those sources. Choices
-can arrive in chat or on the right panel; use an existing answer instead of
-asking twice. The user may skip. A working hosted account remains usable while
-local setup waits for a choice, login, or file.
+After bootstrap completes, inform the user of the sources and history. For a
+fresh setup: "I’ll import Gmail from the past year, iMessage, and WhatsApp.
+Tell me in chat if you want a different account,
+history, source, or to skip one." Then run `<repo>/bin/onboard` immediately;
+do not wait for source or history choices. Existing explicit choices take
+precedence; describe those choices on retries. LinkedIn is included only when
+requested. A working hosted account remains usable while local setup waits for
+sign-in or permissions.
 
 For chat choices, run the same script with one `--source gmail|imessage|whatsapp|linkedin`
-per selected source, or `--source skip`. Gmail also needs repeatable
-`--gmail-email <address>` and `--sync-after <YYYY-MM-DD>` from the user's selected
-accounts and history window. Ask for missing choices together; never guess an
-account. The script installs only the selected sources' tools and reuses existing
-imports. Use `--refresh` only when the user asks to sync again.
+per selected source, or `--source skip`. Gmail accepts repeatable
+`--gmail-email <address>` and `--sync-after <YYYY-MM-DD>` overrides. The script
+preserves source, account, history, and store choices from the manifest's
+`retry_command`; otherwise Gmail uses the verified signed-in email or the only
+configured msgvault account and defaults to one year. If neither identifies one
+account, ask only which Gmail account to use. Never select an arbitrary account
+from several. The script prepares the sources' tools and reuses existing imports.
+Use `--refresh` only when the user asks to sync again.
 
 Watch the saved manifest and the original process. If a panel action already
 started it, follow that process rather than launching a duplicate. When it exits
@@ -203,6 +208,11 @@ keeps the source skipped; if the user asks to resume it, remove only its
 
 When sources are ready, the page points to processing. Follow the installed
 `deep-context` skill when the user requested it, retaining this server and tab.
+Its normal processing commands update this installation manifest while it
+exists. Successful realization advances to indexing; the normal Modal
+`index-people` command mirrors cloud phases into the same page and advances to
+validation after download. The search validator alone marks Ready on success.
+Do not replace the status tab or claim the chain finished at the imports handoff.
 Read the free estimate and obtain the required permission before any paid
 processing or upload. Never emulate completion as a real result; label a
 requested demonstration as simulated.

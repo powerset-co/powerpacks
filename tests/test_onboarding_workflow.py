@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -65,15 +66,88 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(Path.cwd(), self.cwd)
         self.assertEqual(InstallStatus(self.root).read()['steps']['skills']['status'], 'completed')
 
-    def test_no_source_waits_without_installing_or_reading_sources(self):
+    def test_no_source_defaults_to_gmail_messages_and_whatsapp_without_history_choice(self):
         result = SourceOnboarding(self.root, sources=()).run()
         self.assertEqual(result['status'], 'waiting')
-        self.assertEqual(result['action']['kind'], 'sources')
+        self.assertEqual(result['step'], 'gmail_login')
+        self.assertEqual(result['action']['text'], 'Which Gmail account should I use?')
         self.assertEqual(result['plan'][0], 'skills')
-        self.assertEqual(result['plan'][-1], 'sources')
-        self.assertNotIn('deep_context', result['plan'])
+        self.assertIn('gmail_import', result['plan'])
+        self.assertIn('imessage_import', result['plan'])
+        self.assertIn('whatsapp_import', result['plan'])
+        self.assertNotIn('linkedin', result['plan'])
+        self.assertIn((date.today() - timedelta(days=365)).isoformat(), result['retry_command'])
         self.tools.assert_not_called()
         self.assert_preserved()
+
+    def test_default_gmail_uses_verified_install_account_before_configured_accounts(self):
+        InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
+            message='Network checked', pid=os.getpid(), account_email='casey@example.com')
+        with patch.object(accounts, 'status_payload', return_value={
+                'config': {'oauth_configured': False}, 'database': {'exists': False},
+                'accounts': [{'email': 'other@example.com'}]}):
+            result = SourceOnboarding(self.root, sources=()).run()
+        self.assertIn('--gmail-email casey@example.com', result['retry_command'])
+        self.assertIn('browser-setup --email casey@example.com', result['action']['command'])
+
+    def test_cli_without_source_continues_with_defaults(self):
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['bin/onboard']), contextlib.redirect_stdout(output), \
+             self.assertRaises(SystemExit) as exited:
+            main()
+        result = json.loads(output.getvalue())
+        self.assertEqual(exited.exception.code, 10)
+        self.assertEqual(result['step'], 'gmail_login')
+        self.assertIn('--source gmail --source imessage --source whatsapp', result['retry_command'])
+
+    def test_default_sources_continue_from_reused_gmail_to_messages_permission(self):
+        InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
+            message='Network checked', pid=os.getpid(), account_email='casey@example.com')
+        current = import_common.ImportManifest.from_payload('gmail', {
+            'status': 'completed', 'input': {'accounts': [{'account_email': 'casey@example.com'}]}})
+        with patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}) as health, \
+             patch.object(import_common, 'import_manifest_current', return_value=current), \
+             patch.object(GmailDiscovery, 'run') as sync:
+            result = SourceOnboarding(self.root, sources=()).run()
+        self.assertEqual(result['step'], 'imessage_access')
+        self.assertEqual(result['steps']['gmail_import']['status'], 'completed')
+        health.assert_called_once()
+        self.assertEqual(health.call_args.args[1], ['casey@example.com'])
+        sync.assert_not_called()
+
+    def test_default_gmail_uses_only_a_unique_configured_account(self):
+        for configured, expected in (([{'identifier': 'casey@example.com'}], ('casey@example.com',)),
+                                     ([{'email': 'casey@example.com'}, {'email': 'other@example.com'}], ())):
+            with self.subTest(configured=configured), \
+                 patch.object(accounts, 'status_payload', return_value={'accounts': configured}):
+                flow = SourceOnboarding(self.root, sources=())
+            self.assertEqual(flow.gmail_emails, expected)
+
+    def test_default_rerun_preserves_saved_source_account_history_store_and_skips(self):
+        store = self.root / 'selected store'
+        original = SourceOnboarding(self.root, sources=('gmail', 'whatsapp'),
+            gmail_emails=('casey@example.com', 'jordan@example.com'), sync_after='2025-10-03',
+            wacli_store=store, refresh=True, skip_sources=('whatsapp',))
+        original._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, 'Connect Gmail')
+        repeated = SourceOnboarding(self.root, sources=())
+        self.assertEqual(repeated.retry_command, original.retry_command)
+        override = SourceOnboarding(self.root, sources=('imessage',))
+        self.assertEqual(tuple(override.sources), ('imessage',))
+        self.assertEqual(override.gmail_emails, ('casey@example.com', 'jordan@example.com'))
+        self.assertEqual(override.sync_after, '2025-10-03')
+        self.assertEqual(override.wacli_store, store)
+        self.assertEqual(override.skip_sources, ())
+
+    def test_explicit_source_account_and_history_override_saved_choices(self):
+        flow = SourceOnboarding(self.root, sources=('gmail',),
+            gmail_emails=('casey@example.com',), sync_after='2023-01-01')
+        flow._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, 'Connect Gmail')
+        override = SourceOnboarding(self.root, sources=('skip',),
+            gmail_emails=('jordan@example.com',), sync_after='2025-10-03')
+        self.assertEqual(tuple(override.sources), ('skip',))
+        self.assertEqual(override.gmail_emails, ('jordan@example.com',))
+        self.assertEqual(override.sync_after, '2025-10-03')
+        self.assertEqual(override.run()['step'], 'ready')
 
     def test_skip_finishes_without_calling_source_tools(self):
         result = SourceOnboarding(self.root, sources=('skip',)).run()

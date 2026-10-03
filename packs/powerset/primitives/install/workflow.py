@@ -1,6 +1,6 @@
 """Run selected local imports and show their progress on the install page.
 
-Source manifests own reuse. This flow stops for choices, OS permissions, login,
+Source manifests own reuse. This flow stops for missing identity, OS permissions, login,
 or a failed primitive; it never starts enrichment, provider calls, or uploads.
 """
 from __future__ import annotations
@@ -9,6 +9,7 @@ import argparse
 import os
 import shlex
 import traceback
+from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
 
@@ -46,6 +47,7 @@ _SOURCE_STEPS = {
 }
 _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
+_DEFAULT_SOURCES = (Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 
 
 class SourceOnboarding:
@@ -54,26 +56,39 @@ class SourceOnboarding:
                  wacli_store: Path | None = None, refresh: bool = False,
                  skip_sources: tuple[str, ...] = ()) -> None:
         self.root = root.resolve()
-        self.sources = tuple(sorted(dict.fromkeys(Source(source) for source in sources),
+        self.status = InstallStatus(self.root)
+        previous = self.status.read()
+        command = shlex.split(previous["retry_command"])
+        saved = _parser().parse_args(command[1:] if Path(command[0]).name == "onboard" else [])
+        self.sources = tuple(sorted(dict.fromkeys(Source(source) for source in
+                                    (sources or saved.source or _DEFAULT_SOURCES)),
                                     key=lambda source: source is Source.LINKEDIN))
         if Source.SKIP in self.sources and len(self.sources) != 1:
             raise ValueError("Choose sources or skip, not both")
+        skip_sources = skip_sources if sources else (*saved.skip_source, *skip_sources)
         self.skip_sources = tuple(dict.fromkeys(Source(source) for source in skip_sources))
         if Source.SKIP in self.skip_sources or not set(self.skip_sources) <= set(self.sources):
             raise ValueError("Skip only a selected source")
-        self.gmail_emails = gmail_emails
-        self.sync_after = sync_after
+        self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
+        if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
+            if previous.get("account_email"):
+                self.gmail_emails = (previous["account_email"],)
+            else:
+                home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
+                configured = accounts.VaultHealth.from_status(accounts.status_payload(home)).stored_emails - {""}
+                if len(configured) == 1:
+                    self.gmail_emails = tuple(configured)
+        self.sync_after = sync_after or saved.sync_after or (
+            (date.today() - timedelta(days=365)).isoformat() if Source.GMAIL in self.sources else "")
+        wacli_store = wacli_store or saved.wacli_store
         self.wacli_store = wacli_store or self.root / DEFAULT_STORE
-        self.refresh = refresh
-        self.status = InstallStatus(self.root)
+        self.refresh = refresh or (not sources and saved.refresh)
         self.step = InstallStep.SOURCES
-        previous = self.status.read()
         history = [step for step in previous.get("plan", []) if step not in PROCESSING_STEPS
                    and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
-        next_steps = ()
-        if self.sources == (Source.SKIP,) or self.sources and all(source in self.skip_sources for source in self.sources):
+        if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
-        elif self.sources:
+        else:
             next_steps = PROCESSING_STEPS
         self.plan = list(dict.fromkeys([
             *history, InstallStep.SOURCES.value,
@@ -82,13 +97,13 @@ class SourceOnboarding:
         args = [str(self.root / "bin/onboard")]
         for source in self.sources:
             args.extend(("--source", source.value))
-        for email in gmail_emails:
+        for email in self.gmail_emails:
             args.extend(("--gmail-email", email))
-        if sync_after:
-            args.extend(("--sync-after", sync_after))
+        if self.sync_after:
+            args.extend(("--sync-after", self.sync_after))
         if wacli_store is not None:
             args.extend(("--wacli-store", str(wacli_store)))
-        if refresh:
+        if self.refresh:
             args.append("--refresh")
         for source in self.skip_sources:
             args.extend(("--skip-source", source.value))
@@ -132,10 +147,10 @@ class SourceOnboarding:
         return bool(requested) and all(coverage.get(email.lower(), False) for email in self.gmail_emails)
 
     def _gmail(self) -> bool:
-        if not self.gmail_emails or not self.sync_after:
+        if not self.gmail_emails:
             self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING,
-                        "Which Gmail accounts and how far back?",
-                        {"kind": "gmail", "text": "Tell me in chat which accounts and how many years of mail to use."})
+                        "Which Gmail account should I use?",
+                        {"kind": "gmail", "text": "Which Gmail account should I use?"})
             return False
         if not self._tools(Source.GMAIL, InstallStep.GMAIL_TOOLS):
             return False
@@ -223,9 +238,6 @@ class SourceOnboarding:
         try:
             if Path.cwd() != self.root:
                 raise ValueError(f"Run bin/onboard from {self.root}")
-            if not self.sources:
-                return self._write(InstallStep.SOURCES, InstallState.WAITING, "Add your contacts",
-                                   {"kind": "sources", "text": "Choose Gmail, Messages, WhatsApp, LinkedIn, or skip in chat."})
             self._write(InstallStep.SOURCES, InstallState.COMPLETED, "Sources selected")
             for source in self.sources:
                 for step in _SOURCE_STEPS[source]:
@@ -264,7 +276,7 @@ class SourceOnboarding:
                                {"details": {"error_type": type(exc).__name__, "error": str(exc)}})
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", choices=[source.value for source in Source], action="append", default=[])
     parser.add_argument("--skip-source", choices=[source.value for source in Source if source is not Source.SKIP],
@@ -273,7 +285,11 @@ def main() -> None:
     parser.add_argument("--sync-after", default="")
     parser.add_argument("--wacli-store", type=Path)
     parser.add_argument("--refresh", action="store_true", help="Sync selected sources instead of reusing imported contacts")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = _parser().parse_args()
     payload = SourceOnboarding(Path.cwd(), sources=tuple(args.source),
                                gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
                                wacli_store=args.wacli_store, refresh=args.refresh,

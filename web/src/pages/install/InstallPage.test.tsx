@@ -159,7 +159,7 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { container } = mount()
-    const history = await screen.findByRole("button", { name: "2 earlier steps done" })
+    const history = await screen.findByRole("button", { name: "2 tasks completed" })
     expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(7)
     expect(
       screen
