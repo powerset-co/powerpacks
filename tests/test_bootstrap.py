@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -52,6 +53,14 @@ class Sandbox:
             shutil.copyfile(ROOT / relative, target)
         write(self.repo / "packs/ingestion/primitives/deep_context/review/cli.py",
               'import json\nprint(json.dumps({"url": "http://127.0.0.1:8765/install"}))\n')
+        write(self.repo / "packs/powerset/primitives/install/onboard.py",
+              'import sys\nfrom pathlib import Path\n'
+              'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
+              'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
+              'pid=int(sys.argv[sys.argv.index("--pid")+1])\n'
+              'InstallStatus(root).write(step=InstallStep.READY,status=InstallState.COMPLETED,'
+              'message="Account connected and search verified",pid=pid)\n'
+              'print("DONE: Account connected and search verified")\n')
         write(self.repo / "bin/ensure-uv", f'#!/usr/bin/env bash\necho "{self.repo}/bin/uv"\n', executable=True)
         write(self.repo / "bin/uv", f'#!/usr/bin/env bash\n[[ "$2" == find ]] && echo "{sys.executable}"\nexit 0\n', executable=True)
         write(self.repo / "bin/setup-python", '#!/usr/bin/env bash\nexit 0\n', executable=True)
@@ -284,6 +293,222 @@ set -euo pipefail
         self.assertEqual(last_line(proc), "DONE: prior-release-contract --no-tools --harness codex")
         self.assertFalse((self.sandbox.repo / ".powerpacks/install/manifest.json").exists())
         self.assertEqual(self.sandbox.installed(), [])
+
+    def test_hosted_onboarding_wait_preserves_human_action(self) -> None:
+        write(self.sandbox.repo / "packs/powerset/primitives/install/onboard.py",
+              'import sys\nfrom pathlib import Path\n'
+              'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
+              'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
+              'pid=int(sys.argv[sys.argv.index("--pid")+1])\n'
+              'InstallStatus(root).write(step=InstallStep.ACCOUNT,status=InstallState.WAITING,'
+              'message="Waiting for account login",pid=pid)\n'
+              'print("NEEDS YOU: Waiting for account login")\nsys.exit(10)\n')
+        proc = self.sandbox.run("--no-tools", "--powerset", "--harness", "codex")
+        self.assertEqual(proc.returncode, 10, proc.stdout + proc.stderr)
+        self.assertEqual(last_line(proc), "NEEDS YOU: Waiting for account login")
+        self.assertEqual(self.sandbox.progress()["status"], "waiting")
+
+    def test_hosted_error_preserves_message_and_visible_login_url(self) -> None:
+        write(self.sandbox.repo / "packs/powerset/primitives/install/onboard.py",
+              'import sys\nfrom pathlib import Path\n'
+              'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
+              'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
+              'pid=int(sys.argv[sys.argv.index("--pid")+1])\n'
+              'print("Open https://example.test/login", file=sys.stderr)\n'
+              'InstallStatus(root).write(step=InstallStep.ACCOUNT,status=InstallState.FAILED,'
+              'message="Account login timed out; ask me to reopen sign-in",pid=pid)\n'
+              'print("FAILED: Account login timed out")\nsys.exit(1)\n')
+        proc = self.sandbox.run("--no-tools", "--powerset", "--harness", "codex")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("Open https://example.test/login", proc.stderr)
+        self.assertIn("Open https://example.test/login", Path(self.sandbox.progress()["log_path"]).read_text())
+        self.assertEqual(self.sandbox.progress()["message"], "Account login timed out; ask me to reopen sign-in")
+
+    def test_install_only_explicitly_skips_account_checks(self) -> None:
+        proc = self.sandbox.run("--no-tools", "--harness", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("No account was connected", last_line(proc))
+        for step in ("account", "credentials", "connection", "network"):
+            self.assertEqual(self.sandbox.progress()["steps"][step]["status"], "skipped")
+
+
+class PublishedBootstrapTests(unittest.TestCase):
+    """Real local Git releases and real Codex installer; runtime/server are stubbed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.sandbox = Sandbox(Path(self.tmp.name))
+        self.source = self.sandbox.repo
+        self.remote = self.sandbox.root / "published.git"
+        self.checkout = self.sandbox.home / "powerpacks"
+        self.env = {"HOME": str(self.sandbox.home), "PATH": f"{self.sandbox.bin}:/usr/bin:/bin",
+                    "POWERPACKS_REPO_URL": str(self.remote), "POWERPACKS_SKIP_AGENT_BOOTSTRAP": "1"}
+        for relative in ("bin/powerpacks-channel", "install.sh", "adapters/codex/install.sh",
+                         "bin/powerpacks-install-stamp", "bin/update-powerpacks"):
+            write(self.source / relative, (ROOT / relative).read_text(), executable=True)
+        for directory in ("docs", "templates", "config"):
+            write(self.source / directory / ".keep", "")
+        for script in ("build-local-duckdb-shim.py", "adopt-powerpacks-state.py", "fix-powerpacks-state.py"):
+            write(self.source / "scripts" / script, "# fixture\n")
+        write(self.source / "pyproject.toml", '[project]\nname="fixture"\nversion="1.0.0"\n')
+        adapter = (ROOT / "adapters/codex/install.sh").read_text()
+        for name, path in re.findall(r'install_skill (\S+) "\$REPO_ROOT/([^"]+)"', adapter):
+            write(self.source / path, f"---\nname: {name}\n---\nFixture skill\n")
+        write(self.source / ".gitignore", ".env\n.powerpacks/\n__pycache__/\n")
+        write(self.source / "bin/bootstrap", '#!/usr/bin/env bash\necho "DONE: old release"\n', executable=True)
+        self.git(self.source, "init", "-b", "main")
+        self.git(self.source, "add", ".")
+        self.git(self.source, "commit", "-m", "old release")
+        self.git(self.source, "tag", "powerpacks-v1.0.0")
+        self.git(self.sandbox.root, "init", "--bare", str(self.remote))
+        self.git(self.source, "remote", "add", "origin", str(self.remote))
+        self.git(self.source, "push", "origin", "main", "--tags")
+        self.git(self.remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def git(self, root, *args):
+        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
+            env={**self.env, "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.com",
+                 "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.com"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def publish(self, *, interruptible=False):
+        write(self.source / "bin/bootstrap", BOOTSTRAP.read_text(), executable=True)
+        write(self.source / "packs/search/skills/search/SKILL.md", "---\nname: search\n---\nCurrent release skill\n")
+        if interruptible:
+            write(self.source / "bin/setup-python",
+                  '#!/usr/bin/env bash\nif [[ -f "$HOME/pause-install" ]]; then echo "paused fixture"; sleep 30; fi\n', executable=True)
+        self.git(self.source, "add", ".")
+        self.git(self.source, "commit", "-m", "new release")
+        self.git(self.source, "tag", "powerpacks-v1.1.0")
+        self.git(self.source, "push", "origin", "main", "--tags")
+        return self.git(self.source, "rev-parse", "HEAD")
+
+    def installed_old(self):
+        self.git(self.sandbox.root, "clone", str(self.remote), str(self.checkout))
+        self.git(self.checkout, "switch", "-c", "powerpacks-stable", "powerpacks-v1.0.0")
+
+    def launch(self, **env):
+        return subprocess.run(["bash", "-s", "--", "--no-tools", "--harness", "codex"],
+            input=BOOTSTRAP.read_text(), capture_output=True, text=True, env={**self.env, **env}, timeout=30)
+
+    def test_fresh_clone_runs_selected_release_and_real_installer(self):
+        expected = self.publish()
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), expected)
+        installed = self.sandbox.home / ".agents/skills/search/SKILL.md"
+        self.assertIn("Current release skill", installed.read_text())
+        self.assertNotIn("checking for the current", result.stdout)
+
+    def test_existing_release_updates_and_rerun_preserves_user_files(self):
+        self.installed_old()
+        write(self.checkout / ".env", "CUSTOM_SETTING=keep\n")
+        write(self.checkout / ".powerpacks/contacts.csv", "synthetic,data\n")
+        custom_skill = self.sandbox.home / ".agents/skills/my-custom/SKILL.md"
+        write(custom_skill, "my own skill")
+        write(self.sandbox.home / ".codex/config.toml", "custom = true\n")
+        expected = self.publish()
+        for _ in range(2):
+            result = self.launch()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), expected)
+            self.assertEqual((self.checkout / ".env").read_text(), "CUSTOM_SETTING=keep\n")
+            self.assertEqual((self.checkout / ".powerpacks/contacts.csv").read_text(), "synthetic,data\n")
+            self.assertEqual(custom_skill.read_text(), "my own skill")
+            self.assertEqual((self.sandbox.home / ".codex/config.toml").read_text(), "custom = true\n")
+            self.assertIn("Current release skill", (self.sandbox.home / ".agents/skills/search/SKILL.md").read_text())
+
+    def test_dirty_work_is_not_discarded_and_local_entry_does_not_update(self):
+        self.installed_old()
+        original = self.git(self.checkout, "rev-parse", "HEAD")
+        self.publish()
+        write(self.checkout / "packs/search/skills/search/SKILL.md", "local changes")
+        result = self.launch()
+        self.assertEqual(result.returncode, 10, result.stdout + result.stderr)
+        self.assertIn("Local code changes", result.stdout)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), original)
+        self.assertEqual((self.checkout / "packs/search/skills/search/SKILL.md").read_text(), "local changes")
+        # Running an installed/development entrypoint is intentionally not an updater.
+        result = subprocess.run([str(self.checkout / "bin/bootstrap"), "--no-tools"],
+                                capture_output=True, text=True, env=self.env)
+        self.assertEqual(last_line(result), "DONE: old release")
+
+    def test_explicit_pin_and_edge_override_are_respected(self):
+        self.installed_old()
+        self.publish()
+        result = self.launch(POWERPACKS_REF="powerpacks-v1.0.0")
+        self.assertEqual(last_line(result), "DONE: old release")
+        self.assertEqual(self.git(self.checkout, "branch", "--show-current"), "powerpacks-pinned")
+        result = self.launch(POWERPACKS_CHANNEL="edge")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.checkout, "branch", "--show-current"), "powerpacks-edge")
+
+    def test_public_ssh_fetch_recovers_over_https_without_changing_origin(self):
+        self.installed_old()
+        expected = self.publish()
+        ssh_origin = "git@github.com:powerset-co/powerpacks.git"
+        self.git(self.checkout, "remote", "set-url", "origin", ssh_origin)
+        self.git(self.checkout, "config", f"url.{self.remote}.insteadOf", "https://github.com/powerset-co/powerpacks.git")
+        write(self.sandbox.bin / "git",
+              '#!/usr/bin/env bash\n'
+              'if [[ "$*" == *"fetch --quiet --tags origin"* ]]; then echo "mock SSH unavailable" >&2; exit 128; fi\n'
+              'exec /usr/bin/git "$@"\n', executable=True)
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), expected)
+        self.assertEqual(self.git(self.checkout, "config", "remote.origin.url"), ssh_origin)
+
+    def test_local_commits_and_colliding_untracked_files_are_preserved(self):
+        self.installed_old()
+        write(self.source / "docs/new-guide.md", "published guide")
+        self.publish()
+        local_file = self.checkout / "docs/new-guide.md"
+        write(local_file, "my unpublished guide")
+        result = self.launch()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(local_file.read_text(), "my unpublished guide")
+        self.git(self.checkout, "add", "docs/new-guide.md")
+        self.git(self.checkout, "commit", "-m", "local-only work")
+        original = self.git(self.checkout, "rev-parse", "HEAD")
+        result = self.launch()
+        self.assertEqual(result.returncode, 10, result.stdout + result.stderr)
+        self.assertIn("local commits", result.stdout)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), original)
+
+    def test_interrupted_install_reruns_without_losing_data(self):
+        self.installed_old()
+        self.publish(interruptible=True)
+        write(self.checkout / ".powerpacks/contacts.csv", "keep contacts")
+        pause = self.sandbox.home / "pause-install"
+        write(pause, "pause")
+        launcher = self.sandbox.root / "downloaded-bootstrap"
+        write(launcher, BOOTSTRAP.read_text(), executable=True)
+        proc = subprocess.Popen([str(launcher), "--no-tools", "--harness", "codex"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env, start_new_session=True)
+        log = self.checkout / ".powerpacks/install/install.log"
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if log.exists() and "paused fixture" in log.read_text():
+                    break
+                time.sleep(0.02)
+            self.assertIn("paused fixture", log.read_text())
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.communicate(timeout=5)
+            self.assertEqual(json.loads((log.parent / "manifest.json").read_text())["status"], "failed")
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
+        pause.unlink()
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.checkout / ".powerpacks/contacts.csv").read_text(), "keep contacts")
+        self.assertEqual(json.loads((log.parent / "manifest.json").read_text())["status"], "completed")
 
 if __name__ == "__main__":
     unittest.main()

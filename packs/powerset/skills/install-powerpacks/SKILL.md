@@ -1,209 +1,158 @@
 ---
 name: install-powerpacks
-description: Bootstrap Powerpacks into this agent from one URL — clone the public repo, install every Powerpacks skill for this harness (Claude Code, Codex, or Pi), initialize the hosted Powerset config when requested, then continue the user's ask in the same session without a restart. Use for "install powerpacks", "download the powerpacks skill", "use powerpacks to set up ...", or "set up my local network search using my Powerset account".
+description: Set up Powerpacks from one pasted URL. Install locally, open live progress, connect the user's Powerset account, and verify their network in the same session. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
 license: MIT
 allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap *)
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.1.0
-  summary: One-sentence bootstrap for the full Powerpacks skill suite
+  version: 1.2.0
+  summary: Install, connect your account, and check your network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
     - powerpacks
     - install
-    - bootstrap
     - network-search
 ---
 
-# Powerpacks Installer
+# Set up Powerpacks
 
-<!--
-Created: 2026-07-08
-Changelog:
-- 2026-10-02: The download sentence runs the full install and opens live progress
-  in the browser pane; the same local server serves setup and review afterwards.
-- 2026-07-08: Initial ShareOne-style one-URL bootstrap skill.
-- 2026-07-10: Define the Powerset-environment route and provisioning API URL.
-- 2026-07-12: Hosted-config init is conditional on the user choosing Powerset;
-  otherwise $setup Step 1 asks explicitly (own keys are the alternative).
-- 2026-07-24: A fresh clone is pinned to the newest published release via
-  bin/powerpacks-channel instead of being left on the default branch.
-- 2026-08-24: Pull the provisioned Parallel key alongside Modal and OpenAI.
-- 2026-08-31: Pull the provisioned Powerset API key for local profile hydration.
-- 2026-09-28: New Step 1.3 installs the machine tools Gmail import needs
-  (msgvault, gcloud, node, Chrome) so install owns environment setup. Dropped
-  the dead `onboard` route.
-- 2026-09-30: "Where this can run" check stops claude.ai chat, ChatGPT chat,
-  and cloud sessions and names the tool to use instead; Permissions note
-  before Step 1 with per-harness bypass steps and a stop-on-denial rule;
-  allowed-tools pre-approves Step 1's local commands in Claude Code.
-- 2026-09-30: Step 1 is one command, `bin/bootstrap`, and one rule: do what its
-  last line says. The clone, release pin, installer, tool check and .env moved
-  into the script so any model can run it and the user only has to approve.
-- 2026-09-30: Codex skills install to `~/.agents/skills`; `~/.codex/skills` is
-  Codex's deprecated location and the installer cleans our skills out of it.
--->
+<!-- Changelog: 2026-10-02 — one script owns installation, account connection,
+network checks, and real progress; the agent handles human actions and recovery. -->
 
-One sentence installs everything:
+The user pastes:
 
-> Download and install the Powerpacks skill from
-> https://powerset.dev/powerpacks
+> Download and install the Powerpacks skill from https://powerset.dev/powerpacks
 
-The install opens a live progress page beside the conversation when the host
-supports a browser pane. After installation, a Powerset user can say:
+Carry that request through to a working account and a verified network. Do not
+stop after saving this file, ask them to type another skill, or hand them an
+installation checklist. The script does the work; you watch its progress,
+handle anything requiring the user, and recover from failures.
 
-> Use Powerpacks to set up my local network search using my Powerset account.
+## Run one command
 
-This wording is explicit but not required. With the shorter prompt (no
-Powerset mentioned), `$setup` asks whether to log in with a Powerset account
-before anything runs; answering yes gives the same Powerset-backed setup.
+This needs a shell on the user's Mac. If no local shell is available, explain:
+"Open Codex or Claude Code on your Mac and paste the same instruction there."
+Do not claim a cloud installation changed their computer. Respect existing
+permissions; a denied command is not permission to bypass the restriction.
 
-## Where this can run
+Save this skill in the current agent's personal skills folder if needed
+(Codex: `~/.agents/skills/install-powerpacks/SKILL.md`; Claude Code:
+`~/.claude/skills/install-powerpacks/SKILL.md`). Then continue immediately:
 
-This skill runs shell commands on the user's Mac, so it works only in a local
-coding agent there: Claude Code (the CLI, or the desktop app's Code tab in a
-Local session), Codex (CLI or app), or Pi. It does not work in claude.ai chat,
-ChatGPT chat, the desktop app's Chat tab, or a Claude Code cloud session
-(Claude Code on the web, or Cloud in the desktop app): none of those run
-commands on the user's Mac, so nothing lands where Powerpacks looks for it.
+```bash
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --no-tools
+```
 
-The Step 1 command checks this itself and prints a line starting with
-`STOP:` when it is not on the user's Mac. The one case it cannot catch is an
-agent with no shell tool at all: then stop here, do not run Step 0 or Step 1,
-and tell the user which tool to use instead, in a few lines:
+Run asynchronously so you can show progress while it works. In Codex, use a
+short shell `yield_time_ms`; in Claude Code, use background Bash.
 
-- In ChatGPT chat: "This needs a coding agent on your Mac. Please use Codex
-  instead: open Terminal, run
-  `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
-  (https://learn.chatgpt.com/docs/codex/cli), then `cd ~`, run `codex`, and
-  paste the same sentence."
-- In claude.ai chat or a cloud session: "This needs a coding agent on your
-  Mac. Please use the Claude Code app or CLI on your Mac instead: install the
-  app from https://code.claude.com/docs/en/desktop-quickstart and open a Local
-  session on your home folder, or open Terminal, run
-  `curl -fsSL https://claude.ai/install.sh | bash`
-  (https://code.claude.com/docs/en/setup), then `cd ~` and run `claude`. Then
-  paste the same sentence."
+This installs Powerpacks, preserves existing configuration, connects the
+Powerset account, checks access to search, and checks the selected network.
+Already-valid login is skipped. The normal pasted instruction authorizes this
+setup, including local credential configuration. Browser sign-in still belongs
+to the user. It does not authorize uploading contacts, paid research, or reading
+mail and messages.
 
-## Step 0 — save this skill and start the install
+- Explicit "install only", "don't log in", or custom/local-only setup: omit
+  `--powerset`. Follow that narrower request; don't report account readiness.
+- Keep `--no-tools` for initial setup. Gmail tools are installed only if the
+  user later asks to connect Gmail. Don't delay first use with optional imports.
+- Reruns update the existing checkout within its selected release channel and
+  preserve configuration and network data. Fresh installs follow the published
+  release. Do not switch channels or edit application code to repair setup.
 
-Save this SKILL.md into the current harness's skills directory, creating the folder:
+## Show the live page
 
-- Claude Code: `~/.claude/skills/install-powerpacks/SKILL.md`
-- Codex: `~/.agents/skills/install-powerpacks/SKILL.md`
-- Pi / other: the harness's personal skills directory, same layout.
+Watch for `STATUS PAGE: <url>` and open that exact URL immediately, before
+waiting for the command to finish. Reuse the tab on retries.
 
-Continue directly to Step 1 in this session. The download-and-install sentence
-requests the full local install, including the live progress page. It does not
-request account logins, contact imports, paid work, or uploads.
+- If the host exposes a browser-pane tool, use it to open the page beside chat.
+  Use `open_in_codex` only if that tool is actually available.
+- Otherwise open the URL in the Mac's default browser with `open "<url>"`.
+  Codex CLI can use this browser tab; it cannot render a custom animation in chat.
+- A printed URL or queued open request is not proof of a rendered page. Check
+  the returned browser state when available, or the page's HTTP response.
 
-## Step 1 — install Powerpacks and open progress
+The animation and step labels come from the script's
+`.powerpacks/install/manifest.json`. The page shows installing, waiting for
+sign-in, skipped login, search connection, network check, and completion.
+Never fabricate progress, write the manifest by hand, or treat the animation as
+proof of success. The page stays open after the command ends.
 
-Trigger phrases (any harness):
+Keep chat short: an opening sentence, necessary user actions, and the final
+result. Do not repeat the page's checklist after every step or paste logs into
+chat. If the page is unavailable, give one short line when the phase changes.
 
-- "Download and install the Powerpacks skill from https://powerset.dev/powerpacks"
-- "Use powerpacks to set up my local network search"
-- "Use powerpacks to set up my local network search using my Powerset account"
-- "Set up powerpacks" / "install powerpacks fully"
-- "Import my LinkedIn/Gmail/iMessage network with powerpacks"
-- "Search my network for ..." (when Powerpacks skills are not installed yet)
+## Continue or recover
 
-Use the session's existing permissions. If a command is denied, explain which
-command was denied and stop; do not bypass the denial.
+Keep watching the original command until it exits. Read its last status line
+and the saved progress; do not start a second installer while it is running.
 
-Do the following, in order:
+| Script result | Agent action |
+| --- | --- |
+| `DONE:` | Verify the saved result and give the account/network summary below. Continue any search the user already requested. |
+| `NEEDS YOU:` | Show the single action needed. During browser login the script waits and continues automatically. If the script has exited, resume it after the action. |
+| `ASK:` | Answer from the user's existing request where possible. Optional Gmail tools are unnecessary for initial setup; rerun with `--no-tools`. |
+| `STOP:` | Explain where to run the instruction. Do not continue in the wrong environment. |
+| `FAILED:` | Read the saved error, fix the cause within the authorized setup, and rerun. Don't ask "should I try to fix it?" |
 
-1. **Run one command asynchronously.** Let the shell tool yield early so you
-   can open the page while installation continues (Codex: short
-   `yield_time_ms`; Claude Code: background Bash). Add `--powerset` only when the ask named Powerset
-   ("using my Powerset account"):
+Use the same command and options on retries. Completed files and cached
+credentials are reused, and live checks are repeated. Do not delete `.powerpacks`
+or overwrite existing credentials to start over.
 
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash
-   ```
+Specific recovery:
 
-   For a Powerset ask, append `-s -- --powerset` to `bash`.
+- **Download or dependency failure:** inspect `.powerpacks/install/install.log`.
+  Retry a transient connection failure; for an SSH authentication failure on
+  the public repository, use its HTTPS URL. Repair installation/configuration,
+  not application code. Preserve local work and data.
+- **Login missing or expired:** let the script refresh credentials or open the
+  existing sign-in flow. A network timeout is not proof the account is wrong.
+- **Search connection fails after login:** let the script verify direct service
+  access and refresh the agent connection. Don't force a session restart merely
+  because newly registered tools aren't visible yet. Never claim a connection
+  works until its check succeeds.
+- **Personal network has 0 people:** name the actual signed-in email and ask:
+  "Your personal network for <email> is empty. Would you like to use another
+  account or connect your contacts?" An account switch uses the installed
+  `auth.py login --force-account` primitive, then reruns onboarding. Don't guess
+  another identity or silently switch to a shared network.
+- **Personal network has 1–9 people:** continue when search works; mention the
+  count and that another account or network may contain more people. This is a
+  suggestion, not a gate. If all accessible networks are empty, say so.
+- **Progress page fails:** check the printed URL, `/healthz`, `/api/install`, and
+  `.powerpacks/install/server.log`. Reuse or restart the same server via the
+  printed retry command; don't open duplicate tabs. A browser-pane error with
+  healthy HTTP responses is a display problem, not an installation failure.
+- **The same failure returns after a targeted repair:** give the specific
+  remaining problem and action. Do not loop indefinitely or claim success.
 
-   It downloads Powerpacks to `~/powerpacks` (or reuses an existing checkout),
-   pins it to the newest release, installs the skills for every agent found on
-   this Mac, and, only when the user chose Powerset, runs
-   `cp packs/powerset/templates/env.powerset.example .env` (never touching an
-   existing `.env`). Local-only: no paid APIs, no uploads, no logins.
+Internal IDs, "sets", provider keys, MCP, and database names belong in
+troubleshooting details. Say "your personal network", the network's actual
+name, and the signed-in email in normal conversation.
 
-2. **Open the page while the command runs.** Watch the output for
-   `STATUS PAGE: <url>`. Use that URL, not an assumed port. In Codex desktop,
-   call `open_in_codex` with a browser target and `placement: "right"`;
-   in another host use its browser/preview pane. In a CLI with no pane,
-   open the URL in the default browser. Reuse the same tab on retries and for
-   subsequent setup or review. The server stays up when the command finishes.
+## Finish with verified readiness
 
-   The page reads `.powerpacks/install/manifest.json` written by the installer.
-   Never write progress yourself, invent a percentage, or claim a step completed
-   from an animation. A queued panel-open result does not prove it rendered.
-   If the page fails, check its URL, `/healthz`, `/api/install`, and the saved
-   `.powerpacks/install/server.log`. Restart the same server with the repo's
-   pinned Python: `python -m packs.ingestion.primitives.deep_context.review.cli
-   start --stage install --port <same port>` from the repo, then reopen the returned URL.
-   For `Tab content couldn't render`, inspect the host app logs; distinguish a
-   host panel failure from an unreachable server. Do not repeatedly open duplicates.
+`DONE` for local installation alone does not mean a network is ready. Use the
+script's successful account and network checks. For example, with real values:
 
-3. **Read its LAST line and act on it.** Continue watching the asynchronous
-   command until it exits; opening the page is not installation completion.
+> Powerpacks is ready. You're signed in as <email>.
+> <network name> has <N> people, and search is working.
+> Try: "Find backend engineers in my network."
 
-   - `DONE: ...` — installed. Continue below. For an install-only ask, leave
-     the installed page open and ask what the user wants to connect in chat.
-   - `NEEDS YOU: ...` — a step only the human can do (a click, a password).
-     Show the user that line word for word, wait for them to say it is done,
-     then run the same command again.
-   - `ASK: ...` — one yes/no question about installing the free Gmail-import
-     tools. Ask the user that question. Yes: run the command again with
-     `--tools` added. No: run it again with `--no-tools` added.
-   - `STOP: ...` — wrong place to run this. Show the user that line and the
-     matching tool from "Where this can run". Do not continue.
-   - `FAILED: ...` — inspect the failure and the saved install/server logs,
-     fix a free local setup problem, then rerun the same command. Do not move
-     into imports or paid work. If the same failure repeats after a repair,
-     report the exact remaining problem and the next action. Passwords, visible
-     clicks and denied permissions still require the user.
+If something needs the user, state that instead of "ready". An empty personal
+network is not successful personal-network onboarding. Never invent a count
+or call every contact searchable just because the network list reports it.
 
-   Run the command as many times as those lines ask; it is safe to repeat and
-   skips every step already done.
+If the original request included a search, read the installed `search/SKILL.md`
+and do it now, preserving the requested network. Read newly installed skills
+directly in this session; no restart or new user command is needed.
 
-4. **Continue in THIS session — no restart.** The harness's skill registry is
-   snapshotted at session start, but you do not need it: the skills are now plain
-   files on disk. Read the one that matches the user's ask directly (e.g.
-   `~/.claude/skills/setup/SKILL.md`) and follow it as if it had been routed.
-   New sessions pick up the full skill list automatically.
-
-5. **Route the ask:**
-   - "set up my local network search" with or without "using my Powerset
-     account" -> follow `$setup` (LinkedIn export -> merge -> search index).
-     Its Steps 1-3 authenticate the Powerset user and pull that user's
-     provisioned Modal/OpenAI/Parallel/Powerset API keys before the LinkedIn import; when the prompt
-     didn't name Powerset, its Step 1 first asks whether to log in with a
-     Powerset account (the user's own keys are the alternative). Do not run a
-     separate `$powerset setup`; that would duplicate the same login/key pull.
-   - Gmail -> `import-gmail`; iMessage/WhatsApp -> `import-messages`;
-     processing -> `deep-context`; then searches -> `search`.
-
-   Keep progress and decisions beside the chat. Open `/accounts` on the same
-   server for connections, and `/` for Deep Context review when its store is
-   ready. Use the existing skills' commands and their real status; do not start
-   a second server or ask the user to copy commands. Only native login or macOS
-   permission actions need another window.
-
-## Notes
-
-- The repo is public; no credentials are needed to install. Powerset login,
-   Google OAuth, Full Disk Access, and any spend are asked for by the specific
-  skills that need them, never during install.
-- To refresh later: `$update-powerpacks` (installed with everything else).
-- Keep these URLs distinct:
-  - Install skill: `https://powerset.dev/powerpacks`
-  - Provisioning API base: `https://search-api-7wk4uhe77q-uw.a.run.app`
-  - Auth0 audience identifier only: `https://api.powerset.dev`
-- The provisioning calls are `/v2/integrations/modal/token`,
-  `/v2/integrations/openai/key`, and `/v2/integrations/parallel/key` on the
-  provisioning API base. "Using my Powerset account" means authenticate that
-  user and pull those allowlisted values into local `.env`.
+Existing hosted networks can be usable immediately. A fresh install may need
+downloads and a human login, so do not promise a one-minute completion time.
+LinkedIn imports and local index builds are separate, longer work: use `setup`
+only when the user requested a local LinkedIn network. Gmail and messages use
+`import-gmail` and `import-messages`; processing uses `deep-context`. Explain
+any actual file or permission needed in ordinary words. Don't run all imports
+as a prerequisite to using an already-searchable network.

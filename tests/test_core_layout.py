@@ -173,21 +173,16 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("gcloud auth login", text)
         self.assertNotIn("Secret Manager", text)
 
-    def test_install_skill_distinguishes_install_auth_and_provisioning_urls(self) -> None:
+    def test_install_and_hosted_config_use_separate_urls(self) -> None:
         text = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
-        self.assertIn("using my Powerset account", text)
-        self.assertIn("Its Steps 1-3 authenticate the Powerset user", text)
-        self.assertIn("Do not run a\n     separate `$powerset setup`", text)
-        self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
         self.assertIn("https://powerset.dev/powerpacks", text)
-        self.assertIn("https://search-api-7wk4uhe77q-uw.a.run.app", text)
-        self.assertIn("Auth0 audience identifier only: `https://api.powerset.dev`", text)
 
         hosted_env = (ROOT / "packs/powerset/templates/env.powerset.example").read_text()
         self.assertIn(
             "POWERSET_API_URL=https://search-api-7wk4uhe77q-uw.a.run.app",
             hosted_env,
         )
+        self.assertIn("POWERPACKS_AUTH0_AUDIENCE=https://api.powerset.dev", hosted_env)
         # One API-base var only — the retired aliases must not creep back.
         self.assertNotIn("POWERPACKS_SEARCH_API_URL", hosted_env)
         self.assertNotIn("POWERPACKS_API_BASE_URL", hosted_env)
@@ -224,9 +219,6 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("POWERSET_API_KEY=", env_template)
         self.assertIn("POWERSET_API_KEY_BACKUP=", env_template)
         self.assertIn("RAPIDAPI_KEY=", env_template)
-
-        installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
-        self.assertIn("only when the user chose Powerset", installer)
 
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()

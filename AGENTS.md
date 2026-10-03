@@ -546,6 +546,11 @@ internals, primitive sequences, or orchestration details.
 
 Routes:
 
+- Install Powerpacks, including the pasted `https://powerset.dev/powerpacks`
+  instruction → `packs/powerset/skills/install-powerpacks/SKILL.md`.
+  One bootstrap command owns installation, login, and network verification.
+  Follow its live progress and handle blockers; don't stop at skill installation
+  or ask the user to invoke `$setup` to finish ordinary hosted onboarding.
 - `$search` (formerly `$search-network`; the old name still works as an
   alias), people search, network search, local network search,
   role/title/location/school searches, "who is...", "find people...",

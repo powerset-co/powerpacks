@@ -55,6 +55,18 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["status"], "waiting")
         self.assertEqual(record["retry_command"], "bin/bootstrap --tools")
 
+    def test_interrupted_browser_login_does_not_wait_forever(self) -> None:
+        self.status.write(step=InstallStep.ACCOUNT, status=InstallState.WAITING,
+                          message="Waiting for sign-in", pid=99999999)
+        record = self.status.read()
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["steps"]["account"]["status"], "failed")
+
+    def test_empty_network_wait_remains_actionable_after_installer_exit(self) -> None:
+        self.status.write(step=InstallStep.NETWORK, status=InstallState.WAITING,
+                          message="Choose another account or connect contacts", pid=99999999)
+        self.assertEqual(self.status.read()["status"], "waiting")
+
     def test_completed_install_survives_installer_exit(self) -> None:
         self.status.write(step=InstallStep.READY, status=InstallState.COMPLETED,
                           message="Powerpacks is installed", pid=99999999)
@@ -68,6 +80,42 @@ class InstallStatusTests(unittest.TestCase):
                 self.status.write(step=InstallStep.READY, status=InstallState.COMPLETED,
                                   message="Powerpacks is installed", pid=os.getpid())
         self.assertEqual(self.status.read()["step"], "runtime")
+
+    def test_steps_keep_skipped_login_and_verified_account_through_completion(self) -> None:
+        self.status.write(step=InstallStep.RUNTIME, status=InstallState.RUNNING,
+                          message="Preparing your Mac", pid=os.getpid())
+        self.status.write(step=InstallStep.ACCOUNT, status=InstallState.SKIPPED,
+                          message="Already signed in", pid=os.getpid(), account_email="casey@example.com")
+        self.status.write(step=InstallStep.NETWORK, status=InstallState.RUNNING,
+                          message="Checking your network", pid=os.getpid())
+        self.status.write(step=InstallStep.READY, status=InstallState.COMPLETED,
+                          message="Ready", pid=os.getpid(), network_name="Personal Network", person_count=4)
+        record = self.status.read()
+        self.assertEqual(record["steps"]["runtime"]["status"], "completed")
+        self.assertEqual(record["steps"]["account"]["status"], "skipped")
+        self.assertEqual(record["steps"]["network"]["status"], "completed")
+        self.assertEqual(record["account_email"], "casey@example.com")
+        self.assertEqual(record["person_count"], 4)
+
+    def test_retry_clears_previous_identity_and_does_not_claim_unchecked_steps(self) -> None:
+        self.status.write(step=InstallStep.NETWORK, status=InstallState.WAITING,
+                          message="Empty network", pid=os.getpid(), account_email="casey@example.com",
+                          network_name="Personal Network", person_count=0)
+        self.status.write(step=InstallStep.RUNTIME, status=InstallState.RUNNING,
+                          message="Preparing your Mac", pid=os.getpid())
+        record = self.status.read()
+        self.assertEqual(list(record["steps"]), ["runtime"])
+        self.assertIsNone(record["account_email"])
+        self.assertIsNone(record["person_count"])
+
+    def test_waiting_step_does_not_advance_to_completed_on_failure(self) -> None:
+        self.status.write(step=InstallStep.ACCOUNT, status=InstallState.WAITING,
+                          message="Waiting for sign-in", pid=os.getpid())
+        self.status.write(step=InstallStep.ACCOUNT, status=InstallState.FAILED,
+                          message="Sign-in timed out", pid=os.getpid())
+        record = self.status.read()
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["steps"]["account"]["status"], "failed")
 
 
 if __name__ == "__main__":

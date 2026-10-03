@@ -4,7 +4,8 @@ Change log:
 
 - 2026-10-01: the Review page (`/review`) and its routes, folders and fixtures.
 - 2026-10-01: the Review page is `/`; the Jinja page it replaced is deleted.
-- 2026-10-02: `/install` reads installer progress and reuses the review animation.
+- 2026-10-02: `/install` shows installation, sign-in, search access, and network
+  checks from the bootstrap manifest, including waiting and skipped steps.
 
 # web
 

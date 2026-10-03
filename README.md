@@ -17,16 +17,20 @@ Tell your agent (Codex, Claude Code, ...) one sentence:
 > Download and install the Powerpacks skill from
 > https://powerset.dev/powerpacks
 
-The skill installs Powerpacks and opens live progress beside the conversation
-in desktop agents. Installation runs locally; account logins, imports and paid
-work come later. Then say what you want in the same session:
+That one instruction installs Powerpacks, opens a live progress page, connects
+your Powerset account, and checks your network. Sign in when prompted; setup
+continues automatically. If you are already connected, sign-in is skipped.
+The page shows what is running, what is done, and anything that needs you.
 
-> Use Powerpacks to set up my local network search using my Powerset account.
+You finish with your account email, network name, and verified search access.
+An empty network prompts an account or contact check instead of a false success.
+No second setup command is needed. Desktop agents can show the page beside chat;
+terminal agents open it in your browser.
 
-That initializes the public hosted config, signs in to Powerset, pulls the
-provisioned runtime keys for that user, and then builds the local LinkedIn
-network index. The shorter `Use Powerpacks to set up my local network search`
-prompt remains supported.
+Existing networks are checked first. Importing LinkedIn, Gmail, or messages is
+separate work when you ask for it; it does not delay first use. First-time
+downloads and sign-in can take more than a minute. If installation fails, the
+agent reads the saved error and retries without deleting your data.
 
 ### Other install paths
 

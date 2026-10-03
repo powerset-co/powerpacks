@@ -4,7 +4,7 @@
   padding: 40px 0 32px;
 }
 .install-page .empty-state {
-  min-height: 340px;
+  min-height: 260px;
   border: 0;
   background: transparent;
   padding: 24px 0;
@@ -29,20 +29,39 @@
   color: var(--muted);
 }
 .install-page .install-steps li {
-  display: flex;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
 }
 .install-page .install-steps li[aria-current="step"] {
   color: var(--foreground);
 }
-.install-page .install-steps li[data-done="true"] span {
+.install-page .install-steps li[data-done="true"] .install-step-mark {
   color: var(--ok);
 }
-.install-page .install-steps span {
+.install-page .install-step-mark {
   width: 20px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+.install-page .install-step-status {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.install-page .install-step-message {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.install-page .install-account {
+  font-size: 13px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.install-page .install-account p {
+  margin: 4px 0;
 }
 .install-page .install-details {
   border-top: 1px solid var(--border);
