@@ -76,15 +76,3 @@
 .install-page .install-details p {
   margin: 12px 0 0;
 }
-.install-page[data-status="failed"] .enrich-shape {
-  background: var(--bad);
-  box-shadow: none;
-}
-.install-page[data-status="waiting"] .enrich-shape {
-  background: var(--warn);
-  box-shadow: none;
-}
-.install-page[data-status="disconnected"] .enrich-shape {
-  background: var(--secondary);
-  box-shadow: none;
-}
