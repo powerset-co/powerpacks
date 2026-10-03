@@ -28,7 +28,8 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate
 )
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, emit
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.shared.common import emit
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd,

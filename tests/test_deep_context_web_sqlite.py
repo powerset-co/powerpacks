@@ -527,21 +527,49 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(workflow_state.call_count, 1)
 
     def test_review_startup_binds_without_calculating_workflow_queues(self) -> None:
-        server = mock.Mock(server_address=("127.0.0.1", 8765))
+        server = mock.MagicMock(server_address=("127.0.0.1", 8765))
+        server.__enter__.return_value = server
         server.serve_forever.side_effect = KeyboardInterrupt
         with (
             mock.patch.object(review_cli, "CANONICAL_DB", self.db.db_path),
-            mock.patch.object(review_cli, "load_env"),
             mock.patch.object(review_cli.urllib.request, "urlopen", side_effect=OSError),
-            mock.patch.object(review_cli, "open_existing_db", return_value=self.db),
-            mock.patch.object(review_server, "GuidedRetargetWorker"),
+            mock.patch.object(review_server, "make_handler") as mount,
             mock.patch.object(review_cli, "ThreadingHTTPServer", return_value=server) as bind,
             mock.patch.object(review_cli, "_announce"),
             mock.patch.object(self.db, "query", wraps=self.db.query) as query,
         ):
-            review_cli.main(["serve"])
+            review_cli.main(["serve", "--port", "0"])
         bind.assert_called_once()
-        self.assertEqual(query.call_count, 1, "Startup must check existence, not calculate review or research queues")
+        mount.assert_not_called()
+        self.assertEqual(query.call_count, 0, "Startup must bind before mounting review or calculating queues")
+
+    def test_opening_review_waits_for_explicit_job_request(self) -> None:
+        with (
+            mock.patch.object(review_server, "GuidedRetargetWorker", return_value=self.queue),
+            mock.patch.object(self.queue, "resume", return_value=1) as resume,
+            mock.patch.object(enrichment_pipeline.EnrichmentPipeline, "start", return_value=False) as start,
+            mock.patch.object(review_api, "build_feedback_request", side_effect=SystemExit("disabled")),
+        ):
+            self.http = InProcessHttpClient(review_server.make_handler(db=self.db, run_jobs=True))
+            self.assertEqual(self.json_request("GET", "/api/status")[0], 200)
+            resume.assert_not_called()
+            start.assert_not_called()
+            status, payload = self.json_request("POST", "/retarget", {
+                "pub": "jordan-bravo", "parent_slug": "jordan-bravo",
+                "guidance": "Use https://www.linkedin.com/in/jordan-bravo-correct",
+            })
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["item"]["state"], "applied")
+            self.db.decide_worth("worth-parent", "yes")
+            status, payload = self.json_request("POST", "/api/review/approve-enrichment", {})
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["ok"])
+            start.assert_called_once()
+            resume.assert_not_called()
+            status, payload = self.json_request("POST", "/api/review/resume-retargets", {})
+            self.assertEqual(status, 200)
+            self.assertEqual(payload, {"ok": True, "resumed": 1})
+            resume.assert_called_once_with()
 
     def test_empty_review_store_still_refuses_startup(self) -> None:
         empty = Db(self.root / "empty.sqlite")
@@ -1466,6 +1494,36 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "SELECT judgment_fingerprint FROM links WHERE row_key='jordan-bravo'",
         )[0]["judgment_fingerprint"]
         self.assertTrue(fingerprint)
+
+    def test_resuming_live_guided_worker_does_not_queue_duplicate_research(self) -> None:
+        replace_person_identifiers(self.db, "linkedin-person", (
+            PersonIdentifierRow("linkedin-person", "email", "casey@example.com"),
+        ))
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def research(request):
+            calls.append(request)
+            entered.set()
+            release.wait(5)
+            return guided_result("https://www.linkedin.com/in/jordan-bravo-correct")
+
+        self.queue.runner = research
+        request = GuidanceRequest("jordan-bravo", "jordan-bravo", "Jordan Bravo",
+                                  "Find the synthetic operator from Casey.",
+                                  person_ids=("linkedin-person",))
+        self.queue.submit(request)
+        try:
+            self.assertTrue(entered.wait(2))
+            self.assertEqual(self.queue.resume(), 0)
+            self.assertEqual(self.queue._pending, [])
+        finally:
+            worker = self.queue._thread
+            release.set()
+            if worker:
+                worker.join(timeout=2)
+        self.assertEqual(len(calls), 1)
 
     def test_pending_guided_job_resumes_from_sqlite(self) -> None:
         # URL-less guidance only saves for message-derived people (the intake

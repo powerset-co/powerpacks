@@ -2,10 +2,12 @@
 
 `serve` starts the one local server (or reuses the live one) and prints the URL to open:
 `/` for the review at its current stage, `/?stage=worth|enrich|linkedin|done` for one
-stage, `/people`, `/searches`. Before a deep-context store exists it serves the searches
-alone, and `/` goes to `/searches`. `status` prints what the agent should do next.
+stage, `/people`, `/searches`. `start` detaches this same server for installation;
+`/install` and its assets use only the standard library. Existing APIs mount lazily
+when dependencies and data are ready. `status` prints what the agent should do next.
 
 Changelog:
+- 2026-10-02: start one detached server before dependency setup; reuse it for review.
 - 2026-10-01: pending enrichment returns to the agent's enrich command.
 - 2026-10-01: status routes synthesis directly to enrichment without worth review.
 - 2026-10-01: the review is the React page at `/`; before a store exists `/` still
@@ -23,6 +25,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import site
+import socket
+import subprocess
+import threading
 import sys
 import time
 import urllib.parse
@@ -32,20 +39,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
-    load_env,
-)
-from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
-from packs.ingestion.primitives.deep_context.db.store import open_existing_db
-from packs.search.primitives.deep_search.results_web import server as results_web
-from packs.search.primitives.deep_search.results_web.api import search_api
-from packs.ingestion.primitives.accounts.api import AccountsApi
-from packs.ingestion.primitives.refresh.api import TasksApi
 from packs.shared.web.app import AppRoutes
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB, has_parents
 
-from .server import make_handler
-from .sqlite_adapter import SqliteReviewAdapter
+_PRIMITIVE = "reconcile_review_web"
+_START_TIMEOUT_SECONDS = 10
 
 
 # The actions the agent runs itself; every other action waits on the user.
@@ -66,13 +64,21 @@ def _url(host: str, port: int, stage: str, run_id: str = "") -> str:
         return f"http://{host}:{port}/searches/run?run_id={urllib.parse.quote(run_id)}"
     if not stage:
         return f"http://{host}:{port}/"  # the current review stage
-    route = stage if stage in {"people", "searches"} else f"?stage={stage}"
+    route = stage if stage in {"install", "people", "searches"} else f"?stage={stage}"
     return f"http://{host}:{port}/{route}"
 
 
-def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> type[BaseHTTPRequestHandler]:
+def searches_only_handler(root: Path | None = None) -> type[BaseHTTPRequestHandler]:
     """The same server before a deep-context store exists: the saved searches
     at their usual URLs, and People says what to run first."""
+    from packs.ingestion.primitives.deep_context.shared.common import load_env
+    from packs.search.primitives.deep_search.results_web import server as results_web
+    from packs.search.primitives.deep_search.results_web.api import search_api
+    from packs.ingestion.primitives.accounts.api import AccountsApi
+    from packs.ingestion.primitives.refresh.api import TasksApi
+
+    load_env()
+    root = root if root is not None else results_web.DEFAULT_DEEP_SEARCH_ROOT
     routes = results_web.search_routes(root, base="/searches")
     viewer = results_web.make_handler(root, routes.load, catalog=routes.catalog, load_one=routes.load_one,
                                       base="/searches")
@@ -110,63 +116,207 @@ def searches_only_handler(root: Path = results_web.DEFAULT_DEEP_SEARCH_ROOT) -> 
 
 
 def _announce(status: str, url: str, **extra: object) -> None:
-    print(json.dumps({"primitive": "reconcile_review_web", "status": status, "url": url, **extra}, indent=2))
+    print(json.dumps({"primitive": "reconcile_review_web", "status": status, "url": url, **extra}, indent=2), flush=True)
 
 
 def workflow_status(**_: object) -> dict[str, object]:
+    from packs.ingestion.primitives.deep_context.db.store import open_existing_db
+    from .sqlite_adapter import SqliteReviewAdapter
+
     api = SqliteReviewAdapter(open_existing_db(CANONICAL_DB))
     payload = api.workflow_status()
     commands = {
         "synthesize": "bin/deep-context dry",
         "enrich": "bin/deep-context enrich",
         "review_linkedin": "wait for LinkedIn Yes/No decisions in the review UI",
-        "realize": "bin/deep-context stop && bin/deep-context realize",
+        "realize": "bin/deep-context realize",
     }
     payload.update({"command": commands[payload["next_action"]], "poll_after_seconds": 60})
     return payload
 
 
-def cmd_serve(args: argparse.Namespace) -> None:
-    load_env()
+def _health(host: str, port: int) -> dict[str, object] | None:
     try:
-        with urllib.request.urlopen(
-            f"http://{args.host}:{args.port}/api/status",
-            timeout=1,
-        ) as response:
-            live = json.loads(response.read())
-    except (OSError, json.JSONDecodeError):
-        live = {}
-    has_store = CANONICAL_DB.is_file()
-    stage = args.stage or ("" if has_store else "searches")
+        with urllib.request.urlopen(f"http://{host}:{port}/healthz", timeout=1) as response:
+            payload = json.loads(response.read())
+            return payload if isinstance(payload, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _owned_listener(args: argparse.Namespace, root: Path) -> dict[str, object] | None:
+    live = _health(args.host, args.port)
+    if live and live.get("primitive") == _PRIMITIVE and live.get("repo_root") == str(root):
+        return live
+    with socket.socket() as probe:
+        if probe.connect_ex((args.host, args.port)) == 0:
+            raise SystemExit(f"Port {args.port} belongs to another server. Use --port with a free port.")
+    return None
+
+
+def _stage(args: argparse.Namespace, root: Path) -> str:
+    return args.stage or ("" if (root / CANONICAL_DB).is_file() else "searches")
+
+
+def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRequestHandler]:
+    """Serve built assets immediately; mount the existing APIs once their inputs exist."""
+    app = AppRoutes()
+    mounted: type[BaseHTTPRequestHandler] | None = None
+    mounted_review = False
+    mount_lock = threading.Lock()
+    identity = {"primitive": _PRIMITIVE, "repo_root": str(root), "pid": os.getpid()}
+
+    def mount() -> type[BaseHTTPRequestHandler]:
+        nonlocal mounted, mounted_review
+        with mount_lock:
+            if mounted_review:
+                return mounted
+            # The pinned bootstrap interpreter and the project environment share Python.
+            version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+            packages = root / ".venv" / "lib" / version / "site-packages"
+            if packages.is_dir() and str(packages) not in sys.path:
+                site.addsitedir(str(packages))
+            ready = has_parents(root / CANONICAL_DB)
+            path = root / CANONICAL_DB
+            if mounted is not None and not ready:
+                return mounted
+            if ready:
+                from packs.ingestion.primitives.deep_context.shared.common import load_env
+                from packs.ingestion.primitives.deep_context.db.store import StoreError, open_existing_db
+                from .server import make_handler
+
+                load_env()
+                options = {} if args.confirm_threshold is None else {"confirm_threshold": args.confirm_threshold}
+                try:
+                    mounted = make_handler(db=open_existing_db(path), run_jobs=True, **options)
+                except StoreError as error:
+                    raise SystemExit(str(error)) from error
+                mounted_review = True
+            else:
+                mounted = searches_only_handler()
+            return mounted
+
+    class Handler(BaseHTTPRequestHandler):
+        def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _dispatch(self, method: str) -> None:
+            try:
+                handler = mount()
+            except ModuleNotFoundError:
+                self._json({"error": "Powerpacks is still being installed. Run bin/setup-python if installation stopped.",
+                            "retry_command": "bin/setup-python"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            except (ValueError, SystemExit) as error:
+                self._json({"error": str(error), "retry_command": "bin/deep-context ensure-parents"},
+                           HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            # The existing handler owns dispatch and super(); share this request's socket state.
+            request = handler.__new__(handler)
+            request.__dict__ = self.__dict__
+            getattr(request, method)()
+
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/healthz":
+                self._json(identity)
+                return
+            if parsed.path == "/api/install":
+                from packs.powerset.primitives.install.status import InstallStatus
+
+                self._json(InstallStatus(root).read())
+                return
+            if parsed.path in {"/", "/api/status"} and not mounted_review:
+                try:
+                    ready = has_parents(root / CANONICAL_DB)
+                except ValueError as error:
+                    self._json({"error": str(error), "retry_command": "bin/deep-context ensure-parents"},
+                               HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                if not ready:
+                    if parsed.path == "/api/status":
+                        self._json({**identity, "stage": "install"})
+                    else:
+                        destination = "/install" if (root / ".powerpacks/install/manifest.json").is_file() else "/searches"
+                        self.send_response(HTTPStatus.FOUND)
+                        self.send_header("Location", destination)
+                        self.end_headers()
+                    return
+            if app.get(self, parsed):
+                return
+            self._dispatch("do_GET")
+
+        def do_POST(self) -> None:  # noqa: N802
+            self._dispatch("do_POST")
+
+        def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+            if code != HTTPStatus.OK:
+                super().log_request(code, size)
+
+    return Handler
+
+
+def cmd_start(args: argparse.Namespace) -> None:
+    root = Path.cwd().resolve()
+    stage = _stage(args, root)
     url = _url(args.host, args.port, stage, args.run)
-    if live.get("primitive") == "reconcile_review_web":
-        _announce("reused", url, stage=stage)
+    live = _owned_listener(args, root)
+    if live:
+        _announce("reused", url, stage=stage, repo_root=str(root), pid=live["pid"])
         if args.open:
             webbrowser.open(url)
         return
-    # One local server: the review stages, People and the searches when the
-    # deep-context store exists; the searches alone before it does.
-    if has_store:
-        db = open_existing_db(CANONICAL_DB)
-        handler = make_handler(
-            confirm_threshold=args.confirm_threshold,
-            run_jobs=True,
-            db=db,
-        )
-        extra = {}
-    else:
-        handler = searches_only_handler()
-        extra = {"note": "no deep-context store yet; serving the searches alone"}
-    server = ThreadingHTTPServer((args.host, args.port), handler)
-    host, port = server.server_address
-    url = _url(host, port, stage, args.run)
-    _announce("serving", url, **extra)
-    if args.open:
-        webbrowser.open(url)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nshutting down", file=sys.stderr)
+    directory = root / ".powerpacks" / "install"
+    directory.mkdir(parents=True, exist_ok=True)
+    command = [sys.executable, *(["-S"] if sys.flags.no_site else []), "-m", "packs.ingestion.primitives.deep_context.review.cli", "serve",
+               "--host", args.host, "--port", str(args.port)]
+    if args.stage:
+        command.extend(["--stage", args.stage])
+    if args.confirm_threshold is not None:
+        command.extend(["--confirm-threshold", str(args.confirm_threshold)])
+    with (directory / "server.log").open("ab") as log:
+        process = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL,
+                                   stdout=log, stderr=log, start_new_session=True)
+    deadline = time.monotonic() + _START_TIMEOUT_SECONDS
+    while time.monotonic() < deadline and process.poll() is None:
+        live = _health(args.host, args.port)
+        if live and live.get("primitive") == _PRIMITIVE and live.get("repo_root") == str(root):
+            _announce("serving", url, stage=stage, repo_root=str(root), pid=live["pid"])
+            if args.open:
+                webbrowser.open(url)
+            return
+        time.sleep(0.1)
+    if process.poll() is None:
+        process.terminate()
+    raise SystemExit(f"Powerpacks could not start. Read {directory / 'server.log'}, fix the error, then retry.")
+
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    root = Path.cwd().resolve()
+    stage = _stage(args, root)
+    url = _url(args.host, args.port, stage, args.run)
+    live = _owned_listener(args, root)
+    if live:
+        _announce("reused", url, stage=stage, repo_root=str(root), pid=live["pid"])
+        if args.open:
+            webbrowser.open(url)
+        return
+    with ThreadingHTTPServer((args.host, args.port), _persistent_handler(root, args)) as server:
+        host, port = server.server_address
+        url = _url(host, port, stage, args.run)
+        _announce("serving", url, repo_root=str(root), pid=os.getpid())
+        if args.open:
+            webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nshutting down", file=sys.stderr)
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -186,14 +336,15 @@ def cmd_status(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Serve the staged deep-context people review UI.")
     sub = parser.add_subparsers(dest="command")
-    serve = sub.add_parser("serve")
+    for command in ("serve", "start"):
+        serve = sub.add_parser(command)
+        serve.add_argument("--confirm-threshold", type=float)
+        serve.add_argument("--host", default="127.0.0.1")
+        serve.add_argument("--port", type=int, default=8765)
+        serve.add_argument("--stage", choices=("install", "worth", "enrich", "linkedin", "done", "people", "searches"))
+        serve.add_argument("--run", default="", help="with --stage searches: open this saved search")
+        serve.add_argument("--open", action="store_true")
     status = sub.add_parser("status")
-    serve.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "people", "searches"))
-    serve.add_argument("--run", default="", help="with --stage searches: open this saved search")
-    serve.add_argument("--open", action="store_true")
     status.add_argument("--wait", action="store_true")
     status.add_argument("--timeout", type=int, default=900)
     return parser
@@ -204,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "status":
         cmd_status(args)
+    elif args.command == "start":
+        cmd_start(args)
     else:
         cmd_serve(args if args.command == "serve" else parser.parse_args(["serve", *(argv or [])]))
     return 0

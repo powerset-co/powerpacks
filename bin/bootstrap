@@ -14,7 +14,7 @@
 #
 # Safe to run again: every step is skipped once done.
 #
-#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools]
+#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]
 #
 #   --harness   which agent's skills folder to install into; default: every one
 #               found on this Mac (both Claude Code and Codex when none is found)
@@ -38,22 +38,57 @@ HOMEBREW_INSTALL='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/H
 harness="auto"
 powerset=0
 tools="check"
+port=8765
+bootstrap_args=("$@")
+retry_command="bin/bootstrap"
+if [[ $# -gt 0 ]]; then
+  printf -v retry_args ' %q' "$@"
+  retry_command+="$retry_args"
+fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --harness) harness="${2:-}"; shift 2 ;;
     --powerset) powerset=1; shift ;;
     --tools) tools="install"; shift ;;
     --no-tools) tools="skip"; shift ;;
+    --port) port="${2:-}"; shift 2 ;;
     *)
-      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools]" >&2
+      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]" >&2
       exit 2
       ;;
   esac
 done
 
-say() { echo "powerpacks: $*"; }
-needs_you() { echo "NEEDS YOU: $*"; exit 10; }
-failed() { echo "FAILED: $*"; exit 1; }
+log=""
+progress_started=0
+terminal_status=""
+say() { echo "powerpacks: $*"; [[ -z "$log" ]] || echo "powerpacks: $*" >>"$log"; }
+progress() {
+  (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.status write \
+    --root "$root" --step "$1" --status "$2" --message "$3" --pid "$$" \
+    --retry-command "$retry_command") >/dev/null
+}
+finish_progress() {
+  terminal_status="$1"
+  [[ "$progress_started" == 1 ]] || return 0
+  local step
+  step="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["step"])' "$root/.powerpacks/install/manifest.json")"
+  progress "$step" "$1" "$2"
+}
+needs_you() { finish_progress waiting "$*"; echo "NEEDS YOU: $*"; exit 10; }
+failed() { finish_progress failed "$*"; echo "FAILED: $*"; exit 1; }
+on_exit() {
+  local code=$?
+  if [[ "$progress_started" == 1 && -z "$terminal_status" ]]; then
+    finish_progress failed "Installation stopped. Ask the agent to check $log and rerun $retry_command." || true
+    echo "FAILED: Installation stopped. Check $log and run this again."
+    [[ "$code" != 0 ]] || code=1
+  fi
+  exit "$code"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # 1. This must be a local session on the user's own Mac: the skills read mail
 #    and messages from this machine. A cloud session or a Linux sandbox is not it.
@@ -84,7 +119,48 @@ if [[ -z "$root" ]]; then
   "$DEFAULT_ROOT/bin/powerpacks-channel" --checkout "$DEFAULT_ROOT" >/dev/null || failed "downloaded Powerpacks but could not pick a release. Run this again."
   root="$DEFAULT_ROOT"
 fi
+root="$(cd "$root" && pwd)"
+bootstrap_source="${BASH_SOURCE[0]:-}"
+if [[ -n "$bootstrap_source" ]]; then
+  bootstrap_source="$(cd "$(dirname "$bootstrap_source")" && pwd)/$(basename "$bootstrap_source")"
+fi
+# The selected release owns installation, including its available modules.
+if [[ "$bootstrap_source" != "$root/bin/bootstrap" ]]; then
+  exec "$root/bin/bootstrap" ${bootstrap_args[@]+"${bootstrap_args[@]}"}
+fi
 say "repo: $root"
+
+# The page needs only Python itself; project packages install after it opens.
+export POWERPACKS_INSTALL_PID="$$"
+if ! POWERPACKS_INSTALL_PYTHON="$(command -v python3)"; then
+  failed "Python is not available. Finish installing the macOS command line tools and run this again."
+fi
+export POWERPACKS_INSTALL_PYTHON
+export POWERPACKS_INSTALL_RETRY_COMMAND="$retry_command"
+mkdir -p "$root/.powerpacks/install"
+log="$root/.powerpacks/install/install.log"
+say "starting installation"
+progress runtime running "Preparing your Mac"
+progress_started=1
+if ! UV_BIN="$("$root/bin/ensure-uv" 2>>"$log")"; then
+  tail -n 20 "$log" >&2
+  failed "Python could not be prepared. Check $log and run this again."
+fi
+python_version="${POWERPACKS_PYTHON_VERSION:-3.12}"
+if ! "$UV_BIN" python install "$python_version" >>"$log" 2>&1; then
+  tail -n 20 "$log" >&2
+  failed "Python could not be installed. Check $log and run this again."
+fi
+if ! runtime_python="$("$UV_BIN" python find "$python_version" 2>>"$log")"; then
+  failed "Python could not be located. Check $log and run this again."
+fi
+POWERPACKS_INSTALL_PYTHON="$runtime_python"
+if ! page="$(cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.ingestion.primitives.deep_context.review.cli start --stage install --port "$port" 2>>"$log")"; then
+  tail -n 20 "$log" >&2
+  failed "The Powerpacks page could not start. Check $log and run this again."
+fi
+url="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["url"])' <<<"$page")"
+echo "STATUS PAGE: $url"
 
 # 4. Which agents live on this Mac. None found (a brand-new machine) installs
 #    for both, so whichever the user opens next has the skills.
@@ -99,31 +175,36 @@ case "$harness" in
   *) echo "usage: --harness codex|claude-code|pi|all" >&2; exit 2 ;;
 esac
 
-log="$(mktemp -t powerpacks-bootstrap)"
+if ! "$root/bin/setup-python" >>"$log" 2>&1; then
+  tail -n 20 "$log" >&2
+  failed "Powerpacks could not finish installing what it needs. Check $log and run this again."
+fi
+progress skills running "Adding Powerpacks skills"
 for h in "${harnesses[@]}"; do
   say "installing skills for $h"
-  if ! "$root/install.sh" "$h" >"$log" 2>&1; then
+  if ! POWERPACKS_SKIP_UV_SYNC=1 "$root/install.sh" "$h" >>"$log" 2>&1; then
     tail -n 20 "$log" >&2
-    failed "installing the skills for $h did not finish. The last lines above say why; fix that and run this again."
+    failed "installing the skills for $h did not finish. Check $log; fix the error and run this again."
   fi
 done
-rm -f "$log"
 
 # 5. A Powerset user gets the hosted config; an existing .env is theirs and is
 #    never touched.
 if [[ "$powerset" == 1 && ! -f "$root/.env" ]]; then
-  cp "$root/packs/powerset/templates/env.powerset.example" "$root/.env"
-  chmod 600 "$root/.env"
+  cp "$root/packs/powerset/templates/env.powerset.example" "$root/.env" 2>>"$log"
+  chmod 600 "$root/.env" 2>>"$log"
   say "created $root/.env from the Powerset template"
 fi
 
 # 6. Gmail import needs four tools. Installing them is the one thing the user
 #    should hear about before it happens, so a plain check ends in one question.
 if [[ "$tools" != skip ]]; then
+  progress tools running "Checking Gmail tools"
   missing=()
   for t in msgvault gcloud node npm; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
   [[ -d "$CHROME_APP" ]] || missing+=(chrome)
   if [[ ${#missing[@]} -gt 0 && "$tools" == check ]]; then
+    finish_progress waiting "Powerpacks skills are installed. Answer in chat whether to install the optional free Gmail tools."
     echo "ASK: Gmail import needs these free tools, which are not installed yet: ${missing[*]}. Ask the user: \"May I install them with Homebrew? It's free and takes a few minutes.\" Yes: run this again with --tools. No: run this again with --no-tools."
     exit 0
   fi
@@ -132,13 +213,22 @@ if [[ "$tools" != skip ]]; then
     for t in "${missing[@]}"; do
       say "installing $t"
       case "$t" in
-        msgvault) curl -fsSL https://msgvault.io/install.sh | bash >/dev/null 2>&1 || needs_you "msgvault did not install. Open Terminal and paste: curl -fsSL https://msgvault.io/install.sh | bash   Then tell me and I'll continue." ;;
-        gcloud) brew install --cask gcloud-cli >/dev/null 2>&1 || needs_you "gcloud did not install. Open Terminal and paste: brew install --cask gcloud-cli   (it may ask for your password). Then tell me and I'll continue." ;;
-        node|npm) command -v node >/dev/null 2>&1 || brew install node >/dev/null 2>&1 || needs_you "node did not install. Open Terminal and paste: brew install node   Then tell me and I'll continue." ;;
-        chrome) brew install --cask google-chrome >/dev/null 2>&1 || needs_you "Google Chrome did not install. Open Terminal and paste: brew install --cask google-chrome   (it may ask for your password). Then tell me and I'll continue." ;;
+        msgvault) message="Preparing Gmail import" ;;
+        gcloud) message="Preparing Gmail sign-in" ;;
+        node|npm) message="Installing Gmail support" ;;
+        chrome) message="Installing Google Chrome" ;;
+      esac
+      progress tools running "$message"
+      case "$t" in
+        msgvault) curl -fsSL https://msgvault.io/install.sh | bash >>"$log" 2>&1 || needs_you "msgvault did not install. Open Terminal and paste: curl -fsSL https://msgvault.io/install.sh | bash   Then tell me and I'll continue." ;;
+        gcloud) brew install --cask gcloud-cli >>"$log" 2>&1 || needs_you "gcloud did not install. Open Terminal and paste: brew install --cask gcloud-cli   (it may ask for your password). Then tell me and I'll continue." ;;
+        node|npm) command -v node >/dev/null 2>&1 || brew install node >>"$log" 2>&1 || needs_you "node did not install. Open Terminal and paste: brew install node   Then tell me and I'll continue." ;;
+        chrome) brew install --cask google-chrome >>"$log" 2>&1 || needs_you "Google Chrome did not install. Open Terminal and paste: brew install --cask google-chrome   (it may ask for your password). Then tell me and I'll continue." ;;
       esac
     done
   fi
 fi
 
+progress ready completed "Powerpacks is installed. Continue setup in chat."
+terminal_status=completed
 echo "DONE: Powerpacks is installed for ${harnesses[*]} from $root. Continue with the user's ask: read the matching skill file in this agent's skills folder (for example setup/SKILL.md) and follow it."

@@ -3,6 +3,7 @@ import "../styles/enrich.css"
 import type { ReviewStatus } from "@/types/review"
 
 import { EmptyPanel } from "../shared/EmptyPanel"
+import { EnrichMark } from "../shared/EnrichMark"
 import {
   doingNow,
   ENRICHED,
@@ -28,7 +29,6 @@ export interface EnrichStageProps {
 // time left keeps its line while empty, so nothing jumps when it arrives.
 export function EnrichStage({ status, done }: EnrichStageProps) {
   const part = done ? PARTS : status ? partOf(status.step) : -1
-  const ring = { cx: 56, cy: 56, r: 52, pathLength: PARTS }
   const doing = status ? doingNow(status.step, status.pending) : STARTING
   const left = status ? timeLeft(status.minutes_left) : ""
 
@@ -36,19 +36,7 @@ export function EnrichStage({ status, done }: EnrichStageProps) {
     <EmptyPanel
       title={done ? READY_TITLE : TITLE}
       className="enrich-state"
-      above={
-        <span className="enrich-mark" aria-hidden="true">
-          <svg className="enrich-ring" viewBox="0 0 112 112">
-            <circle {...ring} />
-            {part > 0 ? <circle {...ring} className="done" strokeDasharray={`${part} ${PARTS}`} /> : null}
-            {part >= 0 && !done ? (
-              <circle {...ring} className="now" strokeDasharray={`1 ${PARTS}`} strokeDashoffset={-part} />
-            ) : null}
-          </svg>
-          {done ? null : <span className="enrich-orbit" />}
-          <span className="enrich-shape" />
-        </span>
-      }
+      above={<EnrichMark part={part} parts={PARTS} running={!done} />}
     >
       <p className="enrich-doing">
         {done ? ENRICHED : doing}

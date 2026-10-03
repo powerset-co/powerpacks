@@ -398,7 +398,8 @@ bin/deep-context review
 Opening review serves current SQLite choices without resetting human decisions
 or calling providers. Worth review remains optional through `review worth`;
 Maybe does not stop enrichment. Open the UI once and wait for the wrapper's
-`review UI:` line before opening the page.
+JSON `url`, then open it in the existing browser pane. The same local server
+and tab stay open from installation through review; do not open another window.
 
 Use the read-only handoff command while the user reviews:
 
@@ -412,6 +413,15 @@ SQLite decisions; on timeout, run the wait command again. A bare `review-status`
 prints the same contract once. Readiness comes from SQLite, not chat or browser
 state. The review API continues to serve worth/identity decisions and enrichment
 progress.
+
+If the server stops, rerun `bin/deep-context review` with the same `--port`
+and reopen its returned URL in the existing pane. After fixing server code,
+use `--force-restart` once work is idle. Opening it resumes no paid
+work. Check `/api/retargets` for saved pending research; disclose the remaining
+cost and reuse existing authorization, or obtain approval when needed. Then
+POST `/api/review/resume-retargets` on that server to resume its saved requests.
+For interrupted enrichment, use `enrich --dry-run` and the usual cost rule
+before retrying `enrich`. Do not replace SQLite or clear completed artifacts.
 
 ### 6. Identity preparation and settlement
 
@@ -474,14 +484,13 @@ Continue through the wait loop. Continue to realization only when
 
 ### 8. Apply and realize
 
-Stop the review UI first so realization is not competing with an in-process
-enrichment job. SQLite transactions serialize the writes without auxiliary
-runtime state.
+Keep the review page open. Only realize after `review-status --wait` returns
+`next_action == "realize"`; pending enrichment and re-research hold that handoff.
+SQLite transactions serialize writes while the page reads the same store.
 
 Realizing reads only the SQLite store and needs no provider approval:
 
 ```bash
-bin/deep-context stop
 bin/deep-context realize
 ```
 

@@ -94,8 +94,8 @@ from packs.ingestion.primitives.enrich.profile_cache import (
     read_usable_cached_profile,
 )
 from packs.ingestion.primitives.deep_context.manifests.seed_manifest import SeedManifest
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     DEEP_RESEARCH_DIR,
     FACTS_DIR,
     RAW_DIR,

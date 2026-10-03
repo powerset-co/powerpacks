@@ -17,8 +17,9 @@ Tell your agent (Codex, Claude Code, ...) one sentence:
 > Download and install the Powerpacks skill from
 > https://powerset.dev/powerpacks
 
-Then just say what you want — the skill clones this repo, installs everything
-for your harness, and keeps going in the same session:
+The skill installs Powerpacks and opens live progress beside the conversation
+in desktop agents. Installation runs locally; account logins, imports and paid
+work come later. Then say what you want in the same session:
 
 > Use Powerpacks to set up my local network search using my Powerset account.
 

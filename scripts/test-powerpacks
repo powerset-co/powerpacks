@@ -20,6 +20,10 @@ export PYTHONPATH="$ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
 
 # Baseline suites, then the SQLite Deep Context and share rewrite suites.
 exec "$UV_BIN" run --project . python -m unittest \
+  tests.test_bootstrap \
+  tests.test_install_status \
+  tests.test_review_lifecycle \
+  tests.test_review_env \
   tests.test_candidate_judge_evidence \
   tests.test_candidate_judges \
   tests.test_capability_contract \

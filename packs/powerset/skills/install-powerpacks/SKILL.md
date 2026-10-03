@@ -6,7 +6,7 @@ allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/pow
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.0.5
+  version: 1.1.0
   summary: One-sentence bootstrap for the full Powerpacks skill suite
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -21,6 +21,8 @@ metadata:
 <!--
 Created: 2026-07-08
 Changelog:
+- 2026-10-02: The download sentence runs the full install and opens live progress
+  in the browser pane; the same local server serves setup and review afterwards.
 - 2026-07-08: Initial ShareOne-style one-URL bootstrap skill.
 - 2026-07-10: Define the Powerset-environment route and provisioning API URL.
 - 2026-07-12: Hosted-config init is conditional on the user choosing Powerset;
@@ -48,7 +50,8 @@ One sentence installs everything:
 > Download and install the Powerpacks skill from
 > https://powerset.dev/powerpacks
 
-Then a Powerset user says:
+The install opens a live progress page beside the conversation when the host
+supports a browser pane. After installation, a Powerset user can say:
 
 > Use Powerpacks to set up my local network search using my Powerset account.
 
@@ -83,7 +86,7 @@ and tell the user which tool to use instead, in a few lines:
   (https://code.claude.com/docs/en/setup), then `cd ~` and run `claude`. Then
   paste the same sentence."
 
-## Step 0 — install this file (the "download and install" sentence)
+## Step 0 — save this skill and start the install
 
 Save this SKILL.md into the current harness's skills directory, creating the folder:
 
@@ -91,49 +94,36 @@ Save this SKILL.md into the current harness's skills directory, creating the fol
 - Codex: `~/.agents/skills/install-powerpacks/SKILL.md`
 - Pi / other: the harness's personal skills directory, same layout.
 
-That is the whole "install the skill" step. Do NOT clone anything yet — the full
-install runs the first time the user asks to actually use Powerpacks.
+Continue directly to Step 1 in this session. The download-and-install sentence
+requests the full local install, including the live progress page. It does not
+request account logins, contact imports, paid work, or uploads.
 
-## Step 1 — when the user asks to USE powerpacks
+## Step 1 — install Powerpacks and open progress
 
 Trigger phrases (any harness):
 
+- "Download and install the Powerpacks skill from https://powerset.dev/powerpacks"
 - "Use powerpacks to set up my local network search"
 - "Use powerpacks to set up my local network search using my Powerset account"
 - "Set up powerpacks" / "install powerpacks fully"
 - "Import my LinkedIn/Gmail/iMessage network with powerpacks"
 - "Search my network for ..." (when Powerpacks skills are not installed yet)
 
-**Permissions.** This step runs one local command, a few times at most, and
-no paid APIs (Homebrew installs only after the user says yes). Each run prompts
-unless the harness is set to allow it. Before the first command, tell the
-user once: "For the best experience enable bypass permissions", with the steps
-for their harness, then proceed. The agent cannot read or change the mode;
-only the user can.
-
-- Claude Code CLI: restart with `claude --dangerously-skip-permissions` (same
-  as `--permission-mode bypassPermissions`); a session started without it
-  cannot switch into bypass with Shift+Tab. Or allow the commands in
-  `/permissions`.
-- Claude Code desktop app: Settings > Claude Code > "Allow bypass permissions
-  mode", then pick Bypass permissions in the mode selector next to the send
-  button (Cmd+Shift+M).
-- Codex CLI: restart with `codex --yolo` (or `-a never -s danger-full-access`),
-  or pick a profile in `/permissions`.
-- Codex app: the permissions control beneath the composer > Full access.
-
-Rule: if any Step 1 command is denied, or the user has had to approve more
-than one prompt, stop and repeat the enable-bypass steps for their harness
-before continuing.
+Use the session's existing permissions. If a command is denied, explain which
+command was denied and stop; do not bypass the denial.
 
 Do the following, in order:
 
-1. **Run one command.** Add `--powerset` only when the ask named Powerset
+1. **Run one command asynchronously.** Let the shell tool yield early so you
+   can open the page while installation continues (Codex: short
+   `yield_time_ms`; Claude Code: background Bash). Add `--powerset` only when the ask named Powerset
    ("using my Powerset account"):
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
+   curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash
    ```
+
+   For a Powerset ask, append `-s -- --powerset` to `bash`.
 
    It downloads Powerpacks to `~/powerpacks` (or reuses an existing checkout),
    pins it to the newest release, installs the skills for every agent found on
@@ -141,10 +131,28 @@ Do the following, in order:
    `cp packs/powerset/templates/env.powerset.example .env` (never touching an
    existing `.env`). Local-only: no paid APIs, no uploads, no logins.
 
-2. **Read its LAST line and do exactly what it says.** Nothing else in the
-   output needs a decision.
+2. **Open the page while the command runs.** Watch the output for
+   `STATUS PAGE: <url>`. Use that URL, not an assumed port. In Codex desktop,
+   call `open_in_codex` with a browser target and `placement: "right"`;
+   in another host use its browser/preview pane. In a CLI with no pane,
+   open the URL in the default browser. Reuse the same tab on retries and for
+   subsequent setup or review. The server stays up when the command finishes.
 
-   - `DONE: ...` — installed. Go to step 3.
+   The page reads `.powerpacks/install/manifest.json` written by the installer.
+   Never write progress yourself, invent a percentage, or claim a step completed
+   from an animation. A queued panel-open result does not prove it rendered.
+   If the page fails, check its URL, `/healthz`, `/api/install`, and the saved
+   `.powerpacks/install/server.log`. Restart the same server with the repo's
+   pinned Python: `python -m packs.ingestion.primitives.deep_context.review.cli
+   start --stage install --port <same port>` from the repo, then reopen the returned URL.
+   For `Tab content couldn't render`, inspect the host app logs; distinguish a
+   host panel failure from an unreachable server. Do not repeatedly open duplicates.
+
+3. **Read its LAST line and act on it.** Continue watching the asynchronous
+   command until it exits; opening the page is not installation completion.
+
+   - `DONE: ...` — installed. Continue below. For an install-only ask, leave
+     the installed page open and ask what the user wants to connect in chat.
    - `NEEDS YOU: ...` — a step only the human can do (a click, a password).
      Show the user that line word for word, wait for them to say it is done,
      then run the same command again.
@@ -153,19 +161,22 @@ Do the following, in order:
      `--tools` added. No: run it again with `--no-tools` added.
    - `STOP: ...` — wrong place to run this. Show the user that line and the
      matching tool from "Where this can run". Do not continue.
-   - `FAILED: ...` — show the user that line and the lines above it. Do not
-     continue.
+   - `FAILED: ...` — inspect the failure and the saved install/server logs,
+     fix a free local setup problem, then rerun the same command. Do not move
+     into imports or paid work. If the same failure repeats after a repair,
+     report the exact remaining problem and the next action. Passwords, visible
+     clicks and denied permissions still require the user.
 
    Run the command as many times as those lines ask; it is safe to repeat and
    skips every step already done.
 
-3. **Continue in THIS session — no restart.** The harness's skill registry is
+4. **Continue in THIS session — no restart.** The harness's skill registry is
    snapshotted at session start, but you do not need it: the skills are now plain
    files on disk. Read the one that matches the user's ask directly (e.g.
    `~/.claude/skills/setup/SKILL.md`) and follow it as if it had been routed.
    New sessions pick up the full skill list automatically.
 
-4. **Route the ask:**
+5. **Route the ask:**
    - "set up my local network search" with or without "using my Powerset
      account" -> follow `$setup` (LinkedIn export -> merge -> search index).
      Its Steps 1-3 authenticate the Powerset user and pull that user's
@@ -176,10 +187,16 @@ Do the following, in order:
    - Gmail -> `import-gmail`; iMessage/WhatsApp -> `import-messages`;
      processing -> `deep-context`; then searches -> `search`.
 
+   Keep progress and decisions beside the chat. Open `/accounts` on the same
+   server for connections, and `/` for Deep Context review when its store is
+   ready. Use the existing skills' commands and their real status; do not start
+   a second server or ask the user to copy commands. Only native login or macOS
+   permission actions need another window.
+
 ## Notes
 
 - The repo is public; no credentials are needed to install. Powerset login,
-  Google OAuth, Full Disk Access, and any spend are asked for by the specific
+   Google OAuth, Full Disk Access, and any spend are asked for by the specific
   skills that need them, never during install.
 - To refresh later: `$update-powerpacks` (installed with everything else).
 - Keep these URLs distinct:

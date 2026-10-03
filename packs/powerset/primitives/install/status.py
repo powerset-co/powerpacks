@@ -1,0 +1,104 @@
+"""Installer-owned progress, read by the local status page before dependencies exist."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from dataclasses import asdict, dataclass
+from enum import Enum
+from pathlib import Path
+
+from packs.ingestion.primitives.common.jsonio import emit
+from packs.ingestion.primitives.common.manifests import write_stage_manifest
+
+
+class InstallState(str, Enum):
+    RUNNING = "running"
+    WAITING = "waiting"
+    FAILED = "failed"
+    COMPLETED = "completed"
+
+
+class InstallStep(str, Enum):
+    RUNTIME = "runtime"
+    DEPENDENCIES = "dependencies"
+    SKILLS = "skills"
+    TOOLS = "tools"
+    READY = "ready"
+
+
+@dataclass(frozen=True)
+class _InstallManifest:
+    step: InstallStep
+    status: InstallState
+    message: str
+    installer_pid: int
+    log_path: str
+    retry_command: str
+    primitive: str = "powerpacks_install"
+
+    def to_payload(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_record(cls, record: dict) -> "_InstallManifest":
+        return cls(step=InstallStep(record["step"]), status=InstallState(record["status"]),
+                   message=record["message"], installer_pid=int(record["installer_pid"]),
+                   log_path=record["log_path"], retry_command=record["retry_command"])
+
+
+class InstallStatus:
+    def __init__(self, root: Path) -> None:
+        self.directory = Path(root).resolve() / ".powerpacks/install"
+        self.manifest_path = self.directory / "manifest.json"
+        self.log_path = self.directory / "install.log"
+
+    def write(self, *, step: InstallStep, status: InstallState, message: str, pid: int,
+              retry_command: str = "bin/bootstrap") -> dict:
+        manifest = _InstallManifest(step=step, status=status, message=message,
+                                    installer_pid=pid, log_path=str(self.log_path),
+                                    retry_command=retry_command)
+        temporary = self.directory / "manifest.tmp"
+        payload = write_stage_manifest(temporary, manifest)
+        temporary.replace(self.manifest_path)
+        return payload
+
+    def read(self) -> dict:
+        if not self.manifest_path.exists():
+            return _InstallManifest(step=InstallStep.RUNTIME, status=InstallState.WAITING,
+                                    message="Waiting for installation to start. Tell me in chat to install Powerpacks.",
+                                    installer_pid=0, log_path=str(self.log_path),
+                                    retry_command="bin/bootstrap").to_payload()
+        try:
+            record = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            manifest = _InstallManifest.from_record(record)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return _InstallManifest(step=InstallStep.RUNTIME, status=InstallState.FAILED,
+                                    message="Installation status could not be read. Ask the agent to check the installation log and rerun bin/bootstrap.",
+                                    installer_pid=0, log_path=str(self.log_path),
+                                    retry_command="bin/bootstrap").to_payload()
+        if manifest.status is InstallState.RUNNING:
+            try:
+                os.kill(manifest.installer_pid, 0)
+            except ProcessLookupError:
+                record["status"] = InstallState.FAILED.value
+                record["message"] = f"Installation was interrupted. Ask the agent to rerun {manifest.retry_command}."
+        return record
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=["write"])
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--step", type=InstallStep, choices=list(InstallStep), required=True)
+    parser.add_argument("--status", type=InstallState, choices=list(InstallState), required=True)
+    parser.add_argument("--message", required=True)
+    parser.add_argument("--pid", type=int, required=True)
+    parser.add_argument("--retry-command", default="bin/bootstrap")
+    args = parser.parse_args()
+    emit(InstallStatus(args.root).write(step=args.step, status=args.status, message=args.message,
+                                      pid=args.pid, retry_command=args.retry_command))
+
+
+if __name__ == "__main__":
+    main()

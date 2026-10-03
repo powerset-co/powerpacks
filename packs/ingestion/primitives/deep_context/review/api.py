@@ -16,6 +16,7 @@ GET  /api/review/linkedin-card?exclude=&index=&debug=     the next LinkedIn card
 POST /api/review/decide              form pub, decision, new_url, parent_slug, note: one
                                      LinkedIn decision; answers with the next card
 POST /api/review/approve-enrichment  approve the estimate and start the pipeline
+POST /api/review/resume-retargets     explicitly resume queued PAID guided research
 POST /worth                          form pub, worth=yes|no|restore, parent_slug, note
 POST /complete                       form stage=worth|enrich|linkedin: wakes the agent
 POST /retarget                       form pub, parent_slug, guidance: PAID re-research
@@ -29,6 +30,7 @@ are form-encoded, a POST from another origin is refused, and an error is
 `{"error": text}`. What each route answers with is a dataclass in payloads.py.
 
 Changelog:
+  2026-10-02: queued guided research resumes only through an explicit POST.
   2026-10-02: the finished LinkedIn state no longer asks the page to press Finish
     (`auto_continue`): /complete changes nothing in the store, so the page pressed it in a
     loop while a re-research was out.
@@ -102,6 +104,7 @@ from packs.ingestion.primitives.deep_context.review.payloads import (
     Payload,
     QueuePosition,
     RetargetResult,
+    ResumeResult,
     ReviewCandidate,
     ReviewPage,
     ReviewPerson,
@@ -187,6 +190,7 @@ class ReviewApi:
         self._post_routes: dict[str, Callable[[Params], Payload]] = {
             f"{API_PREFIX}decide": self._decide,
             f"{API_PREFIX}approve-enrichment": self._approve_enrichment,
+            f"{API_PREFIX}resume-retargets": self._resume_retargets,
             "/worth": self._worth,
             "/complete": self._complete,
             "/retarget": self._retarget,
@@ -479,6 +483,13 @@ class ReviewApi:
         self.notify()
         self.wake_agent()
         return CompleteResult(ok=True, manifest=manifest, progress=state.progress)
+
+    def _resume_retargets(self, _form: Params) -> ResumeResult:
+        if self.guided_retargets is None:
+            raise _Refusal(HTTPStatus.SERVICE_UNAVAILABLE, "in-app jobs are disabled on this server")
+        resumed = self.guided_retargets.resume()
+        self.notify()
+        return ResumeResult(ok=True, resumed=resumed)
 
     def _retarget(self, form: Params) -> RetargetResult:
         pub = _value(form, "pub")

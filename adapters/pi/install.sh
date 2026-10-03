@@ -27,11 +27,11 @@ RETIRED_SKILLS=(
   linkedin-sync-mcp linkedin-sync-csv
 )
 
+"$REPO_ROOT/bin/setup-python"
 mkdir -p "$SKILLS_DIR"
 for skill in "${MANAGED_SKILLS[@]}" "${RETIRED_SKILLS[@]}"; do
   rm -rf "$SKILLS_DIR/$skill"
 done
-"$REPO_ROOT/bin/setup-python"
 
 copy_powerpacks_bundle() {
   local dest="$1"

@@ -1,0 +1,71 @@
+.install-page .install-main {
+  width: min(100% - 40px, 480px);
+  margin: 0 auto;
+  padding: 40px 0 32px;
+}
+.install-page .empty-state {
+  min-height: 340px;
+  border: 0;
+  background: transparent;
+  padding: 24px 0;
+}
+.install-page .empty-state h2 {
+  font-size: 20px;
+}
+.install-page .empty-state .install-message {
+  color: var(--foreground);
+  font-size: 14px;
+}
+.install-page .empty-state .install-note {
+  font-size: 13px;
+}
+.install-page .install-steps {
+  display: grid;
+  gap: 16px;
+  padding: 20px 0;
+  margin: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--muted);
+}
+.install-page .install-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.install-page .install-steps li[aria-current="step"] {
+  color: var(--foreground);
+}
+.install-page .install-steps li[data-done="true"] span {
+  color: var(--ok);
+}
+.install-page .install-steps span {
+  width: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.install-page .install-details {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.install-page .install-details summary {
+  cursor: pointer;
+}
+.install-page .install-details p {
+  margin: 12px 0 0;
+}
+.install-page[data-status="failed"] .enrich-shape {
+  background: var(--bad);
+  box-shadow: none;
+}
+.install-page[data-status="waiting"] .enrich-shape {
+  background: var(--warn);
+  box-shadow: none;
+}
+.install-page[data-status="disconnected"] .enrich-shape {
+  background: var(--secondary);
+  box-shadow: none;
+}

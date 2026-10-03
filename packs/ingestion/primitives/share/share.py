@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from packs.ingestion.primitives.common.gates import exit_code_for_status
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, emit
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.shared.common import emit
 from packs.ingestion.primitives.share.share_list import ShareList
 
 

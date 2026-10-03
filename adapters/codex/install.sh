@@ -28,12 +28,12 @@ RETIRED_SKILLS=(
   linkedin-sync-mcp linkedin-sync-csv
 )
 
+"$REPO_ROOT/bin/setup-python"
 mkdir -p "$SKILLS_DIR"
 for skill in "${MANAGED_SKILLS[@]}" "${RETIRED_SKILLS[@]}"; do
   rm -rf "$SKILLS_DIR/$skill" "$LEGACY_SKILLS_DIR/$skill"
 done
 rm -f "$LEGACY_SKILLS_DIR/.powerpacks-install.json"
-"$REPO_ROOT/bin/setup-python"
 
 install_powerpacks_bundle() {
   local tmp="$BUNDLE_DIR.tmp"
