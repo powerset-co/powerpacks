@@ -300,6 +300,7 @@ def mapped_identity_tasks(db: Db) -> list[tuple[LinkSnapshotRow, IdentityTask, t
         profile = linkedin_view(source, profiles.get(row.row_key))
         if result and origin == IdentityOrigin.RESEARCH:
             profile = judge.prefer_cached_profile(result.identity_profile(), profile)
+        profile = replace(profile, linkedin_url=normalize_linkedin_url(profile.linkedin_url))
         evidence = evidence_by_parent[row.parent_id]
         task = judge.research_proposal_task(evidence, profile) if origin == IdentityOrigin.RESEARCH else judge.IdentityTask(evidence, profile, origin)
         fingerprint = jev_judge.judgment_fingerprint(task, known_urls.get(row.parent_id, ()), reference_date)
