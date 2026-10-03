@@ -29,6 +29,7 @@ are form-encoded, a POST from another origin is refused, and an error is
 `{"error": text}`. What each route answers with is a dataclass in payloads.py.
 
 Changelog:
+  2026-10-03: an explicit LinkedIn screen reads review counts without planning synthesis.
   2026-10-02: the finished LinkedIn state no longer asks the page to press Finish
     (`auto_continue`): /complete changes nothing in the store, so the page pressed it in a
     loop while a re-research was out.
@@ -66,6 +67,7 @@ from packs.ingestion.primitives.deep_context.db.identity_queries import membersh
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
     linkedin_candidate_shown,
+    linkedin_progress,
     linkedin_queue_parent,
     resolve_identity_key,
 )
@@ -230,6 +232,25 @@ class ReviewApi:
         return True
 
     def _page(self, params: Params) -> ReviewPage:
+        if _phase_view(params) == "linkedin":
+            linkedin = linkedin_progress(self.db)
+            return ReviewPage(
+                view="linkedin",
+                tab="",
+                title=TITLES["linkedin"],
+                progress=PageProgress(
+                    **asdict(self._decision_progress(linkedin.pending)),
+                    linkedin_done=linkedin.done,
+                    rejected=0,
+                    synthesize_pending=0,
+                ),
+                # LinkedIn reads its own cards; no enrichment panel or status watcher.
+                enrichment=EnrichmentPanel("preparing"),
+                state_token="",
+                needs_synthesis=False,
+                external_updates=False,
+            )
+
         state = self.adapter.snapshot()
         progress = state.progress
         enrichment = self.adapter.enrichment(state)
