@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.13.0...powerpacks-v3.14.0) (2026-10-03)
+
+
+### Features
+
+* guide Powerpacks setup and imports on one live page ([#674](https://github.com/powerset-co/powerpacks/issues/674)) ([600ed3d](https://github.com/powerset-co/powerpacks/commit/600ed3d1d3f17e7dd0dbe1e4f5a6c5cd0e42bd1b))
+
 ## [3.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.12.0...powerpacks-v3.13.0) (2026-10-02)
 
 
