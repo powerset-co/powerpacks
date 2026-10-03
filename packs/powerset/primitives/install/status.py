@@ -62,6 +62,7 @@ STEP_LABELS = {
     "validate": "Check your search", "ready": "Ready",
 }
 DEFAULT_PLAN = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
+PROCESSING_STEPS = (InstallStep.DEEP_CONTEXT, InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY)
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,8 @@ class InstallStatus:
         if previous_step != step and previous.get("status") == InstallState.RUNNING:
             steps[previous_step] = {"status": InstallState.COMPLETED.value,
                                     "message": previous["message"]}
+        if step is InstallStep.SOURCES:
+            steps = {key: value for key, value in steps.items() if key not in PROCESSING_STEPS}
         steps[step.value] = {"status": status.value, "message": message}
         manifest = _InstallManifest(step=step, status=status, message=message,
                                     installer_pid=pid, log_path=str(self.log_path),

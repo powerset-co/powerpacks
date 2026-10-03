@@ -81,6 +81,19 @@ class SourceOnboardingTests(unittest.TestCase):
         self.tools.assert_not_called()
         self.assert_preserved()
 
+    def test_new_source_setup_clears_previous_processing_completion(self):
+        status = InstallStatus(self.root)
+        for step in (InstallStep.DEEP_CONTEXT, InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY):
+            status.write(step=step, status=InstallState.COMPLETED, message='Done', pid=os.getpid(),
+                         plan=['skills', 'sources', 'deep_context', 'index', 'validate', 'ready'])
+        result = SourceOnboarding(self.root, sources=('imessage',)).run()
+        self.assertEqual(result['status'], 'waiting')
+        self.assertEqual(result['step'], 'imessage_access')
+        for step in ('deep_context', 'index', 'validate', 'ready'):
+            self.assertNotIn(step, result['steps'])
+        self.assertEqual(result['plan'][-4:], ['deep_context', 'index', 'validate', 'ready'])
+        self.assert_preserved()
+
     def test_external_reinstall_keeps_live_work_and_qr_wait_untouched(self):
         process = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
         try:

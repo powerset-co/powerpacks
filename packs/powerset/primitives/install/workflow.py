@@ -23,7 +23,7 @@ from packs.ingestion.primitives.imports import common as import_common
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
 from packs.ingestion.primitives.setup.automations import accounts
-from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
+from packs.powerset.primitives.install.status import PROCESSING_STEPS, InstallState, InstallStatus, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
 
 
@@ -64,13 +64,13 @@ class SourceOnboarding:
         self.status = InstallStatus(self.root)
         self.step = InstallStep.SOURCES
         previous = self.status.read()
-        history = [step for step in previous.get("plan", []) if step != InstallStep.READY.value
+        history = [step for step in previous.get("plan", []) if step not in PROCESSING_STEPS
                    and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
         next_steps = ()
         if self.sources == (Source.SKIP,):
             next_steps = (InstallStep.READY,)
         elif self.sources:
-            next_steps = (InstallStep.DEEP_CONTEXT, InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY)
+            next_steps = PROCESSING_STEPS
         self.plan = list(dict.fromkeys([
             *history, InstallStep.SOURCES.value,
             *(step.value for source in self.sources for step in _SOURCE_STEPS[source]),
