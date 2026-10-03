@@ -16,8 +16,8 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     PROFILE_CACHE_TEMPLATE,
     emit,
     load_env,
-    normalize_phone,
 )
+from packs.ingestion.primitives.discover.messages.wacli.util import canonicalize_phone as normalize_phone
 from packs.ingestion.primitives.deep_context.db.models import (
     OwnerContextRow,
     OwnerEducation,

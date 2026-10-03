@@ -23,7 +23,7 @@ abbreviated)::
 
     _grokked 40 of 40 messages across gmail, imessage; last on 2026-07-01._
 
-    ## Identifiers
+    ## Contact
 
     - jordan@example.com
     - +15550100
@@ -34,10 +34,6 @@ import json
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.shared.common import (
-    contact_identifiers,
-    phone_digits,
-)
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.shared.template_engine import template_environment
 from packs.ingestion.primitives.deep_context.synthesis.facts import headline
@@ -70,7 +66,7 @@ def render_dossier(
     meta: CollectionBundle,
     merged: SynthesizedFacts,
     depth: DossierDepth | None = None,
-    *, slug: str, owner_emails: tuple[str, ...] = (), owner_phones: tuple[str, ...] = (),
+    *, slug: str,
 ) -> str:
     name = merged.canonical_name or meta.full_name or "(unknown)"
     messages = meta.messages
@@ -104,26 +100,6 @@ def render_dossier(
         )
         relationship_note = note
 
-    contact_values = [*meta.emails, *meta.phones]
-    known = {value.lower() for value in contact_values}
-    known |= {phone_digits(value) for value in contact_values if phone_digits(value)}
-    # merged.identifiers is free text the LLM proposed; contact_identifiers()
-    # is the sanitizer — it drops anything not shaped like an email/phone and
-    # caps phones at two. It also uses `known` as a *validity* signal (a known
-    # email is let through even without a name-token match), which is why we
-    # still need the exact-match filter below: without it, a value already
-    # shown under the structural contact_values header would be repeated here.
-    identifiers = [
-        identifier
-        for identifier in contact_identifiers(
-            merged.identifiers,
-            name=merged.canonical_name or meta.full_name,
-            known=contact_values,
-            owner_emails=owner_emails,
-            owner_phones=owner_phones,
-        )
-        if identifier.lower() not in known and phone_digits(identifier) not in known
-    ]
     worth_line = ""
     if worth:
         reason = f" — {worth.reason}" if worth.reason else ""
@@ -145,7 +121,7 @@ def render_dossier(
         relationship=relationship,
         relationship_note=relationship_note,
         fact_sections=render_fact_sections(merged),
-        identifier_lines=[*contact_values, *identifiers],
+        identifier_lines=[*meta.emails, *meta.phones],
     ).rstrip("\n")
 
 

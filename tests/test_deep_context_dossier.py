@@ -37,6 +37,27 @@ from packs.ingestion.primitives.deep_context.synthesis.validate_dossiers import 
 
 
 class DossierFactsTest(unittest.TestCase):
+    def test_contact_lists_only_source_endpoints_and_keeps_third_party_facts(self) -> None:
+        meta = CollectionBundle.from_payload({
+            "person_id": "person-jordan", "full_name": "Jordan Bravo",
+            "emails": ["jordan@example.com"], "phones": ["+15550100123"],
+            "source_channels": ["gmail_msgvault", "whatsapp"], "messages": [],
+        })
+        facts = SynthesizedFacts.from_payload({
+            "canonical_name": "Jordan Bravo",
+            "identifiers": ["jordan.backup@example.com", "+44 7700 900123"],
+            "notable_events": [{"date": "2026-01-01",
+                "summary": "Casey shared their callback number +44 7700 900123."}],
+        })
+        original = facts.to_payload()
+
+        body = render_dossier(meta, facts, slug="jordan-bravo-current")
+
+        contact = body.split("## Contact\n\n", 1)[1].split("\n\n## Summary", 1)[0]
+        self.assertEqual(contact, "- jordan@example.com\n- +15550100123")
+        self.assertIn("Casey shared their callback number +44 7700 900123.", body)
+        self.assertEqual(facts.to_payload(), original)
+
     def test_merge_policy_and_headline_live_in_concrete_module(self) -> None:
         merged = merge_disjoint_fact_records(filter(None, (
             FactRecord.from_payload({"facts": {

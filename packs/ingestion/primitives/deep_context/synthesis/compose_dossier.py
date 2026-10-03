@@ -214,8 +214,6 @@ class ComposeDossier(Node):
                     meta,
                     merged,
                     depth,
-                    owner_emails=owner.emails,
-                    owner_phones=owner.phones,
                     slug=slug,
                 )
             except (StoreError, TemplateError) as exc:

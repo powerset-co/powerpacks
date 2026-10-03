@@ -25,7 +25,7 @@ not implicit acceptance criteria for that round.
 - Readability polish: `identity_scope` double-negatives → named CTEs;
   `effective_decision` refactor (compute one chosen decision, derive);
   `person_lookup`'s 13 positional params → named SQL params;
-  `contact_identifiers` split; cross-module private imports cleanup.
+  cross-module private imports cleanup.
 - Parent→children helper: one shared `children_by_parent` home (hand-rolled in
   ~10 sites); `_approved_identities` as one SQL query.
 - `owner.json` read-back inversion (file is the record, SQLite the mirror —
