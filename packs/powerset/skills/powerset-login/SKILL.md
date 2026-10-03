@@ -117,6 +117,11 @@ If `auth0_login` is missing or expired, run:
 uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
+Let this command open sign-in in the system's default browser. Do not pass
+`--no-browser` or open sign-in or callback URLs in the in-app browser. If
+automatic launch fails, use `open "<sign-in URL>"` on the printed URL. Keep any
+in-app progress pane on its status page.
+
 ### Step 3 - Pull runtime keys and register MCP directly
 
 If `runtime_keys` is missing, run:

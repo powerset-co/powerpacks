@@ -74,6 +74,11 @@ waiting for the command to finish. Reuse the tab on retries.
 - A printed URL or queued open request is not proof of a rendered page. Check
   the returned browser state when available, or the page's HTTP response.
 
+Keep the progress pane on this URL. Let the login primitive open sign-in in the
+system's default browser; do not pass `--no-browser` or open sign-in or callback
+URLs in the in-app browser. If automatic launch fails, use `open "<sign-in URL>"`
+on the printed URL. The user completes sign-in there while progress stays here.
+
 The animation and step labels come from the script's
 `.powerpacks/install/manifest.json`. The page shows installing, waiting for
 sign-in, skipped login, search connection, network check, and completion.
