@@ -15,6 +15,9 @@ from markdown_it import MarkdownIt
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 _HEADING_RE = re.compile(r"(</?)h([1-6])>")
+_CONFIRMED_CHILDREN_RE = re.compile(
+    r"^## Confirmed children \(merged\)\n.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL
+)
 # The composer's `**Network worth:** <decision> — <reason>` paragraph. The stored
 # dossier keeps it: paid judges read that text.
 _WORTH_LINE_RE = re.compile(r"^\*\*Network worth:\*\*[^\n]*$", re.MULTILINE)
@@ -37,6 +40,7 @@ def markdown_to_html(markdown: str, *, for_review_card: bool = False) -> str:
     ``**Network worth:**`` line.
     """
     body = _FRONTMATTER_RE.sub("", _COMMENT_RE.sub("", markdown), count=1)
+    body = _CONFIRMED_CHILDREN_RE.sub("", body)
     if for_review_card:
         body = re.sub(r"\A\s*# [^\n]*\n?", "", body, count=1)
         body = re.sub(r"\n?## Contact\n(?:(?!#)[^\n]*\n?)*", "", body, count=1)
