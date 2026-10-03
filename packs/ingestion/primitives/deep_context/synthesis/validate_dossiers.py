@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import statistics
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,8 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     emit,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.planning import projected_bundles
+from packs.ingestion.primitives.deep_context.synthesis.selection import effective_parent_bundles
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object, write_json
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind
 from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as fact_rows
@@ -116,9 +117,9 @@ class ValidationFactRecord:
 
 def collect_rows(db: Db) -> list[DossierRow]:
     """Parse every projected fact joined with its projected source bundle."""
-    bundles = projected_bundles(db)
+    bundles = effective_parent_bundles(db)
     records = {
-        row.parent_id: parse_json_object(row.payload_json)
+        row.artifact_key: parse_json_object(row.payload_json)
         for row in artifacts(db, kind=ArtifactKind.FACTS.value)
         if row.person_id is None
     }
@@ -127,13 +128,18 @@ def collect_rows(db: Db) -> list[DossierRow]:
     # parent still on the legacy child-owned layout (synthesis/normalization.py)
     # simply doesn't score until migrated.
     for fact in fact_rows(db, parent_owned=True):
-        record_payload: dict[str, object] | None = records.get(fact.parent_id)
+        record_payload: dict[str, object] | None = records.get(fact.artifact_key)
         facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(parse_json_object(fact.facts_json))
         if record_payload is None or facts is None:
             continue
         record: ValidationFactRecord | None = ValidationFactRecord.from_payload(record_payload, facts)
         if record is None:
             continue
+        history = FactHistory.from_payload(record_payload)
+        depth = history.dossier_depth(bundles.get(fact.parent_id))
+        record = replace(record, messages_used=depth.messages_used, messages_available=depth.messages_available,
+                         batches_used=depth.batches_used if history.messages else record.batches_used,
+                         stop_reason=depth.stop_reason)
         rows.append(
             DossierRow.from_record(
                 fact.parent_id,

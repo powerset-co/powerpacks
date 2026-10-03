@@ -28,7 +28,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.collection import context_sources
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
-from packs.ingestion.primitives.deep_context.collection.planning import projected_bundles
+from packs.ingestion.primitives.deep_context.synthesis.selection import effective_parent_bundles
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
@@ -149,7 +149,7 @@ def sqlite_counts(db: Db) -> ProjectedReadinessCounts:
         if row.person_id in fact_people:
             with_dossiers += 1
     channel_counts: dict[str, int] = {}
-    for bundle in projected_bundles(db).values():
+    for bundle in effective_parent_bundles(db).values():
         for message in bundle.messages:
             channel = message.channel or "unknown"
             channel_counts[channel] = channel_counts.get(channel, 0) + 1

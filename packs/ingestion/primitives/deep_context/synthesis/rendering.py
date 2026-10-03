@@ -37,7 +37,6 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.common import (
     contact_identifiers,
     phone_digits,
-    slugify,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.shared.template_engine import template_environment
@@ -71,7 +70,7 @@ def render_dossier(
     meta: CollectionBundle,
     merged: SynthesizedFacts,
     depth: DossierDepth | None = None,
-    *, owner_emails: tuple[str, ...] = (), owner_phones: tuple[str, ...] = (),
+    *, slug: str, owner_emails: tuple[str, ...] = (), owner_phones: tuple[str, ...] = (),
 ) -> str:
     name = merged.canonical_name or meta.full_name or "(unknown)"
     messages = meta.messages
@@ -133,7 +132,7 @@ def render_dossier(
         meta=meta,
         name=name,
         name_json=json.dumps(name, ensure_ascii=False),
-        slug=slugify(name, meta.person_id),
+        slug=slug,
         emails_yaml=yaml_list(list(meta.emails)),
         phones_yaml=yaml_list(list(meta.phones)),
         channels_yaml=yaml_list(list(meta.source_channels)),

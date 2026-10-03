@@ -92,7 +92,7 @@ class DossierFactsTest(unittest.TestCase):
             "packs.ingestion.primitives.deep_context.synthesis.rendering.now_iso",
             return_value="2026-01-02T03:04:05Z",
         ):
-            rendered = render_dossier(meta, merged)
+            rendered = render_dossier(meta, merged, slug="jordan-bravo-persona")
         self.assertEqual(rendered, (
             "---\n"
             "person_id: person-a\n"

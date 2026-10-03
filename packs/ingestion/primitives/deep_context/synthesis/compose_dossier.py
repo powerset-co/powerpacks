@@ -47,7 +47,8 @@ from packs.ingestion.primitives.deep_context.shared.dossier_policy import (
     unresolved_source_parents,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.planning import projected_bundles
+from packs.ingestion.primitives.deep_context.synthesis.selection import effective_parent_bundles
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactReplacement,
@@ -68,7 +69,6 @@ from packs.ingestion.primitives.deep_context.db.queries import (
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.synthesis.facts import headline
 from packs.ingestion.primitives.deep_context.synthesis.models import (
-    DossierDepth,
     SynthesizedFacts,
 )
 from packs.ingestion.primitives.deep_context.synthesis.rendering import render_dossier, write_catalog
@@ -150,7 +150,7 @@ class ComposeDossier(Node):
             if row.parent_id in source_review_parents
             and row.person_id is None and row.candidate_key is None
         ))
-        bundles = projected_bundles(self.db)
+        bundles = effective_parent_bundles(self.db)
         skips: list[DossierSkip] = []
         skipped_parent_ids: set[str] = set(source_review_parents)
         for parent_id, fact in sorted(facts.items()):
@@ -187,9 +187,7 @@ class ComposeDossier(Node):
                     raise StoreError(
                         f"dossier facts artifact is absent for parent: {parent_id}"
                     )
-                depth: DossierDepth | None = DossierDepth.from_payload(
-                    parse_json_object(facts_artifact.payload_json)
-                )
+                depth = FactHistory.from_payload(parse_json_object(facts_artifact.payload_json)).dossier_depth(meta)
                 # Name priority: LLM-synthesized canonical name, then the identity
                 # graph's display name, then the raw bundle's contact name — first
                 # non-blank wins.
@@ -210,13 +208,15 @@ class ComposeDossier(Node):
                 slug = prior.display_slug
                 if slug is None or not slug.strip():
                     raise StoreError(f"dossier slug is absent for parent: {parent_id}")
+                meta = replace(meta, person_id=parent_id, full_name=name)
                 dossier_path = self.dossier_dir / f"{slug}.md"
                 body = render_dossier(
-                    replace(meta, full_name=name),
+                    meta,
                     merged,
                     depth,
                     owner_emails=owner.emails,
                     owner_phones=owner.phones,
+                    slug=slug,
                 )
             except (StoreError, TemplateError) as exc:
                 # `StoreError` is every explicit prerequisite check above;
