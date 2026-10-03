@@ -35,6 +35,15 @@ contracts every stage obeys, and a per-file map. The product/UX guide is
 [`docs/deep-context-pipeline.md`](../../docs/deep-context-pipeline.md); the
 agent contract is the [`deep-context` skill](../../skills/deep-context/SKILL.md).
 
+After synthesis and JEV tagging, unique imported LinkedIn name matches merge
+locally, accept the profile, and set machine Worth Yes (`deep-context-name-match`).
+The same rule runs before pair judging, parent construction, and direct enrichment;
+it uses original source names and needs no facts or identity judge. Later conflicts
+withdraw automatic acceptance and hold export and dossier publication for review;
+the original contacts and facts remain in SQLite. Exact human mappings override
+machine decisions and publication holds for their existing candidate people;
+they remain resolved without a new merge. Name matches override machine suggestions.
+
 ## Data flow
 
 ```mermaid

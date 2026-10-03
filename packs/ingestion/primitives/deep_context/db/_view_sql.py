@@ -65,11 +65,11 @@ WITH eligible_links AS (
            WHERE l.parent_id=p.parent_id AND l.kind='synthetic'
          ) AS has_synthetic
   FROM parents p
-  JOIN ranked_facts ranked ON ranked.parent_id=p.parent_id AND ranked.worth_rank=1
-  JOIN facts r ON r.subject_key=ranked.subject_key
+  LEFT JOIN ranked_facts ranked ON ranked.parent_id=p.parent_id AND ranked.worth_rank=1
+  LEFT JOIN facts r ON r.subject_key=ranked.subject_key
   -- Empty, ghost-only, and owner-only families cannot enter review; an owner
   -- person never hides a real non-owner member of the same family.
-  WHERE EXISTS (
+  WHERE (ranked.subject_key IS NOT NULL OR p.machine_worth IS NOT NULL) AND EXISTS (
     SELECT 1 FROM people pe
     WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
   )

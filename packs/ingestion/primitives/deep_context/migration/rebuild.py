@@ -11,7 +11,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.common.manifests import write_stage_manifest
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import ImportedPerson, project_imported_people
@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.ensure_parents.source_people import
 from packs.ingestion.primitives.deep_context.migration.human_decisions import (
     CarryStatus, DecisionResult, HumanSnapshot, carry_human_decisions,
 )
+from packs.ingestion.primitives.deep_context.migration.feedback import apply_feedback, read_feedback, write_feedback_csv
 from packs.ingestion.primitives.deep_context.shared.build_owner import BuildOwner, _owner_from_payload
 from packs.ingestion.primitives.deep_context.shared.common import emit
 from packs.ingestion.primitives.imports.merge_people import MergePeopleInput, MergePeopleStats
@@ -34,6 +35,10 @@ class RebuildManifest(StageManifest):
     state_root: str
     people_csv: str
     owner_profile: str
+    operator_id: str
+    feedback_snapshot: str
+    feedback_rows: int
+    feedback_csv: str
     contacts: int
     applied: int
     held: int
@@ -46,12 +51,15 @@ class RebuildManifest(StageManifest):
 
 class Rebuild:
     def __init__(self, *, original_state_root: Path, backup_root: Path, state_root: Path,
-                 people_csv: Path, owner_profile: Path):
+                 people_csv: Path, owner_profile: Path, operator_id: str,
+                 feedback_json: Path | None = None):
         self.original = Path(original_state_root).resolve()
         self.backup = Path(backup_root).resolve()
         self.state = Path(state_root).resolve()
         self.people_csv = Path(people_csv).resolve()
         self.owner_profile = Path(owner_profile).resolve()
+        self.operator_id = operator_id
+        self.feedback_json = Path(feedback_json).resolve() if feedback_json is not None else None
         self.deep_context = self.state / "deep-context"
         self.db_path = self.deep_context / "deep-context.sqlite"
         self.original_db = self.original / "deep-context/deep-context.sqlite"
@@ -59,6 +67,8 @@ class Rebuild:
         self.raw = self.deep_context / "raw"
         self.research = self.deep_context / "reconcile/deep-research"
         self.manifest = self.deep_context / "rebuild/manifest.json"
+        self.feedback_snapshot = self.deep_context / "rebuild/feedback.json"
+        self.feedback_csv = self.deep_context / "rebuild/feedback.csv"
 
     def _validate(self) -> tuple[ImportedPerson, ...]:
         roots = (self.original, self.backup, self.state)
@@ -119,6 +129,7 @@ class Rebuild:
 
     def run(self) -> RebuildManifest:
         sources = self._validate()
+        feedback = read_feedback(self.operator_id, feedback_json=self.feedback_json)
         with sqlite3.connect(f"{self.original_db.as_uri()}?mode=ro", uri=True) as original:
             original.execute("BEGIN")
             snapshot = HumanSnapshot.read(original, self.original / "network-import/overrides/review.csv")
@@ -142,9 +153,14 @@ class Rebuild:
         if owner.status != "exists":
             raise StoreError(owner.error or "explicit owner profile could not be projected")
         decisions, generated = carry_human_decisions(db, snapshot)
+        write_json(self.feedback_snapshot, list(feedback.raw))
+        write_feedback_csv(self.feedback_csv, feedback)
+        decisions += apply_feedback(db, feedback, snapshot)
         result = RebuildManifest(
             status="completed", original_state_root=str(self.original), backup_root=str(self.backup),
             state_root=str(self.state), people_csv=str(self.people_csv), owner_profile=str(self.owner_profile),
+            operator_id=feedback.operator_id, feedback_snapshot=str(self.feedback_snapshot),
+            feedback_rows=len(feedback.rows), feedback_csv=str(self.feedback_csv),
             contacts=contacts, applied=sum(row.status == CarryStatus.APPLIED for row in decisions),
             held=sum(row.status == CarryStatus.HELD for row in decisions),
             unmatched=sum(row.status == CarryStatus.UNMATCHED for row in decisions),
@@ -162,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-root", required=True, type=Path)
     parser.add_argument("--people-csv", required=True, type=Path)
     parser.add_argument("--owner-profile", required=True, type=Path)
+    parser.add_argument("--operator-id", required=True)
+    parser.add_argument("--feedback-json", type=Path, help="Saved operator-scoped GET /v2/feedback response row list")
     args = parser.parse_args(argv)
     try:
         result = Rebuild(**vars(args)).run()

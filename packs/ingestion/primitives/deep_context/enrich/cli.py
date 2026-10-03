@@ -13,6 +13,7 @@ from packs.ingestion.primitives.deep_context.db.workflow_views import enrichment
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
 from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment, minutes_left
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
+from packs.ingestion.primitives.deep_context.merge_candidates.linkedin_name_matches import linkedin_name_matches
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, ENRICH_MANIFEST, emit, load_env
 
 
@@ -26,8 +27,12 @@ def main(argv: list[str] | None = None) -> int:
     state = workflow_state(db)
     estimate = estimate_enrichment(db, state)
     if args.dry_run:
+        matches = linkedin_name_matches(db)
         profiles = PrefetchProfiles(db=db, fetch=False).run()
         emit({"status": "dry_run", **estimate.to_payload(),
+            "linkedin_name_matches": len(matches.matches),
+            "linkedin_parents_to_merge": sum(len(match.parent_ids) - 1 for match in matches.matches),
+            "paid_estimate": "upper_bound_before_name_matches",
             "profile_fetches": profiles.estimated_rapidapi_calls,
             "estimated_minutes": minutes_left(state.progress)})
         return 0

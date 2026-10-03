@@ -16,13 +16,13 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.db.merge_repair import _given_names_differ
 from packs.ingestion.primitives.deep_context.db.context_queries import aggregate_people_from_rows
 from packs.ingestion.primitives.deep_context.db.models import (
-    PersonRow, PersonIdentifierRow, FactRow, MergeVerdictRow, MESSAGE_CHANNELS,
+    CandidatePersonRow, LinkSnapshotRow, PersonRow, PersonIdentifierRow, FactRow, MergeVerdictRow, MESSAGE_CHANNELS,
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.dossier_policy import (
-    SOURCE_IDENTITY_REVIEW_REASON, unresolved_source_parent_ids,
+    SOURCE_IDENTITY_REVIEW_REASON, resolved_parent_ids, unresolved_source_parent_ids,
 )
 from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
@@ -218,6 +218,9 @@ class IdentityAudit:
             names = {row['parent_id']: row['display_name'] for row in conn.execute(
                 'SELECT parent_id,display_name FROM parents ORDER BY parent_id')}
             people = tuple(PersonRow(**dict(row)) for row in conn.execute('SELECT * FROM people'))
+            links = tuple(LinkSnapshotRow(**dict(row)) for row in conn.execute('SELECT * FROM links'))
+            memberships = tuple(CandidatePersonRow(**dict(row)) for row in conn.execute('SELECT * FROM candidate_people'))
+            resolved = resolved_parent_ids(people, links, memberships)
             verdicts = tuple(MergeVerdictRow(**dict(row)) for row in conn.execute('SELECT * FROM merge_verdicts'))
             issues = tuple(_OwnershipIssue(
                 row['parent_id'], AuditCategory(row['category']), row['row_key'], row['person_id']
@@ -249,7 +252,8 @@ class IdentityAudit:
                 (issue.person_id,) if issue.person_id else (), (issue.row_key,)))
         self._merge_findings(people, verdicts, findings)
         self._contact_findings(people, verdicts, coverage, eligible_contacts, findings)
-        self._source_findings(people, imported, current_facts, tuple(names), findings)
+        self._source_findings(people, imported, current_facts, tuple(names), findings,
+                              resolved=resolved)
         self._history_findings(histories, aggregates, findings)
         return AuditReport(len(names), tuple(
             ParentAudit(parent, names.get(parent), tuple(found))
@@ -322,7 +326,7 @@ class IdentityAudit:
     def _source_findings(
         people: tuple[PersonRow, ...], imported: tuple[PeopleRow, ...],
         current_facts: tuple[FactRow, ...], parent_ids: tuple[str, ...],
-        findings: dict[str, list[AuditFinding]],
+        findings: dict[str, list[AuditFinding]], *, resolved: set[str],
     ) -> None:
         source_names = {row.id: row.full_name for row in imported}
         children: dict[str, list[str]] = defaultdict(list)
@@ -332,7 +336,7 @@ class IdentityAudit:
         original_names = {parent: tuple(source_names.get(person, '')
                                         for person in children.get(parent, ())) or ('',)
                           for parent in parent_ids}
-        unresolved = unresolved_source_parent_ids(original_names, current_facts)
+        unresolved = unresolved_source_parent_ids(original_names, current_facts) - resolved
         for parent in sorted(unresolved.intersection(children)):
             findings[parent].append(AuditFinding(
                 AuditCategory.SOURCE_IDENTITY_UNRESOLVED,

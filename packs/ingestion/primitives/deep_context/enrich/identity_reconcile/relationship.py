@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.result imp
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, emit
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, source_evidence
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import name_match_review_parents
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd,
 )
@@ -71,7 +72,7 @@ class ReviewRelationships:
         self.limit = limit
 
     def run(self) -> dict[str, object]:
-        pending = sorted(pending_parent_ids(self.db))
+        pending = sorted(pending_parent_ids(self.db) - name_match_review_parents(self.db))
         records: dict[str, RelationshipDecision] = {}
         saved = {}
         for candidate in links(self.db, parent_ids=pending):

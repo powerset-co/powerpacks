@@ -5,7 +5,8 @@ from __future__ import annotations
 from itertools import combinations
 
 from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
-from packs.ingestion.primitives.deep_context.db.queries import source_names
+from packs.ingestion.primitives.deep_context.db.models import SourceChannel
+from packs.ingestion.primitives.deep_context.db.queries import imported_people, source_names
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityVerdict
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
@@ -25,6 +26,10 @@ def profile_names(db: Db, parent_id: str, candidate_key: str, url: str) -> tuple
         result = ResearchResult.from_json(row.result_json)
         if result is not None and target and normalize_linkedin_url(result.linkedin_url) == target:
             names.append(result.person.full_name or "")
+    if not names:
+        names.extend(row.full_name for row in imported_people(db, parent_id=parent_id)
+                     if SourceChannel.LINKEDIN.value in row.source_channels.split(',')
+                     and normalize_linkedin_url(row.linkedin_url) == target)
     return tuple(names)
 
 

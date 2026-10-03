@@ -127,13 +127,14 @@ class HumanSnapshot:
         )
 
 
-def _scope(snapshot: HumanSnapshot, current: dict[str, PeopleRow], person_ids: tuple[str, ...]) -> tuple[CarryStatus, str]:
+def _scope(snapshot: HumanSnapshot, current: dict[str, PeopleRow], person_ids: tuple[str, ...],
+           *, original_person_id: str | None = None) -> tuple[CarryStatus, str]:
     if len(person_ids) != 1:
         return CarryStatus.HELD, "original contact scope is not unique"
     person_id = person_ids[0]
     if person_id not in current:
         return CarryStatus.UNMATCHED, "original contact is absent from fresh sources"
-    original = snapshot.source_people.get(person_id)
+    original = snapshot.source_people.get(original_person_id or person_id)
     if original is None:
         return CarryStatus.HELD, "original source record is unavailable"
     name = normalize_name_key(original.full_name)

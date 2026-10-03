@@ -340,11 +340,27 @@ bin/deep-context validate
 
 ### 4. Duplicate people
 
+After synthesis and its combined JEV labels/worth pass, unique imported LinkedIn
+name matches merge automatically and set machine LinkedIn acceptance and Worth
+Yes with `deep-context-name-match` provenance. This also runs before pair judging
+and direct enrichment. It needs no facts or identity judge: a full surname and
+matching first name, first-name prefix, or first initial suffice. Ambiguous URLs,
+conflicting source/fact identities, human rejection, and different-person decisions
+withhold the whole proposed merge. Exact human mappings take precedence and remain
+resolved without a new merge or expanded candidate membership. Human decisions
+covering only part of a parent cannot resolve its other children; releasing a
+parent requires all children to have human acceptance of the same URL. Imported name
+matches take precedence over machine profile suggestions. Later contradictory
+evidence withdraws automatic acceptance and withholds the merged parent's export
+and dossier until identity review; exact human acceptance overrides those holds
+for the people it covers. Original contacts and facts remain in SQLite.
+Dry runs report the free matches without applying them.
+
 Identity resolves cheapest evidence first. The cluster stage merges an
 identical name with a shared source contact phone or email locally. Other
 compatible names receive one GPT-6.1-sol high judgment: same person, different
 people, or uncertain. Only an affirmative same-person judgment accepts a pair;
-a matching name alone is not an accepted merge. Extracted contact details
+a matching name alone is not an accepted merge outside the imported LinkedIn rule. Extracted contact details
 cannot create a pair or a free merge, and a shared identifier cannot override
 incompatible names. Reuse same-person and uncertain decisions only when the
 complete request matches. Uncertain pairs remain separate without becoming

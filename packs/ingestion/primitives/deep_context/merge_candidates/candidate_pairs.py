@@ -62,6 +62,7 @@ SAME_FIRST_AND_LAST_NAME = "same first and last name, middle names do not differ
 # A father and a son: a name carrying one of these is not the same name as one without it.
 GENERATION_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 TITLES = frozenset({"dr", "mr", "mrs", "ms", "prof"})
+PROFESSIONAL_CREDENTIALS = frozenset({"cfa", "cia", "cams", "cpa", "macc"})
 T = TypeVar("T")
 
 
@@ -133,6 +134,13 @@ def name_words(name_key: str) -> tuple[str, ...]:
         return ()
     # Composed and decomposed accents are one spelling.
     composed = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", name_key))
+    parts = composed.split(',')
+    while len(parts) > 1:
+        suffix = tuple(re.findall(r"[^\W\d_]+", parts[-1].casefold()))
+        if not suffix or not set(suffix) <= PROFESSIONAL_CREDENTIALS:
+            break
+        parts.pop()
+    composed = ','.join(parts)
     family, comma, given = composed.partition(",")
     ordered = f"{given} {family}" if comma else composed
     return tuple(word for word in re.findall(r"[^\W\d_]+", ordered.casefold()) if word not in TITLES)

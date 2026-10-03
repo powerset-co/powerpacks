@@ -30,6 +30,7 @@ from packs.ingestion.primitives.deep_context.enrich.settle_policy import (
     empty_profile_decision, nothing_to_show, same_profile_decisions, worth_decision,
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import stored_imported_people
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import name_match_review_parents
 
 
 @dataclass(frozen=True)
@@ -69,9 +70,10 @@ class SettleEnrichment:
 
         # A LinkedIn the machine is unsure of is only worth a person's check when there is a
         # profile to look at: one that was fetched and has nothing on it is detached instead.
+        held_parents = name_match_review_parents(self.db)
         unsure = links(self.db, row_keys=tuple(
             candidate.row_key for row in linkedin_queue(self.db) for candidate in row.candidates
-            if candidate.pending and not candidate.synthetic
+            if row.parent_id not in held_parents and candidate.pending and not candidate.synthetic
         ))
         unsure_profiles = profile_payloads(self.db, candidate_keys=tuple(link.row_key for link in unsure))
         for link in unsure:

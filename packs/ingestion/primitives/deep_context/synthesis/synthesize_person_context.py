@@ -44,6 +44,7 @@ from packs.ingestion.primitives.deep_context.shared.common import (
 from packs.ingestion.primitives.deep_context.db.models import SynthesisRun
 from packs.ingestion.primitives.deep_context.db.queries import parent_fact_counts
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
+from packs.ingestion.primitives.deep_context.merge_candidates.linkedin_name_matches import apply_linkedin_name_matches
 from packs.ingestion.primitives.deep_context.manifests.synthesize_person_context_manifest import (
     SynthesizePersonContextManifest,
 )
@@ -171,6 +172,7 @@ class SynthesizePersonContext(Node):
                              for failure in tally.failures),
                 unfinished=tuple(sorted(failed_people)),
             ))
+        apply_linkedin_name_matches(self.db)
         normalization.normalize_parent_cache(
             self.db, raw_dir=self.config.raw_dir, facts_dir=self.config.facts_dir,
         )

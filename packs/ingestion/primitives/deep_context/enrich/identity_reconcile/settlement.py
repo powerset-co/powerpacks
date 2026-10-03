@@ -99,7 +99,10 @@ def settle_machine_identities(
             raise StoreError(f"unknown identity candidate: {key}")
         if row.decision_action:
             continue
-        if settlement.machine_action in AFFIRMATIVE_MACHINE_ACTIONS and settlement.machine_approved in AFFIRMATIVE_MACHINE_APPROVALS:
+        if (settlement.machine_action in AFFIRMATIVE_MACHINE_ACTIONS
+                and settlement.machine_approved in AFFIRMATIVE_MACHINE_APPROVALS
+                and parse_json_object(settlement.judgment_payload_json).get("relationship_decision", {}).get("fingerprint")
+                    != settlement.judgment_fingerprint):
             url = settlement.machine_proposed_url if settlement.machine_action == "retarget" else row.linkedin_url
             veto = profile_name_verdict(db, row.parent_id, profile_names(db, row.parent_id, key, url or ""))
             if veto is not None:

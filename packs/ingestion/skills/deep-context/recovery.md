@@ -6,6 +6,60 @@ decision. Keep a golden copy before replaying changes; do not introduce another
 ledger. A cold rebuild on a separate copy can reuse facts without inheriting
 the old family membership.
 
+## Read the operator's feedback first
+
+Before recovery changes, pull the operator's existing feedback. Fresh `rebuild`
+requires `--operator-id`; it reads the operator-scoped `GET /v2/feedback` before
+backup or new SQLite creation. The authenticated contact-datalake summary and
+every returned feedback row must match that operator. Authentication or scope
+failure stops preparation. This is a free read, with no impersonation or remote
+write. Use the target operator's login; never substitute another person's account.
+
+For an already obtained read-only snapshot, pass `--feedback-json` containing the
+API response row list. The same parser checks every row's operator. This allows
+an authorized target-operator snapshot to be used locally without changing login.
+
+Support resolves identity feedback remotely through explicit columns:
+`valid_linkedin_url`, `resolution_action`, `resolution_person_ids`,
+`resolution_note`, `resolved_by` and `resolved_at`.
+Recovery downloads that explicit choice as human authority;
+support may research a replacement that was not in the original comment. The
+original metadata, comment and guidance remain unchanged. A resolution is
+consumed regardless of the original feedback type or action. Null means
+unresolved, not "this person has no LinkedIn". Action `linkedin` requires a valid URL; actions
+`synthetic`, `exclude` and `unresolved` require a null URL. Missing review
+provenance cannot apply.
+Local reviewed mapping CSV input is removed: the remote feedback row is the
+single authority. A candidate/provider `proposed_linkedin_url` or guidance
+`new_url`, standalone URL comment, and unreviewed free text never establish a
+resolved mapping. Action `synthetic` creates an accepted existing synthetic
+identity marker with the original guidance as its note, retaining the person
+and worth without inventing a provider profile. Its human decision prevents
+ordinary matching/research from replacing it. Action `exclude` explicitly sets
+human Worth No; a wrong URL or failed research never excludes the contact.
+Action `unresolved` and free-text reports without a resolution remain held.
+
+Application requires one exact original contact or unique supplied source
+email/phone. An old contact UUID can resolve through unchanged source endpoints
+and name to one fresh contact; LinkedIn-only or combined source rows cannot prove
+that mapping. Support-reviewed `resolution_person_ids`, when present,
+replace only the application scope; original metadata stays preserved. Each
+reviewed contact is applied separately, without merging it with other contacts.
+Unreviewed multiple-contact scope, uncertain wording and conflicting
+choices remain held. The remote resolution timestamp and local human decision
+timestamp determine precedence; a later explicit choice wins. Proven newer
+local choices retain their timestamps, notes and targets. Unproved old
+machine/seed fields do not outrank a support resolution. Remote feedback does
+not merge source contacts.
+
+The `deep-context/rebuild/feedback.json` output preserves all fetched raw rows.
+The adjacent `feedback.csv` presents identity feedback with its feedback ID,
+operator, original and reviewed contact IDs/candidate key, resolved URL/action, resolver, resolution
+time/note and original guidance, including unresolved notes. `rebuild/manifest.json` records
+both paths, the operator, raw row count and considered identity decisions with
+applied/held scope, target, source feedback ID and decision timestamp. Raw count
+is not an applied mapping count. No new local database schema is created.
+
 ## Inspect before changing identity
 
 Run `bin/deep-context audit --db <store>` and inspect the affected parents,
@@ -150,7 +204,9 @@ bin/deep-context rebuild \
   --backup-root /absolute/rollback/.powerpacks \
   --state-root /absolute/fresh-checkout/.powerpacks \
   --people-csv /absolute/fresh-checkout/.powerpacks/network-import/merged/people.csv \
-  --owner-profile /absolute/reviewed-owner.json
+  --owner-profile /absolute/reviewed-owner.json \
+  --operator-id <expected-operator-uuid> \
+  --feedback-json /absolute/operator-feedback.json
 ```
 
 The three state roots must be disjoint. The backup destination must not exist.
@@ -161,7 +217,10 @@ profile before writing. It preserves the complete original state tree, including
 historical backups and symlinks, and makes a consistent canonical SQLite backup.
 Symlinks remain links; external raw stores need their own consistent snapshots.
 The original store is read only. Preparation never resets or switches the live
-installation and makes no provider calls.
+installation and makes no provider calls. With `--feedback-json`, preparation is
+entirely local; without it, the read-only authenticated feedback preflight runs
+first. Existing snapshots without `valid_linkedin_url` resolution fields retain
+their unresolved notes and supply no positive mappings.
 
 The new canonical DB contains separately projected source contacts and the
 explicit owner configuration. Active facts, raw and research directories start

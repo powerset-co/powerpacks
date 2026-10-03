@@ -70,6 +70,7 @@ from packs.ingestion.primitives.deep_context.manifests.build_parents_manifest im
 from packs.ingestion.primitives.deep_context.merge_candidates import rendering as parent_rendering
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import load_assignment
 from packs.ingestion.primitives.deep_context.merge_candidates.models import ChildEntry, ParentPlan
+from packs.ingestion.primitives.deep_context.merge_candidates.linkedin_name_matches import apply_linkedin_name_matches
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
 
 PARENT_RENDER_CONTRACT = "parent-dossier-v2"
@@ -206,9 +207,9 @@ class BuildParents(Node):
 
     def execute(self) -> BuildParentsManifest:
         started = time.monotonic()
+        parents_merged = apply_linkedin_name_matches(self.db)
         components = _accepted_components(self.db)
         assignment = load_assignment(self.db)
-        parents_merged = 0
         for component in components:
             survivor = assignment.elect(list(component))
             for absorbed in component:

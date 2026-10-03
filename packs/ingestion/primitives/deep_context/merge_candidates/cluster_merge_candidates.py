@@ -39,6 +39,8 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     verdict_rows,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
+from packs.ingestion.primitives.deep_context.merge_candidates.linkedin_name_matches import apply_linkedin_name_matches, linkedin_name_matches
+from packs.ingestion.primitives.deep_context.synthesis.normalization import normalize_parent_cache
 from packs.ingestion.primitives.deep_context.manifests.cluster_merge_manifest import (
     ClusterMergeManifest,
 )
@@ -96,8 +98,12 @@ class ClusterMergeCandidates(Node):
     def estimate(self) -> dict[str, Any]:
         started = time.monotonic()
         survey = self.survey()
+        name_matches = linkedin_name_matches(self.db)
+        matched_group = {parent_id: match.linkedin_url for match in name_matches.matches for parent_id in match.parent_ids}
         owner_name = self.owner_name()
-        chosen = survey.to_judge[:self.limit] if self.limit is not None else survey.to_judge
+        pending = [pair for pair in survey.to_judge if not (
+            pair.first.parent_id in matched_group and matched_group[pair.first.parent_id] == matched_group.get(pair.second.parent_id))]
+        chosen = pending[:self.limit] if self.limit is not None else pending
         input_tokens = sum(len(json.dumps(judge_request(pair.first, pair.second, owner_name=owner_name), ensure_ascii=False)) // 4
                            for pair in chosen)
         output_tokens = ESTIMATED_OUTPUT_TOKENS * len(chosen)
@@ -105,11 +111,13 @@ class ClusterMergeCandidates(Node):
             "source": "cluster_merge_candidates",
             "status": "dry_run",
             "people": len(survey.people),
+            "linkedin_name_matches": len(name_matches.matches),
+            "linkedin_parents_to_merge": sum(len(match.parent_ids) - 1 for match in name_matches.matches),
             "candidate_pairs": len(survey.pairs),
             "pairs_slam_dunk": len(survey.slam),
             "cached_reused": len(survey.reused),
             "candidate_pairs_to_judge": len(chosen),
-            "remaining": len(survey.to_judge) - len(chosen),
+            "remaining": len(pending) - len(chosen),
             "estimated_input_tokens": input_tokens,
             "estimated_output_tokens": output_tokens,
             "estimated_cost_usd": estimate_cost_usd(input_tokens, output_tokens, MODEL_ID),
@@ -121,6 +129,8 @@ class ClusterMergeCandidates(Node):
 
     def execute(self) -> ClusterMergeManifest:
         started = time.monotonic()
+        if apply_linkedin_name_matches(self.db):
+            normalize_parent_cache(self.db, raw_dir=self.db.db_path.parent / 'raw', facts_dir=self.db.db_path.parent / 'facts')
         survey = self.survey()
         people = survey.people
         to_judge = survey.to_judge[:self.limit] if self.limit is not None else survey.to_judge

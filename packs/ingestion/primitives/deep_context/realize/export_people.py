@@ -11,18 +11,19 @@ import argparse
 import sys
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, parse_json_object, write_json
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
 from packs.ingestion.primitives.deep_context.db import identity_queries, queries
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
     AFFIRMATIVE_MACHINE_ACTIONS,
     AFFIRMATIVE_MACHINE_APPROVALS,
 )
-from packs.ingestion.primitives.deep_context.db.models import ReviewAction, RowKind, SourceChannel
+from packs.ingestion.primitives.deep_context.db.models import HUMAN_DECISION_SOURCES, ReviewAction, RowKind, SourceChannel
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.name_policy import profile_name_verdict, profile_names
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import name_match_review_parents
 from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapidapi
 from packs.ingestion.primitives.imports.merge_people import (
     fill_profile_columns,
@@ -76,27 +77,35 @@ class ExportPeople:
             }
         parent_of = {row.person_id: row.parent_id for row in queries.people(self.db)}
         links = {row.row_key: row for row in identity_queries.links(self.db)}
+        held_parents = name_match_review_parents(self.db)
         people_by_candidate: dict[str, list[str]] = {}
         for membership in identity_queries.memberships(self.db):
             people_by_candidate.setdefault(membership.row_key, []).append(membership.person_id)
         accepted: dict[str, str] = {}
         rejected: set[tuple[str, str]] = set()
-        for review in identity_queries.review_rows(self.db, include_worth=False):
+        for review in sorted(identity_queries.review_rows(self.db, include_worth=False),
+                             key=lambda row: links[row.key].decision_source in HUMAN_DECISION_SOURCES):
             link = links[review.key]
             parent_id, kind = link.parent_id, link.kind
             if review.approved not in AFFIRMATIVE_MACHINE_APPROVALS:
                 continue
             if _is_accepted(review.action, kind):
                 url = review.new_linkedin_url if review.action == ReviewAction.RETARGET.value else review.linkedin_url
-                if not link.decision_action and profile_name_verdict(
-                    self.db, parent_id, profile_names(self.db, parent_id, review.key, url or ""),
-                ) is not None:
+                if (not link.decision_action
+                        and parse_json_object(link.judgment_payload_json).get("relationship_decision", {}).get("fingerprint")
+                            != (link.judgment_fingerprint or "")
+                        and profile_name_verdict(
+                            self.db, parent_id, profile_names(self.db, parent_id, review.key, url or ""),
+                        ) is not None):
                     continue
                 slug = (review.new_public_identifier or review.public_identifier).lower()
                 accepted.update((person_id, slug) for person_id in people_by_candidate.get(review.key, ()))
             elif review.action in REJECTING_ACTIONS:
-                rejected.update((person_id, review.public_identifier.lower())
-                                for person_id in people_by_candidate.get(review.key, ()))
+                slug = review.public_identifier.lower()
+                for person_id in people_by_candidate.get(review.key, ()):
+                    rejected.add((person_id, slug))
+                    if link.decision_source in HUMAN_DECISION_SOURCES and accepted.get(person_id) == slug:
+                        accepted.pop(person_id)
 
         realized: list[PeopleRow] = []
         groups: dict[str, list[PeopleRow]] = {}
@@ -118,7 +127,8 @@ class ExportPeople:
                 row = _relinked(row, slug)
             row = row.model_copy(update={"full_name": source_name})
             realized.append(row)
-            groups.setdefault(parent_id, []).append(row)
+            if parent_id not in held_parents:
+                groups.setdefault(parent_id, []).append(row)
 
         profiles = {
             result.normalized_profile.public_identifier: result
@@ -148,6 +158,7 @@ class ExportPeople:
             "status": "completed",
             "people_csv": str(self.people_csv),
             "rows": len(final),
+            "parents_held": len(held_parents),
             "people_added": 0,
             "parents_merged": 0,
             "accepted_identities": len(accepted),

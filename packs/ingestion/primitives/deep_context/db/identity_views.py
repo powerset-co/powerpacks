@@ -68,6 +68,7 @@ WHERE (w.effective_worth!='no' OR (w.human_worth IS NULL AND (
   OR EXISTS (SELECT 1 FROM eligible_links kept WHERE kept.parent_id=w.parent_id
              AND kept.decision_approved='yes' AND kept.decision_action NOT IN ('detach', 'exclude'))
 ))) AND l.kind!='synthetic' AND l.decision_action IS NULL
+  AND l.source!='deep-context-name-match'
   AND (COALESCE(l.linkedin_url, '')!='' OR COALESCE(l.machine_proposed_url, '')!=''
        OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
 """
