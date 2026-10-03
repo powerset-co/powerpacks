@@ -44,6 +44,15 @@ class InstallControllerTests(unittest.TestCase):
         self.assertEqual(request.status, 400)
         self.assertEqual(InstallStatus(self.root).read()["step"], "gmail_sync")
 
+    def test_live_gmail_consent_cannot_start_a_duplicate_import(self):
+        InstallStatus(self.root).write(step=InstallStep.GMAIL_LOGIN, status=InstallState.WAITING,
+                                       message="Connect Gmail", pid=os.getpid())
+        request = Request({"sources": ["gmail"]})
+        with patch("threading.Thread") as worker:
+            self.controller.post(request, "/api/install/sources")
+        self.assertEqual(request.status, 400)
+        worker.assert_not_called()
+
     def test_other_site_cannot_start_imports(self):
         request = Request({"sources": ["imessage"]}, "https://another.example")
         with patch.object(self.controller, "start") as start:

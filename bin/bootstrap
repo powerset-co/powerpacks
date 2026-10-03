@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command that takes a Mac from nothing to installed Powerpacks skills.
+# One command installs Powerpacks, connects accounts, and imports contacts.
 #
 # The coding agent (Claude Code, Codex, Pi) runs this on the user's behalf. It
 # asks nothing and decides nothing for the agent: the LAST line names the
@@ -7,7 +7,7 @@
 #
 #   DONE: ...        installed; continue with the user's ask
 #   NEEDS YOU: ...   a step needs the human (a click, a password); show the line
-#                    word for word, wait, then run the same command again
+#                    live commands resume after the action; exited ones need recovery
 #   STOP: ...        wrong place to run this; show the line, do not continue
 #   FAILED: ...      something broke; show the line
 #
@@ -17,9 +17,9 @@
 #
 #   --harness   which agent's skills folder to install into; default: every one
 #               found on this Mac (both Claude Code and Codex when none is found)
-#   --powerset  connect the account, prepare credentials, and verify network search
+#   --powerset  connect the account, check hosted search, then import contacts
 #   --tools     prepare Gmail and WhatsApp import tools (no login or sync)
-#               --no-tools (default) keeps hosted setup light
+#               --no-tools (default) lets each source prepare its own tools
 #
 # Exit codes: 0 done; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
 #
@@ -36,6 +36,7 @@ harness="auto"
 powerset=0
 tools="skip"
 port=8765
+source_args=()
 bootstrap_args=("$@")
 retry_command="bin/bootstrap"
 if [[ $# -gt 0 ]]; then
@@ -49,6 +50,9 @@ while [[ $# -gt 0 ]]; do
     --tools) tools="install"; shift ;;
     --no-tools) tools="skip"; shift ;;
     --port) port="${2:-}"; shift 2 ;;
+    --source|--skip-source|--gmail-email|--sync-after|--wacli-store)
+      source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
+    --refresh) source_args+=("$1"); shift ;;
     *)
       echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]" >&2
       exit 2
@@ -250,7 +254,7 @@ if [[ "$powerset" == 1 ]]; then
   # Python calls the existing login, provisioning, and connection primitives
   # in-process. Keep its final line visible and preserve its waiting state.
   (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.onboard \
-    --root "$root" --pid "$$" --retry-command "$retry_command" "${onboard_args[@]}") \
+    --root "$root" --pid "$$" --retry-command "$retry_command" "${onboard_args[@]}" ${source_args[@]+"${source_args[@]}"}) \
     2> >(tee -a "$log" >&2) || code=$?
   case "$code" in
     0) terminal_status=completed ;;

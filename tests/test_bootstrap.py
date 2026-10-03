@@ -126,6 +126,19 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(context.exists(), "Onboarding did not refresh user context")
         self.assertEqual(context.read_text(), "ACCOUNT=casey@example.com\n")
 
+    def test_one_command_passes_source_account_and_history_to_onboarding(self) -> None:
+        record = self.sandbox.root / "source-options.json"
+        with (self.sandbox.repo / "packs/powerset/primitives/install/onboard.py").open("a") as handle:
+            handle.write(f'\nimport json\nPath({str(record)!r}).write_text(json.dumps(sys.argv[1:]))\n')
+        proc = self.sandbox.run("--powerset", "--harness", "codex", "--gmail-email", "personal@gmail.com",
+                                "--sync-after", "2025-10-03", "--wacli-store", "/tmp/fresh-whatsapp", "--refresh")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        argv = json.loads(record.read_text())
+        self.assertEqual(argv[argv.index("--gmail-email") + 1], "personal@gmail.com")
+        self.assertEqual(argv[argv.index("--sync-after") + 1], "2025-10-03")
+        self.assertEqual(argv[argv.index("--wacli-store") + 1], "/tmp/fresh-whatsapp")
+        self.assertIn("--refresh", argv)
+
     def test_installs_for_every_harness_found_and_reports_done(self) -> None:
         proc = self.sandbox.run("--no-tools", home_dirs=(".codex", ".claude"))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

@@ -66,7 +66,8 @@ class InstallController:
             raise ValueError("Setup is already running")
         status = InstallStatus(self.root)
         current = status.read()
-        if current["status"] == "running" or (current["status"] == "waiting" and current["step"] in {"account", "whatsapp_login"}):
+        if current["status"] == "running" or (current["status"] == "waiting" and current["installer_pid"] > 0
+                                               and current["step"] in {"account", "gmail_login", "imessage_access", "whatsapp_login"}):
             self.lock.release()
             raise ValueError("Setup is already running")
 

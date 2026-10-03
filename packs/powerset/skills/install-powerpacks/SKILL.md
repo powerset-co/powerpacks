@@ -17,7 +17,7 @@ metadata:
 # Set up Powerpacks
 
 <!-- Changelog: 2026-10-03 — continue with default source imports on the same
-page; preserve source, account, and history choices on retries. -->
+page; the original command owns login, permission waits, and import continuation. -->
 
 The user pastes:
 
@@ -46,7 +46,16 @@ curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/boo
 ```
 
 Run asynchronously so you can show progress while it works. In Codex, use a
-short shell `yield_time_ms`; in Claude Code, use background Bash.
+short shell `yield_time_ms`; in Claude Code, use background Bash. Keep ownership
+of that process until its verified outcome. Browser consent, QR scans, and
+Messages permission changes resume the same command automatically; the user
+should not need to say "done" or ask you to poll. Watch command output and saved
+state using bounded waits. A background process is not a completed workflow.
+
+If the user requests a worker and advisor, give the worker command execution
+and keep the original chat responsible for steering and recovery. Relay chat
+choices to the worker; never launch a competing installer. Do not leave an
+exited workflow waiting on a future user message to resume it.
 
 No project directory or manual clone is needed. Bootstrap downloads into
 `~/powerpacks` or reuses the existing installation. When it prints
@@ -65,7 +74,7 @@ It does not authorize uploading contacts or paid research.
 - Explicit "install only", "don't log in", or custom/local-only setup: omit
   `--powerset`. Follow that narrower request; don't report account readiness.
 - Keep `--no-tools` for initial setup. Source imports prepare their own tools
-  afterward. Hosted search is usable while local imports continue.
+  in the same command. Report hosted search as usable only after verification.
 - Reruns update the existing checkout within its selected release channel and
   preserve configuration and network data. Fresh installs follow the published
   release, not the current PR or `main`. When explicitly testing a PR, run its
@@ -106,8 +115,8 @@ and the saved progress; do not start a second installer while it is running.
 
 | Script result | Agent action |
 | --- | --- |
-| `DONE:` | Verify account/search readiness, inform the user of the default imports below, and run `bin/onboard` from the printed checkout immediately. Continue any already-requested search. Respect an explicit install-only request. |
-| `NEEDS YOU:` | Show the single action needed. During browser login the script waits and continues automatically. If the script has exited, resume it after the action. |
+| `DONE:` | Verify the saved result. Bootstrap already ran the selected imports; do not start a second onboarding command. Respect an explicit install-only request. |
+| `NEEDS YOU:` | Read the saved action. Live sign-in, QR, and permission waits continue automatically. If the command exited for missing app configuration or identity, handle its action yourself and resume the saved command. At the processing handoff, run the free checks and obtain approval before paid work. |
 | `STOP:` | Explain where to run the instruction. Do not continue in the wrong environment. |
 | `FAILED:` | Read the saved error, fix the cause within the authorized setup, and rerun. Don't ask "should I try to fix it?" |
 
@@ -127,6 +136,7 @@ Specific recovery:
   access and refresh the agent connection. Don't force a session restart merely
   because newly registered tools aren't visible yet. Never claim a connection
   works until its check succeeds.
+- **Hosted search is unprovisioned, empty, or unindexed:** the command continues local imports and retains the actual search check in Details. Do not ask the user to repair hosting before connecting sources or claim search is usable.
 - **Personal network has 0 people:** name the actual signed-in email and continue
   the default contact imports. If the user requests an account switch, use the
   installed `auth.py login --force-account` primitive, then rerun onboarding.
@@ -147,14 +157,14 @@ name, and the signed-in email in normal conversation.
 
 ## Continue on the same page
 
-After bootstrap completes, inform the user of the sources and history. For a
-fresh setup: "I’ll import Gmail from the past year, iMessage, and WhatsApp.
-Tell me in chat if you want a different account,
-history, source, or to skip one." Then run `<repo>/bin/onboard` immediately;
-do not wait for source or history choices. Existing explicit choices take
-precedence; describe those choices on retries. LinkedIn is included only when
-requested. A working hosted account remains usable while local setup waits for
-sign-in or permissions.
+Bootstrap connects the account and runs Gmail, iMessage, and WhatsApp in one
+command. Inform the user once: "I’ll import Gmail from the past year, iMessage,
+and WhatsApp. Tell me here if you want a different account, history, or to skip
+one." Apply choices already given; do not ask again or wait for default-source
+confirmation. Pass existing `--source`, `--gmail-email`, `--sync-after`, and
+`--wacli-store` options to bootstrap when supplied. A named Gmail import account
+is independent of the Powerset account; do not force a Powerset account switch
+because the emails differ. LinkedIn is included only when requested.
 
 For chat choices, run the same script with one `--source gmail|imessage|whatsapp|linkedin`
 per selected source, or `--source skip`. Gmail accepts repeatable
@@ -166,9 +176,14 @@ account, ask only which Gmail account to use. Never select an arbitrary account
 from several. The script prepares the sources' tools and reuses existing imports.
 Use `--refresh` only when the user asks to sync again.
 
+Gmail authorization and WhatsApp linking stay inside the original command;
+iMessage access checks resume when permission becomes readable. OAuth app
+creation, absent Messages data, and missing identity can still return a saved
+action for the agent. Keep handling those actions without a new user instruction.
+
 Watch the saved manifest and the original process. If a panel action already
-started it, follow that process rather than launching a duplicate. When it exits
-waiting or failed, read `action` and the saved error:
+started it, follow that process rather than launching a duplicate. Read `action`
+while a live command waits, and the saved error when it fails:
 
 - Run the relevant `action.command` from the checkout yourself within the chosen
   source's scope. Handle dependency repairs, OAuth app preparation, and retries;
@@ -184,7 +199,7 @@ waiting or failed, read `action` and the saved error:
   in chat. Preserve any existing input before replacing it. Receiving the CSV
   does not authorize paid processing or an upload.
 
-After the action, rerun the manifest's `retry_command` with the same exact source,
+If the command exited for an agent action, rerun the manifest's `retry_command` with the same exact source,
 account, history, and store choices. Existing files and sessions are reused;
 never log out, clear stores, or delete data to rehearse a fresh install. Repair a
 failed step and retry it; if the same failure persists, explain the remaining

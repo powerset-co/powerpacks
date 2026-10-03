@@ -62,6 +62,18 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["steps"]["account"]["status"], "failed")
 
+    def test_live_source_wait_is_interrupted_when_its_owner_dies(self) -> None:
+        for step in (InstallStep.GMAIL_LOGIN, InstallStep.IMESSAGE_ACCESS):
+            with self.subTest(step=step):
+                self.status.write(step=step, status=InstallState.WAITING,
+                                  message="Waiting for access", pid=99999999)
+                self.assertEqual(self.status.read()["status"], "failed")
+
+    def test_missing_configuration_wait_has_no_running_owner(self) -> None:
+        self.status.write(step=InstallStep.GMAIL_LOGIN, status=InstallState.WAITING,
+                          message="Set up Gmail access", pid=0, action={"kind": "gmail"})
+        self.assertEqual(self.status.read()["status"], "waiting")
+
     def test_empty_network_wait_remains_actionable_after_installer_exit(self) -> None:
         self.status.write(step=InstallStep.NETWORK, status=InstallState.WAITING,
                           message="Choose another account or connect contacts", pid=99999999)

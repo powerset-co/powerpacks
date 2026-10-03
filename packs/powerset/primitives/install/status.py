@@ -151,7 +151,9 @@ class InstallStatus:
                                     installer_pid=0, log_path=str(self.log_path),
                                     retry_command="bin/bootstrap").to_payload()
         if manifest.status is InstallState.RUNNING or (
-            manifest.status is InstallState.WAITING and manifest.step in {InstallStep.ACCOUNT, InstallStep.WHATSAPP_LOGIN}
+            manifest.status is InstallState.WAITING and manifest.installer_pid > 0
+            and manifest.step in {InstallStep.ACCOUNT, InstallStep.GMAIL_LOGIN,
+                                  InstallStep.IMESSAGE_ACCESS, InstallStep.WHATSAPP_LOGIN}
         ):
             try:
                 os.kill(manifest.installer_pid, 0)
