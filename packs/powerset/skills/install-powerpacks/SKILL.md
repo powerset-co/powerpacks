@@ -47,6 +47,13 @@ curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/boo
 Run asynchronously so you can show progress while it works. In Codex, use a
 short shell `yield_time_ms`; in Claude Code, use background Bash.
 
+No project directory or manual clone is needed. Bootstrap downloads into
+`~/powerpacks` or reuses the existing installation. When it prints
+`powerpacks: repo: <path>`, read that checkout's `AGENTS.md` for usage guidance
+and `.codex/AGENTS.md` if present for remembered user context. Run subsequent
+commands there; don't assume the chat is inside the checkout or write global
+agent instructions into the user's unrelated projects.
+
 This installs Powerpacks, preserves existing configuration, connects the
 Powerset account, checks access to search, and checks the selected network.
 Already-valid login is skipped. The normal pasted instruction authorizes this

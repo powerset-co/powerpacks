@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Install skill instructions with the checkout's absolute runtime context."""
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    root, source, destination = map(Path, sys.argv[1:])
+    root = root.resolve()
+    metadata, body = source.read_text().split("\n---\n", 1)
+    context = f"""
+## Installed Powerpacks context
+
+Powerpacks is installed at `{root}`. Before following this workflow, read
+`{root}/AGENTS.md` for usage guidance and, if present,
+`{root}/.codex/AGENTS.md` for remembered account and network context.
+Run commands from `{root}`; resolve `packs/`, `bin/`, `.env`, and
+`.powerpacks/` paths there, regardless of the chat's working directory.
+Use this checkout for execution, not the skill's copied `powerpacks/` bundle.
+
+"""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(metadata + "\n---\n" + context + body.lstrip("\n"))
+
+
+if __name__ == "__main__":
+    main()

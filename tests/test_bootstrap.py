@@ -113,6 +113,19 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("Codex", last_line(proc))
         self.assertEqual(self.sandbox.installed(), [])
 
+    def test_account_context_is_refreshed_after_onboarding(self) -> None:
+        context = self.sandbox.repo / "profile-account.txt"
+        write(self.sandbox.repo / "bin/agent-bootstrap",
+              'from pathlib import Path\n'
+              f'root=Path({str(self.sandbox.repo)!r})\n'
+              f'Path({str(context)!r}).write_text((root/".env").read_text())\n')
+        with (self.sandbox.repo / "packs/powerset/primitives/install/onboard.py").open("a") as handle:
+            handle.write('\n(root/".env").write_text("ACCOUNT=casey@example.com\\n")\n')
+        proc = self.sandbox.run("--powerset", "--no-tools", "--harness", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(context.exists(), "Onboarding did not refresh user context")
+        self.assertEqual(context.read_text(), "ACCOUNT=casey@example.com\n")
+
     def test_installs_for_every_harness_found_and_reports_done(self) -> None:
         proc = self.sandbox.run("--no-tools", home_dirs=(".codex", ".claude"))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -343,7 +356,7 @@ class PublishedBootstrapTests(unittest.TestCase):
         self.checkout = self.sandbox.home / "powerpacks"
         self.env = {"HOME": str(self.sandbox.home), "PATH": f"{self.sandbox.bin}:/usr/bin:/bin",
                     "POWERPACKS_REPO_URL": str(self.remote), "POWERPACKS_SKIP_AGENT_BOOTSTRAP": "1"}
-        for relative in ("bin/powerpacks-channel", "install.sh", "adapters/codex/install.sh",
+        for relative in ("bin/powerpacks-channel", "bin/install-skill", "install.sh", "adapters/codex/install.sh",
                          "bin/powerpacks-install-stamp", "bin/update-powerpacks"):
             write(self.source / relative, (ROOT / relative).read_text(), executable=True)
         for directory in ("docs", "templates", "config"):

@@ -17,7 +17,7 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["feedback", "fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            ["feedback", "fix-powerpacks", "install-powerpacks", "powerpacks-doctor", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
@@ -90,22 +90,10 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
-            self.assertTrue((skills_dir / "search" / "powerpacks" / "pyproject.toml").exists())
-            self.assertIn(
-                "turbopuffer",
-                (skills_dir / "search" / "powerpacks" / "pyproject.toml").read_text(),
-            )
-            self.assertFalse(
-                (skills_dir / "powerset" / "powerpacks" / "packs" / "powerset" / "skills" / "powerset" / "SKILL.md").exists()
-            )
-            nested_skill_files = sorted(
-                path.relative_to(skills_dir)
-                for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
-            )
-            self.assertEqual(nested_skill_files, [])
+            self.assertIn(str(ROOT), (skills_dir / "search/SKILL.md").read_text())
+            self.assertFalse((skills_dir / "search/powerpacks").exists())
 
-    def test_codex_adapter_uses_shared_powerpacks_bundle(self) -> None:
+    def test_codex_adapter_uses_checkout_context(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             codex_home = Path(td) / ".codex"
             skills_dir = Path(td) / "skills"
@@ -117,24 +105,10 @@ class CoreLayoutTests(unittest.TestCase):
                 env={**os.environ, "CODEX_HOME": str(codex_home), "POWERPACKS_SKIP_UV_SYNC": "1"},
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            bundle = codex_home / "powerpacks"
-            self.assertTrue((bundle / "packs").is_dir())
-            self.assertTrue((bundle / "pyproject.toml").exists())
-            self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
-            self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "import-messages" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "setup" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "build-outbound" / "powerpacks").is_symlink())
-            self.assertEqual((skills_dir / "powerset" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "import-messages" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "setup" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "build-outbound" / "powerpacks").resolve(), bundle.resolve())
-            nested_skill_files = sorted(path.relative_to(bundle) for path in bundle.glob("packs/*/skills/*/SKILL.md"))
-            self.assertEqual(nested_skill_files, [])
+            self.assertFalse((codex_home / "powerpacks").exists())
+            for skill in ("powerset", "import-messages", "setup", "build-outbound"):
+                self.assertIn(str(ROOT), (skills_dir / skill / "SKILL.md").read_text())
+                self.assertFalse((skills_dir / skill / "powerpacks").exists())
 
     def test_claude_adapter_installs_build_outbound_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -148,12 +122,8 @@ class CoreLayoutTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "build-outbound" / "powerpacks" / "packs" / "apollo").is_dir())
-            nested_skill_files = sorted(
-                path.relative_to(skills_dir)
-                for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
-            )
-            self.assertEqual(nested_skill_files, [])
+            self.assertIn(str(ROOT), (skills_dir / "build-outbound/SKILL.md").read_text())
+            self.assertFalse((skills_dir / "build-outbound/powerpacks").exists())
 
     def test_powerset_login_skill_uses_api_runtime_key_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()

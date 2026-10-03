@@ -108,7 +108,7 @@ paths and rely on the primitives — don't pre-delete or invent folders.
 resolve_powerpacks_root() {
   for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
     [[ -n "$candidate" ]] || continue
-    [[ "$candidate" != *"/.codex/"* ]] || continue
+    [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -x "$candidate/bin/update-codex" && -d "$candidate/packs" ]]; then
       printf '%s\n' "$candidate"; return 0
     fi

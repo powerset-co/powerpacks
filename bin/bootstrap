@@ -2,8 +2,8 @@
 # One command that takes a Mac from nothing to installed Powerpacks skills.
 #
 # The coding agent (Claude Code, Codex, Pi) runs this on the user's behalf. It
-# asks nothing and decides nothing for the agent: the LAST line of its output
-# says what happens next, and the agent only relays it.
+# asks nothing and decides nothing for the agent: the LAST line names the
+# outcome. The agent handles routine recovery and relays only human actions.
 #
 #   DONE: ...        installed; continue with the user's ask
 #   NEEDS YOU: ...   a step needs the human (a click, a password); show the line
@@ -284,6 +284,11 @@ if [[ "$powerset" == 1 ]]; then
       terminal_status=failed
       ;;
   esac
+  if [[ "$code" == 0 || "$code" == 10 ]]; then
+    if ! (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" "$root/bin/agent-bootstrap" --json) >>"$log" 2>&1; then
+      echo "powerpacks: user context could not be refreshed" >>"$log"
+    fi
+  fi
   exit "$code"
 fi
 

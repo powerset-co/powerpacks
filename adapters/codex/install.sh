@@ -9,11 +9,10 @@ CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 # each one would load twice.
 SKILLS_DIR="${1:-$HOME/.agents/skills}"
 LEGACY_SKILLS_DIR="$CODEX_HOME/skills"
-BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
   search search-company search-sql search-contacts build-local-search-index
-  powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
+  powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound
   setup msgvault import-gmail import-twitter deep-context logbook
   import-messages clean-slate
 )
@@ -31,88 +30,19 @@ RETIRED_SKILLS=(
 "$REPO_ROOT/bin/setup-python"
 mkdir -p "$SKILLS_DIR"
 for skill in "${MANAGED_SKILLS[@]}" "${RETIRED_SKILLS[@]}"; do
-  rm -rf "$SKILLS_DIR/$skill" "$LEGACY_SKILLS_DIR/$skill"
+  rm -f "$LEGACY_SKILLS_DIR/$skill/SKILL.md"
+done
+for skill in "${RETIRED_SKILLS[@]}"; do
+  rm -f "$SKILLS_DIR/$skill/SKILL.md"
 done
 rm -f "$LEGACY_SKILLS_DIR/.powerpacks-install.json"
-
-install_powerpacks_bundle() {
-  local tmp="$BUNDLE_DIR.tmp"
-  local backup="$BUNDLE_DIR.backup"
-  if [[ ! -e "$BUNDLE_DIR" && -e "$backup" ]]; then
-    mv "$backup" "$BUNDLE_DIR"
-  fi
-  rm -rf "$tmp"
-  mkdir -p "$tmp"
-  cp "$REPO_ROOT/pyproject.toml" "$tmp/pyproject.toml"
-  if [[ -f "$REPO_ROOT/uv.lock" ]]; then
-    cp "$REPO_ROOT/uv.lock" "$tmp/uv.lock"
-  fi
-  # Cross-pack docs + host-install templates (no top-level primitives/skills/
-  # schemas anymore — every domain lives in packs/).
-  cp -R "$REPO_ROOT/docs" "$tmp/docs"
-  cp -R "$REPO_ROOT/templates" "$tmp/templates"
-  cp -R "$REPO_ROOT/config" "$tmp/config"
-  # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
-  # primitives, schemas, contracts, tasks, evals, and docs.
-  cp -R "$REPO_ROOT/packs" "$tmp/packs"
-  # Setup sidecars run from this installed bundle: setup/index expects
-  # scripts/build-local-duckdb-shim.py to materialize restored bootstrap records
-  # into .powerpacks/search-index/local-search.duckdb.
-  mkdir -p "$tmp/scripts"
-  for script in build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
-    cp "$REPO_ROOT/scripts/$script" "$tmp/scripts/$script"
-    chmod +x "$tmp/scripts/$script"
-  done
-  # Keep only the top-level skill entrypoint; avoid nested skill duplication
-  # from copied packs during discovery.
-  find "$tmp/packs" -type f -path "*/SKILL.md" -delete
-
-  cat > "$tmp/README.codex-install.md" <<EOF
-# Codex Powerpacks Bundle
-
-This shared directory is copied by:
-
-\`\`\`bash
-$REPO_ROOT/adapters/codex/install.sh
-\`\`\`
-
-Installed Powerpacks skills link their local \`powerpacks/\` directory here.
-EOF
-
-  if [[ -d "$BUNDLE_DIR/.powerpacks" ]]; then
-    cp -R "$BUNDLE_DIR/.powerpacks" "$tmp/.powerpacks"
-  fi
-  if [[ -f "$BUNDLE_DIR/.env" ]]; then
-    cp "$BUNDLE_DIR/.env" "$tmp/.env"
-  fi
-
-  rm -rf "$backup"
-  if [[ -e "$BUNDLE_DIR" ]]; then
-    mv "$BUNDLE_DIR" "$backup"
-  fi
-  if mv "$tmp" "$BUNDLE_DIR"; then
-    rm -rf "$backup"
-  else
-    status=$?
-    if [[ ! -e "$BUNDLE_DIR" && -e "$backup" ]]; then
-      mv "$backup" "$BUNDLE_DIR"
-    fi
-    return "$status"
-  fi
-}
 
 install_skill() {
   local skill_name="$1"
   local source_skill="$2"
   local dest="$SKILLS_DIR/$skill_name"
-  rm -rf "$dest"
-  mkdir -p "$dest"
-
-  cp -R "$source_skill" "$dest/SKILL.md"
-  ln -s "$BUNDLE_DIR" "$dest/powerpacks"
+  python3 "$REPO_ROOT/bin/install-skill" "$REPO_ROOT" "$source_skill" "$dest/SKILL.md"
 }
-
-install_powerpacks_bundle
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
@@ -127,6 +57,7 @@ install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpa
 install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
+install_skill powerpacks-doctor "$REPO_ROOT/packs/powerset/skills/powerpacks-doctor/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
@@ -143,8 +74,7 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 # manifest + the exact commit + when. Lets update-powerpacks/doctor detect stale
 # installs instead of discovering them by zombie skills.
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" codex \
-  "$SKILLS_DIR/.powerpacks-install.json" \
-  "$BUNDLE_DIR/.powerpacks-install.json"
+  "$SKILLS_DIR/.powerpacks-install.json"
 
 if [[ "${POWERPACKS_SKIP_AGENT_BOOTSTRAP:-}" == "1" ]]; then
   echo "skipped local Codex profile generation (POWERPACKS_SKIP_AGENT_BOOTSTRAP=1)"
@@ -154,4 +84,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
