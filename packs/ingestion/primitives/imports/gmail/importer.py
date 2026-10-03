@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Import every discovered Gmail contact as a source candidate.
 
-Selected account people.csv files -> merge metadata by email -> people.csv +
-manifest.json. Identity matching and worth decisions belong to Deep Context.
+Selected account people.csv files -> source names, email and interactions ->
+merge by email -> people.csv + manifest.json. Identity matching and worth
+decisions belong to Deep Context.
 
 Changelog:
   2026-09-23 (typed rows): account contacts are read as `PeopleRow` and handed to
@@ -13,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,50 +23,33 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, read_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_IMPORT_DIR  # noqa: E402
-from packs.ingestion.primitives.discover.common import read_csv_rows  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.discover import (  # noqa: E402
     GMAIL_ACCOUNT_PEOPLE_CSV,
     GMAIL_STAGE_MANIFEST_JSON,
 )
 from packs.ingestion.primitives.imports.common import import_manifest_current, write_manifest  # noqa: E402
-from packs.ingestion.primitives.imports.directory import merge_jsonish_lists  # noqa: E402
 from packs.ingestion.primitives.imports.merge_people import merge_group  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow, StageManifest  # noqa: E402
-from packs.ingestion.schemas.candidates_schema import candidate_key_for  # noqa: E402
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-GMAIL_IMPORT_CONTRACT = "gmail-source-only-v1"
+from packs.ingestion.primitives.imports.gmail.source_people import (  # noqa: E402
+    GMAIL_IMPORT_CONTRACT, GmailAccount, source_people_from_accounts,
+)
 
 
-@dataclass(frozen=True)
-class _Account:
-    email: str
-    people_csv: Path
-
-
-def _read_accounts(manifest_json: Path) -> tuple[_Account, ...]:
+def _read_accounts(manifest_json: Path) -> tuple[GmailAccount, ...]:
     manifest = read_json(manifest_json, {})
     return tuple(sorted(
-        (_Account(child["account_email"], Path(child["people_csv"])) for child in manifest.get("children", [])),
-        key=lambda account: account.email,
+        (GmailAccount(child["account_email"], Path(child["people_csv"])) for child in manifest.get("children", [])),
+        key=lambda account: account.account_email,
     ))
 
 
-def _people_from_accounts(accounts: tuple[_Account, ...]) -> list[dict[str, str]]:
+def _people_from_accounts(accounts: tuple[GmailAccount, ...]) -> list[dict[str, str]]:
     grouped: dict[str, list[PeopleRow]] = {}
-    for account in accounts:
-        fields, rows = read_csv_rows(account.people_csv)
-        if not {"primary_email", "interaction_counts"}.issubset(fields):
-            raise ValueError(f"Gmail people schema missing primary_email or interaction_counts: {account.people_csv}")
-        for raw in rows:
-            row = PeopleRow.model_validate(raw)
-            key = candidate_key_for(row.primary_email)
-            if not key:
-                raise ValueError(f"Gmail source contact has no valid email: {account.people_csv}")
-            row.primary_email = row.primary_email.strip().lower()
-            row.source_artifacts = merge_jsonish_lists(row.source_artifacts, str(account.people_csv))
-            grouped.setdefault(f"candidate:{key}", []).append(row)
+    for row in source_people_from_accounts(accounts):
+        grouped.setdefault(row.id, []).append(row)
     return [merge_group(key, members) for key, members in sorted(grouped.items())]
 
 
@@ -133,7 +116,7 @@ class GmailImport(Node):
             reason=None if accounts else "no Gmail discovery accounts",
             input={
                 **expected_input,
-                "accounts": [{"account_email": account.email, "people_csv": str(account.people_csv)} for account in accounts],
+                "accounts": [{"account_email": account.account_email, "people_csv": str(account.people_csv)} for account in accounts],
             },
             outputs={"people_csv": str(self.people_csv)} if accounts else {},
             stats={"people": len(people), "candidates": len(people)},

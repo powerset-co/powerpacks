@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.contact_fields import emails_from_row, normalize_email, normalize_phone, phones_from_row
 from packs.ingestion.primitives.deep_context.shared.coerce import clean_text
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -24,6 +25,8 @@ from packs.ingestion.primitives.deep_context.synthesis.facts import NETWORK_WORT
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisRecord
 from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
+from packs.ingestion.primitives.deep_context.db.queries import imported_people, owner_profile, people
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class ProjectionError(StoreError):
@@ -60,6 +63,22 @@ def _content_type(data: bytes) -> str:
     if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return "image/webp"
     return "application/octet-stream"
+
+
+def project_owner_people(db: Db, source_rows: tuple[PeopleRow, ...] | None = None) -> None:
+    """Explicit owner endpoints classify source contacts; model claims do not."""
+    owner = owner_profile(db)
+    if owner is None:
+        return
+    emails = {value for raw in owner.emails if (value := normalize_email(raw))}
+    phones = {value for raw in owner.phones if (value := normalize_phone(raw))}
+    matched = set()
+    for person in imported_people(db) if source_rows is None else source_rows:
+        row = person.to_row()
+        if emails.intersection(emails_from_row(row)) or phones.intersection(phones_from_row(row)):
+            matched.add(person.id)
+    db.project_rows(tuple(replace(person, is_owner=True) for person in people(db)
+                          if person.person_id in matched and not person.is_owner))
 
 
 def project_parent_fact(db: Db, path: Path, parent_id: str, *, artifact_key: str | None = None,

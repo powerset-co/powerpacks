@@ -2,7 +2,9 @@
 """Combine selected message-channel metadata by normalized phone or email.
 
 Flow: parse contact CSVs -> union names/groups/channels -> write contacts + manifest.
-The first nonempty name wins. Later rows replace counts for the same channel.
+Compatible names keep the first nonempty name. Conflicts remain unnamed for
+review, including conflicts recorded in the input source manifests.
+Later rows replace counts for the same channel.
 Identity matching and person review belong to Deep Context.
 
 Changelog:
@@ -19,9 +21,11 @@ import argparse
 import csv
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
+
+from pydantic import BaseModel
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -40,6 +44,7 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     total_message_count,
 )
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match  # noqa: E402
 from packs.ingestion.schemas.message_contacts import (  # noqa: E402
     CSV_HEADERS,
     GROUP_SEPARATOR,
@@ -54,6 +59,20 @@ from packs.shared.csv_io import CsvIO  # noqa: E402
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+class _NameConflict(BaseModel):
+    phone: str
+    names: tuple[str, ...]
+
+
+class _SourceDiagnostics(BaseModel):
+    conflicting_names: tuple[_NameConflict, ...] = ()
+
+
+class _SourceManifest(BaseModel):
+    artifacts: dict[str, str | None] = {}
+    diagnostics: _SourceDiagnostics = _SourceDiagnostics()
+
 
 def schema_error(path: Path, fieldnames: list[str] | None) -> str:
     fields = ",".join(fieldnames or []) or "<none>"
@@ -254,10 +273,12 @@ class ContactsMerger:
         inputs: list[str | Path],
         output: str | Path,
         manifest: str | Path | None = None,
+        source_manifests: list[str | Path] | None = None,
     ) -> dict[str, Any]:
         """Merge ``inputs`` into ``output`` CSV, write the manifest, and return
         it. ``manifest`` defaults next to ``output`` when omitted."""
         input_paths = [Path(p) for p in inputs]
+        source_manifest_paths = [Path(p) for p in source_manifests or ()]
         output_path = Path(output)
         manifest_path = (
             Path(manifest)
@@ -268,6 +289,20 @@ class ContactsMerger:
         by_phone: dict[str, MergedContact] = {}
         per_input_counts: list[dict[str, Any]] = []
         sources_per_phone: dict[str, set[str]] = {}
+        source_names: dict[str, list[str]] = {}
+        known_conflicts: set[str] = set()
+
+        for path in source_manifest_paths:
+            source = _SourceManifest.model_validate_json(path.read_text(encoding="utf-8"))
+            if not source.diagnostics.conflicting_names:
+                continue
+            source_csv = source.artifacts.get("csv")
+            if not source_csv or Path(source_csv).resolve() not in {path.resolve() for path in input_paths}:
+                raise ValueError(f"Source manifest CSV is not a merge input: {path}")
+            for conflict in source.diagnostics.conflicting_names:
+                phone = canonicalize_phone(conflict.phone)
+                source_names.setdefault(phone, []).extend(conflict.names)
+                known_conflicts.add(phone)
 
         for path in input_paths:
             records, counts = read_input_csv(path)
@@ -275,6 +310,8 @@ class ContactsMerger:
             new_in_this_file = 0
             for rec in records:
                 phone = rec.phone
+                if rec.name:
+                    source_names.setdefault(phone, []).append(rec.name)
                 if phone in by_phone:
                     by_phone[phone] = _merge_records(by_phone[phone], rec)
                     merged_in_this_file += 1
@@ -288,6 +325,13 @@ class ContactsMerger:
                 "added_new": new_in_this_file,
                 "merged_into_existing": merged_in_this_file,
             })
+
+        conflicting_names = []
+        for phone, contact in by_phone.items():
+            names = tuple(dict.fromkeys(source_names.get(phone, ())))
+            if phone in known_conflicts or (len(names) > 1 and not source_names_can_match(names)):
+                by_phone[phone] = replace(contact, name="")
+                conflicting_names.append({"phone": phone, "names": list(names)})
 
         rows_written = write_output_csv(output_path, list(by_phone.values()))
 
@@ -305,11 +349,14 @@ class ContactsMerger:
             "inputs": per_input_counts,
             "output": str(output_path),
             "manifest_path": str(manifest_path),
+            "source_manifests": [str(path) for path in source_manifest_paths],
+            "diagnostics": {"conflicting_names": conflicting_names},
             "counts": {
                 "rows_written": rows_written,
                 "unique_phones": len(by_phone),
                 "cross_channel_phones": cross_channel,
                 "by_source": by_source,
+                "contacts_with_conflicting_names": len(conflicting_names),
             },
         }
         write_json(manifest_path, manifest_payload)
@@ -324,6 +371,8 @@ def main() -> None:
                        help="Path to a per-channel CSV (use multiple --input flags to merge several)")
     merge.add_argument("--output", "-o", required=True, help="Path to write the unified contacts.csv")
     merge.add_argument("--manifest", help="Path to write the run manifest JSON")
+    merge.add_argument("--source-manifest", dest="source_manifests", action="append", default=[],
+                       help="Input channel's extractor manifest containing source-name conflicts")
     args = parser.parse_args()
 
     # Single subcommand: build the merger, run it, and emit the manifest. A
@@ -333,6 +382,7 @@ def main() -> None:
         inputs=list(args.inputs),
         output=args.output,
         manifest=args.manifest if args.manifest else None,
+        source_manifests=args.source_manifests,
     ))
 
 

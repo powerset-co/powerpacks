@@ -25,6 +25,8 @@ from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.identity_views import pending_parent_ids
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
+    EnrichRun,
+    EnrichRunStatus,
     ArtifactRow,
     CandidatePersonRow,
     LinkRow,
@@ -38,13 +40,17 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.db.view_models import (
     LinkedInQueueRow,
     WorthHumanRow,
     WorthMachineRow,
 )
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
+from packs.ingestion.primitives.deep_context.db.workflow_views import enrichment_work
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import judging
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityJudgeResult, IdentityUsage, IdentityVerdict
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
     RelationshipDecision,
     finish_reviews,
@@ -310,6 +316,13 @@ class ReviewStore:
 
     def finish_questions(self) -> dict[str, str]:
         """What the enrichment pipeline's last step leaves: every pending LinkedIn handed to the reviewer."""
+        def answered(tasks, **kwargs):
+            verdict = IdentityVerdict.from_payload({"verdict": "needs_review", "confidence": .5,
+                                                   "reason": "Synthetic colleague needs human review"})
+            return [IdentityJudgeResult(verdict, IdentityUsage(), "", judging.jev_judge.judgment_fingerprint(
+                task, urls, kwargs["reference_date"])) for task, urls in zip(tasks, kwargs["imported_urls"], strict=True)]
+        with mock.patch.object(judging.jev_judge, "judge_batch", side_effect=answered):
+            judging.judge_mapped_candidates(self.db)
         decisions = []
         for parent_id in sorted(pending_parent_ids(self.db)):
             undecided = [
@@ -327,6 +340,7 @@ class ReviewStore:
     def reach_linkedin(self) -> None:
         self.reach_enrich()
         self.finish_questions()
+        self.db.record_enrich_run(EnrichRun(EnrichRunStatus.COMPLETED, "", unfinished=enrichment_work(self.db)))
 
     def reach_done(self) -> None:
         self.reach_linkedin()
@@ -1397,6 +1411,10 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             if self.enrichment_manifest.exists():
                 payload = read_json(self.enrichment_manifest, {})
                 if payload.get("status") == expected:
+                    for thread in threading.enumerate():
+                        if thread.name == "pipeline-enrichment":
+                            thread.join(timeout=5)
+                            self.assertFalse(thread.is_alive(), "enrichment callback did not finish")
                     return payload
             time.sleep(0.01)
         self.fail(f"enrichment job did not reach {status}")
@@ -1418,6 +1436,7 @@ class ApproveEnrichmentTests(ReviewApiFixture):
         start.assert_not_called()
 
     def test_running_enrichment_approval_is_idempotent(self) -> None:
+        self.db.replace_imported_people((PeopleRow(id="worth-parent-person", full_name="Casey Delta"),))
         self.db.decide_worth("worth-parent", "yes")
         estimate = self.store.estimate()
         entered, release = threading.Event(), threading.Event()
@@ -1457,6 +1476,7 @@ class ApproveEnrichmentTests(ReviewApiFixture):
             self.assertIs(reconcile.call_args.kwargs["approve"], True)
 
     def test_approval_starts_the_pipeline_with_the_plan_it_showed(self) -> None:
+        self.db.replace_imported_people((PeopleRow(id="worth-parent-person", full_name="Casey Delta"),))
         self.db.decide_worth("worth-parent", "yes")
         plan = SqliteReviewAdapter(self.db, 0.7).enrichment()
         with mock.patch.object(enrichment_pipeline.EnrichmentPipeline, "start", return_value=False) as start:

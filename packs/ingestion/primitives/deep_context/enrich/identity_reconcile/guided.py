@@ -26,8 +26,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     RESEARCH_CONFIRM_THRESHOLD,
     ResearchHandle,
-    ReviewAction,
-    ReviewSource,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.view_models import (
@@ -36,7 +34,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentViewRow,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.identity_queries import links, research_rows
+from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
 from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db import queries as db_queries
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -44,7 +42,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research import dri
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchRunParams,
 )
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, owner_background
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     GuidanceOutcome,
@@ -56,14 +54,14 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.config imp
     DEFAULT_PROCESSOR,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
-    build_queue_row,
+    build_queue,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
     filter_already_done,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 
 @dataclass(frozen=True)
@@ -142,7 +140,7 @@ class GuidedResearch:
         # Second paid step: propose_retargets hydrates this URL (LinkedIn
         # provider) and runs it through the same paid judge as every other
         # retarget proposal, unless its judgment_fingerprint already matches a
-        # cached/grandfathered verdict. `provided_results` hands it the
+        # cached verdict. `provided_results` hands it the
         # ResearchResult from research() above so it skips its own lookup.
         propose_retargets(
             [
@@ -197,7 +195,8 @@ class GuidedResearch:
         # apply. A human decision only wins outright when the guidance text
         # itself contains the LinkedIn URL — that path bypasses judging
         # entirely and never reaches this method (see GuidedRetargetWorker.submit).
-        if decision.action == "retarget" and decision.approved in {"auto", "yes"}:
+        if (decision.action == "retarget" and decision.approved in {"auto", "yes"}
+                and normalize_linkedin_url(decision.new_url) == url):
             return self.record(
                 parent_id,
                 request,
@@ -243,15 +242,10 @@ class GuidedResearch:
         )
         # `guidance` (the user's free-text steer, e.g. "this is actually the
         # Jordan Bravo who works at Acme, not the one in retail") folds into
-        # the research query build_queue_row constructs — it changes what
+        # the research query build_queue constructs — it changes what
         # gets searched, not whether the result is accepted; see
         # apply_provider_result for the judge gate that still applies.
-        return build_queue_row(
-            DossierEvidence.from_db(self.db, row.person_ids),
-            row,
-            owner_context=owner_background(self.db),
-            guidance=request.guidance,
-        )
+        return build_queue([row], self.db, guidance=request.guidance)[0]
 
     def record(
         self,
@@ -262,22 +256,8 @@ class GuidedResearch:
         detail: str = "",
         new_url: str = "",
         candidate_url: str = "",
+        resolved_pubs: tuple[str, ...] = (),
     ) -> GuidanceOutcome:
-        # The person said the LinkedIn they were shown is wrong. How the retarget ends is saved
-        # as their decision before it is reported, which settles the person's other LinkedIns:
-        # the person never shows again.
-        resolved_pubs: list[str] = []
-        if guidance_state in (GuidanceState.APPLIED, GuidanceState.FAILED) and links(
-            self.db, row_keys=(request.row_key,)
-        ):
-            found = guidance_state == GuidanceState.APPLIED
-            resolved_pubs = self.db.decide_identity(
-                request.row_key,
-                ReviewAction.RETARGET.value if found else ReviewAction.DETACH.value,
-                replacement_url=new_url if found else None,
-                replacement_public_identifier=extract_public_identifier(new_url) if found else None,
-                source=ReviewSource.USER_GUIDANCE.value, note=request.guidance,
-            )
         item = GuidanceOutcome(
             slug=request.slug,
             row_key=request.row_key,
@@ -288,7 +268,7 @@ class GuidedResearch:
             submitted_at=request.submitted_at,
             updated_at=now_iso(),
             new_url=new_url,
-            resolved_pubs=tuple(resolved_pubs),
+            resolved_pubs=resolved_pubs,
             candidate_url=candidate_url,
         )
         # guidance_state.value is the queryable status column; detail_json

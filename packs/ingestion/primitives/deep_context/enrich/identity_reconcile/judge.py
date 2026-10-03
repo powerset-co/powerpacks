@@ -182,6 +182,7 @@ def judgment_fingerprint(
         {
             "origin": origin.value,
             "system": SYSTEM_PROMPT,
+            "schema": RECONCILE_SCHEMA,
             "input": identity_judge_prompt(evidence, profile, origin, owner_block),
             "profile": judge_profile,
             "model": model,

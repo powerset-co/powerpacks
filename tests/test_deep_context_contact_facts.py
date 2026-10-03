@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -194,9 +196,18 @@ class ContactFactsTests(unittest.TestCase):
         from packs.ingestion.primitives.deep_context.db.models import MergeVerdictRow
         from packs.ingestion.primitives.deep_context.db.projectors import project_person_fact
         from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import BuildParents, _parent_plans
+        from packs.ingestion.primitives.deep_context.shared.lookup_person import main as lookup_main
         from packs.ingestion.primitives.deep_context.synthesis.normalization import normalize_parent_cache
-        self.db.project_rows((ParentRow('parent-2', 'parent-worth:parent-2', 'Casey Bravo'),
-                              PersonRow('casey', 'parent-2', display_name='Casey Bravo')))
+        from packs.ingestion.primitives.pipeline.contract import PeopleRow
+        self.db.project_rows((
+            ParentRow('parent-1', 'parent-worth:parent-1', 'Jordan Bravo', 'jordan-parent'),
+            ParentRow('parent-2', 'parent-worth:parent-2', 'Jordan A. Bravo', 'jordan-alias'),
+            PersonRow('casey', 'parent-2', display_name='Jordan A. Bravo'),
+        ))
+        self.db.replace_imported_people((
+            PeopleRow(id='jordan', full_name='Jordan Bravo'),
+            PeopleRow(id='casey', full_name='Jordan A. Bravo'),
+        ))
         facts_dir = self.root / 'facts'
         facts_dir.mkdir()
         for person, employer in [('jordan', 'Example One'), ('casey', 'Example Two')]:
@@ -206,9 +217,16 @@ class ContactFactsTests(unittest.TestCase):
         normalize_parent_cache(self.db, raw_dir=self.root / 'raw', facts_dir=facts_dir)
         self.db.replace_merge_verdicts((MergeVerdictRow('casey', 'jordan', 'casey', 'jordan', 'fixture', 'slam_dunk',
                                              True, 1.0, True, accepted=True),))
-        BuildParents(db=self.db, parents_dir=self.root / 'parents').execute()
+        built = BuildParents(db=self.db, parents_dir=self.root / 'parents').execute()
+        self.assertEqual(built.parents_merged, 1)
         plans, _ = _parent_plans(self.db)
+        self.assertEqual(len(plans), 1)
         self.assertEqual({employer.name for employer in plans[0].merged.employers}, {'Example One', 'Example Two'})
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(lookup_main(['--name', 'Jordan A. Bravo', '--db', str(self.db.db_path)]), 0)
+        self.assertIn('Example One', output.getvalue())
+        self.assertIn('Example Two', output.getvalue())
 
     def test_source_contacts_exclude_cached_import_aggregate(self):
         from packs.ingestion.primitives.deep_context.db.projectors import project_person_fact

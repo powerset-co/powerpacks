@@ -76,6 +76,9 @@ class PersonLookupSqliteTest(unittest.TestCase):
                                 "facts-fingerprint", "projected"),
                     FactRow("parent-a", "parent-a", "facts:parent-a", facts_json=facts_json),
                 ))
+                db.replace_imported_people(tuple(
+                    PeopleRow(id=f"person-{i}", full_name="Casey Delta") for i in range(children)
+                ))
                 built = BuildParents(db=db, parents_dir=root / "parents").execute()
                 self.assertEqual(built.parents_changed, 1)
                 dossier = db.query("SELECT path, payload_json FROM artifacts WHERE kind='dossier'")[0]

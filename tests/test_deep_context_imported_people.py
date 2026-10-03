@@ -115,7 +115,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         parent_id = canonical_snapshot(self.db).people[0].parent_id
         self.db.decide_worth(parent_id, "yes")
         promoted = original.model_copy(update={"public_identifier": "jordan-bravo"})
-        merged = merge_group("linkedin:jordan-bravo", [promoted])
+        merged = merge_group("legacy-linkedin-person", [promoted])
         CsvIO.write_dict_rows(self.csv, PEOPLE_SCHEMA_COLUMNS, [merged])
         EnsureParents(db=self.db, people_csv=self.csv).run()
         snapshot = canonical_snapshot(self.db)
@@ -170,8 +170,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             "source": "gmail_msgvault", "status": "found", "email": "jordan@example.test",
             "public_identifier": "jordan-old", "confidence": "1.00",
         }])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged", directory_csv=directory,
-                            profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         parent_id = links(self.db)[0].parent_id
@@ -215,6 +214,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].person_id, "person-1")
+        self.assertEqual(rows[0].superseded_person_ids, ())
         self.assertEqual(rows[0].headline, "CEO @ Example Labs")
         self.assertEqual(rows[0].emails, ("jordan@example.test", "other@example.test"))
         self.assertEqual(
@@ -259,7 +259,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.assertIn("person-ir", {person.person_id for person in canonical_snapshot(self.db).people})
         self.assertIn("person-ir", {row.id for row in queries.imported_people(self.db)})
 
-    def test_projection_gets_one_stable_parent_and_preserves_newer_evidence(self) -> None:
+    def test_projection_preserves_parent_and_endpoints_with_missing_current_name(self) -> None:
         self.write(
             [
                 {
@@ -288,7 +288,8 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         current = canonical_snapshot(self.db)
 
         self.assertEqual(current.people[0].parent_id, parent_id)
-        self.assertEqual(current.people[0].display_name, "Jordan Bravo")
+        self.assertEqual(current.people[0].display_name, "")
+        self.assertEqual(queries.imported_people(self.db)[0].full_name, "")
         self.assertEqual(
             {(row.kind, row.normalized_value) for row in current.identifiers},
             {("email", "first@example.test"), ("phone", "+15550100")},

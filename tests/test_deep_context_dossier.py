@@ -20,6 +20,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.queries import imported_people
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.synthesis.facts import (
     MAX_NOTABLE_EVENTS,
     headline,
@@ -354,6 +356,10 @@ class ComposeDossierTest(unittest.TestCase):
                     }),
                 ),
             ))
+            db.replace_imported_people((PeopleRow(
+                id="person-jordan", full_name="Jordan Bravo",
+                primary_email="jordan@example.com", source_channels="gmail_msgvault",
+            ),))
             dossiers = root / "dossiers"
             parents = root / "parents"
 
@@ -404,8 +410,10 @@ def _seed_parent(
     facts_json = None if broken else json.dumps({
         "canonical_name": name, "title": "Engineer", "confidence": 0.9,
     })
+    person_id = f"person-{parent_id}"
     db.project_rows((
         ParentRow(parent_id, f"parent-worth:{parent_id}", name, slug),
+        PersonRow(person_id, parent_id, display_name=name),
         ArtifactRow(
             f"source-bundle:{parent_id}", ArtifactKind.SOURCE_BUNDLE.value,
             parent_id, str(root / "raw" / f"{parent_id}.json"),
@@ -431,6 +439,10 @@ def _seed_parent(
             parent_id, parent_id, f"facts:{parent_id}",
             confidence=0.9, facts_json=facts_json,
         ),
+    ))
+    db.replace_imported_people((
+        *(row for row in imported_people(db) if row.id != person_id),
+        PeopleRow(id=person_id, full_name=name, source_channels="gmail_msgvault"),
     ))
 
 

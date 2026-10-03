@@ -7,7 +7,7 @@ Changelog:
   the progress names what enrichment still has to do, step by step.
 - 2026-10-01: the enrich command's run record decides when enrichment is finished: what a
   completed run could not finish no longer holds the flow, and an unfinished run does.
-- 2026-10-01: the same for synthesis: parents its latest run could not write facts for no longer
+- 2026-10-01: the same for synthesis: contacts its latest run could not write facts for no longer
   hold the flow on `synthesize`.
 - 2026-09-25: a parent with a collected source bundle and no facts queues
   `synthesize`, ahead of every review queue.
@@ -30,6 +30,9 @@ from packs.ingestion.primitives.deep_context.db.identity_views import (
     workflow_identity_progress,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.context_queries import person_histories
+from packs.ingestion.primitives.deep_context.synthesis.selection import effective_person_bundles, pending_messages
+from packs.ingestion.primitives.deep_context.synthesis.prompting import SEED_FINGERPRINT_PREFIX
 from packs.ingestion.primitives.deep_context.db.view_models import LinkedInProgress, WorthCounts
 from packs.ingestion.primitives.deep_context.db.models import (
     ENRICH_RUN_KEY,
@@ -88,15 +91,46 @@ class WorkflowState:
 
 
 def synthesis_pending(db: Db) -> tuple[str, ...]:
-    """Parents with collected messages and no facts yet."""
-    return tuple(row["parent_id"] for row in db.query(
+    """Missing contact facts or retained messages without successful coverage.
+
+    Old prompt fingerprints alone have no per-message coverage; only the
+    concrete synthesis estimate can validate their configured input cache.
+    """
+    bundles = effective_person_bundles(db)
+    pending = {row["person_id"] for row in db.query(
         """
-SELECT DISTINCT a.parent_id FROM artifacts a
+SELECT DISTINCT pe.person_id FROM artifacts a JOIN people pe ON
+  pe.person_id=a.person_id OR (
+    a.person_id IS NULL AND pe.parent_id=a.parent_id
+    AND (SELECT count(*) FROM people family WHERE family.parent_id=a.parent_id)=1
+  )
 WHERE a.kind='source_bundle' AND a.status='projected'
-  AND NOT EXISTS(SELECT 1 FROM facts f WHERE f.parent_id=a.parent_id)
-ORDER BY a.parent_id
+  AND pe.is_owner=0
+  AND NOT EXISTS (
+    SELECT 1 FROM facts f WHERE f.person_id=pe.person_id OR (
+      f.person_id IS NULL AND f.parent_id=pe.parent_id
+      AND f.artifact_key NOT LIKE 'parent-facts:%'
+      AND (SELECT count(*) FROM people family WHERE family.parent_id=pe.parent_id)=1
+    )
+  )
+ORDER BY pe.person_id
 """
-    ))
+    ) if row['person_id'] in bundles}
+    histories = person_histories(db)
+    owners = {row['person_id'] for row in db.query('SELECT person_id FROM people WHERE is_owner=1')}
+    for person_id, bundle in bundles.items():
+        if person_id in owners:
+            continue
+        history = histories.get(person_id)
+        if history is None:
+            continue
+        has_coverage = history.processed or any(
+            item.record.input_evidence_fingerprint.startswith(SEED_FINGERPRINT_PREFIX)
+            for item in history.records
+        )
+        if has_coverage and pending_messages(bundle, history):
+            pending.add(person_id)
+    return tuple(sorted(pending))
 
 
 def _stage_progress(db: Db, *, worth: WorthCounts) -> StageProgress:

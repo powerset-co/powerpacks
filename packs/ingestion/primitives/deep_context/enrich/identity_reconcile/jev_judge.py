@@ -103,6 +103,14 @@ def _requests(task: IdentityTask, known_urls: tuple[str, ...], reference_date: s
     } for name, questions in _QUESTIONS.items()}
 
 
+def judgment_fingerprint(task: IdentityTask, known_urls: tuple[str, ...], reference_date: str) -> str:
+    """The frozen model and exact provider requests, shared with verdict reuse."""
+    return hashlib.sha256(json.dumps({
+        'model': _MODEL_DIGEST,
+        'requests': {name: request_digest(request) for name, request in _requests(task, known_urls, reference_date).items()},
+    }, sort_keys=True).encode()).hexdigest()
+
+
 def judge_batch(
     tasks: Sequence[IdentityTask], *, imported_urls: Sequence[tuple[str, ...]],
     output_dir: Path, on_done: Callable[[int, int], None] | None = None,
@@ -142,7 +150,7 @@ def judge_batch(
                     rows = await asyncio.gather(*(answer(name, digest, request)
                                                  for digest, request in requests.items()))
                     replies[name] = dict(zip(requests, rows, strict=True))
-                for pair in batch:
+                for index, pair in enumerate(batch):
                     answers = {name: replies[name][request_digest(request)] for name, request in pair.items()}
                     errors = [f'{name}: {reply}' for name, reply in answers.items() if isinstance(reply, Exception)]
                     if errors:
@@ -163,10 +171,7 @@ def judge_batch(
                         'judge': MODEL_ID, 'match_probability': probability,
                         'answers': {name: reply.response['answers'] for name, reply in answers.items()},
                     })
-                    fingerprint = hashlib.sha256(json.dumps({
-                        'model': _MODEL_DIGEST,
-                        'requests': {name: request_digest(request) for name, request in pair.items()},
-                    }, sort_keys=True).encode()).hexdigest()
+                    fingerprint = judgment_fingerprint(tasks[start + index], imported_urls[start + index], day)
                     usage = IdentityUsage(input_tokens=sum(
                         reply.response['usage']['input_tokens'] for reply in answers.values() if not reply.cached
                     ))

@@ -1,4 +1,4 @@
-"""Preserve original source contacts before the fan-in's LinkedIn grouping."""
+"""Read original source observations before repeated IDs are combined."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
     stored_imported_people,
 )
 from packs.ingestion.primitives.imports.merge_people import MergePeopleInput, merge_group
+from packs.ingestion.primitives.imports.gmail.source_people import original_source_people
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import CONTACT_CARRY_COLUMNS, parse_jsonish
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
@@ -58,6 +59,10 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
         path = Path(source)
         if not path.is_file():
             raise FileNotFoundError(f"fan-in source people CSV missing: {path}")
+        originals = original_source_people(path)
+        if originals is not None:
+            rows.extend(originals)
+            continue
         source_root = next((parent.parent for parent in path.parents if parent.name == ".powerpacks"), path.parent)
         for raw in CsvIO.read_dict_rows(path):
             row = PeopleRow.model_validate(raw)

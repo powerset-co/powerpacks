@@ -21,6 +21,7 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import (
 from packs.ingestion.primitives.deep_context.db.models import ReviewAction, RowKind, SourceChannel
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.name_policy import profile_name_verdict, profile_names
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
 from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapidapi
 from packs.ingestion.primitives.imports.merge_people import (
@@ -74,17 +75,23 @@ class ExportPeople:
                 "reason": "the SQLite roster is empty; run bin/deep-context ensure-parents first",
             }
         parent_of = {row.person_id: row.parent_id for row in queries.people(self.db)}
-        kinds = {row.row_key: (row.parent_id, row.kind) for row in identity_queries.links(self.db)}
+        links = {row.row_key: row for row in identity_queries.links(self.db)}
         people_by_candidate: dict[str, list[str]] = {}
         for membership in identity_queries.memberships(self.db):
             people_by_candidate.setdefault(membership.row_key, []).append(membership.person_id)
         accepted: dict[str, str] = {}
         rejected: set[tuple[str, str]] = set()
         for review in identity_queries.review_rows(self.db, include_worth=False):
-            parent_id, kind = kinds[review.key]
+            link = links[review.key]
+            parent_id, kind = link.parent_id, link.kind
             if review.approved not in AFFIRMATIVE_MACHINE_APPROVALS:
                 continue
             if _is_accepted(review.action, kind):
+                url = review.new_linkedin_url if review.action == ReviewAction.RETARGET.value else review.linkedin_url
+                if not link.decision_action and profile_name_verdict(
+                    self.db, parent_id, profile_names(self.db, parent_id, review.key, url or ""),
+                ) is not None:
+                    continue
                 slug = (review.new_public_identifier or review.public_identifier).lower()
                 accepted.update((person_id, slug) for person_id in people_by_candidate.get(review.key, ()))
             elif review.action in REJECTING_ACTIONS:
@@ -93,19 +100,22 @@ class ExportPeople:
 
         realized: list[PeopleRow] = []
         groups: dict[str, list[PeopleRow]] = {}
-        unkeyable = 0
         for row in roster:
             source_name = row.full_name
             parent_id = parent_of[row.id]
             direct_linkedin = SourceChannel.LINKEDIN.value in row.source_channels.split(",")
+            if direct_linkedin and row.id not in accepted:
+                candidate = next((link for link in links.values() if link.parent_id == parent_id
+                                  and link.public_identifier == row.public_identifier), None)
+                veto = profile_name_verdict(self.db, parent_id, profile_names(
+                    self.db, parent_id, candidate.row_key if candidate else "", row.linkedin_url,
+                ))
+                direct_linkedin = veto is None or veto.value != "wrong_person"
             slug = accepted.get(row.id, row.public_identifier if direct_linkedin else "")
             if row.id not in accepted and (row.id, slug) in rejected:
                 slug = ""
             if slug != row.public_identifier:
                 row = _relinked(row, slug)
-            if not (slug or row.primary_email or row.all_emails or row.primary_phone or row.all_phones):
-                unkeyable += 1
-                continue
             row = row.model_copy(update={"full_name": source_name})
             realized.append(row)
             groups.setdefault(parent_id, []).append(row)
@@ -116,8 +126,9 @@ class ExportPeople:
             if result.normalized_profile.present
         }
         merged = {key: merge_group(groups[key][0].id, groups[key]) for key in sorted(groups)}
-        accepted_slugs = set(accepted.values())
-        needed = [row for row in merged.values() if row["public_identifier"] in accepted_slugs and not has_work_history(row)]
+        needed = [row for parent_id, row in merged.items()
+                  if any(accepted.get(source.id) == row["public_identifier"] for source in groups[parent_id])
+                  and not has_work_history(row)]
         for row in needed:
             result = profiles.get(row["public_identifier"])
             # One profile that cannot be read leaves that person's row as it is.
@@ -141,7 +152,7 @@ class ExportPeople:
             "parents_merged": 0,
             "accepted_identities": len(accepted),
             "rejected_identities": len(rejected),
-            "dropped_unkeyable": unkeyable,
+            "dropped_unkeyable": 0,
             "profiles_filled": sum(1 for row in needed if has_work_history(row)),
             "profiles_missing": sum(1 for row in needed if not has_work_history(row)),
             "updated_at": now_iso(),

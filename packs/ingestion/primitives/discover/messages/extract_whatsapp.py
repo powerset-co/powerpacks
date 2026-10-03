@@ -9,6 +9,8 @@ whatsapp_wacli.py.
 
 CLI output defaults to wacli.contacts.*; the discovery channel explicitly uses
 whatsapp.contacts.*. Name fallbacks require an explicit --name-fallback-csv.
+Conflicting saved names leave the contact unnamed; the manifest retains the
+phone and original names for review.
 
 Changelog:
   2026-09-23 (typed rows): the `contacts` and `messages` SQLite rows are parsed
@@ -43,6 +45,7 @@ from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
     write_jsonl as write_jsonl_rows,
 )
 from packs.ingestion.primitives.discover.common import write_csv_rows  # noqa: E402
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli import (  # noqa: E402
@@ -109,13 +112,15 @@ class ContactRow:
     business_name: str = ""
     system_name: str = ""
 
+    def names(self) -> tuple[str, ...]:
+        return tuple(name for candidate in (
+            self.full_name, self.system_name, self.push_name, self.business_name, self.first_name,
+        ) if (name := clean_name(candidate)))
+
     def best_name(self) -> str:
         """wacli's saved name for this contact, best column first."""
-        for candidate in (self.full_name, self.system_name, self.push_name, self.business_name, self.first_name):
-            name = clean_name(candidate)
-            if name:
-                return name
-        return ""
+        names = self.names()
+        return names[0] if names else ""
 
 
 @dataclass(frozen=True)
@@ -352,10 +357,16 @@ def export_contacts_from_store(
     try:
         contacts_by_jid = load_contacts_by_jid(conn)
         lid_map = load_lid_map(store)
+        source_names: dict[str, list[str]] = {}
+        for jid, contact in contacts_by_jid.items():
+            phone = phone_for_jid(jid, contacts_by_jid, lid_map)
+            if phone:
+                source_names.setdefault(phone, []).extend(contact.names())
         contact_names_by_phone = names_by_phone(contacts_by_jid, lid_map)
         name_fallbacks_by_phone = load_name_fallbacks(name_fallback_csv)
         for phone, name in name_fallbacks_by_phone.items():
             contact_names_by_phone.setdefault(phone, name)
+            source_names.setdefault(phone, []).append(name)
         message_stats = load_message_stats(conn)
         participant_counts = group_participant_counts(conn)
         participant_cache = read_group_participants_cache(store)
@@ -390,6 +401,8 @@ def export_contacts_from_store(
             active_group_jids.add(group.jid)
             for participant in group.participants():
                 diagnostics["group_participants"] += 1
+                if participant.name:
+                    source_names.setdefault(participant.phone, []).append(participant.name)
                 add_contact(contacts, Contact(
                     phone=participant.phone,
                     name=participant.name or contact_names_by_phone.get(participant.phone, ""),
@@ -424,6 +437,8 @@ def export_contacts_from_store(
             if not phone:
                 continue
             diagnostics["direct_chats"] += 1
+            if name:
+                source_names.setdefault(phone, []).append(name)
             contact_row = contacts_by_jid.get(jid)
             stats = message_stats.get(jid)
             last_message = (stats.last_message if stats else None) or epoch_to_iso(row["last_message_ts"])
@@ -460,10 +475,18 @@ def export_contacts_from_store(
                 group_names={group_name},
             ))
 
+        conflicting_names = []
+        for phone, contact in contacts.items():
+            names = tuple(dict.fromkeys(source_names.get(phone, ())))
+            if len(names) > 1 and not source_names_can_match(names):
+                contact.name = ""
+                conflicting_names.append({"phone": phone, "names": list(names)})
         diagnostics.update({
             "contacts_exported": len(contacts),
             "contacts_with_message_count": sum(1 for item in contacts.values() if item.message_count is not None),
             "contacts_in_groups": sum(1 for item in contacts.values() if item.is_in_group_chats),
+            "contacts_with_conflicting_names": len(conflicting_names),
+            "conflicting_names": conflicting_names,
         })
         return contacts, diagnostics
     finally:

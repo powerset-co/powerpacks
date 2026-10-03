@@ -16,16 +16,17 @@ from parallel.types import (
 )
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, ParentRow, PersonRow
-from packs.ingestion.primitives.common.legacy import (
-    LEGACY_PARALLEL_HANDLE_RESULT,
-    legacy_parallel_input_fingerprint,
-)
+from packs.ingestion.primitives.common.legacy import LEGACY_PARALLEL_HANDLE_RESULT
 from packs.ingestion.primitives.deep_context.db.queries import artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, driver, parallel_client, queue
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import ResearchRunParams
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ResearchQueueRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
+
+
+# Hash of the synthetic request before processor/schema/header joined the contract.
+INPUT_ONLY_FINGERPRINT = "969fbb67b58e144112330ec3a90a5dd75a2240221b92c42dde94a211f8f92e8b"
 
 
 def research_queue_row(handle: str = "jordan-bravo", *, guidance: str = "") -> ResearchQueueRow:
@@ -156,23 +157,36 @@ class ProviderTests(unittest.TestCase):
             queue.request_plan_fingerprint((row,), beta_header="new-contract"),
         )
 
+    def test_exact_fingerprint_reuses_only_unchanged_input_processor_and_header(self) -> None:
+        row = research_queue_row()
+        artifact = ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected",
+                               input_fingerprint=queue.input_fingerprint(row))
+        self.assertEqual(queue.filter_already_done((row,), (artifact,)), ([], 1))
+        for changed, processor, header in (
+            (replace(row, primary_email="other@example.com"), config.DEFAULT_PROCESSOR, config.DEFAULT_BETA_HEADER),
+            (replace(row, bio="Changed relationship"), config.DEFAULT_PROCESSOR, config.DEFAULT_BETA_HEADER),
+            (row, "pro", config.DEFAULT_BETA_HEADER),
+            (row, config.DEFAULT_PROCESSOR, "changed-contract"),
+        ):
+            with self.subTest(processor=processor, header=header, email=changed.primary_email):
+                self.assertEqual(queue.filter_already_done((changed,), (artifact,), processor=processor, beta_header=header),
+                                 ([changed], 0))
+
     def test_old_handle_input_is_a_different_provider_contract(self) -> None:
         row = research_queue_row()
-        old_input = {"handle": row.handle, **queue.build_input(row)}
         pending, reused = queue.filter_already_done((row,), (
             ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected",
-                        input_fingerprint=legacy_parallel_input_fingerprint(old_input)),
+                        input_fingerprint="13e5912692ee78752575838ae725b95b2875423c15593772747c5095df72f2d8"),
         ))
         self.assertEqual(pending, [row])
         self.assertEqual(reused, 0)
 
-    def test_input_only_fingerprint_is_reused_without_spend(self) -> None:
+    def test_input_only_fingerprint_is_not_a_complete_request_contract(self) -> None:
         row = research_queue_row()
-        legacy = legacy_parallel_input_fingerprint(queue.build_input(row))
         pending, reused = queue.filter_already_done((row,), (
-            ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected", input_fingerprint=legacy),
+            ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected", input_fingerprint=INPUT_ONLY_FINGERPRINT),
         ))
-        self.assertEqual((pending, reused), ([], 1))
+        self.assertEqual((pending, reused), ([row], 0))
 
     def test_missing_paid_fingerprint_is_not_an_exact_cache_hit(self) -> None:
         row = research_queue_row()
@@ -189,7 +203,29 @@ class ProviderTests(unittest.TestCase):
         ))
         self.assertEqual((pending, reused), ([row], 0))
 
-    def test_migrated_paid_result_is_grandfathered_by_stable_handle(self) -> None:
+    def test_legacy_same_handle_result_does_not_hide_changed_contact_input(self) -> None:
+        changed = replace(research_queue_row(), source_person_ids=("person-b",),
+                          display_name="Casey Delta", primary_email="casey-delta@example.com")
+        with tempfile.TemporaryDirectory() as directory:
+            document = Path(directory) / "paid-before-fingerprints.json"
+            document.write_text(json.dumps(provider_output().model_dump(mode="json")))
+            before = document.read_bytes()
+            artifact = ArtifactRow(
+                "research:jordan-bravo", "research", "parent-1", str(document), "content", "projected",
+                input_fingerprint=LEGACY_PARALLEL_HANDLE_RESULT,
+            )
+            pending, reused = queue.filter_already_done((changed,), (artifact,))
+            self.assertEqual((pending, reused), ([changed], 0))
+            self.assertEqual(document.read_bytes(), before)
+
+    def test_input_only_cache_does_not_claim_the_requested_processor(self) -> None:
+        row = research_queue_row()
+        artifact = ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected",
+                               input_fingerprint=INPUT_ONLY_FINGERPRINT)
+        pending, reused = queue.filter_already_done((row,), (artifact,), processor="pro")
+        self.assertEqual((pending, reused), ([row], 0))
+
+    def test_migrated_paid_result_requires_a_current_request_fingerprint(self) -> None:
         row = research_queue_row()
         pending, reused = queue.filter_already_done(
             (row,),
@@ -205,7 +241,7 @@ class ProviderTests(unittest.TestCase):
                 ),
             ),
         )
-        self.assertEqual((pending, reused), ([], 1))
+        self.assertEqual((pending, reused), ([row], 0))
 
     def test_parallel_client_uses_sdk_models_and_streams_json_outputs(self) -> None:
         class Events(list):

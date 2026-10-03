@@ -180,9 +180,10 @@ def linkedin_resolution_queue_rows(rows: Iterable[Any]) -> list[dict[str, Any]]:
 
 
 def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", *, include_automated: bool = False, limit: int | None = None, excluded_labels: Iterable[str] | None = None) -> dict[str, Any]:
-    """Filter aggregated contacts (automated + one-way dropped), upsert every
-    discover artifact CSV in the fixed account directory, and write the stage
-    manifest. Returns the manifest payload.
+    """Replace account artifacts with current eligible source contacts.
+
+    A contact limit selects the replacement subset; no previous rows or enriched
+    fields survive. Counts for each selected contact cover the whole archive.
 
     The store's dict rows are folded into typed `MsgvaultContactRow` values ONCE
     here; everything below reads attributes."""
@@ -193,6 +194,8 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     filtered = [contact for contact in non_automated if has_round_trip_interaction(contact)]
     if limit is not None:
         filtered = filtered[: max(0, int(limit))]
+    name_conflicts = [{"email": contact.email, "observed_names": contact.observed_names}
+                      for contact in filtered if contact.observed_names and not contact.display_name]
     out_dir.mkdir(parents=True, exist_ok=True)
     threads_path = out_dir / "gmail_threads.csv"
     aggregated_path = out_dir / "gmail_contacts_aggregated.csv"
@@ -229,9 +232,6 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
                 "added_at": discovered_at,
             }
         )
-    upserts: dict[str, dict[str, int]] = {}
-    upserts["accounts_csv"] = CsvIO.upsert_dict_rows(accounts_path, ACCOUNT_COLUMNS, account_rows, ["account_email"])
-
     threads_rows = [{
         "email": contact.email,
         "display_name": contact.display_name,
@@ -293,17 +293,15 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)]
     )
 
-    upserts["gmail_threads_csv"] = CsvIO.upsert_dict_rows(threads_path, THREAD_COLUMNS, threads_rows, ["email"])
-    upserts["gmail_contacts_aggregated_csv"] = CsvIO.upsert_dict_rows(
-        aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"]
-    )
-    upserts["targeted_emails_csv"] = CsvIO.upsert_dict_rows(
-        targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"]
-    )
-    upserts["linkedin_resolution_queue_csv"] = CsvIO.upsert_dict_rows(
-        resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"]
-    )
-    upserts["people_csv"] = CsvIO.upsert_dict_rows(people_path, PEOPLE_COLUMNS, people_rows, ["primary_email"])
+    for path, columns, output_rows in (
+        (accounts_path, ACCOUNT_COLUMNS, account_rows),
+        (threads_path, THREAD_COLUMNS, threads_rows),
+        (aggregated_path, AGGREGATED_COLUMNS, aggregated_rows),
+        (targeted_path, TARGETED_COLUMNS, targeted_rows),
+        (resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows),
+        (people_path, PEOPLE_COLUMNS, people_rows),
+    ):
+        CsvIO.write_dict_rows_strict(path, columns, output_rows)
 
     existing_manifest = GmailManifestResume.from_document(read_json(manifest_path, {}) or {})
 
@@ -329,15 +327,15 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "counts": {
             "contacts_seen": len(rows),
             "contacts_written": len(filtered),
-            "contacts_final": upserts["people_csv"]["written"],
-            "contacts_preserved_existing": upserts["people_csv"]["preserved_existing"],
+            "contacts_final": len(filtered),
+            "contacts_preserved_existing": 0,
+            "name_conflicts": len(name_conflicts),
             "automated_filtered": len(automated_filtered),
             "one_way_filtered": len(one_way_filtered),
             "round_trip_required": True,
-            "accounts": upserts["accounts_csv"]["written"],
+            "accounts": len(account_rows),
             "excluded_labels": normalize_label_names(excluded_labels),
         },
-        "upserts": upserts,
         "artifacts": {
             "accounts_csv": str(accounts_path),
             "gmail_threads_csv": str(threads_path),
@@ -347,6 +345,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
             "people_csv": str(people_path),
             "manifest_json": str(manifest_path),
         },
+        "name_conflicts": name_conflicts,
         "schema_reference": {
             "msgvault_tables": ["sources", "participants", "messages", "message_recipients"],
             "key_fields": [
@@ -458,7 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     msgvault.add_argument("--account-email", default="", help="Optional Gmail source account filter")
     msgvault.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    msgvault.add_argument("--limit", type=int)
+    msgvault.add_argument("--limit", type=int, help="Replace account outputs with at most this many eligible contacts")
     msgvault.add_argument(
         "--include-automated", action="store_true", help="Include noreply/automated service addresses"
     )

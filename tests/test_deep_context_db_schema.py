@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,11 +27,16 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.schema import (
     DDL,
+    MERGE_VERDICTS_DDL,
+    BINARY_MERGE_VERDICTS_DDL,
     IMPORTED_PEOPLE_DDL,
     RESEARCH_INDEX_DDL,
     SCHEMA_VERSION,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
+from packs.ingestion.primitives.deep_context.db.queries import merge_verdicts
+from packs.ingestion.primitives.deep_context.db.audit_identity import IdentityAudit, AuditCategory
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from deep_context_sqlite_test_helpers import (
     project_artifact,
     project_candidate,
@@ -82,13 +88,14 @@ class DeepContextSchemaTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM parents").fetchone()[0], 1)
             self.assertIn("rogue", {row[1] for row in conn.execute("PRAGMA table_info(links)")})
 
-    def test_schema_version_includes_imported_roster(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 2)
+    def test_schema_version_includes_uncertain_merge_verdicts(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 3)
 
     def test_v1_upgrade_preserves_decisions_and_reopens(self) -> None:
         self.path.unlink()
         with sqlite3.connect(self.path) as conn:
-            conn.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, "").replace(RESEARCH_INDEX_DDL, ""))
+            conn.executescript(DDL.replace(MERGE_VERDICTS_DDL, BINARY_MERGE_VERDICTS_DDL)
+                               .replace(IMPORTED_PEOPLE_DDL, "").replace(RESEARCH_INDEX_DDL, ""))
             conn.execute("INSERT INTO meta VALUES ('schema_version', '1')")
             conn.execute("INSERT INTO parents(parent_id, public_identifier, human_worth) "
                          "VALUES ('parent-1', 'parent-worth:parent-1', 'yes')")
@@ -102,7 +109,7 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.assertEqual(upgraded.query("SELECT decision_approved FROM links")[0][0], "yes")
         self.assertEqual(upgraded.query("PRAGMA foreign_key_check"), [])
         self.assertEqual(upgraded.query("SELECT * FROM imported_people"), [])
-        self.assertEqual(Db(self.path).query("SELECT value FROM meta WHERE key='schema_version'")[0][0], "2")
+        self.assertEqual(Db(self.path).query("SELECT value FROM meta WHERE key='schema_version'")[0][0], "3")
 
     def test_store_opens_in_wal_with_research_index(self) -> None:
         # A fresh store and a pre-3.8.2 store (rollback journal, no research index)
@@ -112,7 +119,7 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.assertIn("research_by_candidate", _index_names(self.path))
         self.path.unlink()
         with closing(sqlite3.connect(self.path)) as conn:
-            conn.executescript(DDL.replace(RESEARCH_INDEX_DDL, ""))
+            conn.executescript(DDL.replace(MERGE_VERDICTS_DDL, BINARY_MERGE_VERDICTS_DDL).replace(RESEARCH_INDEX_DDL, ""))
             conn.execute("INSERT INTO meta VALUES ('schema_version', '2')")
             conn.commit()
         self.assertEqual(_journal_mode(self.path), "delete")
@@ -140,6 +147,91 @@ class DeepContextSchemaTests(unittest.TestCase):
                         False,
                     ),
                 ))
+
+    def test_uncertain_merge_verdict_roundtrips_without_becoming_different(self) -> None:
+        self.parent()
+        self.person("person-a")
+        self.person("person-b")
+        row = MergeVerdictRow("person-a", "person-b", "a", "b", "current-input", "llm", None, 0.8, False,
+                              reason="not enough identity evidence")
+        self.db.replace_merge_verdicts((row,))
+        self.assertIsNone(merge_verdicts(Db(self.path))[0].same_person)
+        self.assertFalse(merge_verdicts(self.db)[0].accepted)
+
+    def test_only_explicit_same_person_can_be_accepted(self) -> None:
+        self.parent()
+        self.person("person-a")
+        self.person("person-b")
+        row = MergeVerdictRow("person-a", "person-b", "a", "b", "current-input", "llm", True, 0.9, True,
+                              accepted=True)
+        for value in (None, False):
+            with self.subTest(value=value), self.assertRaises(sqlite3.IntegrityError):
+                self.db.replace_merge_verdicts((replace(row, same_person=value),))
+        self.db.replace_merge_verdicts((row,))
+        self.assertTrue(merge_verdicts(self.db)[0].accepted)
+
+    def test_v2_upgrade_preserves_paid_rows_without_binary_authority(self) -> None:
+        path = Path(self.temp.name) / "binary.sqlite"
+        binary_ddl = DDL.replace(MERGE_VERDICTS_DDL, BINARY_MERGE_VERDICTS_DDL)
+        with sqlite3.connect(path) as conn:
+            conn.executescript(binary_ddl)
+            conn.execute("INSERT INTO meta VALUES ('schema_version', '2')")
+            conn.execute("INSERT INTO parents(parent_id,public_identifier,human_worth) VALUES ('p','p','yes')")
+            conn.executemany("INSERT INTO people(person_id,parent_id) VALUES (?,'p')", (("a",), ("b",), ("c",)))
+            conn.execute("INSERT INTO links(row_key,parent_id,public_identifier,kind,decision_action,decision_approved,source) "
+                         "VALUES ('jordan-bravo','p','jordan-bravo','pub','verify','yes','deep-context-reconcile')")
+            conn.executemany("INSERT INTO merge_verdicts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
+                ("a", "b", "a", "b", "paid-positive", "llm", 1, .9, 1, "paid positive reason", 1, "2026-10-03"),
+                ("a", "c", "a", "c", "paid-negative", "llm", 0, .2, 0, "insufficient evidence", 0, "2026-10-03"),
+                ("b", "c", "b", "c", "old-free", "slam_dunk", 1, .99, 1, "old free reason", 1, "2026-10-03"),
+            ))
+        upgraded = Db(path)
+        rows = merge_verdicts(upgraded)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([(r.signature, r.reason, r.confidence) for r in rows], [
+            ("paid-positive", "paid positive reason", .9),
+            ("paid-negative", "insufficient evidence", .2),
+            ("old-free", "old free reason", .99),
+        ])
+        self.assertEqual([r.same_person for r in rows], [True, None, True])
+        self.assertEqual([r.accepted for r in rows], [False, False, False])
+        self.assertEqual(upgraded.query("SELECT human_worth FROM parents")[0][0], "yes")
+        self.assertEqual(upgraded.query("SELECT decision_approved FROM links")[0][0], "yes")
+        self.assertEqual(upgraded.query("PRAGMA foreign_key_check"), [])
+        self.assertEqual(merge_verdicts(Db(path)), rows)
+
+    def test_paid_verdict_checkpoint_does_not_clear_other_accepted_edges(self) -> None:
+        self.parent("parent-a")
+        self.parent("parent-b")
+        self.parent("parent-c")
+        for name in ("a", "b", "c"):
+            self.person(name, f"parent-{name}")
+        accepted = MergeVerdictRow("a", "b", "a", "b", "accepted-input", "sol", True, .95, True,
+                                   accepted=True)
+        pending = MergeVerdictRow("a", "c", "a", "c", "paid-input", "sol", None, .9, False)
+        self.db.replace_merge_verdicts((accepted,))
+        self.db.project_rows((pending,))
+        self.assertEqual([(r.signature, r.same_person, r.accepted) for r in merge_verdicts(Db(self.path))],
+                         [("accepted-input", True, True), ("paid-input", None, False)])
+
+    def test_readonly_audit_reports_proved_different_but_not_uncertain(self) -> None:
+        self.parent()
+        for name in ("a", "b", "c"):
+            self.person(name)
+        self.db.replace_imported_people(tuple(
+            PeopleRow(id=name, full_name="Jordan Bravo") for name in ("a", "b", "c")
+        ))
+        rows = (
+            MergeVerdictRow("a", "b", "a", "b", "ab-input", "sol", True, .95, True, accepted=True),
+            MergeVerdictRow("b", "c", "b", "c", "bc-input", "sol", True, .95, True, accepted=True),
+            MergeVerdictRow("a", "c", "a", "c", "ac-input", "sol", None, .9, False),
+        )
+        self.db.replace_merge_verdicts(rows)
+        report = IdentityAudit(db_path=self.path).run()
+        self.assertFalse(report.parents)
+        self.db.project_rows((replace(rows[-1], same_person=False),))
+        findings = [f.category for p in IdentityAudit(db_path=self.path).run().parents for f in p.findings]
+        self.assertEqual(findings, [AuditCategory.ACCEPTED_MERGE_CONFLICTS_WITH_NEGATIVE])
 
     def test_old_version_fails_without_running_current_ddl(self) -> None:
         old = Path(self.temp.name) / "old.sqlite"

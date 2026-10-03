@@ -22,14 +22,11 @@ For LinkedIn ingestion and the shared cloud index build, see the
 
 ## Shared pipeline seam
 
-Each source import writes the same fixed contracts:
-`.powerpacks/network-import/import/<source>/people.csv` (resolved identities)
-and, for gmail/messages, `.../candidates.csv` (the research pool). Shared
-fan-in through `index_contacts_pipeline.py fan-in` merges the people files;
-`$deep-context` consumes the candidate pools, persists approved real identities
-from its review artifacts into `directory.csv` before fan-in, and owns the single Modal
-index rebuild. `$setup` (LinkedIn first run) is the one import that still
-builds an index so search works out of the box.
+Each source import writes `.powerpacks/network-import/import/<source>/people.csv`.
+Shared fan-in through `index_contacts_pipeline.py fan-in` retains source IDs and
+combines repeated IDs. Deep Context collects facts, reviews associations, merges
+people and exports the judged SQLite parents. Directory lookups do not establish
+identity. LinkedIn setup has its separate Modal indexing workflow.
 
 ## Historical and specialist references
 

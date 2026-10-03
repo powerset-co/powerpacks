@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
@@ -253,6 +254,17 @@ class DossierEvidence:
         return (
             f"CONTACT {label} — {name}  [emails: {email_text}]\n{extra_line}{facts_block}\nMessages:\n{mine}\n{theirs}"
         )
+
+
+def source_evidence(db: Db, parent_id: str, evidence: DossierEvidence) -> DossierEvidence:
+    """Add original source names and endpoints to the actual identity input."""
+    names = queries.source_names(db, parent_id)
+    contacts = [row.model_dump(include={"id", "full_name", "primary_email", "all_emails",
+                                       "primary_phone", "all_phones"})
+                for row in queries.imported_people(db, parent_id=parent_id)]
+    return replace(evidence, name=names[0] if len(names) == 1 else "",
+                   dossier=evidence.dossier + "\nSource contact names: " + json.dumps(names)
+                   + "\nSource contacts: " + json.dumps(contacts, sort_keys=True))
 
 
 def owner_background(db: Db) -> str:

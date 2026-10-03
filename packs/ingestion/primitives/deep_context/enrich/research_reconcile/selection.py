@@ -7,6 +7,9 @@ Changelog:
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+
 from packs.ingestion.primitives.deep_context.db import context_queries, queries
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, ProjectionStatus
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
@@ -31,6 +34,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     ResearchSelection,
 )
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match
 
 
 RESEARCH_BATCH = 500
@@ -40,23 +44,31 @@ def build_queue_row(
     evidence: DossierEvidence,
     row: EnrichmentQueueRow,
     *,
+    source_names: tuple[str, ...],
     owner_context: str,
     guidance: str = "",
 ) -> ResearchQueueRow:
     """Render the one provider input shared by ordinary and guided research."""
     email = next(
-        (value for value in row.match_emails if "@" in value),
+        (value for value in evidence.emails if "@" in value),
         "",
     )
     phone = next(
-        (value for value in row.match_phones if value),
+        (value for value in evidence.phones if value),
         "",
     )
-    context = ""
+    names_compatible = source_names_can_match(source_names)
+    context = "\n".join((
+        "Source contact names: " + json.dumps(source_names, ensure_ascii=False),
+        "Source contact emails: " + json.dumps(evidence.emails, ensure_ascii=False),
+        "Source contact phones: " + json.dumps(evidence.phones, ensure_ascii=False),
+    ))
+    if not names_compatible:
+        context += "\nSource contact names missing or conflicting; identity requires review."
     if row.linkedin_url:
         # Feeds the provider the profile the attached-link judge already rejected
         # (and why), so paid research doesn't just re-surface the same wrong link.
-        context = f"Rejected LinkedIn: {row.linkedin_url}. Reason: {row.verdict_reason}"
+        context += f"\nRejected LinkedIn: {row.linkedin_url}. Reason: {row.verdict_reason}"
     if owner_context:
         context = "\n".join(filter(None, (context, f"Mailbox owner: {owner_context}")))
     return ResearchQueueRow(
@@ -65,7 +77,7 @@ def build_queue_row(
         row_key=row.row_key,
         handle=row.parent_slug,
         source_person_ids=row.person_ids,
-        display_name=row.name,
+        display_name=source_names[0] if names_compatible else "",
         bio=evidence.research_bio(),
         known_info=context,
         primary_email=email,
@@ -80,17 +92,32 @@ def build_queue(
     *,
     guidance: str = "",
 ) -> list[ResearchQueueRow]:
+    if not subset:
+        return []
     owner_context = owner_background(db)
+    source_names = {row.id: row.full_name or "" for row in queries.imported_people(db)}
     queue: list[ResearchQueueRow] = []
     for start in range(0, len(subset), RESEARCH_BATCH):
         batch = subset[start:start + RESEARCH_BATCH]
         evidence_rows = context_queries.dossier_evidence_rows(
             db, tuple(person_id for row in batch for person_id in row.person_ids),
         )
+        source_ids = {
+            person.person_id for person in evidence_rows.people
+            if person.person_id in source_names and not person.is_owner and not person.is_ghost
+        }
+        evidence_rows = replace(evidence_rows, identifiers=tuple(
+            identifier for identifier in evidence_rows.identifiers if identifier.person_id in source_ids
+        ))
         queue.extend(
             build_queue_row(
                 DossierEvidence.from_rows(row.person_ids, evidence_rows),
                 row,
+                source_names=tuple(
+                    source_names.get(person.person_id, "")
+                    for person in evidence_rows.people
+                    if person.parent_id == row.parent_id and not person.is_owner and not person.is_ghost
+                ),
                 owner_context=owner_context,
                 guidance=guidance,
             )
@@ -108,7 +135,7 @@ def select_research(
 ) -> ResearchSelection:
     if fingerprint is None:
         fingerprint = workflow_state(db).selection
-    # Only worth-Yes parents without a known LinkedIn or completed research enter.
+    # Only worth-Yes parents without a known LinkedIn enter.
     eligible = enrichment_queue(db)
     queue = build_queue(eligible, db)
     # pending/reused_completed is the artifact-level reuse that makes an unchanged

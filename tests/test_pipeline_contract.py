@@ -466,13 +466,11 @@ class WholeDeclaredGraphTests(unittest.TestCase):
 
         return [node for node in graph_module.node_subclasses() if node.__module__.startswith("packs.")]
 
-    def test_no_conflicts_or_cycles_and_sqlite_directory_export_is_explicit(self) -> None:
+    def test_no_conflicts_cycles_or_unowned_directory_input(self) -> None:
         report = check_graph(self._declared_nodes())
         self.assertEqual(report["two_writer_conflicts"], [])
         self.assertEqual(report["schema_mismatches"], [])
-        self.assertEqual(report["phantom_inputs"], [{
-            "node": "merge_people", "path": ".powerpacks/network-import/directory.csv",
-        }])
+        self.assertEqual(report["phantom_inputs"], [])
         self.assertEqual(report["cycles"], [])
 
     def test_dead_outputs_are_explicit_one_way_exports(self) -> None:

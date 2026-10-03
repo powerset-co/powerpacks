@@ -64,15 +64,41 @@ or ambiguous counts.
 ## Repair and verify
 
 Use a copied store and sibling facts for the first replay. Preserve the original
-database and files before applying a repair to the user's store. `ensure-parents`
-runs the existing local repairs and creates their backups. Its historical split
-repair covers only eligible families with proven source ownership; it is not a
-general automatic identity judge.
+database and files before applying a repair to the user's store. Ordinary
+`ensure-parents` restores missing candidate membership from unique same-parent
+source identifiers and runs pending structural migrations. It does not infer
+historical identity splits from names or undo an accepted current merge.
 
 Run `bin/deep-context ensure-parents --db <store> --people-csv <people.csv>`,
 then repeat the audit. Verify contact membership, original facts and paid
 payloads, explicit human decisions, and foreign keys. Run again: repaired
-ownership must remain unchanged and unresolved cases must still be reported.
+ownership must remain unchanged. Audit still reports unresolved cases.
+
+`source_identity_unresolved` holds contacts whose original names are missing,
+conflict with one another, or disagree with current retained fact names. The
+same policy withholds human dossiers and paid identity research; facts and raw
+evidence remain intact. A hold is not proof of different people. Correcting a
+source name alone does not validate old facts attributed to another name.
+
+Historical split recovery remains an explicit operation for a reviewed old
+store with sibling original facts. Its name heuristic can separate supported
+aliases; it is not part of the fresh rebuild below. After reviewing the exact
+families it will affect, invoke it on the copy:
+
+```bash
+uv run --project . python - /absolute/copied/deep-context.sqlite <<'PY'
+import sys
+from dataclasses import asdict
+from pathlib import Path
+from packs.ingestion.primitives.common.legacy import _scrub_historical_merges
+from packs.ingestion.primitives.deep_context.db.store import Db
+print(asdict(_scrub_historical_merges(Db(Path(sys.argv[1])))))
+PY
+```
+
+Verify the reported families and unresolved ownership, then reassess duplicate
+pairs from separate original contact evidence. Do not apply this historical
+heuristic to the fresh graph after current merges have been accepted.
 
 For a cold comparison, run the old and new code against identical copied input
 files and record any path rebinding or missing source. Block provider calls for
@@ -98,5 +124,91 @@ scope and cost before paid calls. Start with one affected contact. Reuse existin
 provider caches and completed contact extractions, then verify the resulting
 dossiers before widening the approved run.
 
-A full rebuild requires a backup and explicit destruction/spend approval. Fix
-the ownership path first; reseeding the same bad families is not recovery.
+Keep a backup. Obtain approval for paid stages or a destructive live cutover;
+approval already given for the same scope remains valid. Fix the ownership path
+first; reseeding the same bad families is not recovery.
+
+## Fresh rebuild with current human decisions
+
+Regenerate source imports into an isolated state directory from the declared raw
+accounts/channels. Use the source-only LinkedIn parser; the full LinkedIn import
+includes provider enrichment. Reconcile source counts, exclusions and unavailable
+message bodies before claiming coverage. Historical merged or enriched source
+CSVs cannot establish a fresh source population.
+
+Use a dedicated corrected checkout whose `.powerpacks` is the fresh state.
+Gmail discovery/import use checkout-relative outputs, and source manifests can
+contain relative paths. Run the source primitives and preparation in that same
+checkout.
+
+Prepare the isolated graph with the free local command; no approval is required:
+
+```bash
+cd /absolute/fresh-checkout
+bin/deep-context rebuild \
+  --original-state-root /absolute/original/.powerpacks \
+  --backup-root /absolute/rollback/.powerpacks \
+  --state-root /absolute/fresh-checkout/.powerpacks \
+  --people-csv /absolute/fresh-checkout/.powerpacks/network-import/merged/people.csv \
+  --owner-profile /absolute/reviewed-owner.json
+```
+
+The three state roots must be disjoint. The backup destination must not exist.
+The new state may contain fresh source imports; it must contain no active Deep
+Context artifacts, directory mappings, review overrides or profile cache. The
+primitive validates the actual fan-in source files/counts and explicit owner
+profile before writing. It preserves the complete original state tree, including
+historical backups and symlinks, and makes a consistent canonical SQLite backup.
+Symlinks remain links; external raw stores need their own consistent snapshots.
+The original store is read only. Preparation never resets or switches the live
+installation and makes no provider calls.
+
+The new canonical DB contains separately projected source contacts and the
+explicit owner configuration. Active facts, raw and research directories start
+empty. General `seed`, `clean-slate` and `restart` are not part of this flow.
+All old facts, research, machine decisions and families remain comparison
+evidence in the backup and have no authority in the fresh graph.
+
+Carry reads raw SQLite human fields and exact `candidate_people` membership,
+plus current `network-import/overrides/review.csv` actions not already in SQLite.
+Only a direct review/user-guidance decision with one unchanged source contact,
+source name/endpoints, timestamp and exact profile target can apply. Profile
+approval never merges contacts. Retarget preserves both the reviewed and replacement
+URLs. Conflicting current choices remain held, even when stored under different
+row keys. Mixed parent worth, missing scope, changed source ownership, unknown
+provenance and synthetic targets remain unapplied. Generated sibling decisions
+and machine-only rows are counted separately.
+
+Historical `user-guidance` profile marks also need the original explicit target.
+The old guided research path could label a provider-selected URL, or a failed
+lookup's detach, as a human choice. Carry requires an exact standalone submitted
+profile URL in the saved guidance or decision note, matching the applied target
+and unique contact scope. Free text, a URL merely mentioned in a sentence, and
+missing original guidance leave the decision held. Direct profile-review choices
+continue to use their saved review provenance.
+
+For previously seeded stores, the original current review row must also prove
+the supported decision source, scope, action, timestamp and target. An old seed
+could relabel machine rows as human review. A legacy parent-worth row with one
+`worth_person_ids` value is insufficient: the old worth view could rewrite an
+inherited multi-contact decision into that shape. Archived/reset decisions are
+preserved but never resurrected automatically. Missing current human fields or
+CSV means no proven current choice, not permission to choose a historical backup.
+
+The only preparation receipt is `deep-context/rebuild/manifest.json`. It reports
+applied, held and unmatched actions with their original keys, contacts, target
+and reason, plus excluded generated/machine rows. A second preparation refuses
+before mutation; use another isolated destination for another comparison.
+
+Keep every downstream stage in that isolated checkout, or bind **both** the DB
+and artifact paths on every command. For example,
+collection uses `--db /absolute/fresh-checkout/.powerpacks/deep-context/deep-context.sqlite`
+and `--out-dir /absolute/fresh-checkout/.powerpacks/deep-context/raw`. The free synthesis
+estimate uses that DB, `--raw-dir /absolute/fresh-checkout/.powerpacks/deep-context/raw`,
+`--out-dir /absolute/fresh-checkout/.powerpacks/deep-context/facts` and `--dry-run`.
+Changing only `--db` leaves the command's default artifact paths active.
+Do not run paid synthesis, judging or research until the exact scope and estimate
+are approved. Verify contact membership, human carry, zero inherited machine
+artifacts, foreign keys and unchanged export/reimport in the actual copied CLI
+before proposing cutover. These checks establish scoped reconstruction, not a
+universal identity-precision guarantee.

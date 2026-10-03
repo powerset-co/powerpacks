@@ -28,6 +28,7 @@ weighting is a better fit than Levenshtein distance for given-name spelling
 variants; reference-value tests pin this local implementation.
 
 Changelog:
+- 2026-10-03: every source member name constrains proposals and transitive joins.
 - 2026-10-02: source identifiers and compatible names select pairs; the same
   name alone never accepts one.
 - 2026-10-01: the same name is a merge without the pair judge. A pair is kept
@@ -44,6 +45,7 @@ from itertools import combinations
 from typing import TypeVar
 
 from packs.ingestion.primitives.common.contact_fields import format_phone_digits
+from packs.ingestion.primitives.deep_context.shared.common import normalize_name
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergeDecision,
     MergePair,
@@ -66,7 +68,6 @@ T = TypeVar("T")
 @dataclass(frozen=True)
 class _BlockingRecord:
     person: MergePerson
-    name_words: tuple[str, ...]
     bucket_keys: frozenset[str]
 
 
@@ -186,6 +187,12 @@ def names_can_match(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
     return _word_forms_match(first[0], second[0]) and _word_forms_match(first[-1], second[-1])
 
 
+def source_names_can_match(names: tuple[str, ...]) -> bool:
+    """Every original name is present and compatible with every other member."""
+    words = [name_words(name) for name in names]
+    return bool(words) and all(words) and all(names_can_match(a, b) for a, b in combinations(words, 2))
+
+
 def blocking_name_keys(name_key: str) -> set[str]:
     """Return the name bucket keys: first/last initial pairs, plus whole-name keys for a full name."""
     joined = re.sub(r"[.\-']+", "", name_key)
@@ -206,10 +213,9 @@ def _blocking_record(person: MergePerson) -> _BlockingRecord:
     keys = {f"email:{email}" for email in person.emails}
     keys |= {f"local:{part}" for part in email_localparts(person.emails)}
     keys |= {f"phone:{digits}" for digits in person.phone_digits}
-    keys |= {f"nm:{key}" for key in blocking_name_keys(person.name_key)}
+    keys |= {f"nm:{key}" for name in person.source_names for key in blocking_name_keys(normalize_name(name))}
     return _BlockingRecord(
         person,
-        name_words(person.name_key),
         frozenset(keys),
     )
 
@@ -240,7 +246,7 @@ def generate_pairs(people: list[MergePerson]) -> list[MergePair]:
     selected: list[MergePair] = []
     for left_index, right_index in sorted(candidates):
         left, right = records[left_index], records[right_index]
-        if names_can_match(left.name_words, right.name_words):
+        if source_names_can_match(left.person.source_names + right.person.source_names):
             selected.append(MergePair(left.person, right.person))
     return selected
 
@@ -257,7 +263,8 @@ def slam_dunk_verdict(
 ) -> MergeDecision | None:
     """Merge an identical name with a shared source contact phone or email."""
     shared = _shared_contact_identifiers(first, second)
-    if shared and first.name_key and first.name_key == second.name_key:
+    if (shared and first.name_key and first.name_key == second.name_key
+            and source_names_can_match(first.source_names + second.source_names)):
         return MergeDecision(
             same_person=True,
             confidence=0.99,
@@ -286,18 +293,24 @@ def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[
 
 
 def accepted_edges(
-    verdicts: list[tuple[str, str, bool, float]],
+    verdicts: list[tuple[str, str, bool | None, float]],
+    *,
+    source_names: dict[str, tuple[str, ...]] | None = None,
 ) -> list[tuple[str, str]]:
     """Join strongest pairs without overriding different-person evidence."""
     groups = {node: {node} for left, right, _, _ in verdicts for node in (left, right)}
-    rejected = [(left, right) for left, right, same, _ in verdicts if not same]
+    rejected = [(left, right) for left, right, same, _ in verdicts if same is False]
     accepted = []
     for left, right, same, _ in sorted(
         verdicts, key=lambda row: (-row[3], min(row[:2]), max(row[:2])),
     ):
-        if not same:
+        if same is not True:
             continue
         joined = groups[left] | groups[right]
+        if source_names is not None and not source_names_can_match(tuple(
+            name for node in joined for name in source_names[node]
+        )):
+            continue
         if any(a in joined and b in joined for a, b in rejected):
             continue
         accepted.append(tuple(sorted((left, right))))

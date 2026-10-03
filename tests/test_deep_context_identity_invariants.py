@@ -189,7 +189,7 @@ class IdentityInvariantTest(unittest.TestCase):
         self.assertEqual(exported_identifiers(), ["replacement"])
 
         db.decide_identity("original", None)
-        self.assertEqual(exported_identifiers(), ["original"])
+        self.assertEqual(exported_identifiers(), [""])
         self.assert_invariants(db)
 
     def test_decide_then_merge_matches_merge_then_decide(self) -> None:

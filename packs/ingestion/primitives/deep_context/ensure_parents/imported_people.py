@@ -18,7 +18,7 @@ Changelog:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
@@ -54,6 +54,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     sources as source_rows,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.projectors import project_owner_people
 from packs.ingestion.primitives.deep_context.db.queries import imported_people as stored_people_rows
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.imports.merge_people import merge_group
@@ -125,16 +126,22 @@ def _channels(value: object) -> tuple[str, ...]:
 
 def _imported_people(rows: tuple[PeopleRow, ...]) -> tuple[ImportedPerson, ...]:
     """Project typed full rows to the fields used within Deep Context."""
-    combined: dict[str, ImportedPerson] = {}
+    grouped: dict[str, list[PeopleRow]] = {}
     for row in rows:
+        person_id = _text(row.id).lower()
+        if person_id and "/" not in person_id and "\\" not in person_id:
+            grouped.setdefault(person_id, []).append(row.model_copy(update={
+                "id": person_id,
+                "source_channels": ",".join(_channels(row.source_channels)),
+            }))
+    combined: dict[str, ImportedPerson] = {}
+    for person_id, members in grouped.items():
+        row = members[0] if len(members) == 1 else PeopleRow.model_validate(merge_group(person_id, members))
         raw = row.to_row()
-        person_id = _text(raw.get("id")).lower()
-        if not person_id or "/" in person_id or "\\" in person_id:
-            continue
         display_name = _text(raw.get("full_name")) or " ".join(
             filter(None, (_text(raw.get("first_name")), _text(raw.get("last_name"))))
         )
-        incoming = ImportedPerson(
+        combined[person_id] = ImportedPerson(
             person_id=person_id,
             display_name=display_name,
             emails=tuple(emails_from_row(raw)),
@@ -152,40 +159,6 @@ def _imported_people(rows: tuple[PeopleRow, ...]) -> tuple[ImportedPerson, ...]:
             location=_location(raw),
             index_row=row,
         )
-        prior: ImportedPerson | None = combined.get(person_id)
-        if prior is None:
-            combined[person_id] = incoming
-            continue
-        merged = ImportedPerson(
-            person_id=person_id,
-            display_name=incoming.display_name or prior.display_name,
-            emails=tuple(dict.fromkeys((*prior.emails, *incoming.emails))),
-            phones=tuple(dict.fromkeys((*prior.phones, *incoming.phones))),
-            source_channels=tuple(dict.fromkeys((*prior.source_channels, *incoming.source_channels))),
-            superseded_person_ids=tuple(
-                dict.fromkeys((*prior.superseded_person_ids, *incoming.superseded_person_ids))
-            ),
-            public_identifier=incoming.public_identifier or prior.public_identifier,
-            interaction_counts={**prior.interaction_counts, **incoming.interaction_counts},
-            last_interaction=max(prior.last_interaction, incoming.last_interaction),
-            headline=incoming.headline or prior.headline,
-            linkedin_url=incoming.linkedin_url or prior.linkedin_url,
-            avatar_url=incoming.avatar_url or prior.avatar_url,
-            title=incoming.title or prior.title,
-            company=incoming.company or prior.company,
-            location=incoming.location or prior.location,
-            index_row=incoming.index_row,
-        )
-        full = merge_group(person_id, [incoming.index_row, prior.index_row])
-        full["id"] = merged.person_id
-        full["superseded_person_ids"] = json.dumps(
-            [value for value in _superseded(full["superseded_person_ids"]) if value != person_id]
-        )
-        full["full_name"] = merged.display_name
-        full["headline"] = merged.headline
-        full["public_identifier"] = merged.public_identifier
-        full["linkedin_url"] = merged.linkedin_url
-        combined[person_id] = replace(merged, index_row=PeopleRow.model_validate(full))
     return tuple(combined[key] for key in sorted(combined))
 
 
@@ -237,6 +210,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     """Update each imported person without treating old aliases as a merge."""
     if not imported:
         return 0
+    incoming_rows = tuple(person.index_row for person in imported)
     current = {row.id: row for row in stored_people_rows(db)}
     incoming_ids = {person.person_id for person in imported}
     combined_rows: list[PeopleRow] = []
@@ -261,6 +235,8 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             ]
             merged = merge_group(canonical_id, [source, *previous])
             merged["id"] = canonical_id
+            for column in ("full_name", "first_name", "last_name"):
+                merged[column] = getattr(source, column)
             merged["superseded_person_ids"] = json.dumps(
                 [value for value in _superseded(merged["superseded_person_ids"])
                  if value != canonical_id]
@@ -335,7 +311,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
                 parent_id,
                 child_slug,
                 parent_slug,
-                (prior.display_name if prior else "") or person.display_name,
+                person.display_name,
                 prior.is_owner if prior else False,
                 prior.is_ghost if prior else False,
                 prior.facts_json if prior else None,
@@ -398,4 +374,5 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             ))
     db.project_rows(tuple(projection_rows))
     db.replace_imported_people(tuple(person.index_row for person in imported))
+    project_owner_people(db, incoming_rows)
     return len(imported)

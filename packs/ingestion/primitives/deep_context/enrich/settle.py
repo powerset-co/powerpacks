@@ -14,8 +14,9 @@ fetched profile has content.
 
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.identity_views import approved_identities, linkedin_queue
@@ -23,7 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import HumanWorth, Parent
 from packs.ingestion.primitives.deep_context.db.queries import parents, people, sources
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.worth_views import fact_worth
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import settle_machine_identities
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import MachineIdentitySettlement, settle_machine_identities
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
 from packs.ingestion.primitives.deep_context.enrich.settle_policy import (
     empty_profile_decision, nothing_to_show, same_profile_decisions, worth_decision,
@@ -55,14 +56,16 @@ class SettleEnrichment:
         for identity in accepted:
             link = accepted_links[identity.row_key]
             profile = profiles.get(identity.row_key)
+            if not link.decision_action:
+                settlements.append(replace(MachineIdentitySettlement.from_link(link), judgment_fingerprint=(
+                    link.judgment_fingerprint or hashlib.sha256(
+                        (link.row_key + identity.linkedin_url + (profile.payload_json if profile else "")).encode(),
+                    ).hexdigest())))
             decision = empty_profile_decision(
                 link, own_connection=link.parent_id in own_connections, profile=profile,
             )
             if decision is not None:
                 settlements.append(decision)
-            # Kept: an own connection, a LinkedIn the human kept, or a profile with content.
-            else:
-                real_profiles.add(link.parent_id)
 
         # A LinkedIn the machine is unsure of is only worth a person's check when there is a
         # profile to look at: one that was fetched and has nothing on it is detached instead.
@@ -85,6 +88,7 @@ class SettleEnrichment:
             [(link, unsure_profiles.get(link.row_key)) for link in unsure],
         ))
         settle_machine_identities(self.db, settlements)
+        real_profiles.update(accepted_links[identity.row_key].parent_id for identity in approved_identities(self.db))
 
         verdicts = fact_worth(self.db)
         projections = []

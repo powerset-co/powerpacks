@@ -1,4 +1,3 @@
-import csv
 import json
 import subprocess
 import sys
@@ -6,23 +5,137 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.imports.directory import (
-    DIRECTORY_COLUMNS,
-)
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.ingestion.primitives.imports.gmail import importer as gmail_import
+from packs.ingestion.primitives.discover.gmail.extract_gmail import write_msgvault_artifacts
+from packs.ingestion.primitives.imports.common import write_manifest
 from packs.shared.csv_io import CsvIO
 
 
-def write_directory(path: Path, rows: list[dict[str, str]]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=DIRECTORY_COLUMNS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({column: row.get(column, "") for column in DIRECTORY_COLUMNS})
-
-
 class GmailSourceImportTests(unittest.TestCase):
+    def test_refresh_replaces_enriched_account_rows_before_source_import(self) -> None:
+        for limit, expected_emails in ((None, ["jordan@example.com", "taylor@example.com"]),
+                                      (1, ["jordan@example.com"]), (0, [])):
+            with self.subTest(limit=limit), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                account_dir = root / "discover" / "owner-example.com"
+                account_dir.mkdir(parents=True)
+                account_people = account_dir / "people.csv"
+                old_rows = [{
+                    "id": "candidate:email:jordan@example.com", "primary_email": "jordan@example.com",
+                    "full_name": "Avery Profile", "first_name": "Avery", "last_name": "Profile",
+                    "public_identifier": "avery-profile", "linkedin_url": "https://www.linkedin.com/in/avery-profile",
+                    "headline": "Old profile", "rapidapi_response": '{"name":"Avery Profile"}',
+                    "all_emails": '["jordan@example.com","avery@example.com"]',
+                    "primary_phone": "+15550100", "all_phones": '["+15550100"]',
+                    "superseded_person_ids": '["old-profile"]', "enrichment_provider": "cached",
+                    "source_channels": "gmail_msgvault,linkedin", "interaction_counts": '{"gmail":99}',
+                }, {"primary_email": "removed@example.com", "full_name": "Removed Contact"}]
+                CsvIO.write_dict_rows(account_people, PEOPLE_SCHEMA_COLUMNS, old_rows)
+                archive = root / "original-enriched.csv"
+                archive.write_bytes(account_people.read_bytes())
+                original_bytes = archive.read_bytes()
+                current = [
+                    {"email": "jordan@example.com", "display_name": "", "total_sent": 1,
+                     "total_received": 2, "total_messages": 3},
+                    {"email": "taylor@example.com", "display_name": "Taylor Delta", "total_sent": 1,
+                     "total_received": 1, "total_messages": 2},
+                    {"email": "removed@example.com", "display_name": "Removed Contact", "total_sent": 0,
+                     "total_received": 3, "total_messages": 3},
+                ]
+                refreshed = write_msgvault_artifacts(current, account_dir, "owner@example.com", limit=limit)
+                source_rows = CsvIO.read_dict_rows(account_people)
+                if limit != 0:
+                    self.assertEqual(source_rows[0]["full_name"], "")
+                    self.assertEqual(source_rows[0]["public_identifier"], "")
+                self.assertEqual([row["primary_email"] for row in source_rows], expected_emails)
+                self.assertEqual(refreshed["counts"]["contacts_final"], len(expected_emails))
+                self.assertEqual(refreshed["counts"]["contacts_preserved_existing"], 0)
+                for key, email_column in (("targeted_emails_csv", "primary_email"),
+                                          ("gmail_contacts_aggregated_csv", "email"),
+                                          ("gmail_threads_csv", "email"),
+                                          ("linkedin_resolution_queue_csv", "handle")):
+                    self.assertEqual([row[email_column] for row in CsvIO.read_dict_rows(Path(refreshed["artifacts"][key]))], expected_emails)
+                manifest = root / "discover" / "manifest.json"
+                manifest.write_text(json.dumps({"children": [{
+                    "account_email": "owner@example.com", "people_csv": str(account_people),
+                }]}))
+                node = gmail_import.GmailImport(manifest_json=manifest, import_dir=root / "import")
+                node.run()
+                imported = CsvIO.read_dict_rows(node.people_csv)
+                self.assertEqual([row["primary_email"] for row in imported], expected_emails)
+                if imported:
+                    person = imported[0]
+                    self.assertEqual(person["id"], "candidate:email:jordan@example.com")
+                    self.assertEqual(person["full_name"], "")
+                    self.assertEqual(json.loads(person["all_emails"]), ["jordan@example.com"])
+                    self.assertEqual(json.loads(person["interaction_counts"]), {"gmail": 3})
+                    for field in ("public_identifier", "linkedin_url", "headline", "rapidapi_response",
+                                  "primary_phone", "all_phones", "enrichment_provider"):
+                        self.assertEqual(person[field], "", field)
+                self.assertEqual(archive.read_bytes(), original_bytes)
+
+    def test_import_projects_source_fields_even_when_account_id_is_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            account_people = root / "account.csv"
+            CsvIO.write_dict_rows(account_people, PEOPLE_SCHEMA_COLUMNS, [{
+                "id": "candidate:email:jordan@example.com", "primary_email": "JORDAN@example.com",
+                "full_name": "Jordan Bravo", "first_name": "Jordan", "last_name": "Bravo",
+                "all_emails": '["avery@example.com"]', "primary_phone": "+15550100",
+                "all_phones": '["+15550100"]', "public_identifier": "avery-profile",
+                "linkedin_url": "https://www.linkedin.com/in/avery-profile", "headline": "Old profile",
+                "rapidapi_response": '{"name":"Avery Profile"}', "superseded_person_ids": '["old-profile"]',
+                "enrichment_provider": "cached", "enrichment_status": "enriched",
+                "interaction_counts": '{"gmail":4}', "source_channels": "gmail_msgvault,linkedin",
+            }])
+            original_bytes = account_people.read_bytes()
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"children": [{
+                "account_email": "owner@example.com", "people_csv": str(account_people),
+            }]}))
+            node = gmail_import.GmailImport(manifest_json=manifest, import_dir=root / "import")
+            node.run()
+            person = CsvIO.read_dict_rows(node.people_csv)[0]
+            self.assertEqual(person["id"], "candidate:email:jordan@example.com")
+            self.assertEqual(person["full_name"], "Jordan Bravo")
+            self.assertEqual(person["source_channels"], "gmail_msgvault")
+            self.assertEqual(json.loads(person["all_emails"]), ["jordan@example.com"])
+            for field in ("primary_phone", "all_phones", "public_identifier", "linkedin_url", "headline",
+                          "rapidapi_response", "superseded_person_ids", "enrichment_provider", "enrichment_status"):
+                self.assertEqual(person[field], "", field)
+            self.assertEqual(account_people.read_bytes(), original_bytes)
+
+    def test_import_rebuilds_previous_source_contract_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            account_people = root / "account.csv"
+            CsvIO.write_dict_rows(account_people, PEOPLE_SCHEMA_COLUMNS, [{
+                "primary_email": "jordan@example.com", "full_name": "Jordan Bravo",
+                "interaction_counts": '{"gmail":4}',
+            }])
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"children": [{
+                "account_email": "owner@example.com", "people_csv": str(account_people),
+            }]}))
+            import_root = root / "import"
+            output = import_root / "gmail" / "people.csv"
+            output.parent.mkdir(parents=True)
+            CsvIO.write_dict_rows(output, PEOPLE_SCHEMA_COLUMNS, [{
+                "id": "candidate:email:jordan@example.com", "primary_email": "jordan@example.com",
+                "public_identifier": "avery-profile",
+            }])
+            write_manifest("gmail", {
+                "status": "completed", "input": {"pipeline_contract": "gmail-source-only-v1",
+                    "discovery_manifest": str(manifest),
+                    "accounts": [{"account_email": "owner@example.com", "people_csv": str(account_people)}]},
+                "outputs": {"people_csv": str(output)}, "stats": {"people": 1, "candidates": 1},
+            }, import_dir=import_root)
+            node = gmail_import.GmailImport(manifest_json=manifest, import_dir=import_root)
+            node.run()
+            self.assertFalse(node.written.get("noop", False))
+            self.assertEqual(CsvIO.read_dict_rows(output)[0]["public_identifier"], "")
+
     def test_import_retains_all_source_contacts_without_queue_or_directory(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -87,7 +200,7 @@ class GmailSourceImportTests(unittest.TestCase):
             manifest = discovery / "manifest.json"
             manifest.write_text(json.dumps({"children": accounts}))
             directory = root / "directory.csv"
-            write_directory(directory, [{
+            CsvIO.write_dict_rows(directory, ["source", "source_key", "status", "email", "linkedin_url", "confidence"], [{
                 "source": "deep_context_review", "source_key": "email:jordan@example.com",
                 "email": "jordan@example.com", "status": "found", "confidence": "1",
                 "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",

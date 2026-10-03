@@ -476,7 +476,7 @@ class MergeVerdictRow:
     slug_b: str
     signature: str
     judge: str
-    same_person: bool
+    same_person: bool | None
     confidence: float
     tone_consistent: bool
     reason: str = ""

@@ -45,6 +45,57 @@ class GmailExtractorTests(unittest.TestCase):
         parsed = msgvault_util.parse_email_header('"Jane Example" <jane@example.com>, john@example.org')
         self.assertEqual(parsed, [("Jane Example", "jane@example.com"), ("", "john@example.org")])
 
+    def test_conflicting_observed_names_do_not_elect_a_person_by_frequency(self):
+        self.assertEqual(msgvault_util.best_display_name("service@example.com", {
+            "Jordan Bravo": 21, "Casey Delta": 9,
+        }), "")
+        self.assertEqual(msgvault_util.best_display_name("jordan@example.com", {
+            "Jordan Bravo": 21, "J Bravo": 9,
+        }), "Jordan Bravo")
+
+    def test_source_name_conflict_retains_mailbox_and_manifest_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            con = sqlite3.connect(db)
+            con.executescript("""
+                CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+                CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+                CREATE TABLE messages (id INTEGER PRIMARY KEY, source_id INTEGER, conversation_id INTEGER,
+                    message_type TEXT, sent_at TEXT, received_at TEXT, internal_date TEXT,
+                    deleted_at TEXT, deleted_from_source_at TEXT);
+                CREATE TABLE message_recipients (message_id INTEGER, participant_id INTEGER,
+                    recipient_type TEXT, display_name TEXT);
+                INSERT INTO sources VALUES (1, 'gmail', 'owner@example.com', 'Owner');
+                INSERT INTO participants VALUES (1, 'service@example.com', 'Jordan Bravo', 'example.com'),
+                    (2, 'owner@example.com', 'Owner', 'example.com');
+                INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES
+                    (1, 1, 1, 'email', '2026-01-01'), (2, 1, 1, 'email', '2026-01-02'),
+                    (3, 1, 1, 'email', '2026-01-03');
+                INSERT INTO message_recipients VALUES (1, 1, 'from', 'Casey Delta'),
+                    (2, 1, 'from', 'Jordan Bravo'), (3, 2, 'from', 'Owner'),
+                    (3, 1, 'to', 'Jordan Bravo');
+            """)
+            con.commit()
+            con.close()
+            source_bytes = db.read_bytes()
+            code, payload = self.invoke([
+                "msgvault", "--db", str(db), "--account-email", "owner@example.com",
+                "--output-dir", str(Path(tmp) / "out"),
+            ])
+            self.assertEqual(code, 0)
+            person = CsvIO.read_dict_rows(Path(payload["artifacts"]["people_csv"]))[0]
+            self.assertEqual(person["full_name"], "")
+            self.assertEqual(person["first_name"], "")
+            self.assertEqual(person["last_name"], "")
+            self.assertEqual(person["primary_email"], "service@example.com")
+            self.assertEqual(json.loads(person["all_emails"]), ["service@example.com"])
+            manifest = json.loads(Path(payload["artifacts"]["manifest_json"]).read_text())
+            self.assertEqual(manifest["name_conflicts"], [{
+                "email": "service@example.com", "observed_names": ["Casey Delta", "Jordan Bravo"],
+            }])
+            self.assertEqual(manifest["counts"]["name_conflicts"], 1)
+            self.assertEqual(db.read_bytes(), source_bytes)
+
     def test_msgvault_import_reads_metadata_without_subjects_or_bodies(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "msgvault.db"
@@ -68,7 +119,7 @@ class GmailExtractorTests(unittest.TestCase):
                 CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
                 INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
                 INSERT INTO participants (id, email_address, display_name, domain) VALUES
-                    (1, 'jane@example.com', 'Jane Participant', 'example.com'),
+                    (1, 'jane@example.com', 'Jane Example', 'example.com'),
                     (2, 'me@gmail.com', 'Me', 'gmail.com'),
                     (3, 'noreply@example.com', 'No Reply', 'example.com');
                 INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at, subject, snippet) VALUES
@@ -241,13 +292,13 @@ class GmailExtractorTests(unittest.TestCase):
         self.assertEqual(by_email["carol@example.com"]["group_received"], 0)
         con.close()
 
-    def test_msgvault_import_reruns_upsert_fixed_discover_artifacts(self):
+    def test_msgvault_import_reruns_replace_fixed_discover_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "msgvault.db"
 
             def write_db(contacts):
                 if db.exists():
-                    db.unlink()
+                    db.rename(db.with_suffix(".db.bkup"))
                 con = sqlite3.connect(db)
                 con.executescript("""
                     CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
@@ -320,15 +371,15 @@ class GmailExtractorTests(unittest.TestCase):
             self.assertNotIn("first-run", second["artifacts"]["people_csv"])
             self.assertNotIn("second-run", second["artifacts"]["people_csv"])
             self.assertEqual(second["counts"]["contacts_written"], 1)
-            self.assertEqual(second["counts"]["contacts_final"], 2)
-            self.assertEqual(second["counts"]["contacts_preserved_existing"], 1)
+            self.assertEqual(second["counts"]["contacts_final"], 1)
+            self.assertEqual(second["counts"]["contacts_preserved_existing"], 0)
 
             with Path(second["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 people_rows = list(CsvIO.dict_reader(handle))
-            self.assertEqual([row["primary_email"] for row in people_rows], ["jane@example.com", "john@example.com"])
+            self.assertEqual([row["primary_email"] for row in people_rows], ["john@example.com"])
             with Path(second["artifacts"]["targeted_emails_csv"]).open(newline="", encoding="utf-8") as handle:
                 targeted_rows = list(CsvIO.dict_reader(handle))
-            self.assertEqual([row["primary_email"] for row in targeted_rows], ["jane@example.com", "john@example.com"])
+            self.assertEqual([row["primary_email"] for row in targeted_rows], ["john@example.com"])
 
     def test_msgvault_import_requires_round_trip_contacts(self):
         with tempfile.TemporaryDirectory() as tmp:

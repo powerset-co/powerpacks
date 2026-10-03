@@ -5,6 +5,9 @@ A parent without facts (synthesis has not run for it) has no dossier: it gets no
 file under parents/ and no dossier artifact.
 
 Changelog:
+  2026-10-03: unresolved original contact names withhold both parent dossiers
+    without removing their files or extracted facts.
+  2026-10-03: all original source names and every child rejection constrain joins.
   2026-09-25: parents without facts are absent from parents/, not stubbed.
 """
 
@@ -15,7 +18,7 @@ import hashlib
 import json
 import time
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object
@@ -26,6 +29,10 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     PARENTS_MANIFEST,
     emit,
     slugify,
+)
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import (
+    SOURCE_IDENTITY_REVIEW_REASON,
+    unresolved_source_parents,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -40,6 +47,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     artifacts as artifact_rows,
     facts as fact_rows,
     identifiers as identifier_rows,
+    imported_people,
     merge_verdicts,
     parents as parent_rows,
     people as person_rows,
@@ -71,14 +79,20 @@ def _accepted_components(db: Db) -> tuple[tuple[str, ...], ...]:
     """Join current parents without overriding any child-pair rejection."""
     people = person_rows(db)
     parent_by_person = {row.person_id: row.parent_id for row in people}
+    source_names = {row.id: row.full_name for row in imported_people(db)}
+    names_by_parent: dict[str, tuple[str, ...]] = {}
+    for person in people:
+        names_by_parent.setdefault(person.parent_id, ())
+        if not person.is_owner and not person.is_ghost:
+            names_by_parent[person.parent_id] += (source_names.get(person.person_id, ""),)
     verdicts = []
     for row in merge_verdicts(db):
         left = parent_by_person[row.person_a]
         right = parent_by_person[row.person_b]
-        if left == right or (row.same_person and not row.accepted):
+        if row.same_person is None or (row.same_person is True and (left == right or not row.accepted)):
             continue
-        verdicts.append((left, right, bool(row.same_person), row.confidence))
-    edges = accepted_edges(verdicts)
+        verdicts.append((left, right, row.same_person, row.confidence))
+    edges = accepted_edges(verdicts, source_names=names_by_parent)
     nodes = sorted({parent_id for edge in edges for parent_id in edge})
     return tuple(tuple(sorted(group)) for group in connected_components(nodes, edges))
 
@@ -207,6 +221,8 @@ class BuildParents(Node):
             normalize_parent_cache(self.db, raw_dir=self.db.db_path.parent / 'raw',
                                    facts_dir=self.db.db_path.parent / 'facts')
         plans, owner_excluded = _parent_plans(self.db)
+        source_review_parents = unresolved_source_parents(self.db)
+        plans = tuple(plan for plan in plans if plan.parent_id not in source_review_parents)
         prior_artifacts: dict[str, list[ArtifactRow]] = defaultdict(list)
         for row in artifact_rows(self.db, kind=ArtifactKind.DOSSIER.value):
             if row.person_id is None and row.candidate_key is None:
@@ -239,6 +255,7 @@ class BuildParents(Node):
             disk_fingerprint = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
             changed = (
                 current is None
+                or current.status != ProjectionStatus.PROJECTED.value
                 or current.input_fingerprint != input_fingerprint
                 or current.path != str(path.resolve())
                 or current.path in colliding_paths
@@ -305,6 +322,14 @@ class BuildParents(Node):
         # dossier row; remove_orphans below deletes its file.
         planned = {plan.parent_id for plan in plans}
         for parent_id, prior in prior_artifacts.items():
+            if parent_id in source_review_parents:
+                replacements.append(ArtifactReplacement(
+                    ArtifactKind.DOSSIER.value,
+                    tuple(replace(row, status=ProjectionStatus.FAILED.value,
+                                  error=SOURCE_IDENTITY_REVIEW_REASON) for row in prior),
+                    parent_id=parent_id,
+                ))
+                continue
             stub_key = f"{PARENT_DOSSIER_ARTIFACT_PREFIX}{parent_id}"
             if parent_id in planned or all(row.artifact_key != stub_key for row in prior):
                 continue
@@ -314,6 +339,8 @@ class BuildParents(Node):
         if replacements:
             self.db.project_rows(tuple(replacements))
         active_slugs = {slugify(plan.name, plan.parent_id) for plan in plans}
+        active_slugs.update(Path(row.path).stem for parent_id, rows in prior_artifacts.items()
+                            if parent_id in source_review_parents for row in rows)
         orphans = parent_rendering.remove_orphans(self.parents_dir, active_slugs)
         return BuildParentsManifest(
             status="completed",

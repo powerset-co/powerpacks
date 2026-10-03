@@ -172,6 +172,58 @@ class IdentityAuditTest(unittest.TestCase):
         self.assertEqual(signal.classification.value, 'needs_identity_review')
         self.assertEqual(signal.next_action.value, 'review_identity')
 
+    def test_unresolved_single_source_identity_is_visible_in_audit(self):
+        from packs.ingestion.primitives.deep_context.shared.dossier_policy import SOURCE_IDENTITY_REVIEW_REASON
+
+        self.fact(self.parent)
+        self.db.replace_imported_people((PeopleRow(id='person-a', full_name=''),))
+        found = next(f for f in self.findings() if f.category.value == 'source_identity_unresolved')
+        self.assertEqual(found.detail, SOURCE_IDENTITY_REVIEW_REASON)
+        self.assertEqual(found.child_ids, ('person-a',))
+        self.assertEqual(found.classification.value, 'needs_identity_review')
+        self.assertEqual(found.next_action.value, 'review_identity')
+
+    def test_conflicting_original_names_override_matching_cached_names(self):
+        self.add_child(name='Jordan Bravo')
+        self.db.replace_imported_people((PeopleRow(id='person-a', full_name='Jordan Bravo'),
+                                         PeopleRow(id='person-b', full_name='Casey Delta')))
+        self.assertIn('source_identity_unresolved', self.categories())
+        self.assertNotIn('incompatible_child_names', self.categories())
+
+    def test_current_fact_name_conflict_is_an_unresolved_source_identity(self):
+        self.db.replace_imported_people((PeopleRow(id='person-a', full_name='Jordan Bravo'),))
+        self.fact(self.parent)
+        self.db.project_rows((FactRow(
+            self.parent, self.parent, 'facts:' + self.parent,
+            facts_json=json.dumps({'canonical_name': 'Casey Delta'})),))
+        found = next(f for f in self.findings() if f.category.value == 'source_identity_unresolved')
+        self.assertEqual(found.child_ids, ('person-a',))
+        self.assertEqual(found.classification.value, 'needs_identity_review')
+
+    def test_archived_fact_name_does_not_override_current_contact_facts(self):
+        self.db.replace_imported_people((PeopleRow(id='person-a', full_name='Jordan Bravo'),))
+        self.fact(self.parent)
+        self.db.project_rows((ArtifactRow(
+            'facts:archived-parent', 'facts', self.parent, '/synthetic/archived',
+            'fingerprint', 'failed', payload_json=json.dumps({
+                'facts': {'canonical_name': 'Casey Delta'}})),))
+        self.assertNotIn('source_identity_unresolved', self.categories())
+
+    def test_known_source_names_and_owner_only_parent_are_not_quarantined(self):
+        self.db.replace_imported_people((PeopleRow(id='person-a', full_name='Jordan Bravo'),))
+        self.db.project_rows((ParentRow('owner-parent', 'owner-parent'),
+                              PersonRow('owner', 'owner-parent', is_owner=True),
+                              PersonRow('ghost', 'owner-parent', is_ghost=True)))
+        self.assertNotIn('source_identity_unresolved', self.categories())
+
+    def test_uncertain_merge_is_not_a_negative_conflict(self):
+        self.add_child()
+        self.add_child('person-c', 'Taylor Echo')
+        self.verdict('person-a', 'person-b')
+        self.verdict('person-b', 'person-c')
+        self.verdict('person-a', 'person-c', same=None, accepted=False)
+        self.assertNotIn('accepted_merge_conflicts_with_negative', self.categories())
+
     def history(self, key, records, *, person=None, status='projected'):
         payload = records[0] if len(records) == 1 else {'records': records}
         self.db.project_rows((ArtifactRow(

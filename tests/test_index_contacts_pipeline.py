@@ -31,7 +31,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
             tmp = Path(tmpdir)
             write_source_people(
                 tmp, "linkedin",
-                ",jordan-bravo,https://www.linkedin.com/in/jordan-bravo,Jordan Bravo,linkedin_csv\n",
+                "source-jordan,jordan-bravo,https://www.linkedin.com/in/jordan-bravo,Jordan Bravo,linkedin_csv\n",
             )
 
             old_root = index_contacts_pipeline.ROOT
@@ -79,6 +79,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
             self.assertEqual(payload["status"], "ready")
             promoted = tmp / ".powerpacks/network-import/merged/people.csv"
             self.assertTrue(promoted.exists())
+            self.assertIn("source-jordan", promoted.read_text())
             self.assertEqual(payload["people_sha256"], index_contacts_pipeline.sha256_file(promoted))
             self.assertNotIn("network_duckdb", payload["fan_in"])
             manifest = json.loads((tmp / ".powerpacks/network-import/index/contacts/manifest.json").read_text(encoding="utf-8"))
@@ -88,7 +89,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
             self.assertFalse(any("build_network_duckdb.py" in " ".join(cmd) for cmd in calls))
             self.assertTrue(any("build-local-duckdb-shim.py" in " ".join(cmd) for cmd in calls))
 
-    def test_fan_in_applies_new_review_identity_when_sources_are_unchanged(self) -> None:
+    def test_fan_in_ignores_directory_profiles_when_sources_are_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             source = tmp / ".powerpacks/network-import/import/gmail/people.csv"
@@ -114,9 +115,9 @@ class IndexContactsPipelineTest(unittest.TestCase):
                     second, code = index_contacts_pipeline.run_fan_in(args)
                     self.assertEqual(code, 0)
                     self.assertEqual(source.read_bytes(), source_bytes)
-                    self.assertEqual(second["merge"]["stats"]["directory_stamped"], 1)
+                    self.assertNotIn("directory_stamped", second["merge"]["stats"])
                     merged = tmp / ".powerpacks/network-import/merged/people.csv"
-                    self.assertIn("https://www.linkedin.com/in/casey-bravo", merged.read_text())
+                    self.assertNotIn("https://www.linkedin.com/in/casey-bravo", merged.read_text())
                     first_bytes = merged.read_bytes()
                     index_contacts_pipeline.run_fan_in(args)
                     self.assertEqual(merged.read_bytes(), first_bytes)

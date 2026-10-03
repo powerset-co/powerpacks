@@ -14,7 +14,8 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     people as sqlite_people, identifiers as sqlite_identifiers, imported_people as sqlite_roster,
 )
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
-from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
+from packs.ingestion.primitives.discover.gmail.extract_gmail import write_msgvault_artifacts
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.name_policy import profile_name_verdict
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.shared.csv_io import CsvIO
@@ -29,7 +30,7 @@ IMPORT_STAGE = [GmailImport, LinkedInImport, MessagesImport, PeopleMerge]
 
 class SourceImportContractTests(unittest.TestCase):
     def test_source_imports_do_not_consult_or_write_identity_directory(self) -> None:
-        for node in (GmailImport, MessagesImport):
+        for node in (GmailImport, MessagesImport, PeopleMerge):
             with self.subTest(node=node.name):
                 self.assertFalse(any("directory.csv" in item.path for item in (*node.inputs, *node.outputs)))
                 self.assertEqual(len(node.outputs), 1)
@@ -52,6 +53,93 @@ class SourceImportContractTests(unittest.TestCase):
 
 
 class DeepContextHandoffTests(unittest.TestCase):
+    def test_original_gmail_header_conflict_survives_named_account_and_message(self):
+        for names, another_account in ((["Casey Delta", "Jordan Bravo"], False),
+                                       (["Casey Delta", "Jordan Bravo"], True),
+                                       (["alias@example.com", "Jordan Bravo"], False)):
+            with self.subTest(names=names, another_account=another_account), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = write_msgvault_artifacts([{
+                    "email": "shared@example.com", "display_name": "",
+                    "observed_names": names,
+                    "total_sent": 1, "total_received": 2, "total_messages": 3,
+                }], root / "account", account_email="owner@example.com")
+                accounts = [{"account_email": "owner@example.com", "people_csv": source["artifacts"]["people_csv"]}]
+                if another_account:
+                    other = root / "other.csv"
+                    CsvIO.write_dict_rows(other, PEOPLE_SCHEMA_COLUMNS, [{
+                        "primary_email": "shared@example.com", "full_name": "Jordan Bravo",
+                        "interaction_counts": '{"gmail": 2}',
+                    }])
+                    accounts.append({"account_email": "other@example.com", "people_csv": str(other)})
+                discovery = root / "gmail-discovery.json"
+                discovery.write_text(json.dumps({"children": accounts}))
+                contacts = root / "contacts.csv"
+                CsvIO.write_dict_rows(contacts, CSV_HEADERS, [{
+                    "phone": "shared@example.com", "name": "Jordan Bravo", "source": "imessage",
+                    "message_count": "3", "imessage_message_count": "3",
+                }])
+                gmail = GmailImport(manifest_json=discovery, import_dir=root / "import")
+                messages = MessagesImport(contacts_csv=contacts, import_dir=root / "import")
+                gmail.run()
+                messages.run()
+                self.assertEqual(CsvIO.read_dict_rows(gmail.people_csv)[0]["full_name"], "")
+                merge = PeopleMerge(inputs=[gmail.people_csv, messages.people_csv], output_dir=root / "merged")
+                merge.run()
+                person = CsvIO.read_dict_rows(merge.people_csv)[0]
+                self.assertEqual(person["full_name"], "")
+                self.assertEqual(json.loads(person["interaction_counts"]), {"gmail": 3, "imessage": 3})
+                self.assertIn(source["artifacts"]["manifest_json"], json.loads(person["source_artifacts"]))
+                self.assertEqual(merge.run().stats.input_rows[str(gmail.people_csv)], 2 + another_account)
+                db = Db(root / "context.sqlite")
+                for _ in range(2):
+                    EnsureParents(db=db, people_csv=merge.people_csv).run()
+                    self.assertEqual(sqlite_roster(db)[0].full_name, "")
+                    self.assertEqual(len(sqlite_people(db)), 1)
+                    parent = sqlite_people(db)[0].parent_id
+                    self.assertEqual(profile_name_verdict(db, parent, ('Jordan Bravo',)).value, "needs_review")
+
+    def test_original_gmail_account_conflict_survives_named_message_import(self):
+        for names, expected in ((('Casey Bravo', 'Jordan Delta'), ''), (('', 'Jordan Delta'), 'Jordan Delta')):
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                accounts = []
+                for index, name in enumerate(names):
+                    path = root / f"account-{index}.csv"
+                    CsvIO.write_dict_rows(path, PEOPLE_SCHEMA_COLUMNS, [{
+                        "primary_email": "shared@example.com", "full_name": name,
+                        "interaction_counts": '{"gmail": 3}',
+                    }])
+                    accounts.append({"account_email": f"owner-{index}@example.com", "people_csv": str(path)})
+                discovery = root / "gmail-discovery.json"
+                discovery.write_text(json.dumps({"children": accounts}))
+                contacts = root / "contacts.csv"
+                CsvIO.write_dict_rows(contacts, CSV_HEADERS, [{
+                    "phone": "shared@example.com", "name": "Jordan Delta", "source": "imessage",
+                    "message_count": "3", "imessage_message_count": "3",
+                }])
+                gmail = GmailImport(manifest_json=discovery, import_dir=root / "import")
+                messages = MessagesImport(contacts_csv=contacts, import_dir=root / "import")
+                gmail.run()
+                messages.run()
+                merge = PeopleMerge(inputs=[gmail.people_csv, messages.people_csv], output_dir=root / "merged")
+                merge.run()
+                self.assertEqual(CsvIO.read_dict_rows(merge.people_csv)[0]["full_name"], expected)
+                self.assertEqual(merge.run().stats.input_rows[str(gmail.people_csv)], len(accounts))
+                db = Db(root / "context.sqlite")
+                for _ in range(2):
+                    EnsureParents(db=db, people_csv=merge.people_csv).run()
+                    self.assertEqual(sqlite_roster(db)[0].full_name, expected)
+                    self.assertEqual(len(sqlite_people(db)), 1)
+                    parent = sqlite_people(db)[0].parent_id
+                    verdict = profile_name_verdict(db, parent, ('Jordan Delta',))
+                    self.assertEqual(verdict is None, bool(expected))
+                Path(accounts[0]["people_csv"]).rename(Path(accounts[0]["people_csv"]).with_suffix(".csv.bkup"))
+                empty = Db(root / "missing-source.sqlite")
+                with self.assertRaises(FileNotFoundError):
+                    EnsureParents(db=empty, people_csv=merge.people_csv).run()
+                self.assertEqual(sqlite_people(empty), ())
+
     def test_source_candidates_and_metadata_survive_merge_with_or_without_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -85,12 +173,13 @@ class DeepContextHandoffTests(unittest.TestCase):
             directory = root / "directory.csv"
             for known in (False, True):
                 if known:
-                    CsvIO.write_dict_rows(directory, DIRECTORY_COLUMNS, [{
+                    CsvIO.write_dict_rows(directory, ["source", "source_key", "email", "status", "confidence",
+                                                       "public_identifier", "linkedin_url"], [{
                         "source": "deep_context_review", "source_key": "email:casey@example.com",
                         "email": "casey@example.com", "status": "found", "confidence": "1.0",
                         "public_identifier": "casey-bravo", "linkedin_url": "https://linkedin.com/in/casey-bravo",
                     }])
-                merger = PeopleMerge(inputs=inputs, directory_csv=directory, output_dir=root / "merged")
+                merger = PeopleMerge(inputs=inputs, output_dir=root / "merged")
                 result = merger.run()
                 self.assertEqual(result.stats.dropped_unkeyable, 0)
                 self.assertEqual(result.stats.rows, 3)
@@ -113,7 +202,7 @@ class DeepContextHandoffTests(unittest.TestCase):
                 self.assertEqual(json.loads(casey["interaction_counts"]), {"email": 8, "imessage": 3})
                 self.assertEqual(casey["last_interaction"], "2026-09-03T00:00:00+00:00")
                 self.assertEqual(set(casey["source_channels"].split(",")), {"gmail_msgvault", "imessage"})
-                self.assertEqual(casey["public_identifier"], "casey-bravo" if known else "")
+                self.assertEqual(casey["public_identifier"], "")
                 first = merger.people_csv.read_bytes()
                 merger.run()
                 self.assertEqual(merger.people_csv.read_bytes(), first)

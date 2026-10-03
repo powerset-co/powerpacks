@@ -1,6 +1,8 @@
 """Typed SQLite reads for merge-candidate judging.
 
 Changelog:
+- 2026-10-03: all original source names constrain a parent; only source members
+  contribute identity endpoints.
 - 2026-09-25: evidence is read in MERGE_SURVEY_BATCH-parent batches and grouped per
   parent once; the whole-install packet no longer sits in memory or gets
   rescanned per parent.
@@ -141,10 +143,12 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
     if not parent_members or fact is None:
         return None
     member_ids = tuple(row.person_id for row in parent_members)
-    source_members = [row for row in parent_members if row.person_id in roster.names]
+    actual_members = [row for row in parent_members if not row.is_owner and not row.is_ghost]
+    source_members = [row for row in actual_members if row.person_id in roster.names]
     if not source_members:
         return None
     representative = next((row for row in source_members if roster.names[row.person_id]), source_members[0])
+    source_ids = tuple(row.person_id for row in source_members)
     try:
         fact_payload = SynthesizedFacts.from_payload(json.loads(fact.facts_json or "{}"))
     except json.JSONDecodeError:
@@ -154,12 +158,12 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
     owned = fact_payload.owned_identifiers
     emails = tuple(sorted({
         value
-        for person_id in member_ids
+        for person_id in source_ids
         for value in roster.identifiers.get(person_id, {}).get(IdentifierKind.EMAIL.value, [])
     } - roster.owner_emails))
     phones = tuple(sorted({
         phone_digits(value)
-        for person_id in member_ids
+        for person_id in source_ids
         for value in roster.identifiers.get(person_id, {}).get(IdentifierKind.PHONE.value, [])
         if phone_digits(value)
     } - roster.owner_phones))
@@ -173,6 +177,7 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
         member_person_ids=member_ids,
         name=name,
         name_key=normalize_name(name),
+        source_names=tuple(roster.names.get(row.person_id, "") for row in actual_members),
         emails=emails,
         extra_emails=extra_emails,
         phone_digits=phones,

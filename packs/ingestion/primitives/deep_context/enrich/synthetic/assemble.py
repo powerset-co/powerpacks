@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFallbackRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.name_policy import profile_name_verdict
 
 USER_DECIDED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 
@@ -93,7 +94,10 @@ class AssembleSyntheticProfile:
                 continue
             if result.linkedin_url and not source.research_link_rejected:
                 skipped_with_linkedin += 1
-            elif not result.usable:
+            elif not result.usable or (
+                source.existing_approved.lower() not in USER_DECIDED
+                and profile_name_verdict(self.db, source.parent_id, (result.person.full_name or "",)) is not None
+            ):
                 skipped_unusable += 1
             else:
                 groups.setdefault(source.parent_id, []).append((result, source))

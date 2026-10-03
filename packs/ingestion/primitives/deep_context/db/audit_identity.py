@@ -16,11 +16,14 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.db.merge_repair import _given_names_differ
 from packs.ingestion.primitives.deep_context.db.context_queries import aggregate_people_from_rows
 from packs.ingestion.primitives.deep_context.db.models import (
-    PersonRow, PersonIdentifierRow, MergeVerdictRow, MESSAGE_CHANNELS,
+    PersonRow, PersonIdentifierRow, FactRow, MergeVerdictRow, MESSAGE_CHANNELS,
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components
 from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import (
+    SOURCE_IDENTITY_REVIEW_REASON, unresolved_source_parent_ids,
+)
 from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
@@ -49,13 +52,15 @@ class AuditCategory(StrEnum):
     FACT_OWNER_MISMATCH = 'fact_owner_mismatch'
     ARTIFACT_OWNER_MISMATCH = 'artifact_owner_mismatch'
     UNASSIGNED_PARENT_HISTORY = 'unassigned_parent_history'
+    SOURCE_IDENTITY_UNRESOLVED = 'source_identity_unresolved'
 
     @property
     def classification(self) -> FindingClass:
         if self in {self.MISSING_CONTACT_FACTS, self.MIXED_CONTACT_FACTS}:
             return FindingClass.NO_EVIDENCE
         if self in {self.AMBIGUOUS_LINK_OWNER, self.ACCEPTED_MERGE_CONFLICTS_WITH_NEGATIVE,
-                    self.INCOMPATIBLE_CHILD_NAMES, self.UNASSIGNED_PARENT_HISTORY}:
+                    self.INCOMPATIBLE_CHILD_NAMES, self.UNASSIGNED_PARENT_HISTORY,
+                    self.SOURCE_IDENTITY_UNRESOLVED}:
             return FindingClass.NEEDS_IDENTITY_REVIEW
         return FindingClass.STRUCTURAL_DEFECT
 
@@ -218,6 +223,7 @@ class IdentityAudit:
                 row['parent_id'], AuditCategory(row['category']), row['row_key'], row['person_id']
             ) for row in conn.execute(_OWNERSHIP_SQL))
             coverage = tuple(_FactCoverage(**dict(row)) for row in conn.execute(_COVERAGE_SQL))
+            current_facts = tuple(FactRow(**dict(row)) for row in conn.execute('SELECT * FROM facts'))
             identifiers = tuple(PersonIdentifierRow(**dict(row))
                                 for row in conn.execute('SELECT * FROM person_identifiers'))
             imported = tuple(PeopleRow.model_validate(json.loads(row['row_json']))
@@ -243,6 +249,7 @@ class IdentityAudit:
                 (issue.person_id,) if issue.person_id else (), (issue.row_key,)))
         self._merge_findings(people, verdicts, findings)
         self._contact_findings(people, verdicts, coverage, eligible_contacts, findings)
+        self._source_findings(people, imported, current_facts, tuple(names), findings)
         self._history_findings(histories, aggregates, findings)
         return AuditReport(len(names), tuple(
             ParentAudit(parent, names.get(parent), tuple(found))
@@ -259,7 +266,7 @@ class IdentityAudit:
         components = connected_components(sorted({person for edge in edges for person in edge}), edges)
         component = {person: index for index, members in enumerate(components) for person in members}
         for verdict in verdicts:
-            if verdict.same_person or verdict.person_a not in component:
+            if verdict.same_person is None or verdict.same_person or verdict.person_a not in component:
                 continue
             if component[verdict.person_a] != component.get(verdict.person_b):
                 continue
@@ -310,6 +317,26 @@ class IdentityAudit:
             if incompatible:
                 category = AuditCategory.INCOMPATIBLE_CHILD_NAMES
                 findings[parent].append(AuditFinding(category, _DETAILS[category], tuple(incompatible)))
+
+    @staticmethod
+    def _source_findings(
+        people: tuple[PersonRow, ...], imported: tuple[PeopleRow, ...],
+        current_facts: tuple[FactRow, ...], parent_ids: tuple[str, ...],
+        findings: dict[str, list[AuditFinding]],
+    ) -> None:
+        source_names = {row.id: row.full_name for row in imported}
+        children: dict[str, list[str]] = defaultdict(list)
+        for person in people:
+            if not person.is_owner and not person.is_ghost:
+                children[person.parent_id].append(person.person_id)
+        original_names = {parent: tuple(source_names.get(person, '')
+                                        for person in children.get(parent, ())) or ('',)
+                          for parent in parent_ids}
+        unresolved = unresolved_source_parent_ids(original_names, current_facts)
+        for parent in sorted(unresolved.intersection(children)):
+            findings[parent].append(AuditFinding(
+                AuditCategory.SOURCE_IDENTITY_UNRESOLVED,
+                SOURCE_IDENTITY_REVIEW_REASON, tuple(sorted(children[parent]))))
 
     @staticmethod
     def _history_findings(

@@ -130,6 +130,7 @@ class ExportPeopleTests(unittest.TestCase):
             db = Db(base / "deep-context.sqlite")
             EnsureParents(db=db, people_csv=people_csv).run()
             people_csv.unlink()
+            db.decide_identity("jordan-bravo", "verify")
 
             robin_parent = db.query("SELECT parent_id FROM people WHERE person_id='candidate:phone:+15550102'")[0][0]
             db.project_rows((LinkRow("robin-echo", robin_parent, "robin-echo", "pub", linkedin("robin-echo"),
@@ -200,7 +201,7 @@ class ExportPeopleTests(unittest.TestCase):
             self.assertNotIn(gone, exported)
         riley = rows["candidate:phone:+15550103"]
         self.assertEqual((riley["public_identifier"], riley["primary_phone"]), ("riley-stone", "+15550103"))
-        self.assertEqual(len(rows), 5)
+        self.assertEqual(len(rows), 6)
 
     def test_retarget_onto_an_existing_profile_keeps_families_separate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

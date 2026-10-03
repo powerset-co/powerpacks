@@ -12,7 +12,7 @@ resolution, synthetic-profile, realization, and validation behavior lives here.
 The durable flow is:
 
 ```text
-messages -> dossiers -> enrich -> check LinkedIn -> realize -> people.csv -> index
+source contacts -> contact facts -> dedupe -> parent dossiers -> enrich -> check LinkedIn -> realize -> people.csv -> index
 ```
 
 All paths are fixed and overwritten in place. Do not add run ids, ledgers, or a
@@ -38,6 +38,11 @@ Use the narrow path when the user names one:
 - `$deep-context audit` -> run only `bin/deep-context audit` (free, read-only).
   Findings distinguish broken ownership, identity review, and missing independent
   facts; a finding is not a verdict that two contacts are different people.
+- `$deep-context rebuild`, "clean rebuild", "fresh rebuild", or "rebuild from
+  raw sources" -> follow [Fresh rebuild with current human decisions](recovery.md#fresh-rebuild-with-current-human-decisions).
+  Regenerate source imports, then run `bin/deep-context rebuild` with the explicit
+  original, backup, fresh state and owner paths. Continue on that isolated state
+  with the reviewed source scope and approved paid-stage budget.
 - `$deep-context heal`, "repair bad merges", or "recover contact facts" ->
   follow [Contact recovery](recovery.md). Do not start paid synthesis or research
   from a repair request without a scoped estimate and approval.
@@ -81,6 +86,10 @@ Use the narrow path when the user names one:
   context", or a full rerun -> use the complete staged workflow below.
 
 Do not make a user who asked for a single read-only action walk the full build.
+A lookup `no_match` means no usable projected dossier matched; it does not prove
+the contact is absent. For an investigation, inspect the original contact and
+audit findings before drawing that conclusion. Never present another person's
+dossier as the requested identity merely because an endpoint matches.
 
 ## Privacy and approvals
 
@@ -95,8 +104,8 @@ messages.
   collector always skips them).
 - iMessage collection needs Full Disk Access and may need to run in the user's
   own terminal.
-- Never treat memory, an earlier transcript, or an earlier approval as consent
-  for OpenAI, Parallel, RapidAPI cache misses, or Modal upload.
+- Paid approval must cover the current scope. Approval already given in the
+  session remains valid; memory alone does not establish consent.
 - `bin/deep-context run` is intentionally disabled. Paid stages must be previewed
   and run separately under the cost rules below.
 
@@ -333,11 +342,16 @@ bin/deep-context validate
 
 Identity resolves cheapest evidence first. The cluster stage merges an
 identical name with a shared source contact phone or email locally. Other
-compatible names require a positive JEV pair judgment and the names check;
+compatible names receive one GPT-6.1-sol high judgment: same person, different
+people, or uncertain. Only an affirmative same-person judgment accepts a pair;
 a matching name alone is not an accepted merge. Extracted contact details
 cannot create a pair or a free merge, and a shared identifier cannot override
-incompatible names. Reuse only decisions matching the current evidence and
-policy. A shared first name, last name or email handle alone is not compared.
+incompatible names. Reuse same-person and uncertain decisions only when the
+complete request matches. Uncertain pairs remain separate without becoming
+different-person constraints. Explicit different-person decisions persist across
+evidence changes and block contradictory transitive merges; a clean rebuild
+discards these machine decisions too. A shared first name, last name or email
+handle alone is not compared.
 Preview the complete stage first:
 
 ```bash

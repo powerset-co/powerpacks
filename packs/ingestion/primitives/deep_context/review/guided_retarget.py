@@ -23,6 +23,8 @@ from packs.ingestion.primitives.deep_context.db.people_views import person_detai
 from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceRequestSnapshot,
     GuidanceState,
+    ReviewAction,
+    ReviewSource,
     RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import (
@@ -79,8 +81,13 @@ class GuidedRetargetWorker:
         active = any(row.handle == parent_id and row.state in ACTIVE_GUIDANCE_STATES for row in guidance_rows(self.db))
         if active:
             raise StoreError(f"{request.name or request.slug} is already being retargeted")
-        url, _ = linkedin_url_in_guidance(request.guidance)
+        url, public_identifier = linkedin_url_in_guidance(request.guidance)
         if url:
+            resolved = self.db.decide_identity(
+                request.row_key, ReviewAction.RETARGET.value, replacement_url=url,
+                replacement_public_identifier=public_identifier,
+                source=ReviewSource.USER_GUIDANCE.value, note=request.guidance,
+            )
             item = self.service.record(
                 parent_id,
                 request,
@@ -88,6 +95,7 @@ class GuidedRetargetWorker:
                 "applied",
                 "user-provided LinkedIn applied directly",
                 new_url=url,
+                resolved_pubs=tuple(resolved),
             )
             self.on_change()
             return item

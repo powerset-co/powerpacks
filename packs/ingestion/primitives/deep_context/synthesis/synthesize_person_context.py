@@ -9,6 +9,7 @@ The stage keeps the fixed artifacts and payload contract:
 ``<out-dir>/<person_id>.jsonl`` plus ``<out-dir>/manifest.json``.
 
 Changelog:
+- 2026-10-03: reported output usage already includes reasoning tokens.
 - 2026-10-01: some people failing is a completed run: worth still runs for the rest and the
   people left behind are recorded in SQLite. Only everyone failing fails the run.
 - 2026-09-25: `--people-csv` (the fan-in roster) feeds the worth stage's
@@ -43,7 +44,6 @@ from packs.ingestion.primitives.deep_context.shared.common import (
 from packs.ingestion.primitives.deep_context.db.models import SynthesisRun
 from packs.ingestion.primitives.deep_context.db.queries import parent_fact_counts
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.db.workflow_views import synthesis_pending
 from packs.ingestion.primitives.deep_context.manifests.synthesize_person_context_manifest import (
     SynthesizePersonContextManifest,
 )
@@ -166,11 +166,10 @@ class SynthesizePersonContext(Node):
         # re-projects each tagged record so SQLite carries its worth and labels.
         jev_usage = JevUsage() if nobody_finished else runner.tag_saved_facts(self.db, self.config, plan)
         if not nobody_finished:
-            attempted = {bundle.person_id for bundle in plan.bundles}
             self.db.record_synthesis_run(SynthesisRun(
                 errors=tuple(f"{failure.person_id} batch {failure.batch}: {failure.error}"
                              for failure in tally.failures),
-                unfinished=tuple(sorted(attempted & set(synthesis_pending(self.db)))),
+                unfinished=tuple(sorted(failed_people)),
             ))
         normalization.normalize_parent_cache(
             self.db, raw_dir=self.config.raw_dir, facts_dir=self.config.facts_dir,
@@ -183,8 +182,6 @@ class SynthesizePersonContext(Node):
             without_worth=without_worth,
             total_rows=fact_count,
         )
-        # OpenAI bills reasoning tokens at the output rate, so combine before costing.
-        billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
             status=STATUS_FAILED if nobody_finished else STATUS_COMPLETED,
             people=len(plan.bundles),
@@ -205,7 +202,7 @@ class SynthesizePersonContext(Node):
             tokens=tally.tokens,
             estimated_cost_usd=estimate_cost_usd(
                 tally.tokens["input_tokens"],
-                billed_output,
+                tally.tokens["output_tokens"],
                 self.config.responses.model,
             ) + jev_usage.cost_usd,
             out_dir=str(self.config.facts_dir),

@@ -585,7 +585,7 @@ class SeedTests(SeedFixture):
                                    "experiences": [{"title": "Engineer", "company_name": "Example"}]},
         }))
         db = self.cold_store()
-        self.assertEqual(db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
+        self.assertEqual(db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '2')
         manifest = self.seed(db)
         self.assertEqual(manifest.profiles_carried, 0)
         self.assertEqual(db.query("SELECT * FROM artifacts WHERE kind='profile'"), [])

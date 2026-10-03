@@ -43,7 +43,6 @@ from pathlib import Path
 from contextlib import closing
 from datetime import datetime, timezone
 import csv
-import hashlib
 import json
 import shutil
 import sqlite3
@@ -67,15 +66,14 @@ def is_harmonic_bootstrap(source: object) -> bool:
             and Path(source.get('source_file') or '').match('harmonic_enriched*.csv'))
 
 
-def scrub_deep_context(db: Db) -> tuple[MergeRepairReport, int, MergeRepairReport]:
+def scrub_deep_context(db: Db) -> tuple[MergeRepairReport, int]:
     """Run pending data repairs in order before the calling stage does work."""
     from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_candidate_memberships, _repair_merged_parents
 
     _repair_candidate_memberships(db)
     merged = _repair_merged_parents(db)
     harmonic = _scrub_harmonic_profiles(db)
-    historical = _scrub_historical_merges(db)
-    return merged, harmonic, historical
+    return merged, harmonic
 
 
 def _scrub_harmonic_profiles(db: Db) -> int:
@@ -154,30 +152,10 @@ def scrub_august_deep_context_store(db_path: Path) -> None:
     print(f"[deep-context] August store set aside: {backup}", file=sys.stderr)
 
 
-# Pre-contract research files can prove only their stable parent handle, not
-# the exact request bytes that produced them. Migration stamps this explicit
-# marker so the paid result is grandfathered without pretending it used the
-# current provider contract.
+# Migration records that the original request contract is unavailable.
+# This provenance value never authorizes research reuse.
 # DELETE once no supported install predates powerpacks v1.19.0.
 LEGACY_PARALLEL_HANDLE_RESULT = "legacy:parallel-result-by-stable-handle:v1"
-
-
-def legacy_parallel_input_fingerprint(payload: dict[str, Any]) -> str:
-    """Return the pre-contract-fingerprint paid research key.
-
-    Before 2026-08-13, Parallel reuse hashed only the per-person input and
-    omitted processor, prompt/schema, and beta headers. Keep recognizing those
-    already-paid rows without claiming they used the current contract.
-
-    DELETE once no supported install predates powerpacks v1.19.0.
-    """
-    data = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(data).hexdigest()
 
 
 def parent_slug_migrations(

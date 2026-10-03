@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import replace
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageEntry
 from packs.ingestion.primitives.deep_context.shared.common import owner_background_block
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, OwnerProfile
 from packs.ingestion.primitives.deep_context.db.queries import (
@@ -20,6 +20,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.context_queries import aggregate_people, person_histories, singleton_people
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisPlan
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 
 
 def effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
@@ -58,6 +59,19 @@ def effective_person_bundles(db: Db) -> dict[str, CollectionBundle]:
         if bundle is not None:
             bundles[person_id] = replace(bundle, person_id=person_id)
     return bundles
+
+
+def pending_messages(bundle: CollectionBundle, history: FactHistory | None) -> tuple[MessageEntry, ...]:
+    """Share successful message coverage and whole-bundle seed reuse with workflow."""
+    if history is None:
+        return bundle.messages
+    processed = history.processed
+    if processed:
+        return tuple(message for message in bundle.messages if message.fingerprint() not in processed)
+    fingerprint = prompting.seed_evidence_fingerprint(bundle)
+    if any(item.record.input_evidence_fingerprint == fingerprint for item in history.records):
+        return ()
+    return bundle.messages
 
 
 def pending_target_bundles(
@@ -100,7 +114,7 @@ def pending_target_bundles(
                 or bool(latest.system_prompt_hash and latest.system_prompt_hash != hashlib.sha256(system_prompt.encode()).hexdigest())
             ))
             if not force and not changed:
-                unseen = tuple(message for message in bundle.messages if message.fingerprint() not in history.processed)
+                unseen = pending_messages(bundle, history)
                 if not unseen:
                     continue
                 bundles.append(replace(bundle, messages=unseen))
@@ -112,10 +126,8 @@ def pending_target_bundles(
         # evidence, AND the answering model/effort all still match.
         if not force:
             fingerprint, version = cached.get(pid, ("", ""))
-            if (
-                fingerprint.startswith(prompting.SEED_FINGERPRINT_PREFIX)
-                and fingerprint == prompting.seed_evidence_fingerprint(bundle)
-            ):
+            if (fingerprint.startswith(prompting.SEED_FINGERPRINT_PREFIX)
+                    and history and not pending_messages(bundle, history)):
                 continue
             # The version catches prompt/schema edits, while the evidence hash
             # catches message or owner-context changes. Either mismatch must

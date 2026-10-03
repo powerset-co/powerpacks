@@ -2,7 +2,7 @@
 
 Two declared nodes share this package (one directory, two modules and two
 manifests): `deep_cluster` (`cluster_merge_candidates.py`) finds same-person
-merge candidates with free name and identifier rules plus positive JEV identity and names checks;
+merge candidates with free name and identifier rules plus one Sol/high identity judgment;
 `deep_parents` (`build_parents.py`) applies the accepted merges to parent
 families and rewrites only the changed parent dossiers. There is no
 `--approve` between them: cluster writes proposals, parents applies them.
@@ -12,7 +12,7 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 
 | node | reads | writes | manifest |
 |---|---|---|---|
-| `deep_cluster` | — (reads SQLite facts/verdicts) | `deep-context/merge-candidates.csv` (full_rewrite), `deep-context/merge-candidates.md` (full_rewrite), `deep-context/jev/{request_sha256}.json` (optional) | `deep-context/dossiers/merge_manifest.json` (`ClusterMergeManifest`) |
+| `deep_cluster` | — (reads SQLite facts/verdicts) | `deep-context/merge-candidates.csv` (full_rewrite), `deep-context/merge-candidates.md` (full_rewrite) | `deep-context/dossiers/merge_manifest.json` (`ClusterMergeManifest`) |
 | `deep_parents` | — (reads SQLite) | `deep-context/parents/{slug}.md` (upsert, optional) | `deep-context/parents/manifest.json` (`BuildParentsManifest`) |
 
 ## Manifest / status
@@ -29,12 +29,22 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 | 1 | a parent reachable only at role addresses (`ir@`, `billing@`): a shared mailbox | left out of the survey | free |
 | 2 | source contact email, phone, email handle, or name buckets propose a pair | only compatible names remain; extracted identifier claims cannot propose a pair | free |
 | 3 | identical normalized name and a shared source contact phone or email | merged unless a stored different-person verdict blocks it | free |
-| 4 | all other pairs, including the same name without a source identifier tie | positive JEV pair judgment at p(yes) ≥ 0.5, then JEV names compatibility ≥ 0.5 | about $0.0001 a pair |
+| 4 | all other pairs, including the same name without a source identifier tie | Sol/high: same, different, or uncertain | dry-run estimates input and output tokens |
 
 The pair judge requires affirmative evidence connecting the same individual.
 Shared names, an office number, compatible lives, or missing contradictions do
 not establish identity. Extracted identifier claims remain context and require
-ownership evidence. The names check establishes compatibility only.
+ownership evidence. Uncertain is a completed judgment: it neither merges people
+nor constrains a later proven connection. Different is affirmative evidence of
+two people; it blocks both direct and transitive joins.
+
+Every original source member name must be present and compatible with every
+other member before a join. This applies to proposals, accepted receipts, and
+parent application, including transitive joins. A representative cannot hide a
+conflicting or unknown child name. Stored different-person decisions constrain
+all joins; an internal child rejection prevents further merging of that parent.
+Refreshing the survey does not erase a rejection. A fresh rebuild excludes old
+machine decisions before the survey.
 
 A shared first name, last name or email handle alone does not pair two
 incompatible names. One-word names meet full names only through source contact
@@ -43,11 +53,14 @@ transitive acceptance that would join its two children.
 
 ## Control
 
-- `deep_cluster`: paid, cents. It makes one JEV request per uncached pair and
-  a names request for each positive LLM decision. Answers cache under
-  `deep-context/jev/` and verdicts in SQLite. The free `--dry-run` prices both
-  requests, with names requests as an upper bound. Acceptance between two
-  parents is rewritten by every survey: an omitted pair is no longer accepted.
+- `deep_cluster`: one `gpt-6.1-sol`/high request per uncached pair. The request
+  signature covers system prompt, rendered source evidence, owner, schema,
+  model, effort, and output limit. Each completed decision is saved to SQLite
+  before another call finishes, with acceptance false until global constraints
+  are checked. Unchanged uncertain decisions are reused; failed calls retry.
+  `--dry-run` estimates input and 1,500 output tokens per request, not a ceiling.
+  `--limit 1` runs one uncached pair. Acceptance is rewritten each survey;
+  changed or omitted pairs cannot retain old acceptance.
 - `deep_parents`: free. It applies accepted components; it does not split
   children already joined under one parent.
 
@@ -60,6 +73,12 @@ current blocking survey (`replace_merge_verdicts`) so a re-survey cannot erase
 them.
 
 ## Changelog
+
+- 2026-10-03: one structured Sol/high judgment replaces binary JEV and the names
+  question; SQLite preserves uncertainty and checkpoints every completed call.
+
+- 2026-10-03: all original source names and stored child rejections constrain
+  proposals, receipts, and parent application.
 
 - 2026-10-02: source identifiers and compatible names select pairs; same-name
   pairs need positive identity evidence unless a source identifier proves the

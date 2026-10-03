@@ -18,7 +18,7 @@ from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 def person(person_id, name, **identifiers):
     return MergePerson(person_id, person_id, name, name.lower(), parent_id=f'parent-{person_id}',
-                       member_person_ids=(person_id,), **identifiers)
+                       member_person_ids=(person_id,), **identifiers, source_names=(name,))
 
 
 class TestMergePrecision(unittest.TestCase):
@@ -52,9 +52,12 @@ class TestMergePrecision(unittest.TestCase):
             db = Db(Path(directory) / 'deep-context.sqlite')
             db.project_rows((
                 ParentRow('parent-family', 'parent-worth:parent-family', 'Wrong Extracted Name'),
-                PersonRow('a-aggregate', 'parent-family', display_name='Wrong Extracted Name'),
+                PersonRow('a-aggregate', 'parent-family', display_name='Wrong Extracted Name', is_ghost=True),
                 PersonRow('b-unknown', 'parent-family', display_name='Wrong Extracted Name'),
                 PersonRow('c-source', 'parent-family', display_name='Wrong Extracted Name'),
+                PersonIdentifiersProjection('a-aggregate', (
+                    PersonIdentifierRow('a-aggregate', 'email', 'casey@example.com'),
+                )),
                 ArtifactRow('facts:parent-family', 'facts', 'parent-family', '/synthetic/facts.jsonl',
                             '0' * 64, 'projected'),
                 FactRow('parent-family', 'parent-family', 'facts:parent-family',
@@ -64,6 +67,8 @@ class TestMergePrecision(unittest.TestCase):
                                         PeopleRow(id='c-source', full_name='Casey Delta')))
             self.assertEqual([(person.person_id, person.name) for person in merge_people(db)],
                              [('c-source', 'Casey Delta')])
+            self.assertEqual(merge_people(db)[0].source_names, ('', 'Casey Delta'))
+            self.assertEqual(merge_people(db)[0].emails, ())
             db.replace_imported_people(())
             self.assertEqual(merge_people(db), [])
 

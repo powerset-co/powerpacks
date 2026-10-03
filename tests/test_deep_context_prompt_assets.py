@@ -13,12 +13,7 @@ PROMPTS = {
     "identity_merge_system": (
         "packs.ingestion.primitives.deep_context.merge_candidates.judge",
         "JUDGE_SYSTEM",
-        "39ee61259343095df7ad76b0878d6ae1bff7b961b2e6aa115f12080280b0b301",
-    ),
-    "merge_names": (
-        "packs.ingestion.primitives.deep_context.merge_candidates.judge",
-        "NAMES_QUESTION",
-        "e33403b5e9050e8f1ea9f4f4ff498742ab71b00c3942bcfa3dc64163768faa8b",
+        "2886b667d564842260de8b78f00066c956421931f6ae8f67b3523b5d1d334604",
     ),
     "contact_research_instructions": (
         "packs.ingestion.primitives.deep_context.enrich.parallel_research.config",

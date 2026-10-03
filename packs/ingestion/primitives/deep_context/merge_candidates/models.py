@@ -1,8 +1,7 @@
 """Typed merge-candidate stage values.
 
 Changelog:
-- 2026-09-25: the LLM decision and usage come from JEV answers (no raw payload
-  parser, no reasoning tokens); a failed judge result carries no decision.
+- 2026-10-03: uncertain identity is distinct from affirmative different-person evidence.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ class MergePerson:
     person_id: str
     name: str
     name_key: str
+    source_names: tuple[str, ...] = field(kw_only=True)
     parent_id: str = ""
     member_person_ids: tuple[str, ...] = ()
     emails: tuple[str, ...] = ()
@@ -41,7 +41,7 @@ class MergePerson:
 class MergeDecision:
     """One parsed slam-dunk or LLM same-person decision."""
 
-    same_person: bool
+    same_person: bool | None
     confidence: float
     tone_consistent: bool
     reason: str
@@ -77,35 +77,6 @@ class MergePairCandidate:
 class CachedMergeVerdict:
     signature: str
     decision: MergeDecision
-
-
-@dataclass(frozen=True)
-class MergeUsage:
-    """Paid JEV tokens; cached answers add nothing."""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-    def __add__(self, other: MergeUsage) -> MergeUsage:
-        return type(self)(
-            self.input_tokens + other.input_tokens,
-            self.output_tokens + other.output_tokens,
-        )
-
-    def as_dict(self) -> dict[str, int]:
-        return {
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-        }
-
-
-@dataclass(frozen=True)
-class MergeJudgeResult:
-    """A failed request carries no decision and the error text."""
-
-    decision: MergeDecision | None
-    usage: MergeUsage
-    error: str = ""
 
 
 @dataclass(frozen=True)

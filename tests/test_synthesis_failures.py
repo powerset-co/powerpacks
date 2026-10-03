@@ -107,14 +107,14 @@ class SynthesisFailureTests(unittest.TestCase):
             _, node, result, counts, _ = self._run(root, failures=3)
             self.assertEqual(counts, {'alpha': 1, 'beta': 4})
             self.assertEqual(result.status, 'completed')
-            self.assertTrue((root / 'facts/parent-casey.jsonl').is_file())
+            self.assertTrue((root / 'facts/person-casey.jsonl').is_file())
             self.assertEqual(node._plan().bundles, ())
 
     def test_exhausted_batch_keeps_prior_facts_and_retries(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             db, _, _, _, _ = self._run(root, failures=0)
-            path = root / 'facts/parent-casey.jsonl'
+            path = root / 'facts/person-casey.jsonl'
             prior_bytes = path.read_bytes()
             prior_row = tuple(db.query('SELECT * FROM facts')[0])
             _, node, result, counts, tag = self._run(root, failures=10, force=True)
@@ -124,22 +124,22 @@ class SynthesisFailureTests(unittest.TestCase):
             self.assertEqual(tuple(db.query('SELECT * FROM facts')[0]), prior_row)
             tag.assert_not_called()
             manifest = json.loads((root / 'facts/manifest.json').read_text())
-            self.assertEqual(manifest['failures'], [{'person_id': 'parent-casey', 'batch': 1, 'error': 'RateLimitError HTTP 429'}])
+            self.assertEqual(manifest['failures'], [{'person_id': 'person-casey', 'batch': 1, 'error': 'RateLimitError HTTP 429'}])
             self.assertNotIn('private content', json.dumps(manifest))
             resumed = SynthesizePersonContext(db=db, raw_dir=root / 'raw', out_dir=root / 'facts',
                 model='fixture-model', chunk_chars=1, force=True)
-            self.assertEqual([bundle.person_id for bundle in resumed._plan().bundles], ['parent-casey'])
+            self.assertEqual([bundle.person_id for bundle in resumed._plan().bundles], ['person-casey'])
 
     def test_changed_evidence_failure_retries_normally(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._run(root, failures=0)
-            path = root / 'facts/parent-casey.jsonl'
+            path = root / 'facts/person-casey.jsonl'
             prior = path.read_bytes()
             _, node, result, _, _ = self._run(root, failures=10, text='alpha-marker changed', failure_marker='alpha')
             self.assertEqual(result.status, 'failed')
             self.assertEqual(path.read_bytes(), prior)
-            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['parent-casey'])
+            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['person-casey'])
 
     def test_exhausted_new_person_is_not_cached(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -147,7 +147,7 @@ class SynthesisFailureTests(unittest.TestCase):
             db, node, result, counts, _ = self._run(root, failures=10)
             self.assertEqual(counts['beta'], 4)
             self.assertEqual(result.status, 'failed')
-            self.assertFalse((root / 'facts/parent-casey.jsonl').exists())
+            self.assertFalse((root / 'facts/person-casey.jsonl').exists())
             self.assertEqual(db.query('SELECT COUNT(*) FROM facts')[0][0], 0)
             self.assertEqual(len(node._plan().bundles), 1)
 
@@ -157,7 +157,7 @@ class SynthesisFailureTests(unittest.TestCase):
 
         def store(db, config, histories, result):
             attempted.append(result.person_id)
-            if result.person_id == 'parent-casey':
+            if result.person_id == 'person-casey':
                 raise OSError('synthetic disk failure')
             return store_facts(db, config, histories, result)
 
@@ -166,26 +166,26 @@ class SynthesisFailureTests(unittest.TestCase):
             stderr = io.StringIO()
             with mock.patch.object(runner, '_store_facts', side_effect=store), redirect_stderr(stderr):
                 db, node, tally, _, _ = self._run(root, failures=0, second_person=True, paid_only=True)
-            self.assertCountEqual(attempted, ['parent-casey', 'parent-jordan'])
+            self.assertCountEqual(attempted, ['person-casey', 'person-jordan'])
             self.assertEqual(tally.people_done, 2)
             self.assertEqual(tally.errors, 1)
             self.assertEqual(tally.projected_rows, 1)
             self.assertEqual(len(tally.failures), 1)
             failure = tally.failures[0]
-            self.assertEqual(failure.person_id, 'parent-casey')
+            self.assertEqual(failure.person_id, 'person-casey')
             self.assertTrue(failure.error.startswith('not stored:'))
             self.assertEqual(failure.error, 'not stored: OSError: synthetic disk failure')
-            self.assertIn(f'[synthesize] parent-casey: {failure.error}', stderr.getvalue())
-            self.assertTrue((root / 'facts/parent-jordan.jsonl').is_file())
-            self.assertFalse((root / 'facts/parent-casey.jsonl').exists())
+            self.assertIn(f'[synthesize] person-casey: {failure.error}', stderr.getvalue())
+            self.assertTrue((root / 'facts/person-jordan.jsonl').is_file())
+            self.assertFalse((root / 'facts/person-casey.jsonl').exists())
             self.assertEqual([row['parent_id'] for row in db.query('SELECT parent_id FROM facts')], ['parent-jordan'])
-            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['parent-casey'])
+            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['person-casey'])
 
     def test_build_failure_leaves_one_person_pending_and_stores_the_other(self):
         synthesize_person = runner.synthesize_person
 
         async def synthesize(caller, person, **kwargs):
-            if person.person_id == 'parent-casey':
+            if person.person_id == 'person-casey':
                 raise ValueError('synthetic bad payload')
             return await synthesize_person(caller, person, **kwargs)
 
@@ -199,12 +199,12 @@ class SynthesisFailureTests(unittest.TestCase):
             self.assertEqual(tally.projected_rows, 1)
             self.assertEqual(
                 [(failure.person_id, failure.error) for failure in tally.failures],
-                [('parent-casey', 'not built: ValueError: synthetic bad payload')],
+                [('person-casey', 'not built: ValueError: synthetic bad payload')],
             )
-            self.assertIn('[synthesize] parent-casey: not built: ValueError', stderr.getvalue())
-            self.assertTrue((root / 'facts/parent-jordan.jsonl').is_file())
+            self.assertIn('[synthesize] person-casey: not built: ValueError', stderr.getvalue())
+            self.assertTrue((root / 'facts/person-jordan.jsonl').is_file())
             self.assertEqual([row['parent_id'] for row in db.query('SELECT parent_id FROM facts')], ['parent-jordan'])
-            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['parent-casey'])
+            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['person-casey'])
 
     def test_partial_failure_completes_tags_and_records_unfinished_person(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -217,20 +217,23 @@ class SynthesisFailureTests(unittest.TestCase):
             self.assertEqual(result.total_failures, 1)
             tag.assert_called_once()
             self.assertIs(tag.call_args.args[0], db)
-            self.assertTrue((root / 'facts/parent-jordan.jsonl').is_file())
-            self.assertFalse((root / 'facts/parent-casey.jsonl').exists())
-            self.assertEqual([row['parent_id'] for row in db.query('SELECT parent_id FROM facts')], ['parent-jordan'])
-            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['parent-casey'])
-            self.assertEqual(synthesis_pending(db), ('parent-casey',))
+            self.assertTrue((root / 'facts/person-jordan.jsonl').is_file())
+            self.assertFalse((root / 'facts/person-casey.jsonl').exists())
+            self.assertEqual(
+                {(row['person_id'], row['parent_id']) for row in db.query('SELECT person_id, parent_id FROM facts')},
+                {('person-jordan', 'parent-jordan'), (None, 'parent-jordan')},
+            )
+            self.assertEqual([bundle.person_id for bundle in node._plan().bundles], ['person-casey'])
+            self.assertEqual(synthesis_pending(db), ('person-casey',))
             manifest = json.loads((root / 'facts/manifest.json').read_text())
             self.assertEqual(manifest['status'], 'completed')
-            self.assertEqual([failure['person_id'] for failure in manifest['failures']], ['parent-casey'] * 2)
+            self.assertEqual([failure['person_id'] for failure in manifest['failures']], ['person-casey'] * 2)
             rows = db.query("SELECT value FROM meta WHERE key='synthesis_run'")
             self.assertEqual(len(rows), 1)
             run = SynthesisRun.from_json(rows[0]['value'])
-            self.assertEqual(run.unfinished, ('parent-casey',))
+            self.assertEqual(run.unfinished, ('person-casey',))
             self.assertEqual(run.errors, (
-                'parent-casey batch 1: RateLimitError HTTP 429',
-                'parent-casey batch 2: RateLimitError HTTP 429',
+                'person-casey batch 1: RateLimitError HTTP 429',
+                'person-casey batch 2: RateLimitError HTTP 429',
             ))
             self.assertNotEqual(workflow_state(db).next_action, 'synthesize')

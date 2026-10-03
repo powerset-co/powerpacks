@@ -36,8 +36,7 @@ class SourceIdentityTests(unittest.TestCase):
     def test_manifest_sources_keep_original_ids_separate_on_cold_and_warm_import(self):
         source = self.root / "source.csv"
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in self.contacts()])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged",
-                            directory_csv=self.root / "missing.csv", profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         for _ in range(2):
             EnsureParents(db=self.db, people_csv=merge.people_csv).run()
@@ -47,16 +46,16 @@ class SourceIdentityTests(unittest.TestCase):
             self.assertEqual({row.id for row in queries.imported_people(self.db)}, {row.id for row in self.contacts()})
             self.assertEqual(len(links(self.db)), 2)
 
-    def test_old_manifest_missing_unrelated_profile_counts_still_reads_sources(self):
+    def test_old_manifest_extra_lookup_fields_still_reads_sources(self):
         source = self.root / "source.csv"
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in self.contacts()])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged",
-                            directory_csv=self.root / "missing.csv", profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         manifest = merge.people_csv.parent / "manifest.json"
         payload = json.loads(manifest.read_text())
-        del payload["stats"]["profiles_filled"]
-        del payload["stats"]["profiles_missing"]
+        payload["input"]["directory_csv"] = "old-directory.csv"
+        payload["stats"]["profiles_filled"] = 1
+        payload["stats"]["profiles_missing"] = 0
         manifest.write_text(json.dumps(payload))
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         self.assertEqual({row.person_id for row in queries.people(self.db)}, {row.id for row in self.contacts()})
@@ -73,8 +72,7 @@ class SourceIdentityTests(unittest.TestCase):
             "superseded_person_ids": '["old-profile-alias"]'})
         project_imported_people(self.db, _imported_people((row,)))
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row()])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged",
-                            directory_csv=self.root / "missing.csv", profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         person = next(row for row in queries.people(self.db) if row.person_id == "candidate:email:first@example.test")
@@ -99,8 +97,7 @@ class SourceIdentityTests(unittest.TestCase):
             "all_emails": '["first@example.test","second@example.test","unproven@example.test"]',
             "source_artifacts": f'["{original}"]', "interaction_counts": '{"gmail":999}'})
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row()])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged",
-                            directory_csv=self.root / "missing.csv", profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         roster = {row.id: row for row in queries.imported_people(self.db)}
@@ -131,8 +128,7 @@ class SourceIdentityTests(unittest.TestCase):
         project_imported_people(self.db, _imported_people((old,)))
         source = self.root / "source.csv"
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in (first, second)])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged",
-                            directory_csv=self.root / "missing.csv", profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         self.assertEqual({row.normalized_value for row in queries.identifiers(self.db) if row.person_id == first.id},
@@ -153,8 +149,7 @@ class SourceIdentityTests(unittest.TestCase):
         project_imported_people(self.db, _imported_people((old,)))
         source = self.root / "source.csv"
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in (first, second)])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged",
-                            directory_csv=self.root / "missing.csv", profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         owned = {(row.person_id, row.normalized_value) for row in queries.identifiers(self.db)}
@@ -171,8 +166,7 @@ class SourceIdentityTests(unittest.TestCase):
         source = self.root / "source.csv"
         first, second = self.contacts()
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in (first, second)])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged",
-                            directory_csv=self.root / "missing.csv", profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         parents = {row.person_id: row.parent_id for row in queries.people(self.db)}

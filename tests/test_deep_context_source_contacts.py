@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db import queries
@@ -10,6 +11,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import project_imported_people, read_imported_people
 from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.name_policy import profile_name_verdict
 from packs.ingestion.primitives.imports.merge_people import PeopleMerge
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, generate_person_id
 from packs.shared.csv_io import CsvIO
@@ -30,8 +32,7 @@ class SourceContactsTests(unittest.TestCase):
             {"status": "found", "email": "jordan@example.com", "public_identifier": "jordan-bravo", "confidence": "1"},
             {"status": "found", "phone": "+15550100123", "public_identifier": "jordan-bravo", "confidence": "1"},
         ])
-        self.merge = PeopleMerge(inputs=[self.gmail, self.messages], output_dir=self.root / "merged",
-                                 directory_csv=self.directory, profile_cache_dir=self.root / "cache")
+        self.merge = PeopleMerge(inputs=[self.gmail, self.messages], output_dir=self.root / "merged")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -58,7 +59,7 @@ class SourceContactsTests(unittest.TestCase):
             result.setdefault(row.person_id, set()).add((row.kind, row.normalized_value))
         return result
 
-    def test_cold_linkedin_collapse_preserves_each_actual_source_contact(self) -> None:
+    def test_cold_fan_in_preserves_each_actual_source_contact(self) -> None:
         self.write_sources()
         before = self.gmail.read_bytes(), self.messages.read_bytes()
         self.project()
@@ -100,9 +101,75 @@ class SourceContactsTests(unittest.TestCase):
         self.assertEqual({row.source for row in queries.sources(self.db, person_id=self.first)}, {"gmail_msgvault", "imessage"})
         self.assertEqual([row.person_id for row in collection_sources(self.db)], [self.first])
 
+    def test_conflicting_names_on_repeated_endpoint_remain_unnamed_on_rerun(self) -> None:
+        self.write_sources()
+        CsvIO.write_dict_rows(self.messages, PEOPLE_SCHEMA_COLUMNS, [{
+            "id": self.first, "full_name": "Jordan Bravo", "primary_email": "jordan@example.com",
+            "source_channels": "imessage",
+        }])
+        self.project()
+        CsvIO.write_dict_rows(self.messages, PEOPLE_SCHEMA_COLUMNS, [{
+            "id": self.first, "full_name": "Casey Delta", "first_name": "Casey", "last_name": "Delta",
+            "primary_email": "jordan@example.com", "source_channels": "imessage",
+            "source_artifacts": '["messages/contacts.csv"]',
+        }, {
+            "id": self.first, "full_name": "Jordan Bravo", "primary_email": "jordan@example.com",
+            "source_channels": "whatsapp", "source_artifacts": '["whatsapp/contacts.csv"]',
+        }])
+        originals = self.gmail.read_bytes(), self.messages.read_bytes()
+        for _ in range(2):
+            self.project()
+            merged = CsvIO.read_dict_rows(self.merge.people_csv)[0]
+            source = queries.imported_people(self.db)[0]
+            for row in (merged, source.to_row()):
+                self.assertEqual((row["full_name"], row["first_name"], row["last_name"]), ("", "", ""))
+                self.assertEqual(row["id"], self.first)
+                self.assertEqual(row["primary_email"], "jordan@example.com")
+                self.assertEqual(set(json.loads(row["source_artifacts"])),
+                                 {"gmail-account/people.csv", "messages/contacts.csv", "whatsapp/contacts.csv"})
+            person = queries.people(self.db)[0]
+            self.assertEqual(person.display_name, "")
+            self.assertIsNotNone(profile_name_verdict(self.db, person.parent_id, ("Jordan Bravo",)))
+            self.assertEqual(len(queries.people(self.db)), 1)
+        self.assertEqual(originals, (self.gmail.read_bytes(), self.messages.read_bytes()))
+
+    def test_unknown_repeated_source_name_does_not_hide_known_name(self) -> None:
+        self.write_sources()
+        CsvIO.write_dict_rows(self.messages, PEOPLE_SCHEMA_COLUMNS, [{
+            "id": self.first, "primary_email": "jordan@example.com", "source_channels": "imessage",
+        }])
+        self.project()
+        self.assertEqual(queries.imported_people(self.db)[0].full_name, "Jordan Bravo")
+        parent = queries.people(self.db)[0].parent_id
+        self.assertIsNone(profile_name_verdict(self.db, parent, ("Jordan Bravo",)))
+
+    def test_direct_source_refresh_does_not_restore_previous_name_after_conflict(self) -> None:
+        source = self.root / "people.csv"
+        rows = [{
+            "id": self.first, "full_name": name, "first_name": name.split()[0],
+            "last_name": name.split()[1], "primary_email": "jordan@example.com",
+            "source_channels": "gmail_msgvault",
+        } for name in ("Jordan Bravo", "Casey Delta")]
+        CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, rows[:1])
+        EnsureParents(db=self.db, people_csv=source).run()
+        CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, rows)
+        for _ in range(2):
+            EnsureParents(db=self.db, people_csv=source).run()
+            person = queries.people(self.db)[0]
+            row = queries.imported_people(self.db)[0]
+            self.assertEqual((row.full_name, row.first_name, row.last_name, person.display_name), ("", "", "", ""))
+            self.assertIsNotNone(profile_name_verdict(self.db, person.parent_id, ("Jordan Bravo",)))
+
     def test_retargeted_legacy_aggregate_does_not_collect_copied_contacts(self) -> None:
         self.write_sources()
         self.merge.run()
+        # Represent a previously saved aggregate; current fan-in no longer creates it.
+        CsvIO.write_dict_rows(self.merge.people_csv, PEOPLE_SCHEMA_COLUMNS, [{
+            "id": self.aggregate, "full_name": "Jordan Bravo", "public_identifier": "jordan-bravo",
+            "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+            "primary_email": "jordan@example.com", "primary_phone": "+15550100123",
+            "superseded_person_ids": f'["{self.first}", "{self.second}"]',
+        }])
         project_imported_people(self.db, read_imported_people(self.merge.people_csv))
         self.db.decide_identity("jordan-bravo", "retarget", approved="yes",
                                 replacement_url="https://www.linkedin.com/in/casey-delta",

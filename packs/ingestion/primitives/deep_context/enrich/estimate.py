@@ -11,6 +11,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.config imp
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import RAPIDAPI_RPM_DEFAULT
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import ResearchSelection
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import select_research
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import mapped_identity_tasks
 from packs.ingestion.primitives.deep_context.shared.openai_responses import estimate_cost_usd
 from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION
 
@@ -54,7 +55,8 @@ def estimate_enrichment(db: Db, state: WorkflowState | None = None) -> Enrichmen
     state = state or workflow_state(db)
     plan = select_research(db, processor=DEFAULT_PROCESSOR, fingerprint=state.selection)
     progress = state.progress
-    remaining = (progress.lookups_pending + progress.judgments_pending
+    mapped_pending = sum(item[-1] is None for item in mapped_identity_tasks(db))
+    remaining = (progress.lookups_pending + mapped_pending
                  + progress.questions_pending + progress.synthetic_pending - len(plan.eligible))
     count = remaining + len(plan.pending)
     # Two JEV requests and one possible Sol comparison per candidate.

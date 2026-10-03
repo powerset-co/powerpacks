@@ -1,0 +1,86 @@
+"""Relationship cache reuse requires the same source identity and judge request."""
+import json
+import unittest
+from unittest.mock import AsyncMock, patch
+
+import tests.test_deep_context_identity_disagreements as fixtures
+import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship as relationship
+from packs.ingestion.primitives.deep_context.db import queries
+
+
+class RelationshipCacheContractTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = fixtures.ParentIdentityTest()
+        self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
+        self.fixture.parent()
+        self.db = self.fixture.db
+        self.answer = {'candidates': [{'url': 'https://www.linkedin.com/in/jordan-bravo',
+                                      'verdict': 'review', 'reason': 'Two plausible histories', 'confidence': .5}]}
+
+    def cache(self):
+        return self.fixture.run_stage(self.answer, approve_spend=True)
+
+    def assert_pending(self, **kwargs):
+        before = self.db.db_path.read_bytes()
+        with patch('packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call',
+                   new_callable=AsyncMock) as call:
+            result = relationship.ReviewRelationships(db=self.db, **kwargs).run()
+        self.assertEqual((result['status'], result['calls'], result['reused']), ('needs_approval', 1, 0))
+        call.assert_not_called()
+        self.assertEqual(self.db.db_path.read_bytes(), before)
+
+    def test_unchanged_complete_request_reuses_without_a_call(self):
+        self.cache()
+        result, call = self.fixture.run_stage(self.answer)
+        self.assertEqual((result['status'], result['calls'], result['reused']), ('completed', 0, 1))
+        call.assert_not_called()
+
+    def test_model_change_requires_new_judgment_and_spend_approval(self):
+        self.cache()
+        self.assert_pending(model='gpt-6-sol')
+
+    def test_effort_change_requires_new_judgment_and_spend_approval(self):
+        self.cache()
+        self.assert_pending(reasoning_effort='high')
+
+    def test_system_prompt_change_requires_new_judgment(self):
+        self.cache()
+        with patch.object(relationship, 'SYSTEM_PROMPT', 'Revised source identity question'):
+            self.assert_pending()
+
+    def test_schema_change_requires_new_judgment(self):
+        self.cache()
+        with patch.object(relationship, 'SCHEMA', {**relationship.SCHEMA, 'description': 'Revised output contract'}):
+            self.assert_pending()
+
+    def test_original_name_change_requires_new_judgment(self):
+        self.cache()
+        source = queries.imported_people(self.db)[0]
+        self.db.replace_imported_people((source.model_copy(update={'full_name': 'Casey Delta'}),))
+        self.assert_pending()
+
+    def test_original_email_change_requires_new_judgment(self):
+        self.cache()
+        source = queries.imported_people(self.db)[0]
+        self.db.replace_imported_people((source.model_copy(update={'primary_email': 'changed@example.test'}),))
+        self.assert_pending()
+
+    def test_original_phone_change_requires_new_judgment(self):
+        self.cache()
+        source = queries.imported_people(self.db)[0]
+        self.db.replace_imported_people((source.model_copy(update={'primary_phone': '+15550100123'}),))
+        self.assert_pending()
+
+    def test_original_source_identity_is_sent_to_the_model(self):
+        _, call = self.cache()
+        prompt = json.loads(call.call_args.kwargs['user_prompt'])
+        self.assertIn('Source contact names:', prompt['dossier'])
+        self.assertIn('person:jordan', prompt['dossier'])
+        self.assertIn('jordan@example.test', prompt['dossier'])
+        self.assertNotIn('identity_verdict', prompt['candidates'][0])
+        self.assertNotIn('identity_reason', prompt['candidates'][0])
+
+
+if __name__ == '__main__':
+    unittest.main()

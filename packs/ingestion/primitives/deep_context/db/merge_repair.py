@@ -184,7 +184,7 @@ def _repair_merged_parents(db: Db) -> MergeRepairReport:
         components = connected_components(sorted({p for edge in accepted for p in edge}), accepted)
         component_by_person = {person: index for index, group in enumerate(components) for person in group}
         contradictory = {parent_by_person[r['person_a']] for r in verdicts
-                         if not r['same_person'] and parent_by_person[r['person_a']] == parent_by_person[r['person_b']]
+                         if r['same_person'] == 0 and parent_by_person[r['person_a']] == parent_by_person[r['person_b']]
                          and r['person_a'] in component_by_person
                          and component_by_person.get(r['person_b']) == component_by_person[r['person_a']]}
         for parent_id in sorted(contradictory):

@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match
+
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_EXCLUDED_MSGVAULT_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
 
@@ -139,6 +141,7 @@ class MsgvaultContactRow:
 
     email: str = ""
     display_name: str = ""
+    observed_names: list[str] = field(default_factory=list)
     total_sent: int = 0
     total_received: int = 0
     total_messages: int = 0
@@ -166,6 +169,7 @@ class MsgvaultContactRow:
         return cls(
             email=str(row.get("email") or ""),
             display_name=str(row.get("display_name") or ""),
+            observed_names=_string_list(row.get("observed_names")),
             total_sent=_int_value(row.get("total_sent")),
             total_received=_int_value(row.get("total_received")),
             total_messages=_int_value(row.get("total_messages")),
@@ -321,8 +325,7 @@ def default_name_for_email(email: str) -> str:
 
 
 def best_display_name(email: str, names: dict[str, int]) -> str:
-    """Pick the most frequent non-empty display name observed for an email,
-    falling back to a name derived from the address."""
+    """Pick a frequent compatible name; conflicting observations stay unnamed."""
     cleaned: dict[str, int] = {}
     email_l = email.lower()
     for name, count in names.items():
@@ -331,6 +334,8 @@ def best_display_name(email: str, names: dict[str, int]) -> str:
             continue
         cleaned[value] = (cleaned[value] if value in cleaned else 0) + count
     if cleaned:
+        if len(cleaned) > 1 and not source_names_can_match(tuple(cleaned)):
+            return ""
         return sorted(cleaned.items(), key=lambda item: (-item[1], item[0].casefold()))[0][0]
     return default_name_for_email(email)
 
