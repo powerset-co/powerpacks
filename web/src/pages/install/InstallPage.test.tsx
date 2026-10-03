@@ -40,6 +40,8 @@ afterEach(() => {
 describe("installation progress", () => {
   it("combines source preparation and imports into link and sync steps", async () => {
     const plan = [
+      "imessage_access",
+      "imessage_import",
       "whatsapp_tools",
       "whatsapp_login",
       "whatsapp_sync",
@@ -55,7 +57,7 @@ describe("installation progress", () => {
       step: "gmail_login",
       status: "waiting",
       steps: Object.fromEntries(
-        plan.slice(0, 5).map((step) => [step, { status: "completed", message: "Done" }]),
+        plan.slice(0, 7).map((step) => [step, { status: "completed", message: "Done" }]),
       ),
     }
     vi.stubGlobal(
@@ -65,7 +67,7 @@ describe("installation progress", () => {
     const { client } = mount()
     await screen.findByText("Link Gmail")
     expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toBe(
-      "Link WhatsAppDoneSync WhatsAppDoneLink GmailWaitingSync GmailNext",
+      "Link iMessageDoneSync iMessageDoneLink WhatsAppDoneSync WhatsAppDoneLink GmailWaitingSync GmailNext",
     )
     status = { ...status, step: "gmail_tools", status: "completed" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
@@ -80,7 +82,9 @@ describe("installation progress", () => {
       await waitFor(() => {
         const row = screen.getByRole("list").querySelector('[aria-current="step"]')
         expect(row?.textContent).toContain("Needs a fix")
-        expect(row?.textContent).toContain(step.includes("tools") || step.includes("login") ? "Link" : "Sync")
+        expect(row?.textContent).toContain(
+          step.includes("tools") || step.includes("login") || step.includes("access") ? "Link" : "Sync",
+        )
       })
     }
   })

@@ -185,6 +185,22 @@ never log out, clear stores, or delete data to rehearse a fresh install. Repair 
 failed step and retry it; if the same failure persists, explain the remaining
 cause and the single action needed. Leave technical details on the page.
 
+"Skip Gmail for now" explicitly authorizes skipping that source; the same applies
+to iMessage, WhatsApp, and LinkedIn. Stop only the known, owned work for that source
+if it is still running, including its auth or sync worker, and cancel any queued
+continuation that would resume it. Check the original command and saved process
+before stopping it; never stop unrelated processes. Onboarding leaves active work
+untouched, so wait for the owned worker to exit before retrying.
+
+Append `--skip-source gmail|imessage|whatsapp|linkedin` to the exact original
+`retry_command` and run it yourself. Keep every original `--source`, account,
+history, store, refresh, and prior skip option. The source's stages stay on the
+page as Skipped, and the script continues with the next selected source. When
+all selected sources are skipped, it finishes at Ready without starting
+processing. Existing imports, data, and login are preserved. Repeating the command
+keeps the source skipped; if the user asks to resume it, remove only its
+`--skip-source` option and rerun. Never ask the user to run commands.
+
 When sources are ready, the page points to processing. Follow the installed
 `deep-context` skill when the user requested it, retaining this server and tab.
 Read the free estimate and obtain the required permission before any paid

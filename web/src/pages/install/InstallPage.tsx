@@ -41,6 +41,8 @@ const STATUS_LABELS: Record<InstallState, string> = {
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
 const SOURCE_STEPS = [
+  { key: "imessage_access", label: "Link iMessage", steps: ["imessage_access"] },
+  { key: "imessage_import", label: "Sync iMessage", steps: ["imessage_import"] },
   { key: "whatsapp_login", label: "Link WhatsApp", steps: ["whatsapp_tools", "whatsapp_login"] },
   { key: "whatsapp_sync", label: "Sync WhatsApp", steps: ["whatsapp_sync", "whatsapp_import"] },
   { key: "gmail_login", label: "Link Gmail", steps: ["gmail_tools", "gmail_login"] },

@@ -51,12 +51,16 @@ _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 class SourceOnboarding:
     def __init__(self, root: Path, *, sources: tuple[str, ...],
                  gmail_emails: tuple[str, ...] = (), sync_after: str = "",
-                 wacli_store: Path | None = None, refresh: bool = False) -> None:
+                 wacli_store: Path | None = None, refresh: bool = False,
+                 skip_sources: tuple[str, ...] = ()) -> None:
         self.root = root.resolve()
         self.sources = tuple(sorted(dict.fromkeys(Source(source) for source in sources),
                                     key=lambda source: source is Source.LINKEDIN))
         if Source.SKIP in self.sources and len(self.sources) != 1:
             raise ValueError("Choose sources or skip, not both")
+        self.skip_sources = tuple(dict.fromkeys(Source(source) for source in skip_sources))
+        if Source.SKIP in self.skip_sources or not set(self.skip_sources) <= set(self.sources):
+            raise ValueError("Skip only a selected source")
         self.gmail_emails = gmail_emails
         self.sync_after = sync_after
         self.wacli_store = wacli_store or self.root / DEFAULT_STORE
@@ -67,7 +71,7 @@ class SourceOnboarding:
         history = [step for step in previous.get("plan", []) if step not in PROCESSING_STEPS
                    and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
         next_steps = ()
-        if self.sources == (Source.SKIP,):
+        if self.sources == (Source.SKIP,) or self.sources and all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
         elif self.sources:
             next_steps = PROCESSING_STEPS
@@ -86,6 +90,8 @@ class SourceOnboarding:
             args.extend(("--wacli-store", str(wacli_store)))
         if refresh:
             args.append("--refresh")
+        for source in self.skip_sources:
+            args.extend(("--skip-source", source.value))
         self.retry_command = shlex.join(args)
 
     def _write(self, step: InstallStep, state: InstallState, message: str,
@@ -221,9 +227,17 @@ class SourceOnboarding:
                 return self._write(InstallStep.SOURCES, InstallState.WAITING, "Add your contacts",
                                    {"kind": "sources", "text": "Choose Gmail, Messages, WhatsApp, LinkedIn, or skip in chat."})
             self._write(InstallStep.SOURCES, InstallState.COMPLETED, "Sources selected")
-            if self.sources == (Source.SKIP,):
+            for source in self.sources:
+                for step in _SOURCE_STEPS[source]:
+                    if source in self.skip_sources:
+                        self._write(step, InstallState.SKIPPED, "Skipped for now")
+                    elif previous.get("steps", {}).get(step.value, {}).get("status") == InstallState.SKIPPED:
+                        self._write(step, InstallState.WAITING, "Not started")
+            if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
                 return self._write(InstallStep.READY, InstallState.COMPLETED, "Powerpacks is installed")
             for source in self.sources:
+                if source in self.skip_sources:
+                    continue
                 if source is Source.GMAIL and not self._gmail():
                     return self.status.read()
                 if source in {Source.IMESSAGE, Source.WHATSAPP} and not self._messages(source):
@@ -253,6 +267,8 @@ class SourceOnboarding:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", choices=[source.value for source in Source], action="append", default=[])
+    parser.add_argument("--skip-source", choices=[source.value for source in Source if source is not Source.SKIP],
+                        action="append", default=[], help="Skip a selected source for now")
     parser.add_argument("--gmail-email", action="append", default=[])
     parser.add_argument("--sync-after", default="")
     parser.add_argument("--wacli-store", type=Path)
@@ -260,7 +276,8 @@ def main() -> None:
     args = parser.parse_args()
     payload = SourceOnboarding(Path.cwd(), sources=tuple(args.source),
                                gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
-                               wacli_store=args.wacli_store, refresh=args.refresh).run()
+                               wacli_store=args.wacli_store, refresh=args.refresh,
+                               skip_sources=tuple(args.skip_source)).run()
     emit(payload)
     raise SystemExit({"completed": 0, "waiting": 10, "running": 10, "failed": 1}[payload["status"]])
 
