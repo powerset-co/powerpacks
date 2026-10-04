@@ -1,13 +1,16 @@
-"""Isolated native-command doubles prove installer consent and resume boundaries."""
+"""Native primitive doubles prove installer consent and resume boundaries."""
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from packs.powerset.primitives.install import pipeline
 from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
 from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
 
@@ -17,9 +20,48 @@ class InstallPipelineTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.reset_pipeline(Path(self.temp.name))
-        self.patch = patch("packs.powerset.primitives.install.pipeline.subprocess.run", side_effect=self.native)
-        self.patch.start()
+        stages = (
+            (pipeline.PeopleMerge, "run", "fan-in", True),
+            (pipeline.EnsureParents, "run", "ensure-parents", True),
+            (pipeline.CheckReadiness, "run", "check", False),
+            (pipeline.Seed, "run", "seed", True),
+            (pipeline.BuildOwner, "run", "owner", True),
+            (pipeline.CollectPersonContext, "run", "collect", True),
+            (pipeline.SynthesizePersonContext, "estimate", "synthesize-estimate", False),
+            (pipeline.SynthesizePersonContext, "run", "synthesize", True),
+            (pipeline.ComposeDossier, "run", "compose", True),
+            (pipeline.ValidateDossiers, "run", "validate", False),
+            (pipeline.ClusterMergeCandidates, "estimate", "cluster-estimate", False),
+            (pipeline.ClusterMergeCandidates, "run", "cluster", True),
+            (pipeline.BuildParents, "run", "parents", True),
+            (pipeline.EnrichmentPipeline, "run", "enrich", False),
+            (pipeline.PrefetchProfiles, "run", "profile-prefetch", True),
+            (pipeline.ExportPeople, "run", "realize", False),
+        )
+        for primitive, method, name, serialized in stages:
+            def operation(node, *args, name=name, serialized=serialized, **kwargs):
+                payload = self.native(name, node=node, **kwargs)
+                return SimpleNamespace(to_payload=lambda: payload) if serialized else payload
+            mocked = patch.object(primitive, method, autospec=True, side_effect=operation)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        functions = {
+            "readiness_payload": lambda report: report,
+            "workflow_state": self.workflow_state,
+            "estimate_enrichment": self.estimate_enrichment,
+            "estimate_run": lambda args: self.native("index-estimate", options=args),
+            "validate_search_index": lambda *args, **kwargs: self.native("search-validate"),
+        }
+        for name, operation in functions.items():
+            mocked = patch.object(pipeline, name, side_effect=operation)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        self.patch = patch.object(pipeline.subprocess, "run", side_effect=self.external)
+        self.subprocess = self.patch.start()
         self.addCleanup(self.patch.stop)
+        sleep = patch.object(pipeline.time, "sleep")
+        self.sleep = sleep.start()
+        self.addCleanup(sleep.stop)
 
     def reset_pipeline(self, root):
         self.root = root.resolve()
@@ -41,25 +83,26 @@ class InstallPipelineTests(unittest.TestCase):
         self.seed = False
         self.profiles_missing = False
         self.validation_status = "ok"
-        self.commands = []
+        self.calls = []
         self.paid_commands = []
         self.failing_command = ""
         self.fail_at = 0
+        self.failure_after = ""
+        self.synthesis_cost = 0.1
+        self.cluster_cost = 0.01
+        self.enrichment_cost = 0.2
+        self.index_cost = 0.5
 
     def write(self, path, text):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def native(self, argv, *, cwd, stdin, stdout, stderr, text):
-        self.assertEqual(cwd, self.root)
-        self.assertEqual(stdin, subprocess.DEVNULL)
-        self.commands.append(argv)
-        command = argv[1] if argv[0].endswith("bin/deep-context") else Path(argv[5]).name
+    def native(self, command, *, node=None, **kwargs):
+        self.calls.append((command, {"node": node, **kwargs}))
         payload = {"status": "completed"}
-        if command == self.failing_command or len(self.commands) == self.fail_at:
-            stderr.write("[synthetic] source read failed\n")
-            return subprocess.CompletedProcess(argv, 1, json.dumps({"status": "failed"}))
-        if command == "index_contacts_pipeline.py":
+        if command == self.failing_command or len(self.calls) == self.fail_at:
+            raise RuntimeError("[synthetic] source read failed")
+        if command == "fan-in":
             self.write(self.people, self.csv)
         elif command == "check":
             payload = {"status": "completed", "checks": {
@@ -70,31 +113,21 @@ class InstallPipelineTests(unittest.TestCase):
             self.seed = False
         elif command == "collect":
             self.write(self.root / ".powerpacks/deep-context/raw/manifest.json", json.dumps(payload))
-        elif command == "synthesize":
-            if "--dry-run" in argv:
-                payload = {"status": "dry_run", "people": int(self.synthesize), "jev_people": int(self.synthesize),
-                           "estimated_cost_ceiling_usd": 0.1 if self.synthesize else 0}
-            else:
-                if self.synthesize:
-                    self.paid_commands.append("synthesize")
-                self.synthesize = False
-        elif command == "cluster":
-            if "--dry-run" in argv:
-                payload = {"status": "dry_run", "estimated_input_tokens": 100 if self.cluster else 0,
-                           "estimated_cost_usd": 0.01 if self.cluster else 0}
-            else:
-                if self.cluster:
-                    self.paid_commands.append("cluster")
-                self.cluster = False
-        elif command == "enrich":
-            if "--dry-run" in argv:
-                payload = {"status": "dry_run", "estimated_usd": 0.2, "would_submit": 1}
-            else:
-                if self.enrich:
-                    self.paid_commands.append("enrich")
-                self.enrich = False
+        elif command == "synthesize-estimate":
+            payload = {"status": "dry_run", "people": int(self.synthesize), "jev_people": int(self.synthesize),
+                       "estimated_cost_ceiling_usd": self.synthesis_cost if self.synthesize else 0}
+        elif command == "cluster-estimate":
+            payload = {"status": "dry_run", "estimated_input_tokens": 100 if self.cluster else 0,
+                       "estimated_cost_usd": self.cluster_cost if self.cluster else 0}
+        elif command == "enrich-estimate":
+            payload = {"status": "dry_run", "estimated_usd": self.enrichment_cost,
+                       "would_submit": 1, "judgment_count": 1}
+        elif command in ("synthesize", "cluster", "enrich"):
+            if getattr(self, command):
+                self.paid_commands.append(command)
+            setattr(self, command, False)
         elif command == "review-status":
-            if "--wait" in argv:
+            if self.status.read()["step"] == "review":
                 self.assertEqual(self.status.read()["status"], "waiting")
                 self.assertEqual(self.status.read()["installer_pid"], os.getpid())
                 self.waits += 1
@@ -102,47 +135,69 @@ class InstallPipelineTests(unittest.TestCase):
                     self.review = False
             payload = {"status": "waiting" if self.review else "ok",
                        "next_action": "enrich" if self.enrich else "review_linkedin" if self.review else "realize"}
-        elif command == "review":
-            payload = {"status": "reused", "url": "http://127.0.0.1:8765/?stage=linkedin"}
         elif command == "realize":
             self.write(self.people, self.csv)
             payload["profiles_missing"] = int(self.profiles_missing)
         elif command == "profile-prefetch":
-            if "--fetch" in argv:
-                self.paid_commands.append("profile-prefetch")
-                self.profiles_missing = False
-            else:
-                payload = {"status": "dry_run", "estimated_rapidapi_calls": 1}
-        elif command == "build_processing_pipeline.py":
-            self.assertIn("--dry-run", argv)
-            payload = {"status": "dry_run", "estimated_cost_usd": 0.5,
+            self.assertTrue(node.fetch)
+            self.paid_commands.append("profile-prefetch")
+            self.profiles_missing = False
+        elif command == "index-estimate":
+            options = kwargs["options"]
+            self.assertEqual(options.input, self.people)
+            self.assertEqual(options.output_dir, self.index)
+            self.assertTrue(options.dry_run)
+            payload = {"status": "dry_run", "estimated_cost_usd": self.index_cost,
                        "estimated_paid_calls": {"role_enrichment": 1}}
-        elif command == "linkedin_modal_pipeline.py":
-            self.assertTrue("index-people" in argv or "download" in argv)
-            if "index-people" in argv:
+        elif command in ("index", "download"):
+            if command == "index":
                 self.paid_commands.append("index")
             self.write(self.index / "local-search.duckdb", "synthetic index")
             self.write(self.index / "manifest.json", '{"status":"ok"}')
-            if "download" in argv:
-                return subprocess.CompletedProcess(argv, 0, "downloaded native artifacts\n")
-        elif command == "validate_search_index.py":
+            dispatch_path = self.root / ".powerpacks/runs/setup-gmail-modal/status.json"
+            if command == "index" and dispatch_path.is_file():
+                dispatch = json.loads(dispatch_path.read_text())
+                dispatch["status"] = "completed"
+                dispatch_path.write_text(json.dumps(dispatch))
+        elif command == "search-validate":
             payload = {"status": self.validation_status, "total_people": 1,
                        "summary": "Search index ready: 1 people searchable."}
+        if command == self.failure_after:
+            raise RuntimeError("[synthetic] failed after saving native outputs")
+        return payload
+
+    def workflow_state(self, db):
+        self.assertEqual(db.db_path, self.root / ".powerpacks/deep-context/deep-context.sqlite")
+        payload = self.native("review-status")
+        return SimpleNamespace(next_action=payload["next_action"], selection="synthetic-selection")
+
+    def estimate_enrichment(self, *args, **kwargs):
+        payload = self.native("enrich-estimate")
+        return SimpleNamespace(to_payload=lambda: payload, estimated_usd=payload["estimated_usd"],
+                               research=SimpleNamespace(deduped_total=1, estimated_usd=0.2,
+                                                        request_fingerprint="synthetic-request"))
+
+    def external(self, argv, **kwargs):
+        if argv[0] == "open":
+            return subprocess.CompletedProcess(argv, 0)
+        self.assertIn("packs/indexing/modal/linkedin_modal_pipeline.py", argv)
+        self.assertEqual(kwargs["cwd"], self.root)
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        payload = self.native("download" if "download" in argv else "index", argv=argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload))
 
     def run_pipeline(self, *spend, upload=False):
         return ProcessingOnboarding(self.root, approved_spend=spend, approve_upload=upload).run()
 
     def did(self, stage):
-        return any(argv[0].endswith("bin/deep-context") and argv[1] == stage
-                   and "--dry-run" not in argv for argv in self.commands)
+        return any(name == stage for name, _ in self.calls)
 
     def indexed(self):
-        return any("packs/indexing/modal/linkedin_modal_pipeline.py" in argv and "index-people" in argv
-                   for argv in self.commands)
+        return self.did("index")
 
-    def test_first_paid_stage_stops_with_estimate_and_exact_scoped_resume(self):
+    def test_over_threshold_synthesis_stops_with_estimate_and_exact_scoped_resume(self):
         self.synthesize = True
+        self.synthesis_cost = 25
         self.cluster = True
         self.enrich = True
         result = self.run_pipeline()
@@ -159,8 +214,10 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_resuming_synthesis_preserves_collected_output_and_stops_at_cluster(self):
         self.synthesize = self.cluster = self.enrich = True
+        self.synthesis_cost = 25
+        self.cluster_cost = 100.01
         self.run_pipeline()
-        self.commands.clear()
+        self.calls.clear()
         result = self.run_pipeline("synthesize")
         self.assertTrue(self.did("synthesize"))
         self.assertFalse(self.did("collect"))
@@ -169,24 +226,104 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-spend cluster")
         self.assertNotIn("--approve-spend", result["retry_command"])
 
-    def test_enrichment_stops_before_any_provider_without_approval(self):
+    def test_over_threshold_enrichment_stops_before_any_provider_without_approval(self):
         self.enrich = True
+        self.enrichment_cost = 100.01
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["action"]["step"]), ("enrich", "enrich"))
         self.assertFalse(self.did("enrich"))
         self.assertFalse(self.indexed())
 
-    def test_index_requires_both_spend_and_upload_authorization(self):
-        for spend, upload in [((), False), (("index",), False), ((), True)]:
-            self.commands.clear()
-            result = self.run_pipeline(*spend, upload=upload)
+    def test_routine_processing_runs_at_automatic_budget_boundaries(self):
+        self.synthesize = self.cluster = self.enrich = True
+        self.synthesis_cost = 24.99
+        self.cluster_cost = self.enrichment_cost = 100
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
+        self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich"])
+        self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-upload")
+        self.subprocess.assert_not_called()
+        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+        self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich", "index"])
+
+    def test_local_stages_never_spawn_subprocess_and_cached_index_revalidates_locally(self):
+        self.synthesize = self.cluster = self.enrich = True
+        with patch.object(pipeline.subprocess, "run", side_effect=AssertionError("Local stages must run in process")):
+            result = self.run_pipeline()
+            self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
+        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+        self.calls.clear()
+        with patch.object(pipeline.subprocess, "run", side_effect=AssertionError("Completed index must be reused")):
+            result = self.run_pipeline()
+            self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertFalse(self.indexed())
+        self.assertEqual(self.calls[-1][0], "search-validate")
+
+    def test_direct_runner_stops_on_native_payload_failures_and_action_requests(self):
+        states = (("needs_approval", "waiting"), ("needs_user_action", "waiting"),
+                  ("blocked_user_action", "waiting"), ("failed", "failed"), ("fail", "failed"),
+                  ("missing", "failed"), ("blocked", "failed"), ("error", "failed"),
+                  ("not_ready", "failed"), ("not-ready", "failed"))
+        for native_state, expected_state in states:
+            with self.subTest(native_state=native_state):
+                flow = ProcessingOnboarding(self.root)
+                payload = {"status": native_state, "reason": "Synthetic native stop"}
+                with self.assertRaises(pipeline._Stopped):
+                    flow._run("synthetic-stage", lambda: payload, "Reading synthetic input")
+                result = self.status.read()
+                self.assertEqual(result["status"], expected_state)
+                self.assertEqual(result["installer_pid"], 0)
+                self.assertEqual(result["action"]["result"], payload)
+                self.assertNotIn("ready", result["steps"])
+
+    def test_direct_runner_captures_native_output_in_installation_log(self):
+        def operation():
+            print("Synthetic native output")
+            print("Synthetic native progress", file=sys.stderr)
+            return {"status": "completed"}
+
+        result = ProcessingOnboarding(self.root)._run("synthetic-stage", operation, "Reading synthetic input")
+        self.assertEqual(result["status"], "completed")
+        log = self.status.log_path.read_text()
+        self.assertIn("[install] synthetic-stage", log)
+        self.assertIn("Synthetic native output", log)
+        self.assertIn("Synthetic native progress", log)
+
+    def test_index_requires_upload_consent_without_redundant_spend_approval(self):
+        for spend in ((), ("index",)):
+            self.calls.clear()
+            result = self.run_pipeline(*spend)
             self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
             self.assertEqual(result["action"]["step"], "index")
             self.assertTrue(result["action"]["upload"])
-            self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-spend index --approve-upload")
+            self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-upload")
             self.assertFalse(self.indexed())
+        self.calls.clear()
+        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+        self.assertTrue(self.indexed())
 
-    def test_full_approved_run_uses_real_commands_then_only_validator_marks_ready(self):
+    def test_index_native_estimate_uses_automatic_budget_and_retains_large_cost_approval(self):
+        self.index_cost = 25
+        result = self.run_pipeline(upload=True)
+        self.assertEqual(result["status"], "completed")
+        argv = next(options["argv"] for name, options in self.calls if name == "index")
+        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 25)
+        self.reset_pipeline(self.root / "large-index-estimate")
+        self.index_cost = 25.01
+        result = self.run_pipeline(upload=True)
+        self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
+        self.assertEqual(result["action"]["step"], "index")
+        self.assertFalse(result["action"]["upload"])
+        self.assertEqual(result["action"]["estimate"]["estimated_cost_usd"], 25.01)
+        self.assertEqual(result["action"]["continue_command"],
+                         self.retry + " --approve-spend index --approve-upload")
+        self.assertFalse(self.indexed())
+        self.calls.clear()
+        self.assertEqual(self.run_pipeline("index", upload=True)["status"], "completed")
+        argv = next(options["argv"] for name, options in self.calls if name == "index")
+        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 25.01)
+
+    def test_full_approved_run_uses_native_stages_then_only_validator_marks_ready(self):
         self.synthesize = self.cluster = self.enrich = True
         result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
         self.assertTrue(self.did("synthesize"))
@@ -196,29 +333,29 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertNotIn("review", result["plan"])
         self.assertEqual(result["retry_command"], self.retry)
-        self.assertEqual(Path(self.commands[-1][5]).name, "validate_search_index.py")
+        self.assertEqual(self.calls[-1][0], "search-validate")
 
     def test_completed_native_index_resumes_without_reupload_and_revalidates(self):
         self.run_pipeline("index", upload=True)
-        self.commands.clear()
+        self.calls.clear()
         result = self.run_pipeline()
         self.assertFalse(self.indexed())
         self.assertFalse(self.did("collect"))
         self.assertEqual(result["status"], "completed")
-        self.assertEqual(Path(self.commands[-1][5]).name, "validate_search_index.py")
-        self.commands.clear()
+        self.assertEqual(self.calls[-1][0], "search-validate")
+        self.calls.clear()
         self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertFalse(self.indexed())
 
     def test_invalid_existing_index_fails_until_explicit_rebuild(self):
         self.run_pipeline("index", upload=True)
         self.validation_status = "fail"
-        self.commands.clear()
+        self.calls.clear()
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("validate", "failed"))
         self.assertFalse(self.indexed())
         self.validation_status = "ok"
-        self.commands.clear()
+        self.calls.clear()
         result = self.run_pipeline("index", upload=True)
         self.assertEqual(result["status"], "completed")
         self.assertTrue(self.indexed())
@@ -226,23 +363,22 @@ class InstallPipelineTests(unittest.TestCase):
     def test_roster_change_prevents_old_index_reuse(self):
         self.run_pipeline("index", upload=True)
         self.csv = "id,full_name\nsynthetic-casey,Casey Example\n"
-        self.commands.clear()
+        self.calls.clear()
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertFalse(self.indexed())
 
-    def test_review_timeout_keeps_waiting_until_native_decisions_change(self):
+    def test_review_keeps_waiting_until_native_decisions_change(self):
         self.review = True
         result = self.run_pipeline("index", upload=True)
         self.assertEqual(self.waits, 2)
-        review = next(argv for argv in self.commands if len(argv) > 1 and argv[1] == "review")
-        self.assertEqual(review[-3:], ["--port", "8765", "--open"])
+        self.assertTrue(self.sleep.called)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["steps"]["review"]["status"], "completed")
         self.assertIn("review", result["plan"])
         self.assertEqual(result["plan"].index("review") + 1, result["plan"].index("index"))
 
-    def test_native_failure_logs_stderr_and_stops_before_paid_work(self):
+    def test_native_failure_is_logged_and_stops_before_paid_work(self):
         self.failing_command = "collect"
         result = self.run_pipeline("synthesize", "index", upload=True)
         self.assertEqual(result["status"], "failed")
@@ -250,11 +386,11 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertFalse(self.did("synthesize"))
         self.assertFalse(self.indexed())
 
-    def test_each_native_command_failure_resumes_without_repeating_completed_paid_work(self):
+    def test_each_native_stage_failure_resumes_without_repeating_completed_paid_work(self):
         self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
         self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
                          "completed")
-        baseline = self.commands.copy()
+        baseline = self.calls.copy()
         matrix_root = self.root
         for position, command in enumerate(baseline, 1):
             with self.subTest(command=command, position=position):
@@ -263,14 +399,14 @@ class InstallPipelineTests(unittest.TestCase):
                 self.fail_at = position
                 result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
                 self.assertEqual(result["status"], "failed")
-                self.assertEqual(len(self.commands), position)
+                self.assertEqual(len(self.calls), position)
                 self.assertNotIn("ready", result["steps"])
                 self.assertEqual(result["installer_pid"], 0)
                 self.assertEqual(result["retry_command"], self.retry)
                 collected = (self.root / ".powerpacks/deep-context/raw/manifest.json").is_file()
                 indexed = (self.index / "manifest.json").is_file()
                 self.fail_at = 0
-                self.commands.clear()
+                self.calls.clear()
                 spend = [stage for stage in ("synthesize", "cluster", "enrich") if getattr(self, stage)]
                 if not indexed:
                     spend.append("index")
@@ -279,7 +415,7 @@ class InstallPipelineTests(unittest.TestCase):
                 self.assertEqual(self.did("collect"), not collected)
                 self.assertEqual(self.indexed(), not indexed)
                 self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich", "index"])
-                self.commands.clear()
+                self.calls.clear()
                 self.assertEqual(self.run_pipeline()["status"], "completed")
                 self.assertFalse(self.did("collect"))
                 self.assertFalse(self.indexed())
@@ -298,44 +434,30 @@ class InstallPipelineTests(unittest.TestCase):
         result = self.run_pipeline()
         self.assertTrue(self.did("seed"))
         self.assertEqual(result["action"]["step"], "index")
-        self.commands.clear()
+        self.calls.clear()
         self.run_pipeline()
         self.assertFalse(self.did("seed"))
 
-    def test_missing_profile_fetch_is_scoped_enrichment_approval(self):
+    def test_missing_profiles_are_fetched_in_the_same_flow(self):
         self.profiles_missing = True
-        result = self.run_pipeline("index", upload=True)
-        self.assertEqual(result["action"]["step"], "enrich")
-        self.assertIn("profile-prefetch --fetch", result["action"]["command"])
-        self.assertFalse(self.indexed())
-        self.commands.clear()
-        result = self.run_pipeline("enrich", "index", upload=True)
+        result = self.run_pipeline(upload=True)
         self.assertEqual(result["status"], "completed")
-        self.assertTrue(any("--fetch" in argv for argv in self.commands))
+        self.assertTrue(any(name == "profile-prefetch" and options["node"].fetch for name, options in self.calls))
 
-    def test_profile_estimate_and_fetch_failures_resume_without_repeating_completed_work(self):
+    def test_profile_fetch_failure_resumes_without_repeating_completed_work(self):
         self.profiles_missing = True
-        self.assertEqual(self.run_pipeline("enrich", "index", upload=True)["status"], "completed")
-        positions = [i for i, argv in enumerate(self.commands, 1) if argv[1] == "profile-prefetch"]
-        self.assertEqual(len(positions), 2)
-        matrix_root = self.root
-        for position in positions:
-            with self.subTest(position=position):
-                self.reset_pipeline(matrix_root / str(position))
-                self.profiles_missing = True
-                self.fail_at = position
-                self.assertEqual(self.run_pipeline("enrich", "index", upload=True)["status"], "failed")
-                self.assertEqual(len(self.commands), position)
-                self.assertFalse(self.indexed())
-                self.fail_at = 0
-                self.commands.clear()
-                self.assertEqual(self.run_pipeline("enrich", "index", upload=True)["status"], "completed")
-                self.assertFalse(self.did("collect"))
-                self.assertCountEqual(self.paid_commands, ["profile-prefetch", "index"])
-                self.commands.clear()
-                self.assertEqual(self.run_pipeline()["status"], "completed")
-                self.assertFalse(any("--fetch" in argv for argv in self.commands))
-                self.assertFalse(self.indexed())
+        self.failing_command = "profile-prefetch"
+        self.assertEqual(self.run_pipeline(upload=True)["status"], "failed")
+        self.assertFalse(self.indexed())
+        self.failing_command = ""
+        self.calls.clear()
+        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+        self.assertFalse(self.did("collect"))
+        self.assertCountEqual(self.paid_commands, ["profile-prefetch", "index"])
+        self.calls.clear()
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.assertFalse(self.did("profile-prefetch"))
+        self.assertFalse(self.indexed())
 
     def test_saved_wacli_store_reaches_native_readiness_and_collection(self):
         store = self.root / "synthetic-whatsapp-store"
@@ -343,17 +465,16 @@ class InstallPipelineTests(unittest.TestCase):
                           message="Ready", pid=0, retry_command=self.retry + f" --wacli-store {store}")
         self.run_pipeline()
         for stage in ("check", "collect"):
-            argv = next(argv for argv in self.commands if argv[1] == stage)
-            flag = argv.index("--wacli-db")
-            self.assertEqual(argv[flag + 1], str(store / "wacli.db"))
+            node = next(options["node"] for name, options in self.calls if name == stage)
+            self.assertEqual(node.wacli_db, store / "wacli.db")
 
     def test_review_reuses_requested_installation_port(self):
         self.review = True
         result = ProcessingOnboarding(self.root, approved_spend=("index",),
                                       approve_upload=True, port=8899).run()
         self.assertEqual(result["status"], "completed")
-        review = next(argv for argv in self.commands if argv[1] == "review")
-        self.assertEqual(review[-3:], ["--port", "8899", "--open"])
+        self.assertTrue(any(call.args[0] == ["open", "http://127.0.0.1:8899/?stage=linkedin"]
+                            for call in self.subprocess.call_args_list))
 
     def dispatch(self):
         self.write(self.people, self.csv)
@@ -367,25 +488,74 @@ class InstallPipelineTests(unittest.TestCase):
         result = self.run_pipeline()
         self.assertEqual(result["status"], "completed")
         self.assertFalse(self.indexed())
-        download = next(argv for argv in self.commands if "download" in argv)
+        download = next(options["argv"] for name, options in self.calls if name == "download")
         self.assertEqual(download[-5:], ["--label", "gmail-index", "--wait", "--dest", ".powerpacks/search-index"])
-        self.assertEqual(Path(self.commands[-1][5]).name, "validate_search_index.py")
+        self.assertEqual(self.calls[-1][0], "search-validate")
 
     def test_failed_native_download_resumes_existing_dispatch_without_new_spend(self):
         self.dispatch()
-        self.failing_command = "linkedin_modal_pipeline.py"
+        self.failing_command = "download"
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("index", "failed"))
-        self.assertEqual(self.commands[-1], ProcessingOnboarding(self.root).download)
+        self.assertEqual(self.calls[-1][0], "download")
         self.assertFalse(self.indexed())
         self.failing_command = ""
-        self.commands.clear()
+        self.calls.clear()
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertFalse(self.did("collect"))
         self.assertFalse(self.indexed())
         self.assertEqual(self.paid_commands, [])
-        self.assertTrue(any("download" in argv for argv in self.commands))
+        self.assertTrue(self.did("download"))
+
+    def test_modal_failure_and_native_cost_gate_stop_then_resume(self):
+        matrix_root = self.root
+        for returncode, expected_status in ((1, "failed"), (20, "waiting")):
+            with self.subTest(returncode=returncode):
+                self.reset_pipeline(matrix_root / str(returncode))
+                payload = {"status": "failed" if returncode == 1 else "needs_approval",
+                           "estimated_cost_usd": 30}
+                with patch.object(pipeline.subprocess, "run", return_value=subprocess.CompletedProcess(
+                        [], returncode, json.dumps(payload))) as modal:
+                    result = self.run_pipeline(upload=True)
+                self.assertEqual((result["step"], result["status"]), ("index", expected_status))
+                self.assertEqual(result["action"]["result"]["returncode"], returncode)
+                self.assertEqual(modal.call_count, 1)
+                self.assertNotIn("ready", result["steps"])
+                self.assertFalse(self.did("search-validate"))
+                self.calls.clear()
+                self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+                self.assertFalse(self.did("collect"))
+                self.assertCountEqual(self.paid_commands, ["index"])
+
+    def test_native_cap_failure_resumes_same_uploaded_contacts_with_exact_estimate(self):
+        self.dispatch()
+        path = self.root / ".powerpacks/runs/setup-gmail-modal/status.json"
+        dispatch = json.loads(path.read_text())
+        dispatch["status"] = "failed"
+        dispatch["stages"]["indexing"]["payload"] = {
+            "phase": "estimate", "error": "estimate exceeds --max-usd cap",
+            "estimated_usd": 30, "max_usd": 25}
+        path.write_text(json.dumps(dispatch))
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
+        self.assertEqual(result["action"]["step"], "index")
+        self.assertFalse(result["action"]["upload"])
+        self.assertEqual(result["action"]["estimate"]["estimated_usd"], 30)
+        self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-spend index")
+        self.assertFalse(self.indexed())
+        self.assertFalse(self.did("download"))
+        self.calls.clear()
+        result = self.run_pipeline("index")
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertFalse(self.did("download"))
+        self.assertFalse(self.did("index-estimate"))
+        argv = next(options["argv"] for name, options in self.calls if name == "index")
+        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 30)
+        self.assertCountEqual(self.paid_commands, ["index"])
+        self.calls.clear()
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.assertFalse(self.indexed())
 
     def test_paid_outputs_completed_before_command_failure_are_reused_on_resume(self):
         matrix_root = self.root
@@ -393,22 +563,12 @@ class InstallPipelineTests(unittest.TestCase):
             with self.subTest(stage=stage):
                 self.reset_pipeline(matrix_root / stage)
                 self.synthesize = self.cluster = self.enrich = True
-                faulted = False
-
-                def native_then_fail(argv, **kwargs):
-                    nonlocal faulted
-                    result = self.native(argv, **kwargs)
-                    execution = "index-people" in argv if stage == "index" else argv[1] == stage
-                    if execution and "--dry-run" not in argv and not faulted:
-                        faulted = True
-                        return subprocess.CompletedProcess(argv, 1, json.dumps({"status": "failed"}))
-                    return result
-
-                with patch("packs.powerset.primitives.install.pipeline.subprocess.run", side_effect=native_then_fail):
-                    self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
-                                     "failed")
-                self.assertTrue(faulted)
-                self.commands.clear()
+                self.failure_after = stage
+                self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
+                                 "failed")
+                self.assertIn(stage, self.paid_commands)
+                self.failure_after = ""
+                self.calls.clear()
                 spend = [name for name in ("synthesize", "cluster", "enrich") if getattr(self, name)]
                 if stage != "index":
                     spend.append("index")
@@ -426,7 +586,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(result["action"]["kind"], "recovery")
         self.assertEqual(result["installer_pid"], 0)
         self.assertFalse(self.indexed())
-        self.assertFalse(any("download" in argv for argv in self.commands))
+        self.assertFalse(self.did("download"))
 
     def test_finished_remote_job_with_interrupted_download_is_recovered(self):
         self.dispatch()
@@ -436,7 +596,7 @@ class InstallPipelineTests(unittest.TestCase):
         path.write_text(json.dumps(record))
         result = self.run_pipeline()
         self.assertEqual(result["status"], "completed")
-        self.assertTrue(any("download" in argv for argv in self.commands))
+        self.assertTrue(self.did("download"))
         self.assertFalse(self.indexed())
 
     def test_validator_failure_never_claims_ready(self):

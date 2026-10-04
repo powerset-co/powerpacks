@@ -12,7 +12,6 @@ import sys
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from packs.powerset.primitives.auth import auth
@@ -230,8 +229,8 @@ class OnboardingTests(unittest.TestCase):
         argv = ["onboard", "--root", str(self.root), "--harness", "codex", "--pid", str(os.getpid()), *source_args]
         with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
                 patch("packs.powerset.primitives.install.workflow.SourceOnboarding") as sources, \
-                patch("packs.powerset.primitives.install.onboard.subprocess.run",
-                      return_value=SimpleNamespace(returncode=0, stdout='{"url":"http://localhost:8899/install"}')):
+                patch("packs.ingestion.primitives.deep_context.review.cli.start_server",
+                      return_value={"url": "http://localhost:8899/install"}):
             sources.return_value.run.return_value = {"status": "waiting", "step": "deep_context"}
             sources.return_value.retry_command = "bin/onboard"
             sources.return_value.gmail_emails = ("jordan@example.com",)

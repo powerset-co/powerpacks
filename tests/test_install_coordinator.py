@@ -30,8 +30,8 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.account_email = "powerset@example.com"
         self.source_choices = []
         self.source_result = {"step": "deep_context", "status": "waiting", "action": {"kind": "processing"}}
-        self.page = patch("packs.powerset.primitives.install.onboard.subprocess.run",
-                          return_value=SimpleNamespace(returncode=0, stdout='{"url":"http://127.0.0.1:8899/install"}'))
+        self.page = patch("packs.ingestion.primitives.deep_context.review.cli.start_server",
+                          return_value={"url": "http://127.0.0.1:8899/install"})
         self.launch_page = self.page.start()
         self.account = patch("packs.powerset.primitives.install.onboard.Onboarding")
         self.account_class = self.account.start()
@@ -79,9 +79,10 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.events, ["account", "imports", "processing"])
         self.assertIn("STATUS PAGE: http://127.0.0.1:8899/install", output)
+        self.assertIn("Powerset search is ready; local setup will continue.", output)
         self.assertTrue(output.rstrip().endswith("DONE: Verified"))
         self.assertEqual(self.status.read()["retry_command"], self.retry)
-        self.assertIn("8899", self.launch_page.call_args.args[0])
+        self.assertEqual(self.launch_page.call_args.kwargs["port"], 8899)
         self.assertEqual(self.processing_class.call_args.kwargs["port"], 8899)
 
     def test_approval_is_scoped_to_this_resume_not_saved_for_future_runs(self):

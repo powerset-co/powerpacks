@@ -12,11 +12,12 @@ explicit request to change Powerpacks code, read `docs/development.md`.
   questions directly without making unsolicited code changes; don't abandon an
   already-requested workflow merely because a follow-up is phrased as a question.
 - Handle routine setup, retries, and free, reversible repairs within the user's
-  request. Ask only for a missing decision, an action requiring the user, new
-  spend, destructive changes, or expanded access. Don't ask twice.
+  request. Ask only for a missing decision, an action requiring the user, spend
+  beyond the workflow's automatic budget, destructive changes, or expanded access.
+  Don't ask twice.
 - Follow the relevant skill's scope. Installation includes its default local
   contact imports; inform the user and honor changes or skips in chat. Message
-  processing follows Deep Context. Paid enrichment and uploads need approval.
+  processing follows Deep Context's automatic cost rules. Uploads need authorization.
 - Preserve existing configuration, unrelated skills, local data, checkpoints,
   and paid artifacts. Never delete data or replace a named account with another
   account that happens to work.

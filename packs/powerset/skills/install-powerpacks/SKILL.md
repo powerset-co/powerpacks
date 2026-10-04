@@ -1,11 +1,11 @@
 ---
 name: install-powerpacks
-description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and scoped cost approval. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
+description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and the existing automatic cost rules. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
 license: MIT
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.4.0
+  version: 1.4.1
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -22,7 +22,7 @@ Install → Connect Powerset → Sync Gmail → Sync iMessage → Sync WhatsApp 
 Discover → Enrich → Review when needed → Build Index → Verify.
 
 Own the result. Run commands yourself; involve the user only for browser consent,
-QR scans, OS permissions, identity choices, paid work, and upload authorization.
+QR scans, OS permissions, missing identity choices, required review, and upload authorization.
 Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
 want as it runs."
 
@@ -36,8 +36,11 @@ curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/boo
 ```
 
 Bootstrap installs the runtime and starts the installed coordinator `bin/onboard`.
-That coordinator owns the account, imports, processing, review, indexing, and
-verification. Do not assemble a second sequence of skill commands yourself.
+That coordinator connects Powerset and verifies hosted search first, then owns
+imports, processing, review, indexing, and verification. Once hosted search is
+verified, tell the user they can search while local setup continues. Do not make
+local import or processing completion a prerequisite for cloud search, and do not
+assemble a second sequence of skill commands yourself.
 Explicit install-only or no-login requests omit `--powerset` and stop earlier.
 
 No project directory or manual clone is needed. Use the printed `powerpacks: repo:`
@@ -93,13 +96,19 @@ imports, stores, and accounts survive; never log out or clear data for a retry.
 
 ## Approval and repair
 
-The coordinator runs free checks and estimates before paid stages. An approval
-wait exposes the exact native command, estimate, and coordinator continuation.
-Show the estimate and obtain explicit permission before using `--approve-spend`
-for that stage. Indexing also requires `--approve-upload`. Never infer either
-permission from the normal install instruction or authorize all stages blindly.
-After approval, run the action's `continue_command`; do not run its native paid
-command separately. The coordinator continues from the existing checkpoints.
+The coordinator follows Deep Context's existing automatic cost rules: synthesis
+below $25, duplicate processing and enrichment up to $100 run without asking.
+Estimates and cache checks still run; do not add a confirmation for ordinary work.
+Only an estimate beyond those limits needs a budget decision. If that happens,
+use the saved continuation after the user authorizes it, rather than running a
+separate paid command.
+
+A new index runs automatically within its $25 estimate cap; only a larger
+estimate needs a budget decision. Modal checks its shared cache before spending.
+Upload consent is separate from spend: use `--approve-upload` when the user authorizes uploading contacts to
+the configured workspace. Reuse that authorization while repairing/resuming the
+same requested upload; do not ask again. Existing downloaded indexes are reused
+and verified locally without another upload.
 
 Read command output, saved progress, and `.powerpacks/install/install.log`:
 

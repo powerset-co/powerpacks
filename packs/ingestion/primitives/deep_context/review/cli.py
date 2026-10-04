@@ -147,18 +147,18 @@ def _health(host: str, port: int) -> dict[str, object] | None:
         return None
 
 
-def _owned_listener(args: argparse.Namespace, root: Path) -> dict[str, object] | None:
-    live = _health(args.host, args.port)
+def _owned_listener(host: str, port: int, root: Path) -> dict[str, object] | None:
+    live = _health(host, port)
     if live and live.get("primitive") == _PRIMITIVE and live.get("repo_root") == str(root):
         return live
     with socket.socket() as probe:
-        if probe.connect_ex((args.host, args.port)) == 0:
-            raise SystemExit(f"Port {args.port} belongs to another server. Use --port with a free port.")
+        if probe.connect_ex((host, port)) == 0:
+            raise SystemExit(f"Port {port} belongs to another server. Use --port with a free port.")
     return None
 
 
-def _stage(args: argparse.Namespace, root: Path) -> str:
-    return args.stage or ("" if (root / CANONICAL_DB).is_file() else "searches")
+def _stage(stage: str | None, root: Path) -> str:
+    return stage or ("" if (root / CANONICAL_DB).is_file() else "searches")
 
 
 def _load_project_packages(root: Path) -> None:
@@ -293,24 +293,27 @@ def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRe
     return Handler
 
 
-def cmd_start(args: argparse.Namespace) -> None:
-    root = Path.cwd().resolve()
-    stage = _stage(args, root)
-    url = _url(args.host, args.port, stage, args.run)
-    live = _owned_listener(args, root)
+def start_server(root: Path, *, host: str = "127.0.0.1", port: int = 8765,
+                 stage: str | None = None, run_id: str = "", confirm_threshold: float | None = None,
+                 open_browser: bool = False) -> dict[str, object]:
+    """Start or reuse the persistent UI process; workflow primitives run in the caller."""
+    root = root.resolve()
+    selected_stage = _stage(stage, root)
+    url = _url(host, port, selected_stage, run_id)
+    live = _owned_listener(host, port, root)
     if live:
-        _announce("reused", url, stage=stage, repo_root=str(root), pid=live["pid"])
-        if args.open:
+        if open_browser:
             webbrowser.open(url)
-        return
+        return {"status": "reused", "url": url, "stage": selected_stage,
+                "repo_root": str(root), "pid": live["pid"]}
     directory = root / ".powerpacks" / "install"
     directory.mkdir(parents=True, exist_ok=True)
     command = [sys.executable, *(["-S"] if sys.flags.no_site else []), "-m", "packs.ingestion.primitives.deep_context.review.cli", "serve",
-               "--host", args.host, "--port", str(args.port)]
-    if args.stage:
-        command.extend(["--stage", args.stage])
-    if args.confirm_threshold is not None:
-        command.extend(["--confirm-threshold", str(args.confirm_threshold)])
+               "--host", host, "--port", str(port)]
+    if stage:
+        command.extend(["--stage", stage])
+    if confirm_threshold is not None:
+        command.extend(["--confirm-threshold", str(confirm_threshold)])
     environment = dict(os.environ)
     app = permission_app()
     if app:
@@ -320,23 +323,29 @@ def cmd_start(args: argparse.Namespace) -> None:
                                    stdout=log, stderr=log, start_new_session=True, env=environment)
     deadline = time.monotonic() + _START_TIMEOUT_SECONDS
     while time.monotonic() < deadline and process.poll() is None:
-        live = _health(args.host, args.port)
+        live = _health(host, port)
         if live and live.get("primitive") == _PRIMITIVE and live.get("repo_root") == str(root):
-            _announce("serving", url, stage=stage, repo_root=str(root), pid=live["pid"])
-            if args.open:
+            if open_browser:
                 webbrowser.open(url)
-            return
+            return {"status": "serving", "url": url, "stage": selected_stage,
+                    "repo_root": str(root), "pid": live["pid"]}
         time.sleep(0.1)
     if process.poll() is None:
         process.terminate()
     raise SystemExit(f"Powerpacks could not start. Read {directory / 'server.log'}, fix the error, then retry.")
 
 
+def cmd_start(args: argparse.Namespace) -> None:
+    result = start_server(Path.cwd(), host=args.host, port=args.port, stage=args.stage,
+                          run_id=args.run, confirm_threshold=args.confirm_threshold, open_browser=args.open)
+    _announce(**result)
+
+
 def cmd_serve(args: argparse.Namespace) -> None:
     root = Path.cwd().resolve()
-    stage = _stage(args, root)
+    stage = _stage(args.stage, root)
     url = _url(args.host, args.port, stage, args.run)
-    live = _owned_listener(args, root)
+    live = _owned_listener(args.host, args.port, root)
     if live:
         _announce("reused", url, stage=stage, repo_root=str(root), pid=live["pid"])
         if args.open:

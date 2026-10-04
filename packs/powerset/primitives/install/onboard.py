@@ -8,7 +8,6 @@ import fcntl
 import json
 import os
 import shlex
-import subprocess
 import sys
 import time
 import urllib.error
@@ -281,6 +280,7 @@ class Onboarding:
 def main() -> None:
     from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
     from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
+    from packs.ingestion.primitives.deep_context.review.cli import start_server
 
     parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -314,18 +314,17 @@ def main() -> None:
                                 skip_sources=tuple(sources.skip_source))
         flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
         flow.retry_command += f" --port {port}"
-        page = subprocess.run([sys.executable, "-m", "packs.ingestion.primitives.deep_context.review.cli",
-                               "start", "--port", str(port), "--stage", "install"],
-                              cwd=root, capture_output=True, text=True)
-        if page.returncode:
+        try:
+            page = start_server(root, port=port, stage="install")
+        except (OSError, SystemExit) as error:
             with status.log_path.open("a") as log:
-                log.write(page.stderr)
+                log.write(str(error) + "\n")
             status.write(step=InstallStep.RUNTIME, status=InstallState.FAILED,
                          message="The progress page could not start. I can check the log and retry.",
                          pid=0, retry_command=flow.retry_command)
             print("FAILED: The progress page could not start. Check the installation log.", flush=True)
-            raise SystemExit(1)
-        print(f"STATUS PAGE: {json.loads(page.stdout)['url']}", flush=True)
+            raise SystemExit(1) from error
+        print(f"STATUS PAGE: {page['url']}", flush=True)
         onboarding = Onboarding(root, harnesses=harnesses, pid=os.getpid(),
                                 retry_command=flow.retry_command)
         output = io.StringIO()
@@ -334,6 +333,8 @@ def main() -> None:
         if code not in (0, NEEDS_YOU) or not onboarding.email:
             print(output.getvalue(), end="", flush=True)
             raise SystemExit(code)
+        if code == 0:
+            print("Powerset search is ready; local setup will continue.", flush=True)
         if not flow.gmail_emails and not sources.gmail_email and onboarding.email:
             flow = SourceOnboarding(root, sources=tuple(sources.source),
                                     gmail_emails=(onboarding.email,), sync_after=sources.sync_after,
