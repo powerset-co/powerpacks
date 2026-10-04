@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name")
     p.add_argument("--phone")
     p.add_argument("--email")
-    p.add_argument("--parent-id", help="Select a parent from an ambiguous lookup")
+    p.add_argument("--parent-id", help="Choose a parent after an ambiguous lookup")
     p.add_argument("--db", type=Path, default=CANONICAL_DB)
     p.add_argument("--json", action="store_true", help="Emit parent metadata and, for one match, its dossier body")
     return p

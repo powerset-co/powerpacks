@@ -75,8 +75,10 @@ can be an option; name it and never invent access. Local-only stays local.
 
 Lead with who the person is, then the relevant background and relationship
 context supported by the dossier. For "everything", cover the available
-sections without dumping raw JSON or repeating child records. Link the saved
-dossier/profile when available; preserve dates, sources, and uncertainty.
+sections without dumping raw JSON or repeating child records. Keep parent IDs
+and internal paths out of the answer. Link profiles; only link a dossier file
+after verifying it exists, since the text may live only in SQLite. Preserve
+dates, sources, and uncertainty.
 Distinguish recorded facts from inferences and missing information. A failed
 lookup never establishes that the user does not know someone. Do not trigger
 collection, synthesis, enrichment, or sharing just to answer a lookup.
