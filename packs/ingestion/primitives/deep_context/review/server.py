@@ -40,7 +40,7 @@ from typing import Any, Callable
 
 from packs.ingestion.primitives.accounts.api import AccountsApi
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
-from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.people_views import dossier_body
 from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import (
@@ -210,10 +210,9 @@ def make_handler(
                 )
             if parsed.path == "/api/dossier":
                 query = dict(urllib.parse.parse_qsl(parsed.query))
-                parent = person_detail(db, query.get("slug", ""))
                 # The review cards pass skip=1: the body starts at Summary.
                 body = markdown_to_html(
-                    parent.dossier_body if parent else "",
+                    dossier_body(db, query.get("slug", "")),
                     for_review_card=query.get("skip") == "1",
                 )
                 return self.send_bytes(body.encode())

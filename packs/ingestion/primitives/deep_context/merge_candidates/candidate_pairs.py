@@ -40,9 +40,12 @@ from __future__ import annotations
 import re
 import sys
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from itertools import combinations
 from typing import TypeVar
+
+from nameparser import Lexicon, Parser
 
 from packs.ingestion.primitives.common.contact_fields import format_phone_digits
 from packs.ingestion.primitives.deep_context.shared.common import normalize_name
@@ -62,7 +65,20 @@ SAME_FIRST_AND_LAST_NAME = "same first and last name, middle names do not differ
 # A father and a son: a name carrying one of these is not the same name as one without it.
 GENERATION_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 TITLES = frozenset({"dr", "mr", "mrs", "ms", "prof"})
-PROFESSIONAL_CREDENTIALS = frozenset({"cfa", "cia", "cams", "cpa", "macc"})
+PROFESSIONAL_CREDENTIALS = frozenset({
+    "cfa", "cia", "cams", "cpa", "macc", "phd", "md", "mba", "caia", "cfe",
+    "fca", "pe", "csp", "shrm-cp", "ma", "msed", "mphiled", "nacddc",
+})
+_NAME_PARSER = Parser(lexicon=replace(
+    Lexicon.default(),
+    titles=TITLES,
+    given_name_titles=frozenset(),
+    suffix_acronyms=PROFESSIONAL_CREDENTIALS,
+    suffix_words=GENERATION_SUFFIXES | {"esq", "esquire"},
+    suffix_acronyms_ambiguous=Lexicon.default().suffix_acronyms_ambiguous & PROFESSIONAL_CREDENTIALS,
+    honorific_tails=frozenset(),
+))
+_OUTER_QUOTES = {'"': '"', "'": "'", "“": "”", "‘": "’", "「": "」", "『": "』"}
 T = TypeVar("T")
 
 
@@ -124,6 +140,7 @@ def email_localparts(emails: tuple[str, ...]) -> frozenset[str]:
     return frozenset(email.split("@", 1)[0] for email in emails if "@" in email)
 
 
+@lru_cache(None)
 def name_words(name_key: str) -> tuple[str, ...]:
     """The words of a name, given name first and titles left out: "bravo, dr jordan" reads as jordan bravo.
 
@@ -132,18 +149,16 @@ def name_words(name_key: str) -> tuple[str, ...]:
     """
     if "@" in name_key:
         return ()
-    # Composed and decomposed accents are one spelling.
-    composed = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", name_key))
-    parts = composed.split(',')
-    while len(parts) > 1:
-        suffix = tuple(re.findall(r"[^\W\d_]+", parts[-1].casefold()))
-        if not suffix or not set(suffix) <= PROFESSIONAL_CREDENTIALS:
-            break
-        parts.pop()
-    composed = ','.join(parts)
-    family, comma, given = composed.partition(",")
-    ordered = f"{given} {family}" if comma else composed
-    return tuple(word for word in re.findall(r"[^\W\d_]+", ordered.casefold()) if word not in TITLES)
+    name = unicodedata.normalize("NFC", name_key).strip()
+    if len(name) >= 2 and _OUTER_QUOTES.get(name[0]) == name[-1]:
+        name = name[1:-1]
+    person = _NAME_PARSER.parse(name)
+    ordered = " ".join((person.given, person.middle, person.family))
+    ordered = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", ordered))
+    suffix = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", person.suffix))
+    return tuple(re.findall(r"[^\W\d_]+", ordered.casefold())) + tuple(
+        word for word in re.findall(r"[^\W\d_]+", suffix.casefold()) if word in GENERATION_SUFFIXES
+    )
 
 
 def _is_full_name(words: tuple[str, ...]) -> bool:

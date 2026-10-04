@@ -238,3 +238,31 @@ def person_detail(db: Db, slug_or_parent_id: str) -> ParentViewRow | None:
             dossier_body=(str(payload.get("body") or "") if isinstance(payload, dict) else ""),
         )
     return hydrated[0]
+
+
+def dossier_body(db: Db, slug_or_parent_id: str) -> str:
+    """Read the requested projected dossier without hydrating a review card."""
+    rows = db.query(
+        """
+WITH requested_people AS MATERIALIZED (
+  SELECT person_id, parent_id FROM people WHERE person_id=? OR child_slug=?
+), requested_parent AS (
+  SELECT p.* FROM parents p
+  WHERE p.parent_id=? OR p.display_slug=? OR p.public_identifier=?
+    OR p.parent_id IN (SELECT parent_id FROM requested_people)
+  ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id LIMIT 1
+)
+SELECT COALESCE(
+  (SELECT COALESCE(json_extract(a.payload_json, '$.body'), '')
+   FROM requested_people pe CROSS JOIN artifacts a
+     ON a.parent_id=pe.parent_id AND a.person_id=pe.person_id
+   WHERE a.kind='dossier' AND a.status='projected'
+   ORDER BY a.projected_at DESC, a.artifact_key LIMIT 1),
+  (SELECT json_extract(a.payload_json, '$.body')
+   FROM requested_parent p JOIN artifacts a ON a.artifact_key=(
+""" + PARENT_DOSSIER_SELECT + """
+  )), '') AS dossier_body
+""",
+        (slug_or_parent_id,) * 5,
+    )
+    return str(rows[0]["dossier_body"])
