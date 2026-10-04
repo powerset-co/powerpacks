@@ -235,7 +235,8 @@ if [[ "$powerset" == 1 ]]; then
   code=0
   # Python calls the existing login, provisioning, and connection primitives
   # in-process. Keep its final line visible and preserve its waiting state.
-  (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.onboard \
+  # Onboarding imports the whole pipeline; only the project venv has its dependencies.
+  (cd "$root" && "$root/.venv/bin/python" -m packs.powerset.primitives.install.onboard \
     --root "$root" --port "$port" "${onboard_args[@]}" ${source_args[@]+"${source_args[@]}"}) \
     2> >(tee -a "$log" >&2) || code=$?
   case "$code" in

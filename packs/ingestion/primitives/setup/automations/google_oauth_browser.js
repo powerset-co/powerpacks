@@ -13,6 +13,8 @@
  *     focus returns to the app that started the session.
  *   2026-10-04: Console URLs name the account (authuser) so a profile signed in
  *     to several Google accounts still opens the project owner's Console.
+ *   2026-10-04: the login is checked once, up front, and again after the
+ *     headless relaunch; the form steps no longer wait for a login no one can see.
  */
 
 const fs = require("fs");
@@ -429,7 +431,6 @@ async function requireGoogleAuthConfigured(page) {
 async function setupConsent(page, project, email, clientName, audience, timeoutMs) {
   const overview = consoleUrl("auth/overview", project);
   await gotoPage(page, overview, "OAuth overview");
-  await waitForHumanLogin(page, email, timeoutMs);
   await settle(page);
 
   log("configuring OAuth app overview");
@@ -543,7 +544,6 @@ async function addScopes(page, project) {
 async function addTestUsers(page, project, email, testUsers, timeoutMs) {
   const audienceUrl = consoleUrl("auth/audience", project);
   await gotoPage(page, audienceUrl, "OAuth audience");
-  await waitForHumanLogin(page, email, timeoutMs);
   await settle(page);
   await requireGoogleAuthConfigured(page);
 
@@ -727,7 +727,6 @@ async function createClient(page, project, email, clientName, downloadDir, timeo
   const clients = consoleUrl("auth/clients", project);
   const legacyClient = consoleUrl("apis/credentials/oauthclient", project);
   await gotoPage(page, clients, "OAuth clients page");
-  await waitForHumanLogin(page, email, timeoutMs);
   await settle(page);
 
   const existing = await tryDownloadExistingClient(page, clientName, downloadDir);
@@ -852,6 +851,12 @@ async function main() {
     returnFocus();
     context = await launchChrome(profileDir, true);
     page = context.pages()[0] || await context.newPage();
+    await gotoPage(page, overview, "OAuth overview");
+    if (onGoogleLogin(page.url())) {
+      await context.close().catch(() => {});
+      result({ status: "error", message: "Google did not keep the login for the headless browser." });
+      return;
+    }
   }
   page.setDefaultTimeout(Math.max(5000, timeoutSeconds * 1000));
 

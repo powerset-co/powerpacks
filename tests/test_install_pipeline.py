@@ -82,6 +82,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.waits = 0
         self.seed = False
         self.profiles_missing = False
+        self.empty_profiles = False
         self.validation_status = "ok"
         self.calls = []
         self.paid_commands = []
@@ -137,7 +138,7 @@ class InstallPipelineTests(unittest.TestCase):
                        "next_action": "enrich" if self.enrich else "review_linkedin" if self.review else "realize"}
         elif command == "realize":
             self.write(self.people, self.csv)
-            payload["profiles_missing"] = int(self.profiles_missing)
+            payload["profiles_missing"] = int(self.profiles_missing or self.empty_profiles)
         elif command == "profile-prefetch":
             self.assertTrue(node.fetch)
             self.paid_commands.append("profile-prefetch")
@@ -305,6 +306,23 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertIn("[install] synthetic-stage", log)
         self.assertIn("Synthetic native output", log)
         self.assertIn("Synthetic native progress", log)
+
+    def test_cached_profiles_without_jobs_do_not_block_indexing(self):
+        self.empty_profiles = True
+        result = self.run_pipeline(upload=True)
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertTrue(self.indexed())
+
+    def test_large_index_asks_upload_then_spend_then_finishes(self):
+        self.index_cost = 600
+        first = self.run_pipeline()
+        self.assertTrue(first["action"]["upload"])
+        second = self.run_pipeline(upload=True)
+        self.assertFalse(second["action"]["upload"])
+        self.assertIn("--approve-upload", second["action"]["continue_command"])
+        self.assertIn("--approve-spend index", second["action"]["continue_command"])
+        third = self.run_pipeline("index", upload=True)
+        self.assertEqual((third["step"], third["status"]), ("ready", "completed"))
 
     def test_index_requires_upload_consent_without_redundant_spend_approval(self):
         for spend in ((), ("index",)):
