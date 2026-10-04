@@ -197,7 +197,7 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_over_threshold_synthesis_stops_with_estimate_and_exact_scoped_resume(self):
         self.synthesize = True
-        self.synthesis_cost = 25
+        self.synthesis_cost = 500
         self.cluster = True
         self.enrich = True
         result = self.run_pipeline()
@@ -214,8 +214,8 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_resuming_synthesis_preserves_collected_output_and_stops_at_cluster(self):
         self.synthesize = self.cluster = self.enrich = True
-        self.synthesis_cost = 25
-        self.cluster_cost = 100.01
+        self.synthesis_cost = 500
+        self.cluster_cost = 500
         self.run_pipeline()
         self.calls.clear()
         result = self.run_pipeline("synthesize")
@@ -228,7 +228,7 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_over_threshold_enrichment_stops_before_any_provider_without_approval(self):
         self.enrich = True
-        self.enrichment_cost = 100.01
+        self.enrichment_cost = 500
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["action"]["step"]), ("enrich", "enrich"))
         self.assertFalse(self.did("enrich"))
@@ -236,8 +236,8 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_routine_processing_runs_at_automatic_budget_boundaries(self):
         self.synthesize = self.cluster = self.enrich = True
-        self.synthesis_cost = 24.99
-        self.cluster_cost = self.enrichment_cost = 100
+        self.synthesis_cost = 499.99
+        self.cluster_cost = self.enrichment_cost = 499.99
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich"])
@@ -303,25 +303,25 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertTrue(self.indexed())
 
     def test_index_native_estimate_uses_automatic_budget_and_retains_large_cost_approval(self):
-        self.index_cost = 25
+        self.index_cost = 499.99
         result = self.run_pipeline(upload=True)
         self.assertEqual(result["status"], "completed")
         argv = next(options["argv"] for name, options in self.calls if name == "index")
-        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 25)
+        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 499.99)
         self.reset_pipeline(self.root / "large-index-estimate")
-        self.index_cost = 25.01
+        self.index_cost = 500
         result = self.run_pipeline(upload=True)
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertEqual(result["action"]["step"], "index")
         self.assertFalse(result["action"]["upload"])
-        self.assertEqual(result["action"]["estimate"]["estimated_cost_usd"], 25.01)
+        self.assertEqual(result["action"]["estimate"]["estimated_cost_usd"], 500)
         self.assertEqual(result["action"]["continue_command"],
                          self.retry + " --approve-spend index --approve-upload")
         self.assertFalse(self.indexed())
         self.calls.clear()
         self.assertEqual(self.run_pipeline("index", upload=True)["status"], "completed")
         argv = next(options["argv"] for name, options in self.calls if name == "index")
-        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 25.01)
+        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 500)
 
     def test_full_approved_run_uses_native_stages_then_only_validator_marks_ready(self):
         self.synthesize = self.cluster = self.enrich = True
@@ -528,6 +528,23 @@ class InstallPipelineTests(unittest.TestCase):
                 self.assertFalse(self.did("collect"))
                 self.assertCountEqual(self.paid_commands, ["index"])
 
+    def test_saved_native_estimate_under_500_resumes_without_cost_confirmation(self):
+        self.dispatch()
+        path = self.root / ".powerpacks/runs/setup-gmail-modal/status.json"
+        dispatch = json.loads(path.read_text())
+        dispatch["status"] = "failed"
+        dispatch["stages"]["indexing"]["payload"] = {
+            "phase": "estimate", "error": "estimate exceeds --max-usd cap",
+            "estimated_usd": 499.99, "max_usd": 25}
+        path.write_text(json.dumps(dispatch))
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertFalse(self.did("download"))
+        self.assertFalse(self.did("index-estimate"))
+        argv = next(options["argv"] for name, options in self.calls if name == "index")
+        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 499.99)
+        self.assertCountEqual(self.paid_commands, ["index"])
+
     def test_native_cap_failure_resumes_same_uploaded_contacts_with_exact_estimate(self):
         self.dispatch()
         path = self.root / ".powerpacks/runs/setup-gmail-modal/status.json"
@@ -535,13 +552,13 @@ class InstallPipelineTests(unittest.TestCase):
         dispatch["status"] = "failed"
         dispatch["stages"]["indexing"]["payload"] = {
             "phase": "estimate", "error": "estimate exceeds --max-usd cap",
-            "estimated_usd": 30, "max_usd": 25}
+            "estimated_usd": 500, "max_usd": 499.99}
         path.write_text(json.dumps(dispatch))
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertEqual(result["action"]["step"], "index")
         self.assertFalse(result["action"]["upload"])
-        self.assertEqual(result["action"]["estimate"]["estimated_usd"], 30)
+        self.assertEqual(result["action"]["estimate"]["estimated_usd"], 500)
         self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-spend index")
         self.assertFalse(self.indexed())
         self.assertFalse(self.did("download"))
@@ -551,7 +568,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertFalse(self.did("download"))
         self.assertFalse(self.did("index-estimate"))
         argv = next(options["argv"] for name, options in self.calls if name == "index")
-        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 30)
+        self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 500)
         self.assertCountEqual(self.paid_commands, ["index"])
         self.calls.clear()
         self.assertEqual(self.run_pipeline()["status"], "completed")

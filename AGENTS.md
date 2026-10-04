@@ -17,7 +17,8 @@ explicit request to change Powerpacks code, read `docs/development.md`.
   Don't ask twice.
 - Follow the relevant skill's scope. Installation includes its default local
   contact imports; inform the user and honor changes or skips in chat. Message
-  processing follows Deep Context's automatic cost rules. Uploads need authorization.
+  processing uses Deep Context; onboarding follows the install skill's cost limit.
+  Uploads need authorization.
 - Preserve existing configuration, unrelated skills, local data, checkpoints,
   and paid artifacts. Never delete data or replace a named account with another
   account that happens to work.

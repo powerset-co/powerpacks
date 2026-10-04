@@ -1,7 +1,7 @@
 """Resume imported contacts through native Deep Context, Modal, and validation.
 
-Native manifests and SQLite own completed work. Routine processing follows Deep
-Context's automatic budgets; the installation manifest displays the next action.
+Native manifests and SQLite own completed work. Routine processing follows
+the onboarding automatic budget; the installation manifest displays the next action.
 """
 from __future__ import annotations
 
@@ -47,10 +47,7 @@ from packs.powerset.primitives.install.status import (
 
 _PEOPLE = ".powerpacks/network-import/merged/people.csv"
 _INDEX = ".powerpacks/search-index"
-_SYNTHESIS_AUTO_USD = 25
-_CLUSTER_AUTO_USD = 100
-_ENRICHMENT_AUTO_USD = 100
-_INDEX_MAX_USD = 25
+_AUTO_SPEND_USD = 500
 _REVIEW_POLL_SECONDS = 5
 
 
@@ -189,14 +186,14 @@ class ProcessingOnboarding:
         synthesize = SynthesizePersonContext(db=self.db)
         estimate = self._run("synthesize estimate", synthesize.estimate, "Estimating context processing")
         if estimate["people"] or estimate["jev_people"]:
-            if estimate["estimated_cost_ceiling_usd"] >= _SYNTHESIS_AUTO_USD:
+            if estimate["estimated_cost_ceiling_usd"] >= _AUTO_SPEND_USD:
                 self._approval(SpendStep.SYNTHESIZE, estimate)
             self._run("synthesize", lambda: synthesize.run().to_payload(), "Learning about your contacts")
         self._run("compose", lambda: ComposeDossier(db=self.db).run().to_payload(), "Preparing your contacts")
         self._run("validate", lambda: ValidateDossiers(db=self.db).run(), "Checking your contact context")
         cluster = ClusterMergeCandidates(db=self.db)
         estimate = self._run("cluster estimate", cluster.estimate, "Checking duplicate contacts")
-        if estimate["estimated_cost_usd"] > _CLUSTER_AUTO_USD:
+        if estimate["estimated_cost_usd"] >= _AUTO_SPEND_USD:
             self._approval(SpendStep.CLUSTER, estimate)
         self._run("cluster", lambda: cluster.run().to_payload(), "Combining duplicate contacts")
         self._run("parents", lambda: BuildParents(db=self.db).run().to_payload(), "Preparing your contacts")
@@ -209,7 +206,7 @@ class ProcessingOnboarding:
             if state.next_action == "enrich":
                 self.step = InstallStep.ENRICH
                 estimate = estimate_enrichment(self.db, state)
-                if estimate.estimated_usd > _ENRICHMENT_AUTO_USD:
+                if estimate.estimated_usd >= _AUTO_SPEND_USD:
                     self._approval(SpendStep.ENRICH, estimate.to_payload())
                 pipeline = EnrichmentPipeline(self.db)
                 self._run("enrich", lambda: pipeline.run(total=estimate.research.deduped_total,
@@ -264,7 +261,8 @@ class ProcessingOnboarding:
             native = dispatched["stages"]["indexing"]["payload"]
             if (dispatched["status"] == "failed" and native.get("phase") == "estimate"
                     and native.get("error") == "estimate exceeds --max-usd cap"):
-                self._approval(SpendStep.INDEX, native)
+                if native["estimated_usd"] >= _AUTO_SPEND_USD:
+                    self._approval(SpendStep.INDEX, native)
                 command = [*self.modal, "index-people", "--people-csv", _PEOPLE,
                            "--max-usd", str(native["estimated_usd"])]
                 self._modal(command, "Building your search index")
@@ -275,10 +273,11 @@ class ProcessingOnboarding:
                                  input=self.people, output_dir=self.index, dry_run=True)),
                                  "Estimating search indexing")
             estimate["note"] = "Local cache estimate; Modal checks its shared cache before spending."
-            if estimate["estimated_cost_usd"] > _INDEX_MAX_USD:
+            if estimate["estimated_cost_usd"] >= _AUTO_SPEND_USD:
                 self._approval(SpendStep.INDEX, estimate)
             self._approval(SpendStep.INDEX, estimate, upload=True)
-            cap = max(_INDEX_MAX_USD, estimate["estimated_cost_usd"])
+            # Modal rejects only costs above its cap; keep automatic spend below $500.
+            cap = max(_AUTO_SPEND_USD - 0.01, estimate["estimated_cost_usd"])
             command = [*self.modal, "index-people", "--people-csv", _PEOPLE, "--max-usd", str(cap)]
             payload = self._modal(command, "Building your search index")
             if payload["status"] != "completed":

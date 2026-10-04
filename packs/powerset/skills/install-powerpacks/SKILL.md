@@ -1,11 +1,11 @@
 ---
 name: install-powerpacks
-description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and the existing automatic cost rules. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
+description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and automatic cost checks. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
 license: MIT
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.4.1
+  version: 1.4.2
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -96,18 +96,16 @@ imports, stores, and accounts survive; never log out or clear data for a retry.
 
 ## Approval and repair
 
-The coordinator follows Deep Context's existing automatic cost rules: synthesis
-below $25, duplicate processing and enrichment up to $100 run without asking.
-Estimates and cache checks still run; do not add a confirmation for ordinary work.
-Only an estimate beyond those limits needs a budget decision. If that happens,
-use the saved continuation after the user authorizes it, rather than running a
-separate paid command.
+During onboarding, each paid step runs automatically when its estimated cost is
+below $500. At $500 or more, show the estimate and ask the user before running.
+This applies to synthesis, duplicate processing, enrichment, and indexing;
+do not ask at their former lower thresholds. Estimates and cache checks still
+run. Use the saved continuation for an authorized larger estimate, rather than
+running a separate paid command. Modal checks its shared cache before spending.
 
-A new index runs automatically within its $25 estimate cap; only a larger
-estimate needs a budget decision. Modal checks its shared cache before spending.
-Upload consent is separate from spend: use `--approve-upload` when the user authorizes uploading contacts to
-the configured workspace. Reuse that authorization while repairing/resuming the
-same requested upload; do not ask again. Existing downloaded indexes are reused
+Upload consent is separate from spend: use `--approve-upload` when the user
+authorizes uploading contacts to the configured workspace. Reuse that authorization
+while repairing/resuming the same requested upload; do not ask again. Existing downloaded indexes are reused
 and verified locally without another upload.
 
 Read command output, saved progress, and `.powerpacks/install/install.log`:
