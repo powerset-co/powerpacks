@@ -25,6 +25,7 @@
 const fs = require("fs");
 const { execFileSync } = require("child_process");
 const { chromium } = require("playwright-core");
+const { returnFocus } = require("../../common/return_focus.js");
 
 const CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
 const CARD_LINK = 'main a[href*="/in/"]';
@@ -187,6 +188,7 @@ async function main() {
       }
       log("logged in; closing the window and reading headless");
       await context.close();
+      returnFocus();
       context = await launch(args.profileDir, true);
       page = context.pages()[0] || await context.newPage();
       if (!await signedIn(page)) {

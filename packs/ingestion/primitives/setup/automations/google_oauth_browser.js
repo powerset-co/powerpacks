@@ -1,15 +1,23 @@
 #!/usr/bin/env node
 /* Drive Google Console for msgvault OAuth setup.
  *
- * This is intentionally best-effort. Google login, MFA, and anti-abuse screens
- * stay human-controlled in the opened Chrome window; after those screens are
- * cleared, this script tries to finish the routine form work.
+ * This is intentionally best-effort. The form work runs in headless Chrome over
+ * the persistent profile, so nothing pops up while the saved Google session is
+ * valid. When Console asks for a login, the profile opens in a visible window
+ * for the login only (Google login, MFA, and anti-abuse screens stay
+ * human-controlled there), closes once Console loads, and the form work
+ * continues headless.
+ *
+ * Changelog:
+ *   2026-10-03: headless form work; a visible window only for the login, then
+ *     focus returns to the app that started the session.
  */
 
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { chromium } = require("playwright-core");
+const { returnFocus } = require("../../common/return_focus.js");
 
 // Fallback Chrome major used only if the installed version can't be read. Keep
 // this reasonably current so the UA never looks stale to Google's checks.
@@ -337,6 +345,36 @@ async function clickButton(page, candidates, timeout = 1800) {
   return false;
 }
 
+function onGoogleLogin(url) {
+  return url.includes("accounts.google.com") || url.includes("/signin/");
+}
+
+// Headless runs get a fixed desktop viewport; the visible login window uses the screen.
+function launchChrome(profileDir, headless) {
+  return chromium.launchPersistentContext(profileDir, {
+    channel: "chrome",
+    headless,
+    acceptDownloads: true,
+    viewport: headless ? { width: 1440, height: 900 } : null,
+    // Present a current, consumer-grade UA (no HeadlessChrome token), matched to
+    // the installed Chrome major so it stays consistent with Sec-CH-UA hints.
+    userAgent: recentMacUserAgent(),
+    // Strip the automation fingerprints Google's "this browser may not be
+    // secure" check keys on: the --enable-automation switch (which also sets
+    // navigator.webdriver and shows the "controlled by automated software" +
+    // --no-sandbox infobar) and the AutomationControlled blink feature.
+    // Omit --no-sandbox (re-adds the flag banner) and --disable-web-security
+    // (breaks the GCP console's CORS/OAuth flow).
+    ignoreDefaultArgs: ["--enable-automation"],
+    args: [
+      "--start-maximized",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-infobars",
+      "--disable-extensions",
+    ],
+  });
+}
+
 async function waitForHumanLogin(page, email, timeoutMs) {
   const start = Date.now();
   let lastUrl = "";
@@ -347,7 +385,7 @@ async function waitForHumanLogin(page, email, timeoutMs) {
       log(`page: ${url}`);
       lastUrl = url;
     }
-    if (!url.includes("accounts.google.com") && !url.includes("/signin/")) {
+    if (!onGoogleLogin(url)) {
       return true;
     }
     const now = Date.now();
@@ -817,29 +855,28 @@ async function main() {
   fs.mkdirSync(profileDir, { recursive: true });
   fs.mkdirSync(downloadDir, { recursive: true });
 
-  const context = await chromium.launchPersistentContext(profileDir, {
-    channel: "chrome",
-    headless: false,
-    acceptDownloads: true,
-    viewport: null,
-    // Present a current, consumer-grade UA (no HeadlessChrome token), matched to
-    // the installed Chrome major so it stays consistent with Sec-CH-UA hints.
-    userAgent: recentMacUserAgent(),
-    // Strip the automation fingerprints Google's "this browser may not be
-    // secure" check keys on: the --enable-automation switch (which also sets
-    // navigator.webdriver and shows the "controlled by automated software" +
-    // --no-sandbox infobar) and the AutomationControlled blink feature.
-    // Omit --no-sandbox (re-adds the flag banner) and --disable-web-security
-    // (breaks the GCP console's CORS/OAuth flow).
-    ignoreDefaultArgs: ["--enable-automation"],
-    args: [
-      "--start-maximized",
-      "--disable-blink-features=AutomationControlled",
-      "--disable-infobars",
-      "--disable-extensions",
-    ],
-  });
-  const page = context.pages()[0] || await context.newPage();
+  const overview = `https://console.cloud.google.com/auth/overview?project=${encodeURIComponent(project)}`;
+  let context = await launchChrome(profileDir, true);
+  let page = context.pages()[0] || await context.newPage();
+  await gotoPage(page, overview, "OAuth overview");
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  if (onGoogleLogin(page.url())) {
+    log("Google needs a login; opening Chrome");
+    await context.close();
+    context = await launchChrome(profileDir, false);
+    page = context.pages()[0] || await context.newPage();
+    await gotoPage(page, overview, "OAuth overview");
+    if (!await waitForHumanLogin(page, email, timeoutMs)) {
+      await context.close().catch(() => {});
+      result({ status: "needs_user_action", message: "Log in to Google in the Chrome window Powerpacks opened, then run this again." });
+      return;
+    }
+    log("logged in; closing the window and continuing headless");
+    await context.close();
+    returnFocus();
+    context = await launchChrome(profileDir, true);
+    page = context.pages()[0] || await context.newPage();
+  }
   page.setDefaultTimeout(Math.max(5000, timeoutSeconds * 1000));
 
   let payload;
