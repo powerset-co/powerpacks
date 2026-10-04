@@ -39,10 +39,11 @@ review_port_from_args() {
 }
 
 review_server_pids() {
-  # Only reconcile_review_web listeners on the port — never someone else's process.
+  # Only review listeners running from this checkout.
   local pid
-  for pid in $(lsof -ti :"$1" 2>/dev/null); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review"; then
+  for pid in $(lsof -tnP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null); do
+    if [[ "$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" == "$ROOT" ]] \
+        && ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review"; then
       echo "$pid"
     fi
   done
@@ -62,31 +63,10 @@ stop_review_server() {
   done
 }
 
-port_holder() {
-  # The command still listening on the port after our server stopped, if any.
-  local pid
-  pid="$(lsof -tnP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1)"
-  [[ -n "$pid" ]] && echo "pid $pid: $(ps -p "$pid" -o command= 2>/dev/null)"
-  return 0
-}
-
 review_server_has_active_upload() {
   # A People upload runs inside the server; restarting would interrupt it.
   curl -fsS --max-time 2 "http://127.0.0.1:$1/api/people/upload" 2>/dev/null \
     | grep -qE '"status": *"(checking|uploading)"'
-}
-
-review_url() {
-  local port="$1" stage="$2" run="${3:-}"
-  if [[ "$stage" == "searches" && -n "$run" ]]; then
-    echo "http://127.0.0.1:$port/searches/run?run_id=$run"
-  elif [[ "$stage" == "people" || "$stage" == "searches" ]]; then
-    echo "http://127.0.0.1:$port/$stage"
-  elif [[ -n "$stage" ]]; then
-    echo "http://127.0.0.1:$port/?stage=$stage"
-  else
-    echo "http://127.0.0.1:$port/"
-  fi
 }
 
 review_server_has_active_retargets() {
@@ -100,45 +80,6 @@ review_server_has_active_enrichment() {
   # The live server reads enrichment state from canonical SQLite.
   curl -fsS --max-time 2 "http://127.0.0.1:$1/api/enrichment" 2>/dev/null \
     | grep -qE '"(status|state)": *"(running|submitted|research_complete)"'
-}
-
-open_review_ui_when_healthy() {
-  # The ONLY place a browser is ever launched (`review`): poll
-  # the fresh server's /healthz (bounded, ~10s), print the URL, then open.
-  # LAUNCH ORDER CONTRACT: callers background this helper strictly AFTER the
-  # old server is stopped and immediately before spawning serve in the
-  # foreground. Guard anyway: if something already answers on the
-  # very first probe (a stale or foreign server the stop did not own), wait
-  # for the port to go down and come back rather than opening it; if it never
-  # goes down, print the URL but never auto-open a server we did not start.
-  # The URL line always prints; a missing `open` (non-macOS) degrades to it.
-  local port="$1" stage="$2" run="${3:-}" url _ stale=0
-  url="$(review_url "$port" "$stage" "$run")"
-  if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-    stale=1
-    for _ in $(seq 1 25); do
-      if ! curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-        stale=0
-        break
-      fi
-      sleep 0.2
-    done
-  fi
-  if (( stale )); then
-    echo "review UI: $url (a server was already answering before serve launched; not auto-opening)" >&2
-    return 0
-  fi
-  for _ in $(seq 1 50); do
-    if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-      # Print the URL only — the wrapper NEVER launches a browser. The
-      # harness/user opens it (an already-open tab reattaches by itself).
-      echo "review UI: $url" >&2
-      return 0
-    fi
-    sleep 0.2
-  done
-  echo "review UI: $url (server not healthy after ~10s; open it once serve is up)" >&2
-  return 0
 }
 
 usage() {
@@ -164,16 +105,9 @@ usage: bin/deep-context <command> [args]
   parents      build canonical parent dossiers (free)
   enrich       preview (--dry-run) or run resumable enrichment, then report next action
   validate     completeness report (free)
-  review       restart the review server and print the staged UI URL once
-               /healthz answers. Active enrichment or guided
-               re-research only prints a warning (both are durable: identical
-               resubmits reuse projected research; enrichment resumes from
-               projected artifacts + its SQLite job receipt). --force-restart
-               is accepted for compat but is a
-               no-op — restart is always unconditional.
-               Add a stage word to land there directly
-               (review linkedin | worth | enrich | people | searches; default: the current stage);
-               pass --stage worth|enrich|linkedin for the staged workflow
+  review       start or reuse the local server and print its UI URL
+               Add a stage word: install | linkedin | worth | enrich | done | people | searches.
+               --force-restart refuses while work is running.
   stop         stop the review UI server (free)
   review-status  read canonical SQLite and print the exact next workflow action
                (--wait [--timeout N] blocks until the next action is the agent's)
@@ -306,73 +240,37 @@ case "$cmd" in
     "${PY[@]}" "$PKG.review.restart_review" "$@"
     ;;
   review)
-    # Review boots in one fixed order (bare `review` included):
-    #   1. RESTART the review server — stop any running reconcile_review_web
-    #      listener on the target port (state is in SQLite; nothing is
-    #      lost), then serve WITHOUT --open so the server never auto-launches
-    #      a browser. Active
-    #      enrichment or guided re-research only prints a warning: both are
-    #      durable (identical guided resubmits reuse projected research;
-    #      enrichment resumes from projected artifacts + its SQLite job
-    #      receipt). --force-restart is a compat no-op.
-    #   2. OPEN the staged UI — poll the fresh
-    #      server's /healthz (bounded, ~10s), print the URL, then macOS
-    #      `open` (skipped gracefully when unavailable). CHOSEN STRUCTURE:
-    #      serve stays foreground (its normal blocking role); the watcher is
-    #      backgrounded immediately before it, after the old server is stopped,
-    #      so the first /healthz 200 can only be the new server, and
-    #      the helper's stale-server guard refuses to open anything that was
-    #      already answering at its first probe.
-    # `review linkedin` / `review worth` / `review enrich` / `review people`
-    # / `review searches` is sugar for the server's --stage
-    # flag: open the UI at that page (`people` is your network with the share
-    # decision per person, `searches` the saved deep-search runs; `review
-    # searches --run <slug>` opens one run). This is the ONE local server: the
-    # search skill opens its runs here too, and before a deep-context store
-    # exists it serves the searches alone.
+    # Start or reuse the same detached server used by installation.
+    # The agent opens the returned URL in the current browser pane.
     review_args=()
-    review_stage=""
-    review_run=""
+    force_restart=0
     prev_arg=""
     for arg in "$@"; do
       if [[ "$prev_arg" == "--stage" ]]; then
-        review_args+=("$arg"); review_stage="$arg"
+        review_args+=("$arg")
       elif [[ "$prev_arg" == "--run" ]]; then
-        review_args+=("$arg"); review_run="$arg"
+        review_args+=("$arg")
       else
         case "$arg" in
-          worth|enrich|linkedin|people|searches) review_args+=(--stage "$arg"); review_stage="$arg" ;;
-          --force-restart) ;;  # compat no-op: restart is always unconditional
-          --stage=*) review_args+=("$arg"); review_stage="${arg#--stage=}" ;;
-          --run=*) review_args+=("$arg"); review_run="${arg#--run=}" ;;
+          install|worth|enrich|linkedin|done|people|searches) review_args+=(--stage "$arg") ;;
+          --force-restart) force_restart=1 ;;
           *) review_args+=("$arg") ;;
         esac
       fi
       prev_arg="$arg"
     done
-    if (( ! wants_help )); then
+    if (( ! wants_help && force_restart )); then
       review_port="$(review_port_from_args "$@")"
-      if review_server_has_active_upload "$review_port"; then
-        # Every page lives on the one server: open the route instead of restarting.
-        echo "review: an upload is running; keeping the server on port ${review_port}" >&2
-        echo "review UI: $(review_url "$review_port" "$review_stage" "$review_run")" >&2
-        exit 0
-      fi
-      if review_server_has_active_enrichment "$review_port" \
+      if review_server_has_active_upload "$review_port" \
+          || review_server_has_active_enrichment "$review_port" \
           || review_server_has_active_retargets "$review_port"; then
-        echo "warning: active enrichment/guided re-research detected; restarting anyway; guidance, projected research, and the SQLite job receipt are durable" >&2
-      fi
-      echo "review: restarting the review server on port ${review_port}..." >&2
-      stop_review_server "$review_port"
-      holder="$(port_holder "$review_port")"
-      if [[ -n "$holder" ]]; then
-        echo "review: port ${review_port} is held by another program (${holder}); quit it, or pass --port" >&2
+        echo "refusing: work is running; reuse the page or wait before restarting" >&2
         exit 1
       fi
-      open_review_ui_when_healthy "$review_port" "$review_stage" "$review_run" &
+      stop_review_server "$review_port"
     fi
-    # Bash 3.2 (macOS /bin/bash) calls an empty array unbound under `set -u`.
-    "${PY[@]}" "$PKG.review.reconcile_review_web" serve ${review_args[@]+"${review_args[@]}"}
+    # Bash 3.2 treats an empty array as unbound under set -u.
+    "${PY[@]}" "$PKG.review.reconcile_review_web" start ${review_args[@]+"${review_args[@]}"}
     ;;
   stop|stop-review)
     # Stop only this review server. Refuse while its in-process enrichment run

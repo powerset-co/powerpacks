@@ -6,12 +6,15 @@ import ast
 import unittest
 from pathlib import Path
 
+from scripts import audit_deep_context_sqlite
+
 
 DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 DB_PACKAGE = DEEP_CONTEXT / "db"
 MIGRATION_PACKAGE = DEEP_CONTEXT / "migration"
 EXPECTED_DB_OPERATIONS = {
     "audit_identity.main",
+    "readiness.has_parents",
     "identity_views.approved_identities",
     "identity_views.decision_parents",
     "identity_views.enrichment_queue",
@@ -107,10 +110,10 @@ class DeepContextImportHygieneTests(unittest.TestCase):
     def test_deep_context_has_no_nested_imports(self) -> None:
         nested: list[str] = []
         for path in sorted(DEEP_CONTEXT.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)) and node.col_offset:
-                    nested.append(f"{path}:{node.lineno}")
+            source = path.read_text(encoding="utf-8")
+            for violation in audit_deep_context_sqlite.audit_source(path.resolve(), source):
+                if violation.rule == "top-level-imports":
+                    nested.append(f"{path}:{violation.line}")
 
         self.assertEqual(nested, [])
 

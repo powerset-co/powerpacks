@@ -44,7 +44,7 @@ check is already `ok`.
 
 ## Canonical Repo Setup
 
-Resolve and enter the canonical non-`.codex` Powerpacks repo before running any
+Resolve and enter the installed Powerpacks repo before running any
 Powerset login/setup command. This ensures `.env` and local Powerpacks state are
 written under the installed checkout such as `~/powerpacks`, not under an agent
 skill bundle like `~/.codex/powerpacks`.
@@ -53,7 +53,7 @@ skill bundle like `~/.codex/powerpacks`.
 resolve_powerpacks_root() {
   for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
     [[ -n "$candidate" ]] || continue
-    [[ "$candidate" != *"/.codex/"* ]] || continue
+    [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
       printf '%s\n' "$candidate"
       return 0
@@ -62,7 +62,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No canonical non-.codex Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
   exit 1
 }
 cd "$repo"
@@ -116,6 +116,11 @@ If `auth0_login` is missing or expired, run:
 ```bash
 uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
 ```
+
+Let this command open sign-in in the system's default browser. Do not pass
+`--no-browser` or open sign-in or callback URLs in the in-app browser. If
+automatic launch fails, use `open "<sign-in URL>"` on the printed URL. Keep any
+in-app progress pane on its status page.
 
 ### Step 3 - Pull runtime keys and register MCP directly
 

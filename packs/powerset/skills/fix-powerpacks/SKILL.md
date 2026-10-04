@@ -28,7 +28,7 @@ requests that.
 
 ## Principles
 
-1. Product commands run from the canonical non-`.codex` Powerpacks repo.
+1. Product commands run from the installed Powerpacks repo.
 2. Powerpacks-owned local state lives under that repo’s `.powerpacks/`.
 3. `~/.msgvault/msgvault.db` is external local app state; Powerpacks should
    point to it, not move it into `.powerpacks`.
@@ -98,7 +98,7 @@ Resolve and enter canonical repo:
 resolve_powerpacks_root() {
   for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
     [[ -n "$candidate" ]] || continue
-    [[ "$candidate" != *"/.codex/"* ]] || continue
+    [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
       printf '%s\n' "$candidate"
       return 0
@@ -107,7 +107,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No canonical non-.codex Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
   exit 1
 }
 cd "$repo"

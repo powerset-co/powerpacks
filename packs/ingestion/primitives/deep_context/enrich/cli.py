@@ -14,7 +14,8 @@ from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import E
 from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment, minutes_left
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.merge_candidates.linkedin_name_matches import linkedin_name_matches
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, ENRICH_MANIFEST, emit, load_env
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.shared.common import ENRICH_MANIFEST, emit, load_env
 
 
 def main(argv: list[str] | None = None) -> int:

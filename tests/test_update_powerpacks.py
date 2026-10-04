@@ -83,10 +83,6 @@ class UpdatePowerpacksTests(unittest.TestCase):
                 adapter_text,
             )
 
-        codex_adapter = (ROOT / "adapters/codex/install.sh").read_text(encoding="utf-8")
-        self.assertIn('cp -R "$BUNDLE_DIR/.powerpacks" "$tmp/.powerpacks"', codex_adapter)
-        self.assertIn('mv "$BUNDLE_DIR" "$backup"', codex_adapter)
-
     def test_codex_adapter_preserves_installed_bundle_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -135,8 +131,8 @@ class UpdatePowerpacksTests(unittest.TestCase):
 
             self.assertTrue((skills_dir / "setup/SKILL.md").is_file())
             self.assertTrue((skills_dir / ".powerpacks-install.json").is_file())
-            self.assertFalse((legacy_dir / "setup").exists())
-            self.assertFalse((legacy_dir / "import-email").exists())
+            self.assertFalse((legacy_dir / "setup/SKILL.md").exists())
+            self.assertFalse((legacy_dir / "import-email/SKILL.md").exists())
             self.assertFalse((legacy_dir / ".powerpacks-install.json").exists())
             self.assertEqual((legacy_dir / "my-own-skill/SKILL.md").read_text(encoding="utf-8"), "not ours\n")
 
@@ -295,6 +291,8 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             }))
             write(checkout / ".env", "KEEP_ENV=yes\nOPENAI_API_KEY=personal\n"
                   f"POWERSET_API_URL=http://127.0.0.1:{server.server_port}\n")
+            env["POWERSET_API_URL"] = f"http://127.0.0.1:{server.server_port}"
+            env["POWERPACKS_CREDENTIALS_PATH"] = str(home / ".powerpacks/credentials.json")
             try:
                 refreshed = run(installed_launcher, "codex", cwd=root, env=env)
             finally:

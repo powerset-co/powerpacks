@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context.review import cli
+from packs.search.primitives.deep_search.results_web import server as results_web
 
 
 class ReviewEnvTests(unittest.TestCase):
@@ -15,7 +16,7 @@ class ReviewEnvTests(unittest.TestCase):
             root = Path(tmp)
             (root / '.env').write_text('TURBOPUFFER_API_KEY=synthetic-key\nKEEP_EXPORTED=file-value\n')
 
-            def routes():
+            def routes(*args, **kwargs):
                 self.assertEqual(os.environ['TURBOPUFFER_API_KEY'], 'synthetic-key')
                 self.assertEqual(os.environ['KEEP_EXPORTED'], 'exported')
                 raise StopIteration
@@ -23,9 +24,7 @@ class ReviewEnvTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, {'KEEP_EXPORTED': 'exported'}, clear=True),
                 patch('pathlib.Path.cwd', return_value=root),
-                patch.object(cli, 'CANONICAL_DB', root / 'missing'),
-                patch.object(cli.urllib.request, 'urlopen', side_effect=OSError),
-                patch.object(cli, 'searches_only_handler', side_effect=routes),
+                patch.object(results_web, 'search_routes', side_effect=routes),
             ):
                 with self.assertRaises(StopIteration):
-                    cli.main(['serve', '--stage', 'searches'])
+                    cli.searches_only_handler(root)

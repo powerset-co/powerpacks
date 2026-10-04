@@ -15,9 +15,12 @@ GET   AppRoutes (the React shell at `/`, `/people`, `/searches`, ... and its ass
       then the Searches JSON routes, People's data routes and the legacy search routes.
 POST  People, Searches, Accounts, Tasks, then ReviewApi (every write the review page makes).
 
+Opening a page never resumes provider work. Enabled jobs start only from explicit
+review requests; queued guided research is available to explicit agent recovery.
 Anything unclaimed is a 404.
 
 Changelog:
+- 2026-10-02: guided research no longer resumes on handler construction.
 - 2026-10-01: the LinkedIn queue is held in memory (linkedin_queue.py): loaded when Enrich
   finishes and when a re-research changes, not derived on every click.
 - 2026-10-01: the Jinja review page is gone. `/` is the React shell (AppRoutes); the HTML
@@ -117,7 +120,6 @@ def make_handler(
 
     if guided_retargets is None and run_jobs:
         guided_retargets = GuidedRetargetWorker(db, on_change=retarget_changed)
-        guided_retargets.resume()
     review = ReviewApi(
         db=db,
         adapter=adapter,

@@ -5,9 +5,8 @@
 # explicit target directory to install project-level instead, e.g.
 # `./install.sh /path/to/repo/.claude/skills`.
 #
-# Each skill is installed as `<dest>/<skill-name>/SKILL.md` plus a bundled
-# `powerpacks/` directory next to it that holds primitives, schemas, contracts,
-# tasks, evals, and packs the skill's commands resolve relative to.
+# Each skill is installed as `<dest>/<skill-name>/SKILL.md` with its checkout
+# location so commands resolve independently of the chat's directory.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -16,24 +15,6 @@ SKILLS_DIR="${1:-$DEFAULT_SKILLS_DIR}"
 
 mkdir -p "$SKILLS_DIR"
 "$REPO_ROOT/bin/setup-python"
-
-copy_powerpacks_bundle() {
-  local dest="$1"
-  cp "$REPO_ROOT/pyproject.toml" "$dest/powerpacks/pyproject.toml"
-  if [[ -f "$REPO_ROOT/uv.lock" ]]; then
-    cp "$REPO_ROOT/uv.lock" "$dest/powerpacks/uv.lock"
-  fi
-  # Cross-pack docs + host-install templates (no top-level primitives/skills/
-  # schemas anymore — every domain lives in packs/).
-  cp -R "$REPO_ROOT/docs" "$dest/powerpacks/docs"
-  cp -R "$REPO_ROOT/templates" "$dest/powerpacks/templates"
-  # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
-  # primitives, schemas, contracts, tasks, evals, and docs.
-  cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
-  # Keep only the top-level skill entrypoint; avoid nested skill duplication
-  # from copied packs during discovery.
-  find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
-}
 
 # Skills that once shipped but no longer exist in the repo. Scrubbed from the
 # user's skills dir on update so retired routes can't dispatch deleted primitives.
@@ -45,31 +26,13 @@ RETIRED_SKILLS=(
   linkedin-sync-mcp linkedin-sync-csv
 )
 for skill in "${RETIRED_SKILLS[@]}"; do
-  rm -rf "$SKILLS_DIR/$skill"
+  rm -f "$SKILLS_DIR/$skill/SKILL.md"
 done
 
 install_skill() {
   local skill_name="$1"
   local source_skill="$2"
-  local dest="$SKILLS_DIR/$skill_name"
-  rm -rf "$dest"
-  mkdir -p "$dest/powerpacks"
-
-  cp -R "$source_skill" "$dest/SKILL.md"
-  copy_powerpacks_bundle "$dest"
-
-  cat > "$dest/powerpacks/README.claude-code-install.md" <<EOF
-# Claude Code Powerpacks Bundle
-
-This directory is copied by:
-
-\`\`\`bash
-$REPO_ROOT/adapters/claude-code/install.sh
-\`\`\`
-
-The installed \`$skill_name\` skill resolves \`powerpacks/...\` references
-relative to this skill directory.
-EOF
+  python3 "$REPO_ROOT/bin/install-skill" "$REPO_ROOT" "$source_skill" "$SKILLS_DIR/$skill_name/SKILL.md"
 }
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
@@ -84,6 +47,8 @@ install_skill feedback "$REPO_ROOT/packs/powerset/skills/feedback/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
+install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
+install_skill powerpacks-doctor "$REPO_ROOT/packs/powerset/skills/powerpacks-doctor/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
@@ -100,6 +65,6 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" claude-code "$SKILLS_DIR/.powerpacks-install.json"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks sales-nav-search build-outbound"
+echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks install-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound"
 echo "  setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo

@@ -23,8 +23,7 @@ uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add
 uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py mcp-install
 ```
 
-From an installed skill bundle, replace `packs/...` with
-`powerpacks/packs/...`.
+Run these commands from the checkout identified by the installed skill.
 
 ## Routing
 

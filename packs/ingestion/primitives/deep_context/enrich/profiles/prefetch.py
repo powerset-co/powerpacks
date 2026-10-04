@@ -20,8 +20,8 @@ from packs.ingestion.primitives.deep_context.enrich.profiles.projection import (
     hydrate_profiles,
     profile_payloads,
 )
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     PROFILE_CACHE_DIR,
     emit,
     load_env,

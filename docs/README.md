@@ -17,6 +17,8 @@ only when you need that level of detail.
 | Pond prompt routing | [Pond prompt routing](pond-prompt-routing.md) | Why deep search selects one semantic role-family prompt and freezes it in the recruiter plan. |
 | Running setup | [`$setup` skill](../packs/ingestion/skills/setup/SKILL.md) | Exact LinkedIn-only setup checklist. |
 | All skills | [Root skill index](../README.md#skills) | GitHub-native list of supported skill entry points. |
+| Powerpacks health and repair | [Doctor skill](../packs/powerset/skills/powerpacks-doctor/SKILL.md) | Diagnose an unclear setup failure and repair within the requested workflow. |
+| Developing Powerpacks | [Development guide](development.md) | Engineering, tests, PRs, and releases; read when changing product code. |
 | Generated skills map | [`skills-map.html`](skills-map.html) | Interactive inventory to open locally. On GitHub this link shows the tracked HTML source until Pages is enabled. |
 
 ## How the documents fit together

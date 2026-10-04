@@ -30,8 +30,8 @@ from typing import Any
 from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.legacy import scrub_retired_message_linkedin_facts
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     emit,
     FACTS_DIR,
     FACTS_MANIFEST,

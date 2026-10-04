@@ -29,8 +29,8 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.collection import context_sources
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.synthesis.selection import effective_parent_bundles
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
     OWNER_JSON,
     emit,
