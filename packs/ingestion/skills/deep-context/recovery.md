@@ -6,7 +6,7 @@ decision. Keep a golden copy before replaying changes; do not introduce another
 ledger. A cold rebuild on a separate copy can reuse facts without inheriting
 the old family membership.
 
-## Recover an existing installation
+## Heal an existing installation
 
 Use this path to keep existing source contacts and reusable paid work. It is not
 a fresh rebuild or a historical identity split.
@@ -18,7 +18,7 @@ a fresh rebuild or a historical identity split.
 3. Run the free preparation before collection or enrichment:
 
 ```bash
-bin/deep-context recover \
+bin/deep-context heal \
   --state-root /absolute/install/.powerpacks \
   --backup-root /absolute/backups/pre-recovery.powerpacks \
   --operator-id <expected-operator-uuid>
@@ -32,10 +32,10 @@ Original facts and human decisions retain their authority. The backup destinatio
 must be unused and outside the state directory. An interrupted run can be retried
 with another unused backup path; completed contact work is reused.
 
-Inspect `deep-context/recover/manifest.json`: applied feedback, held/unmatched
+Inspect `deep-context/heal/manifest.json`: applied feedback, held/unmatched
 choices, restored facts and name matches are separate counts. A completed
-preparation is not proof that every identity is correct. Mixed-person histories
-remain held; recover never runs the historical splitting heuristic.
+preparation is not proof that every identity is correct. It does not split or
+repair mixed-person histories; inspect those separately below.
 
 Resume the normal skill at fan-in, then `ensure-parents` and `check`. Continue
 collection and the synthesis preview (only pending contact evidence), compose,

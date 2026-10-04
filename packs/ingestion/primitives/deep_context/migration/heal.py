@@ -23,8 +23,8 @@ from packs.ingestion.primitives.deep_context.synthesis.normalization import norm
 from packs.ingestion.primitives.pipeline.contract import StageManifest
 
 
-class RecoverManifest(StageManifest):
-    source: str = "recover"
+class HealManifest(StageManifest):
+    source: str = "heal"
     state_root: str
     backup_root: str
     operator_id: str
@@ -40,7 +40,7 @@ class RecoverManifest(StageManifest):
     updated_at: str
 
 
-class Recover:
+class Heal:
     def __init__(self, *, state_root: Path, backup_root: Path, operator_id: str,
                  feedback_json: Path | None = None):
         self.state = Path(state_root).resolve()
@@ -51,9 +51,9 @@ class Recover:
         self.db_path = self.deep_context / "deep-context.sqlite"
         self.facts = self.deep_context / "facts"
         self.raw = self.deep_context / "raw"
-        self.manifest = self.deep_context / "recover/manifest.json"
-        self.feedback_snapshot = self.deep_context / "recover/feedback.json"
-        self.feedback_csv = self.deep_context / "recover/feedback.csv"
+        self.manifest = self.deep_context / "heal/manifest.json"
+        self.feedback_snapshot = self.deep_context / "heal/feedback.json"
+        self.feedback_csv = self.deep_context / "heal/feedback.csv"
 
     def _backup(self) -> HumanSnapshot:
         with sqlite3.connect(f"{self.db_path.as_uri()}?mode=ro", uri=True) as original:
@@ -71,7 +71,7 @@ class Recover:
                 original.backup(target)
         return snapshot
 
-    def run(self) -> RecoverManifest:
+    def run(self) -> HealManifest:
         if self.state.is_relative_to(self.backup) or self.backup.is_relative_to(self.state):
             raise StoreError("state and backup must be disjoint")
         if self.backup.exists():
@@ -96,7 +96,7 @@ class Recover:
         merged = apply_linkedin_name_matches(db)
         # Always normalize: a prior interrupted invocation may have committed joins.
         restored += normalize_parent_cache(db, raw_dir=self.raw, facts_dir=self.facts)
-        result = RecoverManifest(
+        result = HealManifest(
             status="completed", state_root=str(self.state), backup_root=str(self.backup),
             operator_id=feedback.operator_id, feedback_snapshot=str(self.feedback_snapshot),
             feedback_csv=str(self.feedback_csv), feedback_rows=len(feedback.rows),
@@ -111,14 +111,14 @@ class Recover:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Recover existing local facts and scoped operator feedback without paid calls")
+    parser = argparse.ArgumentParser(description="Heal existing local facts and scoped operator feedback without paid calls")
     parser.add_argument("--state-root", required=True, type=Path, help="Existing .powerpacks directory")
     parser.add_argument("--backup-root", required=True, type=Path, help="Unused destination for the complete state backup; use a new path on reruns")
     parser.add_argument("--operator-id", required=True)
     parser.add_argument("--feedback-json", type=Path, help="Saved operator-scoped GET /v2/feedback response row list; otherwise fetched read-only")
     args = parser.parse_args(argv)
     try:
-        result = Recover(**vars(args)).run()
+        result = Heal(**vars(args)).run()
     except (StoreError, OSError, ValueError, sqlite3.Error) as exc:
         emit({"status": "error", "error": str(exc)})
         return 1

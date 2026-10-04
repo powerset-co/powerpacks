@@ -43,11 +43,11 @@ Use the narrow path when the user names one:
   Regenerate source imports, then run `bin/deep-context rebuild` with the explicit
   original, backup, fresh state and owner paths. Continue on that isolated state
   with the reviewed source scope and approved paid-stage budget.
-- `$deep-context recover` or "apply saved feedback to an existing installation" ->
-  follow [Recover an existing installation](recovery.md#recover-an-existing-installation).
-- `$deep-context heal`, "repair bad merges", or "recover contact facts" ->
-  follow [Contact recovery](recovery.md). Do not start paid synthesis or research
-  from a repair request without a scoped estimate and approval.
+- `$deep-context heal`, "repair bad merges", "recover contact facts", or
+  "apply saved feedback to an existing installation" -> follow
+  [Heal an existing installation](recovery.md#heal-an-existing-installation),
+  then inspect unresolved identity findings in that guide. Paid synthesis or
+  research requires a scoped estimate and approval.
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
@@ -184,12 +184,12 @@ uv run --project . python packs/ingestion/primitives/imports/status.py status
 it only reads. Combine current source imports, then project their people into
 SQLite; `ensure-parents` creates the store on a fresh install.
 Before changing an existing SQLite installation, check
-`deep-context/recover/manifest.json`. If no completed recovery is recorded, follow
-[Recover an existing installation](recovery.md#recover-an-existing-installation)
+`deep-context/heal/manifest.json`. If no completed recovery is recorded, follow
+[Heal an existing installation](recovery.md#heal-an-existing-installation)
 once, before fan-in, collection or synthesis. An interrupted recovery is retried
 with another unused backup path. A fresh installation without a canonical SQLite
 store skips this step. A completed receipt skips this preparation on later full
-runs; an explicit `recover` request downloads current feedback again.
+runs; an explicit `heal` request downloads current feedback again.
 
 Imports do not merge people or write identity decisions:
 

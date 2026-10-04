@@ -152,7 +152,7 @@ usage: bin/deep-context <command> [args]
                (creates the store on a fresh install)
   rebuild      prepare isolated source contacts with proven human decisions
                (free, local; explicit original, backup and fresh paths)
-  recover      back up an existing store, restore contact facts and apply scoped
+  heal         back up an existing store, restore contact facts and apply scoped
                feedback before LinkedIn name matching (no paid calls;
                --state-root PATH --backup-root UNUSED_PATH --operator-id UUID)
   seed         carry legacy decisions, facts and Parallel results onto the cold
@@ -240,8 +240,8 @@ case "$cmd" in
   rebuild)
     "${PY[@]}" "$PKG.migration.rebuild" "$@"
     ;;
-  recover)
-    "${PY[@]}" "$PKG.migration.recover" "$@"
+  heal)
+    "${PY[@]}" "$PKG.migration.heal" "$@"
     ;;
   dry)
     if (( wants_help )); then
