@@ -152,16 +152,17 @@ class InstallStatus:
                                     retry_command="bin/bootstrap").to_payload()
         if manifest.status is InstallState.RUNNING or (
             manifest.status is InstallState.WAITING and manifest.installer_pid > 0
-            and manifest.step in {InstallStep.ACCOUNT, InstallStep.GMAIL_LOGIN,
-                                  InstallStep.IMESSAGE_ACCESS, InstallStep.WHATSAPP_LOGIN}
         ):
             try:
                 os.kill(manifest.installer_pid, 0)
             except ProcessLookupError:
-                record["status"] = InstallState.FAILED.value
-                record["message"] = f"Installation was interrupted. Ask the agent to rerun {manifest.retry_command}."
+                record["status"] = InstallState.WAITING.value
+                record["installer_pid"] = 0
+                record["message"] = "Setup paused. I can resume it from here."
+                record["action"] = {"kind": "resume", "text": record["message"],
+                                    "command": manifest.retry_command}
                 record.setdefault("steps", {})[manifest.step.value] = {
-                    "status": InstallState.FAILED.value, "message": record["message"],
+                    "status": InstallState.WAITING.value, "message": record["message"],
                 }
         return record
 

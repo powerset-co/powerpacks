@@ -22,6 +22,7 @@ from packs.ingestion.primitives.discover.messages.discover import MessagesDiscov
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
 from packs.ingestion.primitives.discover.messages.wacli import auth
 from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE
+from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked
 from packs.ingestion.primitives.imports import common as import_common
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
@@ -50,7 +51,6 @@ _SOURCE_STEPS = {
 _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
-_PERMISSION_WAIT_SECONDS = 900
 _PERMISSION_POLL_SECONDS = 2
 
 
@@ -63,10 +63,9 @@ class SourceOnboarding:
         self.status = InstallStatus(self.root)
         previous = self.status.read()
         command = shlex.split(previous["retry_command"])
-        saved = _parser().parse_args(command[1:] if Path(command[0]).name == "onboard" else [])
-        self.sources = tuple(sorted(dict.fromkeys(Source(source) for source in
-                                    (sources or saved.source or _DEFAULT_SOURCES)),
-                                    key=lambda source: source is Source.LINKEDIN))
+        saved, _ = _parser().parse_known_args(command[1:] if Path(command[0]).name == "onboard" else [])
+        selected = set(Source(source) for source in (sources or saved.source or _DEFAULT_SOURCES))
+        self.sources = tuple(source for source in Source if source in selected)
         if Source.SKIP in self.sources and len(self.sources) != 1:
             raise ValueError("Choose sources or skip, not both")
         skip_sources = skip_sources if sources else (*saved.skip_source, *skip_sources)
@@ -181,8 +180,13 @@ class SourceOnboarding:
         for check in authorize:
             action = {"kind": "gmail", "text": f"Connect {check['email']} in your browser", "details": check}
             self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, "Connect Gmail", action)
-            result = accounts.add_account(home, check["email"], "", headless=False,
-                                          force=check["status"] == "reauthorization_required")
+            while True:
+                result = accounts.add_account(home, check["email"], "", headless=False,
+                                              force=check["status"] == "reauthorization_required")
+                if result.get("message") != "msgvault timed out":
+                    break
+                self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING,
+                            "The Gmail sign-in expired. Opening a fresh one.", action)
             if not self._result(InstallStep.GMAIL_LOGIN, result, action):
                 return False
         if authorize:
@@ -219,8 +223,8 @@ class SourceOnboarding:
             if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
                 self._write(InstallStep.IMESSAGE_ACCESS, InstallState.WAITING, "Allow access to Messages",
                             {**action, "details": access})
-                deadline = time.monotonic() + _PERMISSION_WAIT_SECONDS
-                while access["status"] == "blocked_user_action" and time.monotonic() < deadline:
+                while (access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
+                       and not access["chat_db"].get("missing_tables")):
                     time.sleep(_PERMISSION_POLL_SECONDS)
                     access = extractor.check(strict=True)
             if not self._result(InstallStep.IMESSAGE_ACCESS, access, action):
@@ -236,8 +240,16 @@ class SourceOnboarding:
                 self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Connect WhatsApp",
                             {"kind": "qr", "text": "Scan with WhatsApp → Linked devices",
                              "details": {"store": str(self.wacli_store)}})
-            if not self._result(InstallStep.WHATSAPP_LOGIN,
-                                auth.auth_report(self.wacli_store, open_qr_page=False), {"kind": "qr"}):
+            while True:
+                try:
+                    result = auth.auth_report(self.wacli_store, open_qr_page=False)
+                    break
+                except PrimitiveBlocked as blocked:
+                    if "command timed out after" not in blocked.payload.get("detail", ""):
+                        raise
+                    self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Refreshing your WhatsApp QR code",
+                                {"kind": "qr", "text": "Scan with WhatsApp → Linked devices"})
+            if not self._result(InstallStep.WHATSAPP_LOGIN, result, {"kind": "qr"}):
                 return False
             sync_step, import_step = InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT
         current = None if self.refresh else import_common.import_manifest_current("messages")
@@ -302,6 +314,11 @@ class SourceOnboarding:
             return self._write(InstallStep.DEEP_CONTEXT, InstallState.WAITING, message,
                                {"kind": "processing", "text": "Ready to build your network",
                                 "command": "bin/deep-context check", "details": {"counts": counts}}, pid=0)
+        except PrimitiveBlocked as exc:
+            action = {"kind": "qr" if self.step is InstallStep.WHATSAPP_LOGIN else "error", "details": exc.payload}
+            if exc.payload.get("install_command"):
+                action["command"] = exc.payload["install_command"]
+            return self._write(self.step, InstallState.WAITING, str(exc), action, pid=0)
         except Exception as exc:
             self.status.directory.mkdir(parents=True, exist_ok=True)
             with self.status.log_path.open("a", encoding="utf-8") as log:
@@ -310,8 +327,8 @@ class SourceOnboarding:
                                {"details": {"error_type": type(exc).__name__, "error": str(exc)}})
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, add_help=add_help)
     parser.add_argument("--source", choices=[source.value for source in Source], action="append", default=[])
     parser.add_argument("--skip-source", choices=[source.value for source in Source if source is not Source.SKIP],
                         action="append", default=[], help="Skip a selected source for now")

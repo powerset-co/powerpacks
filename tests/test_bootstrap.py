@@ -273,7 +273,7 @@ set -euo pipefail
         self.assertIn("STATUS PAGE: http://127.0.0.1:8876/install", proc.stdout)
         self.assertIn("--port 8876", self.sandbox.progress()["retry_command"])
 
-    def test_terminated_install_is_failed_and_rerunnable(self) -> None:
+    def test_terminated_install_is_paused_and_rerunnable(self) -> None:
         write(self.sandbox.repo / "install.sh", '#!/usr/bin/env bash\necho "install started"\nsleep 30\n', executable=True)
         proc = subprocess.Popen([str(BOOTSTRAP), "--no-tools", "--harness", "codex"],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -292,8 +292,8 @@ set -euo pipefail
             os.killpg(proc.pid, signal.SIGTERM)
             stdout, stderr = proc.communicate(timeout=5)
             self.assertEqual(proc.returncode, 143, stdout + stderr)
-            self.assertTrue(stdout.rstrip().splitlines()[-1].startswith("FAILED: "))
-            self.assertEqual(self.sandbox.progress()["status"], "failed")
+            self.assertTrue(stdout.rstrip().splitlines()[-1].startswith("NEEDS YOU: "))
+            self.assertEqual(self.sandbox.progress()["status"], "waiting")
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -543,7 +543,7 @@ class PublishedBootstrapTests(unittest.TestCase):
             self.assertIn("paused fixture", log.read_text())
             os.killpg(proc.pid, signal.SIGTERM)
             proc.communicate(timeout=5)
-            self.assertEqual(json.loads((log.parent / "manifest.json").read_text())["status"], "failed")
+            self.assertEqual(json.loads((log.parent / "manifest.json").read_text())["status"], "waiting")
         finally:
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)

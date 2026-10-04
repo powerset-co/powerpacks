@@ -1,12 +1,16 @@
-"""Connect an installed checkout to Powerset and verify its selected network."""
+"""Resume account setup, source imports, and processing in one ordered flow."""
 from __future__ import annotations
 
 import argparse
 import contextlib
 import io
+import fcntl
 import json
 import os
+import shlex
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -78,8 +82,17 @@ class Onboarding:
             data=json.dumps(payload).encode() if payload is not None else None,
             headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json",
                      "Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                if error.code not in (429, 502, 503, 504) or attempt == 2:
+                    raise
+            except (urllib.error.URLError, TimeoutError):
+                if attempt == 2:
+                    raise
+            time.sleep(2 ** attempt)
 
     def login(self) -> bool:
         self.progress(InstallStep.ACCOUNT, InstallState.WAITING,
@@ -92,11 +105,16 @@ class Onboarding:
             timeout=auth.DEFAULT_LOGIN_TIMEOUT, credentials_path=self.credentials_path)
         # The existing login opens its own browser and prints the fallback URL to stderr.
         # Its JSON output is unnecessary here and may include remote error details.
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            code = auth.cmd_login(args)
-        if code:
+        while True:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = auth.cmd_login(args)
             result = json.loads(output.getvalue()) if output.getvalue().strip() else {}
+            if not code or result.get("error") != "login timed out":
+                break
+            self.progress(InstallStep.ACCOUNT, InstallState.WAITING,
+                          "The sign-in link expired. Opening a fresh one.")
+        if code:
             self.log(f"Account login failed: {result.get('error', 'login did not complete')}")
             return False
         self.token = auth._load_credentials(self.credentials_path)["access_token"]
@@ -262,26 +280,71 @@ class Onboarding:
 
 def main() -> None:
     from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
+    from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
 
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--harness", action="append", required=True)
-    parser.add_argument("--pid", type=int, required=True)
-    parser.add_argument("--retry-command", default="bin/bootstrap --powerset --no-tools")
-    args, source_args = parser.parse_known_args()
-    sources = _parser().parse_args(source_args)
-    onboarding = Onboarding(args.root, harnesses=args.harness, pid=args.pid,
-                            retry_command=args.retry_command)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        code = onboarding.run()
-    if code not in (0, NEEDS_YOU) or not onboarding.email:
-        print(output.getvalue(), end="", flush=True)
-        raise SystemExit(code)
-    payload = SourceOnboarding(args.root, sources=tuple(sources.source),
-                               gmail_emails=tuple(sources.gmail_email), sync_after=sources.sync_after,
-                               wacli_store=sources.wacli_store, refresh=sources.refresh,
-                               skip_sources=tuple(sources.skip_source)).run()
+    parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
+    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--harness", choices=("codex", "claude-code", "pi"), action="append")
+    parser.add_argument("--pid", type=int, default=os.getpid())
+    parser.add_argument("--retry-command", default="bin/onboard")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--approve-spend", choices=("synthesize", "cluster", "enrich", "index"),
+                        action="append", default=[])
+    parser.add_argument("--approve-upload", action="store_true")
+    args = parser.parse_args()
+    sources = args
+    root = args.root.resolve()
+    status = InstallStatus(root)
+    status.directory.mkdir(parents=True, exist_ok=True)
+    # The server and agent can both request a resume. Only this process owns work.
+    with (status.directory / "onboard.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("NEEDS YOU: Setup is already running.", flush=True)
+            raise SystemExit(NEEDS_YOU) from None
+        previous = status.read()
+        saved, _ = parser.parse_known_args(shlex.split(previous["retry_command"])[1:])
+        harnesses = args.harness or saved.harness or ["codex"]
+        port = args.port or saved.port or 8765
+        # Resolve saved source choices before account progress replaces retry_command.
+        flow = SourceOnboarding(root, sources=tuple(sources.source),
+                                gmail_emails=tuple(sources.gmail_email), sync_after=sources.sync_after,
+                                wacli_store=sources.wacli_store, refresh=sources.refresh,
+                                skip_sources=tuple(sources.skip_source))
+        flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
+        flow.retry_command += f" --port {port}"
+        page = subprocess.run([sys.executable, "-m", "packs.ingestion.primitives.deep_context.review.cli",
+                               "start", "--port", str(port), "--stage", "install"],
+                              cwd=root, capture_output=True, text=True)
+        if page.returncode:
+            with status.log_path.open("a") as log:
+                log.write(page.stderr)
+            status.write(step=InstallStep.RUNTIME, status=InstallState.FAILED,
+                         message="The progress page could not start. I can check the log and retry.",
+                         pid=0, retry_command=flow.retry_command)
+            print("FAILED: The progress page could not start. Check the installation log.", flush=True)
+            raise SystemExit(1)
+        print(f"STATUS PAGE: {json.loads(page.stdout)['url']}", flush=True)
+        onboarding = Onboarding(root, harnesses=harnesses, pid=os.getpid(),
+                                retry_command=flow.retry_command)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = onboarding.run()
+        if code not in (0, NEEDS_YOU) or not onboarding.email:
+            print(output.getvalue(), end="", flush=True)
+            raise SystemExit(code)
+        if not flow.gmail_emails and not sources.gmail_email and onboarding.email:
+            flow = SourceOnboarding(root, sources=tuple(sources.source),
+                                    gmail_emails=(onboarding.email,), sync_after=sources.sync_after,
+                                    wacli_store=sources.wacli_store, refresh=sources.refresh,
+                                    skip_sources=tuple(sources.skip_source))
+            flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
+            flow.retry_command += f" --port {port}"
+        payload = flow.run()
+        if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
+            payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend),
+                                           approve_upload=args.approve_upload, port=port).run()
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
     message = (payload.get("action") or {}).get("text") or payload.get("message", "Setup stopped")
     print(f"{prefix[payload['status']]}: {message}", flush=True)

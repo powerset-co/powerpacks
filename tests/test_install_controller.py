@@ -83,6 +83,17 @@ class InstallControllerTests(unittest.TestCase):
         self.assertEqual(request.status, 202)
         self.assertEqual(run.call_args_list[1].args[0], ["open", "-R", "/Applications/Example.app"])
 
+    def test_page_launches_coordinator_independent_of_the_server(self):
+        request = Request({"sources": ["gmail"], "gmail_emails": ["casey@example.com"],
+                           "sync_after": "2025-10-03"})
+        with patch("subprocess.Popen") as launch:
+            self.controller.post(request, "/api/install/sources")
+        self.assertEqual(request.status, 202)
+        self.assertEqual(launch.call_args.args[0], [str(self.root / "bin/onboard"),
+            "--source", "gmail", "--gmail-email", "casey@example.com", "--sync-after", "2025-10-03"])
+        self.assertTrue(launch.call_args.kwargs["start_new_session"])
+        self.assertEqual(launch.call_args.kwargs["cwd"], self.root)
+
     def test_review_opens_existing_review_in_default_browser_only_when_needed(self):
         request = Request({})
         with patch("subprocess.run") as run:

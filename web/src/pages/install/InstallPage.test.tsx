@@ -38,6 +38,53 @@ afterEach(() => {
 })
 
 describe("installation progress", () => {
+  it("shows a stopped WhatsApp connection as paused rather than broken", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              plan: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "deep_context"],
+              step: "whatsapp_login",
+              status: "waiting",
+              message: "Setup paused. I can resume it from here.",
+              action: { kind: "resume", command: "bin/onboard" },
+              steps: { whatsapp_tools: { status: "completed" }, whatsapp_login: { status: "waiting" } },
+            }),
+          ),
+        ),
+      ),
+    )
+    mount()
+    await screen.findByRole("heading", { name: "Setup paused" })
+    expect(screen.getByText("Syncing WhatsApp").closest("li")?.textContent).toContain("Paused")
+    expect(screen.queryByText("Needs a fix")).toBeNull()
+  })
+
+  it("does not claim readiness when an intermediate stage completes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              step: "network",
+              status: "completed",
+              network_name: "Personal Network",
+              person_count: 328,
+            }),
+          ),
+        ),
+      ),
+    )
+    mount()
+    await screen.findByRole("heading", { name: "Setting up Powerpacks" })
+    expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
+  })
+
   it("combines each source into one syncing step while preserving waits and failures", async () => {
     const plan = [
       "imessage_access",

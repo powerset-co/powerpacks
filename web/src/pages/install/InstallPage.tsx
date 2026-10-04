@@ -118,17 +118,24 @@ export function InstallPage() {
     ? "Reconnecting to Powerpacks"
     : failed
       ? TITLES.failed
-      : data?.status === "completed" && data.network_name && (data.person_count ?? 0) > 0
-        ? "Powerpacks is ready"
-        : data?.status === "waiting" && data.step === "account"
-          ? "Waiting for you to sign in"
-          : data?.status === "waiting" && data.step === "review"
-            ? "Waiting for your review"
-            : data?.status === "waiting" && data.action?.kind === "processing"
-              ? "Your contacts are saved"
-              : data
-                ? TITLES[data.status]
-                : "Opening Powerpacks"
+      : data?.action?.kind === "resume"
+        ? "Setup paused"
+        : data?.step === "ready" &&
+            data.status === "completed" &&
+            data.network_name &&
+            (data.person_count ?? 0) > 0
+          ? "Powerpacks is ready"
+          : data?.status === "waiting" && data.step === "account"
+            ? "Waiting for you to sign in"
+            : data?.status === "waiting" && data.step === "review"
+              ? "Waiting for your review"
+              : data?.status === "waiting" && data.action?.kind === "processing"
+                ? "Your contacts are saved"
+                : data
+                  ? data.status === "completed" && data.step !== "ready"
+                    ? TITLES.running
+                    : TITLES[data.status]
+                  : "Opening Powerpacks"
   const steps = installSteps(data)
   const completed = steps.filter((step) => DONE.has(step.status ?? ""))
   const folded = completed.slice(0, -VISIBLE_COMPLETED)
@@ -299,13 +306,15 @@ export function InstallPage() {
                       </span>
                       <span>{step.label}</span>
                       <span className="install-step-status">
-                        {current && failed
-                          ? STATUS_LABELS.failed
-                          : progress
-                            ? STATUS_LABELS[progress]
-                            : current
-                              ? STATUS_LABELS[data.status]
-                              : "Next"}
+                        {current && (error || data.action?.kind === "resume")
+                          ? "Paused"
+                          : current && failed
+                            ? STATUS_LABELS.failed
+                            : progress
+                              ? STATUS_LABELS[progress]
+                              : current
+                                ? STATUS_LABELS[data.status]
+                                : "Next"}
                       </span>
                     </div>
                   </li>

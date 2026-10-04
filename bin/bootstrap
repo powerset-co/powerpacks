@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command installs Powerpacks, connects accounts, and imports contacts.
+# Install the runtime, then resume the single account-to-search workflow.
 #
 # The coding agent (Claude Code, Codex, Pi) runs this on the user's behalf. It
 # asks nothing and decides nothing for the agent: the LAST line names the
@@ -52,7 +52,8 @@ while [[ $# -gt 0 ]]; do
     --port) port="${2:-}"; shift 2 ;;
     --source|--skip-source|--gmail-email|--sync-after|--wacli-store)
       source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
-    --refresh) source_args+=("$1"); shift ;;
+    --approve-spend) source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
+    --refresh|--approve-upload) source_args+=("$1"); shift ;;
     *)
       echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]" >&2
       exit 2
@@ -74,6 +75,7 @@ finish_progress() {
   [[ "$progress_started" == 1 ]] || return 0
   local step
   step="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["step"])' "$root/.powerpacks/install/manifest.json")"
+  retry_command="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["retry_command"])' "$root/.powerpacks/install/manifest.json")"
   progress "$step" "$1" "$2"
 }
 needs_you() { finish_progress waiting "$*"; echo "NEEDS YOU: $*"; exit 10; }
@@ -88,8 +90,8 @@ on_exit() {
   exit "$code"
 }
 trap on_exit EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'finish_progress waiting "Setup paused. I can resume it from here."; echo "NEEDS YOU: Setup paused. I can resume it from here."; exit 130' INT
+trap 'finish_progress waiting "Setup paused. I can resume it from here."; echo "NEEDS YOU: Setup paused. I can resume it from here."; exit 143' TERM
 
 # 1. This must be a local session on the user's own Mac: the skills read mail
 #    and messages from this machine. A cloud session or a Linux sandbox is not it.
@@ -254,11 +256,12 @@ if [[ "$powerset" == 1 ]]; then
   # Python calls the existing login, provisioning, and connection primitives
   # in-process. Keep its final line visible and preserve its waiting state.
   (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.onboard \
-    --root "$root" --pid "$$" --retry-command "$retry_command" "${onboard_args[@]}" ${source_args[@]+"${source_args[@]}"}) \
+    --root "$root" --pid "$$" --port "$port" --retry-command "$retry_command" "${onboard_args[@]}" ${source_args[@]+"${source_args[@]}"}) \
     2> >(tee -a "$log" >&2) || code=$?
   case "$code" in
     0) terminal_status=completed ;;
     10) terminal_status=waiting ;;
+    130|143) finish_progress waiting "Setup paused. I can resume it from here." ;;
     *)
       saved_status="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$root/.powerpacks/install/manifest.json")"
       if [[ "$saved_status" != failed ]]; then

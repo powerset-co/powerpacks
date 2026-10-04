@@ -39,13 +39,13 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["log_path"], str(self.root / ".powerpacks/install/install.log"))
         self.assertFalse((self.root / ".powerpacks/install/manifest.tmp").exists())
 
-    def test_dead_installer_is_failed_with_rerun_guidance(self) -> None:
+    def test_dead_installer_is_paused_with_resume_guidance(self) -> None:
         self.status.write(step=InstallStep.DEPENDENCIES, status=InstallState.RUNNING,
                           message="Installing dependencies", pid=99999999)
         record = self.status.read()
-        self.assertEqual(record["status"], "failed")
-        self.assertIn("interrupted", record["message"])
-        self.assertIn("bin/bootstrap", record["message"])
+        self.assertEqual(record["status"], "waiting")
+        self.assertEqual(record["installer_pid"], 0)
+        self.assertEqual(record["action"]["command"], "bin/bootstrap")
 
     def test_human_wait_survives_installer_exit(self) -> None:
         self.status.write(step=InstallStep.TOOLS, status=InstallState.WAITING,
@@ -59,15 +59,16 @@ class InstallStatusTests(unittest.TestCase):
         self.status.write(step=InstallStep.ACCOUNT, status=InstallState.WAITING,
                           message="Waiting for sign-in", pid=99999999)
         record = self.status.read()
-        self.assertEqual(record["status"], "failed")
-        self.assertEqual(record["steps"]["account"]["status"], "failed")
+        self.assertEqual(record["status"], "waiting")
+        self.assertEqual(record["steps"]["account"]["status"], "waiting")
+        self.assertEqual(record["action"]["kind"], "resume")
 
     def test_live_source_wait_is_interrupted_when_its_owner_dies(self) -> None:
         for step in (InstallStep.GMAIL_LOGIN, InstallStep.IMESSAGE_ACCESS):
             with self.subTest(step=step):
                 self.status.write(step=step, status=InstallState.WAITING,
                                   message="Waiting for access", pid=99999999)
-                self.assertEqual(self.status.read()["status"], "failed")
+                self.assertEqual(self.status.read()["action"]["kind"], "resume")
 
     def test_missing_configuration_wait_has_no_running_owner(self) -> None:
         self.status.write(step=InstallStep.GMAIL_LOGIN, status=InstallState.WAITING,

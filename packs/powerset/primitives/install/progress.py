@@ -58,7 +58,8 @@ def run_with_progress(root: Path, step: InstallStep, message: str, command: list
     plan = [item for item in previous["plan"] if item not in PROCESSING_STEPS]
     plan.extend(item.value for item in PROCESSING_STEPS
                 if item is not InstallStep.REVIEW or step is InstallStep.REVIEW or "review" in previous["plan"])
-    retry = shlex.join(command)
+    saved_retry = previous["retry_command"]
+    retry = saved_retry if Path(shlex.split(saved_retry)[0]).name == "onboard" else shlex.join(command)
 
     def write(state: InstallState, text: str, current: InstallStep = step, *, action: dict | None = None) -> None:
         status.write(step=current, status=state, message=text, pid=os.getpid(),

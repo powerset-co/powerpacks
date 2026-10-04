@@ -19,6 +19,7 @@ from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
 from packs.ingestion.primitives.discover.messages.wacli import auth
+from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked
 from packs.ingestion.primitives.imports import common as import_common
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
@@ -515,7 +516,7 @@ class SourceOnboardingTests(unittest.TestCase):
             {'email': 'casey@example.com', 'status': 'reauthorization_required'}]}
         with patch.object(accounts, 'check_accounts_payload', return_value=health) as check, \
              patch.object(accounts, 'run_visible_command', return_value=CommandResult(
-                 ok=False, returncode=124, message='msgvault timed out')) as login, \
+                 ok=False, returncode=1, message='OAuth app rejected')) as login, \
              patch.object(GmailDiscovery, 'run') as sync:
             result = SourceOnboarding(self.root, sources=('gmail',),
                 gmail_emails=('casey@example.com',), sync_after='2023-01-01').run()
@@ -525,7 +526,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['step'], 'gmail_login')
         self.assertEqual(result['action']['kind'], 'gmail')
-        self.assertEqual(result['message'], 'msgvault timed out')
+        self.assertEqual(result['message'], 'OAuth app rejected')
         self.assert_preserved()
 
     def test_gmail_callback_for_other_account_does_not_start_sync(self):
@@ -626,20 +627,36 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['steps']['imessage_import']['status'], 'completed')
         self.assert_preserved()
 
-    def test_imessage_permission_timeout_preserves_action_and_does_not_import(self):
+    def test_imessage_permission_wait_survives_user_distraction(self):
         blocked = {'status': 'blocked_user_action',
                    'chat_db': {'exists': True, 'readable': False, 'missing_tables': []}}
-        with patch.object(IMessageExtractor, 'check', return_value=blocked), \
-             patch('time.monotonic', side_effect=[0, 900]), patch('time.sleep') as sleep, \
-             patch.object(MessagesDiscovery, 'run') as discover:
+        with patch.object(IMessageExtractor, 'check', side_effect=[blocked] * 4 + [{'status': 'ok'}]), \
+             patch('time.monotonic', return_value=100000), patch('time.sleep') as sleep, \
+             patch.object(MessagesDiscovery, 'run', return_value=payload(status='completed')) as discover, \
+             patch.object(MessagesImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
             result = SourceOnboarding(self.root, sources=('imessage',)).run()
-        sleep.assert_not_called()
-        discover.assert_not_called()
+        self.assertEqual(sleep.call_count, 4)
+        discover.assert_called_once()
         self.assertEqual(result['status'], 'waiting')
         self.assertEqual(result['installer_pid'], 0)
-        self.assertEqual(result['action']['kind'], 'permission')
-        self.assertEqual(result['action']['details'], blocked)
+        self.assertEqual(result['step'], 'deep_context')
+        self.assertEqual(result['steps']['imessage_import']['status'], 'completed')
         self.assert_preserved()
+
+    def test_expired_gmail_login_reopens_and_continues_without_chat_nudge(self):
+        health = {'status': 'needs_user_action', 'accounts': [
+            {'email': 'casey@example.com', 'status': 'reauthorization_required'}]}
+        with patch.object(accounts, 'check_accounts_payload', side_effect=[health, {'status': 'ok'}]), \
+             patch.object(accounts, 'run_visible_command', side_effect=[
+                 CommandResult(ok=False, returncode=124, message='msgvault timed out'), CommandResult(ok=True)]) as login, \
+             patch.object(import_common, 'import_manifest_current', return_value=None), \
+             patch.object(GmailDiscovery, '__init__', return_value=None), \
+             patch.object(GmailDiscovery, 'run', return_value=payload(status='completed')), \
+             patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+            result = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',)).run()
+        self.assertEqual(login.call_count, 2)
+        self.assertEqual(result['step'], 'deep_context')
+        self.assertEqual(result['steps']['gmail_import']['status'], 'completed')
 
     def test_imessage_missing_store_or_schema_does_not_wait_for_permission(self):
         for chat in ({'exists': False, 'readable': False},
@@ -696,6 +713,27 @@ class SourceOnboardingTests(unittest.TestCase):
         check.assert_called_once_with(strict=True)
         discover.assert_not_called()
         self.assertEqual(result['step'], 'deep_context')
+
+    def test_expired_whatsapp_qr_renews_inside_the_owned_command(self):
+        expired = PrimitiveBlocked({'status': 'blocked_user_action', 'message': 'Scan the QR',
+                                    'detail': 'command timed out after 600s'})
+        with patch.object(auth, 'auth_report', side_effect=[expired, {'status': 'linked'}]) as link, \
+             patch.object(MessagesDiscovery, 'run', return_value=payload(status='completed')), \
+             patch.object(MessagesImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+            result = SourceOnboarding(self.root, sources=('whatsapp',)).run()
+        self.assertEqual(link.call_count, 2)
+        self.assertEqual(result['step'], 'deep_context')
+        self.assertEqual(result['steps']['whatsapp_login']['status'], 'completed')
+
+    def test_native_whatsapp_user_block_is_waiting_not_a_sync_failure(self):
+        blocked = PrimitiveBlocked({'status': 'blocked_user_action', 'message': 'Allow linked devices on your phone'})
+        with patch.object(auth, 'auth_report', side_effect=blocked), patch.object(MessagesDiscovery, 'run') as sync:
+            result = SourceOnboarding(self.root, sources=('whatsapp',)).run()
+        sync.assert_not_called()
+        self.assertEqual(result['status'], 'waiting')
+        self.assertEqual(result['installer_pid'], 0)
+        self.assertEqual(result['steps']['whatsapp_login']['status'], 'waiting')
+        self.assertEqual(result['message'], 'Allow linked devices on your phone')
         self.assert_preserved()
 
     def test_changed_whatsapp_store_never_reuses_other_accounts_contacts(self):

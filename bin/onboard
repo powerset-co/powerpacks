@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Selected local imports; existing manifests make repeated installs quick.
+# The installed workflow: account, imports, processing, index, and verification.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-exec uv run --project "$ROOT" python -m packs.powerset.primitives.install.workflow "$@"
+exec uv run --project "$ROOT" python -m packs.powerset.primitives.install.onboard "$@"

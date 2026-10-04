@@ -12,6 +12,7 @@ import sys
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from packs.powerset.primitives.auth import auth
@@ -164,6 +165,21 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         login_mock.assert_called_once()
 
+    def test_expired_browser_link_renews_in_the_same_process(self):
+        self.credentials.unlink()
+        attempts = []
+        def login(args):
+            attempts.append(args)
+            if len(attempts) == 1:
+                print(json.dumps({"status": "failed", "error": "login timed out"}))
+                return 1
+            self.save_credentials()
+            return 0
+        with patch.object(auth, "cmd_login", side_effect=login):
+            code, _, _ = self.run_onboarding()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(attempts), 2)
+
     def test_login_timeout_is_failed_and_can_be_retried(self):
         self.credentials.unlink()
         with patch.object(auth, "cmd_login", return_value=1):
@@ -213,8 +229,12 @@ class OnboardingTests(unittest.TestCase):
     def run_install_command(self, *source_args):
         argv = ["onboard", "--root", str(self.root), "--harness", "codex", "--pid", str(os.getpid()), *source_args]
         with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
-                patch("packs.powerset.primitives.install.workflow.SourceOnboarding") as sources:
+                patch("packs.powerset.primitives.install.workflow.SourceOnboarding") as sources, \
+                patch("packs.powerset.primitives.install.onboard.subprocess.run",
+                      return_value=SimpleNamespace(returncode=0, stdout='{"url":"http://localhost:8899/install"}')):
             sources.return_value.run.return_value = {"status": "waiting", "step": "deep_context"}
+            sources.return_value.retry_command = "bin/onboard"
+            sources.return_value.gmail_emails = ("jordan@example.com",)
             with self.assertRaises(SystemExit) as result:
                 main()
         return result.exception.code, sources
@@ -253,7 +273,7 @@ class OnboardingTests(unittest.TestCase):
         with patch.object(auth, "cmd_login", return_value=1):
             code, sources = self.run_install_command()
         self.assertEqual(code, 1)
-        sources.assert_not_called()
+        sources.return_value.run.assert_not_called()
 
     def test_unknown_default_and_wrong_personal_owner_require_choice(self):
         self.owner_id = "auth0|someone-else"

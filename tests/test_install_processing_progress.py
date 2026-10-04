@@ -33,6 +33,14 @@ class ProcessingProgressTests(unittest.TestCase):
         self.assertEqual(run_with_progress(self.root, InstallStep.DEEP_CONTEXT, "Work", ["collect"], lambda: 0), 0)
         self.assertFalse(self.status.manifest_path.exists())
 
+    def test_native_command_keeps_coordinator_resume_choices(self):
+        command = "bin/onboard --gmail-email casey@example.com --sync-after 2025-10-03 --port 8899"
+        self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
+                          message="Ready", pid=0, retry_command=command)
+        run_with_progress(self.root, InstallStep.DEEP_CONTEXT, "Collect", ["bin/deep-context", "collect"],
+                          lambda: 0, complete=False)
+        self.assertEqual(self.status.read()["retry_command"], command)
+
     def test_partial_processing_stays_waiting_and_keeps_account(self):
         self.start()
         def run():

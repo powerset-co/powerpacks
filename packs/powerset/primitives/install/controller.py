@@ -1,16 +1,15 @@
-"""The local page starts explicit source imports and opens OS permission guidance."""
+"""Page actions launch the same detached coordinator and open permission guidance."""
 from __future__ import annotations
 
 import json
 import os
 import subprocess
-import threading
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
-from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
+from packs.powerset.primitives.install.status import InstallStatus, InstallStep
 
 
 PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
@@ -37,7 +36,6 @@ def permission_app() -> str | None:
 class InstallController:
     def __init__(self, root: Path) -> None:
         self.root = root
-        self.lock = threading.Lock()
 
     def qr(self, record: dict) -> Path | None:
         path = self.root / ".powerpacks/messages/wacli-login-qr.png"
@@ -62,27 +60,21 @@ class InstallController:
         sync_after = record.get("sync_after", "")
         if not isinstance(emails, list) or not isinstance(sync_after, str) or any(not isinstance(email, str) for email in emails):
             raise ValueError("Gmail accounts and history must be text")
-        if not self.lock.acquire(blocking=False):
-            raise ValueError("Setup is already running")
         status = InstallStatus(self.root)
         current = status.read()
-        if current["status"] == "running" or (current["status"] == "waiting" and current["installer_pid"] > 0
-                                               and current["step"] in {"account", "gmail_login", "imessage_access", "whatsapp_login"}):
-            self.lock.release()
+        if current["status"] == "running" or (current["status"] == "waiting" and current["installer_pid"] > 0):
             raise ValueError("Setup is already running")
-
-        def run() -> None:
-            try:
-                from packs.powerset.primitives.install.workflow import SourceOnboarding
-                SourceOnboarding(self.root, sources=tuple(sources) if sources else ("skip",),
-                                 gmail_emails=tuple(emails), sync_after=sync_after).run()
-            except Exception as error:
-                status.write(step=InstallStep.SOURCES, status=InstallState.FAILED,
-                             message=str(error), pid=os.getpid())
-            finally:
-                self.lock.release()
-
-        threading.Thread(target=run, daemon=True).start()
+        command = [str(self.root / "bin/onboard")]
+        for source in sources or ["skip"]:
+            command.extend(("--source", source))
+        for email in emails:
+            command.extend(("--gmail-email", email))
+        if sync_after:
+            command.extend(("--sync-after", sync_after))
+        status.directory.mkdir(parents=True, exist_ok=True)
+        with status.log_path.open("a") as log:
+            subprocess.Popen(command, cwd=self.root, stdout=log, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
 
     def post(self, handler, path: str) -> bool:
         if not path.startswith("/api/install/"):

@@ -2,7 +2,19 @@
 export type InstallStep = string
 export type InstallState = "running" | "waiting" | "failed" | "completed" | "skipped"
 export interface InstallAction {
-  kind: "sources" | "gmail" | "permission" | "qr" | "linkedin" | "processing" | "review"
+  kind:
+    | "sources"
+    | "gmail"
+    | "permission"
+    | "qr"
+    | "linkedin"
+    | "processing"
+    | "review"
+    | "approval"
+    | "owner"
+    | "error"
+    | "resume"
+    | "recovery"
   text?: string
   command?: string
   app_path?: string | null
