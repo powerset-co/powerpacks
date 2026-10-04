@@ -38,8 +38,104 @@ afterEach(() => {
 })
 
 describe("installation progress", () => {
+  it("shows a stopped WhatsApp connection as paused rather than broken", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              plan: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "deep_context"],
+              step: "whatsapp_login",
+              status: "waiting",
+              message: "Setup paused. I can resume it from here.",
+              action: { kind: "resume", command: "bin/onboard" },
+              steps: { whatsapp_tools: { status: "completed" }, whatsapp_login: { status: "waiting" } },
+            }),
+          ),
+        ),
+      ),
+    )
+    mount()
+    await screen.findByRole("heading", { name: "Setup paused" })
+    expect(screen.getByText("Syncing WhatsApp").closest("li")?.textContent).toContain("Paused")
+    expect(screen.queryByText("Needs a fix")).toBeNull()
+  })
+
+  it("does not claim readiness when an intermediate stage completes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              step: "network",
+              status: "completed",
+              network_name: "Personal Network",
+              person_count: 328,
+            }),
+          ),
+        ),
+      ),
+    )
+    mount()
+    await screen.findByRole("heading", { name: "Setting up Powerpacks" })
+    expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
+  })
+
+  it("combines each source into one syncing step while preserving waits and failures", async () => {
+    const plan = [
+      "imessage_access",
+      "imessage_import",
+      "whatsapp_tools",
+      "whatsapp_login",
+      "whatsapp_sync",
+      "whatsapp_import",
+      "gmail_tools",
+      "gmail_login",
+      "gmail_sync",
+      "gmail_import",
+    ]
+    let status: InstallStatus = {
+      ...INSTALL,
+      plan,
+      step: "gmail_login",
+      status: "waiting",
+      steps: Object.fromEntries(
+        plan.slice(0, 7).map((step) => [step, { status: "completed", message: "Done" }]),
+      ),
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    const { client } = mount()
+    await screen.findByText("Syncing Gmail")
+    expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toBe(
+      "Syncing iMessageDoneSyncing WhatsAppDoneSyncing GmailWaiting",
+    )
+    status = { ...status, step: "gmail_tools", status: "completed" }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await waitFor(() =>
+      expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+        "Syncing GmailWorking",
+      ),
+    )
+    for (const step of plan) {
+      status = { ...status, step, status: "failed", steps: {} }
+      await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+      await waitFor(() => {
+        const row = screen.getByRole("list").querySelector('[aria-current="step"]')
+        expect(row?.textContent).toContain("Needs a fix")
+        expect(row?.textContent).toContain("Syncing")
+      })
+    }
+  })
+
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
-    let status: InstallStatus = { ...INSTALL, step: "deep_context", message: "Preparing contacts" }
+    let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) =>
@@ -94,13 +190,28 @@ describe("installation progress", () => {
       "sources",
       "imessage_access",
       "imessage_import",
+      "whatsapp_tools",
+      "whatsapp_login",
+      "whatsapp_sync",
+      "whatsapp_import",
+      "gmail_tools",
+      "gmail_login",
+      "gmail_sync",
+      "gmail_import",
+      "deep_context",
+      "enrich",
+      "review",
+      "index",
+      "validate",
+      "ready",
     ]
     const status = {
       ...INSTALL,
       plan,
-      step: "sources",
+      step: "review",
+      status: "waiting",
       steps: Object.fromEntries(
-        plan.slice(0, 7).map((step) => [step, { status: "completed", message: "Done" }]),
+        plan.slice(0, plan.indexOf("review")).map((step) => [step, { status: "completed", message: "Done" }]),
       ),
     }
     vi.stubGlobal(
@@ -108,7 +219,7 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { container } = mount()
-    const history = await screen.findByRole("button", { name: "2 earlier steps done" })
+    const history = await screen.findByRole("button", { name: "1 tasks completed" })
     expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(7)
     expect(
       screen
@@ -116,28 +227,77 @@ describe("installation progress", () => {
         .filter((node) => node.closest("li")?.getAttribute("aria-hidden") === "false").length,
     ).toBe(1)
     fireEvent.click(history)
-    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(9)
+    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(8)
     expect(history.getAttribute("aria-expanded")).toBe("true")
   })
 
-  it("submits chosen sources without starting unselected imports", async () => {
-    const status = { ...INSTALL, step: "sources", status: "waiting", action: { kind: "sources" } }
-    const fetch = vi.fn((_url: string, options?: RequestInit) =>
-      Promise.resolve(
-        new Response(JSON.stringify(options?.method === "POST" ? { status: "started" } : status)),
+  it("shows review only when needed and completes the index row after validation", async () => {
+    let status: InstallStatus = {
+      ...INSTALL,
+      plan: ["deep_context", "enrich", "index", "validate", "ready"],
+      step: "enrich",
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(url === "/api/status" ? { stage: "enrich", step: "", pending: {} } : status),
+          ),
+        ),
       ),
     )
-    vi.stubGlobal("fetch", fetch)
-    mount()
-    fireEvent.click(await screen.findByRole("checkbox", { name: "iMessage" }))
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }))
-    await waitFor(() =>
-      expect(fetch.mock.calls.some((call) => call[0] === "/api/install/sources")).toBe(true),
+    const { client } = mount()
+    await screen.findByText("Enriching your contacts")
+    expect(screen.queryByText("Waiting for your review")).toBeNull()
+    status = {
+      ...status,
+      plan: ["deep_context", "enrich", "review", "index", "validate", "ready"],
+      step: "review",
+      status: "waiting",
+      action: { kind: "review" },
+      steps: {
+        deep_context: { status: "completed", message: "Done" },
+        enrich: { status: "completed", message: "Done" },
+      },
+    }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await screen.findByRole("button", { name: "Review contacts" })
+    expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+      "Waiting for your reviewWaiting",
     )
-    const post = fetch.mock.calls.find((call) => call[0] === "/api/install/sources")
-    const body = post?.[1]?.body
-    expect(typeof body).toBe("string")
-    expect(JSON.parse(typeof body === "string" ? body : "{}")).toMatchObject({ sources: ["imessage"] })
+    status = {
+      ...status,
+      step: "validate",
+      status: "running",
+      action: null,
+      steps: {
+        ...status.steps,
+        review: { status: "completed", message: "Done" },
+        index: { status: "completed", message: "Done" },
+      },
+    }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await screen.findByText("Review completed")
+    expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+      "Building your search indexWorking",
+    )
+    status = {
+      ...status,
+      step: "ready",
+      status: "completed",
+      steps: {
+        ...status.steps,
+        validate: { status: "completed", message: "Done" },
+        ready: { status: "completed", message: "Done" },
+      },
+    }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await waitFor(() =>
+      expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+        "Building your search indexDone",
+      ),
+    )
   })
 
   it("shows an embedded QR and opens permission settings through the local server", async () => {
@@ -253,7 +413,7 @@ describe("installation progress", () => {
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByText("casey@example.com")
     expect(screen.getByText("Personal Network · 0 people")).toBeTruthy()
-    expect(screen.getByText("Skipped")).toBeTruthy()
+    expect(screen.getByText("Installing Powerpacks")).toBeTruthy()
     expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
 
     status = {

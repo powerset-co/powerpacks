@@ -1,12 +1,12 @@
 ---
 name: install-powerpacks
-description: Set up Powerpacks from one pasted URL. Install locally, open live progress, connect the user's Powerset account, and verify their network in the same session. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
+description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and automatic cost checks. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
 license: MIT
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.3.0
-  summary: Install, connect your account, and check your network from one sentence
+  version: 1.4.2
+  summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
     - powerpacks
@@ -16,196 +16,135 @@ metadata:
 
 # Set up Powerpacks
 
-<!-- Changelog: 2026-10-03 — keep optional source imports and recovery on the
-same page after installation; the agent resumes existing primitives. -->
+The pasted installation instruction starts this whole workflow:
 
-The user pastes:
+Install → Connect Powerset → Sync LinkedIn → Sync Gmail → Sync iMessage →
+Sync WhatsApp → Discover → Enrich → Review when needed → Build Index → Verify.
 
-> Download and install the Powerpacks skill from https://powerset.dev/powerpacks
+Own the result. Run commands yourself; involve the user only for browser logins,
+QR scans, OS permissions, required review, and upload authorization.
+Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
+want as it runs."
 
-Carry that request through to a working account and a verified network. Do not
-stop after saving this file, ask them to type another skill, or hand them an
-installation checklist. The scripts do the work; you watch progress,
-handle routine recovery, and involve the user only for choices or actions
-requiring them. Open with: "I’ll set this up here. Feel free to ask questions or
-tell me what you want as it runs."
+## Start and supervise
 
-## Run one command
+This needs a shell on the user's Mac. Without one, explain where to paste the
+instruction; do not claim a cloud installation changed their computer.
 
-This needs a shell on the user's Mac. If no local shell is available, explain:
-"Open Codex or Claude Code on your Mac and paste the same instruction there."
-Do not claim a cloud installation changed their computer. Respect existing
-permissions; a denied command is not permission to bypass the restriction.
-
-Save this skill in the current agent's personal skills folder if needed
-(Codex: `~/.agents/skills/install-powerpacks/SKILL.md`; Claude Code:
-`~/.claude/skills/install-powerpacks/SKILL.md`). Then continue immediately:
+Before running anything, ask the two things setup needs, in one message: "Which
+Gmail accounts should I add? The first one owns the Gmail setup." and "Building
+your search index uploads your contacts to your Powerset workspace. OK?" Pass
+each address as `--gmail-email`, first address first, and `--approve-upload` on a
+yes. Everything after that is logins the user
+does back to back near the start (Powerset, LinkedIn, Google, each Gmail
+approval, Full Disk Access, WhatsApp QR); then setup runs on its own.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --no-tools
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --approve-upload --gmail-email first@example.com --gmail-email second@example.com
 ```
 
-Run asynchronously so you can show progress while it works. In Codex, use a
-short shell `yield_time_ms`; in Claude Code, use background Bash.
+Bootstrap installs the runtime and starts the installed coordinator `bin/onboard`.
+That coordinator connects Powerset and verifies hosted search first, then owns
+imports, processing, review, indexing, and verification. Once hosted search is
+verified, tell the user they can search while local setup continues. Do not make
+local import or processing completion a prerequisite for cloud search, and do not
+assemble a second sequence of skill commands yourself.
+Explicit install-only or no-login requests omit `--powerset` and stop earlier.
 
-No project directory or manual clone is needed. Bootstrap downloads into
-`~/powerpacks` or reuses the existing installation. When it prints
-`powerpacks: repo: <path>`, read that checkout's `AGENTS.md` for usage guidance
-and `.codex/AGENTS.md` if present for remembered user context. Run subsequent
-commands there; don't assume the chat is inside the checkout or write global
-agent instructions into the user's unrelated projects.
+No project directory or manual clone is needed. Use the printed `powerpacks: repo:`
+checkout for subsequent commands and read its `AGENTS.md`. Skills folders are not
+workflow data roots. Fresh installs follow the published release; a PR test uses
+that checkout's bootstrap and verifies its commit, not the public launcher.
 
-This installs Powerpacks, preserves existing configuration, connects the
-Powerset account, checks access to search, and checks the selected network.
-Already-valid login is skipped. The normal pasted instruction authorizes this
-setup, including local credential configuration. Browser sign-in still belongs
-to the user. It does not authorize uploading contacts, paid research, or reading
-mail and messages.
+Run asynchronously and retain responsibility until completion or a concrete
+required user action. If the user requests a worker and supervisor, dispatch one
+worker to run the coordinator, supervise it in the original chat, and relay chat
+choices. Do not launch a competing installer or finish supervising while owned
+work is still running. A browser action does not require a "done" message.
 
-- Explicit "install only", "don't log in", or custom/local-only setup: omit
-  `--powerset`. Follow that narrower request; don't report account readiness.
-- Keep `--no-tools` for initial setup. Selected source imports prepare their
-  own tools afterward. Optional imports never delay first use of hosted search.
-- Reruns update the existing checkout within its selected release channel and
-  preserve configuration and network data. Fresh installs follow the published
-  release, not the current PR or `main`. When explicitly testing a PR, run its
-  checkout's `bin/bootstrap` instead of the public launcher and verify its commit.
-  Do not switch channels or edit application code to repair setup.
+## Keep the status page beside chat
 
-## Show the live page
+Open the exact printed `STATUS PAGE:` URL immediately. Use the host's browser-pane
+tool when available; reuse the tab on retries. On Codex, use `open_in_codex` when
+available. Other hosts may use their supported pane or system browser.
 
-Watch for `STATUS PAGE: <url>` and open that exact URL immediately, before
-waiting for the command to finish. Reuse the tab on retries.
+Keep this tab on `/install`. Login and review open in the system's default browser,
+never by navigating the status tab. The page reads saved progress and the real
+Modal status files; it does not own the pipeline process. Closing or restarting
+its server must not stop the coordinator.
 
-- If the host exposes a browser-pane tool, use it to open the page beside chat.
-  Use `open_in_codex` only if that tool is actually available.
-- Otherwise open the URL in the Mac's default browser with `open "<url>"`.
-  Codex CLI can use this browser tab; it cannot render a custom animation in chat.
-- A printed URL or queued open request is not proof of a rendered page. Check
-  the returned browser state when available, or the page's HTTP response.
+Use the page for progress, with short chat only for input or needed action. The
+animation signals activity, not invented percentages. Preserve a disconnected
+page and reconnect to the same server; never turn a connection loss into a source
+failure. Check `/healthz`, `/api/install`, and `.powerpacks/install/server.log`.
 
-Keep the progress pane on this URL. Let the login primitive open sign-in in the
-system's default browser; do not pass `--no-browser` or open sign-in or callback
-URLs in the in-app browser. If automatic launch fails, use `open "<sign-in URL>"`
-on the printed URL. The user completes sign-in there while progress stays here.
+## Choices and waiting
 
-The animation and step labels come from
-`.powerpacks/install/manifest.json` and the source primitives' existing artifacts.
-Installation, source imports, and processing share the same page.
-Never fabricate progress, write the manifest by hand, or treat the animation as
-proof of success. The page stays open after the command ends.
+Default to LinkedIn, Gmail's past year, iMessage, and WhatsApp. Inform the user
+once and keep going. Apply already-given account/history choices. Gmail's identity
+is independent of Powerset's identity. If the coordinator still asks which Gmail
+accounts to add (none were passed and msgvault has none), ask the user in chat
+(offer the action's `suggested` address), append one `--gmail-email` per address
+to the saved `retry_command`, first address first, and run it. Every address gets
+its own browser approval; the coordinator allows them all beforehand. LinkedIn and the Google Console run in
+headless Chrome (or Brave); a window opens only when a login is needed, closes
+once the user is signed in, and the sessions are kept for later runs. LinkedIn
+reads up to ~3,000 connections per run, then processing starts; the rest sync on
+later runs. Never ask for LinkedIn's emailed export, the user's LinkedIn URL, or
+their email: the coordinator reads them from those sessions.
 
-Keep chat short: an opening sentence, necessary user actions, and the final
-result. Do not repeat the page's checklist after every step or paste logs into
-chat. If the page is unavailable, give one short line when the phase changes.
+Existing `--source`, `--gmail-email`, `--sync-after`, `--wacli-store`, and `--refresh`
+options pass through bootstrap. Saved source/account/history/store choices survive
+resume. Use `--refresh` only for a requested resync. Never choose an arbitrary Gmail
+account from several or switch to a shared Powerset network merely because it works.
+Unprovisioned or unindexed hosted search does not block local source setup.
 
-## Continue or recover
+Read the manifest's `action` when waiting. The coordinator owns the sequence;
+the agent handles an action that needs setup repair or approval.
+Do not hand its commands to the user. For Messages permissions, the existing
+`/api/install/permissions` action opens Full Disk Access and highlights the detected
+app. Tell the user which app was identified; only the user grants OS access.
 
-Keep watching the original command until it exits. Read its last status line
-and the saved progress; do not start a second installer while it is running.
+"Skip Gmail for now" also applies to iMessage, WhatsApp, and LinkedIn. Stop only
+that pipeline's owned work, wait for it to exit, append `--skip-source gmail`
+(or the requested source) to the saved `retry_command`, and run it yourself.
+Keep all other choices. To resume that source, remove its skip option. Existing
+imports, stores, and accounts survive; never log out or clear data for a retry.
 
-| Script result | Agent action |
+## Approval and repair
+
+During onboarding, each paid step runs automatically when its estimated cost is
+below $500. At $500 or more, show the estimate and ask the user before running.
+This applies to synthesis, duplicate processing, enrichment, and indexing;
+do not ask at their former lower thresholds. Estimates and cache checks still
+run. Use the saved continuation for an authorized larger estimate, rather than
+running a separate paid command. Modal checks its shared cache before spending.
+
+Upload consent is separate from spend: use `--approve-upload` when the user
+authorizes uploading contacts to the configured workspace. Reuse that authorization
+while repairing/resuming the same requested upload; do not ask again. Existing downloaded indexes are reused
+and verified locally without another upload.
+
+Read command output, saved progress, and `.powerpacks/install/install.log`:
+
+| Result | Action |
 | --- | --- |
-| `DONE:` | Verify account/search readiness, then run `bin/onboard` from the printed checkout to show optional source choices. Continue any already-requested search without requiring imports. |
-| `NEEDS YOU:` | Show the single action needed. During browser login the script waits and continues automatically. If the script has exited, resume it after the action. |
-| `STOP:` | Explain where to run the instruction. Do not continue in the wrong environment. |
-| `FAILED:` | Read the saved error, fix the cause within the authorized setup, and rerun. Don't ask "should I try to fix it?" |
+| `DONE:` | Verify the saved result; only index validation proves local search readiness. |
+| `NEEDS YOU:` | Handle the saved action or follow the existing live wait; retain ownership. |
+| `FAILED:` | Inspect the exact failure, repair within scope, rerun the saved coordinator. |
+| `STOP:` | Explain the environment required; do not continue on another computer. |
 
-Use the same command and options on retries. Completed files and cached
-credentials are reused, and live checks are repeated. Do not delete `.powerpacks`
-or overwrite existing credentials to start over.
+Use the manifest's canonical `retry_command` to resume. Native artifacts and
+SQLite, not UI labels, decide completed work. Never delete `.powerpacks`, replace
+configuration, reset reviews, or bypass spend gates to recover. If a targeted
+repair repeats the same failure, explain the remaining cause and needed action.
+For an unclear setup problem, load the installed `powerpacks-doctor` skill.
+If Modal disconnected after dispatch, inspect the existing run and recover its
+result; do not blindly dispatch another paid job.
 
-Specific recovery:
+## Finish
 
-- **Download or dependency failure:** inspect `.powerpacks/install/install.log`.
-  Retry a transient connection failure; for an SSH authentication failure on
-  the public repository, use its HTTPS URL. Repair installation/configuration,
-  not application code. Preserve local work and data.
-- **Login missing or expired:** let the script refresh credentials or open the
-  existing sign-in flow. A network timeout is not proof the account is wrong.
-- **Search connection fails after login:** let the script verify direct service
-  access and refresh the agent connection. Don't force a session restart merely
-  because newly registered tools aren't visible yet. Never claim a connection
-  works until its check succeeds.
-- **Personal network has 0 people:** name the actual signed-in email and ask:
-  "Your personal network for <email> is empty. Would you like to use another
-  account or connect your contacts?" An account switch uses the installed
-  `auth.py login --force-account` primitive, then reruns onboarding. Don't guess
-  another identity or silently switch to a shared network.
-- **Personal network has 1–9 people:** continue when search works; mention the
-  count and that another account or network may contain more people. This is a
-  suggestion, not a gate. If all accessible networks are empty, say so.
-- **Progress page fails:** check the printed URL, `/healthz`, `/api/install`, and
-  `.powerpacks/install/server.log`. Reuse or restart the same server via the
-  printed retry command; don't open duplicate tabs. A browser-pane error with
-  healthy HTTP responses is a display problem, not an installation failure.
-- **The same failure returns after a targeted repair:** give the specific
-  remaining problem and action. Do not loop indefinitely or claim success.
-
-Internal IDs, "sets", provider keys, MCP, and database names belong in
-troubleshooting details. Say "your personal network", the network's actual
-name, and the signed-in email in normal conversation.
-
-## Continue on the same page
-
-After bootstrap completes, run `<repo>/bin/onboard`. It shows optional Gmail,
-iMessage, WhatsApp, and LinkedIn choices without reading those sources. Choices
-can arrive in chat or on the right panel; use an existing answer instead of
-asking twice. The user may skip. A working hosted account remains usable while
-local setup waits for a choice, login, or file.
-
-For chat choices, run the same script with one `--source gmail|imessage|whatsapp|linkedin`
-per selected source, or `--source skip`. Gmail also needs repeatable
-`--gmail-email <address>` and `--sync-after <YYYY-MM-DD>` from the user's selected
-accounts and history window. Ask for missing choices together; never guess an
-account. The script installs only the selected sources' tools and reuses existing
-imports. Use `--refresh` only when the user asks to sync again.
-
-Watch the saved manifest and the original process. If a panel action already
-started it, follow that process rather than launching a duplicate. When it exits
-waiting or failed, read `action` and the saved error:
-
-- Run the relevant `action.command` from the checkout yourself within the chosen
-  source's scope. Handle dependency repairs, OAuth app preparation, and retries;
-  don't hand commands or skill names to the user.
-- Browser sign-in stays outside the progress pane. Let the login primitive open
-  the system browser; if needed, open its URL there. Only the user completes
-  account sign-in, consent screens, or a WhatsApp QR scan. The page shows the QR.
-- For Messages permission, POST the same server's `/api/install/permissions`
-  endpoint. It opens Full Disk Access and highlights the detected app in Finder
-  when available. Tell the user which app was actually identified; don't assume
-  Terminal, Ghostty, or Codex. The user grants access, then you retry.
-- For LinkedIn, open the export URL in the system browser and wait for the CSV
-  in chat. Preserve any existing input before replacing it. Receiving the CSV
-  does not authorize paid processing or an upload.
-
-After the action, rerun the manifest's `retry_command` with the same exact source,
-account, history, and store choices. Existing files and sessions are reused;
-never log out, clear stores, or delete data to rehearse a fresh install. Repair a
-failed step and retry it; if the same failure persists, explain the remaining
-cause and the single action needed. Leave technical details on the page.
-
-When sources are ready, the page points to processing. Follow the installed
-`deep-context` skill when the user requested it, retaining this server and tab.
-Read the free estimate and obtain the required permission before any paid
-processing or upload. Never emulate completion as a real result; label a
-requested demonstration as simulated.
-
-## Finish with verified readiness
-
-Installation, hosted search, imported sources, and a built local index are
-separate results. Report only the verified ones in a short line:
-
-> Powerpacks is ready. Signed in as <email>; <network> has <N> people.
-
-A local-only installation needs no account. A missing or empty hosted network
-isn't proof of usable search. Source imports aren't proof of a built index.
-Don't call all contacts searchable merely because a network list reports them.
-
-If the original request included a search, read the installed `search/SKILL.md`
-and do it now, preserving the requested network. Read newly installed skills
-directly in this session; no restart or new user command is needed.
-
-Existing hosted networks can work immediately. First downloads and human login
-take longer; source syncing and index building can take much longer. Show actual
-progress and keep the page open, without promising a completion time.
+Report installation, account access, hosted search, imported sources, and verified
+local search separately. A network's people count does not prove search readiness.
+Keep internal IDs and provider details in troubleshooting. If the user also asked
+for a search, run the installed search skill once its requested backend is ready.

@@ -8,13 +8,14 @@ import os
 import tempfile
 import threading
 import time
+import sys
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
 from packs.powerset.primitives.auth import auth
-from packs.powerset.primitives.install.onboard import Onboarding
+from packs.powerset.primitives.install.onboard import Onboarding, main
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
 
 
@@ -163,6 +164,21 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         login_mock.assert_called_once()
 
+    def test_expired_browser_link_renews_in_the_same_process(self):
+        self.credentials.unlink()
+        attempts = []
+        def login(args):
+            attempts.append(args)
+            if len(attempts) == 1:
+                print(json.dumps({"status": "failed", "error": "login timed out"}))
+                return 1
+            self.save_credentials()
+            return 0
+        with patch.object(auth, "cmd_login", side_effect=login):
+            code, _, _ = self.run_onboarding()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(attempts), 2)
+
     def test_login_timeout_is_failed_and_can_be_retried(self):
         self.credentials.unlink()
         with patch.object(auth, "cmd_login", return_value=1):
@@ -178,7 +194,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(code, 10)
         self.assertIn("jordan@example.com has 0 people", state["message"])
         self.assertIn("40,000", state["message"])
-        self.assertNotIn("POWERPACKS_DEFAULT_SET_ID", (self.root / ".env").read_text())
+        self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
         self.assertFalse(any(call[0] == "POST" for call in self.calls))
 
     def test_all_empty_networks_explain_account_problem(self):
@@ -200,6 +216,63 @@ class OnboardingTests(unittest.TestCase):
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 0)
         self.assertEqual(state["network_name"], "Powerset")
+
+    def test_stale_default_uses_verified_owned_personal_network(self):
+        with (self.root / ".env").open("a") as stream:
+            stream.write("POWERPACKS_DEFAULT_SET_ID=old-account-network\n")
+        code, state, _ = self.run_onboarding()
+        self.assertEqual(code, 0)
+        self.assertEqual(state["network_name"], "Personal Network")
+        self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
+
+    def run_install_command(self, *source_args):
+        argv = ["onboard", "--root", str(self.root), "--harness", "codex", *source_args]
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
+                patch("packs.powerset.primitives.install.workflow.SourceOnboarding") as sources, \
+                patch("packs.ingestion.primitives.deep_context.review.cli.start_server",
+                      return_value={"url": "http://localhost:8899/install"}):
+            sources.return_value.run.return_value = {"status": "waiting", "step": "deep_context"}
+            sources.return_value.retry_command = "bin/onboard"
+            sources.return_value.gmail_emails = ("jordan@example.com",)
+            with self.assertRaises(SystemExit) as result:
+                main()
+        return result.exception.code, sources
+
+    def test_install_command_continues_into_imports_without_agent_handoff(self):
+        code, sources = self.run_install_command()
+        self.assertEqual(code, 10)
+        sources.return_value.run.assert_called_once()
+
+    def test_install_command_preserves_explicit_gmail_identity_and_history(self):
+        code, sources = self.run_install_command("--gmail-email", "personal@gmail.com", "--sync-after", "2025-10-03")
+        self.assertEqual(code, 10)
+        self.assertEqual(sources.call_args.kwargs["gmail_emails"], ("personal@gmail.com",))
+        self.assertEqual(sources.call_args.kwargs["sync_after"], "2025-10-03")
+
+    def test_unindexed_hosted_network_does_not_block_local_imports(self):
+        self.count = 0
+        code, sources = self.run_install_command()
+        self.assertEqual(code, 10)
+        sources.return_value.run.assert_called_once()
+
+    def test_empty_hosted_network_does_not_block_local_imports(self):
+        self.networks[0]["person_count"] = 0
+        code, sources = self.run_install_command()
+        self.assertEqual(code, 10)
+        sources.return_value.run.assert_called_once()
+
+    def test_unprovisioned_hosted_search_does_not_block_local_imports(self):
+        self.missing_keys.add("OPENAI_API_KEY")
+        code, sources = self.run_install_command()
+        self.assertEqual(code, 10)
+        sources.return_value.run.assert_called_once()
+
+    def test_failed_account_login_does_not_start_imports(self):
+        self.credentials.unlink()
+        with patch.object(auth, "cmd_login", return_value=1):
+            code, sources = self.run_install_command()
+        self.assertEqual(code, 1)
+        sources.return_value.run.assert_not_called()
 
     def test_unknown_default_and_wrong_personal_owner_require_choice(self):
         self.owner_id = "auth0|someone-else"

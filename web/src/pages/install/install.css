@@ -63,18 +63,12 @@
 .install-page .install-account p {
   margin: 4px 0;
 }
-.install-page .install-details {
+.install-page .install-failure {
   border-top: 1px solid var(--border);
   padding-top: 20px;
   font-size: 12px;
   color: var(--muted);
   overflow-wrap: anywhere;
-}
-.install-page .install-details summary {
-  cursor: pointer;
-}
-.install-page .install-details p {
-  margin: 12px 0 0;
 }
 
 .install-page .install-steps li {

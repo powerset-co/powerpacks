@@ -1,12 +1,15 @@
-"""Connect an installed checkout to Powerset and verify its selected network."""
+"""Resume account setup, source imports, and processing in one ordered flow."""
 from __future__ import annotations
 
 import argparse
 import contextlib
 import io
+import fcntl
 import json
 import os
+import shlex
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -78,8 +81,17 @@ class Onboarding:
             data=json.dumps(payload).encode() if payload is not None else None,
             headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json",
                      "Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                if error.code not in (429, 502, 503, 504) or attempt == 2:
+                    raise
+            except (urllib.error.URLError, TimeoutError):
+                if attempt == 2:
+                    raise
+            time.sleep(2 ** attempt)
 
     def login(self) -> bool:
         self.progress(InstallStep.ACCOUNT, InstallState.WAITING,
@@ -92,11 +104,16 @@ class Onboarding:
             timeout=auth.DEFAULT_LOGIN_TIMEOUT, credentials_path=self.credentials_path)
         # The existing login opens its own browser and prints the fallback URL to stderr.
         # Its JSON output is unnecessary here and may include remote error details.
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            code = auth.cmd_login(args)
-        if code:
+        while True:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = auth.cmd_login(args)
             result = json.loads(output.getvalue()) if output.getvalue().strip() else {}
+            if not code or result.get("error") != "login timed out":
+                break
+            self.progress(InstallStep.ACCOUNT, InstallState.WAITING,
+                          "The sign-in link expired. Opening a fresh one.")
+        if code:
             self.log(f"Account login failed: {result.get('error', 'login did not complete')}")
             return False
         self.token = auth._load_credentials(self.credentials_path)["access_token"]
@@ -180,7 +197,9 @@ class Onboarding:
     def choose_network(self, networks: list[Network], account: dict) -> Network | None:
         selected_id = self.config.get("POWERPACKS_DEFAULT_SET_ID") or self.config.get("POWERSET_DEFAULT_SET_ID")
         if selected_id:
-            return next((network for network in networks if network.id == selected_id), None)
+            selected = next((network for network in networks if network.id == selected_id), None)
+            if selected:
+                return selected
         owned = []
         for network in networks:
             if network.is_personal and network.role == "owner":
@@ -207,6 +226,7 @@ class Onboarding:
         name = "Personal Network" if selected.is_personal and selected.name == "Personal Connections" else selected.name
         self.progress(InstallStep.NETWORK, InstallState.RUNNING, f"Checking {name} for {self.email}",
                       network_name=name, person_count=selected.person_count)
+        keys.write_env(self.env_path, {"POWERPACKS_DEFAULT_SET_ID": selected.id})
         if selected.person_count == 0:
             return self.waiting(f"{name} for {self.email} has 0 people. Tell me in chat whether to switch "
                                 "accounts or connect your contacts." + alternative_message)
@@ -217,11 +237,9 @@ class Onboarding:
         if not contacts["leads"] or int(count["count"]) < 1:
             return self.waiting(f"{name} for {self.email} has {selected.person_count:,} people, but its searchable "
                                 "profiles are not ready. Ask me in chat to check the network before searching.")
-        keys.write_env(self.env_path, {"POWERPACKS_DEFAULT_SET_ID": selected.id})
         warning = (" This is a small network; you may want another network or account." if selected.person_count < 10 else "")
         message = f"{name} for {self.email} is ready: {selected.person_count:,} people in this network." + warning
         self.progress(InstallStep.NETWORK, InstallState.COMPLETED, message)
-        self.progress(InstallStep.READY, InstallState.COMPLETED, message)
         print(f"DONE: {message} Ask me to find someone.", flush=True)
         return 0
 
@@ -260,14 +278,68 @@ class Onboarding:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--harness", action="append", required=True)
-    parser.add_argument("--pid", type=int, required=True)
-    parser.add_argument("--retry-command", default="bin/bootstrap --powerset --no-tools")
+    from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
+    from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
+    from packs.ingestion.primitives.deep_context.review.cli import start_server
+
+    parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
+    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--harness", choices=("codex", "claude-code", "pi"), action="append")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--approve-spend", choices=("synthesize", "cluster", "enrich", "index"),
+                        action="append", default=[])
+    parser.add_argument("--approve-upload", action="store_true")
     args = parser.parse_args()
-    raise SystemExit(Onboarding(args.root, harnesses=args.harness, pid=args.pid,
-                                retry_command=args.retry_command).run())
+    root = args.root.resolve()
+    status = InstallStatus(root)
+    status.directory.mkdir(parents=True, exist_ok=True)
+    # The server and agent can both request a resume. Only this process owns work.
+    with (status.directory / "onboard.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("NEEDS YOU: Setup is already running.", flush=True)
+            raise SystemExit(NEEDS_YOU) from None
+        previous = status.read()
+        saved, _ = parser.parse_known_args(shlex.split(previous["retry_command"])[1:])
+        harnesses = args.harness or saved.harness or ["codex"]
+        port = args.port or saved.port or 8765
+        # Resolve saved source choices before account progress replaces retry_command.
+        flow = SourceOnboarding(root, sources=tuple(args.source),
+                                gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
+                                wacli_store=args.wacli_store, refresh=args.refresh,
+                                skip_sources=tuple(args.skip_source))
+        flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
+        flow.retry_command += f" --port {port}"
+        try:
+            page = start_server(root, port=port, stage="install")
+        except (OSError, SystemExit) as error:
+            with status.log_path.open("a") as log:
+                log.write(str(error) + "\n")
+            status.write(step=InstallStep.RUNTIME, status=InstallState.FAILED,
+                         message="The progress page could not start. I can check the log and retry.",
+                         pid=0, retry_command=flow.retry_command)
+            print("FAILED: The progress page could not start. Check the installation log.", flush=True)
+            raise SystemExit(1) from error
+        print(f"STATUS PAGE: {page['url']}", flush=True)
+        onboarding = Onboarding(root, harnesses=harnesses, pid=os.getpid(),
+                                retry_command=flow.retry_command)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = onboarding.run()
+        if code not in (0, NEEDS_YOU) or not onboarding.email:
+            print(output.getvalue(), end="", flush=True)
+            raise SystemExit(code)
+        if code == 0:
+            print("Powerset search is ready; local setup will continue.", flush=True)
+        payload = flow.run()
+        if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
+            payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend),
+                                           approve_upload=args.approve_upload, port=port).run()
+    prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
+    message = (payload.get("action") or {}).get("text") or payload.get("message", "Setup stopped")
+    print(f"{prefix[payload['status']]}: {message}", flush=True)
+    raise SystemExit({"completed": 0, "waiting": NEEDS_YOU, "running": NEEDS_YOU, "failed": 1}[payload["status"]])
 
 
 if __name__ == "__main__":
