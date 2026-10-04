@@ -226,7 +226,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
 
     def run_install_command(self, *source_args):
-        argv = ["onboard", "--root", str(self.root), "--harness", "codex", "--pid", str(os.getpid()), *source_args]
+        argv = ["onboard", "--root", str(self.root), "--harness", "codex", *source_args]
         with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
                 patch("packs.powerset.primitives.install.workflow.SourceOnboarding") as sources, \
                 patch("packs.ingestion.primitives.deep_context.review.cli.start_server",

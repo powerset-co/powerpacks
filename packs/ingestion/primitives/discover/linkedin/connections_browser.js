@@ -12,9 +12,12 @@
  * random 0.5-1.5 s and stop after --max-loads (300 per run: ~3,000 people in
  * ~5 minutes).
  *
+ * The list has ended when nothing new loads for END_AFTER_MS. The signed-in
+ * user's own profile slug comes from /in/me, which LinkedIn redirects to it.
+ *
  * Prints one JSON object on stdout:
  *   {"status": "ok", "connections": [{slug, name, headline, connected_on}],
- *    "loads": n, "stopped": "known" | "end" | "limit"}
+ *    "loads": n, "stopped": "known" | "end" | "limit", "owner_slug": str}
  *   {"status": "needs_user_action", "message": ...}   login not finished in time
  *   {"status": "error", "message": ...}
  *
@@ -23,18 +26,16 @@
  */
 
 const fs = require("fs");
-const { execFileSync } = require("child_process");
 const { chromium } = require("playwright-core");
-const { returnFocus } = require("../../common/return_focus.js");
+const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/browser.js");
 
 const CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
 const CARD_LINK = 'main a[href*="/in/"]';
-const MAC_CHROME_BINARY = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const FALLBACK_CHROME_MAJOR = 149;
 const LOGIN_POLL_MS = 2000;
 const PAUSE_MIN_MS = 500;
 const PAUSE_JITTER_MS = 1000;
-const IDLE_ROUNDS = 4;
+const END_AFTER_MS = 15000;
+const OWNER_URL = "https://www.linkedin.com/in/me/";
 
 function parseArgs(argv) {
   const args = {};
@@ -55,23 +56,12 @@ function log(message) {
   process.stderr.write(`[linkedin/browser] ${message}\n`);
 }
 
-function chromeUserAgent() {
-  let major = FALLBACK_CHROME_MAJOR;
-  try {
-    const match = /(\d+)\.\d+\.\d+/.exec(execFileSync(MAC_CHROME_BINARY, ["--version"], { encoding: "utf8", timeout: 5000 }));
-    if (match) major = Number(match[1]);
-  } catch (_) {
-    // keep the fallback major
-  }
-  return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
-}
-
 function launch(profileDir, headless) {
   return chromium.launchPersistentContext(profileDir, {
-    channel: "chrome",
+    ...browserTarget(),
     headless,
     viewport: null,
-    userAgent: chromeUserAgent(),
+    userAgent: desktopUserAgent(),
     ignoreDefaultArgs: ["--enable-automation"],
     args: ["--disable-blink-features=AutomationControlled", "--disable-infobars", "--disable-extensions"],
   });
@@ -102,15 +92,15 @@ async function waitForConnections(page, deadline) {
 }
 
 // Scroll <main> (the list's own scroller, not the page body) until enough
-// known connections appear, nothing new loads for IDLE_ROUNDS scrolls, or maxLoads.
+// known connections appear, nothing new loads for endAfter ms, or maxLoads.
 async function scrollList(page, known, stopAfterKnown, maxLoads) {
-  return page.evaluate(async ({ cardLink, known, stopAfterKnown, maxLoads, pauseMin, pauseJitter, idleRounds }) => {
+  return page.evaluate(async ({ cardLink, known, stopAfterKnown, maxLoads, pauseMin, pauseJitter, endAfter }) => {
     const knownSet = new Set(known);
     const slugs = () => {
       const seen = new Set();
       for (const a of document.querySelectorAll(cardLink)) {
         const m = (a.getAttribute("href") || "").match(/\/in\/([^/?#]+)/);
-        if (m) seen.add(m[1]);
+        if (m) seen.add(decodeURIComponent(m[1]).toLowerCase());
       }
       return seen;
     };
@@ -123,7 +113,7 @@ async function scrollList(page, known, stopAfterKnown, maxLoads) {
     const main = document.querySelector("main");
     const scroller = main.scrollHeight > main.clientHeight ? main : document.scrollingElement;
 
-    let idle = 0;
+    let lastGrowth = performance.now();
     let loads = 0;
     while (loads < maxLoads) {
       if (reachedKnown()) return { loads, stopped: "known" };
@@ -134,12 +124,12 @@ async function scrollList(page, known, stopAfterKnown, maxLoads) {
       if (button) button.click();
       loads += 1;
       await new Promise((resolve) => setTimeout(resolve, pauseMin + Math.random() * pauseJitter));
-      idle = scroller.scrollHeight === height && slugs().size === before ? idle + 1 : 0;
-      if (idle >= idleRounds) return { loads, stopped: "end" };
+      if (scroller.scrollHeight !== height || slugs().size !== before) lastGrowth = performance.now();
+      else if (performance.now() - lastGrowth >= endAfter) return { loads, stopped: "end" };
     }
     return { loads, stopped: reachedKnown() ? "known" : "limit" };
   }, { cardLink: CARD_LINK, known, stopAfterKnown, maxLoads, pauseMin: PAUSE_MIN_MS,
-       pauseJitter: PAUSE_JITTER_MS, idleRounds: IDLE_ROUNDS });
+       pauseJitter: PAUSE_JITTER_MS, endAfter: END_AFTER_MS });
 }
 
 // One row per profile: the card's first line is the name, a "Connected on"
@@ -200,7 +190,11 @@ async function main() {
     const scrolled = await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads));
     const connections = await readCards(page);
     log(`read ${connections.length} connections in ${scrolled.loads} loads (${scrolled.stopped})`);
-    result({ status: "ok", connections, ...scrolled });
+    // LinkedIn's script swaps /in/me for the real slug just after the page loads.
+    await page.goto(OWNER_URL, { waitUntil: "domcontentloaded" });
+    await page.waitForURL((url) => !/\/in\/me\/?$/.test(new URL(url).pathname), { timeout: 15000 }).catch(() => {});
+    const owner = page.url().match(/\/in\/([^/?#]+)/);
+    result({ status: "ok", connections, ...scrolled, owner_slug: owner && owner[1] !== "me" ? owner[1] : "" });
   } finally {
     await context.close().catch(() => {});
   }

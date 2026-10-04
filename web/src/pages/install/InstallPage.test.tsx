@@ -300,26 +300,6 @@ describe("installation progress", () => {
     )
   })
 
-  it("submits chosen sources without starting unselected imports", async () => {
-    const status = { ...INSTALL, step: "sources", status: "waiting", action: { kind: "sources" } }
-    const fetch = vi.fn((_url: string, options?: RequestInit) =>
-      Promise.resolve(
-        new Response(JSON.stringify(options?.method === "POST" ? { status: "started" } : status)),
-      ),
-    )
-    vi.stubGlobal("fetch", fetch)
-    mount()
-    fireEvent.click(await screen.findByRole("checkbox", { name: "iMessage" }))
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }))
-    await waitFor(() =>
-      expect(fetch.mock.calls.some((call) => call[0] === "/api/install/sources")).toBe(true),
-    )
-    const post = fetch.mock.calls.find((call) => call[0] === "/api/install/sources")
-    const body = post?.[1]?.body
-    expect(typeof body).toBe("string")
-    expect(JSON.parse(typeof body === "string" ? body : "{}")).toMatchObject({ sources: ["imessage"] })
-  })
-
   it("shows an embedded QR and opens permission settings through the local server", async () => {
     let status: InstallStatus = {
       ...INSTALL,

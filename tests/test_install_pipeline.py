@@ -438,7 +438,17 @@ class InstallPipelineTests(unittest.TestCase):
                 self.assertFalse(self.indexed())
                 self.assertEqual(len(self.paid_commands), 4)
 
-    def test_missing_owner_hands_off_without_silently_fetching_profile(self):
+    def test_missing_owner_is_built_from_the_linkedin_session_and_gmail_address(self):
+        (self.root / ".powerpacks/deep-context/owner.json").unlink()
+        self.write(self.root / ".powerpacks/network-import/discover/linkedin/connections.json",
+                   json.dumps({"complete": True, "owner_url": "https://www.linkedin.com/in/casey-owner"}))
+        self.run_pipeline()
+        owner = next(options["node"] for name, options in self.calls if name == "owner")
+        self.assertEqual((owner.linkedin_url, owner.email),
+                         ("https://www.linkedin.com/in/casey-owner", "casey@example.com"))
+        self.assertTrue(self.did("collect"))
+
+    def test_missing_owner_without_a_linkedin_session_hands_off(self):
         (self.root / ".powerpacks/deep-context/owner.json").unlink()
         result = self.run_pipeline()
         self.assertEqual(result["action"]["kind"], "owner")
@@ -499,6 +509,18 @@ class InstallPipelineTests(unittest.TestCase):
         self.write(self.root / ".powerpacks/runs/setup-gmail-modal/status.json",
                    json.dumps({"status": "running", "current_stage": "indexing", "started_at": started,
                                "stages": {"indexing": {"payload": {"sandbox": "synthetic-sandbox"}}}}))
+
+    def test_failed_modal_run_is_redispatched_not_downloaded_again(self):
+        self.dispatch()
+        path = self.root / ".powerpacks/runs/setup-gmail-modal/status.json"
+        record = json.loads(path.read_text())
+        record["status"] = "failed"
+        record["stages"]["indexing"]["payload"] = {"phase": "pipeline", "error": "sandbox exited 1"}
+        path.write_text(json.dumps(record))
+        result = self.run_pipeline(upload=True)
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertFalse(self.did("download"))
+        self.assertTrue(self.indexed())
 
     def test_interrupted_modal_dispatch_downloads_existing_job_without_new_spend(self):
         self.dispatch()

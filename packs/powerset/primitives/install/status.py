@@ -24,7 +24,6 @@ class InstallStep(str, Enum):
     RUNTIME = "runtime"
     DEPENDENCIES = "dependencies"
     SKILLS = "skills"
-    TOOLS = "tools"
     ACCOUNT = "account"
     CREDENTIALS = "credentials"
     CONNECTION = "connection"
@@ -51,7 +50,7 @@ class InstallStep(str, Enum):
 
 STEP_LABELS = {
     "runtime": "Prepare your Mac", "dependencies": "Install Powerpacks",
-    "skills": "Add your skills", "tools": "Prepare import tools",
+    "skills": "Add your skills",
     "account": "Sign in", "credentials": "Connect search",
     "connection": "Connect your agent", "network": "Check your network",
     "sources": "Choose your contacts", "gmail_tools": "Prepare Gmail",

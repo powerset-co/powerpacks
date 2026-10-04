@@ -6,7 +6,10 @@ A LinkedIn connections list newer than its import is imported on Modal first,
 the same ungated step `$setup` runs.
 
 Changelog:
-  2026-10-03: import the scraped LinkedIn connections before fan-in.
+  2026-10-03: import the scraped LinkedIn connections before fan-in; build the
+      owner profile from the LinkedIn session and the Gmail address instead of
+      asking; a failed Modal run is retried, not re-downloaded, unless it failed
+      on the spend cap.
 """
 from __future__ import annotations
 
@@ -26,7 +29,8 @@ from typing import Callable
 from packs.ingestion.primitives.common.jsonio import parse_last_json, sha256_file
 from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store
 from packs.ingestion.primitives.deep_context.collection.collect_person_context import CollectPersonContext
-from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV
+from packs.ingestion.primitives.common.jsonio import read_json
+from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
@@ -47,6 +51,7 @@ from packs.ingestion.primitives.deep_context.synthesis.validate_dossiers import 
 from packs.ingestion.primitives.imports.merge_people import PeopleMerge
 from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import estimate_run
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
+from packs.powerset.primitives.install.workflow import _parser as source_parser
 from packs.powerset.primitives.install.status import (
     PROCESSING_STEPS, InstallState, InstallStatus, InstallStep,
 )
@@ -69,6 +74,14 @@ class _Stopped(Exception):
     pass
 
 
+def _capped(dispatched: dict) -> bool:
+    """The Modal run stopped before spending because its estimate exceeded --max-usd."""
+    if dispatched["status"] != "failed":
+        return False
+    native = dispatched["stages"]["indexing"]["payload"]
+    return native.get("phase") == "estimate" and native.get("error") == "estimate exceeds --max-usd cap"
+
+
 class ProcessingOnboarding:
     def __init__(self, root: Path, *, approved_spend: tuple[str, ...] = (),
                  approve_upload: bool = False, port: int = 8765) -> None:
@@ -82,9 +95,10 @@ class ProcessingOnboarding:
         self.approved = {SpendStep(step) for step in approved_spend}
         self.approve_upload = approve_upload
         self.port = port
-        saved = shlex.split(self.retry)
-        store = next((value for flag, value in zip(saved, saved[1:]) if flag == "--wacli-store"), None)
-        self.collection_options = {"wacli_db": Path(store).expanduser() / "wacli.db"} if store else {}
+        self.saved, _ = source_parser(add_help=False).parse_known_args(shlex.split(self.retry)[1:])
+        self.account_email = previous.get("account_email") or ""
+        store = self.saved.wacli_store
+        self.collection_options = {"wacli_db": store.expanduser() / "wacli.db"} if store else {}
         self.step = InstallStep.DEEP_CONTEXT
         self.people = self.root / _PEOPLE
         self.index = self.root / _INDEX
@@ -184,11 +198,17 @@ class ProcessingOnboarding:
             self._run("seed", lambda: Seed(db=self.db).run().to_payload(), "Reusing your previous context")
             readiness = self._run("check", lambda: readiness_payload(check.run()), "Checking your contacts")
         if readiness["checks"]["owner_json"]["status"] == "absent" and not self.owner.is_file():
-            self._write(InstallState.WAITING, "Add your LinkedIn profile to continue.",
-                        action={"kind": "owner", "command": readiness["next_command"],
-                                "text": "The agent needs your LinkedIn URL and email. A profile cache miss needs approval."})
-            raise _Stopped
-        if self.owner.is_file():
+            # The LinkedIn scrape records the signed-in profile; the mailbox is the owner's email.
+            linkedin_url = (read_json(self.root / SCRAPE_RECORD, {}) or {}).get("owner_url", "")
+            email = next(iter(self.saved.gmail_email), "") or self.account_email
+            if not (linkedin_url and email):
+                self._write(InstallState.WAITING, "Add your LinkedIn profile to continue.",
+                            action={"kind": "owner", "command": readiness["next_command"],
+                                    "text": "The agent needs your LinkedIn URL and email."})
+                raise _Stopped
+            self._run("owner", lambda: BuildOwner(db=self.db, linkedin_url=linkedin_url, email=email)
+                      .run().to_payload(), "Preparing your profile")
+        elif self.owner.is_file():
             self._run("owner", lambda: BuildOwner(db=self.db).run().to_payload(), "Preparing your profile")
         if not self._collected():
             self._run("collect", lambda: CollectPersonContext(db=self.db, deep_cap=1600,
@@ -271,8 +291,7 @@ class ProcessingOnboarding:
                                     "result": dispatched})
                 raise _Stopped
             native = dispatched["stages"]["indexing"]["payload"]
-            if (dispatched["status"] == "failed" and native.get("phase") == "estimate"
-                    and native.get("error") == "estimate exceeds --max-usd cap"):
+            if _capped(dispatched):
                 if native["estimated_usd"] >= _AUTO_SPEND_USD:
                     self._approval(SpendStep.INDEX, native)
                 command = [*self.modal, "index-people", "--people-csv", _PEOPLE,
@@ -319,9 +338,10 @@ class ProcessingOnboarding:
                     and (self.index / filename).stat().st_mtime_ns >= previous_mtime
                     for filename in ("local-search.duckdb", "manifest.json"))
                 dispatched = json.loads(self.dispatch_path.read_text(encoding="utf-8")) if self.dispatch_path.is_file() else None
+                # A run that failed for any reason but the spend cap is redispatched, not re-downloaded.
                 if dispatched is not None and not (
                     dispatched["current_stage"] == "indexing" and (
-                        dispatched["status"] in {"running", "failed"}
+                        dispatched["status"] == "running" or _capped(dispatched)
                         or dispatched["status"] == "completed" and not previous_index
                         and previous_mtime <= int(datetime.fromisoformat(
                             dispatched["started_at"].replace("Z", "+00:00")).timestamp() * 1_000_000_000)

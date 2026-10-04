@@ -1063,14 +1063,6 @@ def main() -> int:
     dl.add_argument("--wait", action="store_true", help="poll runs/<label>/status.json until the run finishes")
 
     args = ap.parse_args()
-    if args.cmd == "index-people":
-        from packs.powerset.primitives.install.progress import run_with_progress
-        from packs.powerset.primitives.install.status import InstallStep
-        def run_index() -> int:
-            require_modal_credentials()
-            return cmd_index_people(args)
-        return run_with_progress(Path.cwd(), InstallStep.INDEX, "Building your search index",
-                                 [sys.executable, *sys.argv], run_index)
     require_modal_credentials()
     return {"pipeline": cmd_pipeline, "import-linkedin": cmd_import_linkedin, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 

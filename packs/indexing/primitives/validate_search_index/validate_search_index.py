@@ -199,17 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    from packs.powerset.primitives.install.progress import run_with_progress
-    from packs.powerset.primitives.install.status import InstallStep
-
-    def run() -> int:
-        payload = validate(Path(args.db), Path(args.people_csv))
-        json.dump(payload, sys.stdout, indent=2)
-        sys.stdout.write("\n")
-        return 0 if payload["status"] == "ok" else 1
-
-    sys.exit(run_with_progress(Path.cwd(), InstallStep.VALIDATE, "Checking your search",
-                              [sys.executable, *sys.argv], run))
+    payload = validate(Path(args.db), Path(args.people_csv))
+    json.dump(payload, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    sys.exit(0 if payload["status"] == "ok" else 1)
 
 
 if __name__ == "__main__":
