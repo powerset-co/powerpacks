@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-import shlex
 import shutil
 import sqlite3
 
@@ -38,7 +37,6 @@ class RecoverManifest(StageManifest):
     decisions: tuple[DecisionResult, ...]
     contact_facts_restored: int
     parents_merged: int
-    next_command: str
     updated_at: str
 
 
@@ -80,8 +78,14 @@ class Recover:
             raise StoreError("backup path already exists; choose an unused destination, including on reruns")
         if not self.db_path.is_file():
             raise StoreError("existing canonical database is missing")
-        if self.deep_context.is_symlink():
-            raise StoreError("deep-context must be a local directory so its backup is independent")
+        for directory in (self.deep_context, self.facts, self.raw, self.manifest.parent,
+                          self.facts / "seed", self.facts / "parents", self.raw / "parents"):
+            if directory.is_symlink():
+                raise StoreError(f"recovery output directory must not be symlinked: {directory}")
+        for directory in (self.manifest.parent, self.facts / "seed",
+                          self.facts / "parents", self.raw / "parents"):
+            if any(path.is_symlink() for path in directory.glob("*")):
+                raise StoreError(f"recovery output files must not be symlinked: {directory}")
         feedback = read_feedback(self.operator_id, feedback_json=self.feedback_json)
         snapshot = self._backup()
         db = Db(self.db_path)
@@ -100,8 +104,6 @@ class Recover:
             held=sum(row.status == CarryStatus.HELD for row in decisions),
             unmatched=sum(row.status == CarryStatus.UNMATCHED for row in decisions),
             decisions=decisions, contact_facts_restored=restored, parents_merged=merged,
-            next_command=(f"bin/deep-context parents --db {shlex.quote(str(self.db_path))} "
-                          f"--parents-dir {shlex.quote(str(self.deep_context / 'parents'))}"),
             updated_at=now_iso(),
         )
         write_stage_manifest(self.manifest, result)

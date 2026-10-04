@@ -37,8 +37,9 @@ choices, restored facts and name matches are separate counts. A completed
 preparation is not proof that every identity is correct. Mixed-person histories
 remain held; recover never runs the historical splitting heuristic.
 
-Continue the normal skill: collect and preview synthesis (only pending contact
-evidence), compose, cluster, parents, then preview/run enrichment. The existing
+Resume the normal skill at fan-in, then `ensure-parents` and `check`. Continue
+collection and the synthesis preview (only pending contact evidence), compose,
+cluster, parents, then preview/run enrichment. The existing
 identity and final Sol stages process unresolved candidates and reuse judgments
 only when their evidence and request match. `finish-reviews --dry-run` previews a
 remaining final pass; do not replay arbitrary historical verdicts by ID or turn
