@@ -31,8 +31,14 @@ want as it runs."
 This needs a shell on the user's Mac. Without one, explain where to paste the
 instruction; do not claim a cloud installation changed their computer.
 
+Before running anything, ask the one question setup needs: "Which Gmail accounts
+should I add? The first one owns the Gmail setup." Pass each answer as
+`--gmail-email`, first address first. Everything after that is logins the user
+does back to back near the start (Powerset, LinkedIn, Google, each Gmail
+approval, Full Disk Access, WhatsApp QR); then setup runs on its own.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --gmail-email first@example.com --gmail-email second@example.com
 ```
 
 Bootstrap installs the runtime and starts the installed coordinator `bin/onboard`.
@@ -74,7 +80,11 @@ failure. Check `/healthz`, `/api/install`, and `.powerpacks/install/server.log`.
 
 Default to LinkedIn, Gmail's past year, iMessage, and WhatsApp. Inform the user
 once and keep going. Apply already-given account/history choices. Gmail's identity
-is independent of Powerset's identity. LinkedIn and the Google Console run in
+is independent of Powerset's identity. If the coordinator still asks which Gmail
+accounts to add (none were passed and msgvault has none), ask the user in chat
+(offer the action's `suggested` address), append one `--gmail-email` per address
+to the saved `retry_command`, first address first, and run it. Every address gets
+its own browser approval; the coordinator allows them all beforehand. LinkedIn and the Google Console run in
 headless Chrome (or Brave); a window opens only when a login is needed, closes
 once the user is signed in, and the sessions are kept for later runs. LinkedIn
 reads up to ~3,000 connections per run, then processing starts; the rest sync on

@@ -9,6 +9,11 @@ Changelog:
       one login) instead of stopping for the agent; LinkedIn prepares its own
       tools; the unreachable `skip` source, the Gmail-account question, the
       second "already running" check and the standalone main() are deleted.
+      Gmail asks once which accounts to add (the first owns the OAuth app)
+      unless msgvault already has some, and makes every one an OAuth test
+      user before its consent. A run prepares every tool, then collects every
+      login back to back (LinkedIn, Google, Full Disk Access, WhatsApp QR),
+      then syncs and imports on its own.
   2026-10-03: LinkedIn is a default source, runs first, and reads the
       connections list in Chrome instead of waiting for LinkedIn's emailed export.
 """
@@ -35,8 +40,8 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import Primitive
 from packs.ingestion.primitives.imports import common as import_common
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
-from packs.ingestion.primitives.setup.automations import accounts
-from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup
+from packs.ingestion.primitives.setup.automations import accounts, msgvault_home
+from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup, TestUsers
 from packs.ingestion.primitives.setup.msgvault_setup import build_parser as msgvault_parser
 from packs.powerset.primitives.install.status import PROCESSING_STEPS, InstallState, InstallStatus, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
@@ -62,6 +67,9 @@ _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
+GMAIL_QUESTION = "Which Gmail accounts should I add? The first one owns the Gmail setup."
+_TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
+               Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
 
 
 class SourceOnboarding:
@@ -81,14 +89,12 @@ class SourceOnboarding:
         if not set(self.skip_sources) <= set(self.sources):
             raise ValueError("Skip only a selected source")
         self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
+        # Mailboxes msgvault already holds are reused; otherwise Gmail asks once.
         if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
-            if previous.get("account_email"):
-                self.gmail_emails = (previous["account_email"],)
-            else:
-                home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
-                configured = accounts.VaultHealth.from_status(accounts.status_payload(home)).stored_emails - {""}
-                if len(configured) == 1:
-                    self.gmail_emails = tuple(configured)
+            home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
+            self.gmail_emails = tuple(sorted(
+                accounts.VaultHealth.from_status(accounts.status_payload(home)).stored_emails - {""}))
+        self.gmail_suggestion = previous.get("account_email") or ""
         self.sync_after = sync_after or saved.sync_after or (
             (date.today() - timedelta(days=365)).isoformat() if Source.GMAIL in self.sources else "")
         wacli_store = wacli_store or saved.wacli_store
@@ -157,9 +163,7 @@ class SourceOnboarding:
             coverage[child["account_email"].lower()] = covers
         return bool(requested) and all(coverage.get(email.lower(), False) for email in self.gmail_emails)
 
-    def _gmail(self) -> bool:
-        if not self._tools(Source.GMAIL, InstallStep.GMAIL_TOOLS):
-            return False
+    def _gmail_connect(self) -> bool:
         self._write(InstallStep.GMAIL_LOGIN, InstallState.RUNNING, "Checking Gmail access")
         home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
         local = accounts.status_payload(home)
@@ -171,6 +175,15 @@ class SourceOnboarding:
             if not self._result(InstallStep.GMAIL_LOGIN, created, {"kind": "gmail"}):
                 return False
             local = accounts.status_payload(home)
+        # Every mailbox must be an OAuth test user before its consent can succeed.
+        allowed = set(accounts.normalize_email_list(list(msgvault_home.load_setup_state(home, "").test_users)))
+        missing = [email for email in accounts.normalize_email_list(list(self.gmail_emails)) if email not in allowed]
+        if missing:
+            self._write(InstallStep.GMAIL_LOGIN, InstallState.RUNNING, "Allowing your Gmail accounts")
+            added = TestUsers.from_args(msgvault_parser().parse_args(
+                ["add-test-users", "--home", str(home), "--login-email", self.gmail_emails[0], *missing])).run()
+            if not self._result(InstallStep.GMAIL_LOGIN, added, {"kind": "gmail"}):
+                return False
         if local["database"]["exists"]:
             health = accounts.check_accounts_payload(home, list(self.gmail_emails))
             if health["status"] == "error":
@@ -200,6 +213,9 @@ class SourceOnboarding:
                              "command": "; ".join(item["authorize_command"] for item in health.get("accounts", [])
                                                   if "authorize_command" in item)}):
             return False
+        return True
+
+    def _gmail_sync(self) -> bool:
         current = None if self.refresh else import_common.import_manifest_current("gmail")
         imported_emails = {item["account_email"].lower() for item in current.input.get("accounts", [])} if current else set()
         if current and imported_emails == {email.lower() for email in self.gmail_emails} and self._gmail_covered(current):
@@ -215,47 +231,45 @@ class SourceOnboarding:
         importer.run()
         return self._result(InstallStep.GMAIL_IMPORT, importer.written)
 
-    def _messages(self, source: Source) -> bool:
-        imessage = source is Source.IMESSAGE
-        if imessage:
-            self._write(InstallStep.IMESSAGE_ACCESS, InstallState.RUNNING, "Checking Messages access")
-            extractor = IMessageExtractor()
-            access = extractor.check(strict=True)
-            action = {"kind": "permission", "text": "Allow access to Messages",
-                      "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"}
-            chat = access.get("chat_db", {})
-            if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
-                self._write(InstallStep.IMESSAGE_ACCESS, InstallState.WAITING, "Allow access to Messages",
-                            {**action, "details": access})
-                while (access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
-                       and not access["chat_db"].get("missing_tables")):
-                    time.sleep(_PERMISSION_POLL_SECONDS)
-                    access = extractor.check(strict=True)
-            if not self._result(InstallStep.IMESSAGE_ACCESS, access, action):
-                return False
-            sync_step = import_step = InstallStep.IMESSAGE_IMPORT
+    def _imessage_access(self) -> bool:
+        self._write(InstallStep.IMESSAGE_ACCESS, InstallState.RUNNING, "Checking Messages access")
+        extractor = IMessageExtractor()
+        access = extractor.check(strict=True)
+        action = {"kind": "permission", "text": "Allow access to Messages",
+                  "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"}
+        chat = access.get("chat_db", {})
+        if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
+            self._write(InstallStep.IMESSAGE_ACCESS, InstallState.WAITING, "Allow access to Messages",
+                        {**action, "details": access})
+            while (access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
+                   and not access["chat_db"].get("missing_tables")):
+                time.sleep(_PERMISSION_POLL_SECONDS)
+                access = extractor.check(strict=True)
+        return self._result(InstallStep.IMESSAGE_ACCESS, access, action)
+
+    def _whatsapp_link(self) -> bool:
+        if auth.auth_status(self.wacli_store).authenticated:
+            self._write(InstallStep.WHATSAPP_LOGIN, InstallState.RUNNING, "Checking WhatsApp")
         else:
-            if not self._tools(source, InstallStep.WHATSAPP_TOOLS):
-                return False
-            if auth.auth_status(self.wacli_store).authenticated:
-                self._write(InstallStep.WHATSAPP_LOGIN, InstallState.RUNNING, "Checking WhatsApp")
-            else:
-                # auth_report stays alive while wacli refreshes the QR artifact.
-                self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Connect WhatsApp",
-                            {"kind": "qr", "text": "Scan with WhatsApp → Linked devices",
-                             "details": {"store": str(self.wacli_store)}})
-            while True:
-                try:
-                    result = auth.auth_report(self.wacli_store, open_qr_page=False)
-                    break
-                except PrimitiveBlocked as blocked:
-                    if "command timed out after" not in blocked.payload.get("detail", ""):
-                        raise
-                    self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Refreshing your WhatsApp QR code",
-                                {"kind": "qr", "text": "Scan with WhatsApp → Linked devices"})
-            if not self._result(InstallStep.WHATSAPP_LOGIN, result, {"kind": "qr"}):
-                return False
-            sync_step, import_step = InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT
+            # auth_report stays alive while wacli refreshes the QR artifact.
+            self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Connect WhatsApp",
+                        {"kind": "qr", "text": "Scan with WhatsApp → Linked devices",
+                         "details": {"store": str(self.wacli_store)}})
+        while True:
+            try:
+                result = auth.auth_report(self.wacli_store, open_qr_page=False)
+                break
+            except PrimitiveBlocked as blocked:
+                if "command timed out after" not in blocked.payload.get("detail", ""):
+                    raise
+                self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Refreshing your WhatsApp QR code",
+                            {"kind": "qr", "text": "Scan with WhatsApp → Linked devices"})
+        return self._result(InstallStep.WHATSAPP_LOGIN, result, {"kind": "qr"})
+
+    def _messages_sync(self, source: Source) -> bool:
+        imessage = source is Source.IMESSAGE
+        sync_step, import_step = ((InstallStep.IMESSAGE_IMPORT, InstallStep.IMESSAGE_IMPORT) if imessage
+                                  else (InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT))
         current = None if self.refresh else import_common.import_manifest_current("messages")
         contacts = self.root / f".powerpacks/messages/{source.value}.contacts.csv"
         store_matches = True
@@ -276,15 +290,22 @@ class SourceOnboarding:
         importer.run()
         return self._result(import_step, importer.written)
 
-    def _linkedin(self) -> bool:
+    def _linkedin_current(self) -> bool:
         record = read_json(self.root / SCRAPE_RECORD, {}) or {}
-        if record.get("complete") and not self.refresh:
+        return bool(record.get("complete")) and not self.refresh
+
+    def _linkedin_login(self) -> bool:
+        if self._linkedin_current():
+            return True
+        self._write(InstallStep.LINKEDIN, InstallState.RUNNING,
+                    "Checking LinkedIn. Log in to LinkedIn in the window that opens if it asks.")
+        return self._result(InstallStep.LINKEDIN, LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login())
+
+    def _linkedin_sync(self) -> bool:
+        if self._linkedin_current():
             self._write(InstallStep.LINKEDIN, InstallState.COMPLETED, "LinkedIn connections ready")
             return True
-        if not self._tools(Source.LINKEDIN, InstallStep.LINKEDIN):
-            return False
-        self._write(InstallStep.LINKEDIN, InstallState.RUNNING,
-                    "Reading your LinkedIn connections. Log in to LinkedIn in the window that opens if it asks.")
+        self._write(InstallStep.LINKEDIN, InstallState.RUNNING, "Reading your LinkedIn connections")
         return self._result(InstallStep.LINKEDIN, LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run())
 
     def run(self) -> dict:
@@ -301,23 +322,28 @@ class SourceOnboarding:
                         self._write(step, InstallState.WAITING, "Not started")
             if all(source in self.skip_sources for source in self.sources):
                 return self._write(InstallStep.READY, InstallState.COMPLETED, "Powerpacks is installed")
-            linkedin_wait = None
-            for source in self.sources:
-                if source in self.skip_sources:
+            active = [source for source in self.sources if source not in self.skip_sources]
+            if Source.GMAIL in active and not self.gmail_emails:
+                return self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, GMAIL_QUESTION,
+                                   {"kind": "gmail", "text": GMAIL_QUESTION, "suggested": self.gmail_suggestion},
+                                   pid=0)
+            # Tools first (Homebrew can take minutes), then every login back to back while
+            # the user is here, then the syncs and imports run without them.
+            for source in active:
+                if source is Source.LINKEDIN and self._linkedin_current():
                     continue
-                if source is Source.LINKEDIN and not self._linkedin():
-                    linkedin_wait = self.status.read()
-                    if linkedin_wait["status"] != InstallState.WAITING:
-                        return linkedin_wait
-                    continue
-                if source is Source.GMAIL and not self._gmail():
+                if source in _TOOL_STEPS and not self._tools(source, _TOOL_STEPS[source]):
                     return self.status.read()
-                if source in {Source.IMESSAGE, Source.WHATSAPP} and not self._messages(source):
+            logins = {Source.LINKEDIN: self._linkedin_login, Source.GMAIL: self._gmail_connect,
+                      Source.IMESSAGE: self._imessage_access, Source.WHATSAPP: self._whatsapp_link}
+            for source in active:
+                if not logins[source]():
                     return self.status.read()
-            # A LinkedIn login still pending waits after the other sources ran.
-            if linkedin_wait:
-                return self._write(InstallStep.LINKEDIN, InstallState.WAITING, linkedin_wait["message"],
-                                   linkedin_wait.get("action"), pid=0)
+            for source in active:
+                synced = (self._linkedin_sync() if source is Source.LINKEDIN else self._gmail_sync()
+                          if source is Source.GMAIL else self._messages_sync(source))
+                if not synced:
+                    return self.status.read()
             imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
             counts = {item.source: item.stats["people"] for item in imports
                       if item.status == "completed" and "people" in item.stats}
