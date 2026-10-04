@@ -91,30 +91,11 @@ class ReviewLifecycleTests(unittest.TestCase):
         error.exception.close()
         self.assertEqual(self.get('/install')[0], 200)
 
-    def test_cold_server_launches_coordinator_after_dependencies_arrive(self):
+    def test_cold_server_serves_install_page_after_dependencies_arrive(self):
         result = self.start()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.addCleanup(self.stop, json.loads(result.stdout)['pid'])
         (self.root / '.venv').symlink_to(ROOT / '.venv', target_is_directory=True)
-        command = self.root / 'bin/onboard'
-        command.parent.mkdir()
-        command.write_text(f'#!{sys.executable}\n'
-                           'import json, sys\n'
-                           'from pathlib import Path\n'
-                           'Path("coordinator-args.json").write_text(json.dumps(sys.argv[1:]))\n')
-        command.chmod(0o755)
-        request = urllib.request.Request(self.base + '/api/install/sources',
-                                         data=json.dumps({'sources': [], 'skip': True}).encode(),
-                                         headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(request, timeout=3) as response:
-            self.assertEqual(response.status, 202)
-        deadline = time.monotonic() + 5
-        args_path = self.root / 'coordinator-args.json'
-        while time.monotonic() < deadline:
-            if args_path.exists():
-                break
-            time.sleep(0.05)
-        self.assertEqual(json.loads(args_path.read_text()), ['--source', 'skip'])
         self.assertEqual(json.loads(self.get('/healthz')[1])['pid'], json.loads(result.stdout)['pid'])
         self.assertEqual(self.get('/install')[0], 200)
 

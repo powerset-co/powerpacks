@@ -12,8 +12,6 @@ import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import { doingNow } from "@/pages/review/enrich/copy"
 import type { InstallState, InstallStatus } from "@/types/install"
 
-import { SourceChoice } from "./SourceChoice"
-
 const DEFAULT_STEPS = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
 const DEFAULT_LABELS: Record<string, string> = {
   runtime: "Prepare your Mac",
@@ -44,7 +42,7 @@ const STATUS_LABELS: Record<InstallState, string> = {
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
 const STEP_GROUPS = [
-  { key: "install", label: "Installing Powerpacks", steps: [...DEFAULT_STEPS, "tools"] },
+  { key: "install", label: "Installing Powerpacks", steps: DEFAULT_STEPS },
   {
     key: "whatsapp",
     label: "Syncing WhatsApp",
@@ -205,11 +203,7 @@ export function InstallPage() {
         </section>
         {data?.status === "waiting" && action ? (
           <section className="install-action">
-            {action.kind === "sources" ? <SourceChoice key={action.kind} data={data} /> : null}
-            {action.kind === "gmail" && !action.command ? (
-              <p>Tell me which Gmail account to use in chat.</p>
-            ) : null}
-            {action.kind === "gmail" && action.command ? (
+            {action.kind === "gmail" ? (
               <p>Finish connecting Gmail in your browser. I’ll continue here.</p>
             ) : null}
             {action.kind === "qr" ? (
@@ -231,17 +225,13 @@ export function InstallPage() {
                   </strong>
                   .
                 </p>
-                {action.app_path ? <code>{action.app_path}</code> : null}
                 <button type="button" onClick={() => void open("permissions")}>
                   Open settings &amp; show the app
                 </button>
-                <p>Drag the highlighted app into Full Disk Access, enable it, then tell me here.</p>
+                <p>
+                  Drag the highlighted app into Full Disk Access and turn it on. I’ll continue automatically.
+                </p>
               </div>
-            ) : null}
-            {action.kind === "processing" ? (
-              <p>
-                {action.text ?? "Your contacts are saved. I’ll check what’s needed to make them searchable."}
-              </p>
             ) : null}
             {action.kind === "review" ? (
               <div>
@@ -313,20 +303,9 @@ export function InstallPage() {
                 )
               })}
             </ol>
-            <details className="install-details">
-              <summary>Details</summary>
-              {failed ? <p>{data.index_progress?.message ?? data.message}</p> : null}
-              <p>
-                Log: <code>{data.log_path}</code>
-              </p>
-              <p>
-                Retry: <code>{data.retry_command}</code>
-              </p>
-              {action?.details ? <pre>{JSON.stringify(action.details, null, 2)}</pre> : null}
-              {data.index_progress?.payload ? (
-                <pre>{JSON.stringify(data.index_progress.payload, null, 2)}</pre>
-              ) : null}
-            </details>
+            {failed ? (
+              <p className="install-failure">{data.index_progress?.message ?? data.message}</p>
+            ) : null}
           </>
         ) : null}
       </main>

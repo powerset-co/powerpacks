@@ -5,6 +5,10 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-03: Gmail's OAuth app is created in process (headless Chrome after
+      one login) instead of stopping for the agent; LinkedIn prepares its own
+      tools; the unreachable `skip` source, the Gmail-account question, the
+      second "already running" check and the standalone main() are deleted.
   2026-10-03: LinkedIn is a default source, runs first, and reads the
       connections list in Chrome instead of waiting for LinkedIn's emailed export.
 """
@@ -19,9 +23,9 @@ from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import emit, read_json
+from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
-from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, LinkedInConnections
+from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD, LinkedInConnections
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import parse_msgvault_sync_date
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
@@ -32,6 +36,8 @@ from packs.ingestion.primitives.imports import common as import_common
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
 from packs.ingestion.primitives.setup.automations import accounts
+from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup
+from packs.ingestion.primitives.setup.msgvault_setup import build_parser as msgvault_parser
 from packs.powerset.primitives.install.status import PROCESSING_STEPS, InstallState, InstallStatus, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
 
@@ -42,7 +48,6 @@ class Source(str, Enum):
     GMAIL = "gmail"
     IMESSAGE = "imessage"
     WHATSAPP = "whatsapp"
-    SKIP = "skip"
 
 
 _SOURCE_STEPS = {
@@ -52,7 +57,6 @@ _SOURCE_STEPS = {
     Source.WHATSAPP: (InstallStep.WHATSAPP_TOOLS, InstallStep.WHATSAPP_LOGIN,
                       InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT),
     Source.LINKEDIN: (InstallStep.LINKEDIN,),
-    Source.SKIP: (),
 }
 _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
@@ -72,11 +76,9 @@ class SourceOnboarding:
         saved, _ = _parser().parse_known_args(command[1:] if Path(command[0]).name == "onboard" else [])
         selected = set(Source(source) for source in (sources or saved.source or _DEFAULT_SOURCES))
         self.sources = tuple(source for source in Source if source in selected)
-        if Source.SKIP in self.sources and len(self.sources) != 1:
-            raise ValueError("Choose sources or skip, not both")
         skip_sources = skip_sources if sources else (*saved.skip_source, *skip_sources)
         self.skip_sources = tuple(dict.fromkeys(Source(source) for source in skip_sources))
-        if Source.SKIP in self.skip_sources or not set(self.skip_sources) <= set(self.sources):
+        if not set(self.skip_sources) <= set(self.sources):
             raise ValueError("Skip only a selected source")
         self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
         if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
@@ -95,7 +97,7 @@ class SourceOnboarding:
         self.step = InstallStep.SOURCES
         history = [step for step in previous.get("plan", []) if step not in PROCESSING_STEPS
                    and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
-        if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
+        if all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
         else:
             next_steps = tuple(step for step in PROCESSING_STEPS if step is not InstallStep.REVIEW)
@@ -156,23 +158,19 @@ class SourceOnboarding:
         return bool(requested) and all(coverage.get(email.lower(), False) for email in self.gmail_emails)
 
     def _gmail(self) -> bool:
-        if not self.gmail_emails:
-            self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING,
-                        "Which Gmail account should I use?",
-                        {"kind": "gmail", "text": "Which Gmail account should I use?"}, pid=0)
-            return False
         if not self._tools(Source.GMAIL, InstallStep.GMAIL_TOOLS):
             return False
         self._write(InstallStep.GMAIL_LOGIN, InstallState.RUNNING, "Checking Gmail access")
         home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
         local = accounts.status_payload(home)
-        oauth = "uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py"
         if not local["config"]["oauth_configured"]:
-            self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, "Connect Gmail",
-                        {"kind": "gmail", "text": "Set up Gmail access in your browser",
-                         "command": f"{oauth} browser-setup --email {shlex.quote(self.gmail_emails[0])} --add-account",
-                         "details": local}, pid=0)
-            return False
+            self._write(InstallStep.GMAIL_LOGIN, InstallState.RUNNING,
+                        "Setting up Gmail access. Sign in to Google in your browser if it asks.")
+            created = BrowserSetup.from_args(msgvault_parser().parse_args(
+                ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0], "--no-install-mcp"])).run()
+            if not self._result(InstallStep.GMAIL_LOGIN, created, {"kind": "gmail"}):
+                return False
+            local = accounts.status_payload(home)
         if local["database"]["exists"]:
             health = accounts.check_accounts_payload(home, list(self.gmail_emails))
             if health["status"] == "error":
@@ -279,23 +277,18 @@ class SourceOnboarding:
         return self._result(import_step, importer.written)
 
     def _linkedin(self) -> bool:
-        manifest = read_json(self.root / CONNECTIONS_CSV.with_name("manifest.json"), {}) or {}
-        if manifest.get("complete") and not self.refresh:
+        record = read_json(self.root / SCRAPE_RECORD, {}) or {}
+        if record.get("complete") and not self.refresh:
             self._write(InstallStep.LINKEDIN, InstallState.COMPLETED, "LinkedIn connections ready")
             return True
+        if not self._tools(Source.LINKEDIN, InstallStep.LINKEDIN):
+            return False
         self._write(InstallStep.LINKEDIN, InstallState.RUNNING,
-                    "Reading your LinkedIn connections. Log in to LinkedIn in the Chrome window if it asks.")
+                    "Reading your LinkedIn connections. Log in to LinkedIn in the window that opens if it asks.")
         return self._result(InstallStep.LINKEDIN, LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run())
 
     def run(self) -> dict:
         previous = self.status.read()
-        active = previous["status"] == InstallState.RUNNING or (
-            previous["status"] == InstallState.WAITING
-            and previous["installer_pid"] > 0
-            and previous["step"] in {InstallStep.ACCOUNT, InstallStep.GMAIL_LOGIN,
-                                     InstallStep.IMESSAGE_ACCESS, InstallStep.WHATSAPP_LOGIN})
-        if active and previous["installer_pid"] != os.getpid():
-            return previous
         try:
             if Path.cwd() != self.root:
                 raise ValueError(f"Run bin/onboard from {self.root}")
@@ -306,7 +299,7 @@ class SourceOnboarding:
                         self._write(step, InstallState.SKIPPED, "Skipped for now")
                     elif previous.get("steps", {}).get(step.value, {}).get("status") == InstallState.SKIPPED:
                         self._write(step, InstallState.WAITING, "Not started")
-            if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
+            if all(source in self.skip_sources for source in self.sources):
                 return self._write(InstallStep.READY, InstallState.COMPLETED, "Powerpacks is installed")
             linkedin_wait = None
             for source in self.sources:
@@ -348,7 +341,7 @@ class SourceOnboarding:
 def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, add_help=add_help)
     parser.add_argument("--source", choices=[source.value for source in Source], action="append", default=[])
-    parser.add_argument("--skip-source", choices=[source.value for source in Source if source is not Source.SKIP],
+    parser.add_argument("--skip-source", choices=[source.value for source in Source],
                         action="append", default=[], help="Skip a selected source for now")
     parser.add_argument("--gmail-email", action="append", default=[])
     parser.add_argument("--sync-after", default="")
@@ -356,16 +349,3 @@ def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--refresh", action="store_true", help="Sync selected sources instead of reusing imported contacts")
     return parser
 
-
-def main() -> None:
-    args = _parser().parse_args()
-    payload = SourceOnboarding(Path.cwd(), sources=tuple(args.source),
-                               gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
-                               wacli_store=args.wacli_store, refresh=args.refresh,
-                               skip_sources=tuple(args.skip_source)).run()
-    emit(payload)
-    raise SystemExit({"completed": 0, "waiting": 10, "running": 10, "failed": 1}[payload["status"]])
-
-
-if __name__ == "__main__":
-    main()

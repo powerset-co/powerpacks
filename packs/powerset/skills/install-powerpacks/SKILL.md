@@ -18,11 +18,11 @@ metadata:
 
 The pasted installation instruction starts this whole workflow:
 
-Install → Connect Powerset → Sync Gmail → Sync iMessage → Sync WhatsApp →
-Discover → Enrich → Review when needed → Build Index → Verify.
+Install → Connect Powerset → Sync LinkedIn → Sync Gmail → Sync iMessage →
+Sync WhatsApp → Discover → Enrich → Review when needed → Build Index → Verify.
 
-Own the result. Run commands yourself; involve the user only for browser consent,
-QR scans, OS permissions, missing identity choices, required review, and upload authorization.
+Own the result. Run commands yourself; involve the user only for browser logins,
+QR scans, OS permissions, required review, and upload authorization.
 Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
 want as it runs."
 
@@ -32,7 +32,7 @@ This needs a shell on the user's Mac. Without one, explain where to paste the
 instruction; do not claim a cloud installation changed their computer.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --no-tools
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
 ```
 
 Bootstrap installs the runtime and starts the installed coordinator `bin/onboard`.
@@ -72,12 +72,14 @@ failure. Check `/healthz`, `/api/install`, and `.powerpacks/install/server.log`.
 
 ## Choices and waiting
 
-Default to Gmail's past year, iMessage, WhatsApp, and LinkedIn. Inform the user once
-and keep going. Apply already-given account/history choices. Gmail's identity is
-independent of Powerset's identity. LinkedIn opens a Chrome window on the user's
-connections page: they log in once (the session is kept), and the coordinator reads
-up to ~3,000 connections per run, then starts processing; the rest sync on later
-runs. Never ask for LinkedIn's emailed export.
+Default to LinkedIn, Gmail's past year, iMessage, and WhatsApp. Inform the user
+once and keep going. Apply already-given account/history choices. Gmail's identity
+is independent of Powerset's identity. LinkedIn and the Google Console run in
+headless Chrome (or Brave); a window opens only when a login is needed, closes
+once the user is signed in, and the sessions are kept for later runs. LinkedIn
+reads up to ~3,000 connections per run, then processing starts; the rest sync on
+later runs. Never ask for LinkedIn's emailed export, the user's LinkedIn URL, or
+their email: the coordinator reads them from those sessions.
 
 Existing `--source`, `--gmail-email`, `--sync-after`, `--wacli-store`, and `--refresh`
 options pass through bootstrap. Saved source/account/history/store choices survive
@@ -86,7 +88,7 @@ account from several or switch to a shared Powerset network merely because it wo
 Unprovisioned or unindexed hosted search does not block local source setup.
 
 Read the manifest's `action` when waiting. The coordinator owns the sequence;
-the agent handles an action that needs setup repair, an owner identity, or approval.
+the agent handles an action that needs setup repair or approval.
 Do not hand its commands to the user. For Messages permissions, the existing
 `/api/install/permissions` action opens Full Disk Access and highlights the detected
 app. Tell the user which app was identified; only the user grants OS access.

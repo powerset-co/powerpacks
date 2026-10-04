@@ -3,7 +3,6 @@ export type InstallStep = string
 export type InstallState = "running" | "waiting" | "failed" | "completed" | "skipped"
 export interface InstallAction {
   kind:
-    | "sources"
     | "gmail"
     | "permission"
     | "qr"

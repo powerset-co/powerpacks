@@ -285,14 +285,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--harness", choices=("codex", "claude-code", "pi"), action="append")
-    parser.add_argument("--pid", type=int, default=os.getpid())
-    parser.add_argument("--retry-command", default="bin/onboard")
     parser.add_argument("--port", type=int)
     parser.add_argument("--approve-spend", choices=("synthesize", "cluster", "enrich", "index"),
                         action="append", default=[])
     parser.add_argument("--approve-upload", action="store_true")
     args = parser.parse_args()
-    sources = args
     root = args.root.resolve()
     status = InstallStatus(root)
     status.directory.mkdir(parents=True, exist_ok=True)
@@ -308,10 +305,10 @@ def main() -> None:
         harnesses = args.harness or saved.harness or ["codex"]
         port = args.port or saved.port or 8765
         # Resolve saved source choices before account progress replaces retry_command.
-        flow = SourceOnboarding(root, sources=tuple(sources.source),
-                                gmail_emails=tuple(sources.gmail_email), sync_after=sources.sync_after,
-                                wacli_store=sources.wacli_store, refresh=sources.refresh,
-                                skip_sources=tuple(sources.skip_source))
+        flow = SourceOnboarding(root, sources=tuple(args.source),
+                                gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
+                                wacli_store=args.wacli_store, refresh=args.refresh,
+                                skip_sources=tuple(args.skip_source))
         flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
         flow.retry_command += f" --port {port}"
         try:
@@ -335,11 +332,11 @@ def main() -> None:
             raise SystemExit(code)
         if code == 0:
             print("Powerset search is ready; local setup will continue.", flush=True)
-        if not flow.gmail_emails and not sources.gmail_email and onboarding.email:
-            flow = SourceOnboarding(root, sources=tuple(sources.source),
-                                    gmail_emails=(onboarding.email,), sync_after=sources.sync_after,
-                                    wacli_store=sources.wacli_store, refresh=sources.refresh,
-                                    skip_sources=tuple(sources.skip_source))
+        if not flow.gmail_emails and not args.gmail_email and onboarding.email:
+            flow = SourceOnboarding(root, sources=tuple(args.source),
+                                    gmail_emails=(onboarding.email,), sync_after=args.sync_after,
+                                    wacli_store=args.wacli_store, refresh=args.refresh,
+                                    skip_sources=tuple(args.skip_source))
             flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
             flow.retry_command += f" --port {port}"
         payload = flow.run()

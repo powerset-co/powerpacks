@@ -7,10 +7,12 @@ LinkedIn's export columns, which the Modal `import-linkedin` step reads.
 
 One run makes at most LOADS_PER_RUN scroll requests, 10 people each, with a
 random pause between them. A run stops once KNOWN_OVERLAP already-known
-connections have loaded. `manifest.json` beside the CSV records whether the
-whole list has been read; until it has, each run goes LOADS_PER_RUN further down
-than the last. A CSV with no manifest is a LinkedIn export (or an earlier
-`$setup` copy of one): complete as of its date, so only newer people are read.
+connections have loaded. `connections.json` beside the CSV records whether the
+whole list has been read and the signed-in user's own profile URL; until the
+list is read, each run goes LOADS_PER_RUN further down than the last. A CSV with
+no record is a LinkedIn export (or an earlier `$setup` copy of one): complete
+as of its date, so only newer people are read. The CSV is rewritten only when
+there are new people, so the Modal import reruns only then.
 
 Changelog:
   2026-10-03: created. Replaces waiting on LinkedIn's emailed export.
@@ -26,6 +28,7 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json
 from packs.ingestion.primitives.setup.automations.oauth_browser import ensure_playwright_core
+from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.setup.automations.shell import (
     command_error,
     parse_json_fragment,
@@ -34,18 +37,16 @@ from packs.ingestion.primitives.setup.automations.shell import (
 from packs.shared.csv_io import CsvIO
 
 CONNECTIONS_CSV = Path(".powerpacks/network-import/discover/linkedin/Connections.csv")
+SCRAPE_RECORD = CONNECTIONS_CSV.with_name("connections.json")
 BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/linkedin")
 BROWSER_SCRIPT = Path(__file__).with_name("connections_browser.js")
 EXPORT_COLUMNS = ["First Name", "Last Name", "URL", "Email Address", "Company", "Position", "Connected On"]
 PROFILE_URL = "https://www.linkedin.com/in/{slug}"
 LOGIN_TIMEOUT_SECONDS = 900
-SCROLL_TIMEOUT_SECONDS = 1800
+# A load takes 0.5-1.5 s plus page time; a deep backfill run needs room for all of them.
+SECONDS_PER_LOAD = 3
 LOADS_PER_RUN = 300
 KNOWN_OVERLAP = 25
-
-
-def _slug(url: str) -> str:
-    return url.rstrip("/").rsplit("/in/", 1)[-1]
 
 
 def _read_export(path: Path) -> list[dict[str, str]]:
@@ -78,12 +79,12 @@ class LinkedInConnections:
         self.csv_path = csv_path
         self.profile_dir = profile_dir.expanduser()
         self.login_timeout_seconds = login_timeout_seconds
-        self.manifest_path = csv_path.with_name("manifest.json")
+        self.record_path = csv_path.with_name(SCRAPE_RECORD.name)
 
     def run(self) -> dict[str, Any]:
         existing = _read_export(self.csv_path)
-        known = {_slug(row["URL"]) for row in existing}
-        previous = read_json(self.manifest_path, {}) or {}
+        known = {extract_public_identifier(row["URL"]) for row in existing} - {""}
+        previous = read_json(self.record_path, {}) or {}
         backfill = previous.get("complete") is False
         max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
         deps = ensure_playwright_core()
@@ -97,7 +98,7 @@ class LinkedInConnections:
                 ["node", str(BROWSER_SCRIPT), "--profile-dir", str(self.profile_dir),
                  "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
                  "--max-loads", str(max_loads), "--timeout-seconds", str(self.login_timeout_seconds)],
-                timeout=self.login_timeout_seconds + SCROLL_TIMEOUT_SECONDS,
+                timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
                 env={**os.environ, "NODE_PATH": deps["node_path"]},
             )
         finally:
@@ -109,15 +110,19 @@ class LinkedInConnections:
         if payload["status"] != "ok":
             return {"status": "failed", "message": payload["message"]}
 
-        added = [_export_row(card) for card in payload["connections"] if card["slug"] not in known]
+        added = [_export_row(card) for card in payload["connections"]
+                 if extract_public_identifier(PROFILE_URL.format(slug=card["slug"])) not in known]
         rows = [*added, *existing]
         if not rows:
             return {"status": "failed", "message": "LinkedIn showed no connections."}
-        CsvIO.write_dict_rows(self.csv_path, EXPORT_COLUMNS, rows)
+        if added:
+            CsvIO.write_dict_rows(self.csv_path, EXPORT_COLUMNS, rows)
         complete = payload["stopped"] != "limit"
-        write_json(self.manifest_path, {
+        write_json(self.record_path, {
             "status": "completed", "complete": complete, "connections": len(rows), "added": len(added),
-            "loads": payload["loads"], "stopped": payload["stopped"], "updated_at": now_iso()})
+            "loads": payload["loads"], "stopped": payload["stopped"],
+            "owner_url": PROFILE_URL.format(slug=payload["owner_slug"]) if payload["owner_slug"] else "",
+            "updated_at": now_iso()})
         message = f"{len(rows):,} LinkedIn connections ({len(added):,} new)"
         if not complete:
             message += ". The rest keep syncing on your next run; your contacts are ready to process now."

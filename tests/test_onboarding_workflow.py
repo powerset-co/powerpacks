@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
 from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections
+from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
 from packs.ingestion.primitives.discover.messages.wacli import auth
@@ -28,7 +29,7 @@ from packs.ingestion.primitives.setup.automations import accounts
 from packs.ingestion.primitives.setup.automations.shell import CommandResult
 from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
-from packs.powerset.primitives.install.workflow import SourceOnboarding, main
+from packs.powerset.primitives.install.workflow import SourceOnboarding
 
 
 def payload(**record):
@@ -71,39 +72,29 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(Path.cwd(), self.cwd)
         self.assertEqual(InstallStatus(self.root).read()['steps']['skills']['status'], 'completed')
 
-    def test_no_source_defaults_to_gmail_messages_whatsapp_and_linkedin_without_history_choice(self):
-        result = SourceOnboarding(self.root, sources=()).run()
-        self.assertEqual(result['status'], 'waiting')
-        self.assertEqual(result['step'], 'gmail_login')
-        self.assertEqual(result['action']['text'], 'Which Gmail account should I use?')
-        self.assertEqual(result['plan'][0], 'skills')
-        self.assertIn('gmail_import', result['plan'])
-        self.assertIn('imessage_import', result['plan'])
-        self.assertIn('whatsapp_import', result['plan'])
-        self.assertIn('linkedin', result['plan'])
-        self.assertIn((date.today() - timedelta(days=365)).isoformat(), result['retry_command'])
+    def test_no_source_defaults_to_linkedin_gmail_messages_and_whatsapp_with_a_year_of_history(self):
+        InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
+            message='Network checked', pid=os.getpid(), account_email='casey@example.com')
+        flow = SourceOnboarding(self.root, sources=())
+        self.assertEqual(flow.plan[flow.plan.index('sources') + 1], 'linkedin')
+        for step in ('gmail_import', 'imessage_import', 'whatsapp_import'):
+            self.assertIn(step, flow.plan)
+        self.assertIn('--source linkedin --source gmail --source imessage --source whatsapp', flow.retry_command)
+        self.assertIn('--gmail-email casey@example.com', flow.retry_command)
+        self.assertIn((date.today() - timedelta(days=365)).isoformat(), flow.retry_command)
         self.tools.assert_not_called()
-        self.assert_preserved()
 
     def test_default_gmail_uses_verified_install_account_before_configured_accounts(self):
         InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
             message='Network checked', pid=os.getpid(), account_email='casey@example.com')
         with patch.object(accounts, 'status_payload', return_value={
                 'config': {'oauth_configured': False}, 'database': {'exists': False},
-                'accounts': [{'email': 'other@example.com'}]}):
-            result = SourceOnboarding(self.root, sources=()).run()
+                'accounts': [{'email': 'other@example.com'}]}), \
+             patch.object(BrowserSetup, 'run', autospec=True,
+                          return_value={'status': 'needs_user_action', 'message': 'Sign in to Google'}) as create:
+            result = SourceOnboarding(self.root, sources=('gmail',)).run()
         self.assertIn('--gmail-email casey@example.com', result['retry_command'])
-        self.assertIn('browser-setup --email casey@example.com', result['action']['command'])
-
-    def test_cli_without_source_continues_with_defaults(self):
-        output = io.StringIO()
-        with patch.object(sys, 'argv', ['bin/onboard']), contextlib.redirect_stdout(output), \
-             self.assertRaises(SystemExit) as exited:
-            main()
-        result = json.loads(output.getvalue())
-        self.assertEqual(exited.exception.code, 10)
-        self.assertEqual(result['step'], 'gmail_login')
-        self.assertIn('--source gmail --source imessage --source whatsapp', result['retry_command'])
+        self.assertEqual(create.call_args.args[0].email, 'casey@example.com')
 
     def test_default_sources_continue_from_reused_gmail_to_messages_permission(self):
         InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
@@ -147,15 +138,15 @@ class SourceOnboardingTests(unittest.TestCase):
         flow = SourceOnboarding(self.root, sources=('gmail',),
             gmail_emails=('casey@example.com',), sync_after='2023-01-01')
         flow._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, 'Connect Gmail')
-        override = SourceOnboarding(self.root, sources=('skip',),
+        override = SourceOnboarding(self.root, sources=('imessage',), skip_sources=('imessage',),
             gmail_emails=('jordan@example.com',), sync_after='2025-10-03')
-        self.assertEqual(tuple(override.sources), ('skip',))
+        self.assertEqual(tuple(override.sources), ('imessage',))
         self.assertEqual(override.gmail_emails, ('jordan@example.com',))
         self.assertEqual(override.sync_after, '2025-10-03')
         self.assertEqual(override.run()['step'], 'ready')
 
     def test_skip_finishes_without_calling_source_tools(self):
-        result = SourceOnboarding(self.root, sources=('skip',)).run()
+        result = SourceOnboarding(self.root, sources=('gmail',), skip_sources=('gmail',)).run()
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['message'], 'Powerpacks is installed')
         self.tools.assert_not_called()
@@ -242,9 +233,8 @@ class SourceOnboardingTests(unittest.TestCase):
             self.assertEqual(result['step'], 'ready')
             for step in ('gmail_tools', 'gmail_login', 'gmail_sync', 'gmail_import', 'linkedin'):
                 self.assertEqual(result['steps'][step]['status'], 'skipped')
-        result = SourceOnboarding(self.root, sources=('gmail', 'linkedin'), skip_sources=('linkedin',)).run()
-        self.assertEqual(result['step'], 'gmail_login')
-        self.assertEqual(result['status'], 'waiting')
+        result = SourceOnboarding(self.root, sources=('gmail', 'linkedin'), skip_sources=('linkedin',),
+                                  gmail_emails=('casey@example.com',)).run()
         for step in ('gmail_tools', 'gmail_login', 'gmail_sync', 'gmail_import'):
             self.assertNotEqual(result['steps'][step]['status'], 'skipped')
         self.assertEqual(result['steps']['linkedin']['status'], 'skipped')
@@ -256,31 +246,12 @@ class SourceOnboardingTests(unittest.TestCase):
                    '--gmail-email', 'casey@example.com', '--gmail-email', 'jordan@example.com',
                    '--sync-after', '2023-01-01', '--wacli-store', str(store), '--refresh',
                    '--skip-source', 'gmail', '--skip-source', 'whatsapp']
-        output = io.StringIO()
-        with patch.object(sys, 'argv', command), contextlib.redirect_stdout(output), \
-             self.assertRaises(SystemExit) as exited:
-            main()
-        result = json.loads(output.getvalue())
-        self.assertEqual(exited.exception.code, 0)
+        result = SourceOnboarding(self.root, sources=('gmail', 'whatsapp'),
+                                  gmail_emails=('casey@example.com', 'jordan@example.com'),
+                                  sync_after='2023-01-01', wacli_store=store, refresh=True,
+                                  skip_sources=('gmail', 'whatsapp')).run()
         self.assertEqual(result['step'], 'ready')
         self.assertEqual(shlex.split(result['retry_command'])[1:], command[1:])
-
-    def test_skip_leaves_active_source_worker_and_manifest_untouched(self):
-        process = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
-        try:
-            status = InstallStatus(self.root)
-            status.write(step=InstallStep.GMAIL_SYNC, status=InstallState.RUNNING,
-                         message='Syncing Gmail', pid=process.pid)
-            original = status.manifest_path.read_bytes()
-            result = SourceOnboarding(self.root, sources=('gmail', 'imessage'), skip_sources=('gmail',)).run()
-            self.assertEqual(result['step'], 'gmail_sync')
-            self.assertEqual(result['installer_pid'], process.pid)
-            self.assertIsNone(process.poll())
-            self.assertEqual(status.manifest_path.read_bytes(), original)
-            self.tools.assert_not_called()
-        finally:
-            process.stdin.close()
-            process.wait(timeout=5)
 
     def test_missing_tools_give_agent_the_command(self):
         self.tools.return_value = {'status': 'needs_user_action', 'message': 'Mac password needed',
@@ -303,62 +274,14 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['plan'][-5:], ['deep_context', 'enrich', 'index', 'validate', 'ready'])
         self.assert_preserved()
 
-    def test_external_reinstall_keeps_live_work_and_qr_wait_untouched(self):
-        process = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
-        try:
-            for state, step in ((InstallState.RUNNING, InstallStep.GMAIL_SYNC),
-                                (InstallState.WAITING, InstallStep.GMAIL_LOGIN),
-                                (InstallState.WAITING, InstallStep.IMESSAGE_ACCESS),
-                                (InstallState.WAITING, InstallStep.WHATSAPP_LOGIN),
-                                (InstallState.WAITING, InstallStep.ACCOUNT)):
-                with self.subTest(state=state, step=step):
-                    status = InstallStatus(self.root)
-                    status.write(step=step, status=state, message='Existing work', pid=process.pid,
-                                 action={'kind': 'qr'} if step is InstallStep.WHATSAPP_LOGIN else None)
-                    original = status.manifest_path.read_bytes()
-                    result = SourceOnboarding(self.root, sources=('gmail',),
-                        gmail_emails=('casey@example.com',), sync_after='2023-01-01').run()
-                    self.assertEqual(result['step'], step.value)
-                    self.assertEqual(result['status'], state.value)
-                    self.assertEqual(status.manifest_path.read_bytes(), original)
-            self.tools.assert_not_called()
-        finally:
-            process.stdin.close()
-            process.wait(timeout=5)
-
-    def test_cli_returns_still_working_for_live_installer(self):
-        process = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
-        try:
-            status = InstallStatus(self.root)
-            status.write(step=InstallStep.GMAIL_SYNC, status=InstallState.RUNNING,
-                         message='Syncing Gmail', pid=process.pid)
-            original = status.manifest_path.read_bytes()
-            output = io.StringIO()
-            with patch.object(sys, 'argv', ['bin/onboard', '--source', 'skip']), \
-                 contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as exited:
-                main()
-            self.assertEqual(exited.exception.code, 10)
-            self.assertEqual(json.loads(output.getvalue())['step'], 'gmail_sync')
-            self.assertEqual(status.manifest_path.read_bytes(), original)
-        finally:
-            process.stdin.close()
-            process.wait(timeout=5)
-
     def test_dead_installer_does_not_block_recovery(self):
         process = subprocess.Popen([sys.executable, '-c', 'pass'])
         process.wait(timeout=5)
         InstallStatus(self.root).write(step=InstallStep.GMAIL_SYNC, status=InstallState.RUNNING,
             message='Interrupted work', pid=process.pid)
-        result = SourceOnboarding(self.root, sources=('skip',)).run()
+        result = SourceOnboarding(self.root, sources=('imessage',), skip_sources=('imessage',)).run()
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['message'], 'Powerpacks is installed')
-
-    def test_missing_gmail_selection_waits_before_tools_or_sync(self):
-        with patch.object(GmailDiscovery, 'run') as sync:
-            result = SourceOnboarding(self.root, sources=('gmail',)).run()
-        self.assertEqual(result['action']['kind'], 'gmail')
-        self.tools.assert_not_called()
-        sync.assert_not_called()
 
     def test_threaded_flow_never_changes_process_directory(self):
         elsewhere = self.root / 'unrelated'
@@ -448,16 +371,17 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['message'], 'Gmail: 12 contacts · Messages: 8 contacts')
         self.assertEqual(result['plan'][-5:], ['deep_context', 'enrich', 'index', 'validate', 'ready'])
 
-    def test_fresh_gmail_waits_for_oauth_app_before_any_account_sync(self):
+    def test_fresh_gmail_creates_the_oauth_app_in_process_before_any_account_sync(self):
         with patch.object(accounts, 'status_payload', return_value={
                 'config': {'oauth_configured': False}, 'database': {'exists': False}}), \
              patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}) as health, \
+             patch.object(BrowserSetup, 'run', autospec=True,
+                          return_value={'status': 'needs_user_action', 'message': 'Sign in to Google'}) as create, \
              patch.object(GmailDiscovery, 'run') as sync:
             result = SourceOnboarding(self.root, sources=('gmail',),
                                       gmail_emails=('casey@example.com',), sync_after='2023-01-01').run()
-        self.assertEqual(result['status'], 'waiting')
-        self.assertEqual(result['installer_pid'], 0)
-        self.assertIn('browser-setup --email casey@example.com --add-account', result['action']['command'])
+        self.assertEqual((result['status'], result['step']), ('waiting', 'gmail_login'))
+        self.assertEqual(create.call_args.args[0].email, 'casey@example.com')
         health.assert_not_called()
         sync.assert_not_called()
 
@@ -807,7 +731,7 @@ class SourceOnboardingTests(unittest.TestCase):
         scrape.assert_called_once()
         self.assertEqual(result['step'], 'deep_context')
         self.assertEqual(result['steps']['linkedin']['message'], '2 LinkedIn connections (2 new)')
-        manifest = self.root / '.powerpacks/network-import/discover/linkedin/manifest.json'
+        manifest = self.root / '.powerpacks/network-import/discover/linkedin/connections.json'
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({'status': 'completed', 'complete': True}))
         with patch.object(LinkedInConnections, 'run') as scrape:
@@ -818,7 +742,7 @@ class SourceOnboardingTests(unittest.TestCase):
         with patch.object(LinkedInConnections, 'run', return_value={'status': 'completed', 'message': 'more'}) as scrape:
             SourceOnboarding(self.root, sources=('linkedin',)).run()
         scrape.assert_called_once()
-        self.tools.assert_not_called()
+        self.assertEqual(self.tools.call_count, 2)
 
 
 if __name__ == '__main__':

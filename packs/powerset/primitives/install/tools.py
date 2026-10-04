@@ -1,6 +1,11 @@
 """Prepare optional import tools through their existing binary installers.
 
 No account login, mailbox sync, WhatsApp pairing, or source-data changes.
+Gmail and LinkedIn drive a browser with playwright-core: they need node/npm and
+Google Chrome or Brave (`common/browser.js` picks between them).
+
+Changelog:
+  2026-10-03: LinkedIn is a source here; Brave counts as the browser.
 """
 from __future__ import annotations
 
@@ -18,7 +23,11 @@ from packs.ingestion.primitives.setup.automations import msgvault_home, shell
 
 class ImportSource(str, Enum):
     GMAIL = "gmail"
+    LINKEDIN = "linkedin"
     WHATSAPP = "whatsapp"
+
+
+BROWSER_APPS = (Path("/Applications/Google Chrome.app"), Path("/Applications/Brave Browser.app"))
 
 
 HOMEBREW_INSTALL_COMMAND = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
@@ -39,12 +48,12 @@ class ImportTools:
         ]))
         packages = []
         installed = {}
-        if ImportSource.GMAIL in self.sources:
-            if not shutil.which("gcloud"):
-                packages.append(("gcloud", ["--cask", "gcloud-cli"]))
+        if ImportSource.GMAIL in self.sources and not shutil.which("gcloud"):
+            packages.append(("gcloud", ["--cask", "gcloud-cli"]))
+        if {ImportSource.GMAIL, ImportSource.LINKEDIN} & set(self.sources):
             if not shutil.which("node") or not shutil.which("npm"):
                 packages.append(("node", ["node"]))
-            if not Path("/Applications/Google Chrome.app").is_dir():
+            if not any(app.is_dir() for app in BROWSER_APPS):
                 packages.append(("chrome", ["--cask", "google-chrome"]))
         if ImportSource.WHATSAPP in self.sources and not shutil.which("qrencode"):
             packages.append(("qrencode", ["qrencode"]))

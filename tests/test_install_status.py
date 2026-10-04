@@ -48,12 +48,12 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["action"]["command"], "bin/bootstrap")
 
     def test_human_wait_survives_installer_exit(self) -> None:
-        self.status.write(step=InstallStep.TOOLS, status=InstallState.WAITING,
-                          message="Approve the free Gmail tools in chat", pid=99999999,
-                          retry_command="bin/bootstrap --tools")
+        self.status.write(step=InstallStep.GMAIL_TOOLS, status=InstallState.WAITING,
+                          message="Your Mac password is needed to prepare import tools.", pid=99999999,
+                          retry_command="bin/onboard --source gmail")
         record = self.status.read()
         self.assertEqual(record["status"], "waiting")
-        self.assertEqual(record["retry_command"], "bin/bootstrap --tools")
+        self.assertEqual(record["retry_command"], "bin/onboard --source gmail")
 
     def test_interrupted_browser_login_does_not_wait_forever(self) -> None:
         self.status.write(step=InstallStep.ACCOUNT, status=InstallState.WAITING,

@@ -57,7 +57,7 @@ class Sandbox:
               'import sys\nfrom pathlib import Path\n'
               'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
               'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
-              'pid=int(sys.argv[sys.argv.index("--pid")+1])\n'
+              'import os\npid=os.getpid()\n'
               'InstallStatus(root).write(step=InstallStep.READY,status=InstallState.COMPLETED,'
               'message="Account connected and search verified",pid=pid)\n'
               'print("DONE: Account connected and search verified")\n')
@@ -107,7 +107,7 @@ class BootstrapTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_cloud_session_stops_before_touching_anything(self) -> None:
-        proc = self.sandbox.run("--no-tools", env={"CLAUDE_CODE_REMOTE": "true"})
+        proc = self.sandbox.run(env={"CLAUDE_CODE_REMOTE": "true"})
         self.assertEqual(proc.returncode, 3)
         self.assertTrue(last_line(proc).startswith("STOP: "))
         self.assertIn("Codex", last_line(proc))
@@ -121,7 +121,7 @@ class BootstrapTests(unittest.TestCase):
               f'Path({str(context)!r}).write_text((root/".env").read_text())\n')
         with (self.sandbox.repo / "packs/powerset/primitives/install/onboard.py").open("a") as handle:
             handle.write('\n(root/".env").write_text("ACCOUNT=casey@example.com\\n")\n')
-        proc = self.sandbox.run("--powerset", "--no-tools", "--harness", "codex")
+        proc = self.sandbox.run("--powerset", "--harness", "codex")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertTrue(context.exists(), "Onboarding did not refresh user context")
         self.assertEqual(context.read_text(), "ACCOUNT=casey@example.com\n")
@@ -140,7 +140,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("--refresh", argv)
 
     def test_installs_for_every_harness_found_and_reports_done(self) -> None:
-        proc = self.sandbox.run("--no-tools", home_dirs=(".codex", ".claude"))
+        proc = self.sandbox.run(home_dirs=(".codex", ".claude"))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(sorted(self.sandbox.installed()), ["claude-code", "codex"])
         self.assertTrue(last_line(proc).startswith("DONE: "))
@@ -148,33 +148,33 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(self.sandbox.progress()["status"], "completed")
 
     def test_no_harness_found_installs_both_and_says_so(self) -> None:
-        proc = self.sandbox.run("--no-tools")
+        proc = self.sandbox.run()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(sorted(self.sandbox.installed()), ["claude-code", "codex"])
 
     def test_explicit_harness_wins(self) -> None:
-        proc = self.sandbox.run("--no-tools", "--harness", "pi", home_dirs=(".codex",))
+        proc = self.sandbox.run("--harness", "pi", home_dirs=(".codex",))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.sandbox.installed(), ["pi"])
 
     def test_rerun_is_a_no_op_that_still_reports_done(self) -> None:
-        first = self.sandbox.run("--no-tools", home_dirs=(".codex",))
-        second = self.sandbox.run("--no-tools", home_dirs=(".codex",))
+        first = self.sandbox.run(home_dirs=(".codex",))
+        second = self.sandbox.run(home_dirs=(".codex",))
         self.assertEqual((first.returncode, second.returncode), (0, 0))
         self.assertTrue(last_line(second).startswith("DONE: "))
 
     def test_powerset_flag_creates_env_once_and_never_overwrites_it(self) -> None:
-        first = self.sandbox.run("--no-tools", "--powerset", home_dirs=(".codex",))
+        first = self.sandbox.run("--powerset", home_dirs=(".codex",))
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         env_file = self.sandbox.repo / ".env"
         self.assertIn("POWERSET_API_URL=", env_file.read_text(encoding="utf-8"))
         env_file.write_text("KEEP=me\n", encoding="utf-8")
-        self.sandbox.run("--no-tools", "--powerset", home_dirs=(".codex",))
+        self.sandbox.run("--powerset", home_dirs=(".codex",))
         self.assertEqual(env_file.read_text(encoding="utf-8"), "KEEP=me\n")
 
     def test_missing_developer_tools_asks_the_human_first(self) -> None:
         write(self.sandbox.bin / "xcode-select", "#!/usr/bin/env bash\nexit 2\n", executable=True)
-        proc = self.sandbox.run("--no-tools", home_dirs=(".codex",))
+        proc = self.sandbox.run(home_dirs=(".codex",))
         self.assertEqual(proc.returncode, 10)
         self.assertTrue(last_line(proc).startswith("NEEDS YOU: "))
         self.assertIn("Install", last_line(proc))
@@ -186,47 +186,20 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(last_line(proc).startswith("DONE: "))
         self.assertNotIn("ASK:", proc.stdout)
 
-    def test_tools_call_source_preparation_and_complete(self) -> None:
-        write(self.sandbox.repo / "packs/powerset/primitives/install/tools.py",
-              'from pathlib import Path\n'
-              'import sys\n'
-              f'Path({str(self.sandbox.root / "tools-args")!r}).write_text(" ".join(sys.argv[1:]))\n'
-              'print(\'{"status":"ok","message":"Contact import tools are ready"}\')\n')
-        proc = self.sandbox.run("--tools", "--harness", "codex")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual((self.sandbox.root / "tools-args").read_text(), "--source gmail --source whatsapp")
-        self.assertEqual(self.sandbox.progress()["steps"]["tools"]["status"], "completed")
-
-    def test_failed_tool_download_is_for_agent_recovery(self) -> None:
-        write(self.sandbox.repo / "packs/powerset/primitives/install/tools.py",
-              'import sys\nprint(\'{"status":"failed","message":"Download was interrupted"}\')\nsys.exit(1)\n')
-        proc = self.sandbox.run("--tools", "--harness", "codex")
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertTrue(last_line(proc).startswith("FAILED: "))
-        self.assertEqual(self.sandbox.progress()["status"], "failed")
-
-    def test_tools_password_action_is_preserved(self) -> None:
-        write(self.sandbox.repo / "packs/powerset/primitives/install/tools.py",
-              'import sys\nprint(\'{"status":"needs_user_action","message":"Install Homebrew from https://brew.sh"}\')\nsys.exit(10)\n')
-        proc = self.sandbox.run("--tools", "--harness", "codex")
-        self.assertEqual(proc.returncode, 10)
-        self.assertTrue(last_line(proc).startswith("NEEDS YOU: "))
-        self.assertEqual(self.sandbox.progress()["status"], "waiting")
-
     def test_installer_failure_is_persisted_with_recovery_log(self) -> None:
         write(self.sandbox.repo / "install.sh", '#!/usr/bin/env bash\necho "broken dependency"\nexit 1\n', executable=True)
-        proc = self.sandbox.run("--no-tools", "--harness", "codex")
+        proc = self.sandbox.run("--harness", "codex")
         self.assertEqual(proc.returncode, 1)
         self.assertTrue(last_line(proc).startswith("FAILED: "))
         self.assertEqual(self.sandbox.progress()["status"], "failed")
         log_path = Path(self.sandbox.progress()["log_path"])
         self.assertIn("broken dependency", log_path.read_text())
         self.assertIn(str(log_path), proc.stdout)
-        self.assertEqual(self.sandbox.progress()["retry_command"], "bin/bootstrap --no-tools --harness codex")
+        self.assertEqual(self.sandbox.progress()["retry_command"], "bin/bootstrap --harness codex")
 
     def test_unexpected_error_does_not_leave_running_progress(self) -> None:
         (self.sandbox.repo / "packs/powerset/templates/env.powerset.example").unlink()
-        proc = self.sandbox.run("--no-tools", "--powerset", "--harness", "codex")
+        proc = self.sandbox.run("--powerset", "--harness", "codex")
         self.assertNotEqual(proc.returncode, 0)
         self.assertTrue(last_line(proc).startswith("FAILED: "))
         self.assertEqual(self.sandbox.progress()["status"], "failed")
@@ -235,7 +208,7 @@ class BootstrapTests(unittest.TestCase):
     def test_page_start_failure_is_actionable_before_installing(self) -> None:
         write(self.sandbox.repo / "packs/ingestion/primitives/deep_context/review/cli.py",
               'import sys\nprint("port in use", file=sys.stderr)\nsys.exit(1)\n')
-        proc = self.sandbox.run("--no-tools", "--harness", "codex")
+        proc = self.sandbox.run("--harness", "codex")
         self.assertEqual(proc.returncode, 1)
         self.assertTrue(last_line(proc).startswith("FAILED: "))
         self.assertEqual(self.sandbox.progress()["status"], "failed")
@@ -260,7 +233,7 @@ set -euo pipefail
 "{self.sandbox.repo}/bin/setup-python"
 "{sys.executable}" -c 'import json; print(json.load(open("{self.sandbox.repo}/.powerpacks/install/manifest.json"))["step"])' >>"{record}"
 ''', executable=True)
-        proc = self.sandbox.run("--no-tools", "--harness", "codex")
+        proc = self.sandbox.run("--harness", "codex")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(record.read_text().splitlines(), ["dependencies", "skills"])
         self.assertEqual(self.sandbox.progress()["status"], "completed")
@@ -268,14 +241,14 @@ set -euo pipefail
     def test_selected_status_port_is_sent_to_launcher_and_rerun(self) -> None:
         write(self.sandbox.repo / "packs/ingestion/primitives/deep_context/review/cli.py",
               'import json,sys\nport=sys.argv[sys.argv.index("--port")+1]\nprint(json.dumps({"url": f"http://127.0.0.1:{port}/install"}))\n')
-        proc = self.sandbox.run("--no-tools", "--port", "8876")
+        proc = self.sandbox.run("--port", "8876")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("STATUS PAGE: http://127.0.0.1:8876/install", proc.stdout)
         self.assertIn("--port 8876", self.sandbox.progress()["retry_command"])
 
     def test_terminated_install_is_paused_and_rerunnable(self) -> None:
         write(self.sandbox.repo / "install.sh", '#!/usr/bin/env bash\necho "install started"\nsleep 30\n', executable=True)
-        proc = subprocess.Popen([str(BOOTSTRAP), "--no-tools", "--harness", "codex"],
+        proc = subprocess.Popen([str(BOOTSTRAP), "--harness", "codex"],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 start_new_session=True,
                                 env={"HOME": str(self.sandbox.home),
@@ -317,7 +290,7 @@ set -euo pipefail
 
     def test_failed_runtime_discovery_keeps_python_for_failure_reporting(self) -> None:
         write(self.sandbox.repo / "bin/uv", '#!/usr/bin/env bash\n[[ "$2" == find ]] && exit 1\nexit 0\n', executable=True)
-        proc = self.sandbox.run("--no-tools")
+        proc = self.sandbox.run()
         self.assertEqual(proc.returncode, 1)
         self.assertTrue(last_line(proc).startswith("FAILED: "))
         self.assertEqual(self.sandbox.progress()["status"], "failed")
@@ -326,13 +299,13 @@ set -euo pipefail
     def test_downloaded_bootstrap_hands_off_to_selected_release_contract(self) -> None:
         write(self.sandbox.repo / "bin/bootstrap",
               '#!/usr/bin/env bash\nprintf "DONE: prior-release-contract %s\\n" "$*"\n', executable=True)
-        proc = subprocess.run(["bash", "-s", "--", "--no-tools", "--harness", "codex"],
+        proc = subprocess.run(["bash", "-s", "--", "--harness", "codex"],
                               input=BOOTSTRAP.read_text(), capture_output=True, text=True,
                               env={"HOME": str(self.sandbox.home),
                                    "PATH": f"{self.sandbox.bin}:/usr/bin:/bin",
                                    "POWERPACKS_REPO_ROOT": str(self.sandbox.repo)})
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(last_line(proc), "DONE: prior-release-contract --no-tools --harness codex")
+        self.assertEqual(last_line(proc), "DONE: prior-release-contract --harness codex")
         self.assertFalse((self.sandbox.repo / ".powerpacks/install/manifest.json").exists())
         self.assertEqual(self.sandbox.installed(), [])
 
@@ -341,11 +314,11 @@ set -euo pipefail
               'import sys\nfrom pathlib import Path\n'
               'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
               'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
-              'pid=int(sys.argv[sys.argv.index("--pid")+1])\n'
+              'import os\npid=os.getpid()\n'
               'InstallStatus(root).write(step=InstallStep.ACCOUNT,status=InstallState.WAITING,'
               'message="Waiting for account login",pid=pid)\n'
               'print("NEEDS YOU: Waiting for account login")\nsys.exit(10)\n')
-        proc = self.sandbox.run("--no-tools", "--powerset", "--harness", "codex")
+        proc = self.sandbox.run("--powerset", "--harness", "codex")
         self.assertEqual(proc.returncode, 10, proc.stdout + proc.stderr)
         self.assertEqual(last_line(proc), "NEEDS YOU: Waiting for account login")
         self.assertEqual(self.sandbox.progress()["status"], "waiting")
@@ -355,19 +328,19 @@ set -euo pipefail
               'import sys\nfrom pathlib import Path\n'
               'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
               'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
-              'pid=int(sys.argv[sys.argv.index("--pid")+1])\n'
+              'import os\npid=os.getpid()\n'
               'print("Open https://example.test/login", file=sys.stderr)\n'
               'InstallStatus(root).write(step=InstallStep.ACCOUNT,status=InstallState.FAILED,'
               'message="Account login timed out; ask me to reopen sign-in",pid=pid)\n'
               'print("FAILED: Account login timed out")\nsys.exit(1)\n')
-        proc = self.sandbox.run("--no-tools", "--powerset", "--harness", "codex")
+        proc = self.sandbox.run("--powerset", "--harness", "codex")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("Open https://example.test/login", proc.stderr)
         self.assertIn("Open https://example.test/login", Path(self.sandbox.progress()["log_path"]).read_text())
         self.assertEqual(self.sandbox.progress()["message"], "Account login timed out; ask me to reopen sign-in")
 
     def test_install_only_explicitly_skips_account_checks(self) -> None:
-        proc = self.sandbox.run("--no-tools", "--harness", "codex")
+        proc = self.sandbox.run("--harness", "codex")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("No account was connected", last_line(proc))
         for step in ("account", "credentials", "connection", "network"):
@@ -434,7 +407,7 @@ class PublishedBootstrapTests(unittest.TestCase):
         self.git(self.checkout, "switch", "-c", "powerpacks-stable", "powerpacks-v1.0.0")
 
     def launch(self, **env):
-        return subprocess.run(["bash", "-s", "--", "--no-tools", "--harness", "codex"],
+        return subprocess.run(["bash", "-s", "--", "--harness", "codex"],
             input=BOOTSTRAP.read_text(), capture_output=True, text=True, env={**self.env, **env}, timeout=30)
 
     def test_fresh_clone_runs_selected_release_and_real_installer(self):
@@ -476,7 +449,7 @@ class PublishedBootstrapTests(unittest.TestCase):
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), original)
         self.assertEqual((self.checkout / "packs/search/skills/search/SKILL.md").read_text(), "local changes")
         # Running an installed/development entrypoint is intentionally not an updater.
-        result = subprocess.run([str(self.checkout / "bin/bootstrap"), "--no-tools"],
+        result = subprocess.run([str(self.checkout / "bin/bootstrap")],
                                 capture_output=True, text=True, env=self.env)
         self.assertEqual(last_line(result), "DONE: old release")
 
@@ -531,7 +504,7 @@ class PublishedBootstrapTests(unittest.TestCase):
         write(pause, "pause")
         launcher = self.sandbox.root / "downloaded-bootstrap"
         write(launcher, BOOTSTRAP.read_text(), executable=True)
-        proc = subprocess.Popen([str(launcher), "--no-tools", "--harness", "codex"],
+        proc = subprocess.Popen([str(launcher), "--harness", "codex"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env, start_new_session=True)
         log = self.checkout / ".powerpacks/install/install.log"
         try:

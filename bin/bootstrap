@@ -13,13 +13,11 @@
 #
 # Safe to run again: every step is skipped once done.
 #
-#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]
+#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--port PORT]
 #
 #   --harness   which agent's skills folder to install into; default: every one
 #               found on this Mac (both Claude Code and Codex when none is found)
 #   --powerset  connect the account, check hosted search, then import contacts
-#   --tools     prepare Gmail and WhatsApp import tools (no login or sync)
-#               --no-tools (default) lets each source prepare its own tools
 #
 # Exit codes: 0 done; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
 #
@@ -34,7 +32,6 @@ DEFAULT_ROOT="$HOME/powerpacks"
 
 harness="auto"
 powerset=0
-tools="skip"
 port=8765
 source_args=()
 bootstrap_args=("$@")
@@ -47,15 +44,13 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --harness) harness="${2:-}"; shift 2 ;;
     --powerset) powerset=1; shift ;;
-    --tools) tools="install"; shift ;;
-    --no-tools) tools="skip"; shift ;;
     --port) port="${2:-}"; shift 2 ;;
     --source|--skip-source|--gmail-email|--sync-after|--wacli-store)
       source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
     --approve-spend) source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
     --refresh|--approve-upload) source_args+=("$1"); shift ;;
     *)
-      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]" >&2
+      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--port PORT]" >&2
       exit 2
       ;;
   esac
@@ -234,21 +229,6 @@ if [[ "$powerset" == 1 && ! -f "$root/.env" ]]; then
   say "created $root/.env from the Powerset template"
 fi
 
-# 6. Optional binaries are prepared without login or syncing any contacts.
-if [[ "$tools" == install ]]; then
-  progress tools running "Preparing contact import"
-  code=0
-  tool_result="$(cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.tools \
-    --source gmail --source whatsapp 2>>"$log")" || code=$?
-  echo "$tool_result" >>"$log"
-  tool_message="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["message"])' <<<"$tool_result")"
-  case "$code" in
-    0) progress tools completed "$tool_message" ;;
-    10) needs_you "$tool_message" ;;
-    *) failed "$tool_message Check $log; I can diagnose this and retry." ;;
-  esac
-fi
-
 if [[ "$powerset" == 1 ]]; then
   onboard_args=()
   for h in "${harnesses[@]}"; do onboard_args+=(--harness "$h"); done
@@ -256,7 +236,7 @@ if [[ "$powerset" == 1 ]]; then
   # Python calls the existing login, provisioning, and connection primitives
   # in-process. Keep its final line visible and preserve its waiting state.
   (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.onboard \
-    --root "$root" --pid "$$" --port "$port" --retry-command "$retry_command" "${onboard_args[@]}" ${source_args[@]+"${source_args[@]}"}) \
+    --root "$root" --port "$port" "${onboard_args[@]}" ${source_args[@]+"${source_args[@]}"}) \
     2> >(tee -a "$log" >&2) || code=$?
   case "$code" in
     0) terminal_status=completed ;;

@@ -1,7 +1,6 @@
 """Page actions launch the same detached coordinator and open permission guidance."""
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from datetime import datetime
@@ -48,34 +47,6 @@ class InstallController:
         path = self.qr(InstallStatus(self.root).read())
         return path.read_bytes() if path else None
 
-    def start(self, record: dict) -> None:
-        sources = record.get("sources", [])
-        if not isinstance(sources, list) or any(source not in {"gmail", "imessage", "whatsapp", "linkedin"} for source in sources):
-            raise ValueError("Choose Gmail, iMessage, WhatsApp, or LinkedIn")
-        if not sources and not record.get("skip"):
-            raise ValueError("Choose a source or skip")
-        if sources and record.get("skip"):
-            raise ValueError("Choose sources or skip, not both")
-        emails = record.get("gmail_emails", [])
-        sync_after = record.get("sync_after", "")
-        if not isinstance(emails, list) or not isinstance(sync_after, str) or any(not isinstance(email, str) for email in emails):
-            raise ValueError("Gmail accounts and history must be text")
-        status = InstallStatus(self.root)
-        current = status.read()
-        if current["status"] == "running" or (current["status"] == "waiting" and current["installer_pid"] > 0):
-            raise ValueError("Setup is already running")
-        command = [str(self.root / "bin/onboard")]
-        for source in sources or ["skip"]:
-            command.extend(("--source", source))
-        for email in emails:
-            command.extend(("--gmail-email", email))
-        if sync_after:
-            command.extend(("--sync-after", sync_after))
-        status.directory.mkdir(parents=True, exist_ok=True)
-        with status.log_path.open("a") as log:
-            subprocess.Popen(command, cwd=self.root, stdout=log, stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, start_new_session=True)
-
     def post(self, handler, path: str) -> bool:
         if not path.startswith("/api/install/"):
             return False
@@ -85,15 +56,7 @@ class InstallController:
             return True
         try:
             response = {"status": "started"}
-            if path == "/api/install/sources":
-                length = int(handler.headers.get("Content-Length", "0"))
-                if not 0 < length <= 8192:
-                    raise ValueError("Source selection is too large")
-                record = json.loads(handler.rfile.read(length))
-                if not isinstance(record, dict):
-                    raise ValueError("Choose your sources")
-                self.start(record)
-            elif path == "/api/install/permissions":
+            if path == "/api/install/permissions":
                 if (InstallStatus(self.root).read().get("action") or {}).get("kind") != "permission":
                     raise ValueError("No permission is needed right now")
                 subprocess.run(["open", PERMISSION_URL], check=True)
