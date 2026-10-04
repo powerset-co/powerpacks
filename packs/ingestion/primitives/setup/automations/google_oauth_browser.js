@@ -11,6 +11,8 @@
  * Changelog:
  *   2026-10-03: headless form work; a visible window only for the login, then
  *     focus returns to the app that started the session.
+ *   2026-10-04: Console URLs name the account (authuser) so a profile signed in
+ *     to several Google accounts still opens the project owner's Console.
  */
 
 const fs = require("fs");
@@ -312,6 +314,13 @@ async function clickButton(page, candidates, timeout = 1800) {
   return false;
 }
 
+// Console opens as the first signed-in account unless authuser names one; the
+// profile may hold several Google accounts, and the project belongs to `email`.
+let consoleAccount = "";
+function consoleUrl(path, project) {
+  return `https://console.cloud.google.com/${path}?project=${encodeURIComponent(project)}&authuser=${encodeURIComponent(consoleAccount)}`;
+}
+
 function onGoogleLogin(url) {
   return url.includes("accounts.google.com") || url.includes("/signin/");
 }
@@ -418,7 +427,7 @@ async function requireGoogleAuthConfigured(page) {
 }
 
 async function setupConsent(page, project, email, clientName, audience, timeoutMs) {
-  const overview = `https://console.cloud.google.com/auth/overview?project=${encodeURIComponent(project)}`;
+  const overview = consoleUrl("auth/overview", project);
   await gotoPage(page, overview, "OAuth overview");
   await waitForHumanLogin(page, email, timeoutMs);
   await settle(page);
@@ -428,7 +437,7 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
     log("Google Auth Platform already configured");
     return;
   }
-  const createUrl = `https://console.cloud.google.com/auth/overview/create?project=${encodeURIComponent(project)}`;
+  const createUrl = consoleUrl("auth/overview/create", project);
   const opened = await clickFirst(page, [/Get started/i, /Configure consent screen/i, /Create app/i], 2500);
   if (!opened || !page.url().includes("/auth/overview/create")) {
     await gotoPage(page, createUrl, "OAuth branding create page");
@@ -490,7 +499,7 @@ async function clickScopeRow(root, scope) {
 
 async function addScopes(page, project) {
   log("adding Gmail OAuth scopes");
-  const scopesUrl = `https://console.cloud.google.com/auth/scopes?project=${encodeURIComponent(project)}`;
+  const scopesUrl = consoleUrl("auth/scopes", project);
   await gotoPage(page, scopesUrl, "OAuth scopes");
   await settle(page);
 
@@ -532,7 +541,7 @@ async function addScopes(page, project) {
 }
 
 async function addTestUsers(page, project, email, testUsers, timeoutMs) {
-  const audienceUrl = `https://console.cloud.google.com/auth/audience?project=${encodeURIComponent(project)}`;
+  const audienceUrl = consoleUrl("auth/audience", project);
   await gotoPage(page, audienceUrl, "OAuth audience");
   await waitForHumanLogin(page, email, timeoutMs);
   await settle(page);
@@ -630,7 +639,7 @@ async function verifyScopesOnCurrentPage(page) {
 }
 
 async function verifyScopes(page, project) {
-  const scopesUrl = `https://console.cloud.google.com/auth/scopes?project=${encodeURIComponent(project)}`;
+  const scopesUrl = consoleUrl("auth/scopes", project);
   await gotoPage(page, scopesUrl, "OAuth scopes verification");
   await settle(page);
   return verifyScopesOnCurrentPage(page);
@@ -715,8 +724,8 @@ async function tryDownloadExistingClient(page, clientName, downloadDir) {
 }
 
 async function createClient(page, project, email, clientName, downloadDir, timeoutMs) {
-  const clients = `https://console.cloud.google.com/auth/clients?project=${encodeURIComponent(project)}`;
-  const legacyClient = `https://console.cloud.google.com/apis/credentials/oauthclient?project=${encodeURIComponent(project)}`;
+  const clients = consoleUrl("auth/clients", project);
+  const legacyClient = consoleUrl("apis/credentials/oauthclient", project);
   await gotoPage(page, clients, "OAuth clients page");
   await waitForHumanLogin(page, email, timeoutMs);
   await settle(page);
@@ -820,8 +829,9 @@ async function main() {
 
   fs.mkdirSync(profileDir, { recursive: true });
   fs.mkdirSync(downloadDir, { recursive: true });
+  consoleAccount = email;
 
-  const overview = `https://console.cloud.google.com/auth/overview?project=${encodeURIComponent(project)}`;
+  const overview = consoleUrl("auth/overview", project);
   let context = await launchChrome(profileDir, true);
   let page = context.pages()[0] || await context.newPage();
   await gotoPage(page, overview, "OAuth overview");

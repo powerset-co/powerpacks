@@ -15,6 +15,9 @@
  * The list has ended when nothing new loads for END_AFTER_MS. The signed-in
  * user's own profile slug comes from /in/me, which LinkedIn redirects to it.
  *
+ * With --login-only it stops once signed in and prints {"status": "ok"}, so the
+ * login can be collected up front and the scroll run later, headless.
+ *
  * Prints one JSON object on stdout:
  *   {"status": "ok", "connections": [{slug, name, headline, connected_on}],
  *    "loads": n, "stopped": "known" | "end" | "limit", "owner_slug": str}
@@ -176,15 +179,23 @@ async function main() {
         result({ status: "needs_user_action", message: "Log in to LinkedIn in the Chrome window Powerpacks opened." });
         return;
       }
-      log("logged in; closing the window and reading headless");
+      log("logged in; closing the window");
       await context.close();
       returnFocus();
+      if (args.loginOnly === "1") {
+        result({ status: "ok" });
+        return;
+      }
       context = await launch(args.profileDir, true);
       page = context.pages()[0] || await context.newPage();
       if (!await signedIn(page)) {
         result({ status: "error", message: "LinkedIn did not keep the login for the headless browser." });
         return;
       }
+    }
+    if (args.loginOnly === "1") {
+      result({ status: "ok" });
+      return;
     }
     log("reading your connections");
     const scrolled = await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads));

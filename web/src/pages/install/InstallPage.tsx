@@ -204,7 +204,7 @@ export function InstallPage() {
         {data?.status === "waiting" && action ? (
           <section className="install-action">
             {action.kind === "gmail" ? (
-              <p>Finish connecting Gmail in your browser. I’ll continue here.</p>
+              <p>{action.text ?? "Finish connecting Gmail in your browser. I’ll continue here."}</p>
             ) : null}
             {action.kind === "qr" ? (
               <div className="install-qr">

@@ -72,7 +72,7 @@ def _export_row(card: dict[str, str]) -> dict[str, str]:
 
 
 class LinkedInConnections:
-    """Scrape new connections and keep the CSV newest-first."""
+    """Scrape new connections and keep the CSV newest-first; login() only signs in."""
 
     def __init__(self, *, csv_path: Path = CONNECTIONS_CSV, profile_dir: Path = BROWSER_PROFILE,
                  login_timeout_seconds: int = LOGIN_TIMEOUT_SECONDS) -> None:
@@ -81,30 +81,38 @@ class LinkedInConnections:
         self.login_timeout_seconds = login_timeout_seconds
         self.record_path = csv_path.with_name(SCRAPE_RECORD.name)
 
+    def _browser(self, *args: str, timeout: int) -> dict[str, Any]:
+        deps = ensure_playwright_core()
+        if deps["status"] != "ok":
+            return {"status": "failed", "message": deps["message"]}
+        result = run_streaming_command(
+            ["node", str(BROWSER_SCRIPT), "--profile-dir", str(self.profile_dir),
+             "--timeout-seconds", str(self.login_timeout_seconds), *args],
+            timeout=timeout, env={**os.environ, "NODE_PATH": deps["node_path"]})
+        return parse_json_fragment(result.stdout) if result.stdout.strip() else {
+            "status": "error", "message": command_error(result)}
+
+    def login(self) -> dict[str, Any]:
+        """Make sure the saved profile is signed in; a window opens only if it is not."""
+        payload = self._browser("--login-only", "1", timeout=self.login_timeout_seconds + 60)
+        if payload["status"] == "ok":
+            return {"status": "completed", "message": "Signed in to LinkedIn"}
+        return payload if payload["status"] == "needs_user_action" else {"status": "failed", "message": payload["message"]}
+
     def run(self) -> dict[str, Any]:
         existing = _read_export(self.csv_path)
         known = {extract_public_identifier(row["URL"]) for row in existing} - {""}
         previous = read_json(self.record_path, {}) or {}
         backfill = previous.get("complete") is False
         max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
-        deps = ensure_playwright_core()
-        if deps["status"] != "ok":
-            return {"status": "failed", "message": deps["message"]}
-
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
             json.dump(sorted(known), handle)
         try:
-            result = run_streaming_command(
-                ["node", str(BROWSER_SCRIPT), "--profile-dir", str(self.profile_dir),
-                 "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
-                 "--max-loads", str(max_loads), "--timeout-seconds", str(self.login_timeout_seconds)],
-                timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
-                env={**os.environ, "NODE_PATH": deps["node_path"]},
-            )
+            payload = self._browser(
+                "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
+                "--max-loads", str(max_loads), timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD)
         finally:
             os.unlink(handle.name)
-        payload = parse_json_fragment(result.stdout) if result.stdout.strip() else {
-            "status": "error", "message": command_error(result)}
         if payload["status"] == "needs_user_action":
             return payload
         if payload["status"] != "ok":

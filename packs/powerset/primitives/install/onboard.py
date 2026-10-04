@@ -332,13 +332,6 @@ def main() -> None:
             raise SystemExit(code)
         if code == 0:
             print("Powerset search is ready; local setup will continue.", flush=True)
-        if not flow.gmail_emails and not args.gmail_email and onboarding.email:
-            flow = SourceOnboarding(root, sources=tuple(args.source),
-                                    gmail_emails=(onboarding.email,), sync_after=args.sync_after,
-                                    wacli_store=args.wacli_store, refresh=args.refresh,
-                                    skip_sources=tuple(args.skip_source))
-            flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
-            flow.retry_command += f" --port {port}"
         payload = flow.run()
         if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
             payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend),
