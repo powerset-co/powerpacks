@@ -178,6 +178,27 @@ class PersonLookupSqliteTest(unittest.TestCase):
         self.assertNotIn("Traceback", err)
         self.assertFalse(missing.parent.exists())
 
+    def test_legacy_store_is_unreadable_even_when_name_is_absent(self) -> None:
+        with sqlite3.connect(self.db.db_path) as conn:
+            conn.execute("DROP TABLE imported_people")
+            conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+        before = hashlib.sha256(self.db.db_path.read_bytes()).hexdigest()
+        for name in ("Jordan Bravo", "Absent Synthetic Zqxv"):
+            with self.subTest(name=name):
+                code, out, err = self.cli("--name", name, "--json")
+                self.assertEqual((code, err), (1, ""))
+                self.assertEqual(json.loads(out)["status"], "unreadable_database")
+                self.assertEqual(json.loads(out)["matches"], [])
+        self.assertEqual(hashlib.sha256(self.db.db_path.read_bytes()).hexdigest(), before)
+
+    def test_non_sqlite_file_is_unreadable_without_traceback(self) -> None:
+        invalid = self.root / "invalid.sqlite"
+        invalid.write_bytes(b"not a SQLite database")
+        code, out, err = self.cli("--name", "Jordan", "--db", str(invalid), "--json")
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(json.loads(out)["status"], "unreadable_database")
+        self.assertEqual(invalid.read_bytes(), b"not a SQLite database")
+
     def test_cli_does_not_upgrade_or_modify_database(self) -> None:
         with sqlite3.connect(self.db.db_path) as conn:
             conn.execute("DROP INDEX research_by_candidate")
