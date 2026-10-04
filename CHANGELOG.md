@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.13.0...powerpacks-v3.14.0) (2026-10-04)
+
+
+### Features
+
+* guide Powerpacks setup and imports on one live page ([#674](https://github.com/powerset-co/powerpacks/issues/674)) ([600ed3d](https://github.com/powerset-co/powerpacks/commit/600ed3d1d3f17e7dd0dbe1e4f5a6c5cd0e42bd1b))
+* run one resumable onboarding pipeline ([#676](https://github.com/powerset-co/powerpacks/issues/676)) ([67289f1](https://github.com/powerset-co/powerpacks/commit/67289f1f0368b6327ec8a55e05382873a1416023))
+
+
+### Bug Fixes
+
+* find parent dossiers from person names and identifiers ([#683](https://github.com/powerset-co/powerpacks/issues/683)) ([6694997](https://github.com/powerset-co/powerpacks/commit/66949970b23e9c59b49b42315c944d794b1c1423))
+
 ## [3.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.12.0...powerpacks-v3.13.0) (2026-10-02)
 
 
