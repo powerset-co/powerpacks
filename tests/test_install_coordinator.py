@@ -126,8 +126,8 @@ class InstallCoordinatorTests(unittest.TestCase):
                 self.assertEqual(self.processing_class.call_args.kwargs["port"], 8899)
 
     def test_each_source_wait_and_failure_resumes_through_same_coordinator(self):
-        self.retry = (f"{self.root}/bin/onboard --source gmail --source imessage --source whatsapp"
-                      " --source linkedin --gmail-email casey@example.com --sync-after 2025-10-03"
+        self.retry = (f"{self.root}/bin/onboard --source linkedin --source gmail --source imessage"
+                      " --source whatsapp --gmail-email casey@example.com --sync-after 2025-10-03"
                       f" --wacli-store {self.root}/synthetic-whatsapp --harness pi --port 8899")
         self.status.write(step=InstallStep.SOURCES, status=InstallState.WAITING,
                           message="Ready", pid=0, retry_command=self.retry)
@@ -150,7 +150,7 @@ class InstallCoordinatorTests(unittest.TestCase):
                     self.assertEqual(code, 0)
                     self.assertEqual(self.events, ["account", "imports", "processing"])
                     self.assertEqual(self.source_choices[-1], choices)
-                    self.assertEqual(choices[:3], (("gmail", "imessage", "whatsapp", "linkedin"),
+                    self.assertEqual(choices[:3], (("linkedin", "gmail", "imessage", "whatsapp"),
                                                   ("casey@example.com",), "2025-10-03"))
                     self.assertEqual(choices[3], self.root / "synthetic-whatsapp")
                     self.assertEqual(self.account_class.call_args.kwargs["harnesses"], ["pi"])

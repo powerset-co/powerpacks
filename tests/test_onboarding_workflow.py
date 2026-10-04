@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
+from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
 from packs.ingestion.primitives.discover.messages.wacli import auth
@@ -47,6 +48,8 @@ class SourceOnboardingTests(unittest.TestCase):
         InstallStatus(self.root).write(step=InstallStep.SKILLS, status=InstallState.COMPLETED,
                                        message='Skills installed', pid=os.getpid())
         self.tools = patch.object(ImportTools, 'run', return_value={'status': 'ok'}).start()
+        patch.object(LinkedInConnections, 'run', return_value={
+            'status': 'completed', 'message': '1 LinkedIn connections (1 new)'}).start()
         patch.object(auth, 'auth_status', return_value=SimpleNamespace(authenticated=False)).start()
         patch.object(IMessageExtractor, 'check', return_value={'status': 'blocked_user_action'}).start()
         patch.object(accounts, 'status_payload', return_value={
@@ -68,7 +71,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(Path.cwd(), self.cwd)
         self.assertEqual(InstallStatus(self.root).read()['steps']['skills']['status'], 'completed')
 
-    def test_no_source_defaults_to_gmail_messages_and_whatsapp_without_history_choice(self):
+    def test_no_source_defaults_to_gmail_messages_whatsapp_and_linkedin_without_history_choice(self):
         result = SourceOnboarding(self.root, sources=()).run()
         self.assertEqual(result['status'], 'waiting')
         self.assertEqual(result['step'], 'gmail_login')
@@ -77,7 +80,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertIn('gmail_import', result['plan'])
         self.assertIn('imessage_import', result['plan'])
         self.assertIn('whatsapp_import', result['plan'])
-        self.assertNotIn('linkedin', result['plan'])
+        self.assertIn('linkedin', result['plan'])
         self.assertIn((date.today() - timedelta(days=365)).isoformat(), result['retry_command'])
         self.tools.assert_not_called()
         self.assert_preserved()
@@ -211,7 +214,7 @@ class SourceOnboardingTests(unittest.TestCase):
         InstallStatus(self.root).write(step=InstallStep.GMAIL_IMPORT, status=InstallState.COMPLETED,
             message='Gmail contacts ready', pid=os.getpid(), plan=['skills', 'sources', 'gmail_import'])
         result = SourceOnboarding(self.root, sources=('gmail', 'linkedin'), skip_sources=('gmail',)).run()
-        self.assertEqual(result['step'], 'linkedin')
+        self.assertEqual(result['step'], 'deep_context')
         self.assertEqual(result['steps']['gmail_import']['status'], 'skipped')
         self.assertEqual({path: path.read_bytes() for path in imported.parent.iterdir()}, saved)
         self.assert_preserved()
@@ -418,12 +421,15 @@ class SourceOnboardingTests(unittest.TestCase):
         discover.assert_not_called()
         self.assertEqual(result['step'], 'deep_context')
 
-    def test_missing_linkedin_csv_does_not_block_messages_selected_after_it(self):
+    def test_linkedin_login_wait_does_not_block_messages_selected_after_it(self):
         with patch.object(IMessageExtractor, 'check', return_value={'status': 'ok'}), \
              patch.object(MessagesDiscovery, 'run', return_value=payload(status='completed')), \
-             patch.object(MessagesImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+             patch.object(MessagesImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})), \
+             patch.object(LinkedInConnections, 'run', return_value={
+                 'status': 'needs_user_action', 'message': 'Log in to LinkedIn in the Chrome window Powerpacks opened.'}):
             result = SourceOnboarding(self.root, sources=('linkedin', 'imessage')).run()
-        self.assertEqual(result['step'], 'linkedin')
+        self.assertEqual((result['step'], result['status']), ('linkedin', 'waiting'))
+        self.assertEqual(result['message'], 'Log in to LinkedIn in the Chrome window Powerpacks opened.')
         self.assertEqual(result['steps']['imessage_import']['status'], 'completed')
 
     def test_processing_reports_saved_source_counts_without_changing_hosted_network_count(self):
@@ -794,17 +800,24 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertIn('--source imessage', result['retry_command'])
         self.assert_preserved()
 
-    def test_linkedin_waits_for_file_and_never_runs_modal(self):
-        flow = SourceOnboarding(self.root, sources=('linkedin',))
-        waiting = flow.run()
-        self.assertEqual(waiting['action']['kind'], 'linkedin')
-        csv = self.root / '.powerpacks/network-import/discover/linkedin/Connections.csv'
-        csv.parent.mkdir(parents=True)
-        csv.write_text('First Name,Last Name\nJordan,Bravo\n')
-        result = flow.run()
+    def test_linkedin_reads_connections_in_chrome_then_reuses_them(self):
+        with patch.object(LinkedInConnections, 'run', return_value={
+                'status': 'completed', 'message': '2 LinkedIn connections (2 new)'}) as scrape:
+            result = SourceOnboarding(self.root, sources=('linkedin',)).run()
+        scrape.assert_called_once()
         self.assertEqual(result['step'], 'deep_context')
-        self.assertEqual(result['steps']['linkedin']['message'], 'LinkedIn export ready')
-        self.assertEqual(csv.read_text(), 'First Name,Last Name\nJordan,Bravo\n')
+        self.assertEqual(result['steps']['linkedin']['message'], '2 LinkedIn connections (2 new)')
+        manifest = self.root / '.powerpacks/network-import/discover/linkedin/manifest.json'
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({'status': 'completed', 'complete': True}))
+        with patch.object(LinkedInConnections, 'run') as scrape:
+            result = SourceOnboarding(self.root, sources=('linkedin',)).run()
+        scrape.assert_not_called()
+        self.assertEqual(result['steps']['linkedin']['message'], 'LinkedIn connections ready')
+        manifest.write_text(json.dumps({'status': 'completed', 'complete': False}))
+        with patch.object(LinkedInConnections, 'run', return_value={'status': 'completed', 'message': 'more'}) as scrape:
+            SourceOnboarding(self.root, sources=('linkedin',)).run()
+        scrape.assert_called_once()
         self.tools.assert_not_called()
 
 

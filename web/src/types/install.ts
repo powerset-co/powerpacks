@@ -7,7 +7,6 @@ export interface InstallAction {
     | "gmail"
     | "permission"
     | "qr"
-    | "linkedin"
     | "processing"
     | "review"
     | "approval"
