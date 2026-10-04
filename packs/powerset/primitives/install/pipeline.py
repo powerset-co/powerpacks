@@ -10,6 +10,9 @@ Changelog:
       owner profile from the LinkedIn session and the Gmail address instead of
       asking; a failed Modal run is retried, not re-downloaded, unless it failed
       on the spend cap.
+  2026-10-04: indexing goes ahead when a cached profile has no jobs listed (it
+      used to raise on every resume); upload consent is asked before a $500+
+      spend approval, so the two questions no longer bounce.
 """
 from __future__ import annotations
 
@@ -276,9 +279,8 @@ class ProcessingOnboarding:
                       "Preparing your profiles")
             self._write(InstallState.COMPLETED, "Done")
             self.step = InstallStep.INDEX
-            realized = self._run("realize", realize.run, "Preparing your search index")
-            if realized["profiles_missing"]:
-                raise ValueError("Profiles remain missing after fetching; inspect the profile manifest.")
+            # A cached profile with no jobs listed stays "missing"; realize exports it anyway.
+            self._run("realize", realize.run, "Preparing your search index")
         unchanged = previous_input == sha256_file(self.people)
         if unchanged:
             os.utime(self.people, ns=(self.people.stat().st_atime_ns, previous_mtime))
@@ -304,9 +306,10 @@ class ProcessingOnboarding:
                                  input=self.people, output_dir=self.index, dry_run=True)),
                                  "Estimating search indexing")
             estimate["note"] = "Local cache estimate; Modal checks its shared cache before spending."
+            # Upload consent first: the spend continuation keeps it, so the two never bounce.
+            self._approval(SpendStep.INDEX, estimate, upload=True)
             if estimate["estimated_cost_usd"] >= _AUTO_SPEND_USD:
                 self._approval(SpendStep.INDEX, estimate)
-            self._approval(SpendStep.INDEX, estimate, upload=True)
             # Modal rejects only costs above its cap; keep automatic spend below $500.
             cap = max(_AUTO_SPEND_USD - 0.01, estimate["estimated_cost_usd"])
             command = [*self.modal, "index-people", "--people-csv", _PEOPLE, "--max-usd", str(cap)]

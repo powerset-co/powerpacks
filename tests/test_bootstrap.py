@@ -53,6 +53,9 @@ class Sandbox:
             shutil.copyfile(ROOT / relative, target)
         write(self.repo / "packs/ingestion/primitives/deep_context/review/cli.py",
               'import json\nprint(json.dumps({"url": "http://127.0.0.1:8765/install"}))\n')
+        # bin/setup-python is faked, so give the checkout the venv Python it would have made.
+        (self.repo / ".venv/bin").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".venv/bin/python").symlink_to(sys.executable)
         write(self.repo / "packs/powerset/primitives/install/onboard.py",
               'import sys\nfrom pathlib import Path\n'
               'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'

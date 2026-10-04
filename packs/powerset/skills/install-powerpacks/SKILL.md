@@ -31,14 +31,16 @@ want as it runs."
 This needs a shell on the user's Mac. Without one, explain where to paste the
 instruction; do not claim a cloud installation changed their computer.
 
-Before running anything, ask the one question setup needs: "Which Gmail accounts
-should I add? The first one owns the Gmail setup." Pass each answer as
-`--gmail-email`, first address first. Everything after that is logins the user
+Before running anything, ask the two things setup needs, in one message: "Which
+Gmail accounts should I add? The first one owns the Gmail setup." and "Building
+your search index uploads your contacts to your Powerset workspace. OK?" Pass
+each address as `--gmail-email`, first address first, and `--approve-upload` on a
+yes. Everything after that is logins the user
 does back to back near the start (Powerset, LinkedIn, Google, each Gmail
 approval, Full Disk Access, WhatsApp QR); then setup runs on its own.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --gmail-email first@example.com --gmail-email second@example.com
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --approve-upload --gmail-email first@example.com --gmail-email second@example.com
 ```
 
 Bootstrap installs the runtime and starts the installed coordinator `bin/onboard`.
