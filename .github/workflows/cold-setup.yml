@@ -34,11 +34,11 @@ jobs:
       - name: Bootstrap (the one command the install skill runs)
         # A fresh runner has neither agent, so bootstrap installs for both.
         run: |
-          POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | tee bootstrap.log
+          POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --harness all | tee bootstrap.log
           grep -q '^DONE: ' bootstrap.log
       - name: Bootstrap again is a no-op
         run: |
-          POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --no-tools --harness all | tee bootstrap.log
+          POWERPACKS_REPO_ROOT="$PWD" bin/bootstrap --harness all | tee bootstrap.log
           grep -q '^DONE: ' bootstrap.log
       - name: Verify installed skills
         run: |

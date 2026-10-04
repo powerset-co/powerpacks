@@ -275,7 +275,7 @@ to do next. Safe to run again.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
-# flags: --harness codex|claude-code|pi|all, --powerset, --tools, --no-tools
+# flags: --harness codex|claude-code|pi|all, --powerset, --port PORT
 ```
 
 The top-level `install.sh` dispatches to a per-host adapter. **All adapters

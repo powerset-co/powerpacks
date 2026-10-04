@@ -31,7 +31,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_onboarding_workflow \
   tests.test_install_controller \
   tests.test_install_index_progress \
-  tests.test_install_processing_progress \
   tests.test_install_pipeline \
   tests.test_install_coordinator \
   tests.test_review_lifecycle \
