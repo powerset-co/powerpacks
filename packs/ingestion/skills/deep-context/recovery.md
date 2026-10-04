@@ -6,6 +6,50 @@ decision. Keep a golden copy before replaying changes; do not introduce another
 ledger. A cold rebuild on a separate copy can reuse facts without inheriting
 the old family membership.
 
+## Recover an existing installation
+
+Use this path to keep existing source contacts and reusable paid work. It is not
+a fresh rebuild or a historical identity split.
+
+1. Stop the local review server with `bin/deep-context stop`.
+2. Identify the authenticated account's operator UUID. Never infer it from an
+   imported connection's historical file path. For a copied store, use the known
+   owner's UUID and an authorized feedback snapshot.
+3. Run the free preparation before collection or enrichment:
+
+```bash
+bin/deep-context recover \
+  --state-root /absolute/install/.powerpacks \
+  --backup-root /absolute/backups/pre-recovery.powerpacks \
+  --operator-id <expected-operator-uuid>
+```
+
+For offline replay, add `--feedback-json /absolute/operator-feedback.json`.
+The command reads and validates feedback before mutation, backs up the state and
+canonical SQLite, restores attributable contact facts, applies reviewed feedback,
+then matches imported LinkedIn connections and refreshes derived parent facts.
+Original facts and human decisions retain their authority. The backup destination
+must be unused and outside the state directory. An interrupted run can be retried
+with another unused backup path; completed contact work is reused.
+
+Inspect `deep-context/recover/manifest.json`: applied feedback, held/unmatched
+choices, restored facts and name matches are separate counts. A completed
+preparation is not proof that every identity is correct. Mixed-person histories
+remain held; recover never runs the historical splitting heuristic.
+
+Continue the normal skill: collect and preview synthesis (only pending contact
+evidence), compose, cluster, parents, then preview/run enrichment. The existing
+identity and final Sol stages process unresolved candidates and reuse judgments
+only when their evidence and request match. `finish-reviews --dry-run` previews a
+remaining final pass; do not replay arbitrary historical verdicts by ID or turn
+machine judgments into human approvals. Review the resulting SQLite queue, then
+realize and validate the index. Preparation does not synthesize, call identity
+providers, export, index or upload anything.
+
+The separate feedback API must expose the support-resolution columns documented
+below. A failed feedback fetch is a failed recovery, not an empty feedback set.
+Unresolved comments remain in the receipt instead of becoming new instructions.
+
 ## Read the operator's feedback first
 
 Before recovery changes, pull the operator's existing feedback. Fresh `rebuild`
