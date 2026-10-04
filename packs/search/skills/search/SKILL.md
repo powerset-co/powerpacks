@@ -1,6 +1,6 @@
 ---
 name: search
-description: "The single people-search door for Powerpacks. You decide surface/backend/depth/mode and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the reviewed result-driven deep mode; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
+description: "Find people in your network, look up a named person or their dossier, or search from a job description. Use for 'who is this person', 'tell me everything about someone', people searches, and shortlists. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
 ---
 
 # Search
@@ -19,6 +19,11 @@ Use this for any people search request:
 
 > `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
 > primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
+
+For a named person's profile, dossier, or "tell me everything about <person>",
+follow `packs/search/skills/search/person-lookup.md` and stop here. This read-only
+lookup skips search preparation, scoring, and `decision.json`. Requests for
+people *like* someone or who worked with them continue through search below.
 
 ## How to run this skill
 
@@ -211,29 +216,6 @@ Uses the local DuckDB search index - no TurboPuffer, Postgres, or set
 resolution. Retrieval stays local, but LLM filtering/reranking runs by default
 and sends the required candidate evidence to the configured OpenAI boundary.
 Use `--search-only` to skip those model stages entirely.
-
-### Local person lookup fast path
-
-If the query is a bare person identifier with no role/filter intent — a
-name ("John Doe", "who is John Doe"), an email, a phone number, a Twitter/X
-handle, or a LinkedIn profile URL — do **not** run the pipeline. Names and
-identifiers are not indexed by any retrieval stage; run one direct lookup
-instead:
-
-```bash
-uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py query \
-  --sql "SELECT person_id, full_name, headline, current_title, current_company, city, linkedin_url FROM local_person_profiles WHERE full_name ILIKE '%john doe%'"
-```
-
-Match emails against `primary_email`/`all_emails`, phones against
-`primary_phone`/`all_phones`, handles against
-`twitter_handle`/`x_twitter_handle`, LinkedIn URLs against
-`linkedin_url`/`public_identifier` (normalize to the slug). Show the
-matches compactly; if several people match, list them all. If zero match,
-say so and offer a normal search. Skip extraction, task state, retrieval,
-hydration, and all LLM stages — this is a deterministic lookup, not a
-search. If the query combines a person with anything else ("engineers who
-worked with John Doe"), it is not this fast path; follow the Step 1 route.
 
 1. Determine the DuckDB path:
    - `$POWERPACKS_LOCAL_SEARCH_DB` if set

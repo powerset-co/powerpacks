@@ -1,203 +1,214 @@
-"""Person lookup reads canonical SQLite and projected dossier paths only."""
+"""Lookup resolves contacts to canonical parents without changing SQLite."""
 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactRow,
-    ParentRow,
-    PersonIdentifierRow,
-    PersonIdentifiersProjection,
-    PersonRow,
-    PersonSourceRow,
-    PersonSourcesProjection,
+    ArtifactRow, ParentRow, PersonIdentifierRow, PersonIdentifiersProjection, PersonRow,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
-    ImportedPerson,
-    project_imported_people,
-)
 from packs.ingestion.primitives.deep_context.shared.lookup_person import PersonLookup, main
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class PersonLookupSqliteTest(unittest.TestCase):
-    def test_phone_lookup_matches_e164_storage_by_digit_key(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            db = Db(root / "deep-context.sqlite")
-            project_imported_people(
-                db,
-                (
-                    ImportedPerson(
-                        "person-phone",
-                        "Jordan Bravo",
-                        (),
-                        ("+1 415-555-0100",),
-                        ("imessage",),
-                        (),
-                        PeopleRow(id="person-phone", full_name="Jordan Bravo",
-                                  primary_phone="+1 415-555-0100", source_channels="imessage"),
-                    ),
-                ),
-            )
-            snapshot = canonical_snapshot(db)
-            person = snapshot.people[0]
-            child_path = root / "child.md"
-            parent_path = root / "parent.md"
-            child_path.write_text("# Child dossier\n", encoding="utf-8")
-            parent_path.write_text("# Parent dossier\n", encoding="utf-8")
-            db.project_rows(
-                (
-                    ArtifactRow(
-                        f"dossier-person:{person.person_id}",
-                        "dossier",
-                        person.parent_id,
-                        str(child_path),
-                        hashlib.sha256(child_path.read_bytes()).hexdigest(),
-                        "projected",
-                        person_id=person.person_id,
-                        payload_json=json.dumps({"body": "# Child dossier\n"}),
-                    ),
-                    ArtifactRow(
-                        f"dossier:{person.parent_id}",
-                        "dossier",
-                        person.parent_id,
-                        str(parent_path),
-                        hashlib.sha256(parent_path.read_bytes()).hexdigest(),
-                        "projected",
-                        payload_json=json.dumps({"body": "# Parent dossier\n"}),
-                    ),
-                )
-            )
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.db = Db(self.root / "deep-context.sqlite")
+        self.add_person("a", "Jordan Bravo", "Jordan A. Bravo")
+        self.db.project_rows((
+            PersonRow("person-alias", "parent-a", "jordan-alias", "jordan-a", "J. Bravo"),
+            PersonIdentifiersProjection("person-alias", (
+                PersonIdentifierRow("person-alias", "email", "alias@example.com", "alias@example.com"),
+            )),
+            ArtifactRow("dossier-person:person-a", "dossier", "parent-a", "/unused/child.md",
+                        "child", "projected", person_id="person-a",
+                        payload_json=json.dumps({"body": "CHILD BODY"})),
+        ))
 
-            stored_phone = db.query(
-                "SELECT normalized_value FROM person_identifiers WHERE person_id=? AND kind='phone'",
-                (person.person_id,),
-            )
-            self.assertEqual(stored_phone[0]["normalized_value"], "+14155550100")
-            for phone in (
-                "415-555-0100",
-                "(415) 555-0100",
-                "4155550100",
-                "+14155550100",
-            ):
-                with self.subTest(phone=phone):
-                    result = PersonLookup(db=db, phone=phone).run()
-                    self.assertEqual(result.status, "found")
-                    self.assertEqual(len(result.matches), 2)
+    def add_person(self, key: str, name: str, child_name: str | None = None,
+                   *, dossier: bool = True) -> None:
+        parent_id, person_id = f"parent-{key}", f"person-{key}"
+        rows = [
+            ParentRow(parent_id, f"parent-worth:{parent_id}", name, f"jordan-{key}"),
+            PersonRow(person_id, parent_id, f"child-{key}", f"jordan-{key}", child_name or name),
+            PersonIdentifiersProjection(person_id, (
+                PersonIdentifierRow(person_id, "email", f"{key}@example.com", f"{key.upper()}@Example.com"),
+                PersonIdentifierRow(person_id, "phone", "+14155550100" if key == "a" else "+14155550101"),
+            )),
+        ]
+        if dossier:
+            rows.append(ArtifactRow(
+                f"dossier:{parent_id}", "dossier", parent_id, str(self.root / f"{key}.md"),
+                key, "projected", payload_json=json.dumps({"body": f"# {name}\nPARENT {key}\n",
+                                                         "headline": f"Engineer {key}"}),
+            ))
+        self.db.project_rows(tuple(rows))
+        imported = tuple(PeopleRow(id=f"person-{item}", full_name=display,
+                                  linkedin_url=f"https://www.linkedin.com/in/jordan-{item}/")
+                         for item, display in (("a", "Jordan A. Bravo"), (key, child_name or name)))
+        self.db.replace_imported_people(tuple({row.id: row for row in imported}.values()))
 
-    def test_phone_email_and_name_keep_the_existing_match_policy(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            child_path = root / "jordan-child.md"
-            parent_path = root / "jordan-parent.md"
-            child_path.write_text("# Child dossier\n", encoding="utf-8")
-            parent_path.write_text("# Parent dossier\n", encoding="utf-8")
-            child_payload = {
-                "person_id": "person-a",
-                "name": "Jordan Bravo",
-                "full_name": "Jordan A. Bravo",
-                "path": "dossiers/jordan-child.md",
-                "headline": "Engineer",
-                "emails": ["stale@example.com"],
-                "phones": ["+1 555 555 9999"],
-                "body": "# Child dossier\n",
-                "source_channels": ["stale"],
-            }
-            parent_payload = {
-                "parent_id": "parent-a",
-                "name": "Jordan Bravo",
-                "path": "parents/jordan-parent.md",
-                "children": ["stale-child"],
-                "emails": ["stale@example.com"],
-                "phones": ["+1 555 555 9999"],
-                "body": "# Parent dossier\n",
-                "source_channels": ["stale"],
-            }
-            db = Db(root / "deep-context.sqlite")
-            db.project_rows(
-                (
-                    ParentRow("parent-a", "parent-worth:parent-a", "Jordan Bravo", "jordan-parent"),
-                    PersonRow("person-a", "parent-a", "jordan-child", "jordan-parent", "Jordan A. Bravo"),
-                    PersonIdentifiersProjection(
-                        "person-a",
-                        (
-                            PersonIdentifierRow("person-a", "email", "jordan@example.com", "Jordan@Example.com"),
-                            PersonIdentifierRow("person-a", "phone", "+14155550100", "+1 415 555 0100"),
-                        ),
-                    ),
-                    PersonSourcesProjection("person-a", (PersonSourceRow("person-a", "imessage"),)),
-                    ArtifactRow(
-                        "dossier-person:person-a",
-                        "dossier",
-                        "parent-a",
-                        str(child_path),
-                        hashlib.sha256(child_path.read_bytes()).hexdigest(),
-                        "projected",
-                        person_id="person-a",
-                        payload_json=json.dumps(child_payload),
-                    ),
-                    ArtifactRow(
-                        "dossier:parent-a",
-                        "dossier",
-                        "parent-a",
-                        str(parent_path),
-                        hashlib.sha256(parent_path.read_bytes()).hexdigest(),
-                        "projected",
-                        payload_json=json.dumps(parent_payload),
-                    ),
-                )
-            )
-            child_path.unlink()
-            parent_path.unlink()
+    def cli(self, *args: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(["--db", str(self.db.db_path), *args])
+        return code, out.getvalue(), err.getvalue()
 
-            def slugs(**query: str) -> list[str]:
-                result = PersonLookup(db=db, **query).run()
+    def test_identifiers_and_child_alias_resolve_one_parent(self) -> None:
+        for query in ({"email": "A@EXAMPLE.COM"}, {"email": "alias@example.com"},
+                      {"name": "J. Bravo"}, {"name": "Jordan A. Bravo"},
+                      {"name": "Jordan Bravo"}, {"name": "Jordan"}):
+            with self.subTest(query=query):
+                result = PersonLookup(db=self.db.db_path, **query).run()
                 self.assertEqual(result.status, "found")
-                return [match.slug for match in result.matches]
+                self.assertEqual(len(result.matches), 1)
+                match = result.matches[0]
+                self.assertEqual(match.parent_id, "parent-a")
+                self.assertEqual(match.name, "Jordan Bravo")
+                self.assertEqual(match.dossier_body, "# Jordan Bravo\nPARENT a\n")
+                self.assertEqual(set(match.emails), {"A@Example.com", "alias@example.com"})
+                self.assertEqual(match.linkedin_urls, ("https://www.linkedin.com/in/jordan-a",))
 
-            expected = ["jordan-child", "jordan-parent"]
-            self.assertEqual(slugs(email="JORDAN@example.com"), expected)
-            self.assertEqual(slugs(phone="+1 415-555-0100"), expected)
-            self.assertEqual(slugs(name="Jordan A. Bravo"), ["jordan-child"])
-            self.assertEqual(slugs(name="Jordan Bravo"), ["jordan-parent"])
-            self.assertEqual(slugs(name="Jordan"), expected)
-            matches = PersonLookup(db=db, email="jordan@example.com").run().matches
-            self.assertEqual(
-                list(matches[0].as_dict()),
-                [
-                    "person_id",
-                    "name",
-                    "path",
-                    "headline",
-                    "full_name",
-                    "emails",
-                    "phones",
-                    "slug",
-                ],
-            )
-            self.assertEqual(matches[1].as_dict(), {"slug": "jordan-parent"})
-            self.assertEqual(matches[1].dossier_body, "# Parent dossier\n")
-            dossiers = {row.slug: row for row in canonical_snapshot(db).dossiers}
-            self.assertEqual(dossiers["jordan-child"].emails, ("Jordan@Example.com",))
-            self.assertEqual(dossiers["jordan-child"].phones, ("+1 415 555 0100",))
-            self.assertEqual(dossiers["jordan-child"].source_channels, ("imessage",))
-            self.assertEqual(dossiers["jordan-parent"].children, ("jordan-child",))
-            self.assertEqual(dossiers["jordan-parent"].source_channels, ("imessage",))
+    def test_phone_formats_keep_digit_matching(self) -> None:
+        for phone in ("415-555-0100", "(415) 555-0100", "4155550100", "+14155550100"):
+            with self.subTest(phone=phone):
+                result = PersonLookup(db=self.db.db_path, phone=phone).run()
+                self.assertEqual(result.status, "found")
+                self.assertEqual([m.parent_id for m in result.matches], ["parent-a"])
 
-    def test_missing_database_exits_without_creating_store(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with self.assertRaisesRegex(SystemExit, "database is missing"):
-                main(["--name", "Jordan", "--db", str(root / "missing.sqlite")])
-            self.assertFalse((root / "missing.sqlite").exists())
+    def test_exact_name_precedes_partial_name(self) -> None:
+        self.add_person("b", "Jordan Bravo Senior")
+        result = PersonLookup(db=self.db.db_path, name="  JORDAN   BRAVO  ").run()
+        self.assertEqual(result.status, "found")
+        self.assertEqual([m.parent_id for m in result.matches], ["parent-a"])
+
+    def test_partial_tokens_match_parent_and_child(self) -> None:
+        result = PersonLookup(db=self.db.db_path, name="Bravo Jordan").run()
+        self.assertEqual([m.parent_id for m in result.matches], ["parent-a"])
+
+    def test_matching_contact_without_parent_dossier_is_found(self) -> None:
+        self.add_person("b", "Casey Example", dossier=False)
+        for query in ({"name": "Casey Example"}, {"email": "b@example.com"}):
+            with self.subTest(query=query):
+                result = PersonLookup(db=self.db.db_path, **query).run()
+                self.assertEqual(result.status, "found")
+                self.assertEqual(result.matches[0].parent_id, "parent-b")
+                self.assertEqual(result.matches[0].dossier_body, "")
+                self.assertEqual(result.matches[0].dossier_path, "")
+        code, out, err = self.cli("--name", "Casey Example")
+        self.assertEqual(code, 0)
+        self.assertIn("Casey Example", out)
+        self.assertIn("No parent dossier", out)
+        self.assertEqual(err, "")
+
+    def test_same_name_parents_need_selection_without_mixed_bodies(self) -> None:
+        self.add_person("b", "Jordan Bravo")
+        result = PersonLookup(db=self.db.db_path, name="Jordan Bravo").run()
+        self.assertEqual(result.status, "ambiguous")
+        self.assertEqual([m.parent_id for m in result.matches], ["parent-a", "parent-b"])
+        self.assertTrue(all(not match.dossier_body for match in result.matches))
+        code, out, err = self.cli("--name", "Jordan Bravo")
+        self.assertEqual(code, 0)
+        self.assertNotIn("PARENT", out + err)
+        self.assertIn("--parent-id", out)
+        self.assertIn("parent-a", out)
+        self.assertIn("parent-b", out)
+        self.assertIn("A@Example.com", out)
+        self.assertIn("https://www.linkedin.com/in/jordan-b", out)
+
+    def test_parent_id_selects_only_one_canonical_dossier(self) -> None:
+        self.add_person("b", "Jordan Bravo")
+        result = PersonLookup(db=self.db.db_path, parent_id="parent-b").run()
+        self.assertEqual(result.status, "found")
+        self.assertEqual([m.parent_id for m in result.matches], ["parent-b"])
+        self.assertEqual(result.matches[0].dossier_body, "# Jordan Bravo\nPARENT b\n")
+
+    def test_json_contains_parent_body_path_and_live_identifiers(self) -> None:
+        code, out, err = self.cli("--email", "alias@example.com", "--json")
+        self.assertEqual((code, err), (0, ""))
+        payload = json.loads(out)
+        self.assertEqual(payload["status"], "found")
+        match, = payload["matches"]
+        self.assertEqual(match["parent_id"], "parent-a")
+        self.assertEqual(match["name"], "Jordan Bravo")
+        self.assertEqual(match["dossier_path"], str(self.root / "a.md"))
+        self.assertEqual(match["dossier_body"], "# Jordan Bravo\nPARENT a\n")
+        self.assertEqual(set(match["emails"]), {"A@Example.com", "alias@example.com"})
+        self.assertEqual(match["phones"], ["+14155550100"])
+        self.assertEqual(match["headline"], "Engineer a")
+
+    def test_ambiguous_json_is_metadata_then_selection_returns_body(self) -> None:
+        self.add_person("b", "Jordan Bravo")
+        code, out, _ = self.cli("--name", "Jordan Bravo", "--json")
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(payload["status"], "ambiguous")
+        self.assertTrue(all(not match["dossier_body"] for match in payload["matches"]))
+        code, out, _ = self.cli("--parent-id", "parent-a", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["matches"][0]["dossier_body"], "# Jordan Bravo\nPARENT a\n")
+
+    def test_no_match_and_no_query_are_explicit(self) -> None:
+        for args, status, expected in ((["--name", "Unknown"], "no_match", 1),
+                                       ([], "no_query", 2),
+                                       (["--parent-id", "missing"], "no_match", 1)):
+            with self.subTest(status=status, args=args):
+                code, out, _ = self.cli(*args, "--json")
+                self.assertEqual(code, expected)
+                self.assertEqual(json.loads(out)["status"], status)
+                self.assertEqual(json.loads(out)["matches"], [])
+
+    def test_missing_database_is_actionable_and_does_not_create_store(self) -> None:
+        missing = self.root / "missing" / "deep-context.sqlite"
+        code, out, err = self.cli("--name", "Jordan", "--db", str(missing), "--json")
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)["status"], "missing_database")
+        self.assertIn("contact/profile lookup", json.loads(out)["message"])
+        self.assertNotIn("Traceback", err)
+        self.assertFalse(missing.parent.exists())
+
+    def test_legacy_store_is_unreadable_even_when_name_is_absent(self) -> None:
+        with sqlite3.connect(self.db.db_path) as conn:
+            conn.execute("DROP TABLE imported_people")
+            conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+        before = hashlib.sha256(self.db.db_path.read_bytes()).hexdigest()
+        for name in ("Jordan Bravo", "Absent Synthetic Zqxv"):
+            with self.subTest(name=name):
+                code, out, err = self.cli("--name", name, "--json")
+                self.assertEqual((code, err), (1, ""))
+                self.assertEqual(json.loads(out)["status"], "unreadable_database")
+                self.assertEqual(json.loads(out)["matches"], [])
+        self.assertEqual(hashlib.sha256(self.db.db_path.read_bytes()).hexdigest(), before)
+
+    def test_non_sqlite_file_is_unreadable_without_traceback(self) -> None:
+        invalid = self.root / "invalid.sqlite"
+        invalid.write_bytes(b"not a SQLite database")
+        code, out, err = self.cli("--name", "Jordan", "--db", str(invalid), "--json")
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(json.loads(out)["status"], "unreadable_database")
+        self.assertEqual(invalid.read_bytes(), b"not a SQLite database")
+
+    def test_cli_does_not_upgrade_or_modify_database(self) -> None:
+        with sqlite3.connect(self.db.db_path) as conn:
+            conn.execute("DROP INDEX research_by_candidate")
+        before = hashlib.sha256(self.db.db_path.read_bytes()).hexdigest()
+        code, out, err = self.cli("--name", "Jordan Bravo", "--json")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out)["matches"][0]["parent_id"], "parent-a")
+        self.assertEqual(hashlib.sha256(self.db.db_path.read_bytes()).hexdigest(), before)
+        with sqlite3.connect(self.db.db_path) as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM sqlite_master WHERE name='research_by_candidate'").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

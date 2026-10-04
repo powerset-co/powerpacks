@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import replace
+from pathlib import Path
+import sqlite3
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.shared.common import normalize_name, phone_digits
 from packs.ingestion.primitives.deep_context.db._view_rows import (
@@ -14,187 +17,106 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentLookupRow,
     ParentViewRow,
-    PersonLookupRow,
 )
 
 
 def person_lookup(
-    db: Db,
+    db: Path,
     *,
     name: str | None = None,
     phone: str | None = None,
     email: str | None = None,
-) -> list[PersonLookupRow | ParentLookupRow]:
-    """Match live identifiers and names, then hydrate only the matched dossiers."""
-    phone_key = phone_digits(phone) if phone else ""
-    email_key = normalize_email(email) if email else ""
+    parent_id: str | None = None,
+) -> list[ParentLookupRow]:
+    """Resolve names/identifiers to parents; return a dossier only for one parent."""
     name_key = normalize_name(name or "")
     tokens = sorted(set(name_key.split()))
-    people_tokens = " AND ".join("lower(pe.display_name) LIKE ?" for _ in tokens) or "0"
-    parent_tokens = " AND ".join("lower(p.display_name) LIKE ?" for _ in tokens) or "0"
-    token_params = tuple(f"%{token}%" for token in tokens)
-    rows = db.query(
-        f"""
-WITH exact_name_people AS (
-  SELECT pe.person_id, pe.parent_id
-  FROM people pe
-  WHERE ?!='' AND lower(trim(pe.display_name))=?
-), exact_name_parents AS (
-  SELECT p.parent_id
-  FROM parents p
-  WHERE ?!='' AND lower(trim(p.display_name))=?
-), phone_identifier_digits AS (
-  SELECT pi.person_id, replace(pi.normalized_value, '+', '') AS digits
-  FROM person_identifiers pi
-  WHERE pi.kind='phone'
-), phone_identifiers AS (
-  SELECT person_id,
-         CASE WHEN length(digits)=11 AND substr(digits, 1, 1)='1'
-              THEN substr(digits, 2) ELSE digits END AS phone_key
-  FROM phone_identifier_digits
-), matched_people_raw AS (
-  SELECT pe.person_id, pe.parent_id, 10 AS match_order
-  FROM phone_identifiers pi JOIN people pe USING(person_id)
-  WHERE ?!='' AND pi.phone_key=?
+    token_sql = " AND ".join(f"instr(name, :token{i})>0" for i in range(len(tokens))) or "0"
+    params = dict(name=name_key, phone=phone_digits(phone or ""),
+                  email=normalize_email(email or ""), parent_id=parent_id or "")
+    params.update({f"token{i}": token for i, token in enumerate(tokens)})
+    try:
+        with closing(sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.create_function("normalize_name", 1, normalize_name)
+            rows = conn.execute(
+                f"""
+WITH names AS (
+  SELECT parent_id, normalize_name(display_name) AS name FROM parents
   UNION ALL
-  SELECT pe.person_id, pe.parent_id, 20
-  FROM person_identifiers pi JOIN people pe USING(person_id)
-  WHERE ?!='' AND pi.kind='email' AND pi.normalized_value=?
+  SELECT parent_id, normalize_name(display_name) FROM people
+), exact_names AS (
+  SELECT parent_id FROM names WHERE :name!='' AND name=:name
+), phone_digits AS (
+  SELECT person_id, replace(normalized_value, '+', '') AS digits
+  FROM person_identifiers WHERE kind='phone'
+), matched_raw AS (
+  SELECT parent_id, 0 AS match_order FROM parents
+  WHERE :parent_id!='' AND parent_id=:parent_id
   UNION ALL
-  SELECT person_id, parent_id, 30 FROM exact_name_people
+  SELECT pe.parent_id, 10 FROM phone_digits pi JOIN people pe USING(person_id)
+  WHERE :parent_id='' AND :phone!=''
+    AND CASE WHEN length(digits)=11 AND substr(digits, 1, 1)='1'
+             THEN substr(digits, 2) ELSE digits END=:phone
   UNION ALL
-  SELECT pe.person_id, pe.parent_id, 30
-  FROM people pe
-  WHERE ?!=''
-    AND NOT EXISTS (SELECT 1 FROM exact_name_people)
-    AND NOT EXISTS (SELECT 1 FROM exact_name_parents)
-    AND {people_tokens}
-), matched_people AS (
-  SELECT person_id, parent_id, min(match_order) AS match_order
-  FROM matched_people_raw GROUP BY person_id, parent_id
-), matched_parents_raw AS (
-  SELECT parent_id, min(match_order) + 1 AS match_order
-  FROM matched_people WHERE match_order < 30 GROUP BY parent_id
+  SELECT pe.parent_id, 20 FROM person_identifiers pi JOIN people pe USING(person_id)
+  WHERE :parent_id='' AND :email!='' AND pi.kind='email' AND pi.normalized_value=:email
   UNION ALL
-  SELECT parent_id, 30 FROM exact_name_parents
+  SELECT parent_id, 30 FROM exact_names WHERE :parent_id=''
   UNION ALL
-  SELECT p.parent_id, 30
-  FROM parents p
-  WHERE ?!=''
-    AND NOT EXISTS (SELECT 1 FROM exact_name_people)
-    AND NOT EXISTS (SELECT 1 FROM exact_name_parents)
-    AND {parent_tokens}
-), matched_parents AS (
-  SELECT parent_id, min(match_order) AS match_order
-  FROM matched_parents_raw GROUP BY parent_id
-), results AS (
-  SELECT 0 AS entity_kind, mp.match_order, pe.child_slug AS slug,
-         pe.display_name AS name, a.path, a.path AS dossier_path,
-         json_extract(a.payload_json, '$.body') AS dossier_body,
-         json_extract(a.payload_json, '$.headline') AS headline,
-         pe.display_name AS full_name,
-         (SELECT json_group_array(value) FROM (
-            SELECT COALESCE(pi.display_value, pi.normalized_value) AS value
-            FROM person_identifiers pi
-            WHERE pi.person_id=pe.person_id AND pi.kind='email'
-            ORDER BY pi.normalized_value
-          )) AS emails_json,
-         (SELECT json_group_array(value) FROM (
-            SELECT COALESCE(pi.display_value, pi.normalized_value) AS value
-            FROM person_identifiers pi
-            WHERE pi.person_id=pe.person_id AND pi.kind='phone'
-            ORDER BY pi.normalized_value
-          )) AS phones_json,
-         pe.parent_id, pe.person_id, '[]' AS children_json
-  FROM matched_people mp JOIN people pe USING(person_id)
-  JOIN artifacts a ON a.artifact_key=(
-    SELECT a2.artifact_key FROM artifacts a2
-    WHERE a2.person_id=pe.person_id AND a2.kind='dossier' AND a2.status='projected'
-    ORDER BY a2.projected_at DESC, a2.artifact_key LIMIT 1
-  )
-  WHERE pe.child_slug IS NOT NULL
-  UNION ALL
-  SELECT 1, mp.match_order, p.display_slug, p.display_name, a.path, a.path,
-         json_extract(a.payload_json, '$.body'),
-         json_extract(a.payload_json, '$.headline'), p.display_name,
-         (SELECT json_group_array(value) FROM (
-            SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
-            FROM people pe JOIN person_identifiers pi USING(person_id)
-            WHERE pe.parent_id=p.parent_id AND pi.kind='email'
-            ORDER BY value
-          )),
-         (SELECT json_group_array(value) FROM (
-            SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
-            FROM people pe JOIN person_identifiers pi USING(person_id)
-            WHERE pe.parent_id=p.parent_id AND pi.kind='phone'
-            ORDER BY value
-          )),
-         p.parent_id, NULL,
-         (SELECT json_group_array(child_slug) FROM (
-            SELECT child_slug FROM people
-            WHERE parent_id=p.parent_id AND child_slug IS NOT NULL ORDER BY child_slug
-          ))
-  FROM matched_parents mp JOIN parents p USING(parent_id)
-  JOIN artifacts a ON a.artifact_key=(
-    SELECT a2.artifact_key FROM artifacts a2
-    WHERE a2.parent_id=p.parent_id AND a2.person_id IS NULL
-      AND a2.candidate_key IS NULL AND a2.kind='dossier' AND a2.status='projected'
-      AND a2.artifact_key='dossier:'||a2.parent_id
-    LIMIT 1
-  )
-  WHERE p.display_slug IS NOT NULL
+  SELECT parent_id, 30 FROM names
+  WHERE :parent_id='' AND :name!='' AND NOT EXISTS (SELECT 1 FROM exact_names)
+    AND {token_sql}
+), matched AS (
+  SELECT parent_id, min(match_order) AS match_order FROM matched_raw GROUP BY parent_id
 )
-SELECT * FROM results ORDER BY match_order, entity_kind, slug
+SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
+       CASE WHEN (SELECT count(*) FROM matched)=1
+            THEN json_extract(a.payload_json, '$.body') ELSE '' END AS body,
+       COALESCE(json_extract(a.payload_json, '$.headline'),
+         (SELECT json_extract(i.row_json, '$.headline')
+          FROM imported_people i JOIN people pe USING(person_id)
+          WHERE pe.parent_id=p.parent_id AND json_extract(i.row_json, '$.headline')!=''
+          ORDER BY pe.person_id LIMIT 1), '') AS headline,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
+          FROM people pe JOIN person_identifiers pi USING(person_id)
+          WHERE pe.parent_id=p.parent_id AND pi.kind='email' ORDER BY value
+        )) AS emails_json,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
+          FROM people pe JOIN person_identifiers pi USING(person_id)
+          WHERE pe.parent_id=p.parent_id AND pi.kind='phone' ORDER BY value
+        )) AS phones_json,
+       (SELECT json_group_array(url) FROM (
+          SELECT json_extract(i.row_json, '$.linkedin_url') AS url
+          FROM imported_people i JOIN people pe USING(person_id)
+          WHERE pe.parent_id=p.parent_id
+          UNION
+          SELECT pi.normalized_value FROM people pe JOIN person_identifiers pi USING(person_id)
+          WHERE pe.parent_id=p.parent_id AND pi.kind='linkedin'
+        ) WHERE url IS NOT NULL AND url!='' ORDER BY url) AS linkedin_urls_json
+FROM matched mp JOIN parents p USING(parent_id)
+LEFT JOIN artifacts a ON a.artifact_key='dossier:'||p.parent_id
+  AND a.kind='dossier' AND a.status='projected'
+  AND a.person_id IS NULL AND a.candidate_key IS NULL
+ORDER BY mp.match_order, p.display_name, p.parent_id
 """,
-        (
-            name_key,
-            name_key,
-            name_key,
-            name_key,
-            phone_key,
-            phone_key,
-            email_key,
-            email_key,
-            name_key,
-            *token_params,
-            name_key,
-            *token_params,
-        ),
-    )
-    result: list[PersonLookupRow | ParentLookupRow] = []
-    for row in rows:
-        emails = tuple(str(value) for value in _json(row["emails_json"], []))
-        phones = tuple(str(value) for value in _json(row["phones_json"], []))
-        if row["person_id"]:
-            item = PersonLookupRow(
-                slug=row["slug"],
-                name=row["name"] or "",
-                path=row["path"],
-                dossier_path=row["dossier_path"],
-                dossier_body=row["dossier_body"] or "",
-                headline=row["headline"] or "",
-                full_name=row["full_name"] or "",
-                emails=emails,
-                phones=phones,
-                parent_id=row["parent_id"],
-                person_id=row["person_id"],
-            )
-        else:
-            item = ParentLookupRow(
-                slug=row["slug"],
-                name=row["name"] or "",
-                path=row["path"],
-                dossier_path=row["dossier_path"],
-                dossier_body=row["dossier_body"] or "",
-                headline=row["headline"] or "",
-                full_name=row["full_name"] or "",
-                emails=emails,
-                phones=phones,
-                parent_id=row["parent_id"],
-                children=tuple(str(value) for value in _json(row["children_json"], [])),
-            )
-        result.append(item)
-    return result
+                params,
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise ValueError(f"Cannot read Deep Context database: {db}: {exc}") from exc
+    return [
+        ParentLookupRow(
+            parent_id=row["parent_id"], name=row["name"] or "", slug=row["slug"] or "",
+            dossier_path=row["path"] or "", dossier_body=row["body"] or "",
+            headline=row["headline"],
+            emails=tuple(_json(row["emails_json"], [])),
+            phones=tuple(_json(row["phones_json"], [])),
+            linkedin_urls=tuple(_json(row["linkedin_urls_json"], [])),
+        )
+        for row in rows
+    ]
 
 
 def person_detail(db: Db, slug_or_parent_id: str) -> ParentViewRow | None:
