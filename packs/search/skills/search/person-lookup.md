@@ -22,13 +22,14 @@ parent dossier from SQLite. It does not require the Markdown export to exist.
 
 - **One person:** summarize `dossier_body`. An empty body means the person was
   found but has no saved parent dossier; present the available identity/profile
-  information and say that clearly.
-- **Several people:** show names plus distinguishing emails/headlines and ask
-  which person. Do not combine their facts. Once chosen, run
+  information and offer to check whether saved context is available to build one.
+- **Several people:** give concrete choices, such as "Taylor, the designer at
+  North, or Taylor, the engineer at South?" Use returned emails/headlines, not
+  invented distinctions. Do not combine their facts. Once chosen, run
   `bin/deep-context lookup --parent-id "<returned parent_id>" --json`.
-- **No match:** retry a distinctive part of the name once (for example the
-  surname), or another identifier the user supplied. A close spelling alone
-  does not establish identity; confirm a plausible alternative.
+- **No match:** try useful name parts, known aliases, or supplied identifiers
+  before asking for help. If a plausible match appears, show its identifying
+  details and ask "Did you mean this person?" Similar spelling is not identity.
 - **No local database:** this installation has no local dossiers. Continue to
   available profile/contact lookup below; do not start setup or import data.
 - **Unreadable database:** report the access/setup error; do not treat it as an
@@ -66,8 +67,9 @@ Use `primary_email`/`all_emails`, `primary_phone`/`all_phones`,
 the supplied identifier (normalize LinkedIn URLs to the slug). Escape SQL string
 literals. Read the matched profile, then use its identifiers for dossier lookup.
 Never run semantic retrieval for a person's name or require an index build.
-Local-only stays local; if the available sources find nobody, say where you
-looked and ask for an email, phone, or LinkedIn URL.
+If the available sources find nobody, say where you looked and offer another
+identifier. When hosted access is allowed, another available network/account
+can be an option; name it and never invent access. Local-only stays local.
 
 ## Answer
 
@@ -78,3 +80,10 @@ dossier/profile when available; preserve dates, sources, and uncertainty.
 Distinguish recorded facts from inferences and missing information. A failed
 lookup never establishes that the user does not know someone. Do not trigger
 collection, synthesis, enrichment, or sharing just to answer a lookup.
+
+When there is a gap, give the best available answer first, then one or two
+useful next steps based on what you found. Do not make the user choose a backend
+or skill, ask them to approve routine reads, or append a menu to a complete answer.
+If they choose to build missing context, follow `deep-context` to check existing
+sources and explain the actual scope and any cost before processing; don't
+promise a one-person build or start processing the whole network implicitly.

@@ -17,12 +17,12 @@
   {
     "id": "person-ambiguous",
     "query": "Tell me about Taylor Example. I know two people with that name.",
-    "expected_behavior": "Look up the name, show the returned distinct parents with distinguishing contact/profile information, and ask which person if ambiguity remains. Read the chosen parent by its returned ID. Never combine two people's dossier facts or treat multiple child aliases of one parent as different people."
+    "expected_behavior": "Look up the name, show the returned distinct parents with distinguishing contact/profile information, and ask which person if ambiguity remains. Read the chosen parent by its returned ID. Never combine two people's dossier facts or treat multiple child aliases of one parent as different people. Offer concrete choices using actual distinguishing details, not a generic request for more information or a skill/backend menu."
   },
   {
     "id": "person-no-dossier",
     "query": "Who is Casey Example? The last lookup found the contact but said there was no saved dossier.",
-    "expected_behavior": "Use the person-lookup reference and verify available identity/profile information. Explain that the person exists but lacks a saved parent dossier. Do not say person not found, fabricate relationship facts, or start building dossiers or importing messages."
+    "expected_behavior": "Use the person-lookup reference and verify available identity/profile information. Explain that the person exists but lacks a saved parent dossier. Do not say person not found, fabricate relationship facts, or start building dossiers or importing messages. Give the useful known facts first, then offer to check existing saved context for a dossier build; do not end with a dead-end missing-dossier message or imply a build already happened."
   },
   {
     "id": "person-hosted-only",
@@ -37,6 +37,6 @@
   {
     "id": "person-local-only",
     "query": "Tell me what I know about Morgan Example, using only what's already on this laptop.",
-    "expected_behavior": "Use the local parent dossier lookup and available local profile index, preserving local-only scope. Retry a distinctive name part on a miss. If local sources are missing or no match remains, explain what was actually searched and ask for another identifier. Never call hosted contacts, a provider, or start an index build."
+    "expected_behavior": "Use the local parent dossier lookup and available local profile index, preserving local-only scope. Retry a distinctive name part on a miss. If local sources are missing or no match remains, explain what was actually searched and ask for another identifier. Never call hosted contacts, a provider, or start an index build. Offer relevant next steps using only accessible local sources; do not offer an account switch that violates local-only scope."
   }
 ]
