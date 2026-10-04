@@ -43,7 +43,7 @@ Use the narrow path when the user names one:
   Regenerate source imports, then run `bin/deep-context rebuild` with the explicit
   original, backup, fresh state and owner paths. Continue on that isolated state
   with the reviewed source scope and approved paid-stage budget.
-- `$deep-context recover` or "apply saved feedback and recover contact facts" ->
+- `$deep-context recover` or "apply saved feedback to an existing installation" ->
   follow [Recover an existing installation](recovery.md#recover-an-existing-installation).
 - `$deep-context heal`, "repair bad merges", or "recover contact facts" ->
   follow [Contact recovery](recovery.md). Do not start paid synthesis or research
