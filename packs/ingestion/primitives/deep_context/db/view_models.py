@@ -170,33 +170,16 @@ class ParentViewRow:
 
 
 @dataclass(frozen=True)
-class PersonLookupRow:
-    slug: str
-    name: str
-    path: str
-    dossier_path: str
-    dossier_body: str
-    headline: str
-    full_name: str
-    emails: tuple[str, ...]
-    phones: tuple[str, ...]
-    parent_id: str
-    person_id: str
-
-
-@dataclass(frozen=True)
 class ParentLookupRow:
-    slug: str
+    parent_id: str
     name: str
-    path: str
+    slug: str
     dossier_path: str
     dossier_body: str
     headline: str
-    full_name: str
     emails: tuple[str, ...]
     phones: tuple[str, ...]
-    parent_id: str
-    children: tuple[str, ...]
+    linkedin_urls: tuple[str, ...]
 
 
 @dataclass(frozen=True)

@@ -55,7 +55,7 @@ Paths below are relative to the installed checkout.
 | Health check or unclear installation/setup failure | `packs/powerset/skills/powerpacks-doctor/SKILL.md` |
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
 | Repair installation or data paths | `packs/powerset/skills/fix-powerpacks/SKILL.md` |
-| People search, job description, shortlist | `packs/search/skills/search/SKILL.md` |
+| People search, job description, shortlist, named person or dossier lookup | `packs/search/skills/search/SKILL.md` |
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |
 | Browse personal or network contacts | `packs/contacts/skills/search-contacts/SKILL.md` |
@@ -64,7 +64,7 @@ Paths below are relative to the installed checkout.
 | Gmail archive/OAuth setup | `packs/ingestion/skills/msgvault/SKILL.md` |
 | Import iMessage or WhatsApp contacts | `packs/ingestion/skills/import-messages/SKILL.md` |
 | Import Twitter/X contacts | `packs/ingestion/skills/import-twitter/SKILL.md` |
-| Process contacts, dossiers, duplicates, review, sharing | `packs/ingestion/skills/deep-context/SKILL.md` |
+| Process contacts, build dossiers, duplicates, review, sharing | `packs/ingestion/skills/deep-context/SKILL.md` |
 | Build the local search index | `packs/indexing/skills/build-local-search-index/SKILL.md` |
 | Raw conversation archive | `packs/ingestion/skills/logbook/SKILL.md` |
 | Reset derived pipeline state | `packs/ingestion/skills/clean-slate/SKILL.md` |
