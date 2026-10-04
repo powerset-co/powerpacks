@@ -72,9 +72,12 @@ failure. Check `/healthz`, `/api/install`, and `.powerpacks/install/server.log`.
 
 ## Choices and waiting
 
-Default to Gmail's past year, iMessage, and WhatsApp. Inform the user once and keep
-going. Apply already-given account/history choices. Gmail's identity is independent
-of Powerset's identity. LinkedIn is included only when requested.
+Default to Gmail's past year, iMessage, WhatsApp, and LinkedIn. Inform the user once
+and keep going. Apply already-given account/history choices. Gmail's identity is
+independent of Powerset's identity. LinkedIn opens a Chrome window on the user's
+connections page: they log in once (the session is kept), and the coordinator reads
+up to ~3,000 connections per run, then starts processing; the rest sync on later
+runs. Never ask for LinkedIn's emailed export.
 
 Existing `--source`, `--gmail-email`, `--sync-after`, `--wacli-store`, and `--refresh`
 options pass through bootstrap. Saved source/account/history/store choices survive

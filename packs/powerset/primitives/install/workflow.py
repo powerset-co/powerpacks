@@ -1,8 +1,12 @@
 """Run selected local imports and show their progress on the install page.
 
-Source manifests own reuse. Gmail authorization and Messages permission checks
-continue in this process; missing setup or failed primitives stop the flow.
-It never starts enrichment, provider calls, or uploads.
+Source manifests own reuse. Gmail authorization, Messages permission checks
+and the LinkedIn login continue in this process; missing setup or failed
+primitives stop the flow. It never starts enrichment, provider calls, or uploads.
+
+Changelog:
+  2026-10-03: LinkedIn is a default source, runs first, and reads the
+      connections list in Chrome instead of waiting for LinkedIn's emailed export.
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import emit, read_json
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
+from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, LinkedInConnections
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import parse_msgvault_sync_date
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
@@ -32,10 +37,11 @@ from packs.powerset.primitives.install.tools import ImportTools
 
 
 class Source(str, Enum):
+    """Members run in this order; LinkedIn first so its one login comes up front."""
+    LINKEDIN = "linkedin"
     GMAIL = "gmail"
     IMESSAGE = "imessage"
     WHATSAPP = "whatsapp"
-    LINKEDIN = "linkedin"
     SKIP = "skip"
 
 
@@ -50,7 +56,7 @@ _SOURCE_STEPS = {
 }
 _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
-_DEFAULT_SOURCES = (Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
+_DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
 
 
@@ -272,6 +278,15 @@ class SourceOnboarding:
         importer.run()
         return self._result(import_step, importer.written)
 
+    def _linkedin(self) -> bool:
+        manifest = read_json(self.root / CONNECTIONS_CSV.with_name("manifest.json"), {}) or {}
+        if manifest.get("complete") and not self.refresh:
+            self._write(InstallStep.LINKEDIN, InstallState.COMPLETED, "LinkedIn connections ready")
+            return True
+        self._write(InstallStep.LINKEDIN, InstallState.RUNNING,
+                    "Reading your LinkedIn connections. Log in to LinkedIn in the Chrome window if it asks.")
+        return self._result(InstallStep.LINKEDIN, LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run())
+
     def run(self) -> dict:
         previous = self.status.read()
         active = previous["status"] == InstallState.RUNNING or (
@@ -293,20 +308,23 @@ class SourceOnboarding:
                         self._write(step, InstallState.WAITING, "Not started")
             if self.sources == (Source.SKIP,) or all(source in self.skip_sources for source in self.sources):
                 return self._write(InstallStep.READY, InstallState.COMPLETED, "Powerpacks is installed")
+            linkedin_wait = None
             for source in self.sources:
                 if source in self.skip_sources:
+                    continue
+                if source is Source.LINKEDIN and not self._linkedin():
+                    linkedin_wait = self.status.read()
+                    if linkedin_wait["status"] != InstallState.WAITING:
+                        return linkedin_wait
                     continue
                 if source is Source.GMAIL and not self._gmail():
                     return self.status.read()
                 if source in {Source.IMESSAGE, Source.WHATSAPP} and not self._messages(source):
                     return self.status.read()
-                if source is Source.LINKEDIN:
-                    csv = self.root / ".powerpacks/network-import/discover/linkedin/Connections.csv"
-                    if not csv.is_file():
-                        return self._write(InstallStep.LINKEDIN, InstallState.WAITING, "Waiting for your LinkedIn export",
-                                           {"kind": "linkedin", "text": "Request your connections, then send me the CSV in chat.",
-                                            "url": "https://www.linkedin.com/mypreferences/d/download-my-data"}, pid=0)
-                    self._write(InstallStep.LINKEDIN, InstallState.COMPLETED, "LinkedIn export ready")
+            # A LinkedIn login still pending waits after the other sources ran.
+            if linkedin_wait:
+                return self._write(InstallStep.LINKEDIN, InstallState.WAITING, linkedin_wait["message"],
+                                   linkedin_wait.get("action"), pid=0)
             imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
             counts = {item.source: item.stats["people"] for item in imports
                       if item.status == "completed" and "people" in item.stats}

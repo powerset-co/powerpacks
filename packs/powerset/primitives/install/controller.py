@@ -101,11 +101,6 @@ class InstallController:
                 if app:
                     subprocess.run(["open", "-R", app], check=True)
                 response["app_path"] = app
-            elif path == "/api/install/linkedin":
-                action = InstallStatus(self.root).read().get("action") or {}
-                if action.get("kind") != "linkedin":
-                    raise ValueError("No LinkedIn export is needed right now")
-                subprocess.run(["open", "https://www.linkedin.com/mypreferences/d/download-my-data"], check=True)
             elif path == "/api/install/review":
                 if InstallStatus(self.root).read()["step"] != InstallStep.REVIEW:
                     raise ValueError("No review is needed right now")

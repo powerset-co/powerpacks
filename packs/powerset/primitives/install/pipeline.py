@@ -2,6 +2,11 @@
 
 Native manifests and SQLite own completed work. Routine processing follows
 the onboarding automatic budget; the installation manifest displays the next action.
+A LinkedIn connections list newer than its import is imported on Modal first,
+the same ungated step `$setup` runs.
+
+Changelog:
+  2026-10-03: import the scraped LinkedIn connections before fan-in.
 """
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ from typing import Callable
 from packs.ingestion.primitives.common.jsonio import parse_last_json, sha256_file
 from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store
 from packs.ingestion.primitives.deep_context.collection.collect_person_context import CollectPersonContext
+from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
@@ -46,6 +52,7 @@ from packs.powerset.primitives.install.status import (
 )
 
 _PEOPLE = ".powerpacks/network-import/merged/people.csv"
+_LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
 _INDEX = ".powerpacks/search-index"
 _AUTO_SPEND_USD = 500
 _REVIEW_POLL_SECONDS = 5
@@ -159,6 +166,11 @@ class ProcessingOnboarding:
             path.stat().st_mtime_ns <= self.raw_manifest.stat().st_mtime_ns for path in imported)
 
     def _prepare(self) -> None:
+        connections, imported = self.root / CONNECTIONS_CSV, self.root / _LINKEDIN_PEOPLE
+        if connections.is_file() and (not imported.is_file()
+                                      or imported.stat().st_mtime_ns < connections.stat().st_mtime_ns):
+            self._modal([*self.modal, "import-linkedin", "--csv", str(CONNECTIONS_CSV), "--dest", _LINKEDIN_PEOPLE],
+                        "Adding your LinkedIn connections")
         self._run("fan-in", lambda: PeopleMerge(output_dir=self.people.parent).run().to_payload(),
                   "Preparing your contacts")
         db_path = self.root / ".powerpacks/deep-context/deep-context.sqlite"

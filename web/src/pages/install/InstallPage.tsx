@@ -238,14 +238,6 @@ export function InstallPage() {
                 <p>Drag the highlighted app into Full Disk Access, enable it, then tell me here.</p>
               </div>
             ) : null}
-            {action.kind === "linkedin" ? (
-              <div>
-                <button type="button" onClick={() => void open("linkedin")}>
-                  Open LinkedIn
-                </button>
-                <p>Send me Connections.csv here when it arrives.</p>
-              </div>
-            ) : null}
             {action.kind === "processing" ? (
               <p>
                 {action.text ?? "Your contacts are saved. I’ll check what’s needed to make them searchable."}

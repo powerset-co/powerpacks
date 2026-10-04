@@ -149,6 +149,8 @@ class InstallPipelineTests(unittest.TestCase):
             self.assertTrue(options.dry_run)
             payload = {"status": "dry_run", "estimated_cost_usd": self.index_cost,
                        "estimated_paid_calls": {"role_enrichment": 1}}
+        elif command == "import-linkedin":
+            self.write(self.root / ".powerpacks/network-import/import/linkedin/people.csv", self.csv)
         elif command in ("index", "download"):
             if command == "index":
                 self.paid_commands.append("index")
@@ -183,7 +185,8 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertIn("packs/indexing/modal/linkedin_modal_pipeline.py", argv)
         self.assertEqual(kwargs["cwd"], self.root)
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
-        payload = self.native("download" if "download" in argv else "index", argv=argv)
+        name = "download" if "download" in argv else "import-linkedin" if "import-linkedin" in argv else "index"
+        payload = self.native(name, argv=argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload))
 
     def run_pipeline(self, *spend, upload=False):
@@ -194,6 +197,20 @@ class InstallPipelineTests(unittest.TestCase):
 
     def indexed(self):
         return self.did("index")
+
+    def test_new_linkedin_connections_import_before_fan_in_once(self):
+        connections = self.root / ".powerpacks/network-import/discover/linkedin/Connections.csv"
+        self.write(connections, "First Name,Last Name,URL\nJordan,Bravo,https://www.linkedin.com/in/jordan-bravo\n")
+        self.run_pipeline()
+        names = [name for name, _ in self.calls]
+        self.assertEqual(names.count("import-linkedin"), 1)
+        self.assertLess(names.index("import-linkedin"), names.index("fan-in"))
+        self.run_pipeline()
+        self.assertEqual([name for name, _ in self.calls].count("import-linkedin"), 1)
+
+    def test_no_linkedin_connections_never_imports_linkedin(self):
+        self.run_pipeline()
+        self.assertFalse(self.did("import-linkedin"))
 
     def test_over_threshold_synthesis_stops_with_estimate_and_exact_scoped_resume(self):
         self.synthesize = True

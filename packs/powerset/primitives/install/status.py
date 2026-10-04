@@ -59,7 +59,7 @@ STEP_LABELS = {
     "gmail_import": "Add Gmail contacts", "imessage_access": "Connect iMessage",
     "imessage_import": "Add iMessage contacts", "whatsapp_tools": "Prepare WhatsApp",
     "whatsapp_login": "Link WhatsApp", "whatsapp_sync": "Sync WhatsApp",
-    "whatsapp_import": "Add WhatsApp contacts", "linkedin": "Get LinkedIn export",
+    "whatsapp_import": "Add WhatsApp contacts", "linkedin": "Sync LinkedIn",
     "deep_context": "Discovering your contacts", "enrich": "Enriching your contacts",
     "review": "Waiting for your review",
     "index": "Build your search index",
