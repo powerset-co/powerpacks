@@ -34,8 +34,8 @@ from pathlib import Path
 from jinja2.exceptions import TemplateError
 
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     DOSSIER_DIR,
     DOSSIER_TEMPLATE,
     DOSSIERS_MANIFEST,

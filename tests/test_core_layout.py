@@ -17,7 +17,7 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["feedback", "fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            ["feedback", "fix-powerpacks", "install-powerpacks", "powerpacks-doctor", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
@@ -90,22 +90,10 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
-            self.assertTrue((skills_dir / "search" / "powerpacks" / "pyproject.toml").exists())
-            self.assertIn(
-                "turbopuffer",
-                (skills_dir / "search" / "powerpacks" / "pyproject.toml").read_text(),
-            )
-            self.assertFalse(
-                (skills_dir / "powerset" / "powerpacks" / "packs" / "powerset" / "skills" / "powerset" / "SKILL.md").exists()
-            )
-            nested_skill_files = sorted(
-                path.relative_to(skills_dir)
-                for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
-            )
-            self.assertEqual(nested_skill_files, [])
+            self.assertIn(str(ROOT), (skills_dir / "search/SKILL.md").read_text())
+            self.assertFalse((skills_dir / "search/powerpacks").exists())
 
-    def test_codex_adapter_uses_shared_powerpacks_bundle(self) -> None:
+    def test_codex_adapter_uses_checkout_context(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             codex_home = Path(td) / ".codex"
             skills_dir = Path(td) / "skills"
@@ -117,24 +105,10 @@ class CoreLayoutTests(unittest.TestCase):
                 env={**os.environ, "CODEX_HOME": str(codex_home), "POWERPACKS_SKIP_UV_SYNC": "1"},
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            bundle = codex_home / "powerpacks"
-            self.assertTrue((bundle / "packs").is_dir())
-            self.assertTrue((bundle / "pyproject.toml").exists())
-            self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
-            self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "import-messages" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "setup" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "build-outbound" / "powerpacks").is_symlink())
-            self.assertEqual((skills_dir / "powerset" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "import-messages" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "setup" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "build-outbound" / "powerpacks").resolve(), bundle.resolve())
-            nested_skill_files = sorted(path.relative_to(bundle) for path in bundle.glob("packs/*/skills/*/SKILL.md"))
-            self.assertEqual(nested_skill_files, [])
+            self.assertFalse((codex_home / "powerpacks").exists())
+            for skill in ("powerset", "import-messages", "setup", "build-outbound"):
+                self.assertIn(str(ROOT), (skills_dir / skill / "SKILL.md").read_text())
+                self.assertFalse((skills_dir / skill / "powerpacks").exists())
 
     def test_claude_adapter_installs_build_outbound_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -148,12 +122,8 @@ class CoreLayoutTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "build-outbound" / "powerpacks" / "packs" / "apollo").is_dir())
-            nested_skill_files = sorted(
-                path.relative_to(skills_dir)
-                for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
-            )
-            self.assertEqual(nested_skill_files, [])
+            self.assertIn(str(ROOT), (skills_dir / "build-outbound/SKILL.md").read_text())
+            self.assertFalse((skills_dir / "build-outbound/powerpacks").exists())
 
     def test_powerset_login_skill_uses_api_runtime_key_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
@@ -173,21 +143,16 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("gcloud auth login", text)
         self.assertNotIn("Secret Manager", text)
 
-    def test_install_skill_distinguishes_install_auth_and_provisioning_urls(self) -> None:
+    def test_install_and_hosted_config_use_separate_urls(self) -> None:
         text = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
-        self.assertIn("using my Powerset account", text)
-        self.assertIn("Its Steps 1-3 authenticate the Powerset user", text)
-        self.assertIn("Do not run a\n     separate `$powerset setup`", text)
-        self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
         self.assertIn("https://powerset.dev/powerpacks", text)
-        self.assertIn("https://search-api-7wk4uhe77q-uw.a.run.app", text)
-        self.assertIn("Auth0 audience identifier only: `https://api.powerset.dev`", text)
 
         hosted_env = (ROOT / "packs/powerset/templates/env.powerset.example").read_text()
         self.assertIn(
             "POWERSET_API_URL=https://search-api-7wk4uhe77q-uw.a.run.app",
             hosted_env,
         )
+        self.assertIn("POWERPACKS_AUTH0_AUDIENCE=https://api.powerset.dev", hosted_env)
         # One API-base var only — the retired aliases must not creep back.
         self.assertNotIn("POWERPACKS_SEARCH_API_URL", hosted_env)
         self.assertNotIn("POWERPACKS_API_BASE_URL", hosted_env)
@@ -224,9 +189,6 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("POWERSET_API_KEY=", env_template)
         self.assertIn("POWERSET_API_KEY_BACKUP=", env_template)
         self.assertIn("RAPIDAPI_KEY=", env_template)
-
-        installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
-        self.assertIn("only when the user chose Powerset", installer)
 
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()

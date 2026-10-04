@@ -42,7 +42,7 @@ class DeepContextCommandsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             commands = calls.read_text().splitlines()
         self.assertEqual(len(commands), 1)
-        self.assertTrue(commands[0].endswith("deep_context.review.reconcile_review_web serve"), commands[0])
+        self.assertTrue(commands[0].endswith("deep_context.review.reconcile_review_web start"), commands[0])
 
     def test_maintenance_verbs_are_not_public(self) -> None:
         result = subprocess.run([str(ROOT / 'bin/deep-context'), '--help'], cwd=ROOT,

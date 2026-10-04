@@ -9,8 +9,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     OWNER_JSON,
     PROFILE_CACHE_DIR,
     PROFILE_CACHE_TEMPLATE,

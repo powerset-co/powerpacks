@@ -17,15 +17,20 @@ Tell your agent (Codex, Claude Code, ...) one sentence:
 > Download and install the Powerpacks skill from
 > https://powerset.dev/powerpacks
 
-Then just say what you want — the skill clones this repo, installs everything
-for your harness, and keeps going in the same session:
+That one instruction installs Powerpacks, opens a live progress page, connects
+your Powerset account, and checks your network. Sign in when prompted; setup
+continues automatically. If you are already connected, sign-in is skipped.
+The page shows what is running, what is done, and anything that needs you.
 
-> Use Powerpacks to set up my local network search using my Powerset account.
+You finish with your account email, network name, and verified search access.
+An empty network prompts an account or contact check instead of a false success.
+No second setup command is needed. Desktop agents can show the page beside chat;
+terminal agents open it in your browser.
 
-That initializes the public hosted config, signs in to Powerset, pulls the
-provisioned runtime keys for that user, and then builds the local LinkedIn
-network index. The shorter `Use Powerpacks to set up my local network search`
-prompt remains supported.
+Existing networks are checked first. Importing LinkedIn, Gmail, or messages is
+separate work when you ask for it; it does not delay first use. First-time
+downloads and sign-in can take more than a minute. If installation fails, the
+agent reads the saved error and retries without deleting your data.
 
 ### Other install paths
 
@@ -91,6 +96,7 @@ Product and architecture walkthroughs live in the
 | Skill | Trigger | What it does |
 | --- | --- | --- |
 | [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: one-command setup (Auth0 login + Powerset API runtime-key pull + MCP), credential refresh, setup status, Auth0 identity, MCP install, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
+| [`powerpacks-doctor`](packs/powerset/skills/powerpacks-doctor/SKILL.md) | Health checks and setup failures | Diagnose unclear failures, repair within the requested scope, and retry the original command. |
 | [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Deterministic LinkedIn-only setup: credentials, Modal profile enrichment, local source merge, Modal indexing, DuckDB download, and read-only validation. Gmail and messages remain separate import skills. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 | [`import-gmail`](packs/ingestion/skills/import-gmail/SKILL.md) | `$import-gmail` | Contact sync only: bounded msgvault sync, metadata-only extraction, and free local-directory attach. Unresolved contacts land in a research-candidates pool; identity lookups and indexing happen in `$deep-context`. See the [product guide](packs/ingestion/docs/gmail-import-pipeline.md). |
@@ -274,7 +280,9 @@ curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/boo
 
 The top-level `install.sh` dispatches to a per-host adapter. **All adapters
 are idempotent — re-run them any time skills change** (you do not need
-to uninstall first; each adapter wipes and re-copies the skill directories).
+to uninstall first). They update skill instructions, preserve existing data,
+and identify the checkout used for commands. No additional runtime is copied
+into the skills directory.
 
 ### Codex
 

@@ -65,6 +65,28 @@ def hydrate(row: object) -> object:
         )
         self.assertEqual(violations, [])
 
+    def test_expression_open_distinguishes_append_from_reads(self) -> None:
+        source = '''from pathlib import Path
+
+def log(directory: Path):
+    return (directory / "server.log").open("ab")
+'''
+        self.assertEqual(self.audit_source("review/cli.py", source), [])
+        for mode in ('"rb"', '"a+b"', ''):
+            with self.subTest(mode=mode):
+                read = source.replace('"ab"', mode)
+                self.assertEqual([v.rule for v in self.audit_source("review/cli.py", read)], ["artifact-file-read"])
+
+    def test_defers_imports_only_at_install_server_boundaries(self) -> None:
+        source = '''def workflow_status():
+    from .sqlite_adapter import SqliteReviewAdapter
+'''
+        self.assertEqual(self.audit_source("review/cli.py", source), [])
+        outside_cli = self.audit_source("review/server.py", source)
+        outside_boundary = self.audit_source("review/cli.py", source.replace("workflow_status", "unexpected"))
+        self.assertEqual([v.rule for v in outside_cli], ["top-level-imports"])
+        self.assertEqual([v.rule for v in outside_boundary], ["top-level-imports"])
+
     def test_review_server_reads_no_files(self) -> None:
         # The review page is the React app; nothing under review/ reads a file from disk,
         # whatever its path is called.

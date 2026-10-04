@@ -16,8 +16,8 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.gates import exit_code_for_status
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     DOSSIER_DIR,
     emit,
     MERGE_CSV,

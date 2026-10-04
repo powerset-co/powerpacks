@@ -20,7 +20,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.dossier_policy import (
     SOURCE_IDENTITY_REVIEW_REASON, resolved_parent_ids, unresolved_source_parent_ids,
 )

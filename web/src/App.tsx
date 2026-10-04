@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "rea
 import { TopBar } from "@/components/shared"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
+import { InstallPage } from "@/pages/install/InstallPage"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
@@ -32,6 +33,7 @@ export function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<ReviewPage />} />
+        <Route path="/install" element={<InstallPage />} />
         <Route element={<Shell />}>
           <Route path="/people" element={<PeoplePage />} />
           <Route path="/searches" element={<SearchesPage />}>

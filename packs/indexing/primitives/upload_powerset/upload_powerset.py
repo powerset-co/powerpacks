@@ -55,7 +55,8 @@ from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow  # noqa: E402
 from packs.ingestion.primitives.deep_context.db.share_views import share_decisions  # noqa: E402
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db  # noqa: E402
-from packs.ingestion.primitives.deep_context.shared.common import CANONICAL_DB, load_env  # noqa: E402
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
+from packs.ingestion.primitives.deep_context.shared.common import load_env  # noqa: E402
 from packs.ingestion.schemas.share_schema import SHARE_YES  # noqa: E402
 from packs.indexing.primitives.upload_powerset import local_index, postgres, turbopuffer_writer  # noqa: E402
 from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402

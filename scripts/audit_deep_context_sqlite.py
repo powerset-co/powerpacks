@@ -38,6 +38,13 @@ REBUILD_READER = PACKAGE / "migration/rebuild.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
 DB_PACKAGE = PACKAGE / "db"
 MIGRATION_PACKAGE = PACKAGE / "migration"
+# The installer starts this CLI before dependencies exist; handlers load them later.
+DEFERRED_REVIEW_IMPORT_SCOPES = frozenset({
+    "searches_only_handler",
+    "workflow_status",
+    "_persistent_handler.mount",
+    "_persistent_handler.Handler.do_GET",
+})
 
 FORBIDDEN_STATE_TEXT = (
     "stage_state",
@@ -259,7 +266,7 @@ def _opens_for_read(call: ast.Call, called: str) -> bool:
         called == "open" or called.endswith(".open")
     ):
         return False
-    mode = _mode(call, method=called != "open")
+    mode = _mode(call, method=called != "open" or isinstance(call.func, ast.Attribute))
     return mode is None or "r" in mode or "+" in mode
 
 
@@ -490,7 +497,11 @@ def audit_source(path: Path, source: str) -> list[Violation]:
             import_block_closed = True
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)) and id(node) not in top_level_imports:
+        deferred_review_import = (
+            relative == "packs/ingestion/primitives/deep_context/review/cli.py"
+            and _scope(node, parents) in DEFERRED_REVIEW_IMPORT_SCOPES
+        )
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and id(node) not in top_level_imports and not deferred_review_import:
             add(node, "top-level-imports", "import is nested instead of module-top")
 
         if isinstance(node, (ast.Import, ast.ImportFrom)):

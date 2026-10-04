@@ -31,7 +31,6 @@ normalize_name = normalize_name_key
 # Below, "written by" / "read by" name the stage subpackage, not the file — most
 # reads go through CANONICAL_DB (queries.py), not by reopening these paths.
 ROOT = Path(".powerpacks/deep-context")
-CANONICAL_DB = ROOT / "deep-context.sqlite"  # the pipeline's real state; nearly every stage opens it directly
 RAW_DIR = ROOT / "raw"  # written: collection (collect_person_context); read: synthesis, migration's one-time import
 FACTS_DIR = ROOT / "facts"  # written: synthesis (synthesize_person_context); read: migration's one-time import only
 # DOSSIER_DIR: written by synthesis (compose_dossier); read by merge_candidates

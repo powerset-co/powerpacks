@@ -7,9 +7,7 @@ import json
 import sys
 from dataclasses import dataclass
 
-from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
-)
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.db.people_views import (
     person_lookup,
 )

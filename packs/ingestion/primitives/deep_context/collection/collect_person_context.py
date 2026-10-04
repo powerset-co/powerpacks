@@ -14,8 +14,8 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.collection import context_sources, planning
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageChannel
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
+from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
-    CANONICAL_DB,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     RAW_MANIFEST,

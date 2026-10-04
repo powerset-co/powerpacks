@@ -153,9 +153,13 @@ class WhatsAppChannel(MessageChannel, Node):
         *,
         other_enabled: bool,
         max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
+        wacli_store: Path = DEFAULT_STORE,
+        open_qr_page: bool = True,
     ) -> None:
         super().__init__(other_enabled=other_enabled)
         self.max_messages = max_messages
+        self.wacli_store = wacli_store
+        self.open_qr_page = open_qr_page
         self.contacts_csv = WHATSAPP_CONTACTS
         self.raw_jsonl = WHATSAPP_RAW_JSONL
         self.extract_manifest = WHATSAPP_MANIFEST
@@ -165,10 +169,13 @@ class WhatsAppChannel(MessageChannel, Node):
         """Declared path -> this instance's path. The key comes from the
         DECLARATION, never a second read of the module constant, so a test that
         patches ``WHATSAPP_CONTACTS`` still produces a key the template matches."""
-        return {self.outputs[0].path: str(self.contacts_csv)}
+        return {
+            self.inputs[0].path: str(self.wacli_store / "wacli.db"),
+            self.outputs[0].path: str(self.contacts_csv),
+        }
 
     def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
-        result = WhatsAppExtractResult.from_payload(WhatsAppExtractor().run(
+        result = WhatsAppExtractResult.from_payload(WhatsAppExtractor(store=self.wacli_store).run(
             output_csv=self.contacts_csv,
             output_jsonl=self.raw_jsonl,
             manifest=self.extract_manifest,
@@ -176,6 +183,7 @@ class WhatsAppChannel(MessageChannel, Node):
             max_messages=self.max_messages,
             max_group_participants=DEFAULT_MAX_GROUP_PARTICIPANTS,
             sync_timeout=DEFAULT_WACLI_SYNC_TIMEOUT,
+            no_open_qr_page=not self.open_qr_page,
         ))
         if result.status == "blocked_user_action":
             return blocked_child(
