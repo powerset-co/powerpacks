@@ -16,7 +16,13 @@ class InstallPipelineTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve()
+        self.reset_pipeline(Path(self.temp.name))
+        self.patch = patch("packs.powerset.primitives.install.pipeline.subprocess.run", side_effect=self.native)
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
+    def reset_pipeline(self, root):
+        self.root = root.resolve()
         self.status = InstallStatus(self.root)
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
         self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
@@ -36,10 +42,9 @@ class InstallPipelineTests(unittest.TestCase):
         self.profiles_missing = False
         self.validation_status = "ok"
         self.commands = []
+        self.paid_commands = []
         self.failing_command = ""
-        self.patch = patch("packs.powerset.primitives.install.pipeline.subprocess.run", side_effect=self.native)
-        self.patch.start()
-        self.addCleanup(self.patch.stop)
+        self.fail_at = 0
 
     def write(self, path, text):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,7 +56,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.commands.append(argv)
         command = argv[1] if argv[0].endswith("bin/deep-context") else Path(argv[5]).name
         payload = {"status": "completed"}
-        if command == self.failing_command:
+        if command == self.failing_command or len(self.commands) == self.fail_at:
             stderr.write("[synthetic] source read failed\n")
             return subprocess.CompletedProcess(argv, 1, json.dumps({"status": "failed"}))
         if command == "index_contacts_pipeline.py":
@@ -70,17 +75,23 @@ class InstallPipelineTests(unittest.TestCase):
                 payload = {"status": "dry_run", "people": int(self.synthesize), "jev_people": int(self.synthesize),
                            "estimated_cost_ceiling_usd": 0.1 if self.synthesize else 0}
             else:
+                if self.synthesize:
+                    self.paid_commands.append("synthesize")
                 self.synthesize = False
         elif command == "cluster":
             if "--dry-run" in argv:
                 payload = {"status": "dry_run", "estimated_input_tokens": 100 if self.cluster else 0,
                            "estimated_cost_usd": 0.01 if self.cluster else 0}
             else:
+                if self.cluster:
+                    self.paid_commands.append("cluster")
                 self.cluster = False
         elif command == "enrich":
             if "--dry-run" in argv:
                 payload = {"status": "dry_run", "estimated_usd": 0.2, "would_submit": 1}
             else:
+                if self.enrich:
+                    self.paid_commands.append("enrich")
                 self.enrich = False
         elif command == "review-status":
             if "--wait" in argv:
@@ -98,6 +109,7 @@ class InstallPipelineTests(unittest.TestCase):
             payload["profiles_missing"] = int(self.profiles_missing)
         elif command == "profile-prefetch":
             if "--fetch" in argv:
+                self.paid_commands.append("profile-prefetch")
                 self.profiles_missing = False
             else:
                 payload = {"status": "dry_run", "estimated_rapidapi_calls": 1}
@@ -107,6 +119,8 @@ class InstallPipelineTests(unittest.TestCase):
                        "estimated_paid_calls": {"role_enrichment": 1}}
         elif command == "linkedin_modal_pipeline.py":
             self.assertTrue("index-people" in argv or "download" in argv)
+            if "index-people" in argv:
+                self.paid_commands.append("index")
             self.write(self.index / "local-search.duckdb", "synthetic index")
             self.write(self.index / "manifest.json", '{"status":"ok"}')
             if "download" in argv:
@@ -236,6 +250,41 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertFalse(self.did("synthesize"))
         self.assertFalse(self.indexed())
 
+    def test_each_native_command_failure_resumes_without_repeating_completed_paid_work(self):
+        self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
+        self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
+                         "completed")
+        baseline = self.commands.copy()
+        matrix_root = self.root
+        for position, command in enumerate(baseline, 1):
+            with self.subTest(command=command, position=position):
+                self.reset_pipeline(matrix_root / str(position))
+                self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
+                self.fail_at = position
+                result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(len(self.commands), position)
+                self.assertNotIn("ready", result["steps"])
+                self.assertEqual(result["installer_pid"], 0)
+                self.assertEqual(result["retry_command"], self.retry)
+                collected = (self.root / ".powerpacks/deep-context/raw/manifest.json").is_file()
+                indexed = (self.index / "manifest.json").is_file()
+                self.fail_at = 0
+                self.commands.clear()
+                spend = [stage for stage in ("synthesize", "cluster", "enrich") if getattr(self, stage)]
+                if not indexed:
+                    spend.append("index")
+                result = self.run_pipeline(*spend, upload=True)
+                self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+                self.assertEqual(self.did("collect"), not collected)
+                self.assertEqual(self.indexed(), not indexed)
+                self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich", "index"])
+                self.commands.clear()
+                self.assertEqual(self.run_pipeline()["status"], "completed")
+                self.assertFalse(self.did("collect"))
+                self.assertFalse(self.indexed())
+                self.assertEqual(len(self.paid_commands), 4)
+
     def test_missing_owner_hands_off_without_silently_fetching_profile(self):
         (self.root / ".powerpacks/deep-context/owner.json").unlink()
         result = self.run_pipeline()
@@ -263,6 +312,30 @@ class InstallPipelineTests(unittest.TestCase):
         result = self.run_pipeline("enrich", "index", upload=True)
         self.assertEqual(result["status"], "completed")
         self.assertTrue(any("--fetch" in argv for argv in self.commands))
+
+    def test_profile_estimate_and_fetch_failures_resume_without_repeating_completed_work(self):
+        self.profiles_missing = True
+        self.assertEqual(self.run_pipeline("enrich", "index", upload=True)["status"], "completed")
+        positions = [i for i, argv in enumerate(self.commands, 1) if argv[1] == "profile-prefetch"]
+        self.assertEqual(len(positions), 2)
+        matrix_root = self.root
+        for position in positions:
+            with self.subTest(position=position):
+                self.reset_pipeline(matrix_root / str(position))
+                self.profiles_missing = True
+                self.fail_at = position
+                self.assertEqual(self.run_pipeline("enrich", "index", upload=True)["status"], "failed")
+                self.assertEqual(len(self.commands), position)
+                self.assertFalse(self.indexed())
+                self.fail_at = 0
+                self.commands.clear()
+                self.assertEqual(self.run_pipeline("enrich", "index", upload=True)["status"], "completed")
+                self.assertFalse(self.did("collect"))
+                self.assertCountEqual(self.paid_commands, ["profile-prefetch", "index"])
+                self.commands.clear()
+                self.assertEqual(self.run_pipeline()["status"], "completed")
+                self.assertFalse(any("--fetch" in argv for argv in self.commands))
+                self.assertFalse(self.indexed())
 
     def test_saved_wacli_store_reaches_native_readiness_and_collection(self):
         store = self.root / "synthetic-whatsapp-store"
@@ -297,6 +370,53 @@ class InstallPipelineTests(unittest.TestCase):
         download = next(argv for argv in self.commands if "download" in argv)
         self.assertEqual(download[-5:], ["--label", "gmail-index", "--wait", "--dest", ".powerpacks/search-index"])
         self.assertEqual(Path(self.commands[-1][5]).name, "validate_search_index.py")
+
+    def test_failed_native_download_resumes_existing_dispatch_without_new_spend(self):
+        self.dispatch()
+        self.failing_command = "linkedin_modal_pipeline.py"
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("index", "failed"))
+        self.assertEqual(self.commands[-1], ProcessingOnboarding(self.root).download)
+        self.assertFalse(self.indexed())
+        self.failing_command = ""
+        self.commands.clear()
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertFalse(self.did("collect"))
+        self.assertFalse(self.indexed())
+        self.assertEqual(self.paid_commands, [])
+        self.assertTrue(any("download" in argv for argv in self.commands))
+
+    def test_paid_outputs_completed_before_command_failure_are_reused_on_resume(self):
+        matrix_root = self.root
+        for stage in ("synthesize", "cluster", "enrich", "index"):
+            with self.subTest(stage=stage):
+                self.reset_pipeline(matrix_root / stage)
+                self.synthesize = self.cluster = self.enrich = True
+                faulted = False
+
+                def native_then_fail(argv, **kwargs):
+                    nonlocal faulted
+                    result = self.native(argv, **kwargs)
+                    execution = "index-people" in argv if stage == "index" else argv[1] == stage
+                    if execution and "--dry-run" not in argv and not faulted:
+                        faulted = True
+                        return subprocess.CompletedProcess(argv, 1, json.dumps({"status": "failed"}))
+                    return result
+
+                with patch("packs.powerset.primitives.install.pipeline.subprocess.run", side_effect=native_then_fail):
+                    self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
+                                     "failed")
+                self.assertTrue(faulted)
+                self.commands.clear()
+                spend = [name for name in ("synthesize", "cluster", "enrich") if getattr(self, name)]
+                if stage != "index":
+                    spend.append("index")
+                result = self.run_pipeline(*spend, upload=True)
+                self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+                self.assertFalse(self.did("collect"))
+                self.assertEqual(self.indexed(), stage != "index")
+                self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich", "index"])
 
     def test_changed_roster_never_redispatches_unknown_previous_job_even_when_approved(self):
         self.dispatch()
