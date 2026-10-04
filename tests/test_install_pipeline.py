@@ -179,7 +179,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertTrue(self.did("cluster"))
         self.assertTrue(self.did("enrich"))
         self.assertTrue(self.indexed())
-        self.assertEqual((result["step"], result["status"], result["person_count"]), ("ready", "completed", 1))
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertNotIn("review", result["plan"])
         self.assertEqual(result["retry_command"], self.retry)
         self.assertEqual(Path(self.commands[-1][5]).name, "validate_search_index.py")
@@ -324,6 +324,14 @@ class InstallPipelineTests(unittest.TestCase):
         result = self.run_pipeline("index", upload=True)
         self.assertEqual((result["step"], result["status"]), ("validate", "failed"))
         self.assertNotIn("ready", result["steps"])
+
+    def test_local_validation_preserves_verified_hosted_network_count(self):
+        self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
+                          message="Ready", pid=0, retry_command=self.retry,
+                          network_name="Personal Network", person_count=328)
+        result = self.run_pipeline("index", upload=True)
+        self.assertEqual(result["person_count"], 328)
+        self.assertIn("1 people searchable", result["message"])
 
 
 if __name__ == "__main__":

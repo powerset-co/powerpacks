@@ -237,7 +237,7 @@ class ProcessingOnboarding:
         self._write(InstallState.COMPLETED, validation["summary"])
         self.step = InstallStep.READY
         self.status.write(step=self.step, status=InstallState.COMPLETED,
-                          message=validation["summary"], person_count=validation["total_people"],
+                          message=validation["summary"],
                           pid=os.getpid(), retry_command=self.retry, plan=self.plan)
 
     def run(self) -> dict:
