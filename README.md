@@ -274,7 +274,7 @@ one line (`DONE:`, `NEEDS YOU:`, `ASK:`, `STOP:` or `FAILED:`) that says what
 to do next. Safe to run again.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/bootstrap | bash -s -- --powerset
 # flags: --harness codex|claude-code|pi|all, --powerset, --port PORT
 ```
 

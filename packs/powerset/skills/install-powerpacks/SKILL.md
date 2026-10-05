@@ -2,7 +2,7 @@
 name: install-powerpacks
 description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and automatic cost checks. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup; installing it means running the setup now, not only saving the file.
 license: MIT
-allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap *)
+allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/bootstrap *)
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
@@ -19,6 +19,8 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: The bootstrap comes from the `stable` branch, which every release
+  moves to its tag, so the launcher always matches the release it installs.
 - 2026-10-05: Restored from 3.13.0 what the onboarding rewrite dropped: where
   this can run (and what to tell chat or cloud users), where to save the skill
   per harness, the full-access ask, and allowed-tools for the bootstrap command.
@@ -88,7 +90,7 @@ start (Powerset, LinkedIn, Google, each Gmail approval, Full Disk Access, WhatsA
 QR); then setup runs on its own.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --approve-upload --gmail-email first@example.com --gmail-email second@example.com
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/bootstrap | bash -s -- --powerset --approve-upload --gmail-email first@example.com --gmail-email second@example.com
 ```
 
 Bootstrap installs the runtime and starts the installed coordinator `bin/onboard`.
