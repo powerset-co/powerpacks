@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command that takes a Mac from nothing to installed Powerpacks skills.
+# Install the runtime, then resume the single account-to-search workflow.
 #
 # The coding agent (Claude Code, Codex, Pi) runs this on the user's behalf. It
 # asks nothing and decides nothing for the agent: the LAST line names the
@@ -7,19 +7,17 @@
 #
 #   DONE: ...        installed; continue with the user's ask
 #   NEEDS YOU: ...   a step needs the human (a click, a password); show the line
-#                    word for word, wait, then run the same command again
+#                    live commands resume after the action; exited ones need recovery
 #   STOP: ...        wrong place to run this; show the line, do not continue
 #   FAILED: ...      something broke; show the line
 #
 # Safe to run again: every step is skipped once done.
 #
-#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]
+#   bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--port PORT]
 #
 #   --harness   which agent's skills folder to install into; default: every one
 #               found on this Mac (both Claude Code and Codex when none is found)
-#   --powerset  connect the account, prepare credentials, and verify network search
-#   --tools     prepare Gmail and WhatsApp import tools (no login or sync)
-#               --no-tools (default) keeps hosted setup light
+#   --powerset  connect the account, check hosted search, then import contacts
 #
 # Exit codes: 0 done; 3 STOP; 10 NEEDS YOU; 1 FAILED; 2 bad arguments.
 #
@@ -34,8 +32,8 @@ DEFAULT_ROOT="$HOME/powerpacks"
 
 harness="auto"
 powerset=0
-tools="skip"
 port=8765
+source_args=()
 bootstrap_args=("$@")
 retry_command="bin/bootstrap"
 if [[ $# -gt 0 ]]; then
@@ -46,11 +44,13 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --harness) harness="${2:-}"; shift 2 ;;
     --powerset) powerset=1; shift ;;
-    --tools) tools="install"; shift ;;
-    --no-tools) tools="skip"; shift ;;
     --port) port="${2:-}"; shift 2 ;;
+    --source|--skip-source|--gmail-email|--sync-after|--wacli-store)
+      source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
+    --approve-spend) source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
+    --refresh|--approve-upload) source_args+=("$1"); shift ;;
     *)
-      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--tools|--no-tools] [--port PORT]" >&2
+      echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--port PORT]" >&2
       exit 2
       ;;
   esac
@@ -70,6 +70,7 @@ finish_progress() {
   [[ "$progress_started" == 1 ]] || return 0
   local step
   step="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["step"])' "$root/.powerpacks/install/manifest.json")"
+  retry_command="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["retry_command"])' "$root/.powerpacks/install/manifest.json")"
   progress "$step" "$1" "$2"
 }
 needs_you() { finish_progress waiting "$*"; echo "NEEDS YOU: $*"; exit 10; }
@@ -84,8 +85,8 @@ on_exit() {
   exit "$code"
 }
 trap on_exit EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'finish_progress waiting "Setup paused. I can resume it from here."; echo "NEEDS YOU: Setup paused. I can resume it from here."; exit 130' INT
+trap 'finish_progress waiting "Setup paused. I can resume it from here."; echo "NEEDS YOU: Setup paused. I can resume it from here."; exit 143' TERM
 
 # 1. This must be a local session on the user's own Mac: the skills read mail
 #    and messages from this machine. A cloud session or a Linux sandbox is not it.
@@ -228,33 +229,20 @@ if [[ "$powerset" == 1 && ! -f "$root/.env" ]]; then
   say "created $root/.env from the Powerset template"
 fi
 
-# 6. Optional binaries are prepared without login or syncing any contacts.
-if [[ "$tools" == install ]]; then
-  progress tools running "Preparing contact import"
-  code=0
-  tool_result="$(cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.tools \
-    --source gmail --source whatsapp 2>>"$log")" || code=$?
-  echo "$tool_result" >>"$log"
-  tool_message="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["message"])' <<<"$tool_result")"
-  case "$code" in
-    0) progress tools completed "$tool_message" ;;
-    10) needs_you "$tool_message" ;;
-    *) failed "$tool_message Check $log; I can diagnose this and retry." ;;
-  esac
-fi
-
 if [[ "$powerset" == 1 ]]; then
   onboard_args=()
   for h in "${harnesses[@]}"; do onboard_args+=(--harness "$h"); done
   code=0
   # Python calls the existing login, provisioning, and connection primitives
   # in-process. Keep its final line visible and preserve its waiting state.
-  (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.onboard \
-    --root "$root" --pid "$$" --retry-command "$retry_command" "${onboard_args[@]}") \
+  # Onboarding imports the whole pipeline; only the project venv has its dependencies.
+  (cd "$root" && "$root/.venv/bin/python" -m packs.powerset.primitives.install.onboard \
+    --root "$root" --port "$port" "${onboard_args[@]}" ${source_args[@]+"${source_args[@]}"}) \
     2> >(tee -a "$log" >&2) || code=$?
   case "$code" in
     0) terminal_status=completed ;;
     10) terminal_status=waiting ;;
+    130|143) finish_progress waiting "Setup paused. I can resume it from here." ;;
     *)
       saved_status="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$root/.powerpacks/install/manifest.json")"
       if [[ "$saved_status" != failed ]]; then

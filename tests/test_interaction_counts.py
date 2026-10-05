@@ -156,9 +156,9 @@ class MergeGroupTests(unittest.TestCase):
             json.loads(second["interaction_counts"]), json.loads(first["interaction_counts"])
         )
 
-    def test_merge_group_mints_the_durable_person_id_from_the_key(self):
-        merged = merge_mod.merge_group("linkedin:janedoe", [self.person_row()])
-        self.assertEqual(merged["id"], merge_mod.generate_person_id("janedoe"))
+    def test_merge_group_preserves_the_existing_person_id(self):
+        merged = merge_mod.merge_group("person-1", [self.person_row()])
+        self.assertEqual(merged["id"], "person-1")
         contact = merge_mod.merge_group(
             "candidate:email:casey@example.com",
             [self.person_row(public_identifier="", linkedin_url="", primary_email="casey@example.com")],

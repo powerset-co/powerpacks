@@ -8,6 +8,9 @@ project > deterministic default), Gmail API enablement, and Google Console
 URL building/opening.
 
 Changelog:
+  2026-10-05: `choose_project_id` no longer adopts the newest local-msg-vault
+      project the account can see; in a shared Google org that was a teammate's
+      project, and setup failed without access to it.
   2026-09-23 (typed rows): `local_msg_vault_projects` returns project ids, and
     the gcloud subprocess probes read `CommandResult` fields, so no `.get`
     remains in this module's business logic.
@@ -51,7 +54,6 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     DEFAULT_PROJECT_NAME,
     default_project_id,
     load_setup_state,
-    local_msg_vault_projects,
     save_oauth_app_state,
     setup_state_path,
 )
@@ -193,8 +195,9 @@ def choose_project_id(home: Path, requested_project: str, email: str, account: s
 
     Precedence: explicit argument > saved setup state > deterministic default
     when the target email differs from the gcloud account > current gcloud
-    project when it is local-msg-vault-* > newest existing local-msg-vault
-    project > deterministic default seeded by email/account. Every non-argument
+    project when it is local-msg-vault-* > deterministic default seeded by
+    email/account. Other local-msg-vault projects the account can see are never
+    adopted: in a shared Google org they can be a teammate's. Every non-argument
     choice is pinned into setup state so re-runs stay stable."""
     if requested_project:
         return validate_project_id(requested_project), {"source": "argument"}
@@ -209,16 +212,6 @@ def choose_project_id(home: Path, requested_project: str, email: str, account: s
     if current.startswith(f"{DEFAULT_PROJECT_NAME}-"):
         save_oauth_app_state(home, app_name, {"project_id": current, "email": email or account})
         return validate_project_id(current), {"source": "gcloud_current_project"}
-    candidates = local_msg_vault_projects()
-    if candidates:
-        project_id = validate_project_id(candidates[0])
-        if project_id:
-            save_oauth_app_state(home, app_name, {"project_id": project_id})
-            return project_id, {
-                "source": "existing_local_msg_vault_project",
-                "existing_count": len(candidates),
-                "state_path": str(setup_state_path(home)),
-            }
     seed = email or account
     project_id = default_project_id(seed)
     save_oauth_app_state(home, app_name, {"project_id": project_id, "email": email or account})

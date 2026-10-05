@@ -3,8 +3,9 @@
 
 Durable stage artifacts remain useful for inspection and paid-work reuse. The
 only general artifact reader is ``migration/seed.py``
-(legacy trees); fresh rebuild reads explicit source inputs, owner configuration
-and original human decisions at named migration boundaries. ``ensure_parents`` reads the current fan-in people.csv and its
+(legacy trees); fresh rebuild reads explicit source inputs, owner configuration,
+original human decisions and saved feedback at named migration boundaries.
+``ensure_parents`` reads the current fan-in people.csv and its
 recorded original source contacts at named input boundaries. Current writers
 parse just-written outputs into frozen projection rows at a named boundary and
 write through ``Db.project_rows``; all later consumers hydrate from SQLite.
@@ -35,6 +36,7 @@ IMPORTED_PEOPLE_READER = PACKAGE / "ensure_parents/imported_people.py"
 SOURCE_PEOPLE_READER = PACKAGE / "ensure_parents/source_people.py"
 HUMAN_DECISION_READER = PACKAGE / "migration/human_decisions.py"
 REBUILD_READER = PACKAGE / "migration/rebuild.py"
+FEEDBACK_READER = PACKAGE / "migration/feedback.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
 DB_PACKAGE = PACKAGE / "db"
 MIGRATION_PACKAGE = PACKAGE / "migration"
@@ -349,9 +351,10 @@ def _allowed_file_read(
         return True
     called = _name(call.func)
     scope = _scope(call, parents)
-    if (path, scope, called) in {
+    if (path, scope, ast.unparse(call.func)) in {
         (REBUILD_READER, "Rebuild._validate", "self.owner_profile.read_text"),
         (REBUILD_READER, "Rebuild._validate", "manifest_path.read_text"),
+        (FEEDBACK_READER, "read_feedback", "Path(feedback_json).read_text"),
     }:
         return True
     if path == SOURCE_PEOPLE_READER and scope == "read_source_people" and called == "manifest_path.read_text":

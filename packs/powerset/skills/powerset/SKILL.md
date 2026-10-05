@@ -7,16 +7,15 @@ description: Unified Powerset command surface. Use for `$powerset setup`, `$powe
 
 Use this skill when the user asks for `$powerset ...` or wants Powerset setup,
 status, identity, MCP registration, runtime key pull, or default set selection.
-`$powerset setup` is the preferred one-command first-run path: it does Auth0
-login, pulls provisioned runtime keys from the Powerset API, and registers the
-MCP so users do not need to run multiple smaller commands.
+First-run setup has one path, the install skill
+(`packs/powerset/skills/install-powerpacks/SKILL.md`); `$powerset setup` runs it.
 
 ## Command routing
 
 | User command | Do this |
 | --- | --- |
 | `$powerset`, `$powerset help` | Print the supported subcommands below. |
-| `$powerset setup` | Run the setup workflow below: ensure login, pull runtime keys, and install/refresh MCP. The explicit command is consent to write `.env`. |
+| `$powerset setup` | Load and follow `packs/powerset/skills/install-powerpacks/SKILL.md`. |
 | `$powerset login` | Run the login workflow below. |
 | `$powerset status` | Run the setup check quietly and summarize only blockers. |
 | `$powerset whoami` | Run the Auth0 `whoami` primitive. |
@@ -28,16 +27,15 @@ MCP so users do not need to run multiple smaller commands.
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
 `$powerset-set` means `$powerset sets` / `$powerset sets use`. If the user asks
-for Powerset setup, runtime setup, or API key setup without naming a
-subcommand, prefer `$powerset setup` over separate login/env commands. Keep
-plain `$setup` routed to the ingestion/product setup skill, not this command.
+for Powerset setup without naming a subcommand, or for `$setup`, follow the
+install skill.
 
 ## Help text
 
 When asked for help, respond with:
 
 ```text
-$powerset setup                 log in, pull runtime keys, and install/refresh MCP
+$powerset setup                 set up Powerpacks (runs the install skill)
 $powerset login                 refresh Auth0 credentials and MCP config
 $powerset status                check local setup
 $powerset whoami                show current Powerset/Auth0 identity
@@ -51,7 +49,7 @@ $powerset help                  show this help
 
 ## Canonical repo setup
 
-For mutating commands (`$powerset setup`, `$powerset login`, `$powerset env
+For mutating commands (`$powerset login`, `$powerset env
 pull`, `$powerset sets use`, `$powerset mcp install`, and `$powerset create
 oauth app`), first resolve and enter the installed Powerpacks repo.
 This ensures `.env` and any local Powerpacks state are written under the
@@ -93,70 +91,10 @@ packs/...`. Prefer `python3` only when invoking a local helper outside `uv`.
 
 ## `$powerset setup`
 
-This is the preferred one-command setup path. It combines the user-facing pieces
-people otherwise had to run separately:
-
-1. ensure Powerset/Auth0 login is present;
-2. pull allowlisted runtime env keys into local `.env`;
-3. install/refresh the `powerset-search` MCP for local hosts.
-
-The explicit `$powerset setup` request is consent to write `.env`; do not ask
-for a separate env-write confirmation. It is not the same as bare `$setup`,
-which stays the ingestion/product setup flow. Modal handles hosted processing
-for provisioned Powerset users.
-
-User-facing output must be terse:
-
-- Start with exactly: `Setting up Powerset...`
-- Do not narrate setup checks, missing check names, token formats, MCP config
-  details, or successful substeps.
-- If a browser/code login is needed, show only the auth URL/code prompt.
-- On success, say exactly:
-  `Powerset setup complete. Please restart Codex to reload the Powerset MCP token.`
-- If still blocked, give one short sentence with the required action. Do not
-  paste raw reports or secret values.
-
-Run one internal setup check first:
-
-```bash
-uv run --env-file .env --project . python packs/powerset/primitives/doctor/doctor.py run \
-  --profile search-core \
-  --env-file .env
-```
-
-Handle `fix_kind` values exactly as in the `$powerset login` workflow below.
-In particular, run direct primitives/CLIs from this shell rather than nested
-doctor fix commands so browser/code prompts stay visible.
-
-If `auth0_login` is missing or expired, run the Auth0 login directly:
-
-```bash
-uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
-```
-
-After Auth0 login, always run the env pull so rotated or newly added keys land
-in `.env`, even if `.env` already exists and the initial setup check was
-healthy. This pulls your Modal token + OpenAI key + Parallel key + Powerset API key from the
-Powerset API using your Auth0 bearer:
-
-```bash
-uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
-  --env-file .env
-```
-
-If it reports `not_provisioned`, an admin must provision the missing runtime
-key out of band; relay that one-line action and continue.
-
-Then install/refresh MCP:
-
-```bash
-uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
-```
-
-Re-run the setup check at the end and use the success/blocker message above. If
-`runtime_keys` is still missing, the env pull reported `not_provisioned` — tell
-the user an admin must provision their Modal token / OpenAI key / Parallel key / Powerset API key
-for their Powerset user (the endpoints never mint).
+Load `packs/powerset/skills/install-powerpacks/SKILL.md` from the installed
+checkout and follow it. Its coordinator signs in, pulls runtime keys, registers
+the MCP, and then imports and indexes the user's network, so there is no
+separate Powerset-only setup.
 
 ## `$powerset login`
 

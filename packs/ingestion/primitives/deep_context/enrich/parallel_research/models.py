@@ -36,10 +36,6 @@ class ResearchRunResult:
     completed: int = 0
     errors: tuple[str, ...] = ()
 
-    @classmethod
-    def failed(cls, total: int, error: str) -> ResearchRunResult:
-        return cls(total, errors=(error,))
-
     @property
     def complete(self) -> bool:
         return self.completed == self.total and not self.errors

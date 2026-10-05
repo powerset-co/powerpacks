@@ -13,7 +13,7 @@ LEGACY_SKILLS_DIR="$CODEX_HOME/skills"
 MANAGED_SKILLS=(
   search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound
-  setup msgvault import-gmail import-twitter deep-context logbook
+  msgvault import-gmail import-twitter deep-context logbook
   import-messages clean-slate
 )
 
@@ -24,7 +24,7 @@ RETIRED_SKILLS=(
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
   import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
-  linkedin-sync-mcp linkedin-sync-csv
+  linkedin-sync-mcp linkedin-sync-csv setup
 )
 
 "$REPO_ROOT/bin/setup-python"
@@ -59,7 +59,6 @@ install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SK
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
 install_skill powerpacks-doctor "$REPO_ROOT/packs/powerset/skills/powerpacks-doctor/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
-install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
@@ -84,4 +83,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"

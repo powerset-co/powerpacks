@@ -169,6 +169,7 @@ def people(
     db: Db,
     *,
     parent_id: str | None = None,
+    parent_ids: Sequence[str] | None = None,
     person_id: str | None = None,
 ) -> tuple[PersonRow, ...]:
     if person_id is not None:
@@ -178,8 +179,11 @@ def people(
             PersonRow,
             (person_id,),
         )
-    where = " WHERE parent_id=?" if parent_id is not None else ""
-    params = (parent_id,) if parent_id is not None else ()
+    selected_parent_ids = (parent_id,) if parent_id is not None else parent_ids
+    if selected_parent_ids is not None and not selected_parent_ids:
+        return ()
+    where = f" WHERE parent_id IN {ID_SET}" if selected_parent_ids is not None else ""
+    params = (id_set(selected_parent_ids),) if selected_parent_ids is not None else ()
     return typed_rows(
         db,
         f"SELECT * FROM people{where} ORDER BY person_id",

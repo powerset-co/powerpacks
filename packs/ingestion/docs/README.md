@@ -26,7 +26,8 @@ Each source import writes `.powerpacks/network-import/import/<source>/people.csv
 Shared fan-in through `index_contacts_pipeline.py fan-in` retains source IDs and
 combines repeated IDs. Deep Context collects facts, reviews associations, merges
 people and exports the judged SQLite parents. Directory lookups do not establish
-identity. LinkedIn setup has its separate Modal indexing workflow.
+identity. First-run installation runs the selected imports, processing and index
+build before offering review.
 
 ## Historical and specialist references
 

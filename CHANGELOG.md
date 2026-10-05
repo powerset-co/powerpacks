@@ -1,5 +1,54 @@
 # Changelog
 
+## [3.15.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.15.0...powerpacks-v3.15.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **gmail:** never adopt a teammate's Google project; keep its steps from the user ([#702](https://github.com/powerset-co/powerpacks/issues/702)) ([1e07f0d](https://github.com/powerset-co/powerpacks/commit/1e07f0d2e60c50b51b717deb52d0c426130e0376))
+
+## [3.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.2...powerpacks-v3.15.0) (2026-10-05)
+
+
+### Features
+
+* **install:** build search first and offer the review after it ([#701](https://github.com/powerset-co/powerpacks/issues/701)) ([71acd7e](https://github.com/powerset-co/powerpacks/commit/71acd7e468e63b91610ade2479cdfac68e611b3a))
+* **install:** save the account's operator id for Modal runs ([#699](https://github.com/powerset-co/powerpacks/issues/699)) ([96e77fc](https://github.com/powerset-co/powerpacks/commit/96e77fca4e794dd1932c8341a3c584281b97c80b))
+
+## [3.14.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.1...powerpacks-v3.14.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **install:** ask for full access and stop chat and cloud sessions again ([#690](https://github.com/powerset-co/powerpacks/issues/690)) ([6e08184](https://github.com/powerset-co/powerpacks/commit/6e081842941b3da84ba3769b80ae3f092770c686))
+* **install:** build the index past failed research and list what to fix ([#695](https://github.com/powerset-co/powerpacks/issues/695)) ([4301d69](https://github.com/powerset-co/powerpacks/commit/4301d69e95ebff040d579712da8b8945a91b8496))
+* **install:** say what setup is waiting for under the status ([#692](https://github.com/powerset-co/powerpacks/issues/692)) ([a97a189](https://github.com/powerset-co/powerpacks/commit/a97a1897034b437c1c9b1e6294a891b1e76d1acb))
+* **install:** serve the launcher from a stable branch each release moves ([#694](https://github.com/powerset-co/powerpacks/issues/694)) ([1f701b0](https://github.com/powerset-co/powerpacks/commit/1f701b07adb622749bdf16e001d78e054d408675))
+* **linkedin:** a read is complete when it reaches LinkedIn's count ([#693](https://github.com/powerset-co/powerpacks/issues/693)) ([caa2d4b](https://github.com/powerset-co/powerpacks/commit/caa2d4bc38a9395ed8ba09f328e1e3daeac1810a))
+* **linkedin:** ask for LinkedIn's data export when a read stalls ([#697](https://github.com/powerset-co/powerpacks/issues/697)) ([458aef4](https://github.com/powerset-co/powerpacks/commit/458aef49254f0aaaafd7dcade132d70330ddb8f3))
+* **linkedin:** stop on a stalled read and record how far a full read got ([#696](https://github.com/powerset-co/powerpacks/issues/696)) ([0d5741c](https://github.com/powerset-co/powerpacks/commit/0d5741c5918782c2dcc1fe1d2c720248fe4a40b6))
+
+## [3.14.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.0...powerpacks-v3.14.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **install:** build the index when research cannot run ([#689](https://github.com/powerset-co/powerpacks/issues/689)) ([592a114](https://github.com/powerset-co/powerpacks/commit/592a114944287a7d79e6fc3a93489e5f86b5b132))
+* **install:** take the page port, retry research that never ran, run after save ([#687](https://github.com/powerset-co/powerpacks/issues/687)) ([1c07545](https://github.com/powerset-co/powerpacks/commit/1c0754523cf554d30e0fbdb83ec647a6de0735ae))
+
+## [3.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.13.0...powerpacks-v3.14.0) (2026-10-04)
+
+
+### Features
+
+* guide Powerpacks setup and imports on one live page ([#674](https://github.com/powerset-co/powerpacks/issues/674)) ([600ed3d](https://github.com/powerset-co/powerpacks/commit/600ed3d1d3f17e7dd0dbe1e4f5a6c5cd0e42bd1b))
+* run one resumable onboarding pipeline ([#676](https://github.com/powerset-co/powerpacks/issues/676)) ([67289f1](https://github.com/powerset-co/powerpacks/commit/67289f1f0368b6327ec8a55e05382873a1416023))
+
+
+### Bug Fixes
+
+* find parent dossiers from person names and identifiers ([#683](https://github.com/powerset-co/powerpacks/issues/683)) ([6694997](https://github.com/powerset-co/powerpacks/commit/66949970b23e9c59b49b42315c944d794b1c1423))
+
 ## [3.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.12.0...powerpacks-v3.13.0) (2026-10-02)
 
 

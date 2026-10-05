@@ -12,10 +12,13 @@ explicit request to change Powerpacks code, read `docs/development.md`.
   questions directly without making unsolicited code changes; don't abandon an
   already-requested workflow merely because a follow-up is phrased as a question.
 - Handle routine setup, retries, and free, reversible repairs within the user's
-  request. Ask only for a missing decision, an action requiring the user, new
-  spend, destructive changes, or expanded access. Don't ask twice.
-- Follow the relevant skill's scope. Setup does not authorize reading messages,
-  importing contacts, paid enrichment, or uploading a network.
+  request. Ask only for a missing decision, an action requiring the user, spend
+  beyond the workflow's automatic budget, destructive changes, or expanded access.
+  Don't ask twice.
+- Follow the relevant skill's scope. Installation includes its default local
+  contact imports; inform the user and honor changes or skips in chat. Message
+  processing uses Deep Context; onboarding follows the install skill's cost limit.
+  Uploads need authorization.
 - Preserve existing configuration, unrelated skills, local data, checkpoints,
   and paid artifacts. Never delete data or replace a named account with another
   account that happens to work.
@@ -50,21 +53,20 @@ Paths below are relative to the installed checkout.
 
 | User intent | Skill |
 | --- | --- |
-| Install Powerpacks from the pasted URL | `packs/powerset/skills/install-powerpacks/SKILL.md` |
+| Install or set up Powerpacks (the pasted URL, `$setup`, first run, LinkedIn import) | `packs/powerset/skills/install-powerpacks/SKILL.md` |
 | Login, account, network selection, credentials, agent connection | `packs/powerset/skills/powerset/SKILL.md` |
 | Health check or unclear installation/setup failure | `packs/powerset/skills/powerpacks-doctor/SKILL.md` |
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
 | Repair installation or data paths | `packs/powerset/skills/fix-powerpacks/SKILL.md` |
-| People search, job description, shortlist | `packs/search/skills/search/SKILL.md` |
+| People search, job description, shortlist, named person or dossier lookup | `packs/search/skills/search/SKILL.md` |
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |
 | Browse personal or network contacts | `packs/contacts/skills/search-contacts/SKILL.md` |
-| Import LinkedIn and set up a local network | `packs/ingestion/skills/setup/SKILL.md` |
 | Import Gmail contacts | `packs/ingestion/skills/import-gmail/SKILL.md` |
 | Gmail archive/OAuth setup | `packs/ingestion/skills/msgvault/SKILL.md` |
 | Import iMessage or WhatsApp contacts | `packs/ingestion/skills/import-messages/SKILL.md` |
 | Import Twitter/X contacts | `packs/ingestion/skills/import-twitter/SKILL.md` |
-| Process contacts, dossiers, duplicates, review, sharing | `packs/ingestion/skills/deep-context/SKILL.md` |
+| Process contacts, build dossiers, duplicates, review, sharing | `packs/ingestion/skills/deep-context/SKILL.md` |
 | Build the local search index | `packs/indexing/skills/build-local-search-index/SKILL.md` |
 | Raw conversation archive | `packs/ingestion/skills/logbook/SKILL.md` |
 | Reset derived pipeline state | `packs/ingestion/skills/clean-slate/SKILL.md` |

@@ -22,6 +22,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchRow,
     ReviewExportRow,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.queries import typed_rows
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
@@ -103,13 +104,17 @@ def memberships(
     *,
     row_key: str | None = None,
     parent_id: str | None = None,
+    parent_ids: Sequence[str] | None = None,
 ) -> tuple[CandidatePersonRow, ...]:
-    if parent_id is not None:
+    selected_parent_ids = (parent_id,) if parent_id is not None else parent_ids
+    if selected_parent_ids is not None:
+        if not selected_parent_ids:
+            return ()
         return typed_rows(
             db,
-            "SELECT cp.* FROM candidate_people cp WHERE cp.parent_id=? ORDER BY cp.row_key, cp.person_id",
+            f"SELECT cp.* FROM candidate_people cp WHERE cp.parent_id IN {ID_SET} ORDER BY cp.row_key, cp.person_id",
             CandidatePersonRow,
-            (parent_id,),
+            (id_set(selected_parent_ids),),
         )
     where = " WHERE row_key=?" if row_key is not None else ""
     params = (row_key,) if row_key is not None else ()
@@ -119,6 +124,15 @@ def memberships(
         CandidatePersonRow,
         params,
     )
+
+
+def name_match_pending_parent_ids(db: Db) -> set[str]:
+    """Parents with a withdrawn automatic name match awaiting a human decision."""
+    return {row['parent_id'] for row in db.query(
+        "SELECT DISTINCT parent_id FROM links WHERE source=? "
+        "AND machine_action='review' AND decision_action IS NULL",
+        (WriterSource.NAME_MATCH.value,),
+    )}
 
 
 def research_rows(

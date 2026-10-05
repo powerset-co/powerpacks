@@ -47,7 +47,7 @@
  {
   "id": "local-name-lookup-fast-path",
   "query": "local: who is Jane Doe?",
-  "expected_behavior": "A bare person-name query must take the deterministic person-lookup fast path: one read-only local DuckDB query against the person profiles table matching the name, returning the matching profile(s) compactly. The plan must skip query extraction, task state, retrieval, hydration, LLM filtering, reranking, and must not spawn a search-sql sub-agent. If several people match, list them; if none match, say so and offer a normal search."
+  "expected_behavior": "Read search/person-lookup.md and resolve the name to its saved parent dossier with the read-only lookup. If no local dossier/person is available, use the existing local profile index when present. Preserve local-only scope. Skip search preparation, semantic retrieval, scoring, and processing. Give distinguishing choices for multiple people; distinguish a person without a dossier from an absent person, and try useful name parts or supplied identifiers before asking for more information."
  },
  {
   "id": "jd-yoe-seniority-founder-gate",

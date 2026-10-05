@@ -73,16 +73,9 @@ class IngestionMessagesContractTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertTrue((INGESTION / relative).is_file())
 
-    def test_setup_gmail_and_messages_remain_distinct_skills(self) -> None:
-        setup = (INGESTION / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    def test_gmail_and_messages_remain_distinct_skills(self) -> None:
         gmail = (INGESTION / "skills/import-gmail/SKILL.md").read_text(encoding="utf-8")
         messages = (INGESTION / "skills/import-messages/SKILL.md").read_text(encoding="utf-8")
-
-        self.assertIn("LinkedIn-only", setup)
-        self.assertIn("linkedin_modal_pipeline.py import-linkedin", setup)
-        self.assertNotIn("discover/messages/discover.py discover", setup)
-        self.assertNotIn("discover/gmail/discover.py discover", setup)
-        self.assertIn("imports/status.py status", setup)
 
         self.assertIn("discover/gmail/discover.py discover", gmail)
         self.assertIn("imports/gmail/importer.py run", gmail)

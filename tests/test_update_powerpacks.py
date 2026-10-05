@@ -129,7 +129,7 @@ class UpdatePowerpacksTests(unittest.TestCase):
             }
             run(ROOT / "adapters/codex/install.sh", skills_dir, cwd=ROOT, env=env)
 
-            self.assertTrue((skills_dir / "setup/SKILL.md").is_file())
+            self.assertTrue((skills_dir / "install-powerpacks/SKILL.md").is_file())
             self.assertTrue((skills_dir / ".powerpacks-install.json").is_file())
             self.assertFalse((legacy_dir / "setup/SKILL.md").exists())
             self.assertFalse((legacy_dir / "import-email/SKILL.md").exists())

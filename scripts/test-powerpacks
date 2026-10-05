@@ -17,6 +17,8 @@ fi
 # Deep Context tests import their synthetic helper from the tests directory, so
 # that directory stays on PYTHONPATH.
 export PYTHONPATH="$ROOT/tests${PYTHONPATH:+:$PYTHONPATH}"
+# Search fixtures load .env; keep their uncached department checks offline.
+export TYPESAFE_API_KEY=""
 
 # Baseline suites, then the SQLite Deep Context and share rewrite suites.
 exec "$UV_BIN" run --project . python -m unittest \
@@ -29,7 +31,10 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_onboarding_workflow \
   tests.test_install_controller \
   tests.test_install_index_progress \
+  tests.test_install_pipeline \
+  tests.test_install_coordinator \
   tests.test_review_lifecycle \
+  tests.test_review_page_port \
   tests.test_review_env \
   tests.test_candidate_judge_evidence \
   tests.test_candidate_judges \
@@ -169,4 +174,26 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_synthesis_jev \
   tests.test_synthesis_failures \
   tests.test_validate_search_index \
+  tests.test_deep_context_contact_facts \
+  tests.test_deep_context_dossier_quarantine \
+  tests.test_deep_context_identity_audit \
+  tests.test_deep_context_parent_metadata \
+  tests.test_deep_context_rebuild \
+  tests.test_deep_context_rebuild_cli \
+  tests.test_deep_context_source_contacts \
+  tests.test_deep_context_source_identity \
+  tests.test_deep_context_source_owner \
+  tests.test_identity_claim_ownership \
+  tests.test_indexing_scaffold \
+  tests.test_linkedin_name_match_regressions \
+  tests.test_linkedin_name_matches \
+  tests.test_merge_candidate_precision \
+  tests.test_merge_people_source_identity \
+  tests.test_merge_source_members \
+  tests.test_merge_uncertain \
+  tests.test_message_name_conflicts \
+  tests.test_profile_source_names \
+  tests.test_relationship_cache_contract \
+  tests.test_share_parent_evidence \
+  tests.test_synthesis_usage_accounting \
   tests.test_upload_powerset -v
