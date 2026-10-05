@@ -64,8 +64,10 @@ class InstallControllerTests(unittest.TestCase):
             self.controller.post(request, "/api/install/review")
             self.assertEqual(request.status, 400)
             run.assert_not_called()
-            InstallStatus(self.root).write(step=InstallStep.REVIEW, status=InstallState.WAITING,
-                                           message="Waiting for your review", pid=os.getpid())
+            # The review is offered once search is ready.
+            InstallStatus(self.root).write(step=InstallStep.READY, status=InstallState.COMPLETED,
+                                           message="Search index ready", pid=os.getpid(),
+                                           action={"kind": "review", "text": "3 LinkedIn matches need a quick look."})
             self.controller.post(request, "/api/install/review")
             self.assertEqual(request.status, 202)
             run.assert_called_once_with(["open", "http://127.0.0.1:8899/?stage=linkedin"], check=True)
