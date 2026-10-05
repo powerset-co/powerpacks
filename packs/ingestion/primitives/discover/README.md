@@ -2,6 +2,9 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-10-03 (linkedin): `linkedin/` is back as a discover vertical: it reads the
+  user's connections list in Chrome into `discover/linkedin/Connections.csv`
+  instead of waiting for LinkedIn's emailed export. The Modal import is unchanged.
 - 2026-07-26 (per-node IO stats): both stages write ONE output.
   `discover/gmail/contacts.csv` and `discover/messages/contacts.csv` are DELETED —
   the first was byte-identical to `linkedin_resolution_queue.csv`, the second a
@@ -102,6 +105,7 @@ flowchart LR
 | [`messages/wacli/`](messages/wacli/) | wacli binary CLIENT package (parallels `gmail/msgvault/`), one concern per module: `binary` (pinned download + sha256 verify + `wacli --json`), `store_db` (read-only wacli.db SQL, body columns refused), `auth`/`pairing`/`qr` (link the account, login QR, full-sync marker), `sync` (one metadata sync pass + contacts/groups refresh), `backfill` + `depth`/`depth_results` (history depth), `payloads` (wacli's JSON parsed once into frozen dataclasses), `runtime`/`util`/`paths` | wacli SQLite under `.powerpacks/messages/wacli` (read-only) | wacli store (via `wacli` subprocess), QR page, group-participants cache, history-depth artifacts |
 | [`messages/merge_contacts.py`](messages/merge_contacts.py) | Union N per-channel CSVs by canonical phone → one `contacts.csv` | `imessage.contacts.csv`, `whatsapp.contacts.csv` | `.powerpacks/messages/contacts.csv` + manifest |
 | [`messages/models.py`](messages/models.py) | `MessageContactRow` (the 11-column `contacts.csv` row model), source column ownership, and the typed channel/stage manifest payloads | — | — |
+| [`linkedin/connections.py`](linkedin/connections.py) + [`linkedin/connections_browser.js`](linkedin/connections_browser.js) | `LinkedInConnections(...).run()`: opens the saved Chrome profile on LinkedIn's connections page (login once), runs headless (a window only for the login), scrolls the newest-first list with jittered pauses, at most 300 loads (~3,000 people) per run, stops after 25 known people or 15 s with nothing new; new people go on top of the existing rows, and the CSV is rewritten only when there are some | existing `Connections.csv` (an earlier export counts as complete), `connections.json`, `~/.powerpacks/browser-profiles/linkedin` | `discover/linkedin/Connections.csv` (LinkedIn export columns), `connections.json` (`complete`, `loads`, `stopped`, `owner_url`) |
 | [`twitter/network_import.py`](twitter/network_import.py) | Manifest-only Twitter/X orchestrator (`TwitterDiscovery`): one idempotent `run` — crawl → score → MOE triage → free LinkedIn pre-resolve → RapidAPI validate → format people; spend steps gated by `--approve-spend`, resume by artifact freshness | Twitter/X + LinkedIn RapidAPI, OpenAI | `discover/twitter/<handle>/`: `followers_dump.csv`, `candidates.csv`, `moe_evaluated.csv`, `linkedin_*.csv`, `people.csv`, `raw_*` dirs, `manifest.json` |
 | [`common.py`](common.py) | Discover-stage helpers: LF CSV IO, accounts/channel state, `source_slug`. The typed stage-manifest contract (`StagePayload`/`write_stage_manifest`) now lives in `primitives/common/manifests.py` and is re-exported here; the spend-gate contract lives in `primitives/common/gates.py` | — | — (used by callers) |
 | [`discovery_config.py`](discovery_config.py) + [`discovery.config.json`](discovery.config.json) | Static discovery input/output contract; resolves per-source output paths and the accounts path | `discovery.config.json` | — |

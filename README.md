@@ -95,9 +95,9 @@ Product and architecture walkthroughs live in the
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: one-command setup (Auth0 login + Powerset API runtime-key pull + MCP), credential refresh, setup status, Auth0 identity, MCP install, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
+| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface (`$powerset setup` runs the install skill): credential refresh, setup status, Auth0 identity, MCP install, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
 | [`powerpacks-doctor`](packs/powerset/skills/powerpacks-doctor/SKILL.md) | Health checks and setup failures | Diagnose unclear failures, repair within the requested scope, and retry the original command. |
-| [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Deterministic LinkedIn-only setup: credentials, Modal profile enrichment, local source merge, Modal indexing, DuckDB download, and read-only validation. Gmail and messages remain separate import skills. |
+| [`install-powerpacks`](packs/powerset/skills/install-powerpacks/SKILL.md) | The pasted install URL, `$setup` | The one setup path: installs Powerpacks, signs in to Powerset, syncs LinkedIn, Gmail, iMessage and WhatsApp, processes contacts, and builds the search index. Rerun its saved command to resync. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 | [`import-gmail`](packs/ingestion/skills/import-gmail/SKILL.md) | `$import-gmail` | Contact sync only: bounded msgvault sync, metadata-only extraction, and free local-directory attach. Unresolved contacts land in a research-candidates pool; identity lookups and indexing happen in `$deep-context`. See the [product guide](packs/ingestion/docs/gmail-import-pipeline.md). |
 | [`import-messages`](packs/ingestion/skills/import-messages/SKILL.md) | `$import-messages` | Contact sync only: adds iMessage/WhatsApp contact metadata, matches against imported LinkedIn/Gmail people for free, and stages matched people + a research-candidates pool for `$deep-context`. No LLM, no research, no index build in-skill. See the [product guide](packs/ingestion/docs/message-import-pipeline.md). |
@@ -274,8 +274,8 @@ one line (`DONE:`, `NEEDS YOU:`, `ASK:`, `STOP:` or `FAILED:`) that says what
 to do next. Safe to run again.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset
-# flags: --harness codex|claude-code|pi|all, --powerset, --tools, --no-tools
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/bootstrap | bash -s -- --powerset
+# flags: --harness codex|claude-code|pi|all, --powerset, --port PORT
 ```
 
 The top-level `install.sh` dispatches to a per-host adapter. **All adapters

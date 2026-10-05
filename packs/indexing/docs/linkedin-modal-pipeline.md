@@ -3,15 +3,15 @@
 > **Canonical current-state guide.** This page explains the production path
 > from LinkedIn `Connections.csv` to the local DuckDB used by `$search local`.
 > The executable instructions are
-> [`$setup`](../../ingestion/skills/setup/SKILL.md), and the implementation is
+> the [install skill](../../powerset/skills/install-powerpacks/SKILL.md), and the implementation is
 > [`linkedin_modal_pipeline.py`](../modal/linkedin_modal_pipeline.py). If prose
 > and code disagree, the code is current behavior and this page should be
 > corrected.
 
 ## Product summary
 
-Today, `$setup` has one initial data source: a user's LinkedIn
-`Connections.csv` export. Powerpacks sends that file to a Modal sandbox,
+Setup reads the user's LinkedIn connections into `Connections.csv` (scraped from
+their signed-in browser, or an existing export). Powerpacks sends that file to a Modal sandbox,
 enriches the LinkedIn profiles, builds search records and vectors, materializes
 a DuckDB database, downloads that database to the user's machine, and validates
 that it is searchable.
@@ -24,9 +24,8 @@ The output is a **local search index**. This flow does not upload the finished
 index into a Powerset set, Postgres, or TurboPuffer. `$search local` reads the
 downloaded DuckDB; `$search powerset` uses a separately managed Powerset set.
 
-Gmail and iMessage/WhatsApp are separate import skills. Their artifacts can be
-included by a later fan-in and rebuild, but they are not part of the `$setup`
-intake flow described here.
+Setup also imports Gmail and iMessage/WhatsApp; those sources join at fan-in,
+after Deep Context processing, and are indexed with LinkedIn in the same build.
 
 ## End-to-end flow
 
@@ -81,7 +80,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | Credentials | Authorize the local driver to dispatch work into the selected Modal workspace. | Local machine plus Powerset login when used. | `.env` and local auth state. |
 | LinkedIn import | Convert LinkedIn's export into normalized people and fill in profile details not present in the CSV. | Modal import sandbox. | `.powerpacks/network-import/import/linkedin/people.csv`. |
-| Source fan-in | Combine all imported source rows referring to the same network into one canonical input. During `$setup`, LinkedIn is the source guaranteed to be present. | Local machine. | `.powerpacks/network-import/merged/people.csv` plus contact/source provenance CSVs. |
+| Source fan-in | Combine all imported source rows referring to the same network into one canonical input. LinkedIn is the default first source. | Local machine. | `.powerpacks/network-import/merged/people.csv` plus contact/source provenance CSVs. |
 | Processing | Turn people and work history into role, company, school, location, profile, and summary records. | Modal indexing sandbox. | Validated Parquet records and `ledger.json`; non-vector metadata remains JSONL. |
 | Classification | Normalize ambiguous titles and company information into fields search can filter and rank. | Modal indexing sandbox, using cached or provider-backed results. | Role/company enrichment caches and records. |
 | Embedding | Convert relevant text into numeric representations used for semantic similarity search. | Modal indexing sandbox, using cached or OpenAI-backed results. | Role, company, and summary embedding artifacts. |
@@ -155,7 +154,7 @@ records use Parquet in both Modal and local processing.
 ### Current isolation limitation
 
 `linkedin_modal_pipeline.py` currently falls back to the all-zero operator ID
-when `POWERPACKS_OPERATOR_ID` is absent. `$setup` does not yet provision or
+when `POWERPACKS_OPERATOR_ID` is absent. Setup does not yet provision or
 validate a user-specific value. Until that is fixed, treat the default Modal
 workspace path as a single-operator/development configuration and set a stable,
 unique `POWERPACKS_OPERATOR_ID` before multi-user use.
@@ -174,10 +173,9 @@ Cache hits avoid repeated provider calls. A capped indexing run performs a
 dry-run estimate before allowing paid cache misses. The LinkedIn import path
 currently treats RapidAPI enrichment as pre-approved product behavior.
 
-The current `$setup` command does not pass a positive `--max-usd`; the driver's
-default `0` means uncapped internal mode and skips the estimate pass. Supplying
-a positive cap enables the estimate-and-refuse behavior. This default should be
-treated as an internal operational choice, not a general consumer spend guard.
+Setup passes `--max-usd` just under $500 (or the approved estimate when the
+user approves a larger run), which enables the estimate-and-refuse behavior. The
+driver's default `0` means uncapped internal mode and skips the estimate pass.
 
 ### Current custom-workspace limitation
 
@@ -222,22 +220,22 @@ workspace is the supported setup path today.
 
 | Capability | Status |
 | --- | --- |
-| LinkedIn `Connections.csv` intake in `$setup` | Shipped. |
+| LinkedIn `Connections.csv` intake in setup | Shipped. |
 | Modal profile enrichment and indexing | Shipped. |
 | Shared content-keyed enrichment caches | Shipped. |
 | Local fan-in followed by one merged-network index | Shipped. |
 | Local DuckDB download and read-only validation | Shipped. |
-| Gmail or messages as `$setup` intake sources | Not part of `$setup`; separate import skills exist. |
+| Gmail or messages as setup intake sources | Shipped; they join at fan-in after Deep Context. |
 | Automatic unique Modal operator identity | Not shipped; explicit configuration is required. |
 | Turnkey bring-your-own Modal workspace provisioning | Not shipped; named provider secrets must already exist. |
-| Default indexing spend cap in `$setup` | Not shipped; `--max-usd 0` is currently uncapped internal mode. |
+| Default indexing spend cap in setup | Shipped; under $500 runs without asking, larger runs ask first. |
 | Publishing the local index into a Powerset set | Not part of this pipeline. |
 
 ## Implementation map
 
 | Concern | Source |
 | --- | --- |
-| Exact setup checklist | [`packs/ingestion/skills/setup/SKILL.md`](../../ingestion/skills/setup/SKILL.md) |
+| Setup entry point | [`packs/powerset/skills/install-powerpacks/SKILL.md`](../../powerset/skills/install-powerpacks/SKILL.md) |
 | Local Modal driver | [`packs/indexing/modal/linkedin_modal_pipeline.py`](../modal/linkedin_modal_pipeline.py) |
 | LinkedIn import sandbox | [`packs/indexing/modal/run_linkedin.py`](../modal/run_linkedin.py) |
 | Indexing sandbox | [`packs/indexing/modal/run_indexing.py`](../modal/run_indexing.py) |

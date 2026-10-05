@@ -6,6 +6,7 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-10-04: a missing LinkedIn import points at setup (the install skill); $setup is retired.
 - 2026-09-28: Step 4 adds Step 2 accounts missing from `desired_emails` as OAuth
   test users before any grant (a new second account's consent failed without
   it). Step 3 drops the removed `--init-db` flag.
@@ -286,8 +287,9 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/statu
 
 - `messages.import.imported: false` → suggest **`$import-messages`**
   (iMessage/WhatsApp contacts give `$deep-context` cross-channel context).
-- `linkedin.import.imported: false` → suggest **`$setup`** (LinkedIn is the
-  identity backbone).
+- `linkedin.import.imported: false` → suggest syncing LinkedIn through setup
+  (LinkedIn is the identity backbone): rerun the `retry_command` saved in
+  `.powerpacks/install/manifest.json`, or the install skill on a first run.
 - Report candidate counts (`import.candidates` per source) so the user knows how
   many contacts are waiting for research.
 

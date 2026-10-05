@@ -1,5 +1,6 @@
-"""Automatic profile associations cannot contradict original source names."""
+"""Source names constrain profile proposals; final relationship choices settle them."""
 
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -128,11 +129,21 @@ class ProfileSourceNamesTests(unittest.TestCase):
                                                   approved="auto", judge_payload=CONFIRMED)])
         self.assert_not_accepted()
 
-    def test_relationship_yes_cannot_override_source_name_veto(self):
+    def test_final_relationship_yes_can_override_source_name_veto(self):
         self.profile()
         finish_reviews(self.db, (RelationshipDecision("parent", "sol-fixture", (
             CandidateDecision(URL, "yes", "Fixture agrees", .99),)),))
-        self.assert_not_accepted()
+        row = identity_queries.links(self.db, row_key="candidate")[0]
+        self.assertEqual((row.machine_action, row.machine_approved, row.machine_judgment),
+                         ("verify", "auto", "confirmed"))
+        self.assertEqual(row.judgment_fingerprint, "sol-fixture")
+        self.assertEqual(json.loads(row.judgment_payload_json)["relationship_decision"]["fingerprint"],
+                         row.judgment_fingerprint)
+        self.assertIsNone(row.decision_action)
+        result = ExportPeople(db=self.db, out_dir=self.root / "export").run()
+        self.assertEqual(result["accepted_identities"], 1)
+        exported = queries.imported_people(self.db)[0]
+        self.assertEqual((exported.full_name, exported.public_identifier), (self.source.full_name, "casey-south"))
 
     def test_missing_profile_name_remains_uncertain(self):
         self.profile("")

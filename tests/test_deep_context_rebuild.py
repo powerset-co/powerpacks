@@ -26,6 +26,7 @@ JORDAN = "candidate:email:jordan@example.com"
 CASEY = "candidate:email:casey@example.com"
 URL = "https://www.linkedin.com/in/jordan-bravo"
 AT = "2026-09-01T00:00:00+00:00"
+OPERATOR_ID = "00000000-0000-0000-0000-000000000001"
 
 
 class RebuildTests(unittest.TestCase):
@@ -48,6 +49,8 @@ class RebuildTests(unittest.TestCase):
         self.parent = {row.person_id: row.parent_id for row in queries.people(self.old)}
         self.owner = self.root / "owner.json"
         self.owner.write_text(json.dumps({"name": "Riley Owner", "emails": ["riley@example.com"], "work": [], "education": []}))
+        self.feedback = self.root / "feedback.json"
+        self.feedback.write_text("[]")
         for name in ("facts/old.jsonl", "raw/old.json", "reconcile/deep-research/old.json", "index.json"):
             path = self.original / "deep-context" / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,7 +71,8 @@ class RebuildTests(unittest.TestCase):
 
     def rebuild(self):
         return Rebuild(original_state_root=self.original, backup_root=self.backup,
-                       state_root=self.state, people_csv=self.people, owner_profile=self.owner).run()
+                       state_root=self.state, people_csv=self.people, owner_profile=self.owner,
+                       operator_id=OPERATOR_ID, feedback_json=self.feedback).run()
 
     def link(self, key="jordan-bravo", members=(JORDAN,), url=URL):
         parent = self.parent[members[0]]
@@ -128,7 +132,7 @@ class RebuildTests(unittest.TestCase):
         result = self.rebuild()
         self.assertEqual((result.applied, result.held), (0, 1))
         self.assertIn("provenance", result.decisions[0].reason)
-    def test_migration_reads_only_named_original_review_and_fresh_inputs(self):
+    def test_migration_reads_only_explicit_inputs_and_original_review(self):
         package = audit_deep_context_sqlite.PACKAGE
         fixtures = (
             ("migration/human_decisions.py", """from packs.shared.csv_io import CsvIO
@@ -143,11 +147,17 @@ class Rebuild:
         manifest_path.read_text()
         return CsvIO.read_dict_rows(path)
 """),
+            ("migration/feedback.py", """from pathlib import Path
+def read_feedback(operator_id, *, feedback_json=None):
+    return Path(feedback_json).read_text()
+"""),
         )
         for relative, source in fixtures:
             with self.subTest(relative=relative):
                 self.assertEqual(audit_deep_context_sqlite.audit_source(package / relative, source), [])
-                changed = source.replace("review_csv)", "facts_path)").replace("self.owner_profile.read_text()", "self.facts.read_text()")
+                changed = (source.replace("review_csv)", "facts_path)")
+                           .replace("self.owner_profile.read_text()", "self.facts.read_text()")
+                           .replace("Path(feedback_json)", "Path(facts_path)"))
                 self.assertTrue(audit_deep_context_sqlite.audit_source(package / relative, changed))
 
     def test_seeded_decision_requires_matching_original_target_and_scope(self):
@@ -190,7 +200,8 @@ class Rebuild:
     def test_original_and_destination_overlap_refuses(self):
         with self.assertRaises(StoreError):
             Rebuild(original_state_root=self.original, backup_root=self.original / "backup",
-                    state_root=self.state, people_csv=self.people, owner_profile=self.owner).run()
+                    state_root=self.state, people_csv=self.people, owner_profile=self.owner,
+                    operator_id=OPERATOR_ID, feedback_json=self.feedback).run()
 
     def test_completed_prepare_refuses_rerun_without_mutation(self):
         self.rebuild()
@@ -204,7 +215,8 @@ class Rebuild:
         result = subprocess.run([sys.executable, "-m", "packs.ingestion.primitives.deep_context.migration.rebuild",
                                  "--original-state-root", str(self.original), "--backup-root", str(self.backup),
                                  "--state-root", str(self.state), "--people-csv", str(self.people),
-                                 "--owner-profile", str(self.owner)], capture_output=True, text=True)
+                                 "--owner-profile", str(self.owner), "--operator-id", OPERATOR_ID,
+                                 "--feedback-json", str(self.feedback)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["status"], "completed")
 

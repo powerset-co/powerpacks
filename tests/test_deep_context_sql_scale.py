@@ -151,10 +151,11 @@ class EnrichmentQueuePlanTest(unittest.TestCase):
             recorder = _QueryRecorder(Db(path))
             identity_views.enrichment_queue(recorder)
             self.assertEqual(len(recorder.sql), 4)
-            sql, source_sql, facts_sql, links_sql = recorder.sql
+            sql, source_sql, facts_sql, review_sql = recorder.sql
             self.assertIn("LEFT JOIN imported_people", source_sql)
             self.assertEqual(facts_sql, "SELECT * FROM facts ORDER BY subject_key")
-            self.assertEqual(links_sql, "SELECT * FROM links ORDER BY row_key")
+            self.assertEqual(review_sql, "SELECT DISTINCT parent_id FROM links WHERE source=? "
+                             "AND machine_action='review' AND decision_action IS NULL")
             with sqlite3.connect(path) as conn:
                 return list(conn.execute("EXPLAIN QUERY PLAN " + sql))
 
@@ -163,10 +164,11 @@ class EnrichmentQueuePlanTest(unittest.TestCase):
             recorder = _QueryRecorder(Db(Path(temp) / "deep-context.sqlite"))
             identity_views.enrichment_queue(recorder)
         self.assertEqual(len(recorder.sql), 4)
-        sql, source_sql, facts_sql, links_sql = recorder.sql
+        sql, source_sql, facts_sql, review_sql = recorder.sql
         self.assertIn("LEFT JOIN imported_people", source_sql)
         self.assertEqual(facts_sql, "SELECT * FROM facts ORDER BY subject_key")
-        self.assertEqual(links_sql, "SELECT * FROM links ORDER BY row_key")
+        self.assertEqual(review_sql, "SELECT DISTINCT parent_id FROM links WHERE source=? "
+                         "AND machine_action='review' AND decision_action IS NULL")
         self.assertNotRegex(sql, r"\b(?:FROM|JOIN)\s+research\b")
 
     def test_identifier_lookups_go_through_the_person(self) -> None:

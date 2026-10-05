@@ -11,10 +11,7 @@ from typing import Callable
 
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, driver
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
-    ResearchRunParams,
-    ResearchRunResult,
-)
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import ResearchRunParams
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     EnrichmentProgress,
     ResearchOutcome,
@@ -174,14 +171,10 @@ class ReconcileDeepResearch:
             on_progress=provider_progress,
             db=self.db,
         )
-        try:
-            research = driver.run_research(params)
-        except SystemExit as exc:
-            research = ResearchRunResult.failed(len(plan.pending), f"SystemExit: {exc}")
-        except Exception as exc:
-            research = ResearchRunResult.failed(
-                len(plan.pending), f"{type(exc).__name__}: {exc}"
-            )
+        # Research that cannot start (no Parallel key) fails the enrich run, so
+        # the next run tries these people again. Provider errors come back as
+        # results from the driver.
+        research = driver.run_research(params)
         research_completed = plan.reused_completed + research.completed
         print(
             f"[deep-research] research finished "

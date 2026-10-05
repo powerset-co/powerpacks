@@ -36,34 +36,18 @@ class InstallControllerTests(unittest.TestCase):
         self.root = Path(directory.name)
         self.controller = InstallController(self.root)
 
-    def test_skip_cannot_replace_running_progress(self):
-        InstallStatus(self.root).write(step=InstallStep.GMAIL_SYNC, status=InstallState.RUNNING,
-                                       message="Syncing Gmail", pid=os.getpid())
-        request = Request({"skip": True, "sources": []})
-        self.controller.post(request, "/api/install/sources")
-        self.assertEqual(request.status, 400)
-        self.assertEqual(InstallStatus(self.root).read()["step"], "gmail_sync")
-
-    def test_other_site_cannot_start_imports(self):
-        request = Request({"sources": ["imessage"]}, "https://another.example")
-        with patch.object(self.controller, "start") as start:
-            self.controller.post(request, "/api/install/sources")
+    def test_other_site_cannot_open_settings(self):
+        request = Request({}, "https://another.example")
+        with patch("packs.powerset.primitives.install.controller.subprocess.run") as run:
+            self.controller.post(request, "/api/install/permissions")
         self.assertEqual(request.status, 403)
-        start.assert_not_called()
+        run.assert_not_called()
 
     def test_detached_server_retains_the_app_that_started_it(self):
         app = self.root / "Example.app"
         app.mkdir()
         with patch.dict(os.environ, {"POWERPACKS_PERMISSION_APP": str(app)}), patch("subprocess.check_output", return_value="1 /usr/bin/python"):
             self.assertEqual(permission_app(), str(app))
-
-    def test_invalid_sources_do_not_start_a_worker(self):
-        for record in ({"sources": "gmail"}, {"sources": ["unknown"]}, {"sources": ["gmail"], "gmail_emails": "casey@example.com"}):
-            request = Request(record)
-            with patch("threading.Thread") as worker:
-                self.controller.post(request, "/api/install/sources")
-            self.assertEqual(request.status, 400)
-            worker.assert_not_called()
 
     def test_permission_button_opens_settings_and_highlights_actual_app(self):
         InstallStatus(self.root).write(step=InstallStep.IMESSAGE_ACCESS, status=InstallState.WAITING,
@@ -73,6 +57,18 @@ class InstallControllerTests(unittest.TestCase):
             self.controller.post(request, "/api/install/permissions")
         self.assertEqual(request.status, 202)
         self.assertEqual(run.call_args_list[1].args[0], ["open", "-R", "/Applications/Example.app"])
+
+    def test_review_opens_existing_review_in_default_browser_only_when_needed(self):
+        request = Request({})
+        with patch("subprocess.run") as run:
+            self.controller.post(request, "/api/install/review")
+            self.assertEqual(request.status, 400)
+            run.assert_not_called()
+            InstallStatus(self.root).write(step=InstallStep.REVIEW, status=InstallState.WAITING,
+                                           message="Waiting for your review", pid=os.getpid())
+            self.controller.post(request, "/api/install/review")
+            self.assertEqual(request.status, 202)
+            run.assert_called_once_with(["open", "http://127.0.0.1:8899/?stage=linkedin"], check=True)
 
     def test_only_current_waiting_qr_is_served(self):
         from packs.ingestion.primitives.deep_context.review.cli import _persistent_handler

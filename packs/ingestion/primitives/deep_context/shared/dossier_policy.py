@@ -4,8 +4,8 @@ from packs.ingestion.primitives.common.jsonio import parse_json_object
 from collections import defaultdict
 from collections.abc import Sequence
 
-from packs.ingestion.primitives.deep_context.db.identity_queries import links, memberships
-from packs.ingestion.primitives.deep_context.db.models import CandidatePersonRow, FactRow, HUMAN_DECISION_SOURCES, LinkSnapshotRow, PersonRow, WriterSource
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, memberships, name_match_pending_parent_ids
+from packs.ingestion.primitives.deep_context.db.models import CandidatePersonRow, FactRow, HUMAN_DECISION_SOURCES, LinkSnapshotRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.queries import facts, people, source_names_by_parent
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match
@@ -21,19 +21,36 @@ SOURCE_IDENTITY_REVIEW_REASON = (
 
 def unresolved_source_parents(db: Db) -> set[str]:
     """Check original contacts and nonempty retained canonical names in batched reads."""
-    rows = links(db)
-    resolved = resolved_parent_ids(people(db), rows, memberships(db))
-    return (unresolved_source_parent_ids(source_names_by_parent(db), facts(db)) - resolved
-            | name_match_review_parents(db))
+    conflicting = unresolved_source_parent_ids(source_names_by_parent(db), facts(db))
+    review = name_match_pending_parent_ids(db)
+    held = conflicting | review
+    if not held:
+        return set()
+    person_rows, rows, candidate_members = _held_family_rows(db, held)
+    resolved = resolved_parent_ids(person_rows, rows, candidate_members)
+    human_resolved = resolved_parent_ids(person_rows, tuple(row for row in rows
+        if row.decision_action and row.decision_source in HUMAN_DECISION_SOURCES), candidate_members)
+    return conflicting - resolved | review - human_resolved
 
 
 def name_match_review_parents(db: Db) -> set[str]:
     """Withhold a withdrawn automatic name match until a human settles its identity."""
-    rows = links(db)
-    return {row.parent_id for row in rows if row.source == WriterSource.NAME_MATCH.value
-            and row.machine_action == 'review' and not row.decision_action} - resolved_parent_ids(
-                people(db), tuple(row for row in rows if row.decision_action
-                    and row.decision_source in HUMAN_DECISION_SOURCES), memberships(db))
+    review = name_match_pending_parent_ids(db)
+    if not review:
+        return set()
+    person_rows, rows, candidate_members = _held_family_rows(db, review)
+    return review - resolved_parent_ids(person_rows, tuple(row for row in rows
+        if row.decision_action and row.decision_source in HUMAN_DECISION_SOURCES), candidate_members)
+
+
+def _held_family_rows(db: Db, parent_ids: set[str]) -> tuple[
+    tuple[PersonRow, ...], tuple[LinkSnapshotRow, ...], tuple[CandidatePersonRow, ...],
+]:
+    selected = sorted(parent_ids)
+    return (
+        people(db, parent_ids=selected), links(db, parent_ids=selected),
+        memberships(db, parent_ids=selected),
+    )
 
 
 def resolved_parent_ids(

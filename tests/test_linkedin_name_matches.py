@@ -146,33 +146,38 @@ class LinkedInNameMatchesTests(unittest.TestCase):
 
     def test_human_native_approval_keeps_its_contact_scope(self):
         from packs.ingestion.primitives.deep_context.db.identity_queries import links, memberships
-        self.seed()
+        parents = self.seed()
         self.db.decide_identity('jordan-bravo', 'verify')
         before = links(self.db, row_keys=('jordan-bravo',))[0]
         members = tuple(row.person_id for row in memberships(self.db, row_key='jordan-bravo'))
-        self.assertEqual(apply_linkedin_name_matches(self.db), 0)
+        plan = linkedin_name_matches(self.db)
+        self.assertEqual((plan.matches, plan.withheld, plan.human_resolved),
+                         ((), (), (parents['linkedin-jordan'],)))
+        self.assertEqual(apply_linkedin_name_matches(self.db, plan), 0)
         self.assertEqual(len(queries.parents(self.db)), 2)
-        self.assertEqual(linkedin_name_matches(self.db).withheld[0].reason, 'human_decisions')
+        self.assertEqual({row.person_id: row.parent_id for row in queries.people(self.db)}, parents)
         after = links(self.db, row_keys=('jordan-bravo',))[0]
-        self.assertEqual(before.decision_action, after.decision_action)
-        self.assertEqual(before.decided_at, after.decided_at)
+        self.assertEqual(before, after)
         self.assertEqual(members, tuple(row.person_id for row in memberships(self.db, row_key='jordan-bravo')))
         self.assertTrue(all(row.source != 'deep-context-name-match' for row in links(self.db)))
 
     def test_human_source_retarget_keeps_its_parent_and_decision_scope(self):
-        self.seed()
+        parents = self.seed()
         self.db.decide_identity('candidate:phone:+15550100123', 'retarget',
             replacement_url='https://www.linkedin.com/in/jordan-bravo',
             replacement_public_identifier='jordan-bravo')
         before = [tuple(row) for row in self.db.query('SELECT * FROM links')]
+        members = [tuple(row) for row in self.db.query('SELECT * FROM candidate_people')]
 
         plan = linkedin_name_matches(self.db)
 
-        self.assertEqual(plan.matches, ())
-        self.assertEqual(plan.withheld[0].reason, 'human_decisions')
+        self.assertEqual((plan.matches, plan.withheld, plan.human_resolved),
+                         ((), (), (parents['candidate:phone:+15550100123'],)))
         self.assertEqual(apply_linkedin_name_matches(self.db, plan), 0)
         self.assertEqual(len(queries.parents(self.db)), 2)
+        self.assertEqual({row.person_id: row.parent_id for row in queries.people(self.db)}, parents)
         self.assertEqual(before, [tuple(row) for row in self.db.query('SELECT * FROM links')])
+        self.assertEqual(members, [tuple(row) for row in self.db.query('SELECT * FROM candidate_people')])
 
     def test_direct_enrichment_matches_before_research_selection(self):
         from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue

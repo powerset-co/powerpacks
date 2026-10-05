@@ -1,12 +1,12 @@
 ---
 name: deep-context
-description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, runs one budget-gated enrichment chain without a worth-review stop, settles empty profiles and insufficient identity evidence, verifies remaining uncertain LinkedIns, then realizes the approved network and index.
+description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the staged people/LinkedIn UI. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the approved network and index. To read a named person's existing dossier, use search.
 ---
 
 # deep-context
 
-This is the one processing skill after `$setup`, `$import-gmail`, or
-`$import-messages`. The former `$deep-setup` surface is retired; its candidate
+This is the one processing skill after setup (the install skill), `$import-gmail`,
+or `$import-messages`. The former `$deep-setup` surface is retired; its candidate
 resolution, synthetic-profile, realization, and validation behavior lives here.
 
 The durable flow is:
@@ -31,8 +31,8 @@ verdicts or questions automatically.
 
 Use the narrow path when the user names one:
 
-- `$deep-context lookup ...`, "who is <name/phone/email>?" -> run only
-  `bin/deep-context lookup ...` (free, read-only).
+- `$deep-context lookup ...`, or a request to read a person's dossier -> follow
+  `packs/search/skills/search/person-lookup.md` (free, read-only), then stop.
 - `$deep-context check` -> run only `bin/deep-context check` (free); report
   `next_command` and stop.
 - `$deep-context audit` -> run only `bin/deep-context audit` (free, read-only).

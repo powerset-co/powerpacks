@@ -66,3 +66,4 @@ class DeepContextCommandsTests(unittest.TestCase):
     def test_rejudge_is_not_a_synthesis_flag(self) -> None:
         with self.assertRaises(SystemExit):
             build_parser().parse_args(['--rejudge'])
+

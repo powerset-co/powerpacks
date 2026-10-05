@@ -100,13 +100,18 @@ class DossierQuarantineTest(unittest.TestCase):
         self.assertEqual(fact_rows, [dict(row) for row in self.db.query("SELECT * FROM facts")])
         for path, body in files.items():
             self.assertEqual(path.read_bytes(), body)
-        self.assertEqual(person_lookup(self.db, name="Jordan Bravo"), [])
-        self.assertEqual(PersonLookup(db=self.db, name="Jordan Bravo").run().status, "no_match")
-        self.assertEqual(person_lookup(self.db, email="support@example.com"), [])
+        for query in ({"name": "Jordan Bravo"}, {"email": "support@example.com"}):
+            match, = person_lookup(self.db.db_path, **query)
+            self.assertEqual((match.parent_id, match.dossier_body, match.dossier_path),
+                             ("parent-jordan", "", ""))
+            lookup = PersonLookup(db=self.db.db_path, **query).run()
+            self.assertEqual(lookup.status, "found")
+            self.assertEqual(lookup.matches, (match,))
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = lookup_main(["--db", str(self.db.db_path), "--email", "support@example.com"])
-        self.assertEqual((code, stdout.getvalue(), stderr.getvalue()), (1, "", "No matching dossier found.\n"))
+        self.assertEqual((code, stdout.getvalue(), stderr.getvalue()),
+                         (0, "Jordan Bravo [parent-jordan]: No parent dossier is available.\n", ""))
         self.assertNotIn("Jordan Bravo", (self.root / "index.md").read_text())
 
     def test_missing_original_roster_quarantines_both_cached_dossiers(self) -> None:
@@ -121,7 +126,9 @@ class DossierQuarantineTest(unittest.TestCase):
         result = self.compose.execute()
 
         self.assertEqual((result.dossiers_written, result.skipped), (1, 0))
-        self.assertEqual(PersonLookup(db=self.db, name="Jordan Bravo").run().status, "found")
+        lookup = PersonLookup(db=self.db.db_path, name="Jordan Bravo").run()
+        self.assertEqual(lookup.status, "found")
+        self.assertTrue(lookup.matches[0].dossier_body)
         rows = {row.artifact_key: row for row in artifacts(self.db, kind="dossier")}
         self.assertEqual(rows["dossier:parent-jordan"].status, "projected")
         self.assertEqual(rows["dossier-parent:parent-jordan"].status, "failed")
@@ -145,7 +152,7 @@ class DossierQuarantineTest(unittest.TestCase):
         self._assert_quarantined()
         self.assertEqual(dict(self.db.query("SELECT * FROM links WHERE row_key='support-profile'")[0]), before)
 
-    def test_source_and_fact_policy_reads_every_parent_in_two_queries(self) -> None:
+    def test_source_and_fact_policy_scopes_identity_resolution_to_unresolved_parents(self) -> None:
         from packs.ingestion.primitives.deep_context.shared.dossier_policy import unresolved_source_parents
 
         self.db.project_rows((ParentRow("parent-casey", "parent-worth:parent-casey"),
@@ -155,7 +162,9 @@ class DossierQuarantineTest(unittest.TestCase):
         with mock.patch.object(self.db, "query", wraps=self.db.query) as query:
             result = unresolved_source_parents(self.db)
         self.assertEqual(result, {"parent-casey"})
-        self.assertEqual(query.call_count, 2)
+        self.assertEqual(query.call_count, 6)
+        for call in query.call_args_list[3:]:
+            self.assertEqual(json.loads(call.args[1][0]), ["parent-casey"])
 
     def test_readonly_audit_uses_the_same_source_and_fact_policy(self) -> None:
         from packs.ingestion.primitives.deep_context.shared.dossier_policy import unresolved_source_parent_ids
@@ -190,7 +199,9 @@ class DossierQuarantineTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(), body)
         self.assertEqual(evidence, [dict(row) for row in self.db.query("SELECT * FROM artifacts WHERE kind!='dossier'")])
         self.assertEqual(facts, [dict(row) for row in self.db.query("SELECT * FROM facts")])
-        self.assertEqual(person_lookup(self.db, email="support@example.com"), [])
+        match, = person_lookup(self.db.db_path, email="support@example.com")
+        self.assertEqual((match.parent_id, match.dossier_body, match.dossier_path),
+                         ("parent-jordan", "", ""))
 
     def test_build_missing_source_name_preserves_both_dossiers_and_recovers(self) -> None:
         build = BuildParents(db=self.db, parents_dir=self.root / "parents")
@@ -203,7 +214,9 @@ class DossierQuarantineTest(unittest.TestCase):
         self.assertEqual(result.parents_changed, 1)
         self.compose.execute()
         self.assertEqual({row.status for row in artifacts(self.db, kind="dossier")}, {"projected"})
-        self.assertEqual(PersonLookup(db=self.db, email="support@example.com").run().status, "found")
+        lookup = PersonLookup(db=self.db.db_path, email="support@example.com").run()
+        self.assertEqual(lookup.status, "found")
+        self.assertTrue(lookup.matches[0].dossier_body)
         self.assertEqual(build.execute().parents_changed, 0)
 
     def test_build_conflicting_original_names_quarantines_both_dossiers(self) -> None:
@@ -235,7 +248,8 @@ class DossierQuarantineTest(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = lookup_main(["--db", str(self.db.db_path), "--name", "Casey Delta"])
-        self.assertEqual((code, stdout.getvalue(), stderr.getvalue()), (1, "", "No matching dossier found.\n"))
+        self.assertEqual((code, stdout.getvalue(), stderr.getvalue()),
+                         (0, "Jordan Bravo [parent-jordan]: No parent dossier is available.\n", ""))
 
     def test_compatible_and_empty_canonical_names_keep_composition_available(self) -> None:
         for name in ("Jordan A. Bravo", ""):
@@ -247,7 +261,9 @@ class DossierQuarantineTest(unittest.TestCase):
                 built = BuildParents(db=self.db, parents_dir=self.root / "parents").execute()
                 composed = self.compose.execute()
                 self.assertEqual((built.parents_changed, composed.dossiers_written, composed.skipped), (1, 1, 0))
-                self.assertEqual(PersonLookup(db=self.db, email="support@example.com").run().status, "found")
+                lookup = PersonLookup(db=self.db.db_path, email="support@example.com").run()
+                self.assertEqual(lookup.status, "found")
+                self.assertTrue(lookup.matches[0].dossier_body)
 
 
 if __name__ == "__main__":

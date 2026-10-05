@@ -577,9 +577,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             start.assert_not_called()
             status, payload = self.json_request("POST", "/retarget", {
                 "pub": "jordan-bravo", "parent_slug": "jordan-bravo",
-                "guidance": "Use https://www.linkedin.com/in/jordan-bravo-correct",
+                "guidance": "https://www.linkedin.com/in/jordan-bravo-correct",
             })
-            self.assertEqual(status, 200)
+            self.assertEqual(status, 200, payload)
             self.assertEqual(payload["item"]["state"], "applied")
             self.db.decide_worth("worth-parent", "yes")
             status, payload = self.json_request("POST", "/api/review/approve-enrichment", {})

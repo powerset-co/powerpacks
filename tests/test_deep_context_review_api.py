@@ -200,6 +200,9 @@ def candidate(row_key: str, name: str, *, url: str = "") -> dict:
         "education": [],
         "synthetic": False,
         "avatar_url": "",
+        "confidence": 0.5,
+        "verdict": "",
+        "reason": "",
     }
 
 
@@ -467,16 +470,19 @@ class ReviewPageTests(ReviewApiFixture):
             for query_string, (view, tab) in {"": landing, "?stage=bogus": landing, **worth_stage, **asked}.items():
                 with self.subTest(store=current, query=query_string):
                     title, watched = SCREENS[view]
+                    explicit_linkedin = query_string.lower() == "?stage=linkedin"
                     self.assertEqual(
                         self.payload(f"/api/review/page{query_string}"),
                         {
                             "view": view,
                             "tab": tab,
                             "title": title,
-                            "progress": counts,
-                            "enrichment": panel,
+                            "progress": {**counts, "rejected": 0, "synthesize_pending": 0}
+                            if explicit_linkedin else counts,
+                            "enrichment": {**COMPLETED_PANEL, "mode": "preparing"}
+                            if explicit_linkedin else panel,
                             # The token the page compares with /api/status to see a change.
-                            "state_token": status["state_token"],
+                            "state_token": "" if explicit_linkedin else status["state_token"],
                             "needs_synthesis": False,
                             "external_updates": watched,
                         },
@@ -547,8 +553,8 @@ class SynthesisPendingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         return json.loads(body)
 
-    def test_every_route_says_synthesis_is_pending(self) -> None:
-        # Enrich and Done say it on the page; the two queues say it on their card reads.
+    def test_pages_and_cards_report_synthesis_at_their_read_boundary(self) -> None:
+        # LinkedIn defers synthesis status to its card read.
         screens = {
             "": ("worth", "review", False),
             "worth": ("worth", "review", False),
@@ -567,8 +573,9 @@ class SynthesisPendingTests(unittest.TestCase):
                         "view": view,
                         "tab": tab,
                         "title": title,
-                        "progress": progress(0, 0, 0, 0, unsynthesized=1),
-                        "enrichment": COMPLETED_PANEL,
+                        "progress": progress(0, 0, 0, 0, unsynthesized=0 if stage == "linkedin" else 1),
+                        "enrichment": {**COMPLETED_PANEL, "mode": "preparing"}
+                        if stage == "linkedin" else COMPLETED_PANEL,
                         "needs_synthesis": needs_synthesis,
                         "external_updates": watched,
                     },
@@ -951,6 +958,9 @@ class LinkedinRoutesTests(ReviewApiFixture):
             experiences=("Founder @ Bravo Robotics", " ", "Engineer @ Example Labs"),
             education=("BS — Example University", ""),
             profile_pic_url="https://example.com/photo.png",
+            confidence=0.91,
+            verdict="confirmed",
+            reason="Synthetic match",
         )
         self.assertEqual(
             dataclasses.asdict(ReviewCandidate.from_row(fetched)),
@@ -965,6 +975,9 @@ class LinkedinRoutesTests(ReviewApiFixture):
                 "education": ("BS — Example University",),
                 "synthetic": False,
                 "avatar_url": "https://example.com/photo.png",
+                "confidence": 0.91,
+                "verdict": "confirmed",
+                "reason": "Synthetic match",
             },
         )
         # A researched profile links nowhere and shows no picture.

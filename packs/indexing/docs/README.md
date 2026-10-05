@@ -4,8 +4,8 @@
 
 - [LinkedIn and Modal indexing pipeline](linkedin-modal-pipeline.md) is the
   canonical product and architecture guide.
-- [`$setup`](../../ingestion/skills/setup/SKILL.md) is the executable,
-  LinkedIn-only setup contract.
+- The [install skill](../../powerset/skills/install-powerpacks/SKILL.md) is the
+  executable setup contract.
 - [`packs/indexing/README.md`](../README.md) documents the separate local-file
   indexing path and artifact layout.
 
