@@ -93,6 +93,9 @@ usage: bin/deep-context <command> [args]
                (creates the store on a fresh install)
   rebuild      prepare isolated source contacts with proven human decisions
                (free, local; explicit original, backup and fresh paths)
+  heal         run pending versioned repairs, fact and feedback recovery
+               (completed migrations are a no-op; no paid calls;
+               --state-root PATH --backup-root UNUSED_PATH --operator-id UUID)
   seed         carry legacy decisions, facts and Parallel results onto the cold
                parents by identifier, once (free, local; --legacy-root PATH)
   dry          estimate synthesis cost from existing raw bundles (free)
@@ -170,6 +173,9 @@ case "$cmd" in
     ;;
   rebuild)
     "${PY[@]}" "$PKG.migration.rebuild" "$@"
+    ;;
+  heal)
+    "${PY[@]}" "$PKG.migration.heal" "$@"
     ;;
   dry)
     if (( wants_help )); then

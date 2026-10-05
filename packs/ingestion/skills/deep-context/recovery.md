@@ -6,6 +6,63 @@ decision. Keep a golden copy before replaying changes; do not introduce another
 ledger. A cold rebuild on a separate copy can reuse facts without inheriting
 the old family membership.
 
+## Heal an existing installation
+
+Use this path to keep existing source contacts and reusable paid work. It is not
+a fresh rebuild or a historical identity split.
+
+1. For a pending migration, stop the local review server with
+   `bin/deep-context stop`. A completed version needs no server restart.
+2. Identify the authenticated account's operator UUID. Never infer it from an
+   imported connection's historical file path. For a copied store, use the known
+   owner's UUID and an authorized feedback snapshot.
+3. Run the free preparation before collection or enrichment:
+
+```bash
+bin/deep-context heal \
+  --state-root /absolute/install/.powerpacks \
+  --backup-root /absolute/backups/pre-recovery.powerpacks \
+  --operator-id <expected-operator-uuid>
+```
+
+For offline replay, add `--feedback-json /absolute/operator-feedback.json`.
+The command first reads SQLite's existing `meta.data_migration_version`. If the
+heal migration is already applied, it returns `skipped` without fetching
+feedback, backing up, or changing the store; the same command is safe to repeat.
+
+When pending, it validates feedback, backs up the state and canonical SQLite,
+runs the existing membership, merge-ownership and Harmonic-profile repairs,
+restores attributable contact facts, applies reviewed feedback, matches imported
+LinkedIn connections and refreshes derived parent facts. It records migration
+version 4 only after all of that succeeds. Original facts and human decisions
+retain their authority. The backup destination must be unused and outside the
+state directory for a pending migration. After interruption, retry with another
+unused backup path; already committed work is reused.
+
+New healing fixes extend the same ordered migrations with the next version;
+never edit an applied migration and expect it to run again. Version 3's historical
+name-based split remains explicit, not part of automatic healing. A no-op does
+not download later feedback; this migration applies the snapshot read when it runs.
+
+`deep-context/heal/manifest.json` reports the applied migration's feedback,
+held/unmatched choices, restored facts and name matches. SQLite determines
+whether work is pending, even if that report is missing. Completion is not proof
+that every identity is correct: mixed-person histories still require inspection.
+
+Resume the normal skill at fan-in, then `ensure-parents` and `check`. Continue
+collection and the synthesis preview (only pending contact evidence), compose,
+cluster, parents, then preview/run enrichment. The existing
+identity and final Sol stages process unresolved candidates and reuse judgments
+only when their evidence and request match. `finish-reviews --dry-run` previews a
+remaining final pass; do not replay arbitrary historical verdicts by ID or turn
+machine judgments into human approvals. Review the resulting SQLite queue, then
+realize and validate the index. Preparation does not synthesize, call identity
+providers, export, index or upload anything.
+
+The separate feedback API must expose the support-resolution columns documented
+below. A failed feedback fetch is a failed recovery, not an empty feedback set.
+Unresolved comments remain in the receipt instead of becoming new instructions.
+
 ## Read the operator's feedback first
 
 Before recovery changes, pull the operator's existing feedback. Fresh `rebuild`

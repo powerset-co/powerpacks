@@ -361,7 +361,9 @@ def _repair_historical_merges(db: Db, histories: dict[str, FactHistory]) -> Merg
                 conn.execute("INSERT INTO artifacts(artifact_key,kind,parent_id,person_id,path,content_fingerprint,status,payload_json,projected_at) VALUES (?,'facts',?,NULL,?,?,'projected',?,?)", (key, owner, path, fingerprint, serialized, history.records[-1].record.updated_at))
                 worth = facts.network_worth
                 conn.execute('INSERT INTO facts(subject_key,parent_id,person_id,artifact_key,machine_worth,machine_worth_reason,confidence,is_owner,facts_json,projected_at) VALUES (?,?,?,?,?,?,?,?,?,?)', (owner, owner, None, key, worth.decision if worth else None, worth.reason if worth else None, facts.confidence, bool(facts.is_owner), json.dumps(facts.to_payload()), history.records[-1].record.updated_at))
-        conn.execute("INSERT INTO meta(key,value) VALUES ('data_migration_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(HISTORICAL_MERGE_MIGRATION),))
+        conn.execute("INSERT INTO meta(key,value) VALUES ('data_migration_version',?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(meta.value AS INTEGER),CAST(excluded.value AS INTEGER))",
+                     (str(HISTORICAL_MERGE_MIGRATION),))
         if conn.execute('PRAGMA foreign_key_check').fetchone():
             raise StoreError('historical merge repair violates foreign keys')
     return MergeRepairReport(tuple(plan[0] for plan in plans), tuple(unresolved), str(backup) if plans or unresolved else '', machine_cleared, siblings_cleared)

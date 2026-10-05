@@ -43,9 +43,11 @@ Use the narrow path when the user names one:
   Regenerate source imports, then run `bin/deep-context rebuild` with the explicit
   original, backup, fresh state and owner paths. Continue on that isolated state
   with the reviewed source scope and approved paid-stage budget.
-- `$deep-context heal`, "repair bad merges", or "recover contact facts" ->
-  follow [Contact recovery](recovery.md). Do not start paid synthesis or research
-  from a repair request without a scoped estimate and approval.
+- `$deep-context heal`, "repair bad merges", "recover contact facts", or
+  "apply saved feedback to an existing installation" -> follow
+  [Heal an existing installation](recovery.md#heal-an-existing-installation),
+  then inspect unresolved identity findings in that guide. Paid synthesis or
+  research requires a scoped estimate and approval.
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
@@ -181,6 +183,14 @@ uv run --project . python packs/ingestion/primitives/imports/status.py status
 `deep-context.sqlite.bkup-schema-<UTC timestamp>` beside the store; otherwise
 it only reads. Combine current source imports, then project their people into
 SQLite; `ensure-parents` creates the store on a fresh install.
+For every existing SQLite installation, run
+[Heal an existing installation](recovery.md#heal-an-existing-installation)
+before fan-in, collection or synthesis. `heal` checks SQLite's existing
+`meta.data_migration_version`: completed migrations are a read-only no-op;
+pending repairs run in order and record completion only after success. Do not
+use `deep-context/heal/manifest.json` to skip this check; it is a report only.
+A fresh installation without a canonical SQLite store skips this command.
+
 Imports do not merge people or write identity decisions:
 
 ```bash
