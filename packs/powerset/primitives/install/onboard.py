@@ -144,6 +144,9 @@ class Onboarding:
         self.email = account["email"]
         if not self.email:
             raise ValueError("Powerset did not return the signed-in account email")
+        # Modal inputs and runs live under this id; servers before 2026-10-05 do not send it.
+        if account.get("operator_id"):
+            keys.write_env(self.env_path, {"POWERPACKS_OPERATOR_ID": account["operator_id"]})
         self.progress(InstallStep.ACCOUNT, InstallState.SKIPPED if reused else InstallState.COMPLETED,
                       f"Already signed in as {self.email}. Tell me if that's the wrong account." if reused else f"Connected as {self.email}",
                       account_email=self.email)
