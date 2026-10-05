@@ -6,7 +6,7 @@ allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/pow
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.4.4
+  version: 1.5.0
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -19,6 +19,9 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: One up-front message, asked synchronously: approve sending contact
+  data to Parallel and OpenAI (else LinkedIn only), Gmail defaults to the Powerset
+  login, full access is a note. The upload question is gone.
 - 2026-10-05: A stopped Gmail Google Cloud setup is the agent's to fix, not the user's.
 - 2026-10-05: The LinkedIn review no longer holds setup: search is built first, then
   the agent offers the review; Finish shows `$search` starters for what is enabled.
@@ -43,7 +46,7 @@ Sync WhatsApp → Discover → Enrich → Build Index → Verify → Review (opt
 whenever the user has time).
 
 Own the result. Run commands yourself; involve the user only for browser logins,
-QR scans, OS permissions, and upload authorization. Reviewing LinkedIn matches is
+QR scans, OS permissions, and the one approval below. Reviewing LinkedIn matches is
 offered after search is ready, never in the way of it.
 Never edit files in the Powerpacks checkout: a changed checkout cannot update.
 If something looks broken, tell the user what you saw and offer `$feedback`.
@@ -74,30 +77,41 @@ Never claim a cloud session changed the user's computer.
 
 ## Start and supervise
 
-Before running anything, ask what setup needs in one message:
+Before running anything, send the user this one message, then stop and wait for
+their reply. Ask it as a plain chat message and end your turn there: do not use a
+question pop-up or any asynchronous prompt (those close when you finish talking),
+and do not run any command until the user has answered.
 
-1. "Which Gmail accounts should I add? The first one owns the Gmail setup."
-2. "Building your search index uploads your contacts to your Powerset workspace. OK?"
-3. "Setup runs many local commands. For the best experience, turn on full access
-   so I don't stop to ask each time:" with the steps for their harness:
-   - Claude Code CLI: restart with `claude --dangerously-skip-permissions`
-     (a running session cannot switch into it), or allow the commands in `/permissions`.
-   - Claude Code desktop app: Settings > Claude Code > "Allow bypass permissions
-     mode", then pick Bypass permissions in the mode selector by the send button.
-   - Codex CLI: restart with `codex --yolo`, or pick a profile in `/permissions`.
-   - Codex app: the permissions control under the composer > Full access.
+> Before I start:
+> - **One approval:** to research and enrich your contacts I'll send their names,
+>   emails, phone numbers and a short summary of how you know them to Parallel and
+>   OpenAI. OpenAI calls are configured with no logging for privacy. Reply
+>   **approve** to go ahead; otherwise I'll only process your LinkedIn connections.
+> - **Gmail:** I'll add the Google account you sign in to Powerset with. To add
+>   others, list them in your reply.
+> - **Fewer prompts:** setup runs many local commands; turn on full access so I
+>   don't stop to ask each time (steps below). No reply needed for this one.
 
-The agent cannot read or change the mode; only the user can. If they restart, they
-paste the same sentence again. If a command is later denied, or the user has had to
-approve more than one prompt, stop and repeat these steps before continuing.
+Put the steps for their harness under the last line:
+- Claude Code CLI: restart with `claude --dangerously-skip-permissions` (a running
+  session cannot switch into it), or allow the commands in `/permissions`.
+- Claude Code desktop app: Settings > Claude Code > "Allow bypass permissions
+  mode", then pick Bypass permissions in the mode selector by the send button.
+- Codex CLI: restart with `codex --yolo`, or pick a profile in `/permissions`.
+- Codex app: the permissions control under the composer > Full access.
 
-Pass each address as `--gmail-email`, first address first, and `--approve-upload`
-on a yes. Everything after that is logins the user does back to back near the
-start (Powerset, LinkedIn, Google, each Gmail approval, Full Disk Access, WhatsApp
-QR); then setup runs on its own.
+The agent cannot read or change the permission mode; only the user can. If they
+restart, they paste the same sentence again. If a command is later denied, or the
+user has had to approve more than one prompt, repeat the full-access steps.
+
+From the one reply: on **approve**, run the command below; otherwise add
+`--source linkedin`. Pass every extra Gmail address they listed as `--gmail-email`
+(the Powerset login is added on its own). Everything after that is logins the user
+does back to back near the start (Powerset, LinkedIn, Google, each Gmail approval,
+Full Disk Access, WhatsApp QR); then setup runs on its own.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/bootstrap | bash -s -- --powerset --approve-upload --gmail-email first@example.com --gmail-email second@example.com
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/bootstrap | bash -s -- --powerset
 ```
 
 Bootstrap installs the runtime and starts the installed coordinator `bin/onboard`.
@@ -138,11 +152,11 @@ failure. Check `/healthz`, `/api/install`, and `.powerpacks/install/server.log`.
 ## Choices and waiting
 
 Default to LinkedIn, Gmail's past year, iMessage, and WhatsApp. Inform the user
-once and keep going. Apply already-given account/history choices. Gmail's identity
-is independent of Powerset's identity. If the coordinator still asks which Gmail
-accounts to add (none were passed and msgvault has none), ask the user in chat
-(offer the action's `suggested` address), append one `--gmail-email` per address
-to the saved `retry_command`, first address first, and run it. Every address gets
+once and keep going. Apply already-given account/history choices. Gmail defaults to
+the Powerset login's address. Only without a Powerset account does the coordinator
+ask which Gmail accounts to add: ask the user in chat (a plain message, then wait
+for the reply), append one `--gmail-email` per address to the saved
+`retry_command`, first address first, and run it. Every address gets
 its own browser approval; the coordinator allows them all beforehand. LinkedIn and the Google Console run in
 headless Chrome (or Brave); a window opens only when a login is needed, closes
 once the user is signed in, and the sessions are kept for later runs. LinkedIn
@@ -183,10 +197,7 @@ do not ask at their former lower thresholds. Estimates and cache checks still
 run. Use the saved continuation for an authorized larger estimate, rather than
 running a separate paid command. Modal checks its shared cache before spending.
 
-Upload consent is separate from spend: use `--approve-upload` when the user
-authorizes uploading contacts to the configured workspace. Reuse that authorization
-while repairing/resuming the same requested upload; do not ask again. Existing downloaded indexes are reused
-and verified locally without another upload.
+Existing downloaded indexes are reused and verified locally without another upload.
 
 Read command output, saved progress, and `.powerpacks/install/install.log`:
 
