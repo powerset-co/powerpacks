@@ -79,7 +79,7 @@ function installSteps(data?: InstallStatus) {
           ? "skipped"
           : "completed"
         : latest && DONE.has(latest)
-          ? "running"
+          ? undefined // tools and logins are done; its sync waits its turn
           : latest
     return [
       {

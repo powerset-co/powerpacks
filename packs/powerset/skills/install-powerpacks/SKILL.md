@@ -27,6 +27,8 @@ Sync WhatsApp → Discover → Enrich → Review when needed → Build Index →
 
 Own the result. Run commands yourself; involve the user only for browser logins,
 QR scans, OS permissions, required review, and upload authorization.
+Never edit files in the Powerpacks checkout: a changed checkout cannot update.
+If something looks broken, tell the user what you saw and offer `$feedback`.
 Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
 want as it runs."
 

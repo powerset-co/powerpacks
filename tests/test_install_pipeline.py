@@ -87,6 +87,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.calls = []
         self.paid_commands = []
         self.failing_command = ""
+        self.exiting_command = ""
         self.fail_at = 0
         self.failure_after = ""
         self.synthesis_cost = 0.1
@@ -103,6 +104,8 @@ class InstallPipelineTests(unittest.TestCase):
         payload = {"status": "completed"}
         if command == self.failing_command or len(self.calls) == self.fail_at:
             raise RuntimeError("[synthetic] source read failed")
+        if command == self.exiting_command:
+            raise SystemExit("PARALLEL_API_KEY not set")
         if command == "fan-in":
             self.write(self.people, self.csv)
         elif command == "check":
@@ -419,6 +422,13 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("source read failed", self.status.log_path.read_text())
         self.assertFalse(self.did("synthesize"))
+        self.assertFalse(self.indexed())
+
+    def test_a_step_that_exits_is_a_recorded_failure_with_its_reason(self):
+        self.exiting_command = "collect"
+        result = self.run_pipeline("synthesize", "index", upload=True)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("PARALLEL_API_KEY not set", result["message"])
         self.assertFalse(self.indexed())
 
     def test_each_native_stage_failure_resumes_without_repeating_completed_paid_work(self):
