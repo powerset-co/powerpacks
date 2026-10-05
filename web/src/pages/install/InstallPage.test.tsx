@@ -146,21 +146,32 @@ describe("installation progress", () => {
     }
   })
 
-  it("offers the matches left for review once search is ready", async () => {
+  it("offers the matches left for review with the review page's own count", async () => {
     const status: InstallStatus = {
       ...INSTALL,
       step: "ready",
       status: "completed",
       message: "Search index ready: 403 people searchable.",
-      action: { kind: "review", text: "3 LinkedIn matches need a quick look when you have time." },
     }
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    let pending = 3
+    const fetch = vi.fn((url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url.startsWith("/api/review/linkedin-card")
+              ? { card: null, finished: null, pending, queue: null }
+              : status,
+          ),
+        ),
+      ),
     )
-    mount()
+    vi.stubGlobal("fetch", fetch)
+    const { client } = mount()
     expect(await screen.findByText("3 LinkedIn matches need a quick look when you have time.")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Review contacts" })).toBeTruthy()
+    pending = 0
+    await act(() => client.invalidateQueries({ queryKey: ["linkedin-left"] }))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Review contacts" })).toBeNull())
   })
 
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {

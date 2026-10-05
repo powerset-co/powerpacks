@@ -65,8 +65,6 @@ class InstallController:
                     subprocess.run(["open", "-R", app], check=True)
                 response["app_path"] = app
             elif path == "/api/install/review":
-                if (InstallStatus(self.root).read().get("action") or {}).get("kind") != "review":
-                    raise ValueError("No review is needed right now")
                 subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
             else:
                 handler._json({"error": "Unknown setup action"}, HTTPStatus.NOT_FOUND)

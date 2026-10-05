@@ -30,7 +30,7 @@ from packs.ingestion.primitives.setup.automations import accounts
 from packs.ingestion.primitives.setup.automations.shell import CommandResult
 from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
-from packs.powerset.primitives.install.workflow import GMAIL_QUESTION, WHATSAPP_DOWNLOADING, SourceOnboarding
+from packs.powerset.primitives.install.workflow import GMAIL_QUESTION, SourceOnboarding
 
 
 def payload(**record):
@@ -631,7 +631,7 @@ class SourceOnboardingTests(unittest.TestCase):
 
     def test_whatsapp_qr_wait_is_written_before_auth_without_opening_browser(self):
         store = self.root / 'isolated-wacli'
-        def authenticate(actual_store, *, open_qr_page, on_connected):
+        def authenticate(actual_store, *, open_qr_page):
             self.assertEqual(actual_store, store)
             self.assertFalse(open_qr_page)
             self.assertEqual(InstallStatus(self.root).read()['action']['kind'], 'qr')
@@ -644,21 +644,9 @@ class SourceOnboardingTests(unittest.TestCase):
         discover.assert_not_called()
         self.assert_preserved()
 
-    def test_whatsapp_scan_replaces_the_qr_with_the_history_download(self):
-        def authenticate(store, *, open_qr_page, on_connected):
-            on_connected()
-            current = InstallStatus(self.root).read()
-            self.assertEqual((current['step'], current['status'], current['message']),
-                             ('whatsapp_login', 'running', WHATSAPP_DOWNLOADING))
-            self.assertIsNone(current['action'])
-            return {'status': 'blocked_user_action', 'message': 'test stop'}
-        with patch.object(auth, 'auth_report', side_effect=authenticate) as link:
-            SourceOnboarding(self.root, sources=('whatsapp',)).run()
-        link.assert_called_once()
-
     def test_already_linked_whatsapp_never_displays_qr_action(self):
         original_write = InstallStatus.write
-        def authenticate(store, *, open_qr_page, on_connected):
+        def authenticate(store, *, open_qr_page):
             current = InstallStatus(self.root).read()
             self.assertEqual(current['status'], 'running')
             self.assertEqual(current['message'], 'Checking WhatsApp')

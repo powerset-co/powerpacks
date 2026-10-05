@@ -6,8 +6,8 @@ primitives stop the flow. It never starts enrichment, provider calls, or uploads
 
 Changelog:
   2026-10-05: LinkedIn's login is its own step, and the plan lists every
-      login step before every sync step, the order a run takes them. Once the
-      WhatsApp scan lands the step says the history download is under way.
+      login step before every sync step, the order a run takes them. Linking
+      WhatsApp only pairs it; its sync step downloads the history.
   2026-10-05: Gmail defaults to the Powerset login's address when no address
       was given; it asks only when there is no Powerset account.
   2026-10-05: when the automated Google Cloud setup stops, the step says so in
@@ -84,8 +84,7 @@ _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATS
 _PERMISSION_POLL_SECONDS = 2
 GMAIL_SETUP_STOPPED = "Gmail setup stopped in Google Cloud. I'm looking into it."
 GMAIL_QUESTION = "Which Gmail accounts should I add? The first one owns the Gmail setup."
-WHATSAPP_DOWNLOADING = ("WhatsApp is linked. Downloading your message history; "
-                        "this takes 30 minutes to a few hours.")
+WHATSAPP_SYNCING = "Syncing WhatsApp. The first sync takes 30 minutes to a few hours."
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
 
@@ -281,9 +280,7 @@ class SourceOnboarding:
                          "details": {"store": str(self.wacli_store)}})
         while True:
             try:
-                # Linking also downloads the account's history; say so once the scan lands.
-                result = auth.auth_report(self.wacli_store, open_qr_page=False, on_connected=lambda: self._write(
-                    InstallStep.WHATSAPP_LOGIN, InstallState.RUNNING, WHATSAPP_DOWNLOADING))
+                result = auth.auth_report(self.wacli_store, open_qr_page=False)
                 break
             except PrimitiveBlocked as blocked:
                 if "command timed out after" not in blocked.payload.get("detail", ""):
@@ -306,7 +303,7 @@ class SourceOnboarding:
             self._write(sync_step, InstallState.COMPLETED, "Contacts already imported")
             self._write(import_step, InstallState.COMPLETED, "Contacts ready")
             return True
-        self._write(sync_step, InstallState.RUNNING, "Reading Messages" if imessage else "Syncing WhatsApp")
+        self._write(sync_step, InstallState.RUNNING, "Reading Messages" if imessage else WHATSAPP_SYNCING)
         result = MessagesDiscovery(include_imessage=imessage, include_whatsapp=not imessage,
                                    wacli_store=self.wacli_store, open_qr_page=False).run()
         if not self._result(sync_step, result.to_payload()):

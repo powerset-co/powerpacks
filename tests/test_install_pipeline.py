@@ -394,8 +394,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertTrue(self.indexed())
         self.assertNotIn("review", result["plan"])
-        self.assertEqual(result["action"]["kind"], "review")
-        self.assertIn("3 LinkedIn matches", result["action"]["text"])
+        self.assertIsNone(result["action"])  # the page counts them from the review queue
         self.assertFalse(any(call.args[0][0] == "open" for call in self.subprocess.call_args_list))
 
     def test_native_failure_is_logged_and_stops_before_paid_work(self):
@@ -534,13 +533,6 @@ class InstallPipelineTests(unittest.TestCase):
         for stage in ("check", "collect"):
             node = next(options["node"] for name, options in self.calls if name == stage)
             self.assertEqual(node.wacli_db, store / "wacli.db")
-
-    def test_the_review_offer_uses_the_installation_port(self):
-        self.review = True
-        result = ProcessingOnboarding(self.root, approved_spend=("index",),
-                                      port=8899).run()
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["action"]["url"], "http://127.0.0.1:8899/?stage=linkedin")
 
     def dispatch(self):
         self.write(self.people, self.csv)

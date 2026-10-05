@@ -1,13 +1,15 @@
 """Link and unlink the WhatsApp account.
 
 Flow: parse auth status -> QR authentication when needed -> report.
-A connected event restarts the bootstrap timeout; failure before connection
-requests a QR scan. Auth status and the QR run's result retain typed fields until
+Linking only pairs the device (`wacli auth --link-only`): it returns at the
+device's first login and reads no history, which WhatsApp holds for the next
+sync. Failure before linking requests a QR scan. Auth status and the QR run's result retain typed fields until
 report serialization; the pairing state is the typed `PairingStatus`.
 
 Changelog:
-  2026-10-05: `auth_report` takes `on_connected`, called once the QR scan
-    lands, so a caller can say the history download is under way.
+  2026-10-05: linking runs `wacli auth --link-only` and returns at the first
+    login instead of downloading the account's history; the first sync does
+    that. `auth_bootstrap_sync_completed` and the auth `idle_exit` are gone.
   2026-09-23 (typed rows): `run_auth_with_qr_page`/`run_auth` return the frozen
     `AuthRunResult` and `pairing_full_sync_status` returns `PairingStatus`, so
     `auth_report` reads typed fields instead of `.get(...)` on two dicts. Emitted
@@ -27,7 +29,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -48,8 +50,7 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import (  # noqa
 from packs.ingestion.primitives.discover.messages.wacli.util import linked_device_blocked  # noqa: E402
 
 DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
-# A newly paired account keeps the auth process alive while whatsmeow completes
-# its initial account bootstrap. That can take hours on a large archive.
+# How long one QR run waits for a scan.
 DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "10800"))
 
 
@@ -80,7 +81,6 @@ class AuthRunResult:
     qr_page: str
     qr_png: str
     connected_event: bool
-    auth_bootstrap_sync_completed: bool
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -89,12 +89,10 @@ class AuthRunResult:
             "qr_page": self.qr_page,
             "qr_png": self.qr_png,
             "connected_event": self.connected_event,
-            "auth_bootstrap_sync_completed": self.auth_bootstrap_sync_completed,
         }
 
 
-def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool,
-                          on_connected: Callable[[], None] | None = None) -> AuthRunResult:
+def run_auth_with_qr_page(store: Path, *, timeout: int, open_qr_page: bool) -> AuthRunResult:
     if not shutil.which("qrencode"):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
@@ -109,8 +107,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
         "--events",
         "auth",
         "--qr-format", "text",
-        "--follow=false",
-        "--idle-exit", idle_exit,
+        "--link-only",
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=pairing.wacli_device_env())
     output: list[str] = []
@@ -130,7 +127,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     stderr_thread.start()
 
     def handle_line(source: str, text: str) -> None:
-        nonlocal opened, connected, deadline
+        nonlocal opened, connected
         output.append(text)
         event = None
         if source == "stderr" and text.startswith("{"):
@@ -147,13 +144,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                 qr.update_qr_page(payload, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
                 opened = True
                 runtime.emit_status("Refreshed WhatsApp QR page.")
-            elif event_name == "connected":
-                if not connected:
-                    # Give the initial archive bootstrap its own complete
-                    # timeout window after the user finishes the QR step.
-                    deadline = time.time() + timeout
-                    if on_connected:
-                        on_connected()
+            elif event_name == "linked":
                 connected = True
             return
         stdout_payload = qr.wa_qr_payload(text) if source == "stdout" else None
@@ -204,38 +195,29 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                 "qr_png": str(DEFAULT_QR_PNG),
                 "detail": joined[-2000:],
             })
-        raise PrimitiveFailed(
-            "WhatsApp connected, but its initial history sync did not finish. "
-            "Rerun $import-messages to try again."
-        )
+        raise PrimitiveFailed("WhatsApp linked, but wacli exited with an error. Rerun $import-messages to try again.")
     return AuthRunResult(
         command=runtime.command_text(cmd),
         returncode=returncode,
         qr_page=str(DEFAULT_QR_HTML),
         qr_png=str(DEFAULT_QR_PNG),
         connected_event=connected,
-        auth_bootstrap_sync_completed=connected and returncode == 0,
     )
 
 
-def run_auth(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool = True,
-             on_connected: Callable[[], None] | None = None) -> AuthRunResult:
-    return run_auth_with_qr_page(store, timeout=timeout, idle_exit=idle_exit, open_qr_page=open_qr_page,
-                                 on_connected=on_connected)
+def run_auth(store: Path, *, timeout: int, open_qr_page: bool = True) -> AuthRunResult:
+    return run_auth_with_qr_page(store, timeout=timeout, open_qr_page=open_qr_page)
 
 
 def auth_report(
     store: Path,
     *,
-    idle_exit: str = DEFAULT_IDLE_EXIT,
     auth_timeout: int = DEFAULT_AUTH_TIMEOUT,
     install: bool = True,
     open_qr_page: bool = True,
-    on_connected: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Link the WhatsApp account (QR scan when needed) without exporting
-    anything; `status` is `linked` or `blocked_user_action`. Linking downloads
-    the account's history before it returns; `on_connected` runs once the scan lands."""
+    """Link the WhatsApp account (QR scan when needed) without syncing or
+    exporting anything; `status` is `linked` or `blocked_user_action`."""
     store.mkdir(parents=True, exist_ok=True)
     wacli_info = binary.ensure_wacli_installed(install=install)
     doctor = binary.wacli_json(store, ["doctor"], timeout=60)
@@ -250,9 +232,7 @@ def auth_report(
         auth_run = run_auth(
             store,
             timeout=auth_timeout,
-            idle_exit=idle_exit,
             open_qr_page=open_qr_page,
-            on_connected=on_connected,
         )
         auth_summary.update(auth_run.to_payload())
     status_after = auth_status(store)
@@ -267,7 +247,7 @@ def auth_report(
         "status": "linked" if linked else "blocked_user_action",
         "pairing": pairing_state.to_payload(),
         "message": (
-            "WhatsApp account is linked and its history is downloaded. No contacts were exported."
+            "WhatsApp account is linked. No WhatsApp sync or export was run."
             if linked
             else "WhatsApp needs a QR scan. Scan it, then rerun the auth command."
         ),

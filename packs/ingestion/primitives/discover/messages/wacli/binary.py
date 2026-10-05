@@ -52,7 +52,7 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import (  # noqa
 # for this tag — no Go toolchain on the user's machine — and keep it off the
 # upstream Homebrew tap so we control the version.
 WACLI_REPO = "powerset-co/wacli"
-WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.14.0-fullsync")
+WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.15.0-fullsync")
 # sha256 of every published release asset for the pinned version above, verified
 # after download and BEFORE the binary is made executable or run (see
 # `verify_wacli_download`). Computed from the public GitHub release assets; the
@@ -60,6 +60,12 @@ WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.14.0-fulls
 # env-overridden POWERPACKS_WACLI_VERSION has no entry here and installs
 # unverified — an explicit dev escape hatch, never the shipped default.
 WACLI_ASSET_SHA256: dict[str, dict[str, str]] = {
+    "v0.15.0-fullsync": {
+        "wacli-darwin-arm64": "6424a23ad70d82fd68fe0bf7d6c6a8d1a617ba517d5fc0438e6544dfa241c860",
+        "wacli-darwin-amd64": "9cfbd33ad9ba1bb18abef5905c4d676372eb9f2e6fba0b41e26492f575a65a2a",
+        "wacli-linux-arm64": "070d6795bb82d394fdab4ce1e610557f033cc43533eefbce1b6f4bcb3605ff59",
+        "wacli-linux-amd64": "f9b4c1cdcf0eae54ca20a40f5522cb346ea6d9f1c9c5d086fd524a8d13d3865f",
+    },
     "v0.14.0-fullsync": {
         "wacli-darwin-arm64": "3cc6e1b31248ef59a37522b52603a4d71bbe87018ec9170e3452d1d0c19d3815",
         "wacli-darwin-amd64": "61e0a9074c35e376739f8b292c69daeb189928d60c2dd117a5cf7ff20c3c25b0",
