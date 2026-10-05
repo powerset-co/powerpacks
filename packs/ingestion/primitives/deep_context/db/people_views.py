@@ -80,7 +80,11 @@ SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
               GROUP BY body
               ORDER BY min(d.person_id IS NOT NULL), min(d.artifact_key)
             )) ELSE '' END AS body,
-       COALESCE(json_extract(a.payload_json, '$.headline'),
+       COALESCE(NULLIF(json_extract(a.payload_json, '$.headline'), ''),
+         (SELECT json_extract(d.payload_json, '$.headline') FROM artifacts d
+          WHERE d.parent_id=p.parent_id AND d.kind='dossier' AND d.status='projected'
+            AND d.candidate_key IS NULL AND json_extract(d.payload_json, '$.headline')!=''
+          ORDER BY d.person_id IS NOT NULL, d.artifact_key LIMIT 1),
          (SELECT json_extract(i.row_json, '$.headline')
           FROM imported_people i JOIN people pe USING(person_id)
           WHERE pe.parent_id=p.parent_id AND json_extract(i.row_json, '$.headline')!=''

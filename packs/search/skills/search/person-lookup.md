@@ -27,9 +27,11 @@ are not the selected person's confirmed context.
 - **One person:** summarize `dossier_body`. An empty body means the person was
   found but has no saved parent or child dossier; present the available identity/profile
   information and offer to check whether saved context is available to build one.
-- **Several people:** give concrete choices, such as "Taylor, the designer at
-  North, or Taylor, the engineer at South?" Use returned emails/headlines, not
-  invented distinctions. Do not combine their facts. Once chosen, run
+- **Several people:** show a numbered list with each person's name and a one-line
+  summary from their returned `headline` (role, company, or relationship).
+  Add an identifying contact detail when needed. If no summary is saved, use
+  known identifiers and say the role/relationship is unknown. Ask which person
+  the user means. Do not combine their facts. Once chosen, run
   `bin/deep-context lookup --parent-id "<returned parent_id>" --json`.
 - **No match:** try useful name parts, known aliases, or supplied identifiers
   before asking for help. If a plausible match appears, show its identifying

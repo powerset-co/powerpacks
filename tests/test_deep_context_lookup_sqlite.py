@@ -177,6 +177,26 @@ class PersonLookupSqliteTest(unittest.TestCase):
         self.assertIn("A@Example.com", out)
         self.assertIn("https://www.linkedin.com/in/jordan-b", out)
 
+    def test_ambiguous_choices_include_saved_child_summary_without_full_bodies(self) -> None:
+        self.add_person("b", "Jordan Bravo", dossier=False)
+        self.db.project_rows((ArtifactRow(
+            "dossier-person:person-b", "dossier", "parent-b", "/missing/child.md",
+            "child-b", "projected", person_id="person-b", payload_json=json.dumps({
+                "body": "PRIVATE FULL CHILD CONTEXT", "headline": "Product designer at North",
+            }),
+        ),))
+        code, out, err = self.cli("--name", "Jordan Bravo", "--json")
+        self.assertEqual((code, err), (0, ""))
+        payload = json.loads(out)
+        self.assertEqual(payload["status"], "ambiguous")
+        self.assertEqual([m["headline"] for m in payload["matches"]],
+                         ["Engineer a", "Product designer at North"])
+        self.assertTrue(all(not m["dossier_body"] for m in payload["matches"]))
+        code, out, err = self.cli("--name", "Jordan Bravo")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("Product designer at North", out)
+        self.assertNotIn("PRIVATE FULL CHILD CONTEXT", out)
+
     def test_parent_id_selects_only_one_canonical_dossier(self) -> None:
         self.add_person("b", "Jordan Bravo")
         result = PersonLookup(db=self.db.db_path, parent_id="parent-b").run()
