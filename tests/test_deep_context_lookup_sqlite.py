@@ -12,7 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactRow, ParentRow, PersonIdentifierRow, PersonIdentifiersProjection, PersonRow,
+    ArtifactRow, LinkRow, ParentRow, PersonIdentifierRow, PersonIdentifiersProjection, PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.lookup_person import PersonLookup, main
@@ -76,7 +76,7 @@ class PersonLookupSqliteTest(unittest.TestCase):
                 match = result.matches[0]
                 self.assertEqual(match.parent_id, "parent-a")
                 self.assertEqual(match.name, "Jordan Bravo")
-                self.assertEqual(match.dossier_body, "# Jordan Bravo\nPARENT a\n")
+                self.assertEqual(match.dossier_body, "# Jordan Bravo\nPARENT a\n\n\nCHILD BODY")
                 self.assertEqual(set(match.emails), {"A@Example.com", "alias@example.com"})
                 self.assertEqual(match.linkedin_urls, ("https://www.linkedin.com/in/jordan-a",))
 
@@ -86,6 +86,56 @@ class PersonLookupSqliteTest(unittest.TestCase):
                 result = PersonLookup(db=self.db.db_path, phone=phone).run()
                 self.assertEqual(result.status, "found")
                 self.assertEqual([m.parent_id for m in result.matches], ["parent-a"])
+
+    def test_lookup_reads_parent_and_all_children_from_sqlite(self) -> None:
+        self.db.project_rows((
+            ArtifactRow("dossier-parent:parent-a", "dossier", "parent-a", "/missing/parent.md",
+                        "stub", "projected", payload_json=json.dumps({
+                            "body": "Single identity. Full context in [[child-a]]."})),
+            ArtifactRow("dossier-person:person-alias", "dossier", "parent-a", "/missing/alias.md",
+                        "alias", "projected", person_id="person-alias",
+                        payload_json=json.dumps({"body": "ALIAS RELATIONSHIP CONTEXT"})),
+        ))
+        result = PersonLookup(db=self.db.db_path, name="J. Bravo").run()
+        body = result.matches[0].dossier_body
+        for text in ("PARENT a", "Full context in [[child-a]]", "CHILD BODY",
+                     "ALIAS RELATIONSHIP CONTEXT"):
+            self.assertIn(text, body)
+        self.assertLess(body.index("PARENT a"), body.index("CHILD BODY"))
+
+    def test_child_dossier_is_read_without_a_composed_parent_dossier(self) -> None:
+        self.add_person("b", "Casey Example", dossier=False)
+        self.db.project_rows((ArtifactRow(
+            "dossier-person:person-b", "dossier", "parent-b", "/missing/child.md",
+            "child-b", "projected", person_id="person-b",
+            payload_json=json.dumps({"body": "# Casey Example\nSAVED CHILD CONTEXT"}),
+        ),))
+        code, out, err = self.cli("--name", "Casey Example", "--json")
+        self.assertEqual((code, err), (0, ""))
+        match, = json.loads(out)["matches"]
+        self.assertEqual(match["parent_id"], "parent-b")
+        self.assertIn("SAVED CHILD CONTEXT", match["dossier_body"])
+
+    def test_lookup_deduplicates_bodies_and_excludes_candidates_and_other_parents(self) -> None:
+        self.add_person("b", "Casey Example")
+        self.db.project_rows((
+            ArtifactRow("dossier-copy:person-alias", "dossier", "parent-a", "/missing/copy.md",
+                        "copy", "projected", person_id="person-alias",
+                        payload_json=json.dumps({"body": "CHILD BODY"})),
+            ArtifactRow("dossier-old:person-a", "dossier", "parent-a", "/missing/old.md",
+                        "old", "failed", person_id="person-a",
+                        payload_json=json.dumps({"body": "FAILED CONTEXT"})),
+            LinkRow("candidate-a", "parent-a", "different-jordan", "pub",
+                    source="deep-context-reconcile"),
+            ArtifactRow("dossier-candidate:candidate-a", "dossier", "parent-a", "/missing/candidate.md",
+                        "candidate", "projected", candidate_key="candidate-a",
+                        payload_json=json.dumps({"body": "UNRESOLVED CANDIDATE CONTEXT"})),
+        ))
+        result = PersonLookup(db=self.db.db_path, parent_id="parent-a").run()
+        body = result.matches[0].dossier_body
+        self.assertEqual(body.count("CHILD BODY"), 1)
+        for text in ("PARENT b", "FAILED CONTEXT", "UNRESOLVED CANDIDATE CONTEXT"):
+            self.assertNotIn(text, body)
 
     def test_exact_name_precedes_partial_name(self) -> None:
         self.add_person("b", "Jordan Bravo Senior")
@@ -109,7 +159,7 @@ class PersonLookupSqliteTest(unittest.TestCase):
         code, out, err = self.cli("--name", "Casey Example")
         self.assertEqual(code, 0)
         self.assertIn("Casey Example", out)
-        self.assertIn("No parent dossier", out)
+        self.assertIn("No saved dossier", out)
         self.assertEqual(err, "")
 
     def test_same_name_parents_need_selection_without_mixed_bodies(self) -> None:
@@ -143,7 +193,7 @@ class PersonLookupSqliteTest(unittest.TestCase):
         self.assertEqual(match["parent_id"], "parent-a")
         self.assertEqual(match["name"], "Jordan Bravo")
         self.assertEqual(match["dossier_path"], str(self.root / "a.md"))
-        self.assertEqual(match["dossier_body"], "# Jordan Bravo\nPARENT a\n")
+        self.assertEqual(match["dossier_body"], "# Jordan Bravo\nPARENT a\n\n\nCHILD BODY")
         self.assertEqual(set(match["emails"]), {"A@Example.com", "alias@example.com"})
         self.assertEqual(match["phones"], ["+14155550100"])
         self.assertEqual(match["headline"], "Engineer a")
@@ -157,7 +207,7 @@ class PersonLookupSqliteTest(unittest.TestCase):
         self.assertTrue(all(not match["dossier_body"] for match in payload["matches"]))
         code, out, _ = self.cli("--parent-id", "parent-a", "--json")
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out)["matches"][0]["dossier_body"], "# Jordan Bravo\nPARENT a\n")
+        self.assertEqual(json.loads(out)["matches"][0]["dossier_body"], "# Jordan Bravo\nPARENT a\n\n\nCHILD BODY")
 
     def test_no_match_and_no_query_are_explicit(self) -> None:
         for args, status, expected in ((["--name", "Unknown"], "no_match", 1),

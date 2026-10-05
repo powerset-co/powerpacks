@@ -28,7 +28,7 @@ def person_lookup(
     email: str | None = None,
     parent_id: str | None = None,
 ) -> list[ParentLookupRow]:
-    """Resolve names/identifiers to parents; return a dossier only for one parent."""
+    """Resolve to parents; read all saved parent/child dossiers after selection."""
     name_key = normalize_name(name or "")
     tokens = sorted(set(name_key.split()))
     token_sql = " AND ".join(f"instr(name, :token{i})>0" for i in range(len(tokens))) or "0"
@@ -72,7 +72,14 @@ WITH names AS (
 )
 SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
        CASE WHEN (SELECT count(*) FROM matched)=1
-            THEN json_extract(a.payload_json, '$.body') ELSE '' END AS body,
+            THEN (SELECT group_concat(body, char(10)||char(10)) FROM (
+              SELECT json_extract(d.payload_json, '$.body') AS body
+              FROM artifacts d
+              WHERE d.parent_id=p.parent_id AND d.kind='dossier' AND d.status='projected'
+                AND d.candidate_key IS NULL AND json_extract(d.payload_json, '$.body')!=''
+              GROUP BY body
+              ORDER BY min(d.person_id IS NOT NULL), min(d.artifact_key)
+            )) ELSE '' END AS body,
        COALESCE(json_extract(a.payload_json, '$.headline'),
          (SELECT json_extract(i.row_json, '$.headline')
           FROM imported_people i JOIN people pe USING(person_id)

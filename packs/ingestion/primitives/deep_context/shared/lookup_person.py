@@ -1,4 +1,4 @@
-"""Resolve a local contact to its canonical parent dossier."""
+"""Resolve a local contact and read its saved parent and child dossiers."""
 
 from __future__ import annotations
 
@@ -50,13 +50,13 @@ class PersonLookup:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Look up a person's canonical parent dossier.")
+    p = argparse.ArgumentParser(description="Look up a person's saved parent and child dossiers.")
     p.add_argument("--name")
     p.add_argument("--phone")
     p.add_argument("--email")
     p.add_argument("--parent-id", help="Choose a parent after an ambiguous lookup")
     p.add_argument("--db", type=Path, default=CANONICAL_DB)
-    p.add_argument("--json", action="store_true", help="Emit parent metadata and, for one match, its dossier body")
+    p.add_argument("--json", action="store_true", help="Emit parent metadata and, for one match, all saved dossier bodies")
     return p
 
 
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         match = result.matches[0]
         print(match.dossier_body or (
-            f"{match.name or match.slug or match.parent_id} [{match.parent_id}]: No parent dossier is available."
+            f"{match.name or match.slug or match.parent_id} [{match.parent_id}]: No saved dossier is available."
         ))
     return 0 if result.matches else (2 if result.status == "no_query" else 1)
 
