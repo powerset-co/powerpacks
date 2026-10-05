@@ -37,6 +37,7 @@ REPO = Path(__file__).resolve().parents[4]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from packs.indexing.lib.identity import stable_person_id  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
@@ -79,10 +80,12 @@ def row_count(con: duckdb.DuckDBPyConnection, table: str) -> int:
 def people_missing_positions(con: duckdb.DuckDBPyConnection, people_csv: Path) -> tuple[int, int]:
     """(LinkedIn people with work history in the CSV, of those with no position rows).
 
-    A LinkedIn person's merged id is the index's id; a contact-only id is
-    re-derived by the index, so those people are not checked here."""
-    with_history = [row["id"] for row in CsvIO.read_dict_rows(people_csv)
-                    if row["public_identifier"] and json.loads(row["work_experiences"] or "[]")]
+    The index files a LinkedIn person under its own id for the slug, which a
+    contact matched to a LinkedIn does not share with the CSV, so the id is
+    derived here the way the index derives it. Contact-only people are not checked."""
+    with_history = sorted({stable_person_id(public_identifier=row["public_identifier"])
+                           for row in CsvIO.read_dict_rows(people_csv)
+                           if row["public_identifier"] and json.loads(row["work_experiences"] or "[]")})
     if not with_history:
         return 0, 0
     indexed = {r[0] for r in con.execute(
