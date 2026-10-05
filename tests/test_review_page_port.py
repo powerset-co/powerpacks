@@ -41,12 +41,16 @@ class OtherServerTests(unittest.TestCase):
         self.fail("test server did not start")
 
     def test_an_older_powerpacks_page_on_the_port_is_stopped(self):
-        process, port = self._serve("packs.ingestion.primitives.deep_context.review.cli")
+        # Started as a module (bootstrap) or by file path (an old skill command).
+        for marker in ("packs.ingestion.primitives.deep_context.review.cli",
+                       "packs/ingestion/primitives/deep_context/review/reconcile_review_web.py"):
+            with self.subTest(marker=marker):
+                process, port = self._serve(marker)
 
-        self.assertIsNone(cli._owned_listener("127.0.0.1", port, Path("/tmp/other-checkout")))
-        self.assertIsNotNone(process.wait(timeout=5))
-        with socket.socket() as probe:
-            self.assertNotEqual(probe.connect_ex(("127.0.0.1", port)), 0)
+                self.assertIsNone(cli._owned_listener("127.0.0.1", port, Path("/tmp/other-checkout")))
+                self.assertIsNotNone(process.wait(timeout=5))
+                with socket.socket() as probe:
+                    self.assertNotEqual(probe.connect_ex(("127.0.0.1", port)), 0)
 
     def test_another_app_on_the_port_is_left_running(self):
         process, port = self._serve()

@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import site
 import socket
@@ -50,8 +51,8 @@ from packs.powerset.primitives.install.index_progress import read_index_progress
 
 _PRIMITIVE = "reconcile_review_web"
 _START_TIMEOUT_SECONDS = 10
-# Every Powerpacks page server runs a module under this package.
-_PAGE_MODULES = "packs.ingestion.primitives.deep_context.review"
+# Every Powerpacks page server's command line, by module or by file path (as bin/deep-context matches).
+_PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review")
 
 
 # The actions the agent runs itself; every other action waits on the user.
@@ -166,7 +167,7 @@ def _stop_other_page(host: str, port: int) -> None:
                                capture_output=True, text=True).stdout.split()
     for pid in listeners:
         command = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True).stdout
-        if _PAGE_MODULES not in command:
+        if not _PAGE_COMMAND.search(command):
             raise SystemExit(f"Port {port} belongs to another server. Use --port with a free port.")
         os.kill(int(pid), signal.SIGTERM)
     deadline = time.monotonic() + _START_TIMEOUT_SECONDS
