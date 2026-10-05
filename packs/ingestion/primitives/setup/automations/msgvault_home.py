@@ -11,6 +11,7 @@ init-db), OAuth-app name validation, and the deterministic
 re-guards the file's shape.
 
 Changelog:
+  2026-10-05: removed `local_msg_vault_projects`; setup never adopts other visible projects.
   2026-09-23 (typed rows): the `oauth_apps` walk is now the named boundary
     `oauth_apps` / `oauth_app_record`, so `load_setup_state` and
     `save_oauth_app_state` read typed values; `local_msg_vault_projects` returns
@@ -211,27 +212,6 @@ def save_oauth_app_state(home: Path, app_name: str, state: dict[str, Any]) -> No
     apps[app_name] = existing
     current["oauth_apps"] = apps
     path.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def local_msg_vault_projects() -> list[str]:
-    """List ACTIVE `local-msg-vault-*` gcloud project ids, newest first."""
-    if not shutil.which("gcloud"):
-        return []
-    result = run_command(
-        ["gcloud", "projects", "list", "--filter=projectId:local-msg-vault-*", "--format=json"],
-        timeout=60,
-    )
-    if not result.ok:
-        return []
-    try:
-        projects = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(projects, list):
-        return []
-    active = [project for project in projects if project.get("lifecycleState") == "ACTIVE"]
-    ordered = sorted(active, key=lambda project: project.get("createTime", ""), reverse=True)
-    return [str(project.get("projectId") or "") for project in ordered]
 
 
 def validate_oauth_app(app_name: str | None) -> str:

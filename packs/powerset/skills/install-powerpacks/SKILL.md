@@ -19,6 +19,7 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: A stopped Gmail Google Cloud setup is the agent's to fix, not the user's.
 - 2026-10-05: The LinkedIn review no longer holds setup: search is built first, then
   the agent offers the review; Finish shows `$search` starters for what is enabled.
 - 2026-10-05: Finish reports a LinkedIn read that stalled and the data export setup requested instead.
@@ -154,6 +155,12 @@ options pass through bootstrap. Saved source/account/history/store choices survi
 resume. Use `--refresh` only for a requested resync. Never choose an arbitrary Gmail
 account from several or switch to a shared Powerset network merely because it works.
 Unprovisioned or unindexed hosted search does not block local source setup.
+
+When the Gmail step says "Gmail setup stopped in Google Cloud", read its
+`action.details` (the page Google showed, `stuck_at`, the project) and fix it
+here; never hand the user Google Cloud steps or open the console for them in a
+browser tab. If it needs a project the user owns, rerun the saved
+`retry_command`; setup creates their own.
 
 Read the manifest's `action` when waiting. The coordinator owns the sequence;
 the agent handles an action that needs setup repair or approval.

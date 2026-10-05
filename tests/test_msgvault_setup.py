@@ -145,6 +145,16 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(choice["source"], "deterministic_default")
             self.assertEqual(msgvault_home.load_setup_state(home).project_id, project_id)
 
+    def test_choose_project_never_adopts_a_teammates_project(self):
+        # In a shared Google org the account can see other people's local-msg-vault projects.
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.object(gcloud_project, "gcloud_value", return_value="powerset-search"), \
+            mock.patch.object(gcloud_project, "run_command", side_effect=AssertionError("must not list projects")):
+            home = Path(tmp)
+            project_id, choice = gcloud_project.choose_project_id(home, "", "me@example.com", "me@example.com")
+            self.assertEqual(project_id, msgvault_home.default_project_id("me@example.com"))
+            self.assertEqual(choice["source"], "deterministic_default")
+
     def test_gcloud_reauth_error_detection(self):
         self.assertTrue(gcloud_project.is_gcloud_reauth_error("There was a problem refreshing your current auth tokens"))
         self.assertTrue(gcloud_project.is_gcloud_reauth_error("Reauthentication failed. cannot prompt during non-interactive execution"))

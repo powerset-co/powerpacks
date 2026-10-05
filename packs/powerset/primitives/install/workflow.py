@@ -5,6 +5,9 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-05: when the automated Google Cloud setup stops, the step says so in
+      one line and keeps Google's details for the agent instead of handing the
+      user its manual steps (open the console, download the client secret).
   2026-10-03: Gmail's OAuth app is created in process (headless Chrome after
       one login) instead of stopping for the agent; LinkedIn prepares its own
       tools; the unreachable `skip` source, the Gmail-account question, the
@@ -67,6 +70,7 @@ _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
+GMAIL_SETUP_STOPPED = "Gmail setup stopped in Google Cloud. I'm looking into it."
 GMAIL_QUESTION = "Which Gmail accounts should I add? The first one owns the Gmail setup."
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
@@ -172,6 +176,11 @@ class SourceOnboarding:
                         "Setting up Gmail access. Sign in to Google in your browser if it asks.")
             created = BrowserSetup.from_args(msgvault_parser().parse_args(
                 ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0], "--no-install-mcp"])).run()
+            if created["status"] == "needs_user_action":
+                # The automation stopped in Google Cloud; the agent reads why, the user is not handed its steps.
+                self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, GMAIL_SETUP_STOPPED,
+                            {"kind": "gmail", "text": GMAIL_SETUP_STOPPED, "details": created}, pid=0)
+                return False
             if not self._result(InstallStep.GMAIL_LOGIN, created, {"kind": "gmail"}):
                 return False
             local = accounts.status_payload(home)
