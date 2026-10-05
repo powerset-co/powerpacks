@@ -18,9 +18,11 @@ bin/deep-context lookup --name "Jordan Bravo" --json
 ```
 
 It resolves child names and identifiers to distinct parents. For one selected
-parent, `dossier_body` includes the current parent and all saved child dossier bodies from
+parent, `dossier_body` includes its saved parent and child dossier bodies from
 `.powerpacks/deep-context/deep-context.sqlite`, with identical bodies deduplicated.
 Read that returned text; a parent Markdown export may only point to a child.
+The current parent text comes first; saved context survives parent merges even
+when its artifact key still contains an earlier parent ID.
 No Markdown export or search index is required. Unresolved candidate dossiers
 are not the selected person's confirmed context.
 

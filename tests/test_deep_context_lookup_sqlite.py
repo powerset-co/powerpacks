@@ -123,7 +123,10 @@ class PersonLookupSqliteTest(unittest.TestCase):
                         ))
                         matches = person_lookup(db.db_path, name="Casey Delta")
                         self.assertEqual(len(matches), 1)
-                        self.assertEqual(matches[0].dossier_body, expected)
+                        self.assertTrue(matches[0].dossier_body.startswith(expected))
+                        self.assertIn("composed", matches[0].dossier_body)
+                        self.assertIn("parent", matches[0].dossier_body)
+                        self.assertNotIn("unrelated", matches[0].dossier_body)
                         self.assertEqual(person_detail(db, "parent-a").dossier_body, expected)
 
     def test_child_name_without_dossier_returns_parent_identity_once(self) -> None:
@@ -411,7 +414,7 @@ class PersonLookupSqliteTest(unittest.TestCase):
         for text in ("PARENT a", "CHILD BODY",
                      "ALIAS RELATIONSHIP CONTEXT"):
             self.assertIn(text, body)
-        self.assertNotIn("Full context in [[child-a]]", body)
+        self.assertIn("Full context in [[child-a]]", body)
         self.assertLess(body.index("PARENT a"), body.index("CHILD BODY"))
 
     def test_child_dossier_is_read_without_a_composed_parent_dossier(self) -> None:
@@ -426,6 +429,25 @@ class PersonLookupSqliteTest(unittest.TestCase):
         match, = json.loads(out)["matches"]
         self.assertEqual(match["parent_id"], "parent-b")
         self.assertIn("SAVED CHILD CONTEXT", match["dossier_body"])
+
+    def test_parent_merge_does_not_hide_saved_dossiers_with_previous_parent_keys(self) -> None:
+        self.add_person("b", "Casey Example", dossier=False)
+        self.db.project_rows((
+            ArtifactRow("dossier:previous-parent", "dossier", "parent-b", "/missing/previous.md",
+                        "previous", "projected", payload_json=json.dumps({
+                            "body": "SAVED CONTEXT FROM BEFORE MERGE",
+                            "headline": "Designer at North",
+                        })),
+            ArtifactRow("dossier-parent:previous-parent", "dossier", "parent-b", "/missing/reference.md",
+                        "reference", "projected", payload_json=json.dumps({
+                            "body": "Full context in [[child-b]]."})),
+            ArtifactRow("dossier-other:parent-b", "dossier", "parent-b", "/missing/other.md",
+                        "other", "projected", payload_json=json.dumps({"body": "UNRELATED ARTIFACT"})),
+        ))
+        result = PersonLookup(db=self.db.db_path, name="Casey Example").run()
+        self.assertIn("SAVED CONTEXT FROM BEFORE MERGE", result.matches[0].dossier_body)
+        self.assertNotIn("UNRELATED ARTIFACT", result.matches[0].dossier_body)
+        self.assertEqual(result.matches[0].headline, "Designer at North")
 
     def test_lookup_deduplicates_bodies_and_excludes_candidates_and_other_parents(self) -> None:
         self.add_person("b", "Casey Example")
