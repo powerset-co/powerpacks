@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.15.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.15.0...powerpacks-v3.15.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **gmail:** never adopt a teammate's Google project; keep its steps from the user ([#702](https://github.com/powerset-co/powerpacks/issues/702)) ([1e07f0d](https://github.com/powerset-co/powerpacks/commit/1e07f0d2e60c50b51b717deb52d0c426130e0376))
+
 ## [3.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.2...powerpacks-v3.15.0) (2026-10-05)
 
 
