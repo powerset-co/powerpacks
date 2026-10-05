@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.16.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.0...powerpacks-v3.16.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* integrate recovery with current lookup and review contracts ([ac12323](https://github.com/powerset-co/powerpacks/commit/ac123239d4965082809d58acda42e18536ca45fe))
+* preserve Deep Context recovery and final Sol decisions ([3ac2f74](https://github.com/powerset-co/powerpacks/commit/3ac2f74da14390af5f0f73c835af95047ee79a12))
+* run versioned healing before Deep Context processing ([0d1e887](https://github.com/powerset-co/powerpacks/commit/0d1e8874e6fbd645aa2c072aa72d54cabe5d102b))
+
 ## [3.16.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.15.1...powerpacks-v3.16.0) (2026-10-05)
 
 
