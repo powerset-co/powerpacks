@@ -99,6 +99,7 @@
 .install-page .install-action {
   margin: 12px 0 24px;
   font-size: 13px;
+  text-align: center;
 }
 .install-page .install-choice fieldset {
   border: 0;
@@ -171,9 +172,6 @@
   border-radius: 10px;
   margin: 0 auto;
 }
-.install-page .install-permission {
-  text-align: center;
-}
 .install-page .install-permission code {
   display: block;
   overflow-wrap: anywhere;
@@ -186,9 +184,37 @@
   .install-page .install-steps li {
     transition: none;
   }
+  .install-page .install-index-progress {
+    animation: none;
+  }
 }
 
+/* The index bar matches the orange orb: thin, and pulsing while it works. */
 .install-page .install-index-progress {
+  appearance: none;
+  display: block;
   width: 100%;
-  accent-color: var(--primary);
+  height: 3px;
+  margin: 4px 0 20px;
+  border: 0;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--primary-soft);
+  animation: install-progress-pulse 1.6s ease-in-out infinite;
+}
+.install-page .install-index-progress::-webkit-progress-bar {
+  background: var(--primary-soft);
+}
+.install-page .install-index-progress::-webkit-progress-value {
+  background: var(--primary);
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+.install-page .install-index-progress::-moz-progress-bar {
+  background: var(--primary);
+}
+@keyframes install-progress-pulse {
+  50% {
+    opacity: 0.55;
+  }
 }
