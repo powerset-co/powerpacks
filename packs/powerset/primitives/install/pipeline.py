@@ -13,6 +13,9 @@ Changelog:
   2026-10-04: a step that stops with SystemExit is recorded as failed with its
       message instead of ending the process; research that cannot run (no
       Parallel key) is skipped with a warning and the index still builds.
+  2026-10-05: the index no longer asks to upload contacts; the user approves
+      sending data to Parallel and OpenAI once, up front (or setup reads only
+      LinkedIn).
   2026-10-05: setup no longer waits on the LinkedIn review: matches the judges
       could not settle are left for the user, the index builds, and the ready
       step offers the review (count and link) for when they have time.
@@ -98,7 +101,7 @@ def _capped(dispatched: dict) -> bool:
 
 class ProcessingOnboarding:
     def __init__(self, root: Path, *, approved_spend: tuple[str, ...] = (),
-                 approve_upload: bool = False, port: int = 8765) -> None:
+                 port: int = 8765) -> None:
         self.root = root.resolve()
         self.status = InstallStatus(self.root)
         previous = self.status.read()
@@ -107,7 +110,6 @@ class ProcessingOnboarding:
         self.plan.extend(step.value for step in PROCESSING_STEPS
                          if step is not InstallStep.REVIEW or step.value in previous["plan"])
         self.approved = {SpendStep(step) for step in approved_spend}
-        self.approve_upload = approve_upload
         self.port = port
         self.saved, _ = source_parser(add_help=False).parse_known_args(shlex.split(self.retry)[1:])
         self.account_email = previous.get("account_email") or ""
@@ -163,25 +165,14 @@ class ProcessingOnboarding:
             return {"status": "completed"} if command == self.download else payload
         return self._run(shlex.join(command), rehost, message)
 
-    def _approval(self, step: SpendStep, estimate: dict, *, upload: bool = False) -> None:
-        if upload and self.approve_upload:
-            return
-        if not upload and step in self.approved:
+    def _approval(self, step: SpendStep, estimate: dict) -> None:
+        if step in self.approved:
             self.approved.remove(step)
             return
-        continuation = shlex.split(self.retry)
-        if upload:
-            continuation.append("--approve-upload")
-        else:
-            continuation.extend(["--approve-spend", step.value])
-            if self.approve_upload:
-                continuation.append("--approve-upload")
-        self._write(InstallState.WAITING,
-                    "Approve uploading your contacts and building your search index." if upload
-                    else "Approve the estimated processing cost to continue.",
-                    action={"kind": "approval", "step": step.value,
-                            "command": self.retry, "estimate": estimate,
-                            "upload": upload, "continue_command": shlex.join(continuation)})
+        continuation = [*shlex.split(self.retry), "--approve-spend", step.value]
+        self._write(InstallState.WAITING, "Approve the estimated processing cost to continue.",
+                    action={"kind": "approval", "step": step.value, "command": self.retry,
+                            "estimate": estimate, "continue_command": shlex.join(continuation)})
         raise _Stopped
 
     def _collected(self) -> bool:
@@ -328,8 +319,6 @@ class ProcessingOnboarding:
                                  input=self.people, output_dir=self.index, dry_run=True)),
                                  "Estimating search indexing")
             estimate["note"] = "Local cache estimate; Modal checks its shared cache before spending."
-            # Upload consent first: the spend continuation keeps it, so the two never bounce.
-            self._approval(SpendStep.INDEX, estimate, upload=True)
             if estimate["estimated_cost_usd"] >= _AUTO_SPEND_USD:
                 self._approval(SpendStep.INDEX, estimate)
             # Modal rejects only costs above its cap; keep automatic spend below $500.
