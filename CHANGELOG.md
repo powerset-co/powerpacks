@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.16.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.2...powerpacks-v3.16.3) (2026-10-05)
+
+
+### Bug Fixes
+
+* **whatsapp:** download history in the background from the scan ([#711](https://github.com/powerset-co/powerpacks/issues/711)) ([46976df](https://github.com/powerset-co/powerpacks/commit/46976dfc82aedcff248a1d28e3cc219b3a4eab86))
+
 ## [3.16.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.1...powerpacks-v3.16.2) (2026-10-05)
 
 
