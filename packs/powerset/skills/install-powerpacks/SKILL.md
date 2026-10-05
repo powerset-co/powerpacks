@@ -19,6 +19,7 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: Finish reports a LinkedIn read that stopped short of LinkedIn's count.
 - 2026-10-05: Finish lists what setup deferred (research, profile lookups) and the fix.
 - 2026-10-05: The bootstrap comes from the `stable` branch, which every release
   moves to its tag, so the launcher always matches the release it installs.
@@ -199,6 +200,9 @@ Report installation, account access, hosted search, imported sources, and verifi
 local search separately. Setup does not stop for research, LinkedIn matching or
 profile lookups: when they fail it builds the index without them and the ready
 message lists what is left (a missing key, no provider credit). Say that the index
-is ready, then list each one with what fixes it; the next setup run picks them up. A network's people count does not prove search readiness.
+is ready, then list each one with what fixes it; the next setup run picks them up.
+When the LinkedIn step says it read fewer connections than LinkedIn shows ("Read X
+of N"), tell the user both numbers and that the next setup run reads LinkedIn
+again. A network's people count does not prove search readiness.
 Keep internal IDs and provider details in troubleshooting. If the user also asked
 for a search, run the installed search skill once its requested backend is ready.

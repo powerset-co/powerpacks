@@ -12,7 +12,9 @@
  * random 0.5-1.5 s and stop after --max-loads (300 per run: ~3,000 people in
  * ~5 minutes).
  *
- * The list has ended when nothing new loads for END_AFTER_MS. The signed-in
+ * Scrolling stops when nothing new loads for END_AFTER_MS; that is the end of
+ * the list or LinkedIn no longer sending cards, so it also returns the count
+ * LinkedIn shows at the top ("total") for the caller to compare. The signed-in
  * user's own profile slug comes from /in/me, which LinkedIn redirects to it.
  *
  * With --login-only it stops once signed in and prints {"status": "ok"}, so the
@@ -20,12 +22,13 @@
  *
  * Prints one JSON object on stdout:
  *   {"status": "ok", "connections": [{slug, name, headline, connected_on}],
- *    "loads": n, "stopped": "known" | "end" | "limit", "owner_slug": str}
+ *    "total": n, "loads": n, "stopped": "known" | "end" | "limit", "owner_slug": str}
  *   {"status": "needs_user_action", "message": ...}   login not finished in time
  *   {"status": "error", "message": ...}
  *
  * Created: 2026-10-03 (scroll and card parsing adapted from
  * stickerdaniel/linkedin-mcp-server#170).
+ * Changelog: 2026-10-05: returns LinkedIn's "N connections" count.
  */
 
 const fs = require("fs");
@@ -74,6 +77,15 @@ async function signedIn(page) {
   await page.goto(CONNECTIONS_URL, { waitUntil: "domcontentloaded" });
   return page.locator(CARD_LINK).first().waitFor({ state: "visible", timeout: 15000 })
     .then(() => true, () => false);
+}
+
+// LinkedIn's own count at the top of the list ("1,234 connections"), read once.
+async function shownTotal(page) {
+  const text = await page.waitForFunction(() => [...document.querySelectorAll("main *")]
+    .map((element) => (element.childElementCount ? "" : element.textContent.trim()))
+    .find((text) => /^[\d,.]+ connections?$/i.test(text)), null, { timeout: 15000 })
+    .then((handle) => handle.jsonValue(), () => "");
+  return text ? Number(text.replace(/\D/g, "")) : null;
 }
 
 async function waitForConnections(page, deadline) {
@@ -197,7 +209,12 @@ async function main() {
       result({ status: "ok" });
       return;
     }
-    log("reading your connections");
+    const total = await shownTotal(page);
+    if (total === null) {
+      result({ status: "error", message: "LinkedIn did not show how many connections you have." });
+      return;
+    }
+    log(`reading your connections (LinkedIn shows ${total})`);
     const scrolled = await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads));
     const connections = await readCards(page);
     log(`read ${connections.length} connections in ${scrolled.loads} loads (${scrolled.stopped})`);
@@ -205,7 +222,7 @@ async function main() {
     await page.goto(OWNER_URL, { waitUntil: "domcontentloaded" });
     await page.waitForURL((url) => !/\/in\/me\/?$/.test(new URL(url).pathname), { timeout: 15000 }).catch(() => {});
     const owner = page.url().match(/\/in\/([^/?#]+)/);
-    result({ status: "ok", connections, ...scrolled, owner_slug: owner && owner[1] !== "me" ? owner[1] : "" });
+    result({ status: "ok", connections, total, ...scrolled, owner_slug: owner && owner[1] !== "me" ? owner[1] : "" });
   } finally {
     await context.close().catch(() => {});
   }
