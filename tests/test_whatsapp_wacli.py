@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import importlib.util
 import io
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -275,7 +277,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                      mock.patch.object(binary, "wacli_json", return_value=doctor), \
                      mock.patch.object(auth, "auth_status", side_effect=[before, after]), \
                      mock.patch.object(auth, "run_auth", return_value=auth.AuthRunResult(
-                         command="wacli auth", returncode=0, qr_page="page", qr_png="image",
+                         command="wacli auth", qr_page="page", qr_png="image",
                          connected_event=False,
                      )) as run_auth, \
                      mock.patch.object(pairing, "write_pairing_marker") as write_marker, \
@@ -326,109 +328,77 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
     def test_auth_requires_qrencode_for_browser_qr(self) -> None:
         with mock.patch.object(auth.shutil, "which", return_value=None), \
                 self.assertRaises(runtime.PrimitiveBlocked) as ctx:
-            auth.run_auth(Path("/tmp/wacli-store"), timeout=1)
+            auth.run_auth(Path("/tmp/wacli-store"), timeout=1, idle_exit="1s")
 
         self.assertEqual(ctx.exception.payload["install_command"], "brew install qrencode")
         self.assertIn("qrencode is required", ctx.exception.payload["message"])
 
-    def test_auth_links_the_device_without_syncing_its_history(self) -> None:
+    def run_fake_auth(self, lines: list[str], *, exits: int | None = None, **options):
+        """Run `run_auth` against a wacli that writes `lines` to its log, then keeps
+        running (the history download) or exits with `exits`."""
         class FakeProc:
-            def __init__(self) -> None:
-                self.stdout = io.StringIO("2@qr-payload\n")
-                self.stderr = io.StringIO('{"event":"linked","ts":1}\n')
-                self.returncode = None
-                self.signals: list[int] = []
-                self.poll_calls = 0
+            def __init__(self, cmd, *, stdout, **kwargs) -> None:
+                self.cmd, self.kwargs = cmd, kwargs
+                stdout.write("".join(f"{line}\n" for line in lines))
+                stdout.flush()
+                self.returncode = exits
+                self.killed = False
 
             def poll(self):
-                self.poll_calls += 1
-                if self.poll_calls > 1:
-                    self.returncode = 0
                 return self.returncode
 
-            def send_signal(self, sig: int) -> None:
-                self.signals.append(sig)
-                self.returncode = 0
-
             def kill(self) -> None:
+                self.killed = True
                 self.returncode = -9
 
             def wait(self) -> int:
-                if self.returncode is None:
-                    self.returncode = 0
                 return self.returncode
 
-        fake = FakeProc()
-        with mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
-                mock.patch.object(auth.subprocess, "Popen", return_value=fake), \
+        procs: list[FakeProc] = []
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(auth, "DEFAULT_AUTH_LOG", Path(td) / "wacli-auth.log"), \
+                mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
+                mock.patch.object(auth.subprocess, "Popen",
+                                  side_effect=lambda cmd, **kw: procs.append(FakeProc(cmd, **kw)) or procs[-1]), \
                 mock.patch.object(qr, "update_qr_page") as update_qr_page:
-            result = auth.run_auth(Path("/tmp/wacli-store"), timeout=5)
+            result = auth.run_auth(Path("/tmp/wacli-store"), timeout=1, idle_exit="30s", **options)
+        return result, procs[0], update_qr_page
 
-        self.assertEqual(fake.signals, [])
+    def test_auth_returns_at_the_scan_and_leaves_the_history_download_running(self) -> None:
+        result, proc, update_qr_page = self.run_fake_auth(["2@qr-payload", '{"event":"connected","ts":1}'])
+
         self.assertTrue(result.connected_event)
-        self.assertIn("--link-only", result.command)
-        self.assertNotIn("--idle-exit", result.command)
+        self.assertFalse(proc.killed)
+        self.assertIsNone(proc.poll())  # still downloading
+        self.assertTrue(proc.kwargs["start_new_session"])
+        self.assertIn("--idle-exit", result.command)
         update_qr_page.assert_called()
 
     def test_auth_can_render_qr_without_opening_browser(self) -> None:
-        class FakeProc:
-            def __init__(self) -> None:
-                self.stdout = io.StringIO("2@qr-payload\n")
-                self.stderr = io.StringIO('{"event":"linked","ts":1}\n')
-                self.returncode = None
-                self.poll_calls = 0
-
-            def poll(self):
-                self.poll_calls += 1
-                if self.poll_calls > 1:
-                    self.returncode = 0
-                return self.returncode
-
-            def send_signal(self, sig: int) -> None:
-                self.returncode = 0
-
-            def kill(self) -> None:
-                self.returncode = -9
-
-            def wait(self) -> int:
-                if self.returncode is None:
-                    self.returncode = 0
-                return self.returncode
-
-        fake = FakeProc()
-        with mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
-                mock.patch.object(auth.subprocess, "Popen", return_value=fake), \
-                mock.patch.object(qr, "update_qr_page") as update_qr_page:
-            auth.run_auth(Path("/tmp/wacli-store"), timeout=5, open_qr_page=False)
+        _, _, update_qr_page = self.run_fake_auth(["2@qr-payload", '{"event":"connected","ts":1}'],
+                                                   open_qr_page=False)
 
         self.assertFalse(update_qr_page.call_args.kwargs["open_page"])
 
-    def test_auth_fails_when_wacli_exits_nonzero_after_linking(self) -> None:
-        class FakeProc:
-            def __init__(self) -> None:
-                self.stdout = io.StringIO("")
-                self.stderr = io.StringIO('{"event":"linked","ts":1}\n')
-                self.returncode = None
-                self.poll_calls = 0
+    def test_auth_that_ends_before_a_scan_asks_for_the_qr_again(self) -> None:
+        with self.assertRaises(runtime.PrimitiveBlocked) as ctx:
+            self.run_fake_auth(["2@qr-payload"], exits=1)
 
-            def poll(self):
-                self.poll_calls += 1
-                if self.poll_calls > 1:
-                    self.returncode = 1
-                return self.returncode
+        self.assertIn("WhatsApp needs a QR scan", ctx.exception.payload["message"])
 
-            def kill(self) -> None:
-                self.returncode = -9
-
-            def wait(self) -> int:
-                return self.returncode if self.returncode is not None else 1
-
-        with mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
-                mock.patch.object(auth.subprocess, "Popen", return_value=FakeProc()), \
-                self.assertRaises(runtime.PrimitiveFailed) as ctx:
-            auth.run_auth(Path("/tmp/wacli-store"), timeout=5)
-
-        self.assertIn("WhatsApp linked, but wacli exited with an error", str(ctx.exception))
+    def test_waiting_for_history_holds_until_wacli_releases_the_store(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            holder = (store / "LOCK").open("a")
+            fcntl.flock(holder, fcntl.LOCK_EX)
+            done = threading.Event()
+            waiter = threading.Thread(target=lambda: (auth.wait_for_history(store), done.set()))
+            waiter.start()
+            self.assertFalse(done.wait(0.3))
+            fcntl.flock(holder, fcntl.LOCK_UN)
+            holder.close()
+            self.assertTrue(done.wait(2))
+            waiter.join()
 
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2231,7 +2201,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     auth,
                     "run_auth",
                     return_value=auth.AuthRunResult(
-                        command="wacli auth", returncode=0, qr_page="", qr_png="",
+                        command="wacli auth", qr_page="", qr_png="",
                         connected_event=False,
                     ),
                 ) as run_auth_mock, mock.patch.object(

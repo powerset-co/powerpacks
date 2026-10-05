@@ -700,8 +700,11 @@ class WhatsAppExtractor:
                 auth_summary.update(auth.run_auth(
                     store,
                     timeout=auth_timeout,
+                    idle_exit=idle_exit,
                     open_qr_page=not no_open_qr_page,
                 ).to_payload())
+                runtime.emit_status("WhatsApp is linked. Downloading your message history; this can take 30 minutes to a few hours.")
+                auth.wait_for_history(store)
                 status = auth.auth_status(store)
                 linked_jid = status.linked_jid or doctor.linked_jid
                 if not status.authenticated:

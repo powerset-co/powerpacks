@@ -58,6 +58,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.test_users = patch.object(TestUsers, 'run', autospec=True, return_value={'status': 'ok'}).start()
         patch.object(msgvault_home, 'load_setup_state', return_value=SimpleNamespace(test_users=())).start()
         patch.object(auth, 'auth_status', return_value=SimpleNamespace(authenticated=False)).start()
+        self.history = patch.object(auth, 'wait_for_history').start()
         patch.object(IMessageExtractor, 'check', return_value={'status': 'blocked_user_action'}).start()
         patch.object(accounts, 'status_payload', return_value={
             'config': {'oauth_configured': True}, 'database': {'exists': True}}).start()
@@ -643,6 +644,16 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertIn('--wacli-store', result['retry_command'])
         discover.assert_not_called()
         self.assert_preserved()
+
+    def test_whatsapp_sync_waits_for_the_history_download_before_reading_the_store(self):
+        order = []
+        self.history.side_effect = lambda store: order.append('history')
+        with patch.object(auth, 'auth_report', return_value={'status': 'linked'}), \
+             patch.object(MessagesDiscovery, 'run', side_effect=lambda: order.append('discover') or SimpleNamespace(
+                 to_payload=lambda: payload(status='failed', error='test stop'))):
+            result = SourceOnboarding(self.root, sources=('whatsapp',)).run()
+        self.assertEqual(order, ['history', 'discover'])
+        self.assertEqual(result['steps']['whatsapp_sync']['status'], 'failed')
 
     def test_already_linked_whatsapp_never_displays_qr_action(self):
         original_write = InstallStatus.write
