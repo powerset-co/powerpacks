@@ -563,6 +563,32 @@ class PersonLookupSqliteTest(unittest.TestCase):
         match = person_lookup(self.db.db_path, name="Casey Example")[0]
         self.assertEqual(match.relationship_to_owner, "")
 
+    def test_child_relationships_are_distinct_sorted_and_ignore_candidate_parent_facts(self) -> None:
+        self.db.project_rows((
+            LinkRow("candidate-a", "parent-a", "unconfirmed", "pub", source="deep-context-reconcile"),
+            ArtifactRow("facts:candidate-a", "facts", "parent-a", "candidate.jsonl", "candidate",
+                        "projected", candidate_key="candidate-a"),
+            FactRow("candidate-a", "parent-a", "facts:candidate-a",
+                    facts_json='{"relationship_to_owner":"Unconfirmed relationship."}'),
+            *(row for person, relationship in (
+                ("person-a", "Worked together on Example launch."),
+                ("person-alias", "Friends since university."),
+            ) for row in (
+                ArtifactRow(f"facts:{person}", "facts", "parent-a", f"{person}.jsonl", person,
+                            "projected", person_id=person),
+                FactRow(person, "parent-a", f"facts:{person}", person_id=person,
+                        facts_json=json.dumps({"relationship_to_owner": relationship})),
+            )),
+            ArtifactRow("facts:duplicate-a", "facts", "parent-a", "duplicate.jsonl", "duplicate",
+                        "projected", person_id="person-a"),
+            FactRow("duplicate-a", "parent-a", "facts:duplicate-a", person_id="person-a",
+                    facts_json='{"relationship_to_owner":"Friends since university."}'),
+        ))
+        expected = "Friends since university.\nWorked together on Example launch."
+        for _ in range(2):
+            self.assertEqual(person_lookup(self.db.db_path, name="Jordan Bravo")[0].relationship_to_owner,
+                             expected)
+
     def test_parent_id_selects_only_one_canonical_dossier(self) -> None:
         self.add_person("b", "Jordan Bravo")
         result = PersonLookup(db=self.db.db_path, parent_id="parent-b").run()

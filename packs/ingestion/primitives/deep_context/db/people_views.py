@@ -29,7 +29,7 @@ def person_lookup(
     email: str | None = None,
     parent_id: str | None = None,
 ) -> list[ParentLookupRow]:
-    """Resolve to parents; read all saved parent/child dossiers after selection."""
+    """Resolve parents with saved relationships; read full dossiers after selection."""
     name_key = normalize_name(name or "")
     tokens = sorted(set(name_key.split()))
     token_sql = " AND ".join(f"instr(name, :token{i})>0" for i in range(len(tokens))) or "0"
@@ -72,7 +72,8 @@ WITH names AS (
   SELECT parent_id, min(match_order) AS match_order FROM matched_raw GROUP BY parent_id
 ), saved_facts AS (
   SELECT f.parent_id, f.person_id, json_extract(f.facts_json, '$.relationship_to_owner') AS relationship
-  FROM facts f JOIN artifacts fa ON fa.artifact_key=f.artifact_key
+  FROM facts f JOIN matched m ON m.parent_id=f.parent_id
+  JOIN artifacts fa ON fa.artifact_key=f.artifact_key
   WHERE fa.kind='facts' AND fa.status='projected' AND fa.candidate_key IS NULL
 )
 SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
