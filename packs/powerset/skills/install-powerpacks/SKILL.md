@@ -19,6 +19,8 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: The LinkedIn review no longer holds setup: search is built first, then
+  the agent offers the review; Finish shows `$search` starters for what is enabled.
 - 2026-10-05: Finish reports a LinkedIn read that stalled and the data export setup requested instead.
 - 2026-10-05: Finish lists what setup deferred (research, profile lookups) and the fix.
 - 2026-10-05: The bootstrap comes from the `stable` branch, which every release
@@ -36,10 +38,12 @@ then start the setup below in the same turn. Do not stop after saving it.
 The pasted installation instruction starts this whole workflow:
 
 Install → Connect Powerset → Sync LinkedIn → Sync Gmail → Sync iMessage →
-Sync WhatsApp → Discover → Enrich → Review when needed → Build Index → Verify.
+Sync WhatsApp → Discover → Enrich → Build Index → Verify → Review (optional,
+whenever the user has time).
 
 Own the result. Run commands yourself; involve the user only for browser logins,
-QR scans, OS permissions, required review, and upload authorization.
+QR scans, OS permissions, and upload authorization. Reviewing LinkedIn matches is
+offered after search is ready, never in the way of it.
 Never edit files in the Powerpacks checkout: a changed checkout cannot update.
 If something looks broken, tell the user what you saw and offer `$feedback`.
 Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
@@ -196,14 +200,28 @@ result; do not blindly dispatch another paid job.
 
 ## Finish
 
-Report installation, account access, hosted search, imported sources, and verified
-local search separately. Setup does not stop for research, LinkedIn matching or
-profile lookups: when they fail it builds the index without them and the ready
-message lists what is left (a missing key, no provider credit). Say that the index
-is ready, then list each one with what fixes it; the next setup run picks them up.
-When the LinkedIn step says LinkedIn stopped sending connections, tell the user
-how many were read of how many, that it stopped to keep their account safe, and
-that setup asked LinkedIn for their data export (it can take a day) and the next
-setup run imports it. Never ask the user to download or upload the export. A network's people count does not prove search readiness.
-Keep internal IDs and provider details in troubleshooting. If the user also asked
-for a search, run the installed search skill once its requested backend is ready.
+The user does their part once, at the start; everything else runs on its own. When
+the ready step completes, say it in this order, in plain words:
+
+1. **Search is ready.** Then show only what this setup turned on:
+   - Local network (local search validated): `$search find people who … in my network`
+   - Powerset network (hosted search connected: the credentials step completed, not
+     the "Hosted search isn't enabled" warning): `$search find people who would be a
+     good fit for <job post URL> in my Powerset network`
+2. **What is left to fix**, if the ready message lists any (research skipped for a
+   missing key or no provider credit, a LinkedIn read that stalled): one line each with
+   what fixes it, and that the next setup run picks it up. When LinkedIn stopped
+   sending connections, say how many were read of how many, that it stopped to keep
+   their account safe, and that setup asked LinkedIn for their data export (it can
+   take a day); the next setup run imports it. Never ask the user to download or
+   upload the export.
+3. **Optional review.** When the ready step has a `review` action, say: "If you have
+   time, <its text> Want me to open them?" Only on a yes, open the action's URL beside
+   chat (the host's browser pane, else the default browser). When they are done, say
+   you are rebuilding search with their decisions and run the saved `retry_command`.
+   They can come back to it later by saying "review my pending contacts"
+   (`bin/deep-context review linkedin`).
+
+A network's people count does not prove search readiness; only index validation
+does. Keep internal IDs and provider details in troubleshooting. If the user also
+asked for a search, run the installed search skill once its backend is ready.

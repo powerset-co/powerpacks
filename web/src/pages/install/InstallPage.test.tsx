@@ -155,6 +155,23 @@ describe("installation progress", () => {
     expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toContain("Syncing GmailNext")
   })
 
+  it("offers the matches left for review once search is ready", async () => {
+    const status: InstallStatus = {
+      ...INSTALL,
+      step: "ready",
+      status: "completed",
+      message: "Search index ready: 403 people searchable.",
+      action: { kind: "review", text: "3 LinkedIn matches need a quick look when you have time." },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    mount()
+    expect(await screen.findByText("3 LinkedIn matches need a quick look when you have time.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Review contacts" })).toBeTruthy()
+  })
+
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
     let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(
