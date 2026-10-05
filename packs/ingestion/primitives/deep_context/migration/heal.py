@@ -2,7 +2,7 @@
 
 Reads operator feedback before mutation. Preserves existing human decisions and
 original contact histories; applies feedback before imported LinkedIn matching.
-Reruns require another unused backup path and reuse the existing paid artifacts.
+Runs once at data migration version 4; later invocations are read-only no-ops.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import shutil
 import sqlite3
 
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
-from packs.ingestion.primitives.common.legacy import restore_contact_facts
+from packs.ingestion.primitives.common.legacy import restore_contact_facts, scrub_deep_context
 from packs.ingestion.primitives.common.manifests import write_stage_manifest
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.merge_candidates.linkedin_name_matches import apply_linkedin_name_matches
@@ -21,6 +21,9 @@ from packs.ingestion.primitives.deep_context.migration.human_decisions import Ca
 from packs.ingestion.primitives.deep_context.shared.common import emit
 from packs.ingestion.primitives.deep_context.synthesis.normalization import normalize_parent_cache
 from packs.ingestion.primitives.pipeline.contract import StageManifest
+
+
+HEAL_MIGRATION_VERSION = 4
 
 
 class HealManifest(StageManifest):
@@ -72,12 +75,22 @@ class Heal:
         return snapshot
 
     def run(self) -> HealManifest:
+        if not self.db_path.is_file():
+            raise StoreError("existing canonical database is missing")
+        with sqlite3.connect(f"{self.db_path.as_uri()}?mode=ro", uri=True) as original:
+            version = original.execute("SELECT value FROM meta WHERE key='data_migration_version'").fetchone()
+        if version and int(version[0]) >= HEAL_MIGRATION_VERSION:
+            return HealManifest(
+                status="skipped", state_root=str(self.state), backup_root=str(self.backup),
+                operator_id=self.operator_id, feedback_snapshot=str(self.feedback_snapshot),
+                feedback_csv=str(self.feedback_csv), feedback_rows=0,
+                applied=0, held=0, unmatched=0, decisions=(),
+                contact_facts_restored=0, parents_merged=0, updated_at=now_iso(),
+            )
         if self.state.is_relative_to(self.backup) or self.backup.is_relative_to(self.state):
             raise StoreError("state and backup must be disjoint")
         if self.backup.exists():
-            raise StoreError("backup path already exists; choose an unused destination, including on reruns")
-        if not self.db_path.is_file():
-            raise StoreError("existing canonical database is missing")
+            raise StoreError("backup path already exists; choose an unused destination for the pending migration")
         for directory in (self.deep_context, self.facts, self.raw, self.manifest.parent,
                           self.facts / "seed", self.facts / "parents", self.raw / "parents"):
             if directory.is_symlink():
@@ -89,13 +102,17 @@ class Heal:
         feedback = read_feedback(self.operator_id, feedback_json=self.feedback_json)
         snapshot = self._backup()
         db = Db(self.db_path)
+        scrub_deep_context(db)
+        restored = restore_contact_facts(db, self.facts)
         write_json(self.feedback_snapshot, list(feedback.raw))
         write_feedback_csv(self.feedback_csv, feedback)
-        restored = restore_contact_facts(db, self.facts)
         decisions = apply_feedback(db, feedback, snapshot)
         merged = apply_linkedin_name_matches(db)
-        # Always normalize: a prior interrupted invocation may have committed joins.
         restored += normalize_parent_cache(db, raw_dir=self.raw, facts_dir=self.facts)
+        with db.transaction() as conn:
+            conn.execute("INSERT INTO meta(key,value) VALUES ('data_migration_version',?) "
+                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (str(HEAL_MIGRATION_VERSION),))
         result = HealManifest(
             status="completed", state_root=str(self.state), backup_root=str(self.backup),
             operator_id=feedback.operator_id, feedback_snapshot=str(self.feedback_snapshot),
@@ -113,7 +130,7 @@ class Heal:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Heal existing local facts and scoped operator feedback without paid calls")
     parser.add_argument("--state-root", required=True, type=Path, help="Existing .powerpacks directory")
-    parser.add_argument("--backup-root", required=True, type=Path, help="Unused destination for the complete state backup; use a new path on reruns")
+    parser.add_argument("--backup-root", required=True, type=Path, help="Unused destination for a pending migration backup; completed migrations skip backup")
     parser.add_argument("--operator-id", required=True)
     parser.add_argument("--feedback-json", type=Path, help="Saved operator-scoped GET /v2/feedback response row list; otherwise fetched read-only")
     args = parser.parse_args(argv)

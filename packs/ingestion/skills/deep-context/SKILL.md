@@ -183,13 +183,13 @@ uv run --project . python packs/ingestion/primitives/imports/status.py status
 `deep-context.sqlite.bkup-schema-<UTC timestamp>` beside the store; otherwise
 it only reads. Combine current source imports, then project their people into
 SQLite; `ensure-parents` creates the store on a fresh install.
-Before changing an existing SQLite installation, check
-`deep-context/heal/manifest.json`. If no completed recovery is recorded, follow
+For every existing SQLite installation, run
 [Heal an existing installation](recovery.md#heal-an-existing-installation)
-once, before fan-in, collection or synthesis. An interrupted recovery is retried
-with another unused backup path. A fresh installation without a canonical SQLite
-store skips this step. A completed receipt skips this preparation on later full
-runs; an explicit `heal` request downloads current feedback again.
+before fan-in, collection or synthesis. `heal` checks SQLite's existing
+`meta.data_migration_version`: completed migrations are a read-only no-op;
+pending repairs run in order and record completion only after success. Do not
+use `deep-context/heal/manifest.json` to skip this check; it is a report only.
+A fresh installation without a canonical SQLite store skips this command.
 
 Imports do not merge people or write identity decisions:
 

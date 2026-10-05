@@ -11,7 +11,8 @@ the old family membership.
 Use this path to keep existing source contacts and reusable paid work. It is not
 a fresh rebuild or a historical identity split.
 
-1. Stop the local review server with `bin/deep-context stop`.
+1. For a pending migration, stop the local review server with
+   `bin/deep-context stop`. A completed version needs no server restart.
 2. Identify the authenticated account's operator UUID. Never infer it from an
    imported connection's historical file path. For a copied store, use the known
    owner's UUID and an authorized feedback snapshot.
@@ -25,17 +26,28 @@ bin/deep-context heal \
 ```
 
 For offline replay, add `--feedback-json /absolute/operator-feedback.json`.
-The command reads and validates feedback before mutation, backs up the state and
-canonical SQLite, restores attributable contact facts, applies reviewed feedback,
-then matches imported LinkedIn connections and refreshes derived parent facts.
-Original facts and human decisions retain their authority. The backup destination
-must be unused and outside the state directory. An interrupted run can be retried
-with another unused backup path; completed contact work is reused.
+The command first reads SQLite's existing `meta.data_migration_version`. If the
+heal migration is already applied, it returns `skipped` without fetching
+feedback, backing up, or changing the store; the same command is safe to repeat.
 
-Inspect `deep-context/heal/manifest.json`: applied feedback, held/unmatched
-choices, restored facts and name matches are separate counts. A completed
-preparation is not proof that every identity is correct. It does not split or
-repair mixed-person histories; inspect those separately below.
+When pending, it validates feedback, backs up the state and canonical SQLite,
+runs the existing membership, merge-ownership and Harmonic-profile repairs,
+restores attributable contact facts, applies reviewed feedback, matches imported
+LinkedIn connections and refreshes derived parent facts. It records migration
+version 4 only after all of that succeeds. Original facts and human decisions
+retain their authority. The backup destination must be unused and outside the
+state directory for a pending migration. After interruption, retry with another
+unused backup path; already committed work is reused.
+
+New healing fixes extend the same ordered migrations with the next version;
+never edit an applied migration and expect it to run again. Version 3's historical
+name-based split remains explicit, not part of automatic healing. A no-op does
+not download later feedback; this migration applies the snapshot read when it runs.
+
+`deep-context/heal/manifest.json` reports the applied migration's feedback,
+held/unmatched choices, restored facts and name matches. SQLite determines
+whether work is pending, even if that report is missing. Completion is not proof
+that every identity is correct: mixed-person histories still require inspection.
 
 Resume the normal skill at fan-in, then `ensure-parents` and `check`. Continue
 collection and the synthesis preview (only pending contact evidence), compose,
