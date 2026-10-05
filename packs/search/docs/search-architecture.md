@@ -219,8 +219,8 @@ Query-time search and index construction are separate systems:
 - `$search powerset` queries an existing Powerset set through TurboPuffer and
   Postgres.
 - `$search local` queries
-  `.powerpacks/search-index/local-search.duckdb`. The standard `$setup` path
-  builds that database from LinkedIn `Connections.csv` in Modal and downloads
+  `.powerpacks/search-index/local-search.duckdb`. Setup (the install skill)
+  builds that database from LinkedIn `Connections.csv` and the imported sources in Modal and downloads
   it to the local machine. See the canonical
   [LinkedIn and Modal indexing pipeline](../../indexing/docs/linkedin-modal-pipeline.md).
 

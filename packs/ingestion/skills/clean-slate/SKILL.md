@@ -9,6 +9,7 @@ Changelog:
 - 2026-07-19: New skill wrapping bin/clean-slate (built 2026-07-19 as the
   pipeclean reset; previously only routed inside $deep-context).
 - 2026-09-25: `reconcile/verdicts.*` labelled legacy migration input.
+- 2026-10-04: the LinkedIn re-walk runs through the install skill ($setup is retired).
 -->
 
 # clean-slate
@@ -58,7 +59,7 @@ From the canonical Powerpacks repo (`$POWERPACKS_REPO_ROOT`, else
    order and that each stage cache-hits on stable keys:
 
    ```text
-   $setup            LinkedIn import + fan-in (no RapidAPI re-spend; caches preserved)
+   install skill     LinkedIn sync + import + fan-in (no RapidAPI re-spend; caches preserved)
    $import-gmail     msgvault preserved -> delta sync, free
    $import-messages  wacli store preserved -> fast incremental pull
    $deep-context     facts/cluster/judge/research all cache-hit; review from the top

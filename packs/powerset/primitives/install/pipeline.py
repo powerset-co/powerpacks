@@ -3,7 +3,7 @@
 Native manifests and SQLite own completed work. Routine processing follows
 the onboarding automatic budget; the installation manifest displays the next action.
 A LinkedIn connections list newer than its import is imported on Modal first,
-the same ungated step `$setup` runs.
+an ungated step.
 
 Changelog:
   2026-10-03: import the scraped LinkedIn connections before fan-in; build the

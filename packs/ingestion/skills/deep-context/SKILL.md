@@ -5,8 +5,8 @@ description: Process imported contacts and build dossiers. Use for $deep-context
 
 # deep-context
 
-This is the one processing skill after `$setup`, `$import-gmail`, or
-`$import-messages`. The former `$deep-setup` surface is retired; its candidate
+This is the one processing skill after setup (the install skill), `$import-gmail`,
+or `$import-messages`. The former `$deep-setup` surface is retired; its candidate
 resolution, synthetic-profile, realization, and validation behavior lives here.
 
 The durable flow is:

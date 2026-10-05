@@ -34,8 +34,8 @@ Changelog:
 - 2026-09-25: SQLite is the state record (the review manifest is gone); small
   iMessage groups run under standing authorization; the app runs enrichment.
 
-`$deep-context` is the single processing workflow after `$setup`,
-`$import-gmail`, or `$import-messages`. It turns local conversation history into
+`$deep-context` is the single processing workflow after setup (the install
+skill), `$import-gmail`, or `$import-messages`. It turns local conversation history into
 per-person dossiers, resolves duplicate identities, decides which imported
 contacts belong in the network, researches the approved people, verifies their
 LinkedIns, and rebuilds the canonical network and search index.

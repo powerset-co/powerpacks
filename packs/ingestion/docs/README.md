@@ -28,8 +28,8 @@ and, for gmail/messages, `.../candidates.csv` (the research pool). Shared
 fan-in through `index_contacts_pipeline.py fan-in` merges the people files;
 `$deep-context` consumes the candidate pools, persists approved real identities
 from its review artifacts into `directory.csv` before fan-in, and owns the single Modal
-index rebuild. `$setup` (LinkedIn first run) is the one import that still
-builds an index so search works out of the box.
+index rebuild. First-run setup (the install skill) runs these imports and then
+`$deep-context` processing and the index build in one pass.
 
 ## Historical and specialist references
 

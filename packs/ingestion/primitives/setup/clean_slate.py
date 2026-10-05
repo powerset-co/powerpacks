@@ -249,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         "preserve_total_bytes": sum(item.size_bytes for item in kept),
         "sqlite_derived_reset": derived_reset,
         "sqlite_snapshot": sqlite_snapshot,
-        "next": ["$setup (LinkedIn import + fan-in)", "$import-gmail",
+        "next": ["install-powerpacks (LinkedIn import + fan-in)", "$import-gmail",
                  "$import-messages", "$deep-context"],
     }
     print(json.dumps(result, indent=2))

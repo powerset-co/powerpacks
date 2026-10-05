@@ -15,7 +15,7 @@ only when you need that level of detail.
 | Post-import processing and relationship context | [Deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md) | The single file-driven workflow for dossiers, duplicate resolution, uncertain-people review, revision-bound enrichment, LinkedIn verify/replace/Skip decisions, realization, and ad-hoc dossier retrieval. |
 | Running deep search | [Deep-mode runbook](../packs/search/skills/search/deep-mode.md) | Exact operator commands, artifacts, approval boundary, and resume rules. |
 | Pond prompt routing | [Pond prompt routing](pond-prompt-routing.md) | Why deep search selects one semantic role-family prompt and freezes it in the recruiter plan. |
-| Running setup | [`$setup` skill](../packs/ingestion/skills/setup/SKILL.md) | Exact LinkedIn-only setup checklist. |
+| Running setup | [Install skill](../packs/powerset/skills/install-powerpacks/SKILL.md) | The one setup path, from the pasted URL through the search index. |
 | All skills | [Root skill index](../README.md#skills) | GitHub-native list of supported skill entry points. |
 | Powerpacks health and repair | [Doctor skill](../packs/powerset/skills/powerpacks-doctor/SKILL.md) | Diagnose an unclear setup failure and repair within the requested workflow. |
 | Developing Powerpacks | [Development guide](development.md) | Engineering, tests, PRs, and releases; read when changing product code. |

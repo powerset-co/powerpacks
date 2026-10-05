@@ -10,7 +10,7 @@ random pause between them. A run stops once KNOWN_OVERLAP already-known
 connections have loaded. `connections.json` beside the CSV records whether the
 whole list has been read and the signed-in user's own profile URL; until the
 list is read, each run goes LOADS_PER_RUN further down than the last. A CSV with
-no record is a LinkedIn export (or an earlier `$setup` copy of one): complete
+no record is a LinkedIn export (or an earlier setup's copy of one): complete
 as of its date, so only newer people are read. The CSV is rewritten only when
 there are new people, so the Modal import reruns only then.
 

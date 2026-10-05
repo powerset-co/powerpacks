@@ -29,7 +29,7 @@ def frontmatter(skill: Path) -> dict[str, str]:
 
 class SkillSpecTests(unittest.TestCase):
     def test_every_skill_meets_the_agent_skills_spec(self) -> None:
-        self.assertEqual(len(skill_dirs()), 23)
+        self.assertEqual(len(skill_dirs()), 22)
         for skill in skill_dirs():
             with self.subTest(skill=skill.name):
                 fields = frontmatter(skill)

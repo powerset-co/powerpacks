@@ -53,7 +53,7 @@ Paths below are relative to the installed checkout.
 
 | User intent | Skill |
 | --- | --- |
-| Install Powerpacks from the pasted URL | `packs/powerset/skills/install-powerpacks/SKILL.md` |
+| Install or set up Powerpacks (the pasted URL, `$setup`, first run, LinkedIn import) | `packs/powerset/skills/install-powerpacks/SKILL.md` |
 | Login, account, network selection, credentials, agent connection | `packs/powerset/skills/powerset/SKILL.md` |
 | Health check or unclear installation/setup failure | `packs/powerset/skills/powerpacks-doctor/SKILL.md` |
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
@@ -62,7 +62,6 @@ Paths below are relative to the installed checkout.
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |
 | Browse personal or network contacts | `packs/contacts/skills/search-contacts/SKILL.md` |
-| Import LinkedIn and set up a local network | `packs/ingestion/skills/setup/SKILL.md` |
 | Import Gmail contacts | `packs/ingestion/skills/import-gmail/SKILL.md` |
 | Gmail archive/OAuth setup | `packs/ingestion/skills/msgvault/SKILL.md` |
 | Import iMessage or WhatsApp contacts | `packs/ingestion/skills/import-messages/SKILL.md` |

@@ -3,14 +3,14 @@ name: cold-setup
 # Full-setup regression gate: a fresh macOS runner executes the real adapter
 # installs end-to-end (Claude Code + Codex) — setup-python through the vendored
 # uv bootstrap, skill copy, venv import health, and a doctor smoke — the
-# closest CI gets to a first-run "$setup doesn't exist" Mac. The cold-bootstrap
+# closest CI gets to a first-run "Powerpacks doesn't exist" Mac. The cold-bootstrap
 # workflow owns the stripped-PATH download path; this one owns the install
 # surface above it. Path-scoped to the setup surface so it only spends runner
 # minutes when that surface changes.
 on:
   pull_request:
     paths:
-      - packs/ingestion/skills/setup/**
+      - packs/powerset/skills/install-powerpacks/**
       - packs/ingestion/primitives/setup/**
       - adapters/claude-code/install.sh
       - adapters/codex/install.sh
@@ -43,7 +43,7 @@ jobs:
       - name: Verify installed skills
         run: |
           for dir in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
-            for skill in setup search deep-context import-gmail powerset; do
+            for skill in install-powerpacks search deep-context import-gmail powerset; do
               test -f "$dir/$skill/SKILL.md" || { echo "FAIL: missing $dir/$skill/SKILL.md"; exit 1; }
             done
             count=$(ls -1 "$dir" | wc -l | tr -d ' ')
