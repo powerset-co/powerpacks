@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.16.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.3...powerpacks-v3.16.4) (2026-10-05)
+
+
+### Bug Fixes
+
+* **index:** check positions under the index's own person id ([#713](https://github.com/powerset-co/powerpacks/issues/713)) ([13e4af6](https://github.com/powerset-co/powerpacks/commit/13e4af67dd2616861384ee82c49d18e157f1aeb8))
+
 ## [3.16.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.2...powerpacks-v3.16.3) (2026-10-05)
 
 
