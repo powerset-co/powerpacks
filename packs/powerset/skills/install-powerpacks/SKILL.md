@@ -2,10 +2,11 @@
 name: install-powerpacks
 description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and automatic cost checks. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup; installing it means running the setup now, not only saving the file.
 license: MIT
+allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap *)
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.4.3
+  version: 1.4.4
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -16,9 +17,17 @@ metadata:
 
 # Set up Powerpacks
 
-Installing this skill means running it. If you saved this file because the user
-asked to download or install it, do not stop there: start the setup below in the
-same turn.
+<!--
+Changelog:
+- 2026-10-05: Restored from 3.13.0 what the onboarding rewrite dropped: where
+  this can run (and what to tell chat or cloud users), where to save the skill
+  per harness, the full-access ask, and allowed-tools for the bootstrap command.
+-->
+
+Installing this skill means running it. Save this file to the harness's skills
+folder (Claude Code: `~/.claude/skills/install-powerpacks/SKILL.md`; Codex:
+`~/.agents/skills/install-powerpacks/SKILL.md`; Pi: its personal skills folder),
+then start the setup below in the same turn. Do not stop after saving it.
 
 The pasted installation instruction starts this whole workflow:
 
@@ -32,18 +41,51 @@ If something looks broken, tell the user what you saw and offer `$feedback`.
 Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
 want as it runs."
 
+## Where this can run
+
+Setup runs shell commands on the user's Mac, so it works only in a local coding
+agent there: Claude Code (the CLI, or the desktop app's Code tab in a Local
+session), Codex (CLI or app), or Pi. It does not work in ChatGPT chat, claude.ai
+chat, the desktop app's Chat tab, or a cloud session (Claude Code on the web,
+Cloud in the desktop app, Codex cloud tasks): nothing would land on the Mac.
+
+Bootstrap checks this and prints `STOP:` when it is not on the user's Mac. If the
+agent has no shell at all, do not run anything; tell the user which tool to use:
+
+- ChatGPT chat: "This needs a coding agent on your Mac. Please use Codex instead:
+  open Terminal, run `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then
+  `cd ~`, run `codex`, and paste the same sentence." (Or the Codex app, in a
+  local folder.)
+- claude.ai chat or a cloud session: "This needs a coding agent on your Mac.
+  Please use Claude Code there: the desktop app's Code tab in a Local session on
+  your home folder, or open Terminal, run `curl -fsSL https://claude.ai/install.sh | bash`,
+  then `cd ~` and run `claude`. Then paste the same sentence."
+
+Never claim a cloud session changed the user's computer.
+
 ## Start and supervise
 
-This needs a shell on the user's Mac. Without one, explain where to paste the
-instruction; do not claim a cloud installation changed their computer.
+Before running anything, ask what setup needs in one message:
 
-Before running anything, ask the two things setup needs, in one message: "Which
-Gmail accounts should I add? The first one owns the Gmail setup." and "Building
-your search index uploads your contacts to your Powerset workspace. OK?" Pass
-each address as `--gmail-email`, first address first, and `--approve-upload` on a
-yes. Everything after that is logins the user
-does back to back near the start (Powerset, LinkedIn, Google, each Gmail
-approval, Full Disk Access, WhatsApp QR); then setup runs on its own.
+1. "Which Gmail accounts should I add? The first one owns the Gmail setup."
+2. "Building your search index uploads your contacts to your Powerset workspace. OK?"
+3. "Setup runs many local commands. For the best experience, turn on full access
+   so I don't stop to ask each time:" with the steps for their harness:
+   - Claude Code CLI: restart with `claude --dangerously-skip-permissions`
+     (a running session cannot switch into it), or allow the commands in `/permissions`.
+   - Claude Code desktop app: Settings > Claude Code > "Allow bypass permissions
+     mode", then pick Bypass permissions in the mode selector by the send button.
+   - Codex CLI: restart with `codex --yolo`, or pick a profile in `/permissions`.
+   - Codex app: the permissions control under the composer > Full access.
+
+The agent cannot read or change the mode; only the user can. If they restart, they
+paste the same sentence again. If a command is later denied, or the user has had to
+approve more than one prompt, stop and repeat these steps before continuing.
+
+Pass each address as `--gmail-email`, first address first, and `--approve-upload`
+on a yes. Everything after that is logins the user does back to back near the
+start (Powerset, LinkedIn, Google, each Gmail approval, Full Disk Access, WhatsApp
+QR); then setup runs on its own.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/main/bin/bootstrap | bash -s -- --powerset --approve-upload --gmail-email first@example.com --gmail-email second@example.com
