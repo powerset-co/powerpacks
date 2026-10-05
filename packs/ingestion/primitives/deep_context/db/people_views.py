@@ -29,7 +29,7 @@ def person_lookup(
     email: str | None = None,
     parent_id: str | None = None,
 ) -> list[ParentLookupRow]:
-    """Resolve to parents; read all saved parent/child dossiers after selection."""
+    """Resolve parents with saved relationships; read full dossiers after selection."""
     name_key = normalize_name(name or "")
     tokens = sorted(set(name_key.split()))
     token_sql = " AND ".join(f"instr(name, :token{i})>0" for i in range(len(tokens))) or "0"
@@ -70,6 +70,11 @@ WITH names AS (
     AND {token_sql}
 ), matched AS (
   SELECT parent_id, min(match_order) AS match_order FROM matched_raw GROUP BY parent_id
+), saved_facts AS (
+  SELECT f.parent_id, f.person_id, json_extract(f.facts_json, '$.relationship_to_owner') AS relationship
+  FROM facts f JOIN matched m ON m.parent_id=f.parent_id
+  JOIN artifacts fa ON fa.artifact_key=f.artifact_key
+  WHERE fa.kind='facts' AND fa.status='projected' AND fa.candidate_key IS NULL
 )
 SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
        CASE WHEN (SELECT count(*) FROM matched)=1
@@ -84,17 +89,14 @@ SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
               GROUP BY body
               ORDER BY parent_order, min(d.person_id IS NOT NULL), min(d.artifact_key)
             )) ELSE '' END AS body,
-       COALESCE(NULLIF(json_extract(a.payload_json, '$.headline'), ''),
-         (SELECT json_extract(d.payload_json, '$.headline') FROM artifacts d
-          WHERE d.parent_id=p.parent_id AND d.kind='dossier' AND d.status='projected'
-            AND (d.person_id IS NOT NULL OR d.artifact_key LIKE 'dossier:%'
-                 OR d.artifact_key LIKE '{PARENT_DOSSIER_ARTIFACT_PREFIX}%')
-            AND d.candidate_key IS NULL AND json_extract(d.payload_json, '$.headline')!=''
-          ORDER BY d.person_id IS NOT NULL, d.artifact_key LIMIT 1),
-         (SELECT json_extract(i.row_json, '$.headline')
-          FROM imported_people i JOIN people pe USING(person_id)
-          WHERE pe.parent_id=p.parent_id AND json_extract(i.row_json, '$.headline')!=''
-          ORDER BY pe.person_id LIMIT 1), '') AS headline,
+       COALESCE((SELECT group_concat(relationship, char(10)) FROM (
+         SELECT DISTINCT f.relationship FROM saved_facts f
+         WHERE f.parent_id=p.parent_id AND trim(f.relationship)!=''
+           AND (f.person_id IS NULL OR NOT EXISTS (
+             SELECT 1 FROM saved_facts pf WHERE pf.parent_id=p.parent_id AND pf.person_id IS NULL
+           ))
+         ORDER BY f.relationship
+       )), '') AS relationship_to_owner,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
           FROM people pe JOIN person_identifiers pi USING(person_id)
@@ -127,7 +129,7 @@ ORDER BY mp.match_order, p.display_name, p.parent_id
         ParentLookupRow(
             parent_id=row["parent_id"], name=row["name"] or "", slug=row["slug"] or "",
             dossier_path=row["path"] or "", dossier_body=row["body"] or "",
-            headline=row["headline"],
+            relationship_to_owner=row["relationship_to_owner"],
             emails=tuple(_json(row["emails_json"], [])),
             phones=tuple(_json(row["phones_json"], [])),
             linkedin_urls=tuple(_json(row["linkedin_urls_json"], [])),

@@ -17,7 +17,12 @@
   {
     "id": "person-ambiguous",
     "query": "Tell me about Taylor Example. I know two people with that name.",
-    "expected_behavior": "Look up the name, show a numbered choice list with each returned person's name and a quick summary from their saved headline (role, company, or relationship), using identifying contact details when needed, and ask which person if ambiguity remains. Read the chosen parent by its returned ID. Never combine two people's dossier facts or treat multiple child aliases of one parent as different people. Offer concrete choices using actual distinguishing details, not a generic request for more information or a skill/backend menu."
+    "expected_behavior": "Look up the name, show a numbered choice list with each returned person's name and a quick summary of their relationship to the user from saved relationship_to_owner text or, when that text is vague/missing, a read of their selected parent dossier. Honor relationship corrections already given in chat. Show personal/shared context rather than LinkedIn titles; if none is saved, say the relationship is unknown, using identifying contact details when needed, and ask which person if ambiguity remains. Read the chosen parent by its returned ID. Never combine two people's dossier facts or treat multiple child aliases of one parent as different people. Offer concrete choices using actual distinguishing details, not a generic request for more information or a skill/backend menu."
+  },
+  {
+    "id": "person-relationship-context",
+    "query": "Which Jordan Bravo do you mean? Show how I know each person, not their job titles. The Jordan I live with is my partner.",
+    "expected_behavior": "Look up the people and present numbered choices led by saved relationship_to_owner context. If that text is vague or missing, read each affected parent dossier and summarize supported relationship/shared history. Honor the user's correction for the identified Jordan without assigning it to another person. Do not replace relationship context with a LinkedIn job title, invent a relationship for a person with no saved evidence, or combine different people. Say relationship unknown when the dossier offers no supported context."
   },
   {
     "id": "person-no-dossier",
