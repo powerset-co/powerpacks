@@ -20,6 +20,11 @@
  * With --login-only it stops once signed in and prints {"status": "ok"}, so the
  * login can be collected up front and the scroll run later, headless.
  *
+ * With --export request|fetch it works LinkedIn's data export page instead of the
+ * list: request the larger archive (the one with Connections.csv), or download it
+ * into --export-dir once LinkedIn has it ready. Prints {"status": "ok", "export":
+ * "requested" | "pending" | "downloaded", "path"?}.
+ *
  * Prints one JSON object on stdout:
  *   {"status": "ok", "connections": [{slug, name, headline, connected_on}],
  *    "total": n, "loads": n, "stopped": "known" | "end" | "limit", "owner_slug": str}
@@ -28,7 +33,8 @@
  *
  * Created: 2026-10-03 (scroll and card parsing adapted from
  * stickerdaniel/linkedin-mcp-server#170).
- * Changelog: 2026-10-05: returns LinkedIn's "N connections" count.
+ * Changelog: 2026-10-05: returns LinkedIn's "N connections" count; --export
+ * requests and downloads LinkedIn's data export after a stalled read.
  */
 
 const fs = require("fs");
@@ -42,6 +48,9 @@ const PAUSE_MIN_MS = 500;
 const PAUSE_JITTER_MS = 1000;
 const END_AFTER_MS = 15000;
 const OWNER_URL = "https://www.linkedin.com/in/me/";
+const EXPORT_URL = "https://www.linkedin.com/mypreferences/d/download-my-data";
+// The larger archive is the one that includes Connections.csv.
+const LARGER_ARCHIVE = "#fast-file-only-plus-other-data";
 
 function parseArgs(argv) {
   const args = {};
@@ -86,6 +95,30 @@ async function shownTotal(page) {
     .find((text) => /^[\d,.]+ connections?$/i.test(text)), null, { timeout: 15000 })
     .then((handle) => handle.jsonValue(), () => "");
   return text ? Number(text.replace(/\D/g, "")) : null;
+}
+
+// LinkedIn's data export: --export request asks for the larger archive unless a
+// request is pending; --export fetch downloads it into --export-dir once it is ready.
+async function linkedinExport(page, mode, exportDir) {
+  await page.goto(EXPORT_URL, { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: /Request (archive|pending|new archive)|Download archive/i }).first()
+    .waitFor({ state: "visible", timeout: 15000 });
+  const download = page.getByRole("button", { name: /^Download archive$/i })
+    .or(page.getByRole("link", { name: /^Download archive$/i })).first();
+  if (mode === "fetch") {
+    if (!await download.isVisible().catch(() => false)) return { status: "ok", export: "pending" };
+    const [file] = await Promise.all([page.waitForEvent("download", { timeout: 120000 }), download.click()]);
+    const path = `${exportDir}/linkedin-export.zip`;
+    await file.saveAs(path);
+    return { status: "ok", export: "downloaded", path };
+  }
+  if (await page.getByRole("button", { name: /Request pending/i }).isVisible().catch(() => false)) {
+    return { status: "ok", export: "pending" };
+  }
+  await page.locator(LARGER_ARCHIVE).check({ force: true });
+  await page.getByRole("button", { name: /^Request archive$/i }).click();
+  await page.getByRole("button", { name: /Request pending/i }).waitFor({ state: "visible", timeout: 30000 });
+  return { status: "ok", export: "requested" };
 }
 
 async function waitForConnections(page, deadline) {
@@ -207,6 +240,10 @@ async function main() {
     }
     if (args.loginOnly === "1") {
       result({ status: "ok" });
+      return;
+    }
+    if (args.export) {
+      result(await linkedinExport(page, args.export, args.exportDir));
       return;
     }
     const total = await shownTotal(page);

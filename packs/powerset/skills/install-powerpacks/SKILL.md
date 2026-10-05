@@ -19,7 +19,7 @@ metadata:
 
 <!--
 Changelog:
-- 2026-10-05: Finish reports a LinkedIn read that stalled (stopped early to keep the account safe).
+- 2026-10-05: Finish reports a LinkedIn read that stalled and the data export setup requested instead.
 - 2026-10-05: Finish lists what setup deferred (research, profile lookups) and the fix.
 - 2026-10-05: The bootstrap comes from the `stable` branch, which every release
   moves to its tag, so the launcher always matches the release it installs.
@@ -203,6 +203,7 @@ message lists what is left (a missing key, no provider credit). Say that the ind
 is ready, then list each one with what fixes it; the next setup run picks them up.
 When the LinkedIn step says LinkedIn stopped sending connections, tell the user
 how many were read of how many, that it stopped to keep their account safe, and
-that the next setup run reads LinkedIn again. A network's people count does not prove search readiness.
+that setup asked LinkedIn for their data export (it can take a day) and the next
+setup run imports it. Never ask the user to download or upload the export. A network's people count does not prove search readiness.
 Keep internal IDs and provider details in troubleshooting. If the user also asked
 for a search, run the installed search skill once its requested backend is ready.

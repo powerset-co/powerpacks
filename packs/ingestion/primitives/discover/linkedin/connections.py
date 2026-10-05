@@ -11,8 +11,9 @@ connections have loaded. `connections.json` beside the CSV records LinkedIn's ow
 "N connections" count, how far the run got (connections read, the load it stopped
 at), whether the whole list has been read, and the signed-in user's own profile
 URL. A read that ends under STALL_SHARE of the count stalled (LinkedIn stopped
-sending cards): it stops there to keep the account safe, says so, and the next
-run reads again. Any other read that reaches the end of the list is the whole
+sending cards): it stops there to keep the account safe, asks LinkedIn for its
+data export, and says so; the next run imports that export once LinkedIn has it
+ready, and reads the list again until then. Any other read that reaches the end of the list is the whole
 list; how far it got against the count is recorded. Until the list is read, each
 run goes LOADS_PER_RUN further down than the last. A CSV with no record is a
 LinkedIn export (or an earlier setup's copy of one); the next run tops it up from
@@ -20,6 +21,8 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-10-05: a stalled read asks LinkedIn for its data export (the larger
+      archive, which has Connections.csv); the next run imports it when ready.
   2026-10-05: a read that ends under STALL_SHARE of LinkedIn's "N connections"
       count is a stall, not the whole list; it used to be saved as complete and
       LinkedIn was never read again. Other reads record how far they got.
@@ -31,6 +34,7 @@ import argparse
 import json
 import os
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -60,15 +64,26 @@ KNOWN_OVERLAP = 25
 # little short, since the count includes people the list never shows (two reads a
 # day apart both ended at the same 294 of 298).
 STALL_SHARE = 0.05
+# Opening LinkedIn's export page, and the archive download once it is ready.
+EXPORT_SECONDS = 180
+
+
+def _export_rows(text: str) -> list[dict[str, str]]:
+    """Rows of a connections export; LinkedIn's own file opens with a Notes preamble."""
+    lines = text.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.startswith("First Name,"))
+    return list(CsvIO.dict_reader(lines[start:]))
 
 
 def _read_export(path: Path) -> list[dict[str, str]]:
-    """Rows of an existing export; LinkedIn's own file opens with a Notes preamble."""
-    if not path.is_file():
-        return []
-    lines = path.read_text(encoding="utf-8-sig").splitlines()
-    start = next(index for index, line in enumerate(lines) if line.startswith("First Name,"))
-    return list(CsvIO.dict_reader(lines[start:]))
+    return _export_rows(path.read_text(encoding="utf-8-sig")) if path.is_file() else []
+
+
+def _archive_connections(path: Path) -> list[dict[str, str]] | None:
+    """Connections.csv from LinkedIn's data archive; None when this archive part has none."""
+    with zipfile.ZipFile(path) as archive:
+        name = next((name for name in archive.namelist() if name.endswith("Connections.csv")), None)
+        return _export_rows(archive.read(name).decode("utf-8-sig")) if name else None
 
 
 def _export_row(card: dict[str, str]) -> dict[str, str]:
@@ -112,10 +127,37 @@ class LinkedInConnections:
             return {"status": "completed", "message": "Signed in to LinkedIn"}
         return payload if payload["status"] == "needs_user_action" else {"status": "failed", "message": payload["message"]}
 
+    def _export(self, mode: str) -> dict[str, Any]:
+        return self._browser("--export", mode, "--export-dir", str(self.csv_path.parent),
+                             timeout=self.login_timeout_seconds + EXPORT_SECONDS)
+
+    def _import_archive(self, path: Path, existing: list[dict[str, str]], known: set[str],
+                        previous: dict[str, Any]) -> dict[str, Any] | None:
+        """After a stalled read, LinkedIn's own export is the whole list."""
+        exported = _archive_connections(path)
+        if exported is None:
+            return None
+        added = [row for row in exported if extract_public_identifier(row["URL"]) not in known]
+        rows = [*existing, *added]
+        if added:
+            CsvIO.write_dict_rows(self.csv_path, EXPORT_COLUMNS, rows)
+        write_json(self.record_path, {
+            **previous, "status": "completed", "complete": True, "connections": len(rows), "added": len(added),
+            "stopped": "export", "export": "imported", "updated_at": now_iso()})
+        return {"status": "completed", "complete": True, "connections": len(rows), "added": len(added),
+                "path": str(self.csv_path),
+                "message": f"{len(rows):,} LinkedIn connections ({len(added):,} new, from your LinkedIn data export)"}
+
     def run(self) -> dict[str, Any]:
         existing = _read_export(self.csv_path)
         known = {extract_public_identifier(row["URL"]) for row in existing} - {""}
         previous = read_json(self.record_path, {}) or {}
+        if previous.get("stopped") == "stalled":
+            exported = self._export("fetch")
+            if exported["status"] == "ok" and exported["export"] == "downloaded":
+                imported = self._import_archive(Path(exported["path"]), existing, known, previous)
+                if imported:
+                    return imported
         backfill = previous.get("complete") is False
         max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
@@ -142,16 +184,21 @@ class LinkedInConnections:
         stalled = stopped == "end" and read < total * STALL_SHARE
         complete = (previous.get("complete", True) if stopped == "known"
                     else stopped == "end" and not stalled)
+        # A stalled read asks LinkedIn for the data export; a later run imports it.
+        export = self._export("request").get("export", "") if stalled else previous.get("export", "")
         write_json(self.record_path, {
             "status": "completed", "complete": complete, "total": total, "connections": len(rows),
             "added": len(added), "loads": payload["loads"], "stopped": "stalled" if stalled else stopped,
+            "export": export,
             "owner_url": PROFILE_URL.format(slug=payload["owner_slug"]) if payload["owner_slug"] else "",
             "updated_at": now_iso()})
         message = f"{len(rows):,} LinkedIn connections ({len(added):,} new)"
         if stalled:
             message = (f"LinkedIn stopped sending connections after {read:,} of {total:,}, likely a network or "
-                       "account limit, so I stopped to keep your account safe. The rest sync on your next run; "
-                       "your contacts are ready to process now.")
+                       "account limit, so I stopped to keep your account safe.")
+            message += (" I asked LinkedIn for your data export (it can take a day); the next setup run imports it."
+                        if export in ("requested", "pending") else " The rest sync on your next run.")
+            message += " Your contacts are ready to process now."
         elif stopped == "limit":
             message += ". The rest keep syncing on your next run; your contacts are ready to process now."
         elif len(rows) < total:

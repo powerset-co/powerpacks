@@ -1,5 +1,6 @@
 """The Chrome connections read keeps the export newest-first and asks only for new rows."""
 import json
+import zipfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,8 +27,13 @@ class LinkedInConnectionsTests(unittest.TestCase):
         deps.start()
         self.addCleanup(deps.stop)
 
-    def scrape(self, browser_payload):
+    def scrape(self, browser_payload, export=None):
+        self.exports = []
+
         def browser(command, *, timeout, env):
+            if "--export" in command:
+                self.exports.append(command[command.index("--export") + 1])
+                return CommandResult(ok=True, stdout=json.dumps(export))
             known_file = command[command.index("--known-file") + 1]
             self.known = json.loads(Path(known_file).read_text())
             self.flags = {flag: command[command.index(flag) + 1] for flag in ("--stop-after-known", "--max-loads")}
@@ -87,15 +93,39 @@ class LinkedInConnectionsTests(unittest.TestCase):
         # LinkedIn stopped sending cards after 10 of the 298 it says there are.
         cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(10)]
         result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 16, "stopped": "end",
-                              "connections": cards})
+                              "connections": cards}, export={"status": "ok", "export": "pending"})
         self.assertEqual(result["status"], "completed")
         self.assertFalse(result["complete"])
         self.assertIn("LinkedIn stopped sending connections after 10 of 298", result["message"])
         self.assertEqual((self.manifest()["complete"], self.manifest()["total"], self.manifest()["stopped"]),
                          (False, 298, "stalled"))
         self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 45, "stopped": "end",
-                     "connections": cards})
+                     "connections": cards}, export={"status": "ok", "export": "pending"})
         self.assertEqual(self.flags["--stop-after-known"], "0")
+
+    def test_a_stall_asks_linkedin_for_the_data_export(self):
+        cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(10)]
+        result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 16, "stopped": "end",
+                              "connections": cards}, export={"status": "ok", "export": "requested"})
+        self.assertEqual(self.exports, ["request"])
+        self.assertIn("asked LinkedIn for your data export", result["message"])
+        self.assertEqual(self.manifest()["export"], "requested")
+
+    def test_the_run_after_a_stall_imports_the_ready_export_instead_of_reading_again(self):
+        self.csv.parent.mkdir(parents=True)
+        self.csv.write_text(EXPORT, encoding="utf-8")
+        self.csv.with_name("connections.json").write_text(json.dumps(
+            {"complete": False, "stopped": "stalled", "total": 3, "loads": 16, "export": "requested"}))
+        archive = self.csv.parent / "linkedin-export.zip"
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("Connections.csv", "Notes:\n\"When exporting your connection data...\"\n\n" + EXPORT
+                            + "Riley,Echo,https://www.linkedin.com/in/riley-echo,,Example,Founder,01 Oct 2026\n")
+        result = self.scrape({"status": "error", "message": "the list must not be read"},
+                             export={"status": "ok", "export": "downloaded", "path": str(archive)})
+        self.assertEqual(self.exports, ["fetch"])
+        self.assertEqual((result["status"], result["complete"], result["added"]), ("completed", True, 1))
+        self.assertIn("riley-echo", self.csv.read_text(encoding="utf-8"))
+        self.assertEqual((self.manifest()["stopped"], self.manifest()["complete"]), ("export", True))
 
     def test_a_read_to_the_end_is_the_whole_list_and_records_how_far_it_got(self):
         # LinkedIn counts 298 but its list shows 294.
