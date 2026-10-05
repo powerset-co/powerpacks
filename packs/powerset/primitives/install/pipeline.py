@@ -266,7 +266,7 @@ class ProcessingOnboarding:
                 subprocess.run(["open", url], check=False)
                 action = {"kind": "review", "url": url, "text": "Review the matches that need your input."}
                 while state.next_action == "review_linkedin":
-                    self._write(InstallState.WAITING, "Waiting for your review", action=action, live=True)
+                    self._write(InstallState.WAITING, action["text"], action=action, live=True)
                     time.sleep(_REVIEW_POLL_SECONDS)
                     state = workflow_state(self.db)
                 self._write(InstallState.COMPLETED, "Done")

@@ -2,7 +2,7 @@ import "../review/styles/base.css"
 import "./install.css"
 
 import { useQuery } from "@tanstack/react-query"
-import { useEffect, useState } from "react"
+import { type ReactNode, useEffect, useState } from "react"
 
 import { fetchInstall, installAction } from "@/lib/api/install"
 import { fetchStatus } from "@/lib/api/review"
@@ -10,7 +10,7 @@ import { errorText } from "@/lib/api/http"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import { doingNow } from "@/pages/review/enrich/copy"
-import type { InstallState, InstallStatus } from "@/types/install"
+import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
 const DEFAULT_STEPS = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
 const DEFAULT_LABELS: Record<string, string> = {
@@ -93,6 +93,27 @@ function installSteps(data?: InstallStatus) {
       },
     ]
   })
+}
+
+// While setup waits on the user, the line under the status says what it needs.
+function actionNote(action: InstallAction): ReactNode {
+  if (action.kind === "permission") {
+    return (
+      <>
+        Powerpacks reads your iMessage history to find the people you talk to, and macOS asks for Full Disk
+        Access first. Drag{" "}
+        <strong>
+          {action.app_path?.split("/").pop()?.replace(".app", "") ?? "the app running this session"}
+        </strong>{" "}
+        into Full Disk Access and turn it on. I’ll continue automatically.
+      </>
+    )
+  }
+  if (action.kind === "review") return "I’ll continue when your review is complete."
+  if (action.kind === "gmail")
+    return action.text ?? "Finish connecting Gmail in your browser. I’ll continue here."
+  if (action.kind === "qr") return "Scan the code with WhatsApp. I’ll continue automatically."
+  return "I’ll keep going. Ask questions or give me input in chat."
 }
 
 export function InstallPage() {
@@ -189,7 +210,9 @@ export function InstallPage() {
             <p className="install-note">
               {data?.status === "completed"
                 ? "You can keep asking here in chat."
-                : "I’ll keep going. Ask questions or give me input in chat."}
+                : data?.status === "waiting" && action
+                  ? actionNote(action)
+                  : "I’ll keep going. Ask questions or give me input in chat."}
             </p>
           </EmptyPanel>
           {data?.step === "index" && data.index_progress?.progress != null && !failed ? (
@@ -203,9 +226,6 @@ export function InstallPage() {
         </section>
         {data?.status === "waiting" && action ? (
           <section className="install-action">
-            {action.kind === "gmail" ? (
-              <p>{action.text ?? "Finish connecting Gmail in your browser. I’ll continue here."}</p>
-            ) : null}
             {action.kind === "qr" ? (
               <div className="install-qr">
                 {action.qr_url ? (
@@ -217,27 +237,14 @@ export function InstallPage() {
               </div>
             ) : null}
             {action.kind === "permission" ? (
-              <div className="install-permission">
-                <p>
-                  Powerpacks reads your iMessage history to find the people you talk to, and macOS asks for
-                  Full Disk Access first. Drag{" "}
-                  <strong>
-                    {action.app_path?.split("/").pop()?.replace(".app", "") ?? "the app running this session"}
-                  </strong>{" "}
-                  into Full Disk Access and turn it on. I’ll continue automatically.
-                </p>
-                <button type="button" onClick={() => void open("permissions")}>
-                  Open settings &amp; show the app
-                </button>
-              </div>
+              <button type="button" onClick={() => void open("permissions")}>
+                Open settings &amp; show the app
+              </button>
             ) : null}
             {action.kind === "review" ? (
-              <div>
-                <button type="button" onClick={() => void open("review")}>
-                  Review contacts
-                </button>
-                <p>I’ll continue when your review is complete.</p>
-              </div>
+              <button type="button" onClick={() => void open("review")}>
+                Review contacts
+              </button>
             ) : null}
             {actionError ? <p role="alert">{actionError}</p> : null}
           </section>
