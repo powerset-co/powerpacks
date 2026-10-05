@@ -303,6 +303,9 @@ class OnboardingTests(unittest.TestCase):
         code, _, _ = self.run_onboarding()
         self.assertEqual(code, 0)
         self.missing_keys.add("OPENAI_API_KEY")
+        env = self.root / ".env"
+        env.write_text("".join(line for line in env.read_text().splitlines(keepends=True)
+                               if not line.startswith("OPENAI_API_KEY=")))
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
         self.assertEqual(state["step"], "credentials")
@@ -339,6 +342,23 @@ class OnboardingTests(unittest.TestCase):
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
         self.assertIn("search access has not been provisioned", state["message"])
+
+    def test_keys_already_in_env_count_when_the_account_returns_none(self):
+        self.blank_keys.update({"TURBOPUFFER_API_KEY", "DATABASE_URL"})
+        env = self.root / ".env"
+        with env.open("a") as stream:
+            stream.write("\nTURBOPUFFER_API_KEY=synthetic-local-key\nDATABASE_URL=synthetic-local-db\n")
+        code, state, _ = self.run_onboarding()
+        self.assertEqual(code, 0)
+        self.assertEqual(state["steps"]["credentials"]["status"], "completed")
+        self.assertIn("TURBOPUFFER_API_KEY=synthetic-local-key", env.read_text())
+
+    def test_unprovisioned_hosted_search_is_a_warning_and_setup_continues(self):
+        self.blank_keys.update({"TURBOPUFFER_API_KEY", "DATABASE_URL"})
+        code, state, _ = self.run_onboarding()
+        self.assertEqual(code, 10)
+        self.assertEqual(state["steps"]["credentials"]["status"], "skipped")
+        self.assertIn("Hosted search isn't enabled", state["steps"]["credentials"]["message"])
 
     def test_service_failure_is_failed_and_not_mistaken_for_login(self):
         self.fail_path = "/v2/search/count"

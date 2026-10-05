@@ -171,6 +171,9 @@
   border-radius: 10px;
   margin: 0 auto;
 }
+.install-page .install-permission {
+  text-align: center;
+}
 .install-page .install-permission code {
   display: block;
   overflow-wrap: anywhere;

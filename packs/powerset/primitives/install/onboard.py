@@ -23,6 +23,8 @@ from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as key
 
 NEEDS_YOU = 10
 REQUIRED_KEYS = ("OPENAI_API_KEY", "TURBOPUFFER_API_KEY", "DATABASE_URL")
+# Local processing needs only this one; the others serve hosted search.
+_PROCESSING_KEY = "OPENAI_API_KEY"
 
 
 @dataclass(frozen=True)
@@ -143,7 +145,7 @@ class Onboarding:
         if not self.email:
             raise ValueError("Powerset did not return the signed-in account email")
         self.progress(InstallStep.ACCOUNT, InstallState.SKIPPED if reused else InstallState.COMPLETED,
-                      f"Already signed in as {self.email}" if reused else f"Connected as {self.email}",
+                      f"Already signed in as {self.email}. Tell me if that's the wrong account." if reused else f"Connected as {self.email}",
                       account_email=self.email)
         return account
 
@@ -172,7 +174,8 @@ class Onboarding:
                 if value:
                     values[key] = value
         keys.write_env(self.env_path, values)
-        missing = [key for key in REQUIRED_KEYS if key not in values]
+        present = keys._read_env_file(self.env_path)
+        missing = [key for key in REQUIRED_KEYS if not present.get(key)]
         if not missing:
             self.progress(InstallStep.CREDENTIALS, InstallState.COMPLETED, "Search access is ready")
         return missing
@@ -261,8 +264,16 @@ class Onboarding:
                 missing = self.prepare_credentials()
             if missing:
                 print("Missing search credentials: " + ", ".join(missing), file=sys.stderr)
+            if _PROCESSING_KEY in missing:
                 return self.waiting(f"Connected as {self.email}, but search access has not been provisioned. "
                                     "Ask Powerset to finish enabling search for this account, then tell me to retry.")
+            if missing:
+                # Local setup does not use hosted search; say so and keep going.
+                self.progress(InstallStep.CREDENTIALS, InstallState.SKIPPED,
+                              f"Hosted search isn't enabled for {self.email} yet, so local setup continues. "
+                              "Tell me if you want to sign in with a different account.")
+                self.connect_tools()
+                return NEEDS_YOU
             self.connect_tools()
             return self.check_network(account)
         except urllib.error.HTTPError as exc:

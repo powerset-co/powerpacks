@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress, workflow_state
 from packs.ingestion.primitives.deep_context.enrich.estimate import minutes_left
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline as pipeline_module
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver as research_driver
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.review import cli as review_cli
 
@@ -135,6 +136,18 @@ class EnrichCommandTest(unittest.TestCase):
         result = self.pipeline().run(total=1, budget=0, request_fingerprint="fixture")
         self.assertEqual(seen, STEPS)
         self.assertEqual(result["status"], "completed")
+
+    def test_research_that_cannot_start_fails_the_run_and_the_next_run_retries_it(self):
+        # No Parallel key: nobody was researched, so nobody may count as tried.
+        seed_identity(self.db, parent_id="lookup", person_id="person:lookup", row_key="candidate:lookup",
+            name="Casey Delta", machine_worth="yes", include_link=False)
+        with mock.patch.object(research_driver, "run_research",
+                               side_effect=SystemExit("PARALLEL_API_KEY not set")):
+            with self.assertRaises(SystemExit):
+                self.pipeline().run(total=1, budget=1, request_fingerprint="fixture")
+        record = self.run_record()
+        self.assertEqual((record.status, record.step), (EnrichRunStatus.FAILED, "research"))
+        self.assertEqual(workflow_state(self.db).next_action, "enrich")
 
     def test_running_receipt_is_not_a_checkpoint(self):
         # An earlier run died mid-step: the next run starts at the first step all the same.

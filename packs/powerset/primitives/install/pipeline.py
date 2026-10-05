@@ -10,6 +10,8 @@ Changelog:
       owner profile from the LinkedIn session and the Gmail address instead of
       asking; a failed Modal run is retried, not re-downloaded, unless it failed
       on the spend cap.
+  2026-10-04: a step that stops with SystemExit (research without a Parallel
+      key) is recorded as failed with its message instead of ending the process.
   2026-10-04: indexing goes ahead when a cached profile has no jobs listed (it
       used to raise on every resume); upload consent is asked before a $500+
       spend approval, so the two questions no longer bounce.
@@ -357,7 +359,8 @@ class ProcessingOnboarding:
                 self._index(previous_input, previous_index, previous_mtime, dispatched)
             except _Stopped:
                 pass
-            except Exception as error:
+            except (Exception, SystemExit) as error:
+                # Primitives stop with SystemExit and a message (e.g. a missing key).
                 self.status.directory.mkdir(parents=True, exist_ok=True)
                 with self.status.log_path.open("a", encoding="utf-8") as log:
                     traceback.print_exc(file=log)

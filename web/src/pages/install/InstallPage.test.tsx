@@ -134,6 +134,27 @@ describe("installation progress", () => {
     }
   })
 
+  it("shows a source whose logins are done as next while another source syncs", async () => {
+    const status: InstallStatus = {
+      ...INSTALL,
+      plan: ["linkedin", "gmail_tools", "gmail_login", "gmail_sync", "gmail_import"],
+      step: "linkedin",
+      status: "running",
+      steps: {
+        linkedin: { status: "running", message: "Reading your LinkedIn connections" },
+        gmail_tools: { status: "completed", message: "Done" },
+        gmail_login: { status: "completed", message: "Done" },
+      },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    mount()
+    await screen.findByText("Syncing Gmail")
+    expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toContain("Syncing GmailNext")
+  })
+
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
     let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(

@@ -1,11 +1,11 @@
 ---
 name: install-powerpacks
-description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and automatic cost checks. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup.
+description: Set up Powerpacks from one pasted URL through a resumable account, import, processing, and search-index workflow with live progress and automatic cost checks. Use for "Download and install the Powerpacks skill from https://powerset.dev/powerpacks", "install Powerpacks", or first-time Powerpacks setup; installing it means running the setup now, not only saving the file.
 license: MIT
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.4.2
+  version: 1.4.3
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -16,6 +16,10 @@ metadata:
 
 # Set up Powerpacks
 
+Installing this skill means running it. If you saved this file because the user
+asked to download or install it, do not stop there: start the setup below in the
+same turn.
+
 The pasted installation instruction starts this whole workflow:
 
 Install → Connect Powerset → Sync LinkedIn → Sync Gmail → Sync iMessage →
@@ -23,6 +27,8 @@ Sync WhatsApp → Discover → Enrich → Review when needed → Build Index →
 
 Own the result. Run commands yourself; involve the user only for browser logins,
 QR scans, OS permissions, required review, and upload authorization.
+Never edit files in the Powerpacks checkout: a changed checkout cannot update.
+If something looks broken, tell the user what you saw and offer `$feedback`.
 Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
 want as it runs."
 

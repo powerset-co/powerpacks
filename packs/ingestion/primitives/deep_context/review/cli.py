@@ -7,6 +7,8 @@ stage, `/people`, `/searches`. `start` detaches this same server for installatio
 when dependencies and data are ready. `status` prints what the agent should do next.
 
 Changelog:
+- 2026-10-04: another checkout's or an older release's page on the port is
+  stopped so this checkout's page takes it; a non-Powerpacks server still fails.
 - 2026-10-02: start one detached server before dependency setup; reuse it for review.
 - 2026-10-01: pending enrichment returns to the agent's enrich command.
 - 2026-10-01: status routes synthesis directly to enrichment without worth review.
@@ -26,6 +28,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import signal
 import site
 import socket
 import subprocess
@@ -47,6 +51,8 @@ from packs.powerset.primitives.install.index_progress import read_index_progress
 
 _PRIMITIVE = "reconcile_review_web"
 _START_TIMEOUT_SECONDS = 10
+# Every Powerpacks page server's command line, by module or by file path (as bin/deep-context matches).
+_PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review")
 
 
 # The actions the agent runs itself; every other action waits on the user.
@@ -151,10 +157,26 @@ def _owned_listener(host: str, port: int, root: Path) -> dict[str, object] | Non
     live = _health(host, port)
     if live and live.get("primitive") == _PRIMITIVE and live.get("repo_root") == str(root):
         return live
-    with socket.socket() as probe:
-        if probe.connect_ex((host, port)) == 0:
-            raise SystemExit(f"Port {port} belongs to another server. Use --port with a free port.")
+    _stop_other_page(host, port)
     return None
+
+
+def _stop_other_page(host: str, port: int) -> None:
+    """Stop another checkout's page (any release) holding the port; refuse anything else."""
+    listeners = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                               capture_output=True, text=True).stdout.split()
+    for pid in listeners:
+        command = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True).stdout
+        if not _PAGE_COMMAND.search(command):
+            raise SystemExit(f"Port {port} belongs to another server. Use --port with a free port.")
+        os.kill(int(pid), signal.SIGTERM)
+    deadline = time.monotonic() + _START_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        with socket.socket() as probe:
+            if probe.connect_ex((host, port)) != 0:
+                return
+        time.sleep(0.1)
+    raise SystemExit(f"Port {port} is still in use. Use --port with a free port.")
 
 
 def _stage(stage: str | None, root: Path) -> str:
