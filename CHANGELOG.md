@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.14.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.0...powerpacks-v3.14.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **install:** build the index when research cannot run ([#689](https://github.com/powerset-co/powerpacks/issues/689)) ([592a114](https://github.com/powerset-co/powerpacks/commit/592a114944287a7d79e6fc3a93489e5f86b5b132))
+* **install:** take the page port, retry research that never ran, run after save ([#687](https://github.com/powerset-co/powerpacks/issues/687)) ([1c07545](https://github.com/powerset-co/powerpacks/commit/1c0754523cf554d30e0fbdb83ec647a6de0735ae))
+
 ## [3.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.13.0...powerpacks-v3.14.0) (2026-10-04)
 
 
