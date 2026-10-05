@@ -65,7 +65,7 @@ primitives so runs are deterministic, ledgered, testable, and resumable.
 | `$import-gmail` | `packs/ingestion/skills/import-gmail/SKILL.md` | bounded `gmail/discover.py discover --account-email ...` -> source candidate import | Gmail metadata staged for Deep Context. |
 | `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter/network_import.py run` (spend gated by `--approve-spend`); then the indexing fan-in | Twitter/X `people.csv`, then merged local network artifacts. |
 | `$import-messages` | `packs/ingestion/skills/import-messages/SKILL.md` | message discovery -> source candidate import | iMessage/WhatsApp metadata staged for Deep Context. |
-| LinkedIn CSV path | `$setup` (or `linkedin/network_import.py` directly) | `linkedin/network_import.py run` (spend gated by `--approve-spend`) delegating to `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
+| LinkedIn CSV path | the install skill (or `linkedin/network_import.py` directly) | `linkedin/network_import.py run` (spend gated by `--approve-spend`) delegating to `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
 
 ## Canonical CSV contracts
 

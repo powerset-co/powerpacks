@@ -5,6 +5,7 @@ description: Import iMessage/WhatsApp contact metadata locally. Sets up source a
 
 <!--
 Changelog:
+- 2026-10-04: a missing LinkedIn import points at setup (the install skill); $setup is retired.
 - 2026-09-28: Checklist falls back to printing when the harness has no plan tool.
 - 2026-09-25: the import floor is back (usable name, at least one message,
   group-only contacts need ten); unnamed contacts are no longer imported.
@@ -207,8 +208,9 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/statu
 
 - `gmail.import.imported: false` → suggest **`$import-gmail`** (email contacts
   sharpen matching and give `$deep-context` cross-channel context).
-- `linkedin.import.imported: false` → suggest **`$setup`** (LinkedIn is the
-  identity backbone).
+- `linkedin.import.imported: false` → suggest syncing LinkedIn through setup
+  (LinkedIn is the identity backbone): rerun the `retry_command` saved in
+  `.powerpacks/install/manifest.json`, or the install skill on a first run.
 - Report candidate counts (`import.candidates` per source) so the user knows how
   many contacts are waiting for research.
 

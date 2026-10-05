@@ -36,7 +36,6 @@ class CoreLayoutTests(unittest.TestCase):
                 "import-twitter",
                 "logbook",
                 "msgvault",
-                "setup",
             ],
         )
         indexing_pack = sorted(
@@ -74,6 +73,9 @@ class CoreLayoutTests(unittest.TestCase):
     def test_pi_adapter_installs_skills(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
+            # A retired $setup left by an older install is scrubbed.
+            (skills_dir / "setup").mkdir(parents=True)
+            (skills_dir / "setup" / "SKILL.md").write_text("old")
             proc = subprocess.run(
                 [str(ROOT / "install.sh"), "pi", str(skills_dir)],
                 cwd=ROOT,
@@ -87,7 +89,8 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-gmail" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "install-powerpacks" / "SKILL.md").exists())
+            self.assertFalse((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertIn(str(ROOT), (skills_dir / "search/SKILL.md").read_text())
@@ -106,7 +109,8 @@ class CoreLayoutTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertFalse((codex_home / "powerpacks").exists())
-            for skill in ("powerset", "import-messages", "setup", "build-outbound"):
+            self.assertFalse((skills_dir / "setup" / "SKILL.md").exists())
+            for skill in ("powerset", "import-messages", "install-powerpacks", "build-outbound"):
                 self.assertIn(str(ROOT), (skills_dir / skill / "SKILL.md").read_text())
                 self.assertFalse((skills_dir / skill / "powerpacks").exists())
 
@@ -158,28 +162,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("POWERPACKS_API_BASE_URL", hosted_env)
         self.assertNotIn("POWERSET_API_URL=https://api.powerset.dev", hosted_env)
 
-    def test_setup_skill_asks_about_powerset_account(self) -> None:
-        text = (ROOT / "packs/ingestion/skills/setup/SKILL.md").read_text()
-        # Step 1 is an explicit choice, not a silent Powerset default.
-        self.assertIn("Do you have a Powerset account you'd like to log in with?", text)
-        self.assertIn("custom-workspace route", text)
-        self.assertIn("1. Choose credentials (Powerset or prepared Modal workspace)", text)
-        # Powerset route initializes .env from the hosted template.
-        self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
-        # Powerset keys are verified after provisioning.
-        self.assertIn("pull_runtime_keys.py check --env-file .env", text)
-        # Large LinkedIn imports need realistic, count-based Modal expectations.
-        self.assertIn("Estimate from the Step 4 connection count", text)
-        self.assertIn("10,001–20,000 | 60–120 minutes", text)
-        self.assertIn("one-hour warm-cache run; allow up to two hours if cache-cold", text)
-        self.assertIn('about every **5 minutes**', text)
-        # Custom workspaces verify the actual named Modal secrets instead of
-        # treating a local OpenAI key as sandbox provisioning.
-        self.assertIn("modal secret list --json", text)
-        self.assertIn("powerset-openai", text)
-        self.assertIn("powerset-api", text)
-        self.assertIn("POWERPACKS_OPERATOR_ID", text)
-
+    def test_modal_driver_mounts_the_powerset_api_secret(self) -> None:
         modal_driver = (ROOT / "packs/indexing/modal/linkedin_modal_pipeline.py").read_text()
         self.assertIn('modal.Secret.from_name("powerset-api")', modal_driver)
         self.assertIn('os.environ.get("POWERSET_API_KEY_BACKUP"', modal_driver)
@@ -190,15 +173,13 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("POWERSET_API_KEY_BACKUP=", env_template)
         self.assertIn("RAPIDAPI_KEY=", env_template)
 
-    def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
+    def test_powerset_setup_runs_the_install_skill(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()
-        self.assertIn("$powerset setup", text)
-        self.assertIn("$powerset setup                 log in, pull runtime keys, and install/refresh MCP", text)
+        self.assertIn("| `$powerset setup` | Load and follow `packs/powerset/skills/install-powerpacks/SKILL.md`. |", text)
         self.assertIn("packs/powerset/primitives/auth/auth.py login", text)
         self.assertIn("packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull", text)
         self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
         self.assertIn("uv run --env-file .env --project . python", text)
-        self.assertIn("Powerset setup complete. Please restart Codex", text)
         self.assertNotIn("provision_runtime_env", text)
         self.assertNotIn("operator_bootstrap", text)
         self.assertNotIn("GCP Secret Manager", text)

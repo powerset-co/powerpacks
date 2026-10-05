@@ -7,7 +7,7 @@ database used by `$search local`.
 
 | Path | Use it when | Where processing runs | Current input |
 | --- | --- | --- | --- |
-| `$setup` plus Modal | Standard product setup. Import and enrich LinkedIn, merge sources, build the index, and download it. | Profile enrichment and indexing run in Modal; source fan-in and final validation run locally. | LinkedIn `Connections.csv`. |
+| Install skill plus Modal | Standard product setup. Import and enrich LinkedIn, merge sources, build the index, and download it. | Profile enrichment and indexing run in Modal; source fan-in and final validation run locally. | LinkedIn `Connections.csv` plus imported sources. |
 | `$build-local-search-index` | Develop, inspect, or rebuild from an existing canonical merged CSV without using Modal. | The processing pipeline and DuckDB build run on the local machine. | `.powerpacks/network-import/merged/people.csv`. |
 | `upload_powerset` (`$deep-context` step 9) | Push the shared slice of a built index to Powerset — TurboPuffer + Postgres — after `bin/deep-context share`. Dry-run by default. | The laptop, with `.env` creds — after a Modal build, `download` has already brought the DuckDB home. | The canonical store's `share` table + `local-search.duckdb`. |
 

@@ -8,7 +8,7 @@
 #   bin/clean-slate            # dry run: table of what would move / stay
 #   bin/clean-slate --apply    # move + write clean-slate-manifest.json
 #
-# Afterwards, pipeclean the flow: $setup (LinkedIn) -> $import-gmail ->
+# Afterwards, pipeclean the flow: install skill (LinkedIn) -> $import-gmail ->
 # $import-messages -> $deep-context. LLM stages cache-hit on stable keys.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

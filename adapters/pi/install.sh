@@ -17,7 +17,7 @@ RETIRED_SKILLS=(
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
   import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
-  linkedin-sync-mcp linkedin-sync-csv
+  linkedin-sync-mcp linkedin-sync-csv setup
 )
 
 "$REPO_ROOT/bin/setup-python"
@@ -44,9 +44,9 @@ install_skill feedback "$REPO_ROOT/packs/powerset/skills/feedback/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
+install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
 install_skill powerpacks-doctor "$REPO_ROOT/packs/powerset/skills/powerpacks-doctor/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
-install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
@@ -56,6 +56,6 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" pi "$SKILLS_DIR/.powerpacks-install.json"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound\n'
-printf '  setup import-messages msgvault import-gmail import-twitter\n'
+printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound\n'
+printf '  import-messages msgvault import-gmail import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

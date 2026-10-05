@@ -23,7 +23,7 @@ RETIRED_SKILLS=(
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
   import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
-  linkedin-sync-mcp linkedin-sync-csv
+  linkedin-sync-mcp linkedin-sync-csv setup
 )
 for skill in "${RETIRED_SKILLS[@]}"; do
   rm -f "$SKILLS_DIR/$skill/SKILL.md"
@@ -50,7 +50,6 @@ install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-power
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill powerpacks-doctor "$REPO_ROOT/packs/powerset/skills/powerpacks-doctor/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
-install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
@@ -66,5 +65,5 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks install-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound"
-echo "  setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
+echo "  import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo
