@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.14.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.1...powerpacks-v3.14.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **install:** ask for full access and stop chat and cloud sessions again ([#690](https://github.com/powerset-co/powerpacks/issues/690)) ([6e08184](https://github.com/powerset-co/powerpacks/commit/6e081842941b3da84ba3769b80ae3f092770c686))
+* **install:** build the index past failed research and list what to fix ([#695](https://github.com/powerset-co/powerpacks/issues/695)) ([4301d69](https://github.com/powerset-co/powerpacks/commit/4301d69e95ebff040d579712da8b8945a91b8496))
+* **install:** say what setup is waiting for under the status ([#692](https://github.com/powerset-co/powerpacks/issues/692)) ([a97a189](https://github.com/powerset-co/powerpacks/commit/a97a1897034b437c1c9b1e6294a891b1e76d1acb))
+* **install:** serve the launcher from a stable branch each release moves ([#694](https://github.com/powerset-co/powerpacks/issues/694)) ([1f701b0](https://github.com/powerset-co/powerpacks/commit/1f701b07adb622749bdf16e001d78e054d408675))
+* **linkedin:** a read is complete when it reaches LinkedIn's count ([#693](https://github.com/powerset-co/powerpacks/issues/693)) ([caa2d4b](https://github.com/powerset-co/powerpacks/commit/caa2d4bc38a9395ed8ba09f328e1e3daeac1810a))
+* **linkedin:** ask for LinkedIn's data export when a read stalls ([#697](https://github.com/powerset-co/powerpacks/issues/697)) ([458aef4](https://github.com/powerset-co/powerpacks/commit/458aef49254f0aaaafd7dcade132d70330ddb8f3))
+* **linkedin:** stop on a stalled read and record how far a full read got ([#696](https://github.com/powerset-co/powerpacks/issues/696)) ([0d5741c](https://github.com/powerset-co/powerpacks/commit/0d5741c5918782c2dcc1fe1d2c720248fe4a40b6))
+
 ## [3.14.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.0...powerpacks-v3.14.1) (2026-10-05)
 
 
