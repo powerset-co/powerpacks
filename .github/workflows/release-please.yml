@@ -20,11 +20,11 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
       # powerset.dev/powerpacks serves the install skill from `stable`, and the skill
       # runs `stable`'s bootstrap, so both always match the newest release.
-      # Release candidates (tags with a "-") leave it alone.
-      - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-') }}
+      # Release candidates (tags with "-rc") leave it alone.
+      - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-rc') }}
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
-      - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-') }}
+      - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-rc') }}
         run: git push --force origin "${{ steps.release.outputs.tag_name }}^{commit}:refs/heads/stable"
