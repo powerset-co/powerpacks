@@ -176,7 +176,7 @@ class ParentLookupRow:
     slug: str
     dossier_path: str
     dossier_body: str
-    headline: str
+    relationship_to_owner: str
     emails: tuple[str, ...]
     phones: tuple[str, ...]
     linkedin_urls: tuple[str, ...]

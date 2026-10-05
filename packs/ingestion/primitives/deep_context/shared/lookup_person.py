@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     elif result.status == "ambiguous":
         print(f"{len(result.matches)} matching people. Select one with --parent-id:\n")
         for match in result.matches:
-            details = " | ".join(filter(None, (match.headline, *match.emails,
+            details = " | ".join(filter(None, (match.relationship_to_owner, *match.emails,
                                                *match.phones, *match.linkedin_urls)))
             print(f"- {match.name or match.slug or match.parent_id} [{match.parent_id}] {details}")
     else:

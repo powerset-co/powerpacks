@@ -30,11 +30,15 @@ are not the selected person's confirmed context.
   found but has no saved parent or child dossier; present the available identity/profile
   information and offer to check whether saved context is available to build one.
 - **Several people:** show a numbered list with each person's name and a one-line
-  summary from their returned `headline` (role, company, or relationship).
-  Add an identifying contact detail when needed. If no summary is saved, use
-  known identifiers and say the role/relationship is unknown. Ask which person
-  the user means. Do not combine their facts. Once chosen, run
-  `bin/deep-context lookup --parent-id "<returned parent_id>" --json`.
+  summary of their relationship to the user from `relationship_to_owner`.
+  Show how the user knows them (partner, friend, former teammate, shared history),
+  rather than a LinkedIn title. Honor relationship corrections already given in chat.
+  If the returned relationship is vague or missing, read that parent's full saved
+  dossier with `bin/deep-context lookup --parent-id "<returned parent_id>" --json`
+  and use supported relationship/shared context. If it remains unknown, say so;
+  don't substitute a job title or infer closeness from professional identity.
+  Add an identifying contact detail when needed and ask which person the user means.
+  Keep each person's facts separate; read the selected parent's full dossier to answer.
 - **No match:** try useful name parts, known aliases, or supplied identifiers
   before asking for help. If a plausible match appears, show its identifying
   details and ask "Did you mean this person?" Similar spelling is not identity.

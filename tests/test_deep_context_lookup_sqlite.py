@@ -447,7 +447,7 @@ class PersonLookupSqliteTest(unittest.TestCase):
         result = PersonLookup(db=self.db.db_path, name="Casey Example").run()
         self.assertIn("SAVED CONTEXT FROM BEFORE MERGE", result.matches[0].dossier_body)
         self.assertNotIn("UNRELATED ARTIFACT", result.matches[0].dossier_body)
-        self.assertEqual(result.matches[0].headline, "Designer at North")
+        self.assertEqual(result.matches[0].relationship_to_owner, "")
 
     def test_lookup_deduplicates_bodies_and_excludes_candidates_and_other_parents(self) -> None:
         self.add_person("b", "Casey Example")
@@ -510,25 +510,58 @@ class PersonLookupSqliteTest(unittest.TestCase):
         self.assertIn("A@Example.com", out)
         self.assertIn("https://www.linkedin.com/in/jordan-b", out)
 
-    def test_ambiguous_choices_include_saved_child_summary_without_full_bodies(self) -> None:
-        self.add_person("b", "Jordan Bravo", dossier=False)
-        self.db.project_rows((ArtifactRow(
-            "dossier-person:person-b", "dossier", "parent-b", "/missing/child.md",
-            "child-b", "projected", person_id="person-b", payload_json=json.dumps({
-                "body": "PRIVATE FULL CHILD CONTEXT", "headline": "Product designer at North",
-            }),
-        ),))
+    def test_ambiguous_choices_show_relationship_instead_of_job_title(self) -> None:
+        self.add_person("b", "Jordan Bravo")
+        self.db.project_rows((
+            ArtifactRow("facts:parent-a", "facts", "parent-a", "facts-a.jsonl", "a", "projected"),
+            FactRow("parent-a", "parent-a", "facts:parent-a", facts_json=json.dumps({
+                "relationship_to_owner": "Your significant other; you share a home.",
+            })),
+            ArtifactRow("facts:person-b", "facts", "parent-b", "facts-b.jsonl", "b", "projected",
+                        person_id="person-b"),
+            FactRow("person-b", "parent-b", "facts:person-b", person_id="person-b",
+                    facts_json=json.dumps({"relationship_to_owner": "Your former teammate."})),
+        ))
         code, out, err = self.cli("--name", "Jordan Bravo", "--json")
         self.assertEqual((code, err), (0, ""))
         payload = json.loads(out)
         self.assertEqual(payload["status"], "ambiguous")
-        self.assertEqual([m["headline"] for m in payload["matches"]],
-                         ["Engineer a", "Product designer at North"])
+        self.assertEqual([m["relationship_to_owner"] for m in payload["matches"]],
+                         ["Your significant other; you share a home.", "Your former teammate."])
         self.assertTrue(all(not m["dossier_body"] for m in payload["matches"]))
+        self.assertTrue(all("headline" not in m for m in payload["matches"]))
         code, out, err = self.cli("--name", "Jordan Bravo")
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("Product designer at North", out)
-        self.assertNotIn("PRIVATE FULL CHILD CONTEXT", out)
+        self.assertIn("Your significant other", out)
+        self.assertIn("Your former teammate", out)
+        self.assertNotIn("Engineer", out)
+
+    def test_parent_relationship_precedes_child_facts_and_unresolved_candidates(self) -> None:
+        self.db.project_rows((
+            ArtifactRow("facts:parent-a", "facts", "parent-a", "parent.jsonl", "parent", "projected"),
+            FactRow("parent-a", "parent-a", "facts:parent-a",
+                    facts_json='{"relationship_to_owner":"Your partner."}'),
+            ArtifactRow("facts:person-a", "facts", "parent-a", "child.jsonl", "child", "projected",
+                        person_id="person-a"),
+            FactRow("person-a", "parent-a", "facts:person-a", person_id="person-a",
+                    facts_json='{"relationship_to_owner":"Old relationship description."}'),
+        ))
+        self.assertEqual(person_lookup(self.db.db_path, name="Jordan Bravo")[0].relationship_to_owner,
+                         "Your partner.")
+        self.add_person("b", "Casey Example")
+        self.db.project_rows((
+            LinkRow("candidate-b", "parent-b", "different-casey", "pub",
+                    source="deep-context-reconcile"),
+            ArtifactRow("facts:candidate-b", "facts", "parent-b", "candidate.jsonl", "candidate",
+                        "projected", candidate_key="candidate-b"),
+            FactRow("candidate-b", "parent-b", "facts:candidate-b",
+                    facts_json='{"relationship_to_owner":"Unconfirmed person."}'),
+            ArtifactRow("facts:failed-b", "facts", "parent-b", "failed.jsonl", "failed", "failed"),
+            FactRow("failed-b", "parent-b", "facts:failed-b",
+                    facts_json='{"relationship_to_owner":"Failed context."}'),
+        ))
+        match = person_lookup(self.db.db_path, name="Casey Example")[0]
+        self.assertEqual(match.relationship_to_owner, "")
 
     def test_parent_id_selects_only_one_canonical_dossier(self) -> None:
         self.add_person("b", "Jordan Bravo")
@@ -549,7 +582,7 @@ class PersonLookupSqliteTest(unittest.TestCase):
         self.assertEqual(match["dossier_body"], "# Jordan Bravo\nPARENT a\n\n\nCHILD BODY")
         self.assertEqual(set(match["emails"]), {"A@Example.com", "alias@example.com"})
         self.assertEqual(match["phones"], ["+14155550100"])
-        self.assertEqual(match["headline"], "Engineer a")
+        self.assertEqual(match["relationship_to_owner"], "")
 
     def test_ambiguous_json_is_metadata_then_selection_returns_body(self) -> None:
         self.add_person("b", "Jordan Bravo")
