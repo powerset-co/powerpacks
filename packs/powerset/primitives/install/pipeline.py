@@ -13,6 +13,9 @@ Changelog:
   2026-10-04: a step that stops with SystemExit is recorded as failed with its
       message instead of ending the process; research that cannot run (no
       Parallel key) is skipped with a warning and the index still builds.
+  2026-10-05: enrichment and profile lookups that fail for any reason are
+      deferred: search is built without them, the ready message lists what is
+      left to fix, and work the last enrichment left is tried once per run.
   2026-10-04: indexing goes ahead when a cached profile has no jobs listed (it
       used to raise on every resume); upload consent is asked before a $500+
       spend approval, so the two questions no longer bounce.
@@ -38,7 +41,7 @@ from packs.ingestion.primitives.deep_context.collection.collect_person_context i
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.ingestion.primitives.deep_context.db.workflow_views import enrichment_work, workflow_state
 from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
 from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
@@ -66,6 +69,10 @@ _PEOPLE = ".powerpacks/network-import/merged/people.csv"
 _LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
 _INDEX = ".powerpacks/search-index"
 _AUTO_SPEND_USD = 500
+# Steps search can be built without: a failure there is deferred to the next run.
+_DEFERRED_LABELS = {"enrich": "Research and LinkedIn matching", "profile-prefetch": "LinkedIn profile lookups"}
+# Skipped steps the finished setup still lists for the user to fix.
+_FOLLOW_UP_STEPS = (InstallStep.CREDENTIALS.value, InstallStep.ENRICH.value)
 _REVIEW_POLL_SECONDS = 5
 
 
@@ -138,7 +145,7 @@ class ProcessingOnboarding:
             self._write(InstallState.WAITING if needs_action else InstallState.FAILED,
                         f"{message} stopped. Check the installation log.",
                         action={"kind": "error", "command": name, "result": payload})
-            raise _Stopped
+            raise _Stopped(payload.get("error") or payload.get("message") or payload.get("note") or name)
         if not payload:
             raise ValueError(f"No result from {name}")
         return payload
@@ -237,11 +244,22 @@ class ProcessingOnboarding:
         self._run("parents", lambda: BuildParents(db=self.db).run().to_payload(), "Preparing your contacts")
         self._write(InstallState.COMPLETED, "Done")
 
+    def _deferred(self, name: str, error: BaseException) -> None:
+        """An optional step that failed is skipped; search is built without it and the next run tries again."""
+        with self.status.log_path.open("a", encoding="utf-8") as log:
+            log.write(f"[install] {name} deferred: {type(error).__name__}: {error}\n")
+        self._write(InstallState.SKIPPED, f"{_DEFERRED_LABELS[name]} didn't finish ({error}). Search is built "
+                    "without it; the next setup run tries again.")
+
     def _enrich(self) -> None:
         self.step = InstallStep.ENRICH
         state = workflow_state(self.db)
-        while state.next_action != "realize":
-            if state.next_action == "enrich":
+        work = enrichment_work(self.db)
+        # What the last enrichment could not finish (a lookup or a judgment) is tried once per setup run.
+        retry = state.next_action == "realize" and bool(work.lookups or work.judgments)
+        while state.next_action != "realize" or retry:
+            if state.next_action == "enrich" or retry:
+                retry = False
                 self.step = InstallStep.ENRICH
                 estimate = estimate_enrichment(self.db, state)
                 if estimate.estimated_usd >= _AUTO_SPEND_USD:
@@ -251,10 +269,8 @@ class ProcessingOnboarding:
                     self._run("enrich", lambda: pipeline.run(total=estimate.research.deduped_total,
                               budget=estimate.research.estimated_usd,
                               request_fingerprint=estimate.research.request_fingerprint), "Enriching your contacts")
-                except SystemExit as error:
-                    # The run is saved as failed, so the next setup run tries it again.
-                    self._write(InstallState.SKIPPED, f"Research could not run ({error}). Search is built "
-                                "without it; the next setup run will research these people.")
+                except (Exception, SystemExit) as error:
+                    self._deferred("enrich", error)
                     return
                 self._write(InstallState.COMPLETED, "Done")
             elif state.next_action == "review_linkedin":
@@ -284,9 +300,12 @@ class ProcessingOnboarding:
         realized = self._run("realize", realize.run, "Preparing your search index")
         if realized["profiles_missing"]:
             self.step = InstallStep.ENRICH
-            self._run("profile-prefetch", lambda: PrefetchProfiles(db=self.db, fetch=True).run().to_payload(),
-                      "Preparing your profiles")
-            self._write(InstallState.COMPLETED, "Done")
+            try:
+                self._run("profile-prefetch", lambda: PrefetchProfiles(db=self.db, fetch=True).run().to_payload(),
+                          "Preparing your profiles")
+                self._write(InstallState.COMPLETED, "Done")
+            except (Exception, SystemExit) as error:
+                self._deferred("profile-prefetch", error)
             self.step = InstallStep.INDEX
             # A cached profile with no jobs listed stays "missing"; realize exports it anyway.
             self._run("realize", realize.run, "Preparing your search index")
@@ -335,8 +354,12 @@ class ProcessingOnboarding:
             raise ValueError(validation["summary"])
         self._write(InstallState.COMPLETED, validation["summary"])
         self.step = InstallStep.READY
+        # Search is ready; whatever was deferred is listed with what it needs.
+        steps = self.status.read()["steps"]
+        deferred = [steps[name]["message"] for name in _FOLLOW_UP_STEPS
+                    if steps.get(name, {}).get("status") == InstallState.SKIPPED.value]
         self.status.write(step=self.step, status=InstallState.COMPLETED,
-                          message=validation["summary"],
+                          message=" ".join([validation["summary"], *deferred]),
                           pid=os.getpid(), retry_command=self.retry, plan=self.plan)
 
     def run(self) -> dict:
