@@ -1,5 +1,8 @@
 """The Chrome connections read keeps the export newest-first and asks only for new rows."""
+import contextlib
+import io
 import json
+import sys
 import zipfile
 import tempfile
 import unittest
@@ -7,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections
-from packs.ingestion.primitives.setup.automations.shell import CommandResult
+from packs.ingestion.primitives.setup.automations.shell import CommandResult, run_streaming_command
 
 MODULE = "packs.ingestion.primitives.discover.linkedin.connections"
 EXPORT = (
@@ -15,6 +18,17 @@ EXPORT = (
     "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
     "Casey,Lane,https://www.linkedin.com/in/casey-lane,casey@example.com,Example Co,Engineer,01 Jan 2026\n"
 )
+
+
+class ProgressLineTests(unittest.TestCase):
+    def test_progress_lines_reach_the_callback_and_stay_in_the_log(self):
+        seen = []
+        line = "powerpacks-progress " + json.dumps({"read": 5, "total": 9})
+        script = f"import sys; print({line!r}, file=sys.stderr); print('{{}}')"
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = run_streaming_command([sys.executable, "-c", script], timeout=30, on_progress=seen.append)
+        self.assertEqual(seen, [{"read": 5, "total": 9}])
+        self.assertIn("powerpacks-progress", result.stderr)
 
 
 class LinkedInConnectionsTests(unittest.TestCase):
@@ -30,7 +44,7 @@ class LinkedInConnectionsTests(unittest.TestCase):
     def scrape(self, browser_payload, export=None):
         self.exports = []
 
-        def browser(command, *, timeout, env):
+        def browser(command, *, timeout, env, on_progress=None):
             if "--export" in command:
                 self.exports.append(command[command.index("--export") + 1])
                 return CommandResult(ok=True, stdout=json.dumps(export))
@@ -77,13 +91,13 @@ class LinkedInConnectionsTests(unittest.TestCase):
         first = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 3, "loads": 300, "stopped": "limit", "connections": cards[:2]})
         self.assertEqual(self.flags, {"--stop-after-known": "25", "--max-loads": "300"})
         self.assertFalse(first["complete"])
-        self.assertIn("keep syncing on your next run", first["message"])
+        self.assertEqual(first["outcome"], "limit")
         self.assertEqual((self.manifest()["complete"], self.manifest()["loads"]), (False, 300))
 
         second = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 3, "loads": 320, "stopped": "end", "connections": cards})
         self.assertEqual(self.flags, {"--stop-after-known": "0", "--max-loads": "600"})
         self.assertEqual((second["connections"], second["added"], second["complete"]), (3, 1, True))
-        self.assertNotIn("next run", second["message"])
+        self.assertEqual(second["outcome"], "read")
 
         self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 3, "loads": 1, "stopped": "known", "connections": cards[:1]})
         self.assertEqual(self.flags, {"--stop-after-known": "25", "--max-loads": "300"})
@@ -96,7 +110,7 @@ class LinkedInConnectionsTests(unittest.TestCase):
                               "connections": cards}, export={"status": "ok", "export": "pending"})
         self.assertEqual(result["status"], "completed")
         self.assertFalse(result["complete"])
-        self.assertIn("LinkedIn stopped sending connections after 10 of 298", result["message"])
+        self.assertEqual((result["outcome"], result["read"], result["total"]), ("export_requested", 10, 298))
         self.assertEqual((self.manifest()["complete"], self.manifest()["total"], self.manifest()["stopped"]),
                          (False, 298, "stalled"))
         self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 45, "stopped": "end",
@@ -108,7 +122,7 @@ class LinkedInConnectionsTests(unittest.TestCase):
         result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 16, "stopped": "end",
                               "connections": cards}, export={"status": "ok", "export": "requested"})
         self.assertEqual(self.exports, ["request"])
-        self.assertIn("asked LinkedIn for your data export", result["message"])
+        self.assertEqual(result["outcome"], "export_requested")
         self.assertEqual(self.manifest()["export"], "requested")
 
     def test_the_run_after_a_stall_imports_the_ready_export_instead_of_reading_again(self):
@@ -123,7 +137,8 @@ class LinkedInConnectionsTests(unittest.TestCase):
         result = self.scrape({"status": "error", "message": "the list must not be read"},
                              export={"status": "ok", "export": "downloaded", "path": str(archive)})
         self.assertEqual(self.exports, ["fetch"])
-        self.assertEqual((result["status"], result["complete"], result["added"]), ("completed", True, 1))
+        self.assertEqual((result["status"], result["outcome"], result["complete"], result["added"]),
+                         ("completed", "export_imported", True, 1))
         self.assertIn("riley-echo", self.csv.read_text(encoding="utf-8"))
         self.assertEqual((self.manifest()["stopped"], self.manifest()["complete"]), ("export", True))
 
@@ -133,7 +148,7 @@ class LinkedInConnectionsTests(unittest.TestCase):
         result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 45, "stopped": "end",
                               "connections": cards})
         self.assertTrue(result["complete"])
-        self.assertEqual(result["message"], "294 LinkedIn connections (294 new); LinkedIn shows 298")
+        self.assertEqual((result["outcome"], result["connections"], result["total"]), ("partial", 294, 298))
         self.assertEqual((self.manifest()["connections"], self.manifest()["total"], self.manifest()["loads"]),
                          (294, 298, 45))
 

@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packs.powerset.primitives.auth import auth
-from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
+from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.mcp_install import mcp_install
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
 
@@ -59,19 +60,17 @@ class Onboarding:
         self.token = ""
         self.email = ""
 
-    def progress(self, step: InstallStep, state: InstallState, message: str, **summary) -> None:
-        self.step = step
-        self.status.write(step=step, status=state, message=message, pid=self.pid,
-                          retry_command=self.retry_command, **summary)
+    def progress(self, event: str, **values) -> dict:
+        record = self.status.write(event, step=self.step, pid=self.pid, retry_command=self.retry_command, **values)
+        self.step = InstallStep(record["step"])
+        return record
 
-    def waiting(self, message: str) -> int:
-        self.progress(self.step, InstallState.WAITING, message)
-        print(f"NEEDS YOU: {message}", flush=True)
+    def waiting(self, event: str, **values) -> int:
+        print(f"NEEDS YOU: {self.progress(event, **values)['message']}", flush=True)
         return NEEDS_YOU
 
-    def failed(self, message: str) -> int:
-        self.progress(self.step, InstallState.FAILED, message)
-        print(f"FAILED: {message}", flush=True)
+    def failed(self, event: str, **values) -> int:
+        print(f"FAILED: {self.progress(event, **values)['message']}", flush=True)
         return 1
 
     def log(self, message: str) -> None:
@@ -96,8 +95,7 @@ class Onboarding:
             time.sleep(2 ** attempt)
 
     def login(self) -> bool:
-        self.progress(InstallStep.ACCOUNT, InstallState.WAITING,
-                      "Waiting for account login. Sign in in the browser; setup will continue automatically.")
+        self.progress("account.signing_in")
         args = argparse.Namespace(auth0_domain=self.config.get("POWERPACKS_AUTH0_DOMAIN"),
             client_id=self.config.get("POWERPACKS_AUTH0_CLIENT_ID"),
             audience=self.config.get("POWERPACKS_AUTH0_AUDIENCE"),
@@ -113,8 +111,7 @@ class Onboarding:
             result = json.loads(output.getvalue()) if output.getvalue().strip() else {}
             if not code or result.get("error") != "login timed out":
                 break
-            self.progress(InstallStep.ACCOUNT, InstallState.WAITING,
-                          "The sign-in link expired. Opening a fresh one.")
+            self.progress("account.link_expired")
         if code:
             self.log(f"Account login failed: {result.get('error', 'login did not complete')}")
             return False
@@ -122,7 +119,7 @@ class Onboarding:
         return True
 
     def connect_account(self) -> dict | None:
-        self.progress(InstallStep.ACCOUNT, InstallState.RUNNING, "Checking your account")
+        self.progress("account.checking")
         reused = True
         try:
             credentials = auth._credentials_with_fresh_token(self.credentials_path,
@@ -147,13 +144,11 @@ class Onboarding:
         # Modal inputs and runs live under this id; servers before 2026-10-05 do not send it.
         if account.get("operator_id"):
             keys.write_env(self.env_path, {"POWERPACKS_OPERATOR_ID": account["operator_id"]})
-        self.progress(InstallStep.ACCOUNT, InstallState.SKIPPED if reused else InstallState.COMPLETED,
-                      f"Already signed in as {self.email}. Tell me if that's the wrong account." if reused else f"Connected as {self.email}",
-                      account_email=self.email)
+        self.progress("account.reused" if reused else "account.connected", email=self.email, account_email=self.email)
         return account
 
     def prepare_credentials(self) -> list[str]:
-        self.progress(InstallStep.CREDENTIALS, InstallState.RUNNING, "Preparing search access")
+        self.progress("credentials.preparing")
         values = {}
         responses = {}
         for path, _ in keys.KEY_SOURCES.values():
@@ -180,11 +175,11 @@ class Onboarding:
         present = keys._read_env_file(self.env_path)
         missing = [key for key in REQUIRED_KEYS if not present.get(key)]
         if not missing:
-            self.progress(InstallStep.CREDENTIALS, InstallState.COMPLETED, "Search access is ready")
+            self.progress("credentials.ready")
         return missing
 
     def connect_tools(self) -> None:
-        self.progress(InstallStep.CONNECTION, InstallState.RUNNING, "Connecting Powerpacks to your agent")
+        self.progress("connection.connecting")
         url = self.config["POWERPACKS_MCP_URL"]
         results = []
         for harness in self.harnesses:
@@ -196,9 +191,7 @@ class Onboarding:
             if not result.get("ok"):
                 self.log(f"Agent connection could not be registered: {result.get('error', 'host CLI unavailable')}")
         complete = bool(results) and all(result.get("ok") for result in results)
-        self.progress(InstallStep.CONNECTION, InstallState.COMPLETED if complete else InstallState.SKIPPED,
-                      "Agent connection configured" if complete else
-                      "Agent connection was skipped. Checking direct Powerset access next.")
+        self.progress("connection.done" if complete else "connection.skipped")
 
     def choose_network(self, networks: list[Network], account: dict) -> Network | None:
         selected_id = self.config.get("POWERPACKS_DEFAULT_SET_ID") or self.config.get("POWERSET_DEFAULT_SET_ID")
@@ -216,79 +209,69 @@ class Onboarding:
         return owned[0] if len(owned) == 1 else None
 
     def check_network(self, account: dict) -> int:
-        self.progress(InstallStep.NETWORK, InstallState.RUNNING, "Checking your network")
+        self.progress("network.checking")
         networks = [Network.parse(row) for row in self.request("/v2/sets")]
         selected = self.choose_network(networks, account)
-        alternative = max(networks, key=lambda network: network.person_count, default=None)
-        alternative_message = (f" {alternative.name} also has {alternative.person_count:,} people; "
-                               "tell me in chat if you want to use it." if alternative and alternative.person_count else "")
+        largest = max(networks, key=lambda network: network.person_count, default=None)
+        # The agent can offer the largest network the account has instead.
+        alternative = ({"alternative": {"name": largest.name, "person_count": largest.person_count}}
+                       if largest and largest.person_count else None)
         if networks and all(network.person_count == 0 for network in networks):
-            return self.waiting(f"All available networks for {self.email} have 0 people. Tell me in chat "
-                                "whether to switch accounts or connect your contacts.")
+            return self.waiting("network.all_empty", email=self.email)
         if selected is None:
-            return self.waiting(f"Connected as {self.email}, but your personal or previously selected network "
-                                "could not be confirmed. Tell me in chat whether to switch accounts or choose a network."
-                                + alternative_message)
+            return self.waiting("network.unconfirmed", email=self.email, details=alternative)
         name = "Personal Network" if selected.is_personal and selected.name == "Personal Connections" else selected.name
-        self.progress(InstallStep.NETWORK, InstallState.RUNNING, f"Checking {name} for {self.email}",
-                      network_name=name, person_count=selected.person_count)
+        found = {"network": name, "email": self.email, "count": selected.person_count}
+        self.progress("network.checking_one", network_name=name, person_count=selected.person_count, **found)
         keys.write_env(self.env_path, {"POWERPACKS_DEFAULT_SET_ID": selected.id})
         if selected.person_count == 0:
-            return self.waiting(f"{name} for {self.email} has 0 people. Tell me in chat whether to switch "
-                                "accounts or connect your contacts." + alternative_message)
+            return self.waiting("network.empty", details=alternative, **found)
         escaped_id = urllib.parse.quote(selected.id, safe="")
         contacts = self.request(f"/v2/set-contacts/{escaped_id}?page_size=1")
         count = self.request("/v2/search/count", {"set_id": selected.id, "is_current": True,
                                                   "search_summary": False, "search_company_signal": False})
         if not contacts["leads"] or int(count["count"]) < 1:
-            return self.waiting(f"{name} for {self.email} has {selected.person_count:,} people, but its searchable "
-                                "profiles are not ready. Ask me in chat to check the network before searching.")
-        warning = (" This is a small network; you may want another network or account." if selected.person_count < 10 else "")
-        message = f"{name} for {self.email} is ready: {selected.person_count:,} people in this network." + warning
-        self.progress(InstallStep.NETWORK, InstallState.COMPLETED, message)
-        print(f"DONE: {message} Ask me to find someone.", flush=True)
+            return self.waiting("network.not_searchable", **found)
+        record = self.progress("network.ready_small" if selected.person_count < 10 else "network.ready", **found)
+        print(f"DONE: {record['message']} Ask me to find someone.", flush=True)
         return 0
 
     def run(self) -> int:
         try:
             account = self.connect_account()
             if account is None:
-                return self.failed("Account login did not finish. Tell me in chat to try again; I will reopen the sign-in page.")
+                return self.failed("account.login_failed")
             try:
                 missing = self.prepare_credentials()
             except urllib.error.HTTPError as exc:
                 if exc.code != 401:
                     raise
                 if not self.login():
-                    return self.failed("Account login did not finish. Tell me in chat to try signing in again.")
+                    return self.failed("account.login_failed")
                 account = self.connect_account()
                 if account is None:
-                    return self.failed("Account login could not be verified. Tell me in chat to try again.")
+                    return self.failed("account.login_failed")
                 missing = self.prepare_credentials()
             if missing:
                 print("Missing search credentials: " + ", ".join(missing), file=sys.stderr)
             if _PROCESSING_KEY in missing:
-                return self.waiting(f"Connected as {self.email}, but search access has not been provisioned. "
-                                    "Ask Powerset to finish enabling search for this account, then tell me to retry.")
+                return self.waiting("credentials.not_provisioned", email=self.email)
             if missing:
                 # Local setup does not use hosted search; say so and keep going.
-                self.progress(InstallStep.CREDENTIALS, InstallState.SKIPPED,
-                              f"Hosted search isn't enabled for {self.email} yet, so local setup continues. "
-                              "Tell me if you want to sign in with a different account.")
+                self.progress("credentials.hosted_off", email=self.email)
                 self.connect_tools()
                 return NEEDS_YOU
             self.connect_tools()
             return self.check_network(account)
         except urllib.error.HTTPError as exc:
             print(f"{self.step.value}: HTTP {exc.code} at {urllib.parse.urlsplit(exc.filename).path}", file=sys.stderr)
-            message = f"Powerset could not complete this check (HTTP {exc.code}). Ask me in chat to check access and retry."
             if exc.code in (401, 403):
-                return self.waiting(message)
+                return self.waiting("account.denied", code=exc.code)
+            return self.failed("account.service_failed", code=exc.code)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             reason = str(exc.reason) if isinstance(exc, urllib.error.URLError) else str(exc)
             self.log(f"{self.step.value}: {type(exc).__name__}: {reason}")
-            message = "Setup could not finish. Ask me in chat to check the installation log and retry."
-        return self.failed(message)
+        return self.failed("account.error")
 
 
 def main() -> None:
@@ -329,9 +312,7 @@ def main() -> None:
         except (OSError, SystemExit) as error:
             with status.log_path.open("a") as log:
                 log.write(str(error) + "\n")
-            status.write(step=InstallStep.RUNTIME, status=InstallState.FAILED,
-                         message="The progress page could not start. I can check the log and retry.",
-                         pid=0, retry_command=flow.retry_command)
+            status.write("install.page_failed", pid=0, retry_command=flow.retry_command)
             print("FAILED: The progress page could not start. Check the installation log.", flush=True)
             raise SystemExit(1) from error
         print(f"STATUS PAGE: {page['url']}", flush=True)
@@ -349,8 +330,7 @@ def main() -> None:
         if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
             payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend)).run()
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
-    message = (payload.get("action") or {}).get("text") or payload.get("message", "Setup stopped")
-    print(f"{prefix[payload['status']]}: {message}", flush=True)
+    print(f"{prefix[payload['status']]}: {payload['message']}", flush=True)
     raise SystemExit({"completed": 0, "waiting": NEEDS_YOU, "running": NEEDS_YOU, "failed": 1}[payload["status"]])
 
 

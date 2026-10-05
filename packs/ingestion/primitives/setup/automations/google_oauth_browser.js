@@ -68,6 +68,11 @@ function result(payload) {
 const START_MS = Date.now();
 let lastLogMs = START_MS;
 
+// One line the caller reads as progress; everything else on stderr is the log.
+function progress(stage) {
+  process.stderr.write(`powerpacks-progress ${JSON.stringify({ stage })}\n`);
+}
+
 function log(message) {
   const now = Date.now();
   const total = ((now - START_MS) / 1000).toFixed(1);
@@ -434,6 +439,7 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
   await settle(page);
 
   log("configuring OAuth app overview");
+  progress("naming");
   if (await googleAuthConfigured(page)) {
     log("Google Auth Platform already configured");
     return;
@@ -500,6 +506,7 @@ async function clickScopeRow(root, scope) {
 
 async function addScopes(page, project) {
   log("adding Gmail OAuth scopes");
+  progress("permissions");
   const scopesUrl = consoleUrl("auth/scopes", project);
   await gotoPage(page, scopesUrl, "OAuth scopes");
   await settle(page);
@@ -837,6 +844,7 @@ async function main() {
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   if (onGoogleLogin(page.url())) {
     log("Google needs a login; opening Chrome");
+    progress("sign_in");
     await context.close();
     context = await launchChrome(profileDir, false);
     page = context.pages()[0] || await context.newPage();
@@ -874,6 +882,7 @@ async function main() {
     } else {
       await setupConsent(page, project, email, clientName, audience, timeoutMs);
       const scopes = await addScopes(page, project);
+      progress("client");
       const client = await createClient(page, project, email, clientName, downloadDir, timeoutMs);
       if (client && client.client_secret_path) {
         payload = {

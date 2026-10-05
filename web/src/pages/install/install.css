@@ -63,14 +63,6 @@
 .install-page .install-account p {
   margin: 4px 0;
 }
-.install-page .install-failure {
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
-  font-size: 12px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
 .install-page .install-steps li {
   display: grid;
   grid-template-rows: 1fr;
@@ -199,4 +191,7 @@
   50% {
     opacity: 0.55;
   }
+}
+.install-page .install-history[data-empty="true"] {
+  visibility: hidden;
 }

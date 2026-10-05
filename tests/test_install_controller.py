@@ -14,7 +14,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.powerset.primitives.install.controller import InstallController, permission_app
-from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
+from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.steps import InstallState, InstallStep
 
 
 class Request:
@@ -50,8 +51,7 @@ class InstallControllerTests(unittest.TestCase):
             self.assertEqual(permission_app(), str(app))
 
     def test_permission_button_opens_settings_and_highlights_actual_app(self):
-        InstallStatus(self.root).write(step=InstallStep.IMESSAGE_ACCESS, status=InstallState.WAITING,
-                                       message="Allow Messages access", pid=os.getpid(), action={"kind": "permission"})
+        InstallStatus(self.root).write('step.waiting', step=InstallStep.IMESSAGE_ACCESS, pid=os.getpid(), action={"kind": "permission"})
         request = Request({})
         with patch("packs.powerset.primitives.install.controller.permission_app", return_value="/Applications/Example.app"), patch("subprocess.run") as run:
             self.controller.post(request, "/api/install/permissions")
@@ -73,8 +73,7 @@ class InstallControllerTests(unittest.TestCase):
         qr.write_bytes(b"synthetic-qr-image")
         os.utime(qr, (1, 1))
         status = InstallStatus(self.root)
-        status.write(step=InstallStep.WHATSAPP_LOGIN, status=InstallState.WAITING,
-                     message="Scan WhatsApp", pid=os.getpid(), action={"kind": "qr"})
+        status.write('whatsapp.blocked', pid=os.getpid(), action={"kind": "qr"})
         server = ThreadingHTTPServer(("127.0.0.1", 0), _persistent_handler(self.root, Namespace(confirm_threshold=None)))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
@@ -88,8 +87,7 @@ class InstallControllerTests(unittest.TestCase):
         self.assertIn("qr_url", get()["action"])
         with urllib.request.urlopen(url + "/api/install/qr") as response:
             self.assertEqual(response.read(), b"synthetic-qr-image")
-        status.write(step=InstallStep.WHATSAPP_LOGIN, status=InstallState.FAILED,
-                     message="Login expired", pid=os.getpid(), action={"kind": "qr"})
+        status.write('whatsapp.failed', pid=os.getpid(), action={"kind": "qr"})
         self.assertNotIn("qr_url", get()["action"])
         with self.assertRaises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(url + "/api/install/qr")

@@ -131,9 +131,9 @@ class ReviewLifecycleTests(unittest.TestCase):
         self.assertEqual(json.loads(self.get('/api/status')[1])['stage'], 'install')
         with urllib.request.urlopen(self.base + '/', timeout=3) as response:
             self.assertEqual(response.url, self.base + '/searches')
-        from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
-        InstallStatus(self.root).write(step=InstallStep.READY, status=InstallState.COMPLETED,
-                                       message='Powerpacks is installed.', pid=os.getpid())
+        from packs.powerset.primitives.install.status import InstallStatus
+        from packs.powerset.primitives.install.steps import InstallState, InstallStep
+        InstallStatus(self.root).write('install.local_only_done', pid=os.getpid())
         with urllib.request.urlopen(self.base + '/', timeout=3) as response:
             self.assertEqual(response.url, self.base + '/install')
         (self.root / '.venv').symlink_to(ROOT / '.venv', target_is_directory=True)

@@ -15,20 +15,26 @@ export interface InstallAction {
     | "recovery"
   text?: string
   command?: string
-  app_path?: string | null
   qr_url?: string
   details?: unknown
+}
+/** The page's rows and fixed words, from packs/powerset/primitives/install/status_prose.py. */
+export interface InstallProse {
+  rows: { label: string; steps: InstallStep[]; done_label: string }[]
+  page: Record<string, string>
 }
 export interface InstallStatus {
   primitive: "powerpacks_install"
   status: InstallState
   step: InstallStep
+  event?: string
   message: string
+  note?: string
   log_path: string
   retry_command: string
   steps: Partial<Record<InstallStep, { status: InstallState; message: string }>>
   plan?: InstallStep[]
-  labels?: Record<string, string>
+  prose: InstallProse
   action?: InstallAction | null
   index_progress?: { status: string; message: string; progress?: number; payload: unknown } | null
   account_email?: string | null

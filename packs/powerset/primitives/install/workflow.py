@@ -5,6 +5,9 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-05: every write names a status_prose event; a primitive's own text goes
+      to the action's details. Google Cloud stages, the LinkedIn count and the
+      WhatsApp download count show on the page as they happen.
   2026-10-05: LinkedIn's login is its own step, and the plan lists every
       login step before every sync step, the order a run takes them. The
       WhatsApp scan starts its history download in the background; the WhatsApp
@@ -52,7 +55,10 @@ from packs.ingestion.primitives.imports.messages.importer import MessagesImport
 from packs.ingestion.primitives.setup.automations import accounts, msgvault_home
 from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup, TestUsers
 from packs.ingestion.primitives.setup.msgvault_setup import build_parser as msgvault_parser
-from packs.powerset.primitives.install.status import PROCESSING_STEPS, InstallState, InstallStatus, InstallStep
+from packs.powerset.primitives.install.controller import permission_app
+from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.status_prose import source_counts
+from packs.powerset.primitives.install.steps import PROCESSING_STEPS, InstallState, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
 
 
@@ -83,9 +89,6 @@ _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
-GMAIL_SETUP_STOPPED = "Gmail setup stopped in Google Cloud. I'm looking into it."
-GMAIL_QUESTION = "Which Gmail accounts should I add? The first one owns the Gmail setup."
-WHATSAPP_SYNCING = "Syncing WhatsApp. The first sync takes 30 minutes to a few hours."
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
 
@@ -145,26 +148,30 @@ class SourceOnboarding:
             args.extend(("--skip-source", source.value))
         self.retry_command = shlex.join(args)
 
-    def _write(self, step: InstallStep, state: InstallState, message: str,
-               action: dict | None = None, *, pid: int | None = None) -> dict:
-        self.step = step
-        return self.status.write(step=step, status=state, message=message,
-                                 pid=os.getpid() if pid is None else pid, retry_command=self.retry_command,
-                                 plan=self.plan, action=action)
+    def _write(self, event: str, *, step: InstallStep | None = None, action: dict | None = None,
+               details: dict | None = None, handed_back: bool = False, **values) -> dict:
+        """Write `event`. `handed_back`: this run returns and the agent takes over, so no process owns it."""
+        record = self.status.write(event, step=step or self.step, pid=0 if handed_back else os.getpid(),
+                                   retry_command=self.retry_command, plan=self.plan, action=action,
+                                   details=details, **values)
+        self.step = InstallStep(record["step"])
+        return record
 
-    def _result(self, step: InstallStep, payload: dict, action: dict | None = None) -> bool:
+    def _result(self, payload: dict, done: str, *, waiting: str = "step.waiting", failed: str = "step.failed",
+                step: InstallStep | None = None, action: dict | None = None, **values) -> bool:
+        """Write the event for a primitive's outcome; its own text stays in the details."""
         if payload["status"] in _SUCCESS:
-            self._write(step, InstallState.COMPLETED, payload.get("message", "Done"))
+            self._write(done, step=step, **values)
             return True
-        state = InstallState.WAITING if payload["status"] in _WAITING else InstallState.FAILED
-        self._write(step, state, payload.get("message") or payload.get("reason") or "This step needs attention",
-                    {**(action or {}), "details": payload}, pid=0 if state is InstallState.WAITING else None)
+        waits = payload["status"] in _WAITING
+        self._write(waiting if waits else failed, step=step, action=action, details=payload, handed_back=waits, **values)
         return False
 
     def _tools(self, source: Source, step: InstallStep) -> bool:
-        self._write(step, InstallState.RUNNING, "Preparing import tools")
+        self._write("tools.preparing", step=step)
         payload = ImportTools(sources=(source.value,)).run()
-        return self._result(step, payload, {"command": payload["command"]} if "command" in payload else None)
+        return self._result(payload, "tools.ready", waiting="tools.needs_password", failed="tools.failed", step=step,
+                            action={"command": payload["command"]} if "command" in payload else None)
 
     def _gmail_covered(self, current: import_common.ImportManifest) -> bool:
         manifest = Path(current.input.get("discovery_manifest", ".powerpacks/network-import/discover/gmail/manifest.json"))
@@ -183,35 +190,32 @@ class SourceOnboarding:
         return bool(requested) and all(coverage.get(email.lower(), False) for email in self.gmail_emails)
 
     def _gmail_connect(self) -> bool:
-        self._write(InstallStep.GMAIL_LOGIN, InstallState.RUNNING, "Checking Gmail access")
+        self._write("gmail.checking")
         home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
         local = accounts.status_payload(home)
         if not local["config"]["oauth_configured"]:
-            self._write(InstallStep.GMAIL_LOGIN, InstallState.RUNNING,
-                        "Setting up Gmail access. Sign in to Google in your browser if it asks.")
+            self._write("gmail.app.starting")
             created = BrowserSetup.from_args(msgvault_parser().parse_args(
-                ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0], "--no-install-mcp"])).run()
-            if created["status"] == "needs_user_action":
-                # The automation stopped in Google Cloud; the agent reads why, the user is not handed its steps.
-                self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, GMAIL_SETUP_STOPPED,
-                            {"kind": "gmail", "text": GMAIL_SETUP_STOPPED, "details": created}, pid=0)
-                return False
-            if not self._result(InstallStep.GMAIL_LOGIN, created, {"kind": "gmail"}):
+                ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0], "--no-install-mcp"]),
+                on_stage=self._gmail_stage).run()
+            # A stop in Google Cloud is the agent's to fix; the user is not handed its steps.
+            if not self._result(created, "gmail.app.ready", waiting="gmail.app.stopped", failed="gmail.app.failed"):
                 return False
             local = accounts.status_payload(home)
         # Every mailbox must be an OAuth test user before its consent can succeed.
         allowed = set(accounts.normalize_email_list(list(msgvault_home.load_setup_state(home, "").test_users)))
         missing = [email for email in accounts.normalize_email_list(list(self.gmail_emails)) if email not in allowed]
         if missing:
-            self._write(InstallStep.GMAIL_LOGIN, InstallState.RUNNING, "Allowing your Gmail accounts")
+            self._write("gmail.allowing")
             added = TestUsers.from_args(msgvault_parser().parse_args(
-                ["add-test-users", "--home", str(home), "--login-email", self.gmail_emails[0], *missing])).run()
-            if not self._result(InstallStep.GMAIL_LOGIN, added, {"kind": "gmail"}):
+                ["add-test-users", "--home", str(home), "--login-email", self.gmail_emails[0], *missing]),
+                on_stage=self._gmail_stage).run()
+            if not self._result(added, "gmail.allowed", waiting="gmail.app.stopped", failed="gmail.allowing.failed"):
                 return False
         if local["database"]["exists"]:
             health = accounts.check_accounts_payload(home, list(self.gmail_emails))
             if health["status"] == "error":
-                return self._result(InstallStep.GMAIL_LOGIN, health, {"kind": "gmail"})
+                return self._result(health, "gmail.connected", failed="gmail.connect.failed")
             checks = health.get("accounts", [])
         else:
             checks = [accounts.check_account(home, email, stored=False).record()
@@ -219,66 +223,64 @@ class SourceOnboarding:
             health = local
         authorize = [check for check in checks if check["status"] in {"missing_token", "reauthorization_required"}]
         for check in authorize:
-            action = {"kind": "gmail", "text": f"Connect {check['email']} in your browser", "details": check}
-            self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, "Connect Gmail", action)
+            self._write("gmail.connect", email=check["email"], details=check)
             while True:
                 result = accounts.add_account(home, check["email"], "", headless=False,
                                               force=check["status"] == "reauthorization_required")
                 if result.get("message") != "msgvault timed out":
                     break
-                self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING,
-                            "The Gmail sign-in expired. Opening a fresh one.", action)
-            if not self._result(InstallStep.GMAIL_LOGIN, result, action):
+                self._write("gmail.connect.expired", details=check)
+            if not self._result(result, "gmail.connected", waiting="gmail.connect.waiting", failed="gmail.connect.failed"):
                 return False
         if authorize:
             health = accounts.check_accounts_payload(home, list(self.gmail_emails))
-        if not self._result(InstallStep.GMAIL_LOGIN, health,
-                            {"kind": "gmail", "text": "Connect Gmail in your browser",
-                             "command": "; ".join(item["authorize_command"] for item in health.get("accounts", [])
-                                                  if "authorize_command" in item)}):
-            return False
-        return True
+        return self._result(health, "gmail.connected", waiting="gmail.connect.waiting", failed="gmail.connect.failed",
+                            action={"command": "; ".join(item["authorize_command"] for item in health.get("accounts", [])
+                                                         if "authorize_command" in item)})
+
+    def _gmail_stage(self, stage: str) -> None:
+        """A stage the Google Cloud automation reached, as its page line."""
+        self._write(f"gmail.app.{stage}")
 
     def _gmail_sync(self) -> bool:
         current = None if self.refresh else import_common.import_manifest_current("gmail")
         imported_emails = {item["account_email"].lower() for item in current.input.get("accounts", [])} if current else set()
         if current and imported_emails == {email.lower() for email in self.gmail_emails} and self._gmail_covered(current):
-            self._write(InstallStep.GMAIL_SYNC, InstallState.COMPLETED, "Gmail is already imported")
-            self._write(InstallStep.GMAIL_IMPORT, InstallState.COMPLETED, "Gmail contacts ready")
+            self._write("gmail.sync.current")
+            self._write("gmail.import.current")
             return True
-        self._write(InstallStep.GMAIL_SYNC, InstallState.RUNNING, "Syncing Gmail")
+        self._write("gmail.syncing")
         result = GmailDiscovery(account_emails=list(self.gmail_emails), sync_after=self.sync_after).run()
-        if not self._result(InstallStep.GMAIL_SYNC, result.to_payload()):
+        if not self._result(result.to_payload(), "gmail.synced", waiting="gmail.sync.waiting", failed="gmail.sync.failed"):
             return False
-        self._write(InstallStep.GMAIL_IMPORT, InstallState.RUNNING, "Adding Gmail contacts")
+        self._write("gmail.importing")
         importer = GmailImport()
         importer.run()
-        return self._result(InstallStep.GMAIL_IMPORT, importer.written)
+        return self._result(importer.written, "gmail.imported", failed="gmail.import.failed")
 
     def _imessage_access(self) -> bool:
-        self._write(InstallStep.IMESSAGE_ACCESS, InstallState.RUNNING, "Checking Messages access")
+        self._write("imessage.checking")
         extractor = IMessageExtractor()
         access = extractor.check(strict=True)
-        action = {"kind": "permission", "text": "Allow access to Messages",
-                  "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"}
         chat = access.get("chat_db", {})
+        settings = {"url": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"}
+        app = Path(permission_app() or "").stem or "the app running this session"
         if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
-            self._write(InstallStep.IMESSAGE_ACCESS, InstallState.WAITING, "Allow access to Messages",
-                        {**action, "details": access})
+            self._write("imessage.permission", app=app, details=access, action=settings)
             while (access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
                    and not access["chat_db"].get("missing_tables")):
                 time.sleep(_PERMISSION_POLL_SECONDS)
                 access = extractor.check(strict=True)
-        return self._result(InstallStep.IMESSAGE_ACCESS, access, action)
+        return self._result(access, "imessage.allowed", waiting="imessage.permission", failed="imessage.unavailable",
+                            action=settings, app=app)
 
     def _whatsapp_link(self) -> bool:
-        if auth.auth_status(self.wacli_store).authenticated:
-            self._write(InstallStep.WHATSAPP_LOGIN, InstallState.RUNNING, "Checking WhatsApp")
+        linked = auth.auth_status(self.wacli_store).authenticated
+        # auth_report stays alive while wacli refreshes the QR artifact.
+        if linked:
+            self._write("whatsapp.checking")
         else:
-            # auth_report stays alive while wacli refreshes the QR artifact.
-            self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Connect WhatsApp",
-                        {"kind": "qr", "text": "Scan with WhatsApp → Linked devices",
-                         "details": {"store": str(self.wacli_store)}})
+            self._write("whatsapp.qr", details={"store": str(self.wacli_store)})
         while True:
             try:
                 result = auth.auth_report(self.wacli_store, open_qr_page=False)
@@ -286,9 +288,9 @@ class SourceOnboarding:
             except PrimitiveBlocked as blocked:
                 if "command timed out after" not in blocked.payload.get("detail", ""):
                     raise
-                self._write(InstallStep.WHATSAPP_LOGIN, InstallState.WAITING, "Refreshing your WhatsApp QR code",
-                            {"kind": "qr", "text": "Scan with WhatsApp → Linked devices"})
-        return self._result(InstallStep.WHATSAPP_LOGIN, result, {"kind": "qr"})
+                self._write("whatsapp.qr.refreshed")
+        return self._result(result, "whatsapp.checking" if linked else "whatsapp.linked",
+                            waiting="whatsapp.blocked", failed="whatsapp.failed")
 
     def _messages_sync(self, source: Source) -> bool:
         imessage = source is Source.IMESSAGE
@@ -301,20 +303,31 @@ class SourceOnboarding:
             exported = read_json(contacts.with_name("whatsapp.contacts.csv.manifest.json"), {})
             store_matches = bool(exported.get("store")) and Path(exported["store"]).resolve() == self.wacli_store.resolve()
         if current and contacts.exists() and store_matches:
-            self._write(sync_step, InstallState.COMPLETED, "Contacts already imported")
-            self._write(import_step, InstallState.COMPLETED, "Contacts ready")
+            self._write("imessage.current" if imessage else "whatsapp.sync.current")
+            if not imessage:
+                self._write("whatsapp.import.current")
             return True
-        self._write(sync_step, InstallState.RUNNING, "Reading Messages" if imessage else WHATSAPP_SYNCING)
-        if not imessage:
-            auth.wait_for_history(self.wacli_store)
+        if imessage:
+            self._write("imessage.reading")
+        else:
+            self._write("whatsapp.downloading")
+            auth.wait_for_history(self.wacli_store, on_count=lambda messages: self._write(
+                "whatsapp.downloading.count", messages=messages))
+            self._write("whatsapp.syncing")
         result = MessagesDiscovery(include_imessage=imessage, include_whatsapp=not imessage,
                                    wacli_store=self.wacli_store, open_qr_page=False).run()
-        if not self._result(sync_step, result.to_payload()):
+        if imessage and not self._result(result.to_payload(), "imessage.importing", failed="imessage.read.failed"):
             return False
-        self._write(import_step, InstallState.RUNNING, "Adding contacts")
+        if not imessage:
+            if not self._result(result.to_payload(), "whatsapp.synced", waiting="whatsapp.sync.waiting",
+                                failed="whatsapp.sync.failed"):
+                return False
+            self._write("whatsapp.importing")
         importer = MessagesImport()
         importer.run()
-        return self._result(import_step, importer.written)
+        if imessage:
+            return self._result(importer.written, "imessage.imported", failed="imessage.import.failed")
+        return self._result(importer.written, "whatsapp.imported", failed="whatsapp.import.failed")
 
     def _linkedin_current(self) -> bool:
         record = read_json(self.root / SCRAPE_RECORD, {}) or {}
@@ -322,41 +335,43 @@ class SourceOnboarding:
 
     def _linkedin_login(self) -> bool:
         if self._linkedin_current():
-            self._write(InstallStep.LINKEDIN_LOGIN, InstallState.COMPLETED, "LinkedIn connections ready")
+            self._write("linkedin.login.current")
             return True
-        self._write(InstallStep.LINKEDIN_LOGIN, InstallState.RUNNING,
-                    "Checking LinkedIn. Log in to LinkedIn in the window that opens if it asks.")
-        return self._result(InstallStep.LINKEDIN_LOGIN,
-                            LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login())
+        self._write("linkedin.login.checking")
+        return self._result(LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login(), "linkedin.login.done",
+                            waiting="linkedin.login.waiting", failed="linkedin.login.failed")
 
     def _linkedin_sync(self) -> bool:
         if self._linkedin_current():
-            self._write(InstallStep.LINKEDIN, InstallState.COMPLETED, "LinkedIn connections ready")
+            self._write("linkedin.sync.current")
             return True
-        self._write(InstallStep.LINKEDIN, InstallState.RUNNING, "Reading your LinkedIn connections")
-        return self._result(InstallStep.LINKEDIN, LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run())
+        self._write("linkedin.reading")
+        result = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run(
+            on_count=lambda read, total: self._write("linkedin.reading.count", read=read, total=total))
+        return self._result(result, f"linkedin.done.{result.get('outcome')}", waiting="linkedin.waiting",
+                            failed="linkedin.failed",
+                            **{key: result[key] for key in ("connections", "added", "read", "total") if key in result})
 
     def run(self) -> dict:
         previous = self.status.read()
         try:
             if Path.cwd() != self.root:
                 raise ValueError(f"Run bin/onboard from {self.root}")
-            self._write(InstallStep.SOURCES, InstallState.COMPLETED, "Sources selected")
+            self._write("sources.selected")
             for source in self.sources:
                 for step in _SOURCE_STEPS[source]:
                     if source in self.skip_sources:
-                        self._write(step, InstallState.SKIPPED, "Skipped for now")
+                        self._write("source.skipped", step=step)
                     elif previous.get("steps", {}).get(step.value, {}).get("status") == InstallState.SKIPPED:
-                        self._write(step, InstallState.WAITING, "Not started")
+                        self._write("source.not_started", step=step)
             if all(source in self.skip_sources for source in self.sources):
-                return self._write(InstallStep.READY, InstallState.COMPLETED, "Powerpacks is installed")
+                return self._write("sources.all_skipped")
             active = [source for source in self.sources if source not in self.skip_sources]
             if Source.GMAIL in active and not self.gmail_emails:
                 # Gmail defaults to the account the user signed in to Powerset with.
                 account = previous.get("account_email") or ""
                 if not account:
-                    return self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, GMAIL_QUESTION,
-                                       {"kind": "gmail", "text": GMAIL_QUESTION}, pid=0)
+                    return self._write("gmail.which_accounts", handed_back=True)
                 self.gmail_emails = (account,)
             # Tools first (Homebrew can take minutes), then every login back to back while
             # the user is here, then the syncs and imports run without them.
@@ -378,21 +393,16 @@ class SourceOnboarding:
             imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
             counts = {item.source: item.stats["people"] for item in imports
                       if item.status == "completed" and "people" in item.stats}
-            message = " · ".join(f"{source.title()}: {count:,} contacts" for source, count in counts.items()) or "Sources are ready"
-            return self._write(InstallStep.DEEP_CONTEXT, InstallState.WAITING, message,
-                               {"kind": "processing", "text": "Ready to build your network",
-                                "command": "bin/deep-context check", "details": {"counts": counts}}, pid=0)
+            return self._write("sources.ready", counts=source_counts(counts), action={"command": "bin/deep-context check"},
+                               details={"counts": counts}, handed_back=True)
         except PrimitiveBlocked as exc:
-            action = {"kind": "qr" if self.step is InstallStep.WHATSAPP_LOGIN else "error", "details": exc.payload}
-            if exc.payload.get("install_command"):
-                action["command"] = exc.payload["install_command"]
-            return self._write(self.step, InstallState.WAITING, str(exc), action, pid=0)
+            return self._write("step.waiting", details=exc.payload, handed_back=True,
+                               action={"command": exc.payload["install_command"]} if exc.payload.get("install_command") else None)
         except Exception as exc:
             self.status.directory.mkdir(parents=True, exist_ok=True)
             with self.status.log_path.open("a", encoding="utf-8") as log:
                 traceback.print_exc(file=log)
-            return self._write(self.step, InstallState.FAILED, str(exc),
-                               {"details": {"error_type": type(exc).__name__, "error": str(exc)}})
+            return self._write("step.failed", details={"error_type": type(exc).__name__, "error": str(exc)})
 
 
 def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:

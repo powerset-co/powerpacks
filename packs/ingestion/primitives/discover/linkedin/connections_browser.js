@@ -71,6 +71,11 @@ function log(message) {
   process.stderr.write(`[linkedin/browser] ${message}\n`);
 }
 
+// One line the caller reads as progress; everything else on stderr is the log.
+function progress(payload) {
+  process.stderr.write(`powerpacks-progress ${JSON.stringify(payload)}\n`);
+}
+
 function launch(profileDir, headless) {
   return chromium.launchPersistentContext(profileDir, {
     ...browserTarget(),
@@ -171,6 +176,7 @@ async function scrollList(page, known, stopAfterKnown, maxLoads) {
       const button = showMore();
       if (button) button.click();
       loads += 1;
+      if (loads % 5 === 0) window.powerpacksRead(slugs().size);
       await new Promise((resolve) => setTimeout(resolve, pauseMin + Math.random() * pauseJitter));
       if (scroller.scrollHeight !== height || slugs().size !== before) lastGrowth = performance.now();
       else if (performance.now() - lastGrowth >= endAfter) return { loads, stopped: "end" };
@@ -252,6 +258,7 @@ async function main() {
       return;
     }
     log(`reading your connections (LinkedIn shows ${total})`);
+    await page.exposeFunction("powerpacksRead", (read) => progress({ read, total }));
     const scrolled = await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads));
     const connections = await readCards(page);
     log(`read ${connections.length} connections in ${scrolled.loads} loads (${scrolled.stopped})`);

@@ -21,6 +21,8 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-10-05: the read reports its count as it scrolls and returns an `outcome`
+      instead of a message; the install page words it (install/status_prose.py).
   2026-10-05: a stalled read asks LinkedIn for its data export (the larger
       archive, which has Connections.csv); the next run imports it when ready.
   2026-10-05: a read that ends under STALL_SHARE of LinkedIn's "N connections"
@@ -36,7 +38,7 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json
 from packs.ingestion.primitives.setup.automations.oauth_browser import ensure_playwright_core
@@ -109,14 +111,14 @@ class LinkedInConnections:
         self.login_timeout_seconds = login_timeout_seconds
         self.record_path = csv_path.with_name(SCRAPE_RECORD.name)
 
-    def _browser(self, *args: str, timeout: int) -> dict[str, Any]:
+    def _browser(self, *args: str, timeout: int, on_progress: Callable[[dict], None] | None = None) -> dict[str, Any]:
         deps = ensure_playwright_core()
         if deps["status"] != "ok":
             return {"status": "failed", "message": deps["message"]}
         result = run_streaming_command(
             ["node", str(BROWSER_SCRIPT), "--profile-dir", str(self.profile_dir),
              "--timeout-seconds", str(self.login_timeout_seconds), *args],
-            timeout=timeout, env={**os.environ, "NODE_PATH": deps["node_path"]})
+            timeout=timeout, env={**os.environ, "NODE_PATH": deps["node_path"]}, on_progress=on_progress)
         return parse_json_fragment(result.stdout) if result.stdout.strip() else {
             "status": "error", "message": command_error(result)}
 
@@ -124,7 +126,7 @@ class LinkedInConnections:
         """Make sure the saved profile is signed in; a window opens only if it is not."""
         payload = self._browser("--login-only", "1", timeout=self.login_timeout_seconds + 60)
         if payload["status"] == "ok":
-            return {"status": "completed", "message": "Signed in to LinkedIn"}
+            return {"status": "completed"}
         return payload if payload["status"] == "needs_user_action" else {"status": "failed", "message": payload["message"]}
 
     def _export(self, mode: str) -> dict[str, Any]:
@@ -144,11 +146,13 @@ class LinkedInConnections:
         write_json(self.record_path, {
             **previous, "status": "completed", "complete": True, "connections": len(rows), "added": len(added),
             "stopped": "export", "export": "imported", "updated_at": now_iso()})
-        return {"status": "completed", "complete": True, "connections": len(rows), "added": len(added),
-                "path": str(self.csv_path),
-                "message": f"{len(rows):,} LinkedIn connections ({len(added):,} new, from your LinkedIn data export)"}
+        return {"status": "completed", "outcome": "export_imported", "complete": True, "connections": len(rows),
+                "added": len(added), "path": str(self.csv_path)}
 
-    def run(self) -> dict[str, Any]:
+    def run(self, *, on_count: Callable[[int, int], None] | None = None) -> dict[str, Any]:
+        """Read new connections; `on_count(read, total)` follows the read as it scrolls. `outcome`
+        says how it ended: read, partial (LinkedIn shows more), limit, stalled, export_requested,
+        or export_imported."""
         existing = _read_export(self.csv_path)
         known = {extract_public_identifier(row["URL"]) for row in existing} - {""}
         previous = read_json(self.record_path, {}) or {}
@@ -165,7 +169,8 @@ class LinkedInConnections:
         try:
             payload = self._browser(
                 "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
-                "--max-loads", str(max_loads), timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD)
+                "--max-loads", str(max_loads), timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
+                on_progress=(lambda progress: on_count(progress["read"], progress["total"])) if on_count else None)
         finally:
             os.unlink(handle.name)
         if payload["status"] == "needs_user_action":
@@ -192,20 +197,13 @@ class LinkedInConnections:
             "export": export,
             "owner_url": PROFILE_URL.format(slug=payload["owner_slug"]) if payload["owner_slug"] else "",
             "updated_at": now_iso()})
-        message = f"{len(rows):,} LinkedIn connections ({len(added):,} new)"
-        if stalled:
-            message = (f"LinkedIn stopped sending connections after {read:,} of {total:,}, likely a network or "
-                       "account limit, so I stopped to keep your account safe.")
-            message += (" I asked LinkedIn for your data export (it can take a day); the next setup run imports it."
-                        if export in ("requested", "pending") else " The rest sync on your next run.")
-            message += " Your contacts are ready to process now."
-        elif stopped == "limit":
-            message += ". The rest keep syncing on your next run; your contacts are ready to process now."
-        elif len(rows) < total:
-            message += f"; LinkedIn shows {total:,}"
+        outcome = ("export_requested" if stalled and export in ("requested", "pending") else "stalled" if stalled
+                   else "limit" if stopped == "limit" else "partial" if len(rows) < total else "read")
         return {
             "status": "completed",
-            "message": message,
+            "outcome": outcome,
+            "read": read,
+            "total": total,
             "connections": len(rows),
             "added": len(added),
             "complete": complete,

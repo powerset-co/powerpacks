@@ -14,7 +14,8 @@ from packs.ingestion.primitives.deep_context.db.models import EnrichmentWork
 
 from packs.powerset.primitives.install import pipeline
 from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
-from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
+from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.steps import InstallState, InstallStep
 
 
 class InstallPipelineTests(unittest.TestCase):
@@ -67,8 +68,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.root = root.resolve()
         self.status = InstallStatus(self.root)
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
-        self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
-                          message="Ready", pid=os.getpid(), retry_command=self.retry)
+        self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
         owner = self.root / ".powerpacks/deep-context/owner.json"
         owner.parent.mkdir(parents=True)
         owner.write_text("{}")
@@ -285,11 +285,11 @@ class InstallPipelineTests(unittest.TestCase):
                 flow = ProcessingOnboarding(self.root)
                 payload = {"status": native_state, "reason": "Synthetic native stop"}
                 with self.assertRaises(pipeline._Stopped):
-                    flow._run("synthetic-stage", lambda: payload, "Reading synthetic input")
+                    flow._run("synthetic-stage", lambda: payload, "discover.reading")
                 result = self.status.read()
                 self.assertEqual(result["status"], expected_state)
                 self.assertEqual(result["installer_pid"], 0)
-                self.assertEqual(result["action"]["result"], payload)
+                self.assertEqual(result["action"]["details"], payload)
                 self.assertNotIn("ready", result["steps"])
 
     def test_direct_runner_captures_native_output_in_installation_log(self):
@@ -298,7 +298,7 @@ class InstallPipelineTests(unittest.TestCase):
             print("Synthetic native progress", file=sys.stderr)
             return {"status": "completed"}
 
-        result = ProcessingOnboarding(self.root)._run("synthetic-stage", operation, "Reading synthetic input")
+        result = ProcessingOnboarding(self.root)._run("synthetic-stage", operation, "discover.reading")
         self.assertEqual(result["status"], "completed")
         log = self.status.log_path.read_text()
         self.assertIn("[install] synthetic-stage", log)
@@ -409,7 +409,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.exiting_command = "collect"
         result = self.run_pipeline("synthesize", "index")
         self.assertEqual(result["status"], "failed")
-        self.assertIn("PARALLEL_API_KEY not set", result["message"])
+        self.assertIn("PARALLEL_API_KEY not set", result["action"]["details"]["error"])
         self.assertFalse(self.indexed())
 
     def test_research_that_cannot_run_is_skipped_and_the_index_still_builds(self):
@@ -418,7 +418,8 @@ class InstallPipelineTests(unittest.TestCase):
         result = self.run_pipeline("index")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
-        self.assertIn("PARALLEL_API_KEY not set", result["steps"]["enrich"]["message"])
+        self.assertIn("PARALLEL_API_KEY not set", result["action"]["details"]["left_to_fix"][0]["error"])
+        self.assertIn("Research and LinkedIn matching didn't finish", result["note"])
         self.assertTrue(self.indexed())
 
     def test_each_native_stage_failure_resumes_without_repeating_completed_paid_work(self):
@@ -433,7 +434,7 @@ class InstallPipelineTests(unittest.TestCase):
                 self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
                 self.fail_at = position
                 result = self.run_pipeline("synthesize", "cluster", "enrich", "index")
-                if command[0] in pipeline._DEFERRED_LABELS:
+                if command[0] in ("enrich", "profile-prefetch"):
                     # Search is built without a deferred step; it is skipped, not failed.
                     self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
                     self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
@@ -501,7 +502,7 @@ class InstallPipelineTests(unittest.TestCase):
         result = self.run_pipeline()
         self.assertEqual(result["status"], "completed")
         self.assertTrue(self.indexed())
-        self.assertIn("source read failed", result["message"])
+        self.assertIn("source read failed", result["action"]["details"]["left_to_fix"][0]["error"])
         self.failing_command = ""
         self.calls.clear()
         self.assertEqual(self.run_pipeline()["status"], "completed")
@@ -514,7 +515,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
         self.assertTrue(self.indexed())
-        self.assertIn("source read failed", result["message"])
+        self.assertIn("source read failed", result["action"]["details"]["left_to_fix"][0]["error"])
 
     def test_people_the_last_enrichment_could_not_finish_are_tried_again(self):
         self.leftover = EnrichmentWork(lookups=("parent:jordan",))
@@ -527,8 +528,7 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_saved_wacli_store_reaches_native_readiness_and_collection(self):
         store = self.root / "synthetic-whatsapp-store"
-        self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
-                          message="Ready", pid=0, retry_command=self.retry + f" --wacli-store {store}")
+        self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=0, retry_command=self.retry + f" --wacli-store {store}")
         self.run_pipeline()
         for stage in ("check", "collect"):
             node = next(options["node"] for name, options in self.calls if name == stage)
@@ -589,7 +589,7 @@ class InstallPipelineTests(unittest.TestCase):
                         [], returncode, json.dumps(payload))) as modal:
                     result = self.run_pipeline()
                 self.assertEqual((result["step"], result["status"]), ("index", expected_status))
-                self.assertEqual(result["action"]["result"]["returncode"], returncode)
+                self.assertEqual(result["action"]["details"]["returncode"], returncode)
                 self.assertEqual(modal.call_count, 1)
                 self.assertNotIn("ready", result["steps"])
                 self.assertFalse(self.did("search-validate"))
@@ -697,9 +697,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertNotIn("ready", result["steps"])
 
     def test_local_validation_preserves_verified_hosted_network_count(self):
-        self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
-                          message="Ready", pid=0, retry_command=self.retry,
-                          network_name="Personal Network", person_count=328)
+        self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=0, retry_command=self.retry, network_name="Personal Network", person_count=328)
         result = self.run_pipeline("index")
         self.assertEqual(result["person_count"], 328)
         self.assertIn("1 people searchable", result["message"])

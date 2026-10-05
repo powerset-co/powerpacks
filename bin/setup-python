@@ -11,10 +11,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_VERSION="${POWERPACKS_PYTHON_VERSION:-3.12}"
 AUTO_INSTALL="${POWERPACKS_AUTO_INSTALL:-1}"
 
+# Names a status page event (packs/powerset/primitives/install/status_prose.py).
 install_progress() {
   [[ -n "${POWERPACKS_INSTALL_PID:-}" ]] || return 0
   (cd "$ROOT" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.status write \
-    --root "$ROOT" --step "$1" --status running --message "$2" --pid "$POWERPACKS_INSTALL_PID" \
+    --root "$ROOT" --event "$1" --pid "$POWERPACKS_INSTALL_PID" \
     --retry-command "$POWERPACKS_INSTALL_RETRY_COMMAND") >/dev/null
 }
 
@@ -35,7 +36,7 @@ fi
 
 "$UV_BIN" python install "$PYTHON_VERSION"
 
-install_progress dependencies "Installing what Powerpacks needs"
+install_progress install.dependencies
 sync_args=(sync --project "$ROOT" --python "$PYTHON_VERSION")
 if [[ -f "$ROOT/uv.lock" ]]; then
   sync_args+=(--frozen)

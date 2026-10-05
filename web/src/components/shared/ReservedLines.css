@@ -1,0 +1,17 @@
+/* Holds a fixed number of text lines whatever the text, so the layout under it never moves;
+   text longer than that is cut with an ellipsis. Narrow screens wrap more, so they hold more. */
+.reserved-lines {
+  --reserved-lines: var(--reserved-lines-wide);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--reserved-lines);
+  line-clamp: var(--reserved-lines);
+  overflow: hidden;
+  min-height: calc(var(--reserved-lines) * 1lh);
+  margin: 0;
+}
+@media (max-width: 520px) {
+  .reserved-lines {
+    --reserved-lines: var(--reserved-lines-narrow);
+  }
+}

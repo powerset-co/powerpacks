@@ -1,0 +1,89 @@
+{
+  "rows": [
+    {
+      "label": "Installing Powerpacks",
+      "steps": ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
+      "done_label": ""
+    },
+    {
+      "label": "Logging in to your accounts",
+      "steps": [
+        "linkedin_login",
+        "gmail_tools",
+        "gmail_login",
+        "imessage_access",
+        "whatsapp_tools",
+        "whatsapp_login"
+      ],
+      "done_label": ""
+    },
+    {
+      "label": "Syncing LinkedIn",
+      "steps": ["linkedin"],
+      "done_label": ""
+    },
+    {
+      "label": "Syncing Gmail",
+      "steps": ["gmail_sync", "gmail_import"],
+      "done_label": ""
+    },
+    {
+      "label": "Syncing iMessage",
+      "steps": ["imessage_import"],
+      "done_label": ""
+    },
+    {
+      "label": "Syncing WhatsApp",
+      "steps": ["whatsapp_sync", "whatsapp_import"],
+      "done_label": ""
+    },
+    {
+      "label": "Discovering your contacts",
+      "steps": ["deep_context"],
+      "done_label": ""
+    },
+    {
+      "label": "Enriching your contacts",
+      "steps": ["enrich"],
+      "done_label": ""
+    },
+    {
+      "label": "Waiting for your review",
+      "steps": ["review"],
+      "done_label": "Review completed"
+    },
+    {
+      "label": "Building your search index",
+      "steps": ["index", "validate", "ready"],
+      "done_label": ""
+    }
+  ],
+  "page": {
+    "title.running": "Setting up Powerpacks",
+    "title.waiting": "One thing to finish",
+    "title.failed": "Setup needs a fix",
+    "title.completed": "Powerpacks is installed",
+    "title.ready": "Powerpacks is ready",
+    "title.paused": "Setup paused",
+    "title.signing_in": "Waiting for you to sign in",
+    "title.review": "Waiting for your review",
+    "title.processing": "Your contacts are saved",
+    "state.running": "Working",
+    "state.waiting": "Waiting",
+    "state.failed": "Needs a fix",
+    "state.completed": "Done",
+    "state.skipped": "Skipped",
+    "state.paused": "Paused",
+    "state.next": "Next",
+    "failed.note": "Your progress is saved. I can check this step and retry.",
+    "history.folded": "{count} tasks completed",
+    "history.open": "Hide completed tasks",
+    "permission.button": "Open settings & show the app",
+    "qr.loading": "Getting your QR code…",
+    "qr.where": "WhatsApp → Settings → Linked devices → Link a device",
+    "qr.alt": "Scan this QR code to link WhatsApp",
+    "review.offer.one": "1 LinkedIn match needs a quick look when you have time.",
+    "review.offer.many": "{count} LinkedIn matches need a quick look when you have time.",
+    "review.button": "Review contacts"
+  }
+}

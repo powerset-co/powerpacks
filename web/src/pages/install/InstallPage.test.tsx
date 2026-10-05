@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { InstallStatus } from "@/types/install"
 
 import { InstallPage } from "./InstallPage"
+import PROSE from "./prose.fixture.json"
 
 const INSTALL: InstallStatus = {
   primitive: "powerpacks_install",
@@ -14,6 +15,8 @@ const INSTALL: InstallStatus = {
   message: "Installing what Powerpacks needs",
   log_path: "/synthetic/.powerpacks/install/install.log",
   retry_command: "bin/bootstrap --no-tools",
+  plan: ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
+  prose: PROSE,
   steps: {
     runtime: { status: "completed", message: "Mac ready" },
     dependencies: { status: "running", message: "Installing what Powerpacks needs" },
@@ -107,7 +110,6 @@ describe("installation progress", () => {
       plan: SOURCE_PLAN,
       step: "whatsapp_login",
       status: "waiting",
-      labels: { linkedin: "Syncing LinkedIn" },
       steps: Object.fromEntries(
         LOGINS.slice(0, -1).map((step) => [step, { status: "completed", message: "Done" }]),
       ),
@@ -347,7 +349,8 @@ describe("installation progress", () => {
     status = {
       ...status,
       step: "imessage_access",
-      action: { kind: "permission", app_path: "/Applications/Example.app" },
+      note: "Powerpacks reads your iMessage history to find the people you talk to. Drag Example into Full Disk Access and turn it on; I’ll continue automatically.",
+      action: { kind: "permission" },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     fireEvent.click(await screen.findByRole("button", { name: "Open settings & show the app" }))
@@ -355,7 +358,7 @@ describe("installation progress", () => {
       "/api/install/permissions",
       expect.objectContaining({ method: "POST" }),
     )
-    expect(screen.getByText("Example")).toBeTruthy()
+    expect(screen.getByText(/Drag Example into Full Disk Access/)).toBeTruthy()
   })
 
   it("keeps the page mounted on unchanged reads and stops the progress orbit while waiting or failed", async () => {
