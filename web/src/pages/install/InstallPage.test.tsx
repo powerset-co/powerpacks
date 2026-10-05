@@ -59,7 +59,7 @@ describe("installation progress", () => {
     )
     mount()
     await screen.findByRole("heading", { name: "Setup paused" })
-    expect(screen.getByText("Syncing WhatsApp").closest("li")?.textContent).toContain("Paused")
+    expect(screen.getByText("Logging in to your accounts").closest("li")?.textContent).toContain("Paused")
     expect(screen.queryByText("Needs a fix")).toBeNull()
   })
 
@@ -85,26 +85,31 @@ describe("installation progress", () => {
     expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
   })
 
-  it("combines each source into one syncing step while preserving waits and failures", async () => {
-    const plan = [
-      "imessage_access",
-      "imessage_import",
-      "whatsapp_tools",
-      "whatsapp_login",
-      "whatsapp_sync",
-      "whatsapp_import",
-      "gmail_tools",
-      "gmail_login",
-      "gmail_sync",
-      "gmail_import",
-    ]
+  const SOURCE_PLAN = [
+    "linkedin_login",
+    "gmail_tools",
+    "gmail_login",
+    "imessage_access",
+    "whatsapp_tools",
+    "whatsapp_login",
+    "linkedin",
+    "gmail_sync",
+    "gmail_import",
+    "imessage_import",
+    "whatsapp_sync",
+    "whatsapp_import",
+  ]
+  const LOGINS = SOURCE_PLAN.slice(0, SOURCE_PLAN.indexOf("linkedin"))
+
+  it("shows every login as one row, then one syncing row per source", async () => {
     let status: InstallStatus = {
       ...INSTALL,
-      plan,
-      step: "gmail_login",
+      plan: SOURCE_PLAN,
+      step: "whatsapp_login",
       status: "waiting",
+      labels: { linkedin: "Syncing LinkedIn" },
       steps: Object.fromEntries(
-        plan.slice(0, 7).map((step) => [step, { status: "completed", message: "Done" }]),
+        LOGINS.slice(0, -1).map((step) => [step, { status: "completed", message: "Done" }]),
       ),
     }
     vi.stubGlobal(
@@ -112,64 +117,61 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { client } = mount()
-    await screen.findByText("Syncing Gmail")
-    expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toBe(
-      "Syncing iMessageDoneSyncing WhatsAppDoneSyncing GmailWaiting",
-    )
-    status = { ...status, step: "gmail_tools", status: "completed" }
+    await screen.findByText("Logging in to your accounts")
+    const current = () => screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent
+    expect(current()).toContain("Logging in to your accountsWaiting")
+    expect(screen.getByRole("list").textContent).toContain("Syncing LinkedIn")
+
+    status = {
+      ...status,
+      step: "linkedin",
+      status: "running",
+      steps: {
+        ...status.steps,
+        whatsapp_login: { status: "completed", message: "Done" },
+        linkedin: { status: "running", message: "Reading your LinkedIn connections" },
+      },
+    }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await waitFor(() =>
-      expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-        "Syncing GmailWorking",
-      ),
-    )
-    for (const step of plan) {
+    await waitFor(() => expect(current()).toContain("Syncing LinkedInWorking"))
+    expect(screen.getByText("Logging in to your accounts").closest("li")?.textContent).toContain("Done")
+
+    for (const step of SOURCE_PLAN) {
       status = { ...status, step, status: "failed", steps: {} }
       await act(() => client.invalidateQueries({ queryKey: ["install"] }))
       await waitFor(() => {
-        const row = screen.getByRole("list").querySelector('[aria-current="step"]')
-        expect(row?.textContent).toContain("Needs a fix")
-        expect(row?.textContent).toContain("Syncing")
+        expect(current()).toContain("Needs a fix")
+        expect(current()).toContain(LOGINS.includes(step) ? "Logging in" : "Syncing")
       })
     }
   })
 
-  it("shows a source whose logins are done as next while another source syncs", async () => {
-    const status: InstallStatus = {
-      ...INSTALL,
-      plan: ["linkedin", "gmail_tools", "gmail_login", "gmail_sync", "gmail_import"],
-      step: "linkedin",
-      status: "running",
-      steps: {
-        linkedin: { status: "running", message: "Reading your LinkedIn connections" },
-        gmail_tools: { status: "completed", message: "Done" },
-        gmail_login: { status: "completed", message: "Done" },
-      },
-    }
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
-    )
-    mount()
-    await screen.findByText("Syncing Gmail")
-    expect(screen.getByRole("list").textContent.replace(/[✓•○]/g, "")).toContain("Syncing GmailNext")
-  })
-
-  it("offers the matches left for review once search is ready", async () => {
+  it("offers the matches left for review with the review page's own count", async () => {
     const status: InstallStatus = {
       ...INSTALL,
       step: "ready",
       status: "completed",
       message: "Search index ready: 403 people searchable.",
-      action: { kind: "review", text: "3 LinkedIn matches need a quick look when you have time." },
     }
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    let pending = 3
+    const fetch = vi.fn((url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url.startsWith("/api/review/linkedin-card")
+              ? { card: null, finished: null, pending, queue: null }
+              : status,
+          ),
+        ),
+      ),
     )
-    mount()
+    vi.stubGlobal("fetch", fetch)
+    const { client } = mount()
     expect(await screen.findByText("3 LinkedIn matches need a quick look when you have time.")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Review contacts" })).toBeTruthy()
+    pending = 0
+    await act(() => client.invalidateQueries({ queryKey: ["linkedin-left"] }))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Review contacts" })).toBeNull())
   })
 
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
@@ -226,16 +228,7 @@ describe("installation progress", () => {
       "connection",
       "network",
       "sources",
-      "imessage_access",
-      "imessage_import",
-      "whatsapp_tools",
-      "whatsapp_login",
-      "whatsapp_sync",
-      "whatsapp_import",
-      "gmail_tools",
-      "gmail_login",
-      "gmail_sync",
-      "gmail_import",
+      ...SOURCE_PLAN,
       "deep_context",
       "enrich",
       "review",
@@ -257,7 +250,7 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { container } = mount()
-    const history = await screen.findByRole("button", { name: "1 tasks completed" })
+    const history = await screen.findByRole("button", { name: "3 tasks completed" })
     expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(7)
     expect(
       screen
@@ -265,7 +258,7 @@ describe("installation progress", () => {
         .filter((node) => node.closest("li")?.getAttribute("aria-hidden") === "false").length,
     ).toBe(1)
     fireEvent.click(history)
-    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(8)
+    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(10)
     expect(history.getAttribute("aria-expanded")).toBe("true")
   })
 

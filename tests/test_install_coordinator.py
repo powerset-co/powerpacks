@@ -83,7 +83,6 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertTrue(output.rstrip().endswith("DONE: Verified"))
         self.assertEqual(self.status.read()["retry_command"], self.retry)
         self.assertEqual(self.launch_page.call_args.kwargs["port"], 8899)
-        self.assertEqual(self.processing_class.call_args.kwargs["port"], 8899)
 
     def test_approval_is_scoped_to_this_resume_not_saved_for_future_runs(self):
         self.run_command("--approve-spend", "index")
@@ -122,7 +121,6 @@ class InstallCoordinatorTests(unittest.TestCase):
                 self.assertTrue(output.rstrip().endswith("DONE: Verified"))
                 self.assertEqual(self.source_choices[-1][:3], (("gmail",), ("casey@example.com",), "2025-10-03"))
                 self.assertEqual(self.account_class.call_args.kwargs["harnesses"], ["codex"])
-                self.assertEqual(self.processing_class.call_args.kwargs["port"], 8899)
 
     def test_each_source_wait_and_failure_resumes_through_same_coordinator(self):
         self.retry = (f"{self.root}/bin/onboard --source linkedin --source gmail --source imessage"
@@ -153,7 +151,6 @@ class InstallCoordinatorTests(unittest.TestCase):
                                                   ("casey@example.com",), "2025-10-03"))
                     self.assertEqual(choices[3], self.root / "synthetic-whatsapp")
                     self.assertEqual(self.account_class.call_args.kwargs["harnesses"], ["pi"])
-                    self.assertEqual(self.processing_class.call_args.kwargs["port"], 8899)
                     self.assertTrue(output.rstrip().endswith("DONE: Verified"))
 
     def test_existing_coordinator_rejects_duplicate_before_side_effects(self):

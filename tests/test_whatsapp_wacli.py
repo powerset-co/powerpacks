@@ -276,7 +276,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                      mock.patch.object(auth, "auth_status", side_effect=[before, after]), \
                      mock.patch.object(auth, "run_auth", return_value=auth.AuthRunResult(
                          command="wacli auth", returncode=0, qr_page="page", qr_png="image",
-                         connected_event=False, auth_bootstrap_sync_completed=False,
+                         connected_event=False,
                      )) as run_auth, \
                      mock.patch.object(pairing, "write_pairing_marker") as write_marker, \
                      mock.patch.object(pairing, "pairing_full_sync_status", return_value=pairing.PairingStatus(
@@ -326,16 +326,16 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
     def test_auth_requires_qrencode_for_browser_qr(self) -> None:
         with mock.patch.object(auth.shutil, "which", return_value=None), \
                 self.assertRaises(runtime.PrimitiveBlocked) as ctx:
-            auth.run_auth(Path("/tmp/wacli-store"), timeout=1, idle_exit="1s")
+            auth.run_auth(Path("/tmp/wacli-store"), timeout=1)
 
         self.assertEqual(ctx.exception.payload["install_command"], "brew install qrencode")
         self.assertIn("qrencode is required", ctx.exception.payload["message"])
 
-    def test_auth_waits_for_wacli_bootstrap_sync_after_connected_event(self) -> None:
+    def test_auth_links_the_device_without_syncing_its_history(self) -> None:
         class FakeProc:
             def __init__(self) -> None:
                 self.stdout = io.StringIO("2@qr-payload\n")
-                self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
+                self.stderr = io.StringIO('{"event":"linked","ts":1}\n')
                 self.returncode = None
                 self.signals: list[int] = []
                 self.poll_calls = 0
@@ -362,19 +362,19 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
                 mock.patch.object(auth.subprocess, "Popen", return_value=fake), \
                 mock.patch.object(qr, "update_qr_page") as update_qr_page:
-            result = auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
+            result = auth.run_auth(Path("/tmp/wacli-store"), timeout=5)
 
         self.assertEqual(fake.signals, [])
         self.assertTrue(result.connected_event)
-        self.assertTrue(result.auth_bootstrap_sync_completed)
-        self.assertIn("--events", result.command)
+        self.assertIn("--link-only", result.command)
+        self.assertNotIn("--idle-exit", result.command)
         update_qr_page.assert_called()
 
     def test_auth_can_render_qr_without_opening_browser(self) -> None:
         class FakeProc:
             def __init__(self) -> None:
                 self.stdout = io.StringIO("2@qr-payload\n")
-                self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
+                self.stderr = io.StringIO('{"event":"linked","ts":1}\n')
                 self.returncode = None
                 self.poll_calls = 0
 
@@ -399,15 +399,15 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
                 mock.patch.object(auth.subprocess, "Popen", return_value=fake), \
                 mock.patch.object(qr, "update_qr_page") as update_qr_page:
-            auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s", open_qr_page=False)
+            auth.run_auth(Path("/tmp/wacli-store"), timeout=5, open_qr_page=False)
 
         self.assertFalse(update_qr_page.call_args.kwargs["open_page"])
 
-    def test_auth_fails_when_bootstrap_exits_nonzero_after_connected(self) -> None:
+    def test_auth_fails_when_wacli_exits_nonzero_after_linking(self) -> None:
         class FakeProc:
             def __init__(self) -> None:
                 self.stdout = io.StringIO("")
-                self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
+                self.stderr = io.StringIO('{"event":"linked","ts":1}\n')
                 self.returncode = None
                 self.poll_calls = 0
 
@@ -426,9 +426,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
                 mock.patch.object(auth.subprocess, "Popen", return_value=FakeProc()), \
                 self.assertRaises(runtime.PrimitiveFailed) as ctx:
-            auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
+            auth.run_auth(Path("/tmp/wacli-store"), timeout=5)
 
-        self.assertIn("initial history sync did not finish", str(ctx.exception))
+        self.assertIn("WhatsApp linked, but wacli exited with an error", str(ctx.exception))
 
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -688,11 +688,11 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
     def test_pinned_release_points_at_powerset_fork(self) -> None:
         self.assertEqual(binary.WACLI_REPO, "powerset-co/wacli")
-        self.assertEqual(binary.WACLI_PINNED_VERSION, "v0.14.0-fullsync")
+        self.assertEqual(binary.WACLI_PINNED_VERSION, "v0.15.0-fullsync")
         self.assertIn("powerset-co/wacli/releases/download", binary.WACLI_RELEASE_BASE)
 
     def test_every_asset_of_the_pinned_version_has_a_sha256_pin(self) -> None:
-        pins = binary.WACLI_ASSET_SHA256["v0.14.0-fullsync"]
+        pins = binary.WACLI_ASSET_SHA256[binary.WACLI_PINNED_VERSION]
         self.assertEqual(
             sorted(pins),
             ["wacli-darwin-amd64", "wacli-darwin-arm64",
@@ -2232,7 +2232,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "run_auth",
                     return_value=auth.AuthRunResult(
                         command="wacli auth", returncode=0, qr_page="", qr_png="",
-                        connected_event=False, auth_bootstrap_sync_completed=False,
+                        connected_event=False,
                     ),
                 ) as run_auth_mock, mock.patch.object(
                     pairing,

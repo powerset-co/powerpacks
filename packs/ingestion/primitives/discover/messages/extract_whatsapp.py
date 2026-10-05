@@ -700,7 +700,6 @@ class WhatsAppExtractor:
                 auth_summary.update(auth.run_auth(
                     store,
                     timeout=auth_timeout,
-                    idle_exit=idle_exit,
                     open_qr_page=not no_open_qr_page,
                 ).to_payload())
                 status = auth.auth_status(store)

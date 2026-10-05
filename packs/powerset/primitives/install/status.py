@@ -29,6 +29,7 @@ class InstallStep(str, Enum):
     CONNECTION = "connection"
     NETWORK = "network"
     SOURCES = "sources"
+    LINKEDIN_LOGIN = "linkedin_login"
     GMAIL_TOOLS = "gmail_tools"
     GMAIL_LOGIN = "gmail_login"
     GMAIL_SYNC = "gmail_sync"
@@ -53,7 +54,8 @@ STEP_LABELS = {
     "skills": "Add your skills",
     "account": "Sign in", "credentials": "Connect search",
     "connection": "Connect your agent", "network": "Check your network",
-    "sources": "Choose your contacts", "gmail_tools": "Prepare Gmail",
+    "sources": "Choose your contacts", "linkedin_login": "Connect LinkedIn",
+    "gmail_tools": "Prepare Gmail",
     "gmail_login": "Connect Gmail", "gmail_sync": "Sync Gmail",
     "gmail_import": "Add Gmail contacts", "imessage_access": "Connect iMessage",
     "imessage_import": "Add iMessage contacts", "whatsapp_tools": "Prepare WhatsApp",

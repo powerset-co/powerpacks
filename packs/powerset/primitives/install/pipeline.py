@@ -22,6 +22,10 @@ Changelog:
   2026-10-05: enrichment and profile lookups that fail for any reason are
       deferred: search is built without them, the ready message lists what is
       left to fix, and work the last enrichment left is tried once per run.
+  2026-10-05: missing profiles are fetched under the index step instead of
+      stepping the page back to enrich.
+  2026-10-05: the ready step no longer saves a review count; the page reads
+      the review queue's own count, so the two always agree.
   2026-10-04: indexing goes ahead when a cached profile has no jobs listed (it
       used to raise on every resume); upload consent is asked before a $500+
       spend approval, so the two questions no longer bounce.
@@ -100,8 +104,7 @@ def _capped(dispatched: dict) -> bool:
 
 
 class ProcessingOnboarding:
-    def __init__(self, root: Path, *, approved_spend: tuple[str, ...] = (),
-                 port: int = 8765) -> None:
+    def __init__(self, root: Path, *, approved_spend: tuple[str, ...] = ()) -> None:
         self.root = root.resolve()
         self.status = InstallStatus(self.root)
         previous = self.status.read()
@@ -110,7 +113,6 @@ class ProcessingOnboarding:
         self.plan.extend(step.value for step in PROCESSING_STEPS
                          if step is not InstallStep.REVIEW or step.value in previous["plan"])
         self.approved = {SpendStep(step) for step in approved_spend}
-        self.port = port
         self.saved, _ = source_parser(add_help=False).parse_known_args(shlex.split(self.retry)[1:])
         self.account_email = previous.get("account_email") or ""
         store = self.saved.wacli_store
@@ -243,8 +245,8 @@ class ProcessingOnboarding:
         self._write(InstallState.SKIPPED, f"{_DEFERRED_LABELS[name]} didn't finish ({error}). Search is built "
                     "without it; the next setup run tries again.")
 
-    def _enrich(self) -> int:
-        """Run enrichment; returns how many LinkedIn matches the judges left for the user."""
+    def _enrich(self) -> None:
+        """Run enrichment; LinkedIn matches the judges left wait for the user."""
         self.step = InstallStep.ENRICH
         state = workflow_state(self.db)
         work = enrichment_work(self.db)
@@ -264,34 +266,33 @@ class ProcessingOnboarding:
                               request_fingerprint=estimate.research.request_fingerprint), "Enriching your contacts")
                 except (Exception, SystemExit) as error:
                     self._deferred("enrich", error)
-                    return 0
+                    return
                 self._write(InstallState.COMPLETED, "Done")
             elif state.next_action == "review_linkedin":
                 # Matches the judges could not settle wait for the user until search is built.
                 self.step = InstallStep.ENRICH
                 self._write(InstallState.COMPLETED, "Done")
-                return state.progress.linkedin_pending
+                return
             else:
                 raise ValueError(f"Context processing is unfinished: {state.next_action}")
             state = workflow_state(self.db)
         self.step = InstallStep.ENRICH
         self._write(InstallState.COMPLETED, "Done")
-        return 0
 
     def _index(self, previous_input: str, previous_index: bool, previous_mtime: int,
-               dispatched: dict | None, review_pending: int) -> None:
+               dispatched: dict | None) -> None:
         self.step = InstallStep.INDEX
         realize = ExportPeople(db=self.db, out_dir=self.people.parent)
         realized = self._run("realize", realize.run, "Preparing your search index")
         if realized["profiles_missing"]:
-            self.step = InstallStep.ENRICH
+            # Fetched under the index row so the page never steps back; a failure is left on enrich to fix.
             try:
                 self._run("profile-prefetch", lambda: PrefetchProfiles(db=self.db, fetch=True).run().to_payload(),
                           "Preparing your profiles")
-                self._write(InstallState.COMPLETED, "Done")
             except (Exception, SystemExit) as error:
+                self.step = InstallStep.ENRICH
                 self._deferred("profile-prefetch", error)
-            self.step = InstallStep.INDEX
+                self.step = InstallStep.INDEX
             # A cached profile with no jobs listed stays "missing"; realize exports it anyway.
             self._run("realize", realize.run, "Preparing your search index")
         unchanged = previous_input == sha256_file(self.people)
@@ -341,12 +342,9 @@ class ProcessingOnboarding:
         steps = self.status.read()["steps"]
         deferred = [steps[name]["message"] for name in _FOLLOW_UP_STEPS
                     if steps.get(name, {}).get("status") == InstallState.SKIPPED.value]
-        # Matches the judges left are offered once search is ready; the user reviews when they have time.
-        offer = {"kind": "review", "url": f"http://127.0.0.1:{self.port}/?stage=linkedin",
-                 "text": f"{review_pending:,} LinkedIn matches need a quick look when you have time."
-                 } if review_pending else None
+        # The page offers the matches the judges left, counted live by the review queue.
         self.status.write(step=self.step, status=InstallState.COMPLETED,
-                          message=" ".join([validation["summary"], *deferred]), action=offer,
+                          message=" ".join([validation["summary"], *deferred]),
                           pid=os.getpid(), retry_command=self.retry, plan=self.plan)
 
     def run(self) -> dict:
@@ -372,8 +370,8 @@ class ProcessingOnboarding:
                     dispatched = None
                 self._prepare()
                 self._discover()
-                review_pending = self._enrich()
-                self._index(previous_input, previous_index, previous_mtime, dispatched, review_pending)
+                self._enrich()
+                self._index(previous_input, previous_index, previous_mtime, dispatched)
             except _Stopped:
                 pass
             except (Exception, SystemExit) as error:

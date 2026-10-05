@@ -5,6 +5,9 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-05: LinkedIn's login is its own step, and the plan lists every
+      login step before every sync step, the order a run takes them. Linking
+      WhatsApp only pairs it; its sync step downloads the history.
   2026-10-05: Gmail defaults to the Powerset login's address when no address
       was given; it asks only when there is no Powerset account.
   2026-10-05: when the automated Google Cloud setup stops, the step says so in
@@ -60,21 +63,29 @@ class Source(str, Enum):
     WHATSAPP = "whatsapp"
 
 
-_SOURCE_STEPS = {
-    Source.GMAIL: (InstallStep.GMAIL_TOOLS, InstallStep.GMAIL_LOGIN,
-                   InstallStep.GMAIL_SYNC, InstallStep.GMAIL_IMPORT),
-    Source.IMESSAGE: (InstallStep.IMESSAGE_ACCESS, InstallStep.IMESSAGE_IMPORT),
-    Source.WHATSAPP: (InstallStep.WHATSAPP_TOOLS, InstallStep.WHATSAPP_LOGIN,
-                      InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT),
-    Source.LINKEDIN: (InstallStep.LINKEDIN,),
+# A run walks every source's login steps, then every source's sync steps; the
+# plan lists them in that order so the page shows them as they happen.
+_LOGIN_STEPS = {
+    Source.LINKEDIN: (InstallStep.LINKEDIN_LOGIN,),
+    Source.GMAIL: (InstallStep.GMAIL_TOOLS, InstallStep.GMAIL_LOGIN),
+    Source.IMESSAGE: (InstallStep.IMESSAGE_ACCESS,),
+    Source.WHATSAPP: (InstallStep.WHATSAPP_TOOLS, InstallStep.WHATSAPP_LOGIN),
 }
+_SYNC_STEPS = {
+    Source.LINKEDIN: (InstallStep.LINKEDIN,),
+    Source.GMAIL: (InstallStep.GMAIL_SYNC, InstallStep.GMAIL_IMPORT),
+    Source.IMESSAGE: (InstallStep.IMESSAGE_IMPORT,),
+    Source.WHATSAPP: (InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT),
+}
+_SOURCE_STEPS = {source: _LOGIN_STEPS[source] + _SYNC_STEPS[source] for source in Source}
 _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
 GMAIL_SETUP_STOPPED = "Gmail setup stopped in Google Cloud. I'm looking into it."
 GMAIL_QUESTION = "Which Gmail accounts should I add? The first one owns the Gmail setup."
-_TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
+WHATSAPP_SYNCING = "Syncing WhatsApp. The first sync takes 30 minutes to a few hours."
+_TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
 
 
@@ -107,16 +118,17 @@ class SourceOnboarding:
         self.wacli_store = wacli_store or self.root / DEFAULT_STORE
         self.refresh = refresh or (not sources and saved.refresh)
         self.step = InstallStep.SOURCES
-        history = [step for step in previous.get("plan", []) if step not in PROCESSING_STEPS
-                   and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
         if all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
         else:
             next_steps = tuple(step for step in PROCESSING_STEPS if step is not InstallStep.REVIEW)
-        self.plan = list(dict.fromkeys([
-            *history, InstallStep.SOURCES.value,
-            *(step.value for source in self.sources for step in _SOURCE_STEPS[source]),
-            *(step.value for step in next_steps)]))
+        steps = [InstallStep.SOURCES.value,
+                 *(step.value for source in self.sources for step in _LOGIN_STEPS[source]),
+                 *(step.value for source in self.sources for step in _SYNC_STEPS[source]),
+                 *(step.value for step in next_steps)]
+        history = [step for step in previous.get("plan", []) if step not in PROCESSING_STEPS and step not in steps
+                   and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
+        self.plan = list(dict.fromkeys([*history, *steps]))
         args = [str(self.root / "bin/onboard")]
         for source in self.sources:
             args.extend(("--source", source.value))
@@ -291,7 +303,7 @@ class SourceOnboarding:
             self._write(sync_step, InstallState.COMPLETED, "Contacts already imported")
             self._write(import_step, InstallState.COMPLETED, "Contacts ready")
             return True
-        self._write(sync_step, InstallState.RUNNING, "Reading Messages" if imessage else "Syncing WhatsApp")
+        self._write(sync_step, InstallState.RUNNING, "Reading Messages" if imessage else WHATSAPP_SYNCING)
         result = MessagesDiscovery(include_imessage=imessage, include_whatsapp=not imessage,
                                    wacli_store=self.wacli_store, open_qr_page=False).run()
         if not self._result(sync_step, result.to_payload()):
@@ -307,10 +319,12 @@ class SourceOnboarding:
 
     def _linkedin_login(self) -> bool:
         if self._linkedin_current():
+            self._write(InstallStep.LINKEDIN_LOGIN, InstallState.COMPLETED, "LinkedIn connections ready")
             return True
-        self._write(InstallStep.LINKEDIN, InstallState.RUNNING,
+        self._write(InstallStep.LINKEDIN_LOGIN, InstallState.RUNNING,
                     "Checking LinkedIn. Log in to LinkedIn in the window that opens if it asks.")
-        return self._result(InstallStep.LINKEDIN, LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login())
+        return self._result(InstallStep.LINKEDIN_LOGIN,
+                            LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login())
 
     def _linkedin_sync(self) -> bool:
         if self._linkedin_current():

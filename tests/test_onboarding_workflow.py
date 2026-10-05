@@ -82,9 +82,11 @@ class SourceOnboardingTests(unittest.TestCase):
         InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
             message='Network checked', pid=os.getpid(), account_email='casey@example.com')
         flow = SourceOnboarding(self.root, sources=())
-        self.assertEqual(flow.plan[flow.plan.index('sources') + 1], 'linkedin')
-        for step in ('gmail_import', 'imessage_import', 'whatsapp_import'):
-            self.assertIn(step, flow.plan)
+        sources = flow.plan.index('sources')
+        # Every login comes before every sync, the order the run takes them.
+        self.assertEqual(flow.plan[sources + 1:flow.plan.index('deep_context')], [
+            'linkedin_login', 'gmail_tools', 'gmail_login', 'imessage_access', 'whatsapp_tools', 'whatsapp_login',
+            'linkedin', 'gmail_sync', 'gmail_import', 'imessage_import', 'whatsapp_sync', 'whatsapp_import'])
         self.assertIn('--source linkedin --source gmail --source imessage --source whatsapp', flow.retry_command)
         self.assertNotIn('--gmail-email', flow.retry_command)
         self.assertIn((date.today() - timedelta(days=365)).isoformat(), flow.retry_command)
@@ -364,7 +366,7 @@ class SourceOnboardingTests(unittest.TestCase):
              patch.object(LinkedInConnections, 'login', return_value={
                  'status': 'needs_user_action', 'message': 'Log in to LinkedIn in the Chrome window Powerpacks opened.'}):
             result = SourceOnboarding(self.root, sources=('linkedin', 'imessage')).run()
-        self.assertEqual((result['step'], result['status']), ('linkedin', 'waiting'))
+        self.assertEqual((result['step'], result['status']), ('linkedin_login', 'waiting'))
         self.assertEqual(result['message'], 'Log in to LinkedIn in the Chrome window Powerpacks opened.')
         access.assert_not_called()
         sync.assert_not_called()

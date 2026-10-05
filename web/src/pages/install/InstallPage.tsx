@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query"
 import { type ReactNode, useEffect, useState } from "react"
 
 import { fetchInstall, installAction } from "@/lib/api/install"
-import { fetchStatus } from "@/lib/api/review"
+import { fetchLinkedinCard, fetchStatus } from "@/lib/api/review"
 import { errorText } from "@/lib/api/http"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
@@ -41,19 +41,24 @@ const STATUS_LABELS: Record<InstallState, string> = {
 }
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
+// Setup takes every login first, then each source's sync, so those are the rows.
 const STEP_GROUPS = [
   { key: "install", label: "Installing Powerpacks", steps: DEFAULT_STEPS },
   {
-    key: "whatsapp",
-    label: "Syncing WhatsApp",
-    steps: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"],
+    key: "logins",
+    label: "Logging in to your accounts",
+    steps: [
+      "linkedin_login",
+      "gmail_tools",
+      "gmail_login",
+      "imessage_access",
+      "whatsapp_tools",
+      "whatsapp_login",
+    ],
   },
-  { key: "imessage", label: "Syncing iMessage", steps: ["imessage_access", "imessage_import"] },
-  {
-    key: "gmail",
-    label: "Syncing Gmail",
-    steps: ["gmail_tools", "gmail_login", "gmail_sync", "gmail_import"],
-  },
+  { key: "whatsapp", label: "Syncing WhatsApp", steps: ["whatsapp_sync", "whatsapp_import"] },
+  { key: "imessage", label: "Syncing iMessage", steps: ["imessage_import"] },
+  { key: "gmail", label: "Syncing Gmail", steps: ["gmail_sync", "gmail_import"] },
   { key: "index", label: "Building your search index", steps: ["index", "validate", "ready"] },
 ]
 
@@ -79,7 +84,7 @@ function installSteps(data?: InstallStatus) {
           ? "skipped"
           : "completed"
         : latest && DONE.has(latest)
-          ? undefined // tools and logins are done; its sync waits its turn
+          ? undefined // part done in an earlier run; the rest waits its turn
           : latest
     return [
       {
@@ -109,8 +114,7 @@ function actionNote(action: InstallAction): ReactNode {
       </>
     )
   }
-  if (action.kind === "review")
-    return action.text ?? "A few LinkedIn matches need a quick look when you have time."
+  if (action.kind === "review") return action.text
   if (action.kind === "gmail")
     return action.text ?? "Finish connecting Gmail in your browser. I’ll continue here."
   if (action.kind === "qr") return "Scan the code with WhatsApp. I’ll continue automatically."
@@ -156,12 +160,28 @@ export function InstallPage() {
                     ? TITLES.running
                     : TITLES[data.status]
                   : "Opening Powerpacks"
+  // The matches left to check, counted by the review queue the review page reads.
+  const ready = data?.step === "ready" && data.status === "completed"
+  const { data: linkedin } = useQuery({
+    queryKey: ["linkedin-left"],
+    queryFn: ({ signal }) => fetchLinkedinCard({}, signal),
+    enabled: ready,
+    refetchInterval: 15_000,
+    retry: false,
+  })
+  const reviewLeft = ready ? (linkedin?.pending ?? 0) : 0
   const steps = installSteps(data)
   const completed = steps.filter((step) => DONE.has(step.status ?? ""))
   const folded = completed.slice(0, -VISIBLE_COMPLETED)
   const currentIndex = steps.findIndex((step) => step.current)
   const next = steps.slice(currentIndex + 1).find((step) => !step.status)
-  const action = data?.action
+  const action: InstallAction | undefined =
+    reviewLeft > 0
+      ? {
+          kind: "review",
+          text: `${reviewLeft.toLocaleString()} LinkedIn ${reviewLeft === 1 ? "match needs" : "matches need"} a quick look when you have time.`,
+        }
+      : (data?.action ?? undefined)
   useEffect(() => {
     document.title = `${title} · Powerpacks`
   }, [title])
@@ -227,7 +247,7 @@ export function InstallPage() {
             />
           ) : null}
         </section>
-        {action && (data.status === "waiting" || action.kind === "review") ? (
+        {action && (data?.status === "waiting" || action.kind === "review") ? (
           <section className="install-action">
             {action.kind === "qr" ? (
               <div className="install-qr">

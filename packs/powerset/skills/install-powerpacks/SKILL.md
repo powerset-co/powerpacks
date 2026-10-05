@@ -6,7 +6,7 @@ allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/pow
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.5.0
+  version: 1.6.0
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -19,6 +19,9 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: A worker runs setup to the end; the main chat stays free. A QR scan,
+  login or permission no longer ends the agent's turn. The review offer reads the
+  review queue's own count.
 - 2026-10-05: One up-front message, asked synchronously: approve sending contact
   data to Parallel and OpenAI (else LinkedIn only), Gmail defaults to the Powerset
   login, full access is a note. The upload question is gone.
@@ -127,11 +130,14 @@ checkout for subsequent commands and read its `AGENTS.md`. Skills folders are no
 workflow data roots. Fresh installs follow the published release; a PR test uses
 that checkout's bootstrap and verifies its commit, not the public launcher.
 
-Run asynchronously and retain responsibility until completion or a concrete
-required user action. If the user requests a worker and supervisor, dispatch one
-worker to run the coordinator, supervise it in the original chat, and relay chat
-choices. Do not launch a competing installer or finish supervising while owned
-work is still running. A browser action does not require a "done" message.
+Dispatch one worker (a sub-agent) to run the coordinator and watch it until search is
+ready; the main chat stays free to answer the user and pass their choices to the worker.
+A QR scan, browser login or permission is not a reason to stop: the status page shows
+it and setup continues by itself once the user is done, so say what is needed once and
+keep watching. Without sub-agents, do the worker's job in this chat the same way. Do
+not end the turn before search is ready unless setup needs an answer only the user can
+give in chat. Do not launch a competing installer. A browser action does not require
+a "done" message.
 
 ## Keep the status page beside chat
 
@@ -233,9 +239,12 @@ the ready step completes, say it in this order, in plain words:
    their account safe, and that setup asked LinkedIn for their data export (it can
    take a day); the next setup run imports it. Never ask the user to download or
    upload the export.
-3. **Optional review.** When the ready step has a `review` action, say: "If you have
-   time, <its text> Want me to open them?" Only on a yes, open the action's URL beside
-   chat (the host's browser pane, else the default browser). When they are done, say
+3. **Optional review.** Read the matches left to check from the review queue, the
+   count the review page shows: `pending` in `curl -fsS http://127.0.0.1:<port>/api/review/linkedin-card`
+   (the status page's port). When it is above 0, say: "If you have time, <pending>
+   LinkedIn matches need a quick look. Want me to open them?" Only on a yes, open
+   `http://127.0.0.1:<port>/?stage=linkedin` beside chat (the host's browser pane,
+   else the default browser). When they are done, say
    you are rebuilding search with their decisions and run the saved `retry_command`.
    They can come back to it later by saying "review my pending contacts"
    (`bin/deep-context review linkedin`).

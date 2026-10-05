@@ -347,8 +347,7 @@ def main() -> None:
             print("Powerset search is ready; local setup will continue.", flush=True)
         payload = flow.run()
         if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
-            payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend),
-                                           port=port).run()
+            payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend)).run()
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
     message = (payload.get("action") or {}).get("text") or payload.get("message", "Setup stopped")
     print(f"{prefix[payload['status']]}: {message}", flush=True)
