@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.17.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.4...powerpacks-v3.17.0) (2026-10-05)
+
+
+### Features
+
+* **install:** one script for every word on the status page ([#715](https://github.com/powerset-co/powerpacks/issues/715)) ([6504d1f](https://github.com/powerset-co/powerpacks/commit/6504d1f4e2a51e3ddb7c798c9b23d3e03d1d7ef6))
+
 ## [3.16.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.3...powerpacks-v3.16.4) (2026-10-05)
 
 
