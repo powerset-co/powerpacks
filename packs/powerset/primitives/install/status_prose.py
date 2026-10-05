@@ -46,6 +46,7 @@ class Row:
     label: str
     steps: tuple[InstallStep, ...]
     done_label: str = ""
+    needs: InstallStep | None = None  # shown only when this step is planned
 
 
 # The page's rows, top to bottom. Setup takes every login first, then each source's sync.
@@ -63,7 +64,9 @@ ROWS = (
     Row("Discovering your contacts", (InstallStep.DEEP_CONTEXT,)),
     Row("Enriching your contacts", (InstallStep.ENRICH,)),
     Row("Waiting for your review", (InstallStep.REVIEW,), done_label="Review completed"),
-    Row("Building your search index", (InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY)),
+    # A run whose every source is skipped ends ready without building an index.
+    Row("Building your search index", (InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY),
+        needs=InstallStep.INDEX),
 )
 
 # The page's fixed words: the title over each situation, the row states, buttons.
@@ -185,6 +188,7 @@ PROSE: dict[str, Prose] = {
     "whatsapp.checking": Prose(InstallStep.WHATSAPP_LOGIN, R, "Checking WhatsApp"),
     "whatsapp.qr": Prose(InstallStep.WHATSAPP_LOGIN, W, "Connect WhatsApp", note=_QR_NOTE, action="qr"),
     "whatsapp.qr.refreshed": Prose(InstallStep.WHATSAPP_LOGIN, W, "Refreshing your WhatsApp QR code", note=_QR_NOTE, action="qr"),
+    "whatsapp.already_linked": Prose(InstallStep.WHATSAPP_LOGIN, C, "WhatsApp is linked"),
     "whatsapp.linked": Prose(InstallStep.WHATSAPP_LOGIN, C, "WhatsApp is linked. Your message history is downloading in the background.", note=_WHATSAPP_NOTE),
     "whatsapp.blocked": Prose(InstallStep.WHATSAPP_LOGIN, W, "WhatsApp can't link right now. I'll explain in chat."),
     "whatsapp.failed": Prose(InstallStep.WHATSAPP_LOGIN, F, "WhatsApp could not be linked. I'm checking what happened."),
@@ -197,7 +201,7 @@ PROSE: dict[str, Prose] = {
     "linkedin.done.partial": Prose(InstallStep.LINKEDIN, C, "{connections:,} LinkedIn connections ({added:,} new); LinkedIn shows {total:,}"),
     "linkedin.done.limit": Prose(InstallStep.LINKEDIN, C, "{connections:,} LinkedIn connections ({added:,} new). The rest keep syncing on your next run; your contacts are ready to process now."),
     "linkedin.done.stalled": Prose(InstallStep.LINKEDIN, C, "LinkedIn stopped sending connections after {read:,} of {total:,}, so I stopped to keep your account safe.", note="The rest sync on your next run. Your contacts are ready to process now."),
-    "linkedin.done.export_requested": Prose(InstallStep.LINKEDIN, C, "LinkedIn stopped sending connections after {read:,} of {total:,}, so I stopped to keep your account safe.", note="I asked LinkedIn for your data export (it can take a day); the next setup run imports it. Your contacts are ready to process now."),
+    "linkedin.done.export_requested": Prose(InstallStep.LINKEDIN, C, "LinkedIn stopped sending connections after {read:,} of {total:,}, so I stopped to keep your account safe and asked LinkedIn for your data export.", note="It can take a day; the next setup run imports it. Your contacts are ready to process now."),
     "linkedin.done.export_imported": Prose(InstallStep.LINKEDIN, C, "{connections:,} LinkedIn connections ({added:,} new, from your LinkedIn data export)"),
     "linkedin.waiting": Prose(InstallStep.LINKEDIN, W, "Log in to LinkedIn in the Chrome window Powerpacks opened."),
     "linkedin.failed": Prose(InstallStep.LINKEDIN, F, "Your LinkedIn connections could not be read. I'm checking what happened."),
@@ -292,5 +296,5 @@ def render(event: str, values: dict) -> tuple[Prose, str, str]:
 def page_prose() -> dict:
     """The page's rows and fixed words, sent with every status read."""
     return {"rows": [{"label": row.label, "steps": [step.value for step in row.steps],
-                      "done_label": row.done_label} for row in ROWS],
+                      "done_label": row.done_label, "needs": row.needs.value if row.needs else ""} for row in ROWS],
             "page": PAGE}

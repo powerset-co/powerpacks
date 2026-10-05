@@ -74,8 +74,10 @@ class InstallStatus:
             step = InstallStep(self.read()["step"])
         step = prose.step or step
         status = prose.state
-        # Details and extra fields always travel in the action; one with no kind of its own is an error.
-        action = ({"kind": prose.action or "error", **(action or {}), **({"details": details} if details else {})}
+        # Details and extra fields travel in the action. One with no kind of its own is an
+        # error when the step stopped, otherwise just the details.
+        kind = prose.action or ("error" if prose.state in (InstallState.WAITING, InstallState.FAILED) else "details")
+        action = ({"kind": kind, **(action or {}), **({"details": details} if details else {})}
                   if prose.action or action or details else None)
         previous = {} if event == "install.preparing_mac" else self.read()
         steps = previous.get("steps", {})

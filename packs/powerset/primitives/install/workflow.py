@@ -289,13 +289,11 @@ class SourceOnboarding:
                 if "command timed out after" not in blocked.payload.get("detail", ""):
                     raise
                 self._write("whatsapp.qr.refreshed")
-        return self._result(result, "whatsapp.checking" if linked else "whatsapp.linked",
+        return self._result(result, "whatsapp.already_linked" if linked else "whatsapp.linked",
                             waiting="whatsapp.blocked", failed="whatsapp.failed")
 
     def _messages_sync(self, source: Source) -> bool:
         imessage = source is Source.IMESSAGE
-        sync_step, import_step = ((InstallStep.IMESSAGE_IMPORT, InstallStep.IMESSAGE_IMPORT) if imessage
-                                  else (InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT))
         current = None if self.refresh else import_common.import_manifest_current("messages")
         contacts = self.root / f".powerpacks/messages/{source.value}.contacts.csv"
         store_matches = True

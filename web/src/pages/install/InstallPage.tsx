@@ -32,7 +32,7 @@ function installSteps(data?: InstallStatus) {
   const plan = data.plan ?? []
   return data.prose.rows.flatMap((row) => {
     const members = plan.filter((step) => row.steps.includes(step))
-    if (!members.length) return []
+    if (!members.length || (row.needs && !plan.includes(row.needs))) return []
     const current = members.includes(data.step)
     const states = members.map((step) => data.steps[step]?.status)
     const latest = [...states].reverse().find((state) => state != null)
@@ -128,13 +128,7 @@ export function InstallPage() {
               : word("review.offer.many").replace("{count}", reviewLeft.toLocaleString()),
         }
       : (data?.action ?? undefined)
-  const note = error
-    ? ""
-    : failed
-      ? word("failed.note")
-      : action?.kind === "review"
-        ? action.text
-        : data?.note
+  const note = error ? "" : failed ? word("failed.note") : data?.note
   useEffect(() => {
     document.title = `${title} · Powerpacks`
   }, [title])
@@ -214,9 +208,12 @@ export function InstallPage() {
               </button>
             ) : null}
             {action.kind === "review" ? (
-              <button type="button" onClick={() => void open("review")}>
-                {word("review.button")}
-              </button>
+              <>
+                <p className="install-review-offer">{action.text}</p>
+                <button type="button" onClick={() => void open("review")}>
+                  {word("review.button")}
+                </button>
+              </>
             ) : null}
             {actionError ? <p role="alert">{actionError}</p> : null}
           </section>

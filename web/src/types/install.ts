@@ -13,6 +13,7 @@ export interface InstallAction {
     | "error"
     | "resume"
     | "recovery"
+    | "details"
   text?: string
   command?: string
   qr_url?: string
@@ -20,7 +21,7 @@ export interface InstallAction {
 }
 /** The page's rows and fixed words, from packs/powerset/primitives/install/status_prose.py. */
 export interface InstallProse {
-  rows: { label: string; steps: InstallStep[]; done_label: string }[]
+  rows: { label: string; steps: InstallStep[]; done_label: string; needs: InstallStep }[]
   page: Record<string, string>
 }
 export interface InstallStatus {

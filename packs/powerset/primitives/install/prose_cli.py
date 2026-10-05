@@ -77,6 +77,10 @@ def print_script() -> None:
         for event, prose in PROSE.items():
             if prose.step in row.steps:
                 _print_event(event)
+    print("\n## Not shown in a row")
+    for event, prose in PROSE.items():
+        if prose.step and not any(prose.step in row.steps for row in ROWS):
+            _print_event(event)
     print("\n## Any step (the step the run is on)")
     for event, prose in PROSE.items():
         if prose.step is None:

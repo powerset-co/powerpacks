@@ -176,6 +176,52 @@ describe("installation progress", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Review contacts" })).toBeNull())
   })
 
+  it("keeps what is left to fix in view next to the review offer", async () => {
+    const status: InstallStatus = {
+      ...INSTALL,
+      step: "ready",
+      status: "completed",
+      message: "Search is ready: 403 people searchable.",
+      note: "Research and LinkedIn matching didn’t finish.",
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              url.startsWith("/api/review/linkedin-card")
+                ? { card: null, finished: null, pending: 2, queue: null }
+                : status,
+            ),
+          ),
+        ),
+      ),
+    )
+    mount()
+    expect(await screen.findByText("2 LinkedIn matches need a quick look when you have time.")).toBeTruthy()
+    expect(screen.getByText("Research and LinkedIn matching didn’t finish.")).toBeTruthy()
+  })
+
+  it("shows no index row when every source was skipped", async () => {
+    const plan = ["runtime", "dependencies", "skills", "sources", "ready"]
+    const status: InstallStatus = {
+      ...INSTALL,
+      plan,
+      step: "ready",
+      status: "completed",
+      message: "Powerpacks is installed",
+      steps: Object.fromEntries(plan.map((step) => [step, { status: "completed", message: "Done" }])),
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    mount()
+    await screen.findByText("Installing Powerpacks")
+    expect(screen.queryByText("Building your search index")).toBeNull()
+  })
+
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
     let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(

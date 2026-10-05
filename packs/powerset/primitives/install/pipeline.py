@@ -334,7 +334,7 @@ class ProcessingOnboarding:
         deferred = [steps[name]["message"] for name in _FOLLOW_UP_STEPS
                     if steps.get(name, {}).get("status") == InstallState.SKIPPED.value]
         self._write("search.ready", people=validation["total_people"], follow_ups=" ".join(deferred),
-                    details={"left_to_fix": self.left_to_fix} if self.left_to_fix else None)
+                    details={"validation": validation, "left_to_fix": self.left_to_fix})
 
     def run(self) -> dict:
         with chdir(self.root):

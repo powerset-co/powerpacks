@@ -394,7 +394,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertTrue(self.indexed())
         self.assertNotIn("review", result["plan"])
-        self.assertIsNone(result["action"])  # the page counts them from the review queue
+        self.assertEqual(result["action"]["kind"], "details")  # no review offer: the page counts them live
         self.assertFalse(any(call.args[0][0] == "open" for call in self.subprocess.call_args_list))
 
     def test_native_failure_is_logged_and_stops_before_paid_work(self):
@@ -411,6 +411,12 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("PARALLEL_API_KEY not set", result["action"]["details"]["error"])
         self.assertFalse(self.indexed())
+
+    def test_ready_keeps_the_search_check_for_the_agent(self):
+        result = self.run_pipeline("index")
+        self.assertEqual(result["event"], "search.ready")
+        self.assertEqual(result["action"]["details"]["validation"]["status"], "ok")
+        self.assertEqual(result["action"]["details"]["left_to_fix"], [])
 
     def test_research_that_cannot_run_is_skipped_and_the_index_still_builds(self):
         self.enrich = True

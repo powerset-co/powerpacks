@@ -672,6 +672,14 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(order, ['history', 'discover'])
         self.assertEqual(result['steps']['whatsapp_sync']['status'], 'failed')
 
+    def test_already_linked_whatsapp_completes_its_login(self):
+        with patch.object(auth, 'auth_status', return_value=SimpleNamespace(authenticated=True)), \
+             patch.object(auth, 'auth_report', return_value={'status': 'linked'}), \
+             patch.object(MessagesDiscovery, 'run', side_effect=lambda: SimpleNamespace(
+                 to_payload=lambda: payload(status='failed', error='test stop'))):
+            result = SourceOnboarding(self.root, sources=('whatsapp',)).run()
+        self.assertEqual(result['steps']['whatsapp_login'], {'status': 'completed', 'message': 'WhatsApp is linked'})
+
     def test_already_linked_whatsapp_never_displays_qr_action(self):
         original_write = InstallStatus.write
         def authenticate(store, *, open_qr_page):
