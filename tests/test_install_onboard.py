@@ -340,6 +340,13 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(code, 10)
         self.assertIn("search access has not been provisioned", state["message"])
 
+    def test_unprovisioned_hosted_search_is_a_warning_and_setup_continues(self):
+        self.blank_keys.update({"TURBOPUFFER_API_KEY", "DATABASE_URL"})
+        code, state, _ = self.run_onboarding()
+        self.assertEqual(code, 10)
+        self.assertEqual(state["steps"]["credentials"]["status"], "skipped")
+        self.assertIn("Hosted search isn't enabled", state["steps"]["credentials"]["message"])
+
     def test_service_failure_is_failed_and_not_mistaken_for_login(self):
         self.fail_path = "/v2/search/count"
         with patch.object(auth, "cmd_login") as login:

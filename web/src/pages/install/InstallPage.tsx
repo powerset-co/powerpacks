@@ -219,18 +219,16 @@ export function InstallPage() {
             {action.kind === "permission" ? (
               <div className="install-permission">
                 <p>
-                  Enable Full Disk Access for{" "}
+                  Powerpacks reads your iMessage history to find the people you talk to, and macOS asks for
+                  Full Disk Access first. Drag{" "}
                   <strong>
                     {action.app_path?.split("/").pop()?.replace(".app", "") ?? "the app running this session"}
-                  </strong>
-                  .
+                  </strong>{" "}
+                  into Full Disk Access and turn it on. I’ll continue automatically.
                 </p>
                 <button type="button" onClick={() => void open("permissions")}>
                   Open settings &amp; show the app
                 </button>
-                <p>
-                  Drag the highlighted app into Full Disk Access and turn it on. I’ll continue automatically.
-                </p>
               </div>
             ) : null}
             {action.kind === "review" ? (
