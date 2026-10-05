@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.16.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.1...powerpacks-v3.16.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **install:** login and sync rows, WhatsApp link-only, one review count ([#709](https://github.com/powerset-co/powerpacks/issues/709)) ([fb91247](https://github.com/powerset-co/powerpacks/commit/fb91247b4a2a7cfb1f209ac48aa8641a082bf156))
+* read complete saved context for person lookups ([#706](https://github.com/powerset-co/powerpacks/issues/706)) ([bf023d0](https://github.com/powerset-co/powerpacks/commit/bf023d049a75832123b525f13fe24bca9a092b35))
+* show relationship context in person lookup choices ([#710](https://github.com/powerset-co/powerpacks/issues/710)) ([f144493](https://github.com/powerset-co/powerpacks/commit/f14449367a9b1a1933c4c00bf750d783f1398057))
+
 ## [3.16.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.0...powerpacks-v3.16.1) (2026-10-05)
 
 
