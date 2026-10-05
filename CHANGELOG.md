@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.2...powerpacks-v3.15.0) (2026-10-05)
+
+
+### Features
+
+* **install:** build search first and offer the review after it ([#701](https://github.com/powerset-co/powerpacks/issues/701)) ([71acd7e](https://github.com/powerset-co/powerpacks/commit/71acd7e468e63b91610ade2479cdfac68e611b3a))
+* **install:** save the account's operator id for Modal runs ([#699](https://github.com/powerset-co/powerpacks/issues/699)) ([96e77fc](https://github.com/powerset-co/powerpacks/commit/96e77fca4e794dd1932c8341a3c584281b97c80b))
+
 ## [3.14.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.14.1...powerpacks-v3.14.2) (2026-10-05)
 
 
