@@ -83,27 +83,29 @@ class LinkedInConnectionsTests(unittest.TestCase):
         self.assertEqual(self.flags, {"--stop-after-known": "25", "--max-loads": "300"})
         self.assertTrue(self.manifest()["complete"])
 
-    def test_a_list_that_stops_short_of_linkedins_count_is_not_complete(self):
-        # LinkedIn stopped sending cards after 2 of the 298 it says there are.
-        cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(2)]
+    def test_a_read_that_stalls_early_is_not_complete_and_says_why(self):
+        # LinkedIn stopped sending cards after 10 of the 298 it says there are.
+        cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(10)]
         result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 16, "stopped": "end",
                               "connections": cards})
         self.assertEqual(result["status"], "completed")
         self.assertFalse(result["complete"])
-        self.assertIn("Read 2 of 298 LinkedIn connections", result["message"])
-        self.assertIn("LinkedIn stopped sending more", result["message"])
-        self.assertEqual((self.manifest()["complete"], self.manifest()["total"]), (False, 298))
+        self.assertIn("LinkedIn stopped sending connections after 10 of 298", result["message"])
+        self.assertEqual((self.manifest()["complete"], self.manifest()["total"], self.manifest()["stopped"]),
+                         (False, 298, "stalled"))
         self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 45, "stopped": "end",
                      "connections": cards})
         self.assertEqual(self.flags["--stop-after-known"], "0")
 
-    def test_a_read_a_few_short_of_linkedins_count_is_the_whole_list(self):
+    def test_a_read_to_the_end_is_the_whole_list_and_records_how_far_it_got(self):
         # LinkedIn counts 298 but its list shows 294.
         cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(294)]
         result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 298, "loads": 45, "stopped": "end",
                               "connections": cards})
         self.assertTrue(result["complete"])
-        self.assertEqual(result["message"], "294 LinkedIn connections (294 new)")
+        self.assertEqual(result["message"], "294 LinkedIn connections (294 new); LinkedIn shows 298")
+        self.assertEqual((self.manifest()["connections"], self.manifest()["total"], self.manifest()["loads"]),
+                         (294, 298, 45))
 
     def test_nothing_new_leaves_the_csv_alone_and_records_the_owner(self):
         self.csv.parent.mkdir(parents=True)
