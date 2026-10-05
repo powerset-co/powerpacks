@@ -2,83 +2,45 @@ import "../review/styles/base.css"
 import "./install.css"
 
 import { useQuery } from "@tanstack/react-query"
-import { type ReactNode, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 
 import { fetchInstall, installAction } from "@/lib/api/install"
 import { fetchLinkedinCard, fetchStatus } from "@/lib/api/review"
 import { errorText } from "@/lib/api/http"
+import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import { doingNow } from "@/pages/review/enrich/copy"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
-const DEFAULT_STEPS = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
-const DEFAULT_LABELS: Record<string, string> = {
-  runtime: "Prepare your Mac",
-  dependencies: "Install Powerpacks",
-  skills: "Add your skills",
-  account: "Sign in",
-  credentials: "Connect search",
-  connection: "Connect your agent",
-  network: "Check your network",
-  deep_context: "Discovering your contacts",
-  enrich: "Enriching your contacts",
-  review: "Waiting for your review",
+// Every other word comes with the status (status_prose.py); these show while the page cannot reach setup.
+const OFFLINE = {
+  title: "Reconnecting to Powerpacks",
+  line: "Reconnecting automatically…",
+  opening: "Opening Powerpacks",
+  reading: "Reading your progress…",
 }
-const TITLES: Record<InstallState, string> = {
-  running: "Setting up Powerpacks",
-  waiting: "One thing to finish",
-  failed: "Setup needs a fix",
-  completed: "Powerpacks is installed",
-  skipped: "Setting up Powerpacks",
-}
-const STATUS_LABELS: Record<InstallState, string> = {
-  running: "Working",
-  waiting: "Waiting",
-  failed: "Needs a fix",
-  completed: "Done",
-  skipped: "Skipped",
-}
+// The status line and the note under it hold this many lines, so the page never jumps
+// (status_prose.py keeps every line and note within them).
+const MESSAGE_LINES = { wide: 3, narrow: 5 }
+const NOTE_LINES = { wide: 4, narrow: 6 }
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
-// Setup takes every login first, then each source's sync, so those are the rows.
-const STEP_GROUPS = [
-  { key: "install", label: "Installing Powerpacks", steps: DEFAULT_STEPS },
-  {
-    key: "logins",
-    label: "Logging in to your accounts",
-    steps: [
-      "linkedin_login",
-      "gmail_tools",
-      "gmail_login",
-      "imessage_access",
-      "whatsapp_tools",
-      "whatsapp_login",
-    ],
-  },
-  { key: "whatsapp", label: "Syncing WhatsApp", steps: ["whatsapp_sync", "whatsapp_import"] },
-  { key: "imessage", label: "Syncing iMessage", steps: ["imessage_import"] },
-  { key: "gmail", label: "Syncing Gmail", steps: ["gmail_sync", "gmail_import"] },
-  { key: "index", label: "Building your search index", steps: ["index", "validate", "ready"] },
-]
 
 function installSteps(data?: InstallStatus) {
-  const plan = data?.plan ?? DEFAULT_STEPS
-  return plan.flatMap((step) => {
-    if (step === "sources") return []
-    const group = STEP_GROUPS.find(
-      (group) => group.steps.includes(step) && (group.key !== "index" || plan.includes("index")),
-    )
-    const members = group ? plan.filter((step) => group.steps.includes(step)) : [step]
-    if (step !== members[0]) return []
-    const current = members.includes(data?.step ?? "")
-    const states = members.map((step) => data?.steps[step]?.status)
+  if (!data) return []
+  const plan = data.plan ?? []
+  return data.prose.rows.flatMap((row) => {
+    const members = plan.filter((step) => row.steps.includes(step))
+    if (!members.length || (row.needs && !plan.includes(row.needs))) return []
+    const current = members.includes(data.step)
+    const states = members.map((step) => data.steps[step]?.status)
     const latest = [...states].reverse().find((state) => state != null)
     const complete = states.every((state) => DONE.has(state ?? ""))
     const status: InstallState | undefined = current
-      ? group && DONE.has(data?.status ?? "") && !complete
+      ? DONE.has(data.status) && !complete
         ? "running"
-        : data?.status
+        : data.status
       : complete
         ? states.every((state) => state === "skipped")
           ? "skipped"
@@ -88,37 +50,13 @@ function installSteps(data?: InstallStatus) {
           : latest
     return [
       {
-        key: group?.key ?? step,
-        label:
-          step === "review" && status === "completed"
-            ? "Review completed"
-            : (group?.label ?? data?.labels?.[step] ?? DEFAULT_LABELS[step] ?? step),
+        key: row.label,
+        label: status === "completed" && row.done_label ? row.done_label : row.label,
         current,
         status,
       },
     ]
   })
-}
-
-// While setup waits on the user, the line under the status says what it needs.
-function actionNote(action: InstallAction): ReactNode {
-  if (action.kind === "permission") {
-    return (
-      <>
-        Powerpacks reads your iMessage history to find the people you talk to, and macOS asks for Full Disk
-        Access first. Drag{" "}
-        <strong>
-          {action.app_path?.split("/").pop()?.replace(".app", "") ?? "the app running this session"}
-        </strong>{" "}
-        into Full Disk Access and turn it on. I’ll continue automatically.
-      </>
-    )
-  }
-  if (action.kind === "review") return action.text
-  if (action.kind === "gmail")
-    return action.text ?? "Finish connecting Gmail in your browser. I’ll continue here."
-  if (action.kind === "qr") return "Scan the code with WhatsApp. I’ll continue automatically."
-  return "I’ll keep going. Ask questions or give me input in chat."
 }
 
 export function InstallPage() {
@@ -138,28 +76,33 @@ export function InstallPage() {
     refetchInterval: 5_000,
     retry: false,
   })
+  const word = (key: string) => data?.prose.page[key] ?? ""
   const title = error
-    ? "Reconnecting to Powerpacks"
-    : failed
-      ? TITLES.failed
-      : data?.action?.kind === "resume"
-        ? "Setup paused"
-        : data?.step === "ready" &&
-            data.status === "completed" &&
-            data.network_name &&
-            (data.person_count ?? 0) > 0
-          ? "Powerpacks is ready"
-          : data?.status === "waiting" && data.step === "account"
-            ? "Waiting for you to sign in"
-            : data?.status === "waiting" && data.step === "review"
-              ? "Waiting for your review"
-              : data?.status === "waiting" && data.action?.kind === "processing"
-                ? "Your contacts are saved"
-                : data
-                  ? data.status === "completed" && data.step !== "ready"
-                    ? TITLES.running
-                    : TITLES[data.status]
-                  : "Opening Powerpacks"
+    ? OFFLINE.title
+    : !data
+      ? OFFLINE.opening
+      : word(
+          failed
+            ? "title.failed"
+            : data.action?.kind === "resume"
+              ? "title.paused"
+              : data.step === "ready" &&
+                  data.status === "completed" &&
+                  data.network_name &&
+                  (data.person_count ?? 0) > 0
+                ? "title.ready"
+                : data.status === "waiting" && data.step === "account"
+                  ? "title.signing_in"
+                  : data.status === "waiting" && data.step === "review"
+                    ? "title.review"
+                    : data.status === "waiting" && data.action?.kind === "processing"
+                      ? "title.processing"
+                      : data.status === "completed" && data.step !== "ready"
+                        ? "title.running"
+                        : data.status === "skipped"
+                          ? "title.running"
+                          : `title.${data.status}`,
+        )
   // The matches left to check, counted by the review queue the review page reads.
   const ready = data?.step === "ready" && data.status === "completed"
   const { data: linkedin } = useQuery({
@@ -179,9 +122,13 @@ export function InstallPage() {
     reviewLeft > 0
       ? {
           kind: "review",
-          text: `${reviewLeft.toLocaleString()} LinkedIn ${reviewLeft === 1 ? "match needs" : "matches need"} a quick look when you have time.`,
+          text:
+            reviewLeft === 1
+              ? word("review.offer.one")
+              : word("review.offer.many").replace("{count}", reviewLeft.toLocaleString()),
         }
       : (data?.action ?? undefined)
+  const note = error ? "" : failed ? word("failed.note") : data?.note
   useEffect(() => {
     document.title = `${title} · Powerpacks`
   }, [title])
@@ -214,29 +161,25 @@ export function InstallPage() {
               />
             }
           >
-            <p className="install-message">
+            <ReservedLines
+              className="install-message"
+              lines={MESSAGE_LINES.wide}
+              narrowLines={MESSAGE_LINES.narrow}
+            >
               {error
-                ? "Reconnecting automatically…"
-                : failed
-                  ? "Your progress is saved. I can check this step and retry."
-                  : data?.step === "enrich" &&
-                      data.status === "running" &&
-                      processing?.stage === "enrich" &&
-                      processing.step
-                    ? doingNow(processing.step, processing.pending)
-                    : data?.step === "index" && data.index_progress
-                      ? data.index_progress.message
-                      : (data?.message ?? "Reading your progress…")}
-            </p>
-            <p className="install-note">
-              {data?.status === "completed"
-                ? action?.kind === "review"
-                  ? actionNote(action)
-                  : "You can keep asking here in chat."
-                : data?.status === "waiting" && action
-                  ? actionNote(action)
-                  : "I’ll keep going. Ask questions or give me input in chat."}
-            </p>
+                ? OFFLINE.line
+                : data?.step === "enrich" &&
+                    data.status === "running" &&
+                    processing?.stage === "enrich" &&
+                    processing.step
+                  ? doingNow(processing.step, processing.pending)
+                  : data?.step === "index" && data.index_progress
+                    ? data.index_progress.message
+                    : (data?.message ?? OFFLINE.reading)}
+            </ReservedLines>
+            <ReservedLines className="install-note" lines={NOTE_LINES.wide} narrowLines={NOTE_LINES.narrow}>
+              {note}
+            </ReservedLines>
           </EmptyPanel>
           {data?.step === "index" && data.index_progress?.progress != null && !failed ? (
             <progress
@@ -252,22 +195,25 @@ export function InstallPage() {
             {action.kind === "qr" ? (
               <div className="install-qr">
                 {action.qr_url ? (
-                  <img src={action.qr_url} alt="Scan this QR code to link WhatsApp" />
+                  <img src={action.qr_url} alt={word("qr.alt")} />
                 ) : (
-                  <p>Getting your QR code…</p>
+                  <p>{word("qr.loading")}</p>
                 )}
-                <p>WhatsApp → Settings → Linked devices → Link a device</p>
+                <p>{word("qr.where")}</p>
               </div>
             ) : null}
             {action.kind === "permission" ? (
               <button type="button" onClick={() => void open("permissions")}>
-                Open settings &amp; show the app
+                {word("permission.button")}
               </button>
             ) : null}
             {action.kind === "review" ? (
-              <button type="button" onClick={() => void open("review")}>
-                Review contacts
-              </button>
+              <>
+                <p className="install-review-offer">{action.text}</p>
+                <button type="button" onClick={() => void open("review")}>
+                  {word("review.button")}
+                </button>
+              </>
             ) : null}
             {actionError ? <p role="alert">{actionError}</p> : null}
           </section>
@@ -285,16 +231,20 @@ export function InstallPage() {
         ) : null}
         {data ? (
           <>
-            {folded.length > 0 ? (
-              <button
-                className="install-history"
-                type="button"
-                aria-expanded={expanded}
-                onClick={() => setExpanded(!expanded)}
-              >
-                {expanded ? "Hide completed tasks" : `${folded.length} tasks completed`}
-              </button>
-            ) : null}
+            {/* The button keeps its slot even with nothing folded, so the list never moves. */}
+            <button
+              className="install-history"
+              type="button"
+              aria-expanded={expanded}
+              aria-hidden={folded.length === 0}
+              tabIndex={folded.length === 0 ? -1 : undefined}
+              data-empty={folded.length === 0}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded
+                ? word("history.open")
+                : word("history.folded").replace("{count}", String(folded.length))}
+            </button>
             <ol className="install-steps" aria-label="Setup steps">
               {steps.map((step) => {
                 const progress = step.status
@@ -316,24 +266,23 @@ export function InstallPage() {
                       </span>
                       <span>{step.label}</span>
                       <span className="install-step-status">
-                        {current && (error || data.action?.kind === "resume")
-                          ? "Paused"
-                          : current && failed
-                            ? STATUS_LABELS.failed
-                            : progress
-                              ? STATUS_LABELS[progress]
-                              : current
-                                ? STATUS_LABELS[data.status]
-                                : "Next"}
+                        {word(
+                          current && (error || data.action?.kind === "resume")
+                            ? "state.paused"
+                            : current && failed
+                              ? "state.failed"
+                              : progress
+                                ? `state.${progress}`
+                                : current
+                                  ? `state.${data.status}`
+                                  : "state.next",
+                        )}
                       </span>
                     </div>
                   </li>
                 )
               })}
             </ol>
-            {failed ? (
-              <p className="install-failure">{data.index_progress?.message ?? data.message}</p>
-            ) : null}
           </>
         ) : null}
       </main>

@@ -263,8 +263,6 @@ def _persistent_handler(root: Path, args: argparse.Namespace) -> type[BaseHTTPRe
                 if record["step"] == "index":
                     record["index_progress"] = read_index_progress(root, record["updated_at"])
                 action = record.get("action")
-                if action and action.get("kind") == "permission":
-                    action["app_path"] = permission_app()
                 qr = install.qr(record)
                 if qr:
                     action["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"

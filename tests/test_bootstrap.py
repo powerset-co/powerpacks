@@ -45,6 +45,8 @@ class Sandbox:
         write(self.repo / "packs/.keep", "")
         for relative in (
             "packs/powerset/primitives/install/status.py",
+            "packs/powerset/primitives/install/status_prose.py",
+            "packs/powerset/primitives/install/steps.py",
             "packs/ingestion/primitives/common/manifests.py",
             "packs/ingestion/primitives/common/jsonio.py",
         ):
@@ -58,11 +60,10 @@ class Sandbox:
         (self.repo / ".venv/bin/python").symlink_to(sys.executable)
         write(self.repo / "packs/powerset/primitives/install/onboard.py",
               'import sys\nfrom pathlib import Path\n'
-              'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
+              'from packs.powerset.primitives.install.status import InstallStatus\n'
               'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
               'import os\npid=os.getpid()\n'
-              'InstallStatus(root).write(step=InstallStep.READY,status=InstallState.COMPLETED,'
-              'message="Account connected and search verified",pid=pid)\n'
+              'InstallStatus(root).write("validate.done",people=1,pid=pid)\n'
               'print("DONE: Account connected and search verified")\n')
         write(self.repo / "bin/ensure-uv", f'#!/usr/bin/env bash\necho "{self.repo}/bin/uv"\n', executable=True)
         write(self.repo / "bin/uv", f'#!/usr/bin/env bash\n[[ "$2" == find ]] && echo "{sys.executable}"\nexit 0\n', executable=True)
@@ -315,11 +316,10 @@ set -euo pipefail
     def test_hosted_onboarding_wait_preserves_human_action(self) -> None:
         write(self.sandbox.repo / "packs/powerset/primitives/install/onboard.py",
               'import sys\nfrom pathlib import Path\n'
-              'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
+              'from packs.powerset.primitives.install.status import InstallStatus\n'
               'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
               'import os\npid=os.getpid()\n'
-              'InstallStatus(root).write(step=InstallStep.ACCOUNT,status=InstallState.WAITING,'
-              'message="Waiting for account login",pid=pid)\n'
+              'InstallStatus(root).write("account.signing_in",pid=pid)\n'
               'print("NEEDS YOU: Waiting for account login")\nsys.exit(10)\n')
         proc = self.sandbox.run("--powerset", "--harness", "codex")
         self.assertEqual(proc.returncode, 10, proc.stdout + proc.stderr)
@@ -329,18 +329,17 @@ set -euo pipefail
     def test_hosted_error_preserves_message_and_visible_login_url(self) -> None:
         write(self.sandbox.repo / "packs/powerset/primitives/install/onboard.py",
               'import sys\nfrom pathlib import Path\n'
-              'from packs.powerset.primitives.install.status import InstallStatus,InstallStep,InstallState\n'
+              'from packs.powerset.primitives.install.status import InstallStatus\n'
               'root=Path(sys.argv[sys.argv.index("--root")+1])\n'
               'import os\npid=os.getpid()\n'
               'print("Open https://example.test/login", file=sys.stderr)\n'
-              'InstallStatus(root).write(step=InstallStep.ACCOUNT,status=InstallState.FAILED,'
-              'message="Account login timed out; ask me to reopen sign-in",pid=pid)\n'
+              'InstallStatus(root).write("account.login_failed",pid=pid)\n'
               'print("FAILED: Account login timed out")\nsys.exit(1)\n')
         proc = self.sandbox.run("--powerset", "--harness", "codex")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("Open https://example.test/login", proc.stderr)
         self.assertIn("Open https://example.test/login", Path(self.sandbox.progress()["log_path"]).read_text())
-        self.assertEqual(self.sandbox.progress()["message"], "Account login timed out; ask me to reopen sign-in")
+        self.assertEqual(self.sandbox.progress()["event"], "account.login_failed")
 
     def test_install_only_explicitly_skips_account_checks(self) -> None:
         proc = self.sandbox.run("--harness", "codex")

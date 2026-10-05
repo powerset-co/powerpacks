@@ -392,13 +392,17 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             holder = (store / "LOCK").open("a")
             fcntl.flock(holder, fcntl.LOCK_EX)
             done = threading.Event()
-            waiter = threading.Thread(target=lambda: (auth.wait_for_history(store), done.set()))
-            waiter.start()
-            self.assertFalse(done.wait(0.3))
-            fcntl.flock(holder, fcntl.LOCK_UN)
-            holder.close()
-            self.assertTrue(done.wait(2))
-            waiter.join()
+            counts: list[int] = []
+            with mock.patch.object(auth, "HISTORY_COUNT_SECONDS", 0.05):
+                waiter = threading.Thread(target=lambda: (auth.wait_for_history(store, on_count=counts.append),
+                                                          done.set()))
+                waiter.start()
+                self.assertFalse(done.wait(0.3))
+                fcntl.flock(holder, fcntl.LOCK_UN)
+                holder.close()
+                self.assertTrue(done.wait(2))
+                waiter.join()
+            self.assertTrue(counts)  # the download's message count was followed while it ran
 
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:

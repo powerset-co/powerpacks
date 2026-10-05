@@ -6,7 +6,7 @@ allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/pow
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.6.0
+  version: 1.6.1
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -19,6 +19,8 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: Page lines name no reasons; a stopped or deferred step's reason is in its
+  action's details (the ready step's `left_to_fix`).
 - 2026-10-05: A worker runs setup to the end; the main chat stays free. A QR scan,
   login or permission no longer ends the agent's turn. The review offer reads the
   review queue's own count.
@@ -232,9 +234,10 @@ the ready step completes, say it in this order, in plain words:
    - Powerset network (hosted search connected: the credentials step completed, not
      the "Hosted search isn't enabled" warning): `$search find people who would be a
      good fit for <job post URL> in my Powerset network`
-2. **What is left to fix**, if the ready message lists any (research skipped for a
-   missing key or no provider credit, a LinkedIn read that stalled): one line each with
-   what fixes it, and that the next setup run picks it up. When LinkedIn stopped
+2. **What is left to fix**, if the ready step's note lists any: its
+   `action.details.left_to_fix` holds each one's reason (research skipped for a missing
+   key or no provider credit), and the LinkedIn step's line says when its read stalled.
+   One line each with what fixes it, and that the next setup run picks it up. When LinkedIn stopped
    sending connections, say how many were read of how many, that it stopped to keep
    their account safe, and that setup asked LinkedIn for their data export (it can
    take a day); the next setup run imports it. Never ask the user to download or

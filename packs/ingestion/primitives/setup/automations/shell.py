@@ -34,7 +34,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -122,11 +122,16 @@ def run_visible_command(cmd: list[str], *, timeout: int | None = None) -> Comman
     return CommandResult(ok=completed.returncode == 0, returncode=completed.returncode)
 
 
-def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] | None = None) -> CommandResult:
+PROGRESS_PREFIX = "powerpacks-progress "
+
+
+def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] | None = None,
+                          on_progress: Callable[[dict], None] | None = None) -> CommandResult:
     """Run a command capturing stdout while mirroring stderr live.
 
     Browser automation logs land on stderr as they happen; stdout is kept
-    whole so the final JSON payload can be parsed after exit."""
+    whole so the final JSON payload can be parsed after exit. A stderr line
+    starting with `PROGRESS_PREFIX` carries JSON for `on_progress`."""
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     except FileNotFoundError:
@@ -147,6 +152,8 @@ def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] |
         for line in proc.stderr:
             stderr_chunks.append(line)
             print(line, end="", file=sys.stderr, flush=True)
+            if on_progress and line.startswith(PROGRESS_PREFIX):
+                on_progress(json.loads(line[len(PROGRESS_PREFIX):]))
 
     threads = [threading.Thread(target=read_stdout), threading.Thread(target=read_stderr)]
     for thread in threads:

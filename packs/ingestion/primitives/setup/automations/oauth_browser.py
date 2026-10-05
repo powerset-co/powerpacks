@@ -27,7 +27,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -103,8 +103,10 @@ def run_browser_automation(
     download_dir: Path,
     timeout_seconds: int,
     audience: str,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
-    """Drive google_oauth_browser.js to create the OAuth app and download its secret."""
+    """Drive google_oauth_browser.js to create the OAuth app and download its secret;
+    `on_progress` gets each stage it reaches."""
     progress("Opening Chrome to create the Google OAuth app...")
     deps = ensure_playwright_core()
     if deps["status"] != "ok":
@@ -130,7 +132,7 @@ def run_browser_automation(
         audience,
     ]
     env = {**os.environ, "NODE_PATH": deps["node_path"]}
-    result = run_streaming_command(cmd, timeout=timeout_seconds + 180, env=env)
+    result = run_streaming_command(cmd, timeout=timeout_seconds + 180, env=env, on_progress=on_progress)
     payload: dict[str, Any]
     try:
         payload = parse_json_fragment(result.stdout)
@@ -161,6 +163,7 @@ def run_browser_add_test_users(
     download_dir: Path,
     timeout_seconds: int,
     oauth_client_name: str = DEFAULT_OAUTH_CLIENT_NAME,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
     """Drive google_oauth_browser.js in add-test-users mode for the consent screen."""
     progress("Opening Chrome to add Google OAuth test users...")
@@ -190,7 +193,7 @@ def run_browser_add_test_users(
         ",".join(test_users),
     ]
     env = {**os.environ, "NODE_PATH": deps["node_path"]}
-    result = run_streaming_command(cmd, timeout=timeout_seconds + 180, env=env)
+    result = run_streaming_command(cmd, timeout=timeout_seconds + 180, env=env, on_progress=on_progress)
     try:
         payload: dict[str, Any] = parse_json_fragment(result.stdout)
     except json.JSONDecodeError:

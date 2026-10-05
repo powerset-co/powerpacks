@@ -11,7 +11,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from packs.powerset.primitives.install.onboard import main
-from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
+from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.steps import InstallState, InstallStep
 from packs.powerset.primitives.install.workflow import SourceOnboarding
 
 
@@ -23,8 +24,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.status = InstallStatus(self.root)
         self.retry = (f"{self.root}/bin/onboard --source gmail --gmail-email casey@example.com"
                       " --sync-after 2025-10-03 --harness codex --port 8899")
-        self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
-                          message="Ready", pid=0, retry_command=self.retry)
+        self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=0, retry_command=self.retry)
         self.events = []
         self.account_code = 0
         self.account_email = "powerset@example.com"
@@ -46,10 +46,10 @@ class InstallCoordinatorTests(unittest.TestCase):
     def build_account(self, root, *, harnesses, pid, retry_command):
         def run():
             self.events.append("account")
-            state = {0: InstallState.COMPLETED, 1: InstallState.FAILED, 10: InstallState.WAITING}[self.account_code]
-            self.status.write(step=InstallStep.NETWORK, status=state,
-                              message="Account checked", pid=os.getpid(), retry_command=retry_command,
-                              account_email=self.account_email)
+            event = {0: "network.ready", 1: "account.error", 10: "network.empty"}[self.account_code]
+            self.status.write(event, step=InstallStep.NETWORK, pid=os.getpid(), retry_command=retry_command,
+                              account_email=self.account_email, network="Personal Network",
+                              email=self.account_email, count=1)
             return self.account_code
         return SimpleNamespace(run=run, email=self.account_email)
 
@@ -57,10 +57,13 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.events.append("imports")
         self.source_choices.append((flow.sources, flow.gmail_emails, flow.sync_after,
                                     flow.wacli_store, flow.skip_sources))
-        self.status.write(step=InstallStep(self.source_result["step"]),
-                          status=InstallState(self.source_result["status"]), message="Source checked",
-                          pid=0, retry_command=flow.retry_command, plan=flow.plan,
-                          action=self.source_result.get("action"))
+        event = {"waiting": "step.waiting", "failed": "step.failed", "completed": "tools.ready",
+                 "running": "tools.preparing"}[self.source_result["status"]]
+        if self.source_result.get("action", {}).get("kind") == "processing":
+            event = "sources.ready"
+        self.status.write(event, step=InstallStep(self.source_result["step"]), pid=0, retry_command=flow.retry_command,
+                          plan=flow.plan, counts="Gmail: 1 contacts",
+                          action={key: value for key, value in self.source_result.get("action", {}).items() if key != "kind"})
         return self.source_result
 
     def run_processing(self):
@@ -126,8 +129,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.retry = (f"{self.root}/bin/onboard --source linkedin --source gmail --source imessage"
                       " --source whatsapp --gmail-email casey@example.com --sync-after 2025-10-03"
                       f" --wacli-store {self.root}/synthetic-whatsapp --harness pi --port 8899")
-        self.status.write(step=InstallStep.SOURCES, status=InstallState.WAITING,
-                          message="Ready", pid=0, retry_command=self.retry)
+        self.status.write('step.waiting', step=InstallStep.SOURCES, pid=0, retry_command=self.retry)
         steps = ("gmail_tools", "gmail_login", "gmail_sync", "gmail_import", "imessage_access",
                  "imessage_import", "whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import",
                  "linkedin")

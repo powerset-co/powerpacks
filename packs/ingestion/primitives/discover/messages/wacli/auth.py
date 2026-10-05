@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -39,7 +39,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.discover.messages.wacli import binary, pairing, qr, runtime  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli import binary, depth_db, pairing, qr, runtime  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: E402
     DEFAULT_AUTH_LOG,
     DEFAULT_QR_HTML,
@@ -50,6 +50,7 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import Primitive
 from packs.ingestion.primitives.discover.messages.wacli.util import linked_device_blocked  # noqa: E402
 
 DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
+HISTORY_COUNT_SECONDS = 10
 # How long one QR run waits for a scan.
 DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "10800"))
 
@@ -193,10 +194,18 @@ def run_auth(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool = 
     return run_auth_with_qr_page(store, timeout=timeout, idle_exit=idle_exit, open_qr_page=open_qr_page)
 
 
-def wait_for_history(store: Path) -> None:
-    """Wait until no wacli holds the store: the history download started at the scan is done."""
+def wait_for_history(store: Path, *, on_count: Callable[[int], None] | None = None) -> None:
+    """Wait until no wacli holds the store: the history download started at the scan is done.
+    `on_count(messages)` follows the download every HISTORY_COUNT_SECONDS."""
     with (store / "LOCK").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if on_count:
+                    on_count(depth_db.history_depth_total_count(store))
+                time.sleep(HISTORY_COUNT_SECONDS)
         fcntl.flock(lock, fcntl.LOCK_UN)
 
 

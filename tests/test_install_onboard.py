@@ -195,7 +195,7 @@ class OnboardingTests(unittest.TestCase):
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
         self.assertIn("jordan@example.com has 0 people", state["message"])
-        self.assertIn("40,000", state["message"])
+        self.assertEqual(state["action"]["details"]["alternative"]["person_count"], 40000)
         self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
         self.assertFalse(any(call[0] == "POST" for call in self.calls))
 
@@ -204,7 +204,7 @@ class OnboardingTests(unittest.TestCase):
             network["person_count"] = 0
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
-        self.assertIn("All available networks for jordan@example.com have 0 people", state["message"])
+        self.assertIn("Every network for jordan@example.com has 0 people", state["message"])
 
     def test_small_personal_network_is_ready_with_nonblocking_advice(self):
         self.networks[0]["person_count"] = 4
@@ -233,7 +233,8 @@ class OnboardingTests(unittest.TestCase):
                 patch("packs.powerset.primitives.install.workflow.SourceOnboarding") as sources, \
                 patch("packs.ingestion.primitives.deep_context.review.cli.start_server",
                       return_value={"url": "http://localhost:8899/install"}):
-            sources.return_value.run.return_value = {"status": "waiting", "step": "deep_context"}
+            sources.return_value.run.return_value = {"status": "waiting", "step": "deep_context",
+                                                     "message": "Gmail: 1 contacts"}
             sources.return_value.retry_command = "bin/onboard"
             sources.return_value.gmail_emails = ("jordan@example.com",)
             with self.assertRaises(SystemExit) as result:
@@ -343,7 +344,7 @@ class OnboardingTests(unittest.TestCase):
         self.blank_keys.add("OPENAI_API_KEY")
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
-        self.assertIn("search access has not been provisioned", state["message"])
+        self.assertEqual(state["event"], "credentials.not_provisioned")
 
     def test_keys_already_in_env_count_when_the_account_returns_none(self):
         self.blank_keys.update({"TURBOPUFFER_API_KEY", "DATABASE_URL"})

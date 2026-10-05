@@ -39,7 +39,7 @@ import sys
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -92,9 +92,11 @@ class BrowserSetup:
     force_browser_setup: bool
     copy_client_secret: bool
     open_browser: bool
+    on_stage: Callable[[str], None] | None = None
 
     @classmethod
-    def from_args(cls, args: Namespace) -> BrowserSetup:
+    def from_args(cls, args: Namespace, *, on_stage: Callable[[str], None] | None = None) -> BrowserSetup:
+        """`on_stage` gets each stage the Google Cloud automation reaches."""
         return cls(
             home=expand(args.home),
             app_name=msgvault_home.validate_oauth_app(args.oauth_app),
@@ -117,7 +119,12 @@ class BrowserSetup:
             force_browser_setup=args.force_browser_setup,
             copy_client_secret=not args.no_copy_client_secret,
             open_browser=not args.no_open_browser,
+            on_stage=on_stage,
         )
+
+    def _stage(self, progress: dict) -> None:
+        if self.on_stage:
+            self.on_stage(progress["stage"])
 
     def authorize(self) -> dict[str, Any] | None:
         """Authorize the Gmail account when asked to, else None."""
@@ -235,6 +242,7 @@ class BrowserSetup:
             download_dir=self.download_dir,
             timeout_seconds=self.timeout_seconds,
             audience=self.audience,
+            on_progress=self._stage,
         )
         secret_path = oauth_browser.browser_client_secret_path(browser)
 
@@ -329,9 +337,11 @@ class TestUsers:
     download_dir: Path
     timeout_seconds: int
     open_browser: bool
+    on_stage: Callable[[str], None] | None = None
 
     @classmethod
-    def from_args(cls, args: Namespace) -> TestUsers:
+    def from_args(cls, args: Namespace, *, on_stage: Callable[[str], None] | None = None) -> TestUsers:
+        """`on_stage` gets each stage the Google Cloud automation reaches."""
         return cls(
             home=expand(args.home),
             app_name=msgvault_home.validate_oauth_app(args.oauth_app),
@@ -343,7 +353,12 @@ class TestUsers:
             download_dir=expand(args.download_dir),
             timeout_seconds=args.timeout_seconds,
             open_browser=not args.no_open_browser,
+            on_stage=on_stage,
         )
+
+    def _stage(self, progress: dict) -> None:
+        if self.on_stage:
+            self.on_stage(progress["stage"])
 
     def save_users(self, project_id: str, login_email: str) -> None:
         """Merge the newly added test users into this app's setup state."""
@@ -383,6 +398,7 @@ class TestUsers:
             download_dir=self.download_dir,
             timeout_seconds=self.timeout_seconds,
             oauth_client_name=self.oauth_client_name,
+            on_progress=self._stage,
         )
         status = oauth_browser.browser_status(browser)
         if status == "ok":

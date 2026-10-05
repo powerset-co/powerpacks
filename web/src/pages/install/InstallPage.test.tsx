@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { InstallStatus } from "@/types/install"
 
 import { InstallPage } from "./InstallPage"
+import PROSE from "./prose.fixture.json"
 
 const INSTALL: InstallStatus = {
   primitive: "powerpacks_install",
@@ -14,6 +15,8 @@ const INSTALL: InstallStatus = {
   message: "Installing what Powerpacks needs",
   log_path: "/synthetic/.powerpacks/install/install.log",
   retry_command: "bin/bootstrap --no-tools",
+  plan: ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
+  prose: PROSE,
   steps: {
     runtime: { status: "completed", message: "Mac ready" },
     dependencies: { status: "running", message: "Installing what Powerpacks needs" },
@@ -107,7 +110,6 @@ describe("installation progress", () => {
       plan: SOURCE_PLAN,
       step: "whatsapp_login",
       status: "waiting",
-      labels: { linkedin: "Syncing LinkedIn" },
       steps: Object.fromEntries(
         LOGINS.slice(0, -1).map((step) => [step, { status: "completed", message: "Done" }]),
       ),
@@ -172,6 +174,52 @@ describe("installation progress", () => {
     pending = 0
     await act(() => client.invalidateQueries({ queryKey: ["linkedin-left"] }))
     await waitFor(() => expect(screen.queryByRole("button", { name: "Review contacts" })).toBeNull())
+  })
+
+  it("keeps what is left to fix in view next to the review offer", async () => {
+    const status: InstallStatus = {
+      ...INSTALL,
+      step: "ready",
+      status: "completed",
+      message: "Search is ready: 403 people searchable.",
+      note: "Research and LinkedIn matching didn’t finish.",
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              url.startsWith("/api/review/linkedin-card")
+                ? { card: null, finished: null, pending: 2, queue: null }
+                : status,
+            ),
+          ),
+        ),
+      ),
+    )
+    mount()
+    expect(await screen.findByText("2 LinkedIn matches need a quick look when you have time.")).toBeTruthy()
+    expect(screen.getByText("Research and LinkedIn matching didn’t finish.")).toBeTruthy()
+  })
+
+  it("shows no index row when every source was skipped", async () => {
+    const plan = ["runtime", "dependencies", "skills", "sources", "ready"]
+    const status: InstallStatus = {
+      ...INSTALL,
+      plan,
+      step: "ready",
+      status: "completed",
+      message: "Powerpacks is installed",
+      steps: Object.fromEntries(plan.map((step) => [step, { status: "completed", message: "Done" }])),
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    mount()
+    await screen.findByText("Installing Powerpacks")
+    expect(screen.queryByText("Building your search index")).toBeNull()
   })
 
   it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
@@ -347,7 +395,8 @@ describe("installation progress", () => {
     status = {
       ...status,
       step: "imessage_access",
-      action: { kind: "permission", app_path: "/Applications/Example.app" },
+      note: "Powerpacks reads your iMessage history to find the people you talk to. Drag Example into Full Disk Access and turn it on; I’ll continue automatically.",
+      action: { kind: "permission" },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     fireEvent.click(await screen.findByRole("button", { name: "Open settings & show the app" }))
@@ -355,7 +404,7 @@ describe("installation progress", () => {
       "/api/install/permissions",
       expect.objectContaining({ method: "POST" }),
     )
-    expect(screen.getByText("Example")).toBeTruthy()
+    expect(screen.getByText(/Drag Example into Full Disk Access/)).toBeTruthy()
   })
 
   it("keeps the page mounted on unchanged reads and stops the progress orbit while waiting or failed", async () => {

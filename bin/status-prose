@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# The install status page's script: print it, or play it on the page (see install/prose_cli.py).
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+exec uv run --project "$ROOT" python -m packs.powerset.primitives.install.prose_cli "$@"

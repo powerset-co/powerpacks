@@ -63,18 +63,20 @@ log=""
 progress_started=0
 terminal_status=""
 say() { echo "powerpacks: $*"; [[ -z "$log" ]] || echo "powerpacks: $*" >>"$log"; }
+# The status page's words live in packs/powerset/primitives/install/status_prose.py;
+# bootstrap names the event (and the step for one without its own).
 progress() {
   (cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.powerset.primitives.install.status write \
-    --root "$root" --step "$1" --status "$2" --message "$3" --pid "$$" \
+    --root "$root" --event "$1" ${2:+--step "$2"} --pid "$$" \
     --retry-command "$retry_command") >/dev/null
 }
+# A stop names its event; the reason in "$2" is for the agent and the log, not the page.
 finish_progress() {
   terminal_status="$1"
   [[ "$progress_started" == 1 ]] || return 0
-  local step
-  step="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["step"])' "$root/.powerpacks/install/manifest.json")"
   retry_command="$("$POWERPACKS_INSTALL_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["retry_command"])' "$root/.powerpacks/install/manifest.json")"
-  progress "$step" "$1" "$2"
+  [[ -z "$log" ]] || echo "powerpacks: $2" >>"$log"
+  progress "$([[ "$1" == waiting ]] && echo setup.paused || echo install.stopped)"
 }
 needs_you() { finish_progress waiting "$*"; echo "NEEDS YOU: $*"; exit 10; }
 failed() { finish_progress failed "$*"; echo "FAILED: $*"; exit 1; }
@@ -173,7 +175,7 @@ export POWERPACKS_INSTALL_RETRY_COMMAND="$retry_command"
 mkdir -p "$root/.powerpacks/install"
 log="$root/.powerpacks/install/install.log"
 say "starting installation"
-progress runtime running "Preparing your Mac"
+progress install.preparing_mac
 progress_started=1
 if ! UV_BIN="$("$root/bin/ensure-uv" 2>>"$log")"; then
   tail -n 20 "$log" >&2
@@ -212,8 +214,8 @@ if ! "$root/bin/setup-python" >>"$log" 2>&1; then
   tail -n 20 "$log" >&2
   failed "Powerpacks could not finish installing what it needs. Check $log and run this again."
 fi
-progress dependencies completed "Powerpacks dependencies are ready"
-progress skills running "Adding Powerpacks skills"
+progress install.dependencies_ready
+progress install.adding_skills
 for h in "${harnesses[@]}"; do
   say "installing skills for $h"
   if ! POWERPACKS_SKIP_UV_SYNC=1 "$root/install.sh" "$h" >>"$log" 2>&1; then
@@ -222,7 +224,7 @@ for h in "${harnesses[@]}"; do
   fi
 done
 
-progress skills completed "Powerpacks skills are installed"
+progress install.skills_ready
 
 # 5. A Powerset user gets the hosted config; an existing .env is theirs and is
 #    never touched.
@@ -263,8 +265,8 @@ if [[ "$powerset" == 1 ]]; then
 fi
 
 for step in account credentials connection network; do
-  progress "$step" skipped "Skipped for this local-only installation"
+  progress install.local_only "$step"
 done
-progress ready completed "Powerpacks skills are installed. No account was connected."
+progress install.local_only_done
 terminal_status=completed
 echo "DONE: Powerpacks skills are installed for ${harnesses[*]} from $root. No account was connected. Continue with the user's request."
