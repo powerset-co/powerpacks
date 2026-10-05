@@ -431,6 +431,15 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertIn("PARALLEL_API_KEY not set", result["message"])
         self.assertFalse(self.indexed())
 
+    def test_research_that_cannot_run_is_skipped_and_the_index_still_builds(self):
+        self.enrich = True
+        self.exiting_command = "enrich"
+        result = self.run_pipeline("index", upload=True)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
+        self.assertIn("PARALLEL_API_KEY not set", result["steps"]["enrich"]["message"])
+        self.assertTrue(self.indexed())
+
     def test_each_native_stage_failure_resumes_without_repeating_completed_paid_work(self):
         self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
         self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
