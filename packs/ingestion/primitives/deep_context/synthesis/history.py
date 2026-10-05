@@ -5,8 +5,8 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
-from packs.ingestion.primitives.deep_context.collection.models import MessageObservation
-from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts, OwnedIdentifiers, SynthesisRecord
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageObservation
+from packs.ingestion.primitives.deep_context.synthesis.models import DossierDepth, SynthesizedFacts, OwnedIdentifiers, SynthesisRecord
 
 _LIST_FIELDS = ('aliases', 'employers', 'topics', 'notable_events', 'identifiers', 'shared_context')
 _SCALAR_FIELDS = ('canonical_name', 'title', 'school', 'field_of_study', 'location',
@@ -58,6 +58,16 @@ class FactHistory:
     def source_channels(self) -> tuple[str, ...]:
         return _unique(source for item in self.records for source in item.record.source_channels)
 
+    def dossier_depth(self, bundle: CollectionBundle | None) -> DossierDepth:
+        """Unique successful coverage; old records retain their stored tallies."""
+        depth = DossierDepth.from_payload(self.payload())
+        if not self.messages or bundle is None:
+            return depth
+        available = (bundle.messages_available if bundle.capped else
+                     len(self.processed | {message.fingerprint() for message in bundle.messages}))
+        return replace(depth, messages_used=len(self.messages), messages_available=max(available, len(self.messages)),
+                       batches_used=sum(item.record.batches_used for item in self.records))
+
     @property
     def facts(self) -> SynthesizedFacts:
         ordered = sorted(self.records, key=lambda item: (
@@ -89,4 +99,3 @@ class FactHistory:
             return self.records[0].payload()
         return {**self.records[-1].payload(), 'facts': self.facts.to_payload(),
                 'records': [item.payload() for item in self.records]}
-

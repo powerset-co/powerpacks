@@ -1,5 +1,6 @@
-"""Research rationale reaches the identity judge without becoming profile fact."""
+"""Identity judges receive research citations, never synthesized research claims."""
 
+import json
 import unittest
 
 from parallel.types import TaskRunJsonOutput
@@ -27,10 +28,21 @@ class IdentityResearchClaimsTests(unittest.TestCase):
             },
             basis=[{
                 "field": "linkedin_url",
-                "reasoning": "The Oriel CFO role comes from the supplied contact. A public contact page links jordan@oriel.example to the proposed URL.",
-                "citations": [],
+                "reasoning": "INVENTED email-to-employer bridge from the supplied contact.",
+                "citations": [{"url": "https://example.com/jordan", "title": "Jordan Bravo bio",
+                               "excerpts": ["Jordan Bravo founded Oriel; contact jordan@oriel.example."]}],
             }],
         )).identity_profile()
+
+    def test_repeated_citations_are_emitted_once_without_losing_distinct_excerpts(self):
+        first = {"url": "https://example.com/jordan", "title": "Jordan bio", "excerpts": ["Founded Oriel."]}
+        second = {"url": first["url"], "title": first["title"], "excerpts": ["Contact jordan@oriel.example."]}
+        result = ResearchResult.from_output(TaskRunJsonOutput(type="json",
+            content={"work_experience": [], "education": []},
+            basis=[{"field": "summary", "reasoning": "", "citations": [first, first]},
+                   {"field": "linkedin_url", "reasoning": "", "citations": [second, first, second]}]))
+        self.assertEqual(result.identity_citations(), [first, second])
+        self.assertEqual(json.loads(result.identity_profile().reason), [first, second])
 
     def test_contact_only_employer_cannot_confirm_an_empty_attached_profile(self):
         from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge import SYSTEM_PROMPT
@@ -47,9 +59,11 @@ class IdentityResearchClaimsTests(unittest.TestCase):
         evidence = DossierEvidence(name="Jordan Bravo", emails=("jordan@oriel.example",))
         prompt = identity_judge_prompt(evidence, selected, IdentityOrigin.RESEARCH, "")
         self.assertEqual(selected.source, "research")
-        self.assertIn("RESEARCH-DERIVED CANDIDATE CLAIMS (not fetched LinkedIn profile evidence):", prompt)
+        self.assertIn("RESEARCH PROPOSAL (no fetched LinkedIn profile evidence):", prompt)
         self.assertNotIn("\n\nLINKEDIN:", prompt)
-        self.assertIn("CFO @ Oriel Robotics", prompt)
+        self.assertNotIn("CFO @ Oriel Robotics", prompt)
+        self.assertNotIn("INVENTED email-to-employer bridge", prompt)
+        self.assertIn("Jordan Bravo founded Oriel; contact jordan@oriel.example.", prompt)
         self.assertIn(research.linkedin_url, prompt)
         self.assertIn(research.reason, prompt)
         self.assertIn("copied contact facts are not corroboration", prompt)
@@ -60,6 +74,16 @@ class IdentityResearchClaimsTests(unittest.TestCase):
 
         self.assertNotEqual(fingerprint(research), fingerprint(selected))
         self.assertEqual(fingerprint(selected), fingerprint(prefer_cached_profile(research, JudgeProfile())))
+
+    def test_jev_requests_omit_uncited_research_content_and_reasoning(self):
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import jev_judge
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityTask
+        selected = prefer_cached_profile(self.research_profile(), JudgeProfile())
+        request = json.dumps(jev_judge._requests(IdentityTask(DossierEvidence(name="Jordan Bravo"), selected), ()))
+        self.assertNotIn("INVENTED email-to-employer bridge", request)
+        self.assertNotIn("CFO @ Oriel Robotics", request)
+        self.assertIn("https://example.com/jordan", request)
+        self.assertIn("Jordan Bravo founded Oriel; contact jordan@oriel.example.", request)
 
     def test_hydrated_research_profile_keeps_existing_prompt_and_fingerprint(self):
         research = self.research_profile()
@@ -84,14 +108,16 @@ class IdentityResearchClaimsTests(unittest.TestCase):
             judgment_fingerprint(evidence, cached, IdentityOrigin.RESEARCH, "", model="fixture", effort="high"),
         )
 
-    def test_cached_research_claims_survive_profile_hydration_in_judge_prompt(self):
-        reason = "A public contact page lists +15550100 for Jordan Bravo; the email concerns a 2021 job interview."
+    def test_actual_citations_survive_profile_hydration_in_judge_prompt(self):
+        research = self.research_profile()
+        reason = research.reason
         profile = prefer_cached_profile(
-            JudgeProfile(reason=reason),
+            research,
             JudgeProfile(full_name="Jordan Bravo", experiences=("Acme Robotics, Engineer, 2023-present",)),
         )
         prompt = identity_judge_prompt(DossierEvidence(name="Jordan Bravo"), profile, IdentityOrigin.RESEARCH, "")
-        self.assertIn("Cached research claims (not independently verified):", prompt)
+        self.assertIn("Research source citations (URLs, titles and excerpts):", prompt)
+        self.assertNotIn("INVENTED email-to-employer bridge", prompt)
         self.assertIn(reason, prompt)
         self.assertIn("Missing information is not a contradiction.", prompt)
         self.assertIn("Interview or referral context does not prove employment; evaluate the dates.", prompt)

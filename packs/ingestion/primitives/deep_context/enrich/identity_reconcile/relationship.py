@@ -2,6 +2,10 @@
 
 SQLite pending parents -> cached identity judgments -> candidate settlement.
 Dry-run previews uncached OpenAI calls; completed outputs resume from SQLite.
+
+Changelog:
+- 2026-10-03: source identities enter the judge request; cache reuse binds the
+  source evidence, model, effort, system prompt, and response schema.
 """
 
 from __future__ import annotations
@@ -27,10 +31,12 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate
     RelationshipDecision, cache_relationship_judgment, finish_reviews,
 )
 from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import emit
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, source_evidence
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import name_match_review_parents
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd,
 )
@@ -67,7 +73,7 @@ class ReviewRelationships:
         self.limit = limit
 
     def run(self) -> dict[str, object]:
-        pending = sorted(pending_parent_ids(self.db))
+        pending = sorted(pending_parent_ids(self.db) - name_match_review_parents(self.db))
         records: dict[str, RelationshipDecision] = {}
         saved = {}
         for candidate in links(self.db, parent_ids=pending):
@@ -80,8 +86,7 @@ class ReviewRelationships:
         candidates = {parent.parent_id: [{
             "url": normalize_linkedin_url(candidate.url), "name": candidate.full_name, "headline": candidate.headline,
             "location": candidate.location, "experiences": candidate.experiences,
-            "education": candidate.education, "identity_verdict": candidate.verdict,
-            "identity_reason": candidate.reason,
+            "education": candidate.education,
         } for candidate in parent.candidates if candidate.url and not candidate.synthetic] for parent in review_parents}
         hydrated = profile_payloads(self.db, candidate_keys=(candidate.row_key
             for parent in review_parents for candidate in parent.candidates if not candidate.synthetic))
@@ -113,7 +118,7 @@ class ReviewRelationships:
                 if candidate["url"] in eligible_urls}
             for url in eligible_urls:
                 profiles.setdefault(url, {"url": url})
-            evidence = DossierEvidence.from_parent_db(self.db, parent_id)
+            evidence = source_evidence(self.db, parent_id, DossierEvidence.from_parent_db(self.db, parent_id))
             message_count = dossier_message_count(self.db, parent_id)
             context = {key: value for key, value in evidence.as_judge_dict().items() if value}
             context.update(dossier=evidence.dossier, message_count=message_count,
@@ -124,14 +129,13 @@ class ReviewRelationships:
                     "network_worth": parse_json_object(row.facts_json).get("network_worth")}
                     for row in facts(self.db, parent_id=parent_id)],
                 candidates=[profiles[url] for url in sorted(profiles)],
-                research=[parse_json_object(row.result_json) for row in research_rows(self.db, parent_id=parent_id)
-                    if row.result_json])
+                research=[result.identity_citations() for row in research_rows(self.db, parent_id=parent_id)
+                    if (result := ResearchResult.from_json(row.result_json)) is not None])
             prompt = json.dumps(context, ensure_ascii=False, sort_keys=True)
-            # Machine verdicts change when this decision settles; paid evidence does not.
-            evidence_input = dict(context)
-            evidence_input["candidates"] = [{key: value for key, value in candidate.items()
-                if key not in {"identity_verdict", "identity_reason"}} for candidate in context["candidates"]]
-            fingerprint = hashlib.sha256(json.dumps(evidence_input, ensure_ascii=False,
+            request = {"model": self.config.model, "effort": self.config.effort,
+                "system_prompt": SYSTEM_PROMPT, "user_prompt": prompt,
+                "schema_name": "relationship", "schema": SCHEMA}
+            fingerprint = hashlib.sha256(json.dumps(request, ensure_ascii=False,
                 sort_keys=True).encode()).hexdigest()
             task = _RelationshipTask(parent_id, prompt, fingerprint)
             tasks.append(task)

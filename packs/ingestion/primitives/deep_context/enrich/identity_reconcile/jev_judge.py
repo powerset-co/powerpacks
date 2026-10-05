@@ -1,7 +1,8 @@
 """Two cached JEV evidence views accept matches or send them to comparison.
 
 The frozen logistic model and both evidence views must support acceptance.
-Disagreement escalates, never automatically rejects a contact.
+Disagreement escalates, never automatically rejects a contact. Identity uses
+the supplied dated evidence; elapsed wall-clock time does not change the question.
 """
 from __future__ import annotations
 
@@ -13,7 +14,6 @@ import os
 
 import httpx
 from dataclasses import asdict, dataclass
-from datetime import date
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -85,7 +85,7 @@ def _classify(probability: float, network: Mapping, association: Mapping) -> tup
     return 'confirmed', 'Both identity evidence views and the combined model support this match.'
 
 
-def _requests(task: IdentityTask, known_urls: tuple[str, ...], reference_date: str) -> dict[str, dict]:
+def _requests(task: IdentityTask, known_urls: tuple[str, ...]) -> dict[str, dict]:
     known = sorted({normalize_linkedin_url(url) for url in known_urls})
     context = {
         'proposed_url_in_imported_linkedin_record': normalize_linkedin_url(task.linkedin.linkedin_url) in known,
@@ -97,20 +97,26 @@ def _requests(task: IdentityTask, known_urls: tuple[str, ...], reference_date: s
         'state': {
             'dossier': json.dumps({'contact': asdict(task.evidence), 'network_context': context}, ensure_ascii=False),
             'profile': task.linkedin.as_judge_dict(), 'facts': {}, 'channels': {}, 'owner': {},
-            'reference_date': reference_date, 'evidence_policy': questions.policy,
+            'reference_date': '', 'evidence_policy': questions.policy,
         },
         'questions': questions.questions,
     } for name, questions in _QUESTIONS.items()}
 
 
+def judgment_fingerprint(task: IdentityTask, known_urls: tuple[str, ...]) -> str:
+    """The frozen model and exact provider requests, shared with verdict reuse."""
+    return hashlib.sha256(json.dumps({
+        'model': _MODEL_DIGEST,
+        'requests': {name: request_digest(request) for name, request in _requests(task, known_urls).items()},
+    }, sort_keys=True).encode()).hexdigest()
+
+
 def judge_batch(
     tasks: Sequence[IdentityTask], *, imported_urls: Sequence[tuple[str, ...]],
     output_dir: Path, on_done: Callable[[int, int], None] | None = None,
-    reference_date: str | None = None,
 ) -> list[IdentityJudgeResult]:
     """Bound pending requests in memory; the shared client persists each answer."""
     load_env()
-    day = reference_date or date.today().isoformat()
 
     async def run() -> list[IdentityJudgeResult]:
         results = []
@@ -132,7 +138,7 @@ def judge_batch(
         try:
             for start in range(0, len(tasks), _CHUNK_SIZE):
                 batch = [
-                    _requests(task, urls, day)
+                    _requests(task, urls)
                     for task, urls in zip(tasks[start:start + _CHUNK_SIZE],
                                           imported_urls[start:start + _CHUNK_SIZE], strict=True)
                 ]
@@ -142,7 +148,7 @@ def judge_batch(
                     rows = await asyncio.gather(*(answer(name, digest, request)
                                                  for digest, request in requests.items()))
                     replies[name] = dict(zip(requests, rows, strict=True))
-                for pair in batch:
+                for index, pair in enumerate(batch):
                     answers = {name: replies[name][request_digest(request)] for name, request in pair.items()}
                     errors = [f'{name}: {reply}' for name, reply in answers.items() if isinstance(reply, Exception)]
                     if errors:
@@ -163,10 +169,7 @@ def judge_batch(
                         'judge': MODEL_ID, 'match_probability': probability,
                         'answers': {name: reply.response['answers'] for name, reply in answers.items()},
                     })
-                    fingerprint = hashlib.sha256(json.dumps({
-                        'model': _MODEL_DIGEST,
-                        'requests': {name: request_digest(request) for name, request in pair.items()},
-                    }, sort_keys=True).encode()).hexdigest()
+                    fingerprint = judgment_fingerprint(tasks[start + index], imported_urls[start + index])
                     usage = IdentityUsage(input_tokens=sum(
                         reply.response['usage']['input_tokens'] for reply in answers.values() if not reply.cached
                     ))

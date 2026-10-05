@@ -90,7 +90,7 @@ class ShareEvidenceLabelsTests(unittest.TestCase):
         self.assertEqual(person.network_worth, "yes")
         self.assertEqual(person.facts["labels"]["relationship_kind"], "colleague")
 
-    def test_a_realized_row_inherits_context_through_a_superseded_identity(self) -> None:
+    def test_a_superseded_alias_does_not_move_another_parents_context(self) -> None:
         self._people = [{
             "id": "realized-person",
             "public_identifier": "jordan-bravo",
@@ -108,8 +108,9 @@ class ShareEvidenceLabelsTests(unittest.TestCase):
             labels={"relationship_kind": "service_provider"},
         )
         person = self._load()[0]
-        self.assertFalse(person.linkedin_only)
-        self.assertEqual(person.facts["labels"]["relationship_kind"], "service_provider")
+        self.assertTrue(person.linkedin_only)
+        self.assertIsNone(person.facts)
+        self.assertEqual(person.network_worth, "maybe")
 
     def test_parent_owned_facts_remain_readable(self) -> None:
         self._people = [{"id": "person-a", "public_identifier": "jordan-bravo", "full_name": "Jordan Bravo"}]

@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""The `directory.csv` row shape and pure people-row merge helpers.
-
-The fan-in reads directory rows; source imports reuse the metadata unions.
+"""Pure unions for source artifacts and people identifier lists.
 
 Changelog:
-  2026-09-28: the Deep Context review writer (`replace_directory_source_rows`
-    and its row normalizer/ranker) is gone; realize exports reviewed identities
-    straight from SQLite.
-  2026-09-23 (typed rows): `normalized_directory_row` is the ONE boundary parse of
-    a source/review row into the declared `DirectoryRow` and returns that instance;
-    `merge_directory_rows` compares typed rows (rank from
-    `directory_source_priority`) instead of dicts. The in-memory `_priority` /
-    `_url_column` hint columns are gone: the sole producer's `_priority="100"` is
-    what `directory_source_priority("deep_context_review", ...)` already returns,
-    and no writer ever set `_url_column`. directory.csv bytes are unchanged.
+  2026-10-03: remove the unused directory schema and confidence parser.
 """
 
 from __future__ import annotations
@@ -21,7 +10,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 import sys  # noqa: F401
 
@@ -32,46 +20,6 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
-from packs.ingestion.primitives.pipeline.contract import row_model_for  # noqa: E402
-
-DIRECTORY_COLUMNS = [
-    "source",
-    "source_key",
-    "source_account",
-    "source_id",
-    "source_channels",
-    "status",
-    "email",
-    "phone",
-    "name",
-    "linkedin_url",
-    "public_identifier",
-    "confidence",
-    "matched_name",
-    "matched_headline",
-    "evidence",
-    "reasoning",
-    "source_artifact",
-    "updated_at",
-]
-# The declared row shape of `directory.csv`, generated FROM DIRECTORY_COLUMNS so
-# field order stays the on-disk header order and the column list keeps one home.
-DirectoryRow = row_model_for("DirectoryRow", DIRECTORY_COLUMNS)
-
-
-def parse_confidence(value: Any, default: float = 0.0) -> float:
-    raw = str(value or "").strip().lower()
-    if raw in {"high", "confirmed", "exact"}:
-        return 0.95
-    if raw in {"medium", "med"}:
-        return 0.8
-    if raw == "low":
-        return 0.5
-    try:
-        parsed = float(raw)
-        return parsed / 100.0 if parsed > 1 else parsed
-    except ValueError:
-        return default
 
 
 def merge_jsonish_lists(current: str, incoming: str) -> str:
@@ -93,10 +41,7 @@ def merge_jsonish_lists(current: str, incoming: str) -> str:
 def union_alias_list(current: str, incoming: str, primary_current: str = "", primary_incoming: str = "") -> str:
     """Set-union an all_emails/all_phones column, preserving first-seen order.
 
-    Distinct work emails that resolve to the same LinkedIn person accumulate
-    here rather than overwriting each other. The matching
-    primary_email/primary_phone values are folded in so a single-email row that
-    only populated primary_* still contributes its address to the union.
+    Include primary values so rows without an all_* list retain their endpoints.
     """
     seen: list[str] = []
     for value in (primary_current, primary_incoming):

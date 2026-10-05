@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from packs.ingestion.primitives.deep_context.db.models import GuidanceState, IsoTimestamp
 from packs.ingestion.schemas.people_schema import (
@@ -20,14 +20,6 @@ ACTIVE_GUIDANCE_STATES = {
     GuidanceState.PENDING.value,
     GuidanceState.RUNNING.value,
 }
-_LINKEDIN_RE = re.compile(
-    # Locale subdomains (de.linkedin.com, uk.linkedin.com, ...) are real URLs
-    # people paste. This only detects a LinkedIn URL inside free-text
-    # guidance; normalize_linkedin_url — the one pinned normalizer — still
-    # does the actual parsing below.
-    r"(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/in/[A-Za-z0-9_%.\-]+",
-    re.IGNORECASE,
-)
 
 
 @dataclass(frozen=True)
@@ -47,18 +39,14 @@ class GuidanceRequest:
 
 
 def linkedin_url_in_guidance(guidance: str) -> tuple[str, str]:
-    """Find (url, public_identifier) if guidance text names a LinkedIn URL.
-
-    ``("", "")`` means none found. A match is the fast path: the caller can
-    settle identity directly from a pasted URL without spending a
-    deep-research call at all — see GuidedRetargetWorker.submit.
-    """
-    match = _LINKEDIN_RE.search(guidance)
-    if not match:
+    """Accept a standalone supported profile URL as an explicit human choice."""
+    text = guidance.strip()
+    if not text or any(character.isspace() for character in text):
         return "", ""
-    raw = match.group(0)
-    url = normalize_linkedin_url(
-        raw if raw.lower().startswith("http") else f"https://{raw}"
-    )
+    parsed = urlsplit(text if "://" in text else f"https://{text}")
+    if not (parsed.hostname and (parsed.hostname == "linkedin.com" or parsed.hostname.endswith(".linkedin.com"))
+            and parsed.path.startswith("/in/")):
+        return "", ""
+    url = normalize_linkedin_url(text)
     public_identifier = extract_public_identifier(url).lower()
     return (url, public_identifier) if public_identifier else ("", "")

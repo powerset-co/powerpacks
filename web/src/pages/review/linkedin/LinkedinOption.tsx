@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import type { ReviewCandidate, ReviewPerson } from "@/types/review"
 
 import { FactList } from "../shared/FactList"
+import { LabelBadges } from "../shared/LabelBadges"
 import { ReviewAvatar } from "../shared/ReviewAvatar"
 import { DECISION, OPTION } from "./copy"
 
@@ -45,6 +46,7 @@ export function LinkedinOption({ person, candidate, disabled, onUse }: LinkedinO
         <ReviewAvatar person={person} candidate={candidate} />
         <div className="profile-copy">
           <h3>{displayName(person, candidate, false)}</h3>
+          <LabelBadges labels={[]} candidate={candidate} />
           <KindLine kind={kind} url={candidate.url} />
           {headline ? <p>{headline}</p> : null}
         </div>

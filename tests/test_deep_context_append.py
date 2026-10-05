@@ -34,9 +34,11 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow, OwnerContextRow
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
-from packs.ingestion.primitives.deep_context.db.context_queries import parent_histories
+from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle, project_person_source_bundle, project_person_fact
+from packs.ingestion.primitives.deep_context.db.context_queries import person_histories
+from packs.ingestion.primitives.deep_context.db.workflow_views import synthesis_pending, workflow_state
 from packs.ingestion.primitives.deep_context.synthesis import runner
+from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 from packs.ingestion.primitives.deep_context.synthesis.synthesize_person_context import SynthesizePersonContext
 
 
@@ -49,7 +51,7 @@ class AppendPipelineTests(unittest.TestCase):
         self.db.project_rows((ParentRow('jordan', 'jordan'), PersonRow('person-jordan', 'jordan'),
             OwnerContextRow('owner', json.dumps({'name': 'Synthetic Owner'}), 'owner.json', '0' * 64)))
         self.calls = []
-        self.fail = False
+        self.provider_fails = False
         outer = self
         class Caller:
             def __init__(self, config): pass
@@ -58,7 +60,7 @@ class AppendPipelineTests(unittest.TestCase):
             async def call(self, **kwargs):
                 prompt = kwargs['user_prompt']
                 outer.calls.append(prompt)
-                if outer.fail:
+                if outer.provider_fails:
                     raise RuntimeError('synthetic failure')
                 new = 'new-company' in prompt
                 return SimpleNamespace(payload={'canonical_name': 'Jordan Bravo',
@@ -89,7 +91,7 @@ class AppendPipelineTests(unittest.TestCase):
         self.run_node()
         self.bundle(['old-company', 'new-company'])
         self.run_node()
-        history = parent_histories(self.db)['jordan']
+        history = person_histories(self.db)['person-jordan']
         self.assertEqual(history.facts.title, 'Founder')
         self.assertEqual([e.name for e in history.facts.employers], ['New Company', 'Old Company'])
         self.assertEqual(len(history.records), 2)
@@ -100,26 +102,81 @@ class AppendPipelineTests(unittest.TestCase):
     def test_failed_delta_preserves_facts_and_coverage(self):
         self.bundle(['old-company'])
         self.run_node()
-        path = self.root / 'facts/jordan.jsonl'
+        path = self.root / 'facts/person-jordan.jsonl'
         before = path.read_bytes()
         self.bundle(['old-company', 'new-company'])
-        self.fail = True
+        self.provider_fails = True
         self.assertEqual(self.run_node().status, 'failed')
         self.assertEqual(path.read_bytes(), before)
-        self.assertEqual(len(parent_histories(self.db)['jordan'].processed), 1)
-        self.fail = False
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].processed), 1)
+        self.assertEqual(synthesis_pending(self.db), ('person-jordan',))
+        self.provider_fails = False
         self.run_node()
-        self.assertEqual(len(parent_histories(self.db)['jordan'].processed), 2)
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].processed), 2)
+        self.assertEqual(synthesis_pending(self.db), ())
+
+    def test_partial_synthesis_records_failed_contact_ids_when_parent_ids_differ(self):
+        from packs.ingestion.primitives.deep_context.db.models import SYNTHESIS_RUN_KEY, SynthesisRun
+        self.bundle(['old-company'])
+        self.run_node()
+        self.bundle(['old-company', 'new-company'])
+        self.db.project_rows((ParentRow('casey', 'casey'), PersonRow('person-casey', 'casey')))
+        self.bundle(['third-message'], parent='casey')
+        from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisFailure, SynthesisResult, SynthesisRecord
+        async def result(caller, person, **kwargs):
+            if person.person_id == 'person-jordan':
+                failure = SynthesisFailure('person-jordan', 1, 'synthetic failure')
+                return SynthesisResult('person-jordan', SynthesisRecord.from_payload({'facts': {}, 'stop_reason': 'failed'}),
+                                       1, total_failure=True, failures=(failure,))
+            return SynthesisResult(person.person_id, SynthesisRecord.from_payload({'facts': {'canonical_name': 'Casey Bravo'}}), 0)
+        with patch.object(runner, 'synthesize_person', side_effect=result):
+            self.run_node()
+        receipt = SynthesisRun.from_json(self.db.query('SELECT value FROM meta WHERE key=?', (SYNTHESIS_RUN_KEY,))[0]['value'])
+        self.assertEqual(receipt.unfinished, ('person-jordan',))
 
     def test_max_batches_advances_only_consumed_evidence(self):
         self.bundle(['old-company', 'new-company', 'third-message'])
         self.run_node(max_batches=1)
-        self.assertEqual(len(parent_histories(self.db)['jordan'].processed), 1)
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].processed), 1)
+        self.assertEqual(synthesis_pending(self.db), ('person-jordan',))
+        self.assertEqual(workflow_state(self.db).progress.synthesize_pending, 1)
         self.run_node(max_batches=1)
         self.run_node(max_batches=1)
         self.run_node(max_batches=1)
         self.assertEqual(len(self.calls), 3)
-        self.assertEqual(len(parent_histories(self.db)['jordan'].processed), 3)
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].processed), 3)
+        self.assertEqual(synthesis_pending(self.db), ())
+
+    def test_legacy_seed_without_message_observations_reuses_exact_evidence(self):
+        self.bundle(['old-company'])
+        bundle = selection.effective_person_bundles(self.db)['person-jordan']
+        path = self.root / 'legacy.jsonl'
+        path.write_text(json.dumps({'facts': {'canonical_name': 'Jordan Bravo'},
+            'input_evidence_fingerprint': prompting.seed_evidence_fingerprint(bundle)}) + '\n')
+        project_person_fact(self.db, path, 'person-jordan')
+        node = SynthesizePersonContext(db=self.db, raw_dir=self.root, out_dir=self.root / 'facts',
+            model='fixture-model', chunk_chars=1)
+        self.assertEqual(node._plan().bundles, ())
+        self.assertEqual(synthesis_pending(self.db), ())
+        self.bundle(['old-company', 'new-company'])
+        self.assertEqual(len(node._plan().bundles), 1)
+        self.assertEqual(synthesis_pending(self.db), ('person-jordan',))
+
+    def test_legacy_prompt_cache_without_message_observations_stays_config_aware(self):
+        self.bundle(['old-company'])
+        node = SynthesizePersonContext(db=self.db, raw_dir=self.root, out_dir=self.root / 'facts',
+            model='fixture-model', chunk_chars=1)
+        plan = node._plan()
+        path = self.root / 'legacy.jsonl'
+        path.write_text(json.dumps({'facts': {'canonical_name': 'Jordan Bravo'},
+            'synthesis_version': prompting.SYNTHESIS_VERSION,
+            'input_evidence_fingerprint': prompting.input_evidence_fingerprint(plan.bundles[0],
+                system_prompt=plan.system_prompt, chunk_chars=1, max_batches=node.config.max_batches)}) + '\n')
+        project_person_fact(self.db, path, 'person-jordan')
+        self.assertEqual(node._plan().bundles, ())
+        self.assertEqual(synthesis_pending(self.db), ())
+        self.bundle(['old-company', 'new-company'])
+        self.assertEqual(len(node._plan().bundles), 1)
 
     def test_merge_keeps_both_histories_on_next_append(self):
         self.bundle(['old-company'])
@@ -130,11 +187,16 @@ class AppendPipelineTests(unittest.TestCase):
         self.db.merge_parents('jordan', 'casey')
         self.run_node()
         self.assertEqual(len(self.calls), 2)
-        self.bundle(['old-company', 'new-company', 'third-message'])
+        path = self.root / 'person-jordan.json'
+        path.write_text(json.dumps({'person_id': 'person-jordan', 'messages': [
+            {'channel': 'imessage', 'at': '2026-01-01', 'direction': 'from_them', 'text': text}
+            for text in ['old-company', 'third-message']]}))
+        project_person_source_bundle(self.db, path, 'person-jordan')
         self.run_node()
-        history = parent_histories(self.db)['jordan']
-        self.assertEqual(len(history.records), 3)
-        self.assertEqual(len(history.processed), 3)
+        history = person_histories(self.db)['person-jordan']
+        self.assertEqual(len(history.records), 2)
+        self.assertEqual(len(history.processed), 2)
+        self.assertEqual(len(person_histories(self.db)['person-casey'].records), 1)
         self.run_node()
         self.assertEqual(len(self.calls), 3)
 
@@ -143,20 +205,20 @@ class AppendPipelineTests(unittest.TestCase):
         self.run_node()
         node = SynthesizePersonContext(db=self.db, raw_dir=self.root, out_dir=self.root / 'facts',
             model='other-model', chunk_chars=1)
-        self.fail = True
+        self.provider_fails = True
         self.assertEqual(node.run().status, 'failed')
         self.assertEqual(len(node._plan().bundles), 1)
-        self.fail = False
+        self.provider_fails = False
         node.run()
         self.assertEqual(node._plan().bundles, ())
-        self.assertEqual(len(parent_histories(self.db)['jordan'].records), 2)
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].records), 2)
 
     def test_force_appends_current_bundle_and_retains_prior_records(self):
         self.bundle(['old-company'])
         self.run_node()
         self.run_node(force=True)
-        self.assertEqual(len(parent_histories(self.db)['jordan'].records), 2)
-        self.assertEqual(len(parent_histories(self.db)['jordan'].processed), 1)
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].records), 2)
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].processed), 1)
 
     def test_old_backfill_does_not_replace_recent_title_or_lose_jev_channels(self):
         self.bundle(['new-company'])
@@ -166,7 +228,7 @@ class AppendPipelineTests(unittest.TestCase):
             {'channel': 'gmail', 'at': '2020-01-01', 'direction': 'from_me', 'text': 'old-company'}]}))
         project_parent_source_bundle(self.db, path, 'jordan')
         self.run_node()
-        history = parent_histories(self.db)['jordan']
+        history = person_histories(self.db)['person-jordan']
         self.assertEqual(history.facts.title, 'Founder')
         from packs.ingestion.primitives.deep_context.jev_worth.questions import build_request
         from packs.ingestion.primitives.deep_context.jev_worth.models import WorthFacts
@@ -178,16 +240,19 @@ class AppendPipelineTests(unittest.TestCase):
         self.assertIn('gmail', serialized)
         self.assertIn('2020-01-01', serialized)
 
-    def test_absorbed_only_history_uses_survivor_id(self):
+    def test_absorbed_only_history_keeps_contact_id(self):
         self.bundle(['old-company'])
         self.run_node()
         self.db.project_rows((ParentRow('casey', 'casey'), PersonRow('person-casey', 'casey')))
         self.db.merge_parents('casey', 'jordan')
         self.run_node()
         self.assertEqual(len(self.calls), 1)
-        self.bundle(['new-company'], parent='casey')
+        path = self.root / 'person-jordan.json'
+        path.write_text(json.dumps({'person_id': 'person-jordan', 'messages': [
+            {'channel': 'imessage', 'at': '2026-01-02', 'direction': 'from_them', 'text': 'new-company'}]}))
+        project_person_source_bundle(self.db, path, 'person-jordan')
         self.run_node()
-        self.assertEqual(len(parent_histories(self.db)['casey'].records), 2)
+        self.assertEqual(len(person_histories(self.db)['person-jordan'].records), 2)
 
     def test_jev_tags_accumulated_facts_without_erasing_extractions(self):
         self.bundle(['old-company'])
@@ -206,7 +271,7 @@ class AppendPipelineTests(unittest.TestCase):
         classify.assert_awaited_once()
         facts = classify.await_args.kwargs['facts'].facts
         self.assertEqual([employer.name for employer in facts.employers], ['New Company', 'Old Company'])
-        history = parent_histories(self.db)['jordan']
+        history = person_histories(self.db)['person-jordan']
         self.assertEqual(len(history.records), 2)
         self.assertEqual(history.facts.network_worth.decision, 'yes')
         self.assertEqual(history.records[0].record.facts.title, 'Engineer')

@@ -16,6 +16,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.queries import imported_people
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from deep_context_sqlite_test_helpers import seed_identity
 
@@ -101,6 +103,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
             linkedin_url=None,
             link_updates={"candidate_origin": 1, "raw_import": 1},
         )
+        self.db.replace_imported_people((PeopleRow(id="person-unlinked", full_name="Jordan Unlinked"),))
         self.assertEqual(
             [row.row_key for row in enrichment_queue(self.db)],
             ["candidate:email:unlinked@example.test"],
@@ -111,6 +114,9 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
             row_key="unused", name="Jordan Nameless", machine_worth="yes",
             include_link=False,
         )
+        self.db.replace_imported_people((*imported_people(self.db), PeopleRow(
+            id="person-nameless", full_name="Jordan Nameless",
+        )))
         with self.db.transaction() as conn:
             conn.execute("UPDATE parents SET display_name=NULL WHERE parent_id='parent-nameless'")
         row = next(row for row in enrichment_queue(self.db) if row.parent_id == "parent-nameless")

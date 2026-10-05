@@ -1,4 +1,4 @@
-"""The share UI's read boundary: one typed row per roster person, joined once.
+"""The share UI's read boundary: one typed row per parent, joined once.
 
 Flow: the roster (people.csv through `imported_people`, the one roster reader)
 + the canonical store (`share`, `person_labels`, `person_tags`, `people`,
@@ -15,8 +15,7 @@ Changelog:
 
 from __future__ import annotations
 
-from dataclasses import asdict, astuple, dataclass, fields
-from pathlib import Path
+from dataclasses import asdict, astuple, dataclass, fields, replace
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
@@ -37,6 +36,7 @@ from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags
 from packs.ingestion.schemas.share_schema import SHARE_CONFIRM, SHARE_NO, SHARE_YES
+from packs.ingestion.schemas.people_schema import merge_interaction_counts
 
 WORTH_HUMAN = "human"
 WORTH_MACHINE = "machine"
@@ -189,12 +189,14 @@ class SharePeople:
         if self._families_stamp != stamp:
             decided = {row.person_id for row in share_views.share_decisions(self.db)}
             parent_of_person = {row.person_id: row.parent_id for row in queries.people(self.db)}
+            decided_parents = {parent_of_person[person_id] for person_id in decided}
             families: dict[str, list[ImportedPerson]] = {}
             for imported in self.roster.values():
-                if imported.person_id not in decided:
+                key = parent_of_person[imported.person_id]
+                if key not in decided_parents:
                     continue
-                key = self._parent_id(imported, parent_of_person) or imported.person_id
-                families.setdefault(key, []).append(imported)
+                families.setdefault(key, []).append(replace(imported, superseded_person_ids=tuple(
+                    old for old in imported.superseded_person_ids if parent_of_person.get(old, key) == key)))
             self._families = {parent_id: tuple(members) for parent_id, members in families.items()}
             self._families_stamp = stamp
         return self._families
@@ -207,21 +209,19 @@ class SharePeople:
         labels = {row.person_id: row for row in share_views.person_labels(self.db)}
         tags = {row.person_id: row for row in share_views.person_tags(self.db)}
         parents = {row.parent_id: row for row in queries.parents(self.db)}
-        fact_rows = {row.parent_id: row for row in queries.facts(self.db, parent_owned=True)}
+        fact_rows = {row.parent_id: row for row in sorted(
+            queries.facts(self.db, parent_owned=True), key=lambda row: row.artifact_key.startswith("parent-facts:"))}
         facts = {parent_id: parse_json_object(row.facts_json) for parent_id, row in fact_rows.items()}
         rows = []
         for parent_id, members in families.items():
             ordered = _by_weight(members)
             primary = ordered[0]
             # The node writes person_labels and share together: a decision always has its label row.
-            cells = {member.person_id: parse_json_object(labels[member.person_id].labels_json) for member in members}
-            latest = min(ordered, key=lambda member: _recency(cells[member.person_id]))
             decided_by = _decided_by(ordered, decisions)
             decision = decisions[decided_by.person_id]
-            held = _held(decided_by, tags)
-            label = labels[primary.person_id]
-            jev = cells[primary.person_id]
-            when = cells[latest.person_id]
+            held = _held((decided_by, *ordered), tags)
+            label = labels[decided_by.person_id]
+            jev = parse_json_object(label.labels_json)
             parent = parents.get(parent_id)
             fact = facts.get(parent_id, {})
             fact_title, fact_company = _facts_title(fact)
@@ -234,11 +234,11 @@ class SharePeople:
                 company=_first(member.company for member in ordered) or fact_company,
                 location=_first(member.location for member in ordered) or str(fact.get("location") or ""),
                 channels=_families(tuple(channel for member in ordered for channel in member.source_channels)),
-                interactions=sum(sum(member.interaction_counts.values()) for member in members),
+                interactions=sum(merge_interaction_counts(*(member.interaction_counts for member in members)).values()),
                 last_interaction=max((member.last_interaction for member in members), default=""),
-                recency_days=when.get("recency_days"),
-                cadence=str(when.get("cadence") or ""),
-                direction=str(when.get("direction") or ""),
+                recency_days=jev.get("recency_days"),
+                cadence=str(jev.get("cadence") or ""),
+                direction=str(jev.get("direction") or ""),
                 worth=str(label.worth or ""),
                 worth_source=_worth_source(parent, fact),
                 relationship_kind=str(jev.get("relationship_kind") or ""),
@@ -274,17 +274,22 @@ class SharePeople:
         primary = ordered[0]
         linked = next((member for member in ordered if member.linkedin_url), primary)
         parent = next(iter(queries.parents(self.db, parent_id=parent_id)), None)
-        fact_rows = queries.facts(self.db, parent_id=parent_id, parent_owned=True)
-        facts = parse_json_object(fact_rows[0].facts_json) if fact_rows else {}
-        label = next((row for row in share_views.person_labels(self.db) if row.person_id == primary.person_id), None)
-        cells = parse_json_object(label.labels_json) if label else {}
+        fact_rows = sorted(queries.facts(self.db, parent_id=parent_id, parent_owned=True),
+                           key=lambda row: row.artifact_key.startswith("parent-facts:"))
+        facts = parse_json_object(fact_rows[-1].facts_json) if fact_rows else {}
         decisions = {row.person_id: row for row in share_views.share_decisions(self.db)}
+        decided_by = _decided_by(ordered, decisions)
+        label = next(row for row in share_views.person_labels(self.db) if row.person_id == decided_by.person_id)
+        cells = parse_json_object(label.labels_json)
         tags = {row.person_id: row for row in share_views.person_tags(self.db)}
-        held = _held(_decided_by(ordered, decisions), tags)
+        held = _held((decided_by, *ordered), tags)
         dossier = ""
-        for artifact in queries.artifacts(self.db, kind=ArtifactKind.DOSSIER.value, parent_id=parent_id):
+        for artifact in sorted(queries.artifacts(self.db, kind=ArtifactKind.DOSSIER.value,
+                                                parent_id=parent_id, status="projected"),
+                               key=lambda row: (row.person_id is None, row.projected_at or "",
+                                                row.artifact_key.startswith("dossier:"))):
             body = str(parse_json_object(artifact.payload_json).get("body") or "")
-            if body and (artifact.person_id is None or not dossier):
+            if body:
                 dossier = body
         name = _name(facts, parent, primary)
         known_as = (*(member.display_name for member in ordered), *(str(alias) for alias in facts.get("aliases") or []))
@@ -314,12 +319,6 @@ class SharePeople:
             phones=tuple(dict.fromkeys(phone for member in ordered for phone in member.phones)),
         )
 
-    @staticmethod
-    def _parent_id(imported: ImportedPerson, parent_of_person: dict[str, str]) -> str:
-        identities = (imported.person_id, *imported.superseded_person_ids)
-        parent_ids = sorted({parent_of_person[key] for key in identities if key in parent_of_person})
-        return parent_ids[0] if parent_ids else ""
-
 
 def _by_weight(members: tuple[ImportedPerson, ...]) -> tuple[ImportedPerson, ...]:
     """The people under one parent, the one with the most to say first."""
@@ -327,19 +326,15 @@ def _by_weight(members: tuple[ImportedPerson, ...]) -> tuple[ImportedPerson, ...
         -sum(member.interaction_counts.values()), not member.linkedin_url, member.person_id)))
 
 
-def _recency(cells: dict[str, Any]) -> tuple[bool, int]:
-    days = cells.get("recency_days")
-    return (days is None, int(days or 0))
-
-
 def _decided_by(ordered: tuple[ImportedPerson, ...], decisions: dict[str, ShareDecisionRow]) -> ImportedPerson:
-    """The member whose share row speaks for the parent: a human's call wins over the rule."""
-    return next((member for member in ordered if decisions[member.person_id].source == "human"), ordered[0])
+    """A saved human decision wins over other members' machine decisions."""
+    decided = tuple(member for member in ordered if member.person_id in decisions)
+    return next((member for member in decided if decisions[member.person_id].source == "human"), decided[0])
 
 
-def _held(member: ImportedPerson, tags: dict[str, PersonTagRow]) -> PersonTagRow | None:
-    return tags.get(member.person_id) or next(
-        (tags[old] for old in member.superseded_person_ids if old in tags), None)
+def _held(members: tuple[ImportedPerson, ...], tags: dict[str, PersonTagRow]) -> PersonTagRow | None:
+    return next((tags[key] for member in members for key in (member.person_id, *member.superseded_person_ids)
+                 if key in tags), None)
 
 
 def _name(facts: dict[str, Any], parent: ParentSnapshotRow | None, primary: ImportedPerson) -> str:

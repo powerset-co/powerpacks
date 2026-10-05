@@ -1,6 +1,8 @@
 """Typed SQLite reads for merge-candidate judging.
 
 Changelog:
+- 2026-10-03: all original source names constrain a parent; only source members
+  contribute identity endpoints.
 - 2026-09-25: evidence is read in MERGE_SURVEY_BATCH-parent batches and grouped per
   parent once; the whole-install packet no longer sits in memory or gets
   rescanned per parent.
@@ -20,6 +22,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
     identifiers as identifier_rows,
     parents as parent_rows,
     people as person_rows,
+    imported_people,
     owner_profile,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -100,6 +103,7 @@ class _Roster:
     facts: dict[str, FactRow]
     identifiers: dict[str, dict[str, list[str]]]
     members: dict[str, list[PersonRow]]
+    names: dict[str, str]
     owner_emails: set[str]
     owner_phones: set[str]
 
@@ -118,6 +122,7 @@ class _Roster:
             facts={row.parent_id: row for row in fact_rows(db, parent_owned=True) if row.parent_id},
             identifiers=identifiers,
             members=members,
+            names={row.id: row.full_name for row in imported_people(db)},
             owner_emails=identifier_emails(owner.emails if owner else ()) | {
                 value
                 for person_id in owner_ids
@@ -138,7 +143,12 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
     if not parent_members or fact is None:
         return None
     member_ids = tuple(row.person_id for row in parent_members)
-    representative = parent_members[0]
+    actual_members = [row for row in parent_members if not row.is_owner and not row.is_ghost]
+    source_members = [row for row in actual_members if row.person_id in roster.names]
+    if not source_members:
+        return None
+    representative = next((row for row in source_members if roster.names[row.person_id]), source_members[0])
+    source_ids = tuple(row.person_id for row in source_members)
     try:
         fact_payload = SynthesizedFacts.from_payload(json.loads(fact.facts_json or "{}"))
     except json.JSONDecodeError:
@@ -148,18 +158,18 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
     owned = fact_payload.owned_identifiers
     emails = tuple(sorted({
         value
-        for person_id in member_ids
+        for person_id in source_ids
         for value in roster.identifiers.get(person_id, {}).get(IdentifierKind.EMAIL.value, [])
     } - roster.owner_emails))
     phones = tuple(sorted({
         phone_digits(value)
-        for person_id in member_ids
+        for person_id in source_ids
         for value in roster.identifiers.get(person_id, {}).get(IdentifierKind.PHONE.value, [])
         if phone_digits(value)
     } - roster.owner_phones))
     extra_emails = tuple(sorted(identifier_emails(owned.emails) - set(emails) - roster.owner_emails))
     extra_phones = tuple(sorted(identifier_phones(owned.phones) - set(phones) - roster.owner_phones))
-    name = parent.display_name or fact_payload.canonical_name
+    name = roster.names[representative.person_id]
     return MergePerson(
         parent_id=parent.parent_id,
         slug=parent.display_slug or representative.child_slug or parent.parent_id,
@@ -167,6 +177,7 @@ def _merge_person(parent: ParentSnapshotRow, roster: _Roster, evidence_rows: Dos
         member_person_ids=member_ids,
         name=name,
         name_key=normalize_name(name),
+        source_names=tuple(roster.names.get(row.person_id, "") for row in actual_members),
         emails=emails,
         extra_emails=extra_emails,
         phone_digits=phones,

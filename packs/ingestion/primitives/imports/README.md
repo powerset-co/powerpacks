@@ -5,8 +5,8 @@ write one `manifest.json` each. They make no identity or worth decisions and cal
 no enrichment providers. LinkedIn setup has its separate Modal workflow.
 
 Deep Context combines source files with `merge_people.py` before collection.
-That existing fan-in reuses confirmed directory identities; Deep Context owns
-uncertain identity decisions, worth review, person merging, and enrichment.
+The fan-in retains source IDs and combines repeated IDs. Deep Context owns
+identity decisions, worth review, person merging, and enrichment.
 
 ```mermaid
 flowchart LR
@@ -17,9 +17,7 @@ flowchart LR
     GP --> F[Deep Context source fan-in]
     MP --> F
     LI[LinkedIn people.csv] --> F
-    D[Confirmed directory identities] --> F
     F --> DC[Collect, review, merge, enrich]
-    DC --> D
 ```
 
 | File | Role | Reads | Writes |
@@ -28,8 +26,8 @@ flowchart LR
 | [messages/importer.py](messages/importer.py) | Import source candidates | Discovery contacts | Messages candidates and manifest |
 | [messages/util.py](messages/util.py) | Map typed contacts to people | Parsed source values | Returned people rows |
 | [linkedin/network_import.py](linkedin/network_import.py) | LinkedIn setup import | Connections/profile files | LinkedIn metadata and manifest |
-| [directory.py](directory.py) | Shared directory schema and persistence | Confirmed identities | Directory rows through callers |
-| [merge_people.py](merge_people.py) | Combine source people | Source files and confirmed directory | Merged people and manifest |
+| [directory.py](directory.py) | Metadata unions | Source metadata | Returned values |
+| [merge_people.py](merge_people.py) | Combine source people | Source people files | Merged people and manifest |
 | [common.py](common.py) | Import manifests and fingerprints | Inputs and outputs | Import manifest |
 | [status.py](status.py) | Read-only source status | Discovery/import artifacts | CLI JSON |
 
@@ -47,11 +45,11 @@ There is no separate candidates file or import-time review file.
 
 | node | reads | writes | manifest |
 |---|---|---|---|
-| `merge_people` | `import/linkedin/people.csv` (external, optional), `import/gmail/people.csv` (optional), `import/messages/people.csv` (optional), `directory.csv` (optional) | `merged/people.csv` (full_rewrite) | `merged/manifest.json` (`MergePeopleManifest`) |
+| `merge_people` | `import/linkedin/people.csv` (external, optional), `import/gmail/people.csv` (optional), `import/messages/people.csv` (optional) | `merged/people.csv` (full_rewrite) | `merged/manifest.json` (`MergePeopleManifest`) |
 
 `merge_people` (`PeopleMerge`, `merge_people.py`) is free and applies no human
 decisions. Status: `completed`, or `not_ready`
 (`reason: missing_import_people_csvs`, when no source file was readable), plus
-the template `failed`. The only distinction it makes is the `public_identifier`
-column — a person either has one or does not; the merge admits nobody and drops
-nobody.
+the template `failed`. Existing source IDs are retained; rows without an ID use
+a primary email/phone candidate key. Rows without either are counted unkeyable.
+Directory matches and cached profiles are not inputs.

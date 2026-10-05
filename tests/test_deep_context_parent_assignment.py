@@ -21,6 +21,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import (
     load_assignment,
     mint_parent_id,
@@ -254,6 +255,8 @@ class ParentIncrementalBuildTest(unittest.TestCase):
                 )
             )
         db.project_rows(tuple(rows))
+        db.replace_imported_people(tuple(PeopleRow(id=person_id, full_name=name)
+                                         for person_id, _, name in PEOPLE if person_id in person_ids))
         person_by_slug = {slug: pid for pid, slug in slug_by_person.items()}
         db.replace_merge_verdicts(
             tuple(

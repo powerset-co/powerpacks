@@ -22,11 +22,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
-    RelationshipDecision,
-    finish_reviews,
-)
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
     approved_identities,
@@ -89,6 +87,9 @@ class DeepContextDbViewTests(unittest.TestCase):
                     is_ghost=int(ghost),
                 ),
             )
+            self.db.replace_imported_people((*queries.imported_people(self.db), PeopleRow(
+                id=person_id, full_name=f"Jordan {parent_id.title()}",
+            )))
             artifact_key = f"facts:{person_id}"
             project_artifact(
                 self.db,
@@ -112,7 +113,7 @@ class DeepContextDbViewTests(unittest.TestCase):
                     machine_worth=worth,
                     machine_worth_reason=f"{worth or 'default'} evidence",
                     is_owner=int(owner),
-                    facts_json=json.dumps({"canonical_name": "Jordan Bravo"}),
+                    facts_json=json.dumps({"canonical_name": f"Jordan {parent_id.title()}"}),
                 ),
             )
         if human:
@@ -524,17 +525,17 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-mixed"])
         self.assertEqual([row.parent_id for row in linkedin_queue(self.db)], ["mixed"])
 
-    def test_valid_machine_verdict_skips_judge_even_with_old_fingerprint(self) -> None:
+    def test_old_machine_verdict_is_selected_for_current_input_check(self) -> None:
         people = self.add_parent("judged", "yes")
         self.add_candidate("judged", "jordan-judged", person_ids=people,
                            linkedin_url="https://www.linkedin.com/in/jordan-judged",
                            judgment_fingerprint="old-input",
                            judgment_payload_json=json.dumps({"verdict": "needs_review", "confidence": 0.7}))
-        self.assertEqual(judge_candidates(self.db), [])
+        self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-judged"])
         self.add_candidate("judged", "jordan-empty", person_ids=people,
                            linkedin_url="https://www.linkedin.com/in/jordan-empty",
                            judgment_fingerprint="failed-input", judgment_payload_json="{}")
-        self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-empty"])
+        self.assertEqual([row.row_key for row in judge_candidates(self.db)], ["jordan-empty", "jordan-judged"])
 
     def test_human_synthetic_keep_stays_local_without_linkedin_progress(self):
         people = self.add_parent("keepish", "no")
@@ -789,7 +790,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(linkedin_queue(self.db), [])
         self.assertEqual(asdict(linkedin_progress(self.db)), {"total": 0, "pending": 0, "done": 0})
         self.assertEqual(review_questions_pending(self.db), 0)
-        self.assertEqual(workflow_state(self.db).next_action, "realize")
+        self.assertEqual(workflow_state(self.db).next_action, "enrich")
         self.assertEqual(approved_identities(self.db), [])
         self.assertEqual(len(person_detail(self.db, "synthetic-review").candidates), 1)
         self.assertEqual([tuple(row) for row in self.db.query("SELECT * FROM links")], before)
@@ -817,6 +818,15 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(asdict(linkedin_progress(self.db)), {"total": 1, "pending": 0, "done": 1})
         self.assertEqual([row.linkedin_url for row in approved_identities(self.db)], [url])
         self.assertEqual([tuple(row) for row in self.db.query("SELECT * FROM links")], before)
+
+    def test_unsynthesized_contact_is_not_hidden_by_a_siblings_facts(self) -> None:
+        self.add_parent('shared', 'yes')
+        project_person(self.db, PersonRow('shared-person-2', 'shared'))
+        project_artifact(self.db, ArtifactRow('source-bundle:shared-person-2', 'source_bundle', 'shared',
+                                             '/raw/shared-person-2.json', 'fixture', 'projected',
+                                             person_id='shared-person-2'))
+        self.assertEqual(synthesis_pending(self.db), ('shared-person-2',))
+        self.assertEqual(workflow_state(self.db).progress.synthesize_pending, 1)
 
     def test_collected_parent_without_facts_queues_synthesize(self) -> None:
         self.add_factsless_parent("linkedin-only")
@@ -853,14 +863,15 @@ class DeepContextDbViewTests(unittest.TestCase):
     def test_a_parent_synthesis_could_not_finish_does_not_hold_the_flow(self) -> None:
         for parent in ("skipped", "later"):
             self.add_factsless_parent(parent)
-        bundle = lambda parent: ArtifactRow(
-            f"source_bundle:{parent}", "source_bundle", parent, f"/raw/{parent}.json", f"sha-{parent}", "projected")
+        def bundle(parent):
+            return ArtifactRow(
+                f"source_bundle:{parent}", "source_bundle", parent, f"/raw/{parent}.json", f"sha-{parent}", "projected")
         project_artifact(self.db, bundle("skipped"))
         self.assertEqual(workflow_state(self.db).next_action, "synthesize")
-        self.assertEqual(synthesis_pending(self.db), ("skipped",))
+        self.assertEqual(synthesis_pending(self.db), ("skipped-person-1",))
 
         # The run tried this parent and could not write its facts: it waits for the next run.
-        self.db.record_synthesis_run(SynthesisRun(("skipped: model answer unusable",), ("skipped",)))
+        self.db.record_synthesis_run(SynthesisRun(("skipped-person-1: model answer unusable",), ("skipped-person-1",)))
         state = workflow_state(self.db)
         self.assertEqual((state.next_action, state.progress.synthesize_pending), ("realize", 0))
 
@@ -938,13 +949,13 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(research_candidate_urls(self.db), {"jordan-bravo": url})
         self.assertEqual(len(self.db.query("SELECT * FROM research WHERE status='complete'")), 2)
 
-    def test_enrichment_queue_excludes_only_terminal_research_parents(self):
+    def test_terminal_research_is_selected_for_current_input_cache_check(self):
         for status in ("pending", "running", "complete", "no_match", "failed"):
             self.add_parent(status, "yes")
             self.db.project_rows((ResearchRow(f"research:{status}", status, status),))
         self.add_parent("no-research", "yes")
         self.assertEqual({row.parent_id for row in enrichment_queue(self.db)},
-                         {"pending", "running", "failed", "no-research"})
+                         {"pending", "running", "failed", "no-research", "complete", "no_match"})
 
     def test_enrichment_queue_scopes_identifiers_and_scans_research_once(self):
         self.add_parent("fixture", "yes")
@@ -955,9 +966,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         details = [row["detail"] for row in plan]
         self.assertFalse(any("identifiers_by_value (kind=?)" in detail for detail in details))
         research_scans = [row for row in plan if row["detail"] == "SCAN done"]
-        self.assertEqual(len(research_scans), 1)
-        parents = {row["id"]: row["detail"] for row in plan}
-        self.assertIn("LIST SUBQUERY", parents[research_scans[0]["parent"]])
+        self.assertEqual(research_scans, [])
 
     def test_decision_page_does_not_hydrate_profiles_or_read_dossiers(self):
         from packs.ingestion.primitives.deep_context.db import _view_rows

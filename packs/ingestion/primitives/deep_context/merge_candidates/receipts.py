@@ -1,13 +1,13 @@
 """SQLite-backed merge survey cache plus human-readable result exports.
 
 Changelog:
+- 2026-10-03: all source names and stored child rejections constrain acceptance.
 - 2026-10-01: shared mailboxes are left out of the survey.
 - 2026-10-01: accepted merges preserve explicit different-person judgments.
 """
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import is_shared_mailbox
@@ -22,7 +22,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs im
     generate_pairs,
     slam_dunk_verdict,
 )
-from packs.ingestion.primitives.deep_context.merge_candidates.judge import JUDGE_SYSTEM, judge_prompt
+from packs.ingestion.primitives.deep_context.merge_candidates.judge import judge_request, request_signature
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     CachedMergeVerdict,
     ConfirmedMergeRow,
@@ -35,13 +35,9 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
 )
 from packs.shared.csv_io import CsvIO
 
-IDENTITY_CONTRACT_VERSION = "owned-identifiers-v2"
-_JUDGE_VERSION = hashlib.sha1(f"{IDENTITY_CONTRACT_VERSION}\x1e{JUDGE_SYSTEM}".encode("utf-8")).hexdigest()[:8]
 
-
-def pair_sig(first: MergePerson, second: MergePerson) -> str:
-    prompt = judge_prompt(first, second)
-    return hashlib.sha1(f"{_JUDGE_VERSION}\x1e{prompt}".encode("utf-8")).hexdigest()[:16]
+def pair_sig(first: MergePerson, second: MergePerson, *, owner_name: str = "") -> str:
+    return request_signature(judge_request(first, second, owner_name=owner_name))
 
 
 def load_cached_verdicts(
@@ -65,7 +61,7 @@ def load_cached_verdicts(
         cache[key] = CachedMergeVerdict(
             row.signature,
             MergeDecision(
-                same_person=bool(row.same_person),
+                same_person=row.same_person,
                 confidence=row.confidence,
                 tone_consistent=bool(row.tone_consistent),
                 reason=row.reason,
@@ -78,12 +74,13 @@ def load_cached_verdicts(
 def split_cached_pairs(
     pairs: list[MergePair],
     cache: dict[frozenset[str], CachedMergeVerdict],
+    *, owner_name: str = "",
 ) -> tuple[list[MergePairVerdict], list[MergePairCandidate]]:
     reused: list[MergePairVerdict] = []
     to_judge: list[MergePairCandidate] = []
     for pair in pairs:
         first, second = pair.first, pair.second
-        signature = pair_sig(first, second)
+        signature = pair_sig(first, second, owner_name=owner_name)
         hit = cache.get(
             frozenset(
                 {
@@ -99,7 +96,7 @@ def split_cached_pairs(
     return reused, to_judge
 
 
-def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
+def survey_pairs(db: Db, *, refresh: bool = False, owner_name: str = "") -> PairSurvey:
     """Survey current parents without rejudging source-child rejections as aggregates."""
     # A mailbox an earlier import let in is not a person to merge.
     people = [person for person in merge_people(db) if not is_shared_mailbox(person.emails, person.phone_digits)]
@@ -107,20 +104,19 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
     stored = merge_verdicts(db)
     rejected = {
         frozenset((parent_by_person[row.person_a], parent_by_person[row.person_b]))
-        for row in stored if not row.same_person
+        for row in stored if row.same_person is False
     }
-    # Aggregate evidence uses a borrowed child ID; it cannot replace that child's rejection.
-    pairs = [pair for pair in generate_pairs(people) if not (
-        (len(pair.first.member_person_ids) > 1 or len(pair.second.member_person_ids) > 1)
-        and frozenset((pair.first.parent_id, pair.second.parent_id)) in rejected
-    )]
+    blocked_parents = {next(iter(pair)) for pair in rejected if len(pair) == 1}
+    pairs = [pair for pair in generate_pairs(people)
+             if not ({pair.first.parent_id, pair.second.parent_id} & blocked_parents)
+             and frozenset((pair.first.parent_id, pair.second.parent_id)) not in rejected]
     slam: list[MergePairVerdict] = []
     rest: list[MergePair] = []
     for pair in pairs:
         first, second = pair.first, pair.second
         verdict = slam_dunk_verdict(first, second)
-        if verdict and frozenset((first.parent_id, second.parent_id)) not in rejected:
-            slam.append(MergePairVerdict(first, second, pair_sig(first, second), verdict))
+        if verdict:
+            slam.append(MergePairVerdict(first, second, pair_sig(first, second, owner_name=owner_name), verdict))
         else:
             rest.append(pair)
     cache = (
@@ -131,15 +127,31 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
             parent_by_person,
         )
     )
-    reused, to_judge = split_cached_pairs(rest, cache)
+    reused, to_judge = split_cached_pairs(rest, cache, owner_name=owner_name)
     return PairSurvey(people, pairs, slam, reused, to_judge)
 
 
-def verdict_rows(verdicts: list[MergePairVerdict]) -> tuple[MergeVerdictRow, ...]:
-    selected = set(accepted_edges([
+def _accepted_verdict_edges(verdicts: list[MergePairVerdict], *, db: Db | None = None) -> list[tuple[str, str]]:
+    people = {person.person_id: person for verdict in verdicts for person in (verdict.first, verdict.second)}
+    decisions = [
         (v.first.person_id, v.second.person_id, v.decision.same_person, v.decision.confidence)
         for v in verdicts
-    ]))
+    ]
+    if db is not None:
+        parent_by_person = {row.person_id: row.parent_id for row in person_rows(db)}
+        representative = {person.parent_id: person.person_id for person in people.values()}
+        for row in merge_verdicts(db):
+            if row.same_person is not False:
+                continue
+            left = representative.get(parent_by_person[row.person_a])
+            right = representative.get(parent_by_person[row.person_b])
+            if left is not None and right is not None:
+                decisions.append((left, right, False, row.confidence))
+    return accepted_edges(decisions, source_names={key: person.source_names for key, person in people.items()})
+
+
+def verdict_rows(verdicts: list[MergePairVerdict], *, db: Db | None = None) -> tuple[MergeVerdictRow, ...]:
+    selected = set(_accepted_verdict_edges(verdicts, db=db))
     rows = []
     for verdict in verdicts:
         first, second = verdict.first, verdict.second
@@ -169,11 +181,10 @@ def verdict_rows(verdicts: list[MergePairVerdict]) -> tuple[MergeVerdictRow, ...
 def _confirmed(
     people: list[MergePerson],
     verdicts: list[MergePairVerdict],
+    *,
+    db: Db | None = None,
 ) -> tuple[list[ConfirmedMergeRow], list[list[str]]]:
-    edges = accepted_edges([
-        (v.first.person_id, v.second.person_id, v.decision.same_person, v.decision.confidence)
-        for v in verdicts
-    ])
+    edges = _accepted_verdict_edges(verdicts, db=db)
     selected = set(edges)
     rows: list[ConfirmedMergeRow] = []
     for verdict in verdicts:
@@ -202,9 +213,10 @@ def render_results(
     out_md: Path,
     people: list[MergePerson],
     verdicts: list[MergePairVerdict],
+    db: Db | None = None,
 ) -> tuple[list[ConfirmedMergeRow], list[list[str]]]:
     """Write display exports only; SQLite remains the graph/cache authority."""
-    confirmed, clusters = _confirmed(people, verdicts)
+    confirmed, clusters = _confirmed(people, verdicts, db=db)
     CsvIO.write_dict_rows(
         out_csv,
         [
@@ -223,7 +235,7 @@ def render_results(
     lines = [
         f"# Merge candidates ({len(clusters)} clusters, {len(confirmed)} pairs)",
         "",
-        f"_Generated {now_iso()}. LLM-judged on tone + identity. Confirm before merging._",
+        f"_Generated {now_iso()}. Source identifiers and identity judgments._",
         "",
     ]
     for number, group in enumerate(clusters, 1):

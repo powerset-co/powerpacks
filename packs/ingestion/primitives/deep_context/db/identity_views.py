@@ -45,11 +45,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
     ResearchHandle,
 )
-from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows, stored_judgments
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import VERDICTS
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.db.schema import ID_SET, id_set
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import unresolved_source_parents
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
     EnrichmentQueueRow,
@@ -61,9 +61,14 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
 
 
 _JUDGE_CANDIDATE_SELECT = """
-SELECT l.row_key FROM eligible_links l JOIN identity_scope s USING(parent_id)
-WHERE l.kind!='synthetic' AND l.decision_action IS NULL
-  AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
+SELECT l.row_key FROM eligible_links l JOIN worth w USING(parent_id)
+WHERE (w.effective_worth!='no' OR (w.human_worth IS NULL AND (
+  EXISTS (SELECT 1 FROM people pe JOIN person_sources ps USING(person_id)
+          WHERE pe.parent_id=w.parent_id AND pe.is_owner=0 AND ps.source='linkedin_csv')
+  OR EXISTS (SELECT 1 FROM eligible_links kept WHERE kept.parent_id=w.parent_id
+             AND kept.decision_approved='yes' AND kept.decision_action NOT IN ('detach', 'exclude'))
+))) AND l.kind!='synthetic' AND l.decision_action IS NULL
+  AND l.source!='deep-context-name-match'
   AND (COALESCE(l.linkedin_url, '')!='' OR COALESCE(l.machine_proposed_url, '')!=''
        OR EXISTS (SELECT 1 FROM research r WHERE r.candidate_key=l.row_key AND r.status='complete'))
 """
@@ -94,10 +99,6 @@ WHERE {WORTH_GATE_ACCEPTED}
       AND (COALESCE(known.linkedin_url, '')!=''
            OR COALESCE(known.machine_proposed_url, '')!=''
            OR COALESCE(known.replacement_url, '')!='')
-  )
-  AND w.parent_id NOT IN (
-    SELECT done.parent_id FROM research done
-    WHERE done.status IN ('complete', 'no_match')
   )
   AND NOT EXISTS (
     SELECT 1 FROM eligible_links decided WHERE decided.parent_id=w.parent_id
@@ -219,10 +220,10 @@ def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
 
 
 def enrichment_queue(db: Db) -> list[EnrichmentQueueRow]:
-    """Return worth-Yes parents with no known LinkedIn or completed research."""
+    """Return worth-Yes parents with compatible source/fact names and no LinkedIn."""
     rows = db.query(
         WORTH_CTE
-        + f"""
+        + """
 SELECT l.row_key, w.parent_id, w.display_slug, w.display_name,
        l.candidate_origin,
        -- CROSS JOIN pins the identifier lookups to the family's people; left to
@@ -250,6 +251,7 @@ SELECT l.row_key, w.parent_id, w.display_slug, w.display_name,
 ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
 """,
     )
+    held = unresolved_source_parents(db)
     return [
         EnrichmentQueueRow(
             parent_id=row["parent_id"],
@@ -266,20 +268,23 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
             candidate_origin=bool(row["candidate_origin"]),
         )
         for row in rows
+        if row["parent_id"] not in held
     ]
 
 
 def lookups_pending(db: Db) -> tuple[str, ...]:
     """The parents `enrichment_queue` would send to research."""
+    held = unresolved_source_parents(db)
     return tuple(row["parent_id"] for row in db.query(
         WORTH_CTE + "SELECT w.parent_id " + _ENRICHMENT_QUEUE_FROM + " ORDER BY w.parent_id"
-    ))
+    ) if row["parent_id"] not in held)
 
 
 def workflow_identity_progress(db: Db) -> tuple[LinkedInProgress, tuple[str, ...], tuple[str, ...]]:
     """LinkedIn review progress, the parents with an unsettled question, and the unjudged LinkedIns."""
     row = db.query(
-        LINKEDIN_CTE + ", judge_candidates AS (" + _JUDGE_CANDIDATE_SELECT + ")" + """
+        LINKEDIN_CTE + ", judge_candidates AS (" + _JUDGE_CANDIDATE_SELECT
+        + " AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no'))" + """
 SELECT (SELECT count(*) FROM identity_scope) AS total,
        (SELECT count(*) FROM pending_parents) AS pending,
        (SELECT json_group_array(p.parent_id) """ + _REVIEW_QUESTIONS_PENDING_FROM + """) AS questions,
@@ -290,24 +295,17 @@ SELECT (SELECT count(*) FROM identity_scope) AS total,
     return (
         LinkedInProgress(total, pending, total - pending),
         tuple(sorted(_json(row["questions"], []))),
-        _unjudged(db, _json(row["candidate_keys"], [])),
+        tuple(sorted(_json(row["candidate_keys"], []))),
     )
 
 
-def _unjudged(db: Db, keys: list[str]) -> tuple[str, ...]:
-    """The LinkedIns among `keys` with no stored verdict the judge stands by."""
-    judged = {key for key, stored in stored_judgments(db, row_keys=tuple(keys)).items()
-              if stored.verdict.value in VERDICTS}
-    return tuple(sorted(set(keys) - judged))
-
-
 def _judge_candidate_keys(db: Db) -> tuple[str, ...]:
-    """Real mapped LinkedIns without human or valid machine decisions."""
-    return _unjudged(db, [row["row_key"] for row in db.query(LINKEDIN_CTE + _JUDGE_CANDIDATE_SELECT)])
+    """Real mapped LinkedIns without human decisions, including cached machine winners."""
+    return tuple(row["row_key"] for row in db.query(WORTH_CTE + _JUDGE_CANDIDATE_SELECT))
 
 
 def judge_candidates(db: Db) -> list[LinkSnapshotRow]:
-    """Real mapped LinkedIns without human or valid machine decisions."""
+    """Real mapped LinkedIns without human decisions; reuse compares current input."""
     return list(links(db, row_keys=_judge_candidate_keys(db)))
 
 

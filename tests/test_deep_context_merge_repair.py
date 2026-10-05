@@ -8,6 +8,7 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_merged_parents
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class MergeRepairTests(unittest.TestCase):
@@ -32,6 +33,8 @@ class MergeRepairTests(unittest.TestCase):
             for a,b,same,score,accepted in [('person-a',self.ids[2],1,.8,1),('person-b',self.ids[2],1,.7,1),('person-a','person-b',0,.9,0)]:
                 a,b=sorted((a,b))
                 c.execute("INSERT INTO merge_verdicts VALUES (?,?,?,?,?,'llm',?,?,1,'',?,'2026-01-02T00:00:00Z')", (a,b,a,b,'signature',same,score,accepted))
+        self.db.replace_imported_people(tuple(PeopleRow(id=row['person_id'], full_name=row['display_name'])
+                                             for row in self.db.query('SELECT person_id,display_name FROM people')))
 
     def test_repair_preserves_child_facts_phone_and_human_decisions(self):
         before = [tuple(r) for r in self.db.query('SELECT row_key,decision_action,decision_approved,decision_source FROM links ORDER BY row_key')]
@@ -39,7 +42,7 @@ class MergeRepairTests(unittest.TestCase):
         self.assertEqual(len(report.repaired), 1)
         self.assertEqual(report.unresolved, ())
         owners = {r['person_id']:r['parent_id'] for r in self.db.query('SELECT person_id,parent_id FROM people')}
-        self.assertEqual(owners['person-a'], owners['candidate:phone:+15550100100'])
+        self.assertEqual(owners['candidate:phone:+15550100100'], mint_parent_id(('candidate:phone:+15550100100',)))
         self.assertEqual(len({owners[person] for person in self.ids}), 3)
         self.assertEqual(self.db.query('SELECT count(*) n FROM merge_verdicts WHERE accepted=1')[0]['n'], 0)
         self.assertEqual(before, [tuple(r) for r in self.db.query('SELECT row_key,decision_action,decision_approved,decision_source FROM links ORDER BY row_key')])
@@ -118,7 +121,7 @@ class MergeRepairTests(unittest.TestCase):
                 c.execute("INSERT INTO merge_verdicts VALUES (?,?,?,?,?,'llm',1,.9,1,'',1,'2026-01-02T00:00:00Z')", (a,b,a,b,'signature'))
         report = _repair_merged_parents(self.db)
         self.assertEqual(report.unresolved, ())
-        self.assertEqual(self.db.query('SELECT count(*) n FROM parents')[0]['n'], 9)
+        self.assertEqual(self.db.query('SELECT count(*) n FROM parents')[0]['n'], 10)
         self.assertEqual(self.db.query('SELECT count(*) n FROM merge_verdicts WHERE accepted=1')[0]['n'], 0)
 
     def test_merged_context_machine_confirmation_is_invalidated(self):
@@ -132,14 +135,14 @@ class MergeRepairTests(unittest.TestCase):
         self.assertEqual(report.machine_verdicts_cleared, 1)
         self.assertEqual(self.db.query("SELECT decision_action FROM links WHERE row_key='person-a'")[0]['decision_action'], 'verify')
 
-    def test_cross_parent_sibling_decision_is_removed_supported_one_remains(self):
+    def test_cross_parent_sibling_decisions_without_source_proof_are_removed(self):
         with self.db.transaction() as c:
             c.execute("UPDATE links SET decided_at='2026-01-01T00:00:00Z'")
             c.execute("UPDATE links SET decision_action='detach',decision_source='sibling-settle' WHERE row_key IN ('person-b','candidate:phone:+15550100100')")
         report = _repair_merged_parents(self.db)
-        self.assertEqual(report.sibling_decisions_cleared, 1)
+        self.assertEqual(report.sibling_decisions_cleared, 2)
         self.assertIsNone(self.db.query("SELECT decision_action FROM links WHERE row_key='person-b'")[0]['decision_action'])
-        self.assertEqual(self.db.query("SELECT decision_source FROM links WHERE row_key='candidate:phone:+15550100100'")[0]['decision_source'], 'sibling-settle')
+        self.assertIsNone(self.db.query("SELECT decision_source FROM links WHERE row_key='candidate:phone:+15550100100'")[0]['decision_source'])
 
     def test_paid_premerge_candidate_membership_preserves_original_join(self):
         with self.db.transaction() as c:
@@ -165,8 +168,117 @@ class MergeRepairTests(unittest.TestCase):
             c.execute("UPDATE facts SET projected_at='2026-01-03T00:00:00Z'")
         self.assertIn('predate', _repair_merged_parents(self.db).unresolved[0][1])
 
+class CandidateMembershipRepairTests(unittest.TestCase):
+    setUp = MergeRepairTests.setUp
+
+    def test_version_three_restores_exact_person_phone_and_email_membership(self):
+        from packs.ingestion.primitives.common.legacy import scrub_deep_context
+        parent = self.parents['person-a']
+        email = 'candidate:email:casey@example.com'
+        with self.db.transaction() as c:
+            c.execute("INSERT INTO meta VALUES ('data_migration_version','3')")
+            c.execute("DELETE FROM candidate_people WHERE row_key IN ('person-b','candidate:phone:+15550100100')")
+            c.execute("INSERT INTO links(row_key,parent_id,public_identifier,kind,source) VALUES (?,?,'','candidate_email','legacy-migration')", (email, parent))
+            c.execute("INSERT INTO person_identifiers VALUES ('person-b','email','casey@example.com','casey@example.com')")
+        before = [tuple(r) for r in self.db.query('SELECT * FROM links ORDER BY row_key')]
+        scrub_deep_context(self.db)
+        members = {r['row_key']:r['person_id'] for r in self.db.query('SELECT * FROM candidate_people')}
+        self.assertEqual(members['person-b'], 'person-b')
+        self.assertEqual(members['candidate:phone:+15550100100'], 'candidate:phone:+15550100100')
+        self.assertEqual(members[email], 'person-b')
+        self.assertEqual(before, [tuple(r) for r in self.db.query('SELECT * FROM links ORDER BY row_key')])
+        self.assertEqual(self.db.query('PRAGMA foreign_key_check'), [])
+        scrub_deep_context(self.db)
+        self.assertEqual(self.db.query('SELECT COUNT(*) FROM candidate_people')[0][0], 5)
+
+    def test_ambiguous_and_foreign_family_identifiers_are_not_attached(self):
+        from packs.ingestion.primitives.common.legacy import scrub_deep_context
+        parent = self.parents['person-a']
+        foreign = mint_parent_id(('person-foreign',))
+        keys = ('candidate:phone:+15550100300', 'candidate:email:foreign@example.com', 'person-foreign')
+        with self.db.transaction() as c:
+            c.execute("INSERT INTO meta VALUES ('data_migration_version','3')")
+            c.execute('INSERT INTO parents(parent_id,public_identifier,display_name) VALUES (?,?,?)', (foreign, foreign, 'Jordan Foreign'))
+            c.execute("INSERT INTO people(person_id,parent_id,display_name) VALUES ('person-foreign',?,'Jordan Foreign')", (foreign,))
+            c.execute("INSERT INTO person_identifiers VALUES ('person-foreign','email','foreign@example.com','foreign@example.com')")
+            for person in ('person-a','person-b'):
+                c.execute("INSERT INTO person_identifiers VALUES (?,'phone','15550100300','+15550100300')", (person,))
+            for key in keys:
+                c.execute("INSERT INTO links(row_key,parent_id,public_identifier,kind,source) VALUES (?,?,'','pub','legacy-migration')", (key, parent))
+        before = [tuple(r) for r in self.db.query('SELECT * FROM candidate_people ORDER BY row_key,person_id')]
+        scrub_deep_context(self.db)
+        self.assertEqual(before, [tuple(r) for r in self.db.query('SELECT * FROM candidate_people ORDER BY row_key,person_id')])
+        self.assertEqual(self.db.query('PRAGMA foreign_key_check'), [])
+
+
 class HistoricalMergeRepairTests(unittest.TestCase):
     setUp = MergeRepairTests.setUp
+    def test_version_three_replays_unique_identifier_without_candidate_join(self):
+        from packs.ingestion.primitives.common.legacy import _scrub_historical_merges
+        directory = self.db.db_path.parent / 'facts'
+        directory.mkdir()
+        for person, history in self._histories().items():
+            (directory / (person + '.jsonl')).write_text(json.dumps(history.payload()) + '\n')
+        phone_key = 'candidate:phone:+15550100200'
+        with self.db.transaction() as c:
+            c.execute("INSERT INTO meta VALUES ('data_migration_version','3')")
+            c.execute("INSERT INTO links(row_key,parent_id,public_identifier,kind,source,decision_action,decision_approved,decision_source) VALUES (?,?,'','candidate_phone','legacy-migration','detach','yes','deep-context-review')", (phone_key, self.parents['person-a']))
+            c.execute("INSERT INTO person_identifiers VALUES ('person-b','phone','15550100200','+15550100200')")
+        decisions = [tuple(r) for r in self.db.query('SELECT row_key,decision_action,decision_approved,decision_source FROM links ORDER BY row_key')]
+        report = _scrub_historical_merges(self.db)
+        self.assertEqual(report.repaired, (self.parents['person-a'],))
+        self.assertEqual(report.unresolved, ())
+        self.assertEqual(self.db.query('SELECT parent_id FROM links WHERE row_key=?', (phone_key,))[0][0], self.parents['person-b'])
+        self.assertEqual([tuple(row) for row in self.db.query('SELECT person_id,parent_id FROM candidate_people WHERE row_key=?', (phone_key,))], [('person-b', self.parents['person-b'])])
+        self.assertEqual(decisions, [tuple(r) for r in self.db.query('SELECT row_key,decision_action,decision_approved,decision_source FROM links ORDER BY row_key')])
+        self.assertEqual(self.db.query('PRAGMA foreign_key_check'), [])
+        before = {table: [tuple(row) for row in self.db.query(f'SELECT * FROM {table} ORDER BY 1')] for table in ('people', 'facts', 'artifacts', 'links', 'candidate_people')}
+        self.assertEqual(_scrub_historical_merges(self.db).repaired, ())
+        self.assertEqual(before, {table: [tuple(row) for row in self.db.query(f'SELECT * FROM {table} ORDER BY 1')] for table in before})
+
+    def test_version_three_unresolved_findings_recur_then_repair(self):
+        from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_historical_merges
+        with self.db.transaction() as c:
+            c.execute("INSERT INTO meta VALUES ('data_migration_version','3')")
+            c.execute("DELETE FROM candidate_people WHERE row_key='candidate:phone:+15550100100'")
+            c.execute("UPDATE links SET row_key='candidate:phone:+15550100400' WHERE row_key='candidate:phone:+15550100100'")
+            c.execute("UPDATE person_identifiers SET normalized_value='15550100400',display_value='+15550100400' WHERE person_id='candidate:phone:+15550100100'")
+            c.execute("INSERT INTO person_identifiers VALUES ('person-b','phone','15550100400','+15550100400')")
+        before = [tuple(row) for row in self.db.query('SELECT * FROM people')]
+        first = _repair_historical_merges(self.db, self._histories())
+        second = _repair_historical_merges(self.db, self._histories())
+        self.assertEqual(first.unresolved, ((self.parents['person-a'], 'candidate has no unique child owner'),))
+        self.assertEqual(first.unresolved, second.unresolved)
+        self.assertEqual(before, [tuple(row) for row in self.db.query('SELECT * FROM people')])
+        with self.db.transaction() as c:
+            c.execute("DELETE FROM person_identifiers WHERE person_id='person-b' AND kind='phone'")
+        self.assertEqual(_repair_historical_merges(self.db, self._histories()).repaired, (self.parents['person-a'],))
+
+    def test_original_person_facts_and_paid_artifacts_retain_their_payloads(self):
+        from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_historical_merges
+        parent = self.parents['person-a']
+        payload = json.dumps({'canonical_name': 'Casey Delta', 'topics': ['original contact fact']})
+        with self.db.transaction() as c:
+            c.execute("INSERT INTO artifacts(artifact_key,kind,parent_id,person_id,path,content_fingerprint,status,payload_json) VALUES ('facts:person-b','facts',?,'person-b','/paid/person-b.jsonl','paid-hash','projected',?)", (parent, payload))
+            c.execute("INSERT INTO facts(subject_key,parent_id,person_id,artifact_key,facts_json,projected_at) VALUES ('person-b',?,'person-b','facts:person-b',?,'2025-12-01')", (parent, payload))
+        report = _repair_historical_merges(self.db, self._histories())
+        self.assertEqual(report.unresolved, ())
+        row = self.db.query("SELECT parent_id,facts_json,projected_at FROM facts WHERE subject_key='person-b'")[0]
+        self.assertEqual(tuple(row), (self.parents['person-b'], payload, '2025-12-01'))
+        row = self.db.query("SELECT parent_id,status,payload_json,content_fingerprint,path FROM artifacts WHERE artifact_key='facts:person-b'")[0]
+        self.assertEqual(tuple(row), (self.parents['person-b'], 'projected', payload, 'paid-hash', '/paid/person-b.jsonl'))
+        self.assertEqual(self.db.query('PRAGMA foreign_key_check'), [])
+
+    def test_replay_does_not_undo_a_reassessed_merge(self):
+        from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_historical_merges
+        _repair_historical_merges(self.db, self._histories())
+        self.db.merge_parents(self.parents['person-a'], self.parents['person-b'])
+        before = [tuple(row) for row in self.db.query('SELECT * FROM people')]
+        report = _repair_historical_merges(self.db, self._histories())
+        self.assertEqual(report.repaired, ())
+        self.assertEqual(report.unresolved, ())
+        self.assertEqual(before, [tuple(row) for row in self.db.query('SELECT * FROM people')])
+
     def test_positive_merge_without_stored_no_restores_originals(self):
         from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_historical_merges
         from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
@@ -206,6 +318,7 @@ class HistoricalMergeRepairTests(unittest.TestCase):
         from packs.ingestion.primitives.deep_context.db.merge_repair import _repair_historical_merges
         with self.db.transaction() as c:
             c.execute("DELETE FROM candidate_people WHERE row_key='person-b'")
+            c.execute("UPDATE links SET row_key='unowned-profile' WHERE row_key='person-b'")
         report = _repair_historical_merges(self.db, self._histories())
         self.assertEqual(report.repaired, ())
         self.assertEqual(report.unresolved[0][1], 'candidate has no unique child owner')
@@ -310,38 +423,81 @@ class HistoricalMergeRepairTests(unittest.TestCase):
         self.assertEqual(len(_repair_historical_merges(self.db, self._histories()).repaired), 1)
 
 
+class FreshRebuildMergeRepairTests(unittest.TestCase):
+    def test_ensure_preserves_a_fresh_accepted_nickname_merge(self):
+        import subprocess
+        import sys
+        from tests.test_deep_context_rebuild import RebuildTests, JORDAN, CASEY, AT
+        from packs.ingestion.primitives.deep_context.db.models import CandidatePeopleProjection, CandidatePersonRow, LinkRow
+        from packs.ingestion.primitives.deep_context.db.projectors import project_person_fact
+        from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
+        from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import BuildParents
+        from packs.ingestion.primitives.deep_context.synthesis.normalization import normalize_parent_cache
+        fixture = RebuildTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        names = ('Jordan Bravo', 'Jo Bravo')
+        for row, name in zip(fixture.rows, names):
+            row.update(full_name=name, primary_phone='+15550100200')
+        fixture.write_sources()
+        fixture.rebuild()
+        db = Db(fixture.state / 'deep-context/deep-context.sqlite')
+        directory = db.db_path.parent
+        for index, (person, name) in enumerate(zip((JORDAN, CASEY), names)):
+            parent = db.query('SELECT parent_id FROM people WHERE person_id=?', (person,))[0][0]
+            key = f'jordan-bravo-{index}'
+            db.project_rows((LinkRow(key, parent, key, 'pub', f'https://www.linkedin.com/in/{key}', source='deep-context-reconcile'),
+                             CandidatePeopleProjection(key, (CandidatePersonRow(key, person, parent),))))
+            path = directory / 'facts' / (person + '.jsonl')
+            path.write_text(json.dumps({'person_id': person, 'updated_at': AT, 'facts': {'canonical_name': name, 'confidence': .9}}) + '\n')
+            project_person_fact(db, path, person)
+        normalize_parent_cache(db, raw_dir=directory / 'raw', facts_dir=directory / 'facts')
+        a, b = sorted((JORDAN, CASEY))
+        with db.transaction() as conn:
+            conn.execute("INSERT INTO merge_verdicts VALUES (?,?,?,?,'current','llm',1,1,1,'source name abbreviation and phone',1,?)", (a, b, a, b, AT))
+        self.assertEqual(BuildParents(db=db, parents_dir=directory / 'parents').execute().parents_merged, 1)
+        self.assertEqual(db.query('SELECT COUNT(*) FROM parents')[0][0], 1)
+        facts_before = [tuple(row) for row in db.query('SELECT * FROM facts ORDER BY subject_key')]
+        result = subprocess.run([sys.executable, '-m', 'packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents',
+                                 '--db', str(db.db_path), '--people-csv', str(fixture.people)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['status'], 'completed')
+        EnsureParents(db=db, people_csv=fixture.people).execute()
+        self.assertEqual(db.query('SELECT COUNT(*) FROM parents')[0][0], 1)
+        self.assertEqual(db.query('SELECT accepted FROM merge_verdicts')[0][0], 1)
+        self.assertEqual(facts_before, [tuple(row) for row in db.query('SELECT * FROM facts ORDER BY subject_key')])
+        self.assertEqual(db.query('PRAGMA foreign_key_check'), [])
+
+
 class MigrationSequenceTests(unittest.TestCase):
     setUp = MergeRepairTests.setUp
 
     def test_stage_entry_runs_all_pending_repairs_in_order(self):
         from packs.ingestion.primitives.common.legacy import scrub_deep_context
-        report, removed, historical = scrub_deep_context(self.db)
+        report, removed = scrub_deep_context(self.db)
         self.assertEqual(len(report.repaired), 1)
         self.assertEqual(removed, 0)
-        self.assertEqual(historical.unresolved, ((self.parents['person-a'], 'original child facts missing'),))
-        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '2')
         self.assertEqual(scrub_deep_context(self.db)[0].repaired, ())
 
-    def test_failed_second_repair_preserves_first_and_stops_the_next(self):
+    def test_failed_harmonic_repair_preserves_merge_repair(self):
         from packs.ingestion.primitives.common import legacy
-        with patch.object(legacy, '_scrub_harmonic_profiles', side_effect=OSError('interrupted')), patch.object(legacy, '_scrub_historical_merges') as historical:
+        with patch.object(legacy, '_scrub_harmonic_profiles', side_effect=OSError('interrupted')):
             with self.assertRaises(OSError):
                 legacy.scrub_deep_context(self.db)
-            historical.assert_not_called()
         self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '1')
-        self.assertEqual(len({r['parent_id'] for r in self.db.query('SELECT parent_id FROM people')}), 3)
+        self.assertEqual(len({r['parent_id'] for r in self.db.query('SELECT parent_id FROM people')}), 4)
         legacy.scrub_deep_context(self.db)
-        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '2')
 
     def test_failed_first_repair_stops_later_repairs_and_the_stage(self):
         from packs.ingestion.primitives.deep_context.db import merge_repair
         from packs.ingestion.primitives.common import legacy
         from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
-        with patch.object(merge_repair, '_repair_merged_parents', side_effect=OSError('interrupted')), patch.object(legacy, '_scrub_harmonic_profiles') as harmonic, patch.object(legacy, '_scrub_historical_merges') as historical:
+        with patch.object(merge_repair, '_repair_merged_parents', side_effect=OSError('interrupted')), patch.object(legacy, '_scrub_harmonic_profiles') as harmonic:
             with self.assertRaises(OSError):
                 EnsureParents(db=self.db, people_csv=Path(self.temp.name) / 'missing.csv').run()
             harmonic.assert_not_called()
-            historical.assert_not_called()
         self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'"), [])
 
     def test_ensure_parents_runs_repairs_from_sqlite_without_import_csv(self):
@@ -350,18 +506,22 @@ class MigrationSequenceTests(unittest.TestCase):
         result = node.run()
         self.assertEqual(result.status, 'completed')
         self.assertEqual(result.people_projected, 0)
-        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '2')
         before = [tuple(row) for row in self.db.query('SELECT * FROM people')]
         self.assertEqual(node.run().status, 'completed')
         self.assertEqual(before, [tuple(row) for row in self.db.query('SELECT * FROM people')])
 
-    def test_repairs_commit_before_import_read_fails(self):
+    def test_invalid_import_preserves_database_until_valid_retry(self):
         from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
         path = Path(self.temp.name) / 'people.csv'
         raw = 'id,full_name\nperson-new,Jordan Bravo\n'
         path.write_text(raw)
+        before = [tuple(row) for row in self.db.query('SELECT * FROM people ORDER BY person_id')]
         with patch('packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents.read_imported_people', side_effect=OSError('unreadable CSV')):
             with self.assertRaises(OSError):
                 EnsureParents(db=self.db, people_csv=path).run()
-        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'"), [])
+        self.assertEqual(before, [tuple(row) for row in self.db.query('SELECT * FROM people ORDER BY person_id')])
         self.assertEqual(path.read_text(), raw)
+        self.assertEqual(EnsureParents(db=self.db, people_csv=path).run().status, 'completed')
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '2')

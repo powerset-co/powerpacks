@@ -10,6 +10,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergeDecision, MergePairVerdict, MergePerson,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.receipts import _confirmed, verdict_rows
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 class MergeConflictTests(unittest.TestCase):
@@ -31,7 +32,7 @@ class MergeConflictTests(unittest.TestCase):
         self.assertEqual(edges, [('a', 'b')])
 
     def test_hub_does_not_override_negative_leaf_pair(self):
-        people = [MergePerson(key, key, key, key) for key in ('a', 'b', 'c')]
+        people = [MergePerson(key, key, key, key, source_names=('Jordan Bravo',)) for key in ('a', 'b', 'c')]
         a, b, c = people
         verdicts = [
             MergePairVerdict(a, c, 'ac', MergeDecision(True, .6, True, '', 'llm')),
@@ -44,7 +45,7 @@ class MergeConflictTests(unittest.TestCase):
         self.assertEqual(accepted, {('a', 'b')})
 
     def test_parent_application_does_not_override_negative_leaf_pair(self):
-        people = [SimpleNamespace(person_id=key, parent_id=key, display_name=key) for key in ('a', 'b', 'c')]
+        people = [SimpleNamespace(person_id=key, parent_id=key, display_name=key, is_owner=False, is_ghost=False) for key in ('a', 'b', 'c')]
         verdicts = [
             SimpleNamespace(person_a=a, person_b=b, same_person=same, accepted=same,
                             confidence=score, updated_at='2026-10-01T00:00:00Z')
@@ -52,6 +53,9 @@ class MergeConflictTests(unittest.TestCase):
         ]
         with patch.object(build_parents, 'person_rows', return_value=people), patch.object(
             build_parents, 'merge_verdicts', return_value=verdicts,
+        ), patch.object(build_parents, 'imported_people', return_value=tuple(
+            PeopleRow(id=p.person_id, full_name='Jordan Bravo') for p in people
+        )
         ):
             self.assertEqual(build_parents._accepted_components(None), (('a', 'b'),))
 
@@ -71,9 +75,9 @@ class MergeConflictTests(unittest.TestCase):
         self.assertEqual(connected_components(['a', 'b', 'c'], edges), [['a', 'b', 'c']])
 
     def test_exact_identifier_positive_cannot_override_explicit_negative(self):
-        a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',))
-        b = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',))
-        c = MergePerson('c', 'c', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',))
+        a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',), source_names=('Jordan Bravo',))
+        b = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',), source_names=('Jordan Bravo',))
+        c = MergePerson('c', 'c', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',), source_names=('Jordan Bravo',))
         verdicts = [
             MergePairVerdict(a, b, 'ab', MergeDecision(True, .99, True, '', 'slam_dunk')),
             MergePairVerdict(a, c, 'ac', MergeDecision(True, .99, True, '', 'slam_dunk')),
@@ -83,7 +87,7 @@ class MergeConflictTests(unittest.TestCase):
         self.assertEqual(groups, [['a', 'b']])
 
     def test_receipts_and_parent_application_select_the_same_edges(self):
-        people = [MergePerson(key, key, key, key, parent_id=key) for key in ('a', 'b', 'c')]
+        people = [MergePerson(key, key, key, key, parent_id=key, source_names=('Jordan Bravo',)) for key in ('a', 'b', 'c')]
         a, b, c = people
         verdicts = [
             MergePairVerdict(a, b, 'ab', MergeDecision(True, .8, True, '', 'llm')),
@@ -93,14 +97,17 @@ class MergeConflictTests(unittest.TestCase):
         stored = verdict_rows(verdicts)
         _, groups = _confirmed(people, verdicts)
         with patch.object(build_parents, 'person_rows', return_value=[
-            SimpleNamespace(person_id=p.person_id, parent_id=p.parent_id, display_name=p.name) for p in people
+            SimpleNamespace(person_id=p.person_id, parent_id=p.parent_id, display_name=p.name, is_owner=False, is_ghost=False) for p in people
         ]), patch.object(
             build_parents, 'merge_verdicts', return_value=stored,
+        ), patch.object(build_parents, 'imported_people', return_value=tuple(
+            PeopleRow(id=p.person_id, full_name='Jordan Bravo') for p in people
+        )
         ):
             self.assertEqual(build_parents._accepted_components(None), tuple(tuple(g) for g in groups))
 
     def test_older_negative_between_children_blocks_newer_positive_between_parents(self):
-        people = [SimpleNamespace(person_id=child, parent_id=parent, display_name=parent)
+        people = [SimpleNamespace(person_id=child, parent_id=parent, display_name=parent, is_owner=False, is_ghost=False)
                   for child, parent in [('a1', 'a'), ('a2', 'a'), ('b1', 'b'), ('b2', 'b')]]
         verdicts = [
             SimpleNamespace(person_a='a1', person_b='b1', same_person=False,
@@ -110,6 +117,9 @@ class MergeConflictTests(unittest.TestCase):
         ]
         with patch.object(build_parents, 'person_rows', return_value=people), patch.object(
             build_parents, 'merge_verdicts', return_value=verdicts,
+        ), patch.object(build_parents, 'imported_people', return_value=tuple(
+            PeopleRow(id=p.person_id, full_name='Jordan Bravo') for p in people
+        )
         ):
             self.assertEqual(build_parents._accepted_components(None), ())
 
@@ -118,8 +128,8 @@ class MergeConflictTests(unittest.TestCase):
         from packs.ingestion.primitives.deep_context.merge_candidates.judge import judge_prompt
         from packs.ingestion.primitives.deep_context.merge_candidates.receipts import pair_sig
         from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo')
-        second = MergePerson('b', 'b', 'Casey Delta', 'casey delta')
+        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', source_names=('Jordan Bravo',))
+        second = MergePerson('b', 'b', 'Casey Delta', 'casey delta', source_names=('Casey Delta',))
         for field, value in [('from_me', ('Hello Jordan',)), ('from_them', ('I am Casey Delta',))]:
             with self.subTest(field=field):
                 changed = replace(first, evidence=DossierEvidence(**{field: value}))
@@ -136,17 +146,17 @@ class MergeConflictTests(unittest.TestCase):
             db = Db(Path(directory) / 'context.sqlite')
             db.project_rows(tuple(ParentRow(key, key) for key in ('a', 'b', 'c')) +
                             tuple(PersonRow(key, key) for key in ('a', 'b', 'c')))
-            a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', parent_id='a', member_person_ids=('a',))
-            b = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', parent_id='b', member_person_ids=('b',))
+            a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', parent_id='a', member_person_ids=('a',), source_names=('Jordan Bravo',))
+            b = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', parent_id='b', member_person_ids=('b',), source_names=('Jordan Bravo',))
             db.replace_merge_verdicts(verdict_rows([
                 MergePairVerdict(a, b, receipts.pair_sig(a, b), MergeDecision(False, .1, True, '', 'llm')),
             ]))
-            # New evidence can change a singleton judgment.
+            # New evidence cannot silently replace a stored different-person decision.
             from dataclasses import replace
             from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
             changed = replace(a, evidence=DossierEvidence(from_them=('I work with Jordan at Oriel Robotics',)))
             with patch.object(receipts, 'merge_people', return_value=[changed, b]):
-                self.assertEqual(len(receipts.survey_pairs(db).to_judge), 1)
+                self.assertEqual(receipts.survey_pairs(db).pairs, [])
             # A later aggregate uses the same representative ID but cannot erase the source-pair no.
             db.merge_parents('a', 'c')
             aggregate = replace(changed, member_person_ids=('a', 'c'), emails=('jordan@example.com',))
@@ -161,30 +171,26 @@ class MergeConflictTests(unittest.TestCase):
         from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
         first = MergePerson('a', 'a', 'Jordan B', 'jordan b',
                             extra_phones=('15550100100',),
-                            evidence=DossierEvidence(from_them=('That is our shared office number.',)))
-        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_phones=('15550100100',))
+                            evidence=DossierEvidence(from_them=('That is our shared office number.',)), source_names=('Jordan B',))
+        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_phones=('15550100100',), source_names=('Jordan B',))
         self.assertIsNone(slam_dunk_verdict(first, second))
 
     def test_extracted_shared_email_cannot_skip_the_judge(self):
         from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict
-        first = MergePerson('a', 'a', 'Jordan B', 'jordan b', extra_emails=('office@example.com',))
-        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_emails=('office@example.com',))
+        first = MergePerson('a', 'a', 'Jordan B', 'jordan b', extra_emails=('office@example.com',), source_names=('Jordan B',))
+        second = MergePerson('b', 'b', 'Jordan B', 'jordan b', extra_emails=('office@example.com',), source_names=('Jordan B',))
         self.assertIsNone(slam_dunk_verdict(first, second))
 
-    def test_extracted_shared_phone_under_one_full_name_merges_on_the_name_alone(self):
-        from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import SAME_FULL_NAME, slam_dunk_verdict
-        from packs.ingestion.primitives.deep_context.merge_candidates.judge import asks_keep_apart
-        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',))
-        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',))
-        verdict = slam_dunk_verdict(first, second)
-        # The office number is not credited; the name is, and the facts are still read.
-        self.assertEqual(verdict.reason, SAME_FULL_NAME)
-        self.assertTrue(asks_keep_apart(verdict))
+    def test_extracted_shared_phone_under_one_full_name_needs_positive_evidence(self):
+        from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict
+        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',), source_names=('Jordan Bravo',))
+        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', extra_phones=('15550100100',), source_names=('Jordan Bravo',))
+        self.assertIsNone(slam_dunk_verdict(first, second))
 
     def test_shared_direct_contact_email_remains_free(self):
         from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import slam_dunk_verdict
-        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',))
-        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',))
+        first = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',), source_names=('Jordan Bravo',))
+        second = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', emails=('jordan@example.com',), source_names=('Jordan Bravo',))
         self.assertTrue(slam_dunk_verdict(first, second).same_person)
 
     def test_stored_singleton_no_cannot_be_replaced_by_slam_dunk(self):
@@ -196,16 +202,15 @@ class MergeConflictTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             db = Db(Path(directory) / 'context.sqlite')
             db.project_rows((ParentRow('a', 'a'), ParentRow('b', 'b'), PersonRow('a', 'a'), PersonRow('b', 'b')))
-            a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', parent_id='a', member_person_ids=('a',), emails=('jordan@example.com',))
-            b = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', parent_id='b', member_person_ids=('b',), emails=('jordan@example.com',))
+            a = MergePerson('a', 'a', 'Jordan Bravo', 'jordan bravo', parent_id='a', member_person_ids=('a',), emails=('jordan@example.com',), source_names=('Jordan Bravo',))
+            b = MergePerson('b', 'b', 'Jordan Bravo', 'jordan bravo', parent_id='b', member_person_ids=('b',), emails=('jordan@example.com',), source_names=('Jordan Bravo',))
             db.replace_merge_verdicts(verdict_rows([
                 MergePairVerdict(a, b, receipts.pair_sig(a, b), MergeDecision(False, .98, True, 'Shared office email', 'llm')),
             ]))
             with patch.object(receipts, 'merge_people', return_value=[a, b]):
                 survey = receipts.survey_pairs(db)
                 self.assertEqual(survey.slam, [])
-                self.assertEqual(len(survey.reused), 1)
-                self.assertFalse(survey.reused[0].decision.same_person)
+                self.assertEqual(survey.pairs, [])
                 refreshed = receipts.survey_pairs(db, refresh=True)
                 self.assertEqual(refreshed.slam, [])
-                self.assertEqual(len(refreshed.to_judge), 1)
+                self.assertEqual(refreshed.pairs, [])

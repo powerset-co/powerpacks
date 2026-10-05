@@ -7,6 +7,7 @@ class ClusterMergeManifest(StageManifest):
     source: str = "cluster_merge_candidates"
     judge: str = ""
     model: str = ""
+    reasoning_effort: str = ""
     people: int = 0
     pairs_total: int = 0
     pairs_slam_dunk: int = 0
@@ -15,7 +16,7 @@ class ClusterMergeManifest(StageManifest):
     errors: int = 0
     candidate_pairs: int = 0
     clusters: int = 0
-    confidence_threshold: float = 0.0
+    remaining: int = 0
     tokens: dict[str, int] = {}
     estimated_cost_usd: float = 0.0
     out_csv: str = ""

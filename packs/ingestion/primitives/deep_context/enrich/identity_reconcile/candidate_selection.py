@@ -91,7 +91,7 @@ def finish_reviews(db: Db, decisions: tuple[RelationshipDecision, ...]) -> dict[
             elif candidate.verdict == "no":
                 action = "detach"
             settlements.append(replace(MachineIdentitySettlement.from_link(row),
-                judgment_fingerprint=row.judgment_fingerprint or decision.fingerprint,
+                judgment_fingerprint=decision.fingerprint,
                 judgment_payload_json=json.dumps(payload, ensure_ascii=False),
                 machine_action=action,
                 machine_proposed_url=row.machine_proposed_url if action == 'retarget' else None,

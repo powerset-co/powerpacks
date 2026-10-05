@@ -244,31 +244,23 @@
    margin. */
 .review-page .dossier-text {
   margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
 }
 .review-page .details .dossier-text {
   margin: 0 0 16px;
 }
-/* Its markup is plain HTML drawn with the browser's defaults; preflight removes those, so
-   they are restored here. */
-.review-page .dossier-text :where(h3) {
-  margin: 1em 0;
-  font-size: 1.17em;
+/* Markdown sections share the profile facts' text rhythm. */
+.review-page .dossier-text :where(h3, h4, h5, h6) {
+  margin: 12px 0 4px;
+  font-size: 13px;
 }
-.review-page .dossier-text :where(h4) {
-  margin: 1.33em 0;
-  font-size: 1em;
-}
-.review-page .dossier-text :where(h5) {
-  margin: 1.67em 0;
-  font-size: 0.83em;
-}
-.review-page .dossier-text :where(h6) {
-  margin: 2.33em 0;
-  font-size: 0.67em;
+.review-page .dossier-text :where(h5, h6) {
+  font-size: 12px;
 }
 .review-page .dossier-text :where(ul, ol) {
-  margin: 1em 0;
-  padding-left: 40px;
+  margin: 0 0 6px;
+  padding-left: 18px;
 }
 .review-page .dossier-text :where(ul) {
   list-style: disc;

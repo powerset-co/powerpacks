@@ -151,6 +151,9 @@ class ReviewCandidate:
     education: tuple[str, ...]
     synthetic: bool
     avatar_url: str
+    confidence: float | None
+    verdict: str
+    reason: str
 
     @classmethod
     def from_row(cls, candidate: CandidateViewRow) -> ReviewCandidate:
@@ -166,6 +169,9 @@ class ReviewCandidate:
             synthetic=candidate.synthetic,
             # A researched profile shows initials only.
             avatar_url="" if candidate.synthetic else candidate.profile_pic_url,
+            confidence=candidate.confidence,
+            verdict=candidate.verdict,
+            reason=candidate.reason,
         )
 
     @classmethod

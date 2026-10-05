@@ -171,11 +171,11 @@ and cannot be blocked by the Done page.
 
 | Stage | What it does | Main result |
 | --- | --- | --- |
-| Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. `ensure-parents` projects the fan-in export into stable parents (creating the store on a fresh install); on an install with pre-SQLite artifacts, `seed` then carries its merges, raw bundles, facts, human decisions and Parallel results onto those parents by identifier, once. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON, SQLite parents, `owner.json` |
-| Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are always included. | `raw/<parent_id>.json`, SQLite projection, receipt |
-| Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, except that a notable imported LinkedIn headline (CEO or any chief officer, founder, president, chair, partner, managing director) is Yes. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
+| Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. `ensure-parents` projects the fan-in export into stable parents (creating the store on a fresh install); on an install with pre-SQLite artifacts, `seed` carries uniquely attributable raw bundles, facts, human decisions and research once, without restoring old family merges. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON, SQLite parents, `owner.json` |
+| Collection | Reads Gmail and message bodies separately using each contact's own identifiers. The default depth is `--deep-cap 1600`; small iMessage groups are always included. Parent display bundles are derived from the contact bundles. | `raw/<person_id>.json`, derived `raw/parents/<parent_id>.json`, SQLite projection, receipt |
+| Synthesis | Sends bounded contact message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Contact histories remain independent across parent merges. Worth uses message context/identifiers only, never LinkedIn, except that a notable imported LinkedIn headline (CEO or any chief officer, founder, president, chair, partner, managing director) is Yes. Unchanged fingerprints cost $0. | `facts/<person_id>.jsonl`, derived `facts/parents/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
-| Duplicate resolution | Pairs parents that share a phone or email or whose names can be forms of one name. The same name merges unless JEV finds the facts keep the two records apart; the rest go to the JEV pair judge (one request per pair, merge at p(yes) ≥ 0.5 when JEV also answers that the two names can be one contact's). Caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
+| Duplicate resolution | Pairs compatible source names using source identifiers and name buckets. Only identical names with a shared source phone or email merge free; other pairs receive one GPT-6.1-sol high decision: same, different, or uncertain. Only affirmative identity evidence accepts a merge; uncertainty remains separate without a negative constraint. Extracted identifier claims do not create pairs. Checkpoints completed verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id and each contact's facts. | Display-only merge exports, `parents/*.md`, SQLite graph |
 | LinkedIn judging | After cache-first profile preparation, enrichment judges mapped attached and researched links lacking a decision. Existing human and valid machine decisions are kept. | SQLite identity verdicts |
 | Optional worth review | Shows model-Maybe parents and editable Yes/No. Human worth writes the parent row and remains authoritative. Maybe does not stop enrichment. | SQLite human worth |
 | Enrichment plan and run | `enrich --dry-run` reports lookups, Parallel cost, profile fetches, judgment estimates, and one `estimated_usd` total without writes. The agent runs `enrich` automatically when the total is at most $100, asking only above that. | One fixed enrichment progress manifest |
@@ -184,7 +184,7 @@ and cannot be blocked by the Done page.
 | Local settlement | Detaches empty machine-accepted lookup LinkedIns, then marks parents with no real profile and fewer than 25 messages worth No unless human worth exists. Re-evaluation lifts that No when evidence arrives. | SQLite machine identity and parent worth |
 | Synthetic assembly | Creates no-LinkedIn research cards for eligible parents; worth No receives none. | SQLite synthetic profiles |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn, describe the right person, or Skip. A description queues a re-research in the background: a LinkedIn it finds that clears the judge is saved, otherwise the person's No is saved, and either settles the person's other LinkedIns, so the person is not shown again. The flow waits at review until every re-research lands. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions; guidance status |
-| Realization | Applies reviewed identities and merges their parents in SQLite, then exports the final roster. Fills profiles from SQLite and makes no provider calls. Synthetic profiles require a reviewed real LinkedIn replacement to be indexed. | SQLite roster, `.powerpacks/network-import/merged/people.csv` |
+| Realization | Applies each reviewed identity to its exact source contacts without merging parents. SQLite retains source rows; the exported CSV aggregates existing parents only. Fills profiles from SQLite and makes no provider calls. Synthetic profiles require a reviewed real LinkedIn replacement to be indexed. | SQLite roster, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
 
 ## Commands and approval boundaries
@@ -202,7 +202,7 @@ bin/deep-context synthesize
 bin/deep-context compose
 bin/deep-context validate
 bin/deep-context cluster --dry-run # free merge count + JEV estimate
-bin/deep-context cluster           # merge on names and identifiers, then JEV-judge the remainder
+bin/deep-context cluster           # source-tied duplicates, then positive JEV identity judgment
 bin/deep-context parents
 bin/deep-context enrich --dry-run
 bin/deep-context enrich
@@ -263,7 +263,7 @@ The durable worth authority is the parent row in
 `.powerpacks/deep-context/deep-context.sqlite`; legacy `review.csv` is read only
 at the one-time seed boundary.
 
-- Synthesis writes machine worth into `facts/<parent_id>.jsonl` and SQLite
+- Synthesis writes machine worth into `facts/<person_id>.jsonl` and SQLite
   facts. Effective worth reads human worth, then `parents.machine_worth`, then
   the best machine verdict on the parent's facts, otherwise Maybe.
 - Each canonical parent has one human-worth override in SQLite. On a parent
@@ -391,7 +391,7 @@ This gives repeatability without a ledger:
 | Boundary | Data sent | Not sent |
 | --- | --- | --- |
 | OpenAI synthesis | Sampled message text, necessary message metadata, owner context, and small iMessage group bodies under standing owner authorization. | Unselected messages and raw source databases. |
-| JEV duplicate judge (TypeSafe) | The rendered pair evidence: structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
+| Sol duplicate judge (OpenAI) | The rendered pair evidence: original source names and identifiers, structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
 | OpenAI identity judge (research) | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
 | Parallel.ai | Display name, email, phone, source channel, dossier-derived relationship/work/school/location/topics, and rejected LinkedIn evidence for the approved lookup scope. | Raw message bodies. |
 | RapidAPI | A LinkedIn URL requiring profile hydration. | Gmail or chat content. |
@@ -408,10 +408,12 @@ facts, not verbatim messages.
 |-- deep-context.sqlite
 |-- owner.json
 |-- raw/
-|   |-- <parent_id>.json
+|   |-- <person_id>.json
+|   |-- parents/<parent_id>.json
 |   `-- manifest.json
 |-- facts/
-|   |-- <parent_id>.jsonl
+|   |-- <person_id>.jsonl
+|   |-- parents/<parent_id>.jsonl
 |   `-- manifest.json
 |-- dossiers/
 |   |-- <slug>.md

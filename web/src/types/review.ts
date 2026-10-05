@@ -85,6 +85,9 @@ export interface ReviewCandidate {
   synthetic: boolean
   /** The profile's picture; "" when it has none or is a researched profile. */
   avatar_url: string
+  confidence: number | null
+  verdict: string
+  reason: string
 }
 
 /** The debug carousel's position (`?debug=1`). */

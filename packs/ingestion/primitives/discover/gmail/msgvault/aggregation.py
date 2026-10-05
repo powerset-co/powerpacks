@@ -309,6 +309,7 @@ def aggregate_contacts(con: sqlite3.Connection, account_email: str = "", exclude
         out.append({
             "email": email,
             "display_name": display_name,
+            "observed_names": sorted(record.names),
             "total_sent": record.one_to_one.sent + record.group.sent,
             "total_received": record.one_to_one.received + record.group.received,
             "total_messages": record.one_to_one.sent + record.one_to_one.received + record.group.sent + record.group.received,

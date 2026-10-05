@@ -40,7 +40,7 @@ export function PersonCard({ person, candidate, personOnly = false, dossier = tr
             </div>
           ) : null}
           <h2>{displayName(person, candidate, personOnly)}</h2>
-          <LabelBadges labels={person.labels} />
+          <LabelBadges labels={person.labels} candidate={facts} />
           {url ? (
             <a className="linkedin-label" href={url} target="_blank" rel="noreferrer">
               {VIEW_LINKEDIN}

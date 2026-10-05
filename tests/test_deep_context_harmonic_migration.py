@@ -56,7 +56,7 @@ class HarmonicMigrationTests(unittest.TestCase):
 
     def test_ensure_parents_runs_migration_even_without_new_imports(self):
         EnsureParents(db=self.db, people_csv=self.root / 'missing.csv').run()
-        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '3')
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0][0], '2')
         self.assertFalse(self.harmonic.exists())
 
     def test_disk_only_harmonic_is_archived_and_other_bootstrap_is_preserved(self):

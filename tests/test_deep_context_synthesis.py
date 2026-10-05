@@ -114,12 +114,12 @@ class DeepContextSynthesisTests(unittest.TestCase):
             hashlib.sha256(canonical).hexdigest(),
             "b108f626a394f8bbbf33522a2d26b1b8840e87799e2b6473d6fafe8036139583",
         )
-        self.assertEqual(prompting.SYNTHESIS_VERSION, "52b1189e667e")
+        self.assertEqual(prompting.SYNTHESIS_VERSION, "b2374192ab73")
 
     def test_bundle_evidence_fingerprint_serialization_is_pinned(self) -> None:
         self.assertEqual(
             self.fingerprint({"person_id": "p1", "messages": []}),
-            "943e8f23c0f4f8cece9b64d0f4f0f91e25a1d6e1556a68c1c0fcecb1a030bef3",
+            "29147dc630d142f206efde2fe4174b9217da1e1df104d596e7e70a6f6bdf46c5",
         )
         self.assertEqual(
             self.fingerprint(
@@ -135,7 +135,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     "messages_available": 1,
                 }
             ),
-            "b05a916ea5a16e54c5d4274976ea2702c396dca3c3ed640d616c17df72ed37ef",
+            "2d4aa62178a7e5918af8a50697bce0a3a9b4603c36a0523eeaf341d6edbc9f75",
         )
 
     def test_terminal_provider_failure_returns_no_fabricated_facts(self) -> None:
@@ -387,7 +387,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                         force=False,
                     )
                 ],
-                ["parent-1"],
+                ["person-1"],
             )
 
     def test_selection_reuses_only_matching_artifact_fingerprint(self) -> None:
@@ -475,7 +475,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
 
             self.assertEqual(
                 [bundle.person_id for bundle in bundles],
-                ["parent-changed", "parent-missing", "parent-stale"],
+                ["person-changed", "person-missing", "person-stale"],
             )
             self.assertEqual(
                 [
@@ -488,7 +488,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                         force=True,
                     )
                 ],
-                ["parent-changed", "parent-missing", "parent-stale", "parent-unchanged"],
+                ["person-changed", "person-missing", "person-stale", "person-unchanged"],
             )
 
     def test_legacy_child_facts_without_stored_fingerprint_are_not_silently_skipped(self) -> None:
@@ -560,7 +560,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 force=False,
             )
 
-            self.assertEqual([bundle.person_id for bundle in bundles], [parent_id])
+            self.assertEqual([bundle.person_id for bundle in bundles], ["person-legacy"])
 
     def test_legacy_child_facts_with_a_real_stored_fingerprint_still_skip(self) -> None:
         """Complements the test above: when a legacy child artifact DOES carry
@@ -694,7 +694,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             )
 
             self.assertEqual(unchanged, [])
-            self.assertEqual([bundle.person_id for bundle in after_model_swap], [parent_id])
+            self.assertEqual([bundle.person_id for bundle in after_model_swap], ["person-one"])
 
 
     def test_selection_skips_owner_only_parent_bundles(self) -> None:
@@ -746,7 +746,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
 
             self.assertEqual(
                 [bundle.person_id for bundle in bundles],
-                ["parent-mixed"],
+                [],
             )
 
     def test_estimate_does_not_normalize_or_mutate_child_caches(self) -> None:
@@ -1065,39 +1065,30 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 database,
                 raw_dir=raw_dir,
                 facts_dir=facts_dir,
-                system_prompt=prompting.SYSTEM_PROMPT,
-                chunk_chars=9000,
-                max_batches=20,
             )
 
-            self.assertEqual(migrated, 1)
-            parent_bundle = json.loads((raw_dir / "parent-1.json").read_text())
+            self.assertEqual(migrated, 0)
+            parent_bundle = json.loads((raw_dir / "parents/parent-1.json").read_text())
             self.assertEqual(parent_bundle["person_id"], "parent-1")
             self.assertEqual(len(parent_bundle["messages"]), 2)
-            parent_fact = database.query("SELECT * FROM facts")[0]
+            parent_fact = database.query("SELECT * FROM facts WHERE subject_key='parent-1'")[0]
             self.assertEqual(
                 (parent_fact["subject_key"], parent_fact["person_id"], parent_fact["machine_worth"]),
                 ("parent-1", None, "no"),
             )
-            parent_artifact = database.query("SELECT payload_json FROM artifacts WHERE artifact_key='facts:parent-1'")[
+            parent_artifact = database.query("SELECT payload_json FROM artifacts WHERE artifact_key='parent-facts:parent-1'")[
                 0
             ]
+            self.assertNotIn("synthesis_version", json.loads(parent_artifact["payload_json"]))
             self.assertEqual(
-                json.loads(parent_artifact["payload_json"])["synthesis_version"],
-                prompting.SYNTHESIS_VERSION,
+                [bundle.person_id for bundle in selection.pending_target_bundles(
+                    database, system_prompt=prompting.SYSTEM_PROMPT,
+                    chunk_chars=9000, max_batches=20, force=False,
+                )],
+                ["person-a", "person-b"],
             )
-            self.assertEqual(
-                selection.pending_target_bundles(
-                    database,
-                    system_prompt=prompting.SYSTEM_PROMPT,
-                    chunk_chars=9000,
-                    max_batches=20,
-                    force=False,
-                ),
-                [],
-            )
-            self.assertFalse((raw_dir / "person-a.json").exists())
-            self.assertFalse((facts_dir / "person-b.jsonl").exists())
+            self.assertTrue((raw_dir / "person-a.json").exists())
+            self.assertTrue((facts_dir / "person-b.jsonl").exists())
 
     def test_facts_only_child_is_preserved_until_parent_bundle_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1141,14 +1132,11 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 database,
                 raw_dir=root / "raw",
                 facts_dir=facts_dir,
-                system_prompt=prompting.SYSTEM_PROMPT,
-                chunk_chars=9000,
-                max_batches=20,
             )
 
             self.assertEqual(migrated, 0)
             self.assertTrue(path.exists())
-            self.assertEqual(database.query("SELECT subject_key FROM facts")[0][0], "person-a")
+            self.assertTrue(database.query("SELECT subject_key FROM facts WHERE person_id='person-a'"))
 
     def test_mocked_node_run_writes_and_projects_fixed_fact_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1259,7 +1247,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             }
             # The tagging phase stamps updated_at from the file mtime for a record
             # that never had one, so compare every other key and shape exactly.
-            written = json.loads((facts_dir / "parent-1.jsonl").read_text(encoding="utf-8"))
+            written = json.loads((facts_dir / "person-1.jsonl").read_text(encoding="utf-8"))
             self.assertIn("updated_at", written)
             written.pop("updated_at")
             self.assertEqual(written.pop("model"), node.config.responses.model)
@@ -1281,7 +1269,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             self.assertEqual((row["machine_worth"], row["confidence"]), ("yes", 0.91))
             # The share stage reads labels from SQLite, not the jsonl.
             self.assertEqual(json.loads(row["facts_json"])["labels"], jev_answer["labels"])
-            artifact = database.query("SELECT input_fingerprint FROM artifacts WHERE artifact_key='facts:parent-1'")[0]
+            artifact = database.query("SELECT input_fingerprint FROM artifacts WHERE artifact_key='parent-facts:parent-1'")[0]
             self.assertEqual(artifact["input_fingerprint"], expected_fingerprint)
 
 

@@ -18,7 +18,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourceRow,
     PersonSourcesProjection,
 )
-from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
+from packs.ingestion.primitives.deep_context.db.projectors import project_person_source_bundle
 from packs.ingestion.primitives.deep_context.db.queries import artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from deep_context_sqlite_test_helpers import message_payload
@@ -41,12 +41,12 @@ class CollectionFailuresTest(unittest.TestCase):
         ))
         self.raw = self.root / "raw"
         self.raw.mkdir()
-        self.bundle = self.raw / "parent-1.json"
+        self.bundle = self.raw / "person-1.json"
         self.bundle.write_text(json.dumps({
-            "person_id": "parent-1",
+            "person_id": "person-1",
             "messages": [message_payload("Previously collected evidence")],
         }))
-        project_parent_source_bundle(self.db, self.bundle, "parent-1")
+        project_person_source_bundle(self.db, self.bundle, "person-1")
         self.before = self.bundle.read_bytes()
         self.projected_before = artifacts(self.db, kind="source_bundle")[0]
         self.node = CollectPersonContext(

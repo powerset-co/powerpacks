@@ -2,7 +2,7 @@
 
 Two declared nodes share this package (one directory, two modules and two
 manifests): `deep_cluster` (`cluster_merge_candidates.py`) finds same-person
-merge candidates with free name and identifier rules plus two paid JEV checks;
+merge candidates with free name and identifier rules plus one Sol/high identity judgment;
 `deep_parents` (`build_parents.py`) applies the accepted merges to parent
 families and rewrites only the changed parent dossiers. There is no
 `--approve` between them: cluster writes proposals, parents applies them.
@@ -12,7 +12,7 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 
 | node | reads | writes | manifest |
 |---|---|---|---|
-| `deep_cluster` | — (reads SQLite facts/verdicts) | `deep-context/merge-candidates.csv` (full_rewrite), `deep-context/merge-candidates.md` (full_rewrite), `deep-context/jev/{request_sha256}.json` (optional) | `deep-context/dossiers/merge_manifest.json` (`ClusterMergeManifest`) |
+| `deep_cluster` | — (reads SQLite facts/verdicts) | `deep-context/merge-candidates.csv` (full_rewrite), `deep-context/merge-candidates.md` (full_rewrite) | `deep-context/dossiers/merge_manifest.json` (`ClusterMergeManifest`) |
 | `deep_parents` | — (reads SQLite) | `deep-context/parents/{slug}.md` (upsert, optional) | `deep-context/parents/manifest.json` (`BuildParentsManifest`) |
 
 ## Manifest / status
@@ -24,39 +24,45 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 
 ## How a pair is decided
 
-Each step takes what the one before left.
-
 | step | what it takes | decided by | cost |
 |---|---|---|---|
 | 1 | a parent reachable only at role addresses (`ir@`, `billing@`): a shared mailbox | left out of the survey | free |
-| 2 | the pair shares no phone or whole email, and neither name can be a form of the other | never paired | free |
-| 3 | identical name and a shared contact phone or email | merged | free |
-| 4 | the same name: the same words in any order, or the same first and last name where a middle name is missing on one side or agrees | merged unless JEV, reading both records' facts, puts the chance they must be kept apart at 0.4 or more | about $0.00003 a pair |
-| 5 | everything else that was paired: a short or variant form of the name ("Jordan" / "Jordan Bravo", "J Bravo", "Jordan B", "Jon" / "John"), or a shared phone or email under two names | the JEV pair judge at p(yes) ≥ 0.5, then JEV on the two names alone | about $0.0001 a pair |
+| 2 | source contact email, phone, email handle, or name buckets propose a pair | only compatible names remain; extracted identifier claims cannot propose a pair | free |
+| 3 | identical normalized name and a shared source contact phone or email | merged unless a stored different-person verdict blocks it | free |
+| 4 | all other pairs, including the same name without a source identifier tie | Sol/high: same, different, or uncertain | dry-run estimates input and output tokens |
 
-A shared first name, a shared last name or a shared email handle alone is not
-a pair (step 2). A one-word name meets a full name only through a shared email
-handle, phone or email. A generation suffix on one side (Jr, Sr, III) is not
-the same name; a title (Dr, Mr) is not part of a name. A stored "two people" between two parents outranks steps 3
-and 4.
+The pair judge requires affirmative evidence connecting the same individual.
+Shared names, an office number, compatible lives, or missing contradictions do
+not establish identity. Extracted identifier claims remain context and require
+ownership evidence. Uncertain is a completed judgment: it neither merges people
+nor constrains a later proven connection. Different is affirmative evidence of
+two people; it blocks both direct and transitive joins.
 
-The step 4 bar was set on 127 same-name pairs from two real installs, each
-with a separate dossier on both sides, labeled blind and without LinkedIn. At
-0.4: 54 merged, 52 of them labeled one person; 24 of 26 labeled two people
-and all 10 that were not a person stayed apart; 25 of the 29 with a concrete
-tie beyond the name merged. On the half held out from choosing the wording,
-24 merged and all 24 were labeled one person.
+Every original source member name must be present and compatible with every
+other member before a join. This applies to proposals, accepted receipts, and
+parent application, including transitive joins. A representative cannot hide a
+conflicting or unknown child name. Stored different-person decisions constrain
+all joins; an internal child rejection prevents further merging of that parent.
+Refreshing the survey does not erase a rejection. A fresh rebuild excludes old
+machine decisions before the survey.
+
+A shared first name, last name or email handle alone does not pair two
+incompatible names. One-word names meet full names only through source contact
+identifiers or source email handles. A stored different-person verdict blocks
+transitive acceptance that would join its two children.
 
 ## Control
 
-- `deep_cluster`: paid, cents. The same-name check is one JEV request per
-  same-name pair; the pair judge is one request per remaining pair, plus the
-  two names alone for each pair it calls one person (about $0.00002). Answers
-  cache under `deep-context/jev/` and verdicts in SQLite, so re-runs do not
-  re-bill. Free `--dry-run` prices all three, the names requests as an upper
-  bound. Acceptance between two parents is rewritten by every survey: a pair
-  it does not return is no longer accepted.
-- `deep_parents`: free.
+- `deep_cluster`: one `gpt-6.1-sol`/high request per uncached pair. The request
+  signature covers system prompt, rendered source evidence, owner, schema,
+  model, effort, and output limit. Each completed decision is saved to SQLite
+  before another call finishes, with acceptance false until global constraints
+  are checked. Unchanged uncertain decisions are reused; failed calls retry.
+  `--dry-run` estimates input and 1,500 output tokens per request, not a ceiling.
+  `--limit 1` runs one uncached pair. Acceptance is rewritten each survey;
+  changed or omitted pairs cannot retain old acceptance.
+- `deep_parents`: free. It applies accepted components; it does not split
+  children already joined under one parent.
 
 ## Invariant
 
@@ -67,6 +73,16 @@ current blocking survey (`replace_merge_verdicts`) so a re-survey cannot erase
 them.
 
 ## Changelog
+
+- 2026-10-03: one structured Sol/high judgment replaces binary JEV and the names
+  question; SQLite preserves uncertainty and checkpoints every completed call.
+
+- 2026-10-03: all original source names and stored child rejections constrain
+  proposals, receipts, and parent application.
+
+- 2026-10-02: source identifiers and compatible names select pairs; same-name
+  pairs need positive identity evidence unless a source identifier proves the
+  exact-name duplicate.
 
 - 2026-10-01: the same name merges without the pair judge once JEV finds
   nothing in the facts that keeps the records apart; a shared first name, last

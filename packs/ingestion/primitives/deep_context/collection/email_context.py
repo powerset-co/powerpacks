@@ -166,10 +166,13 @@ class EmailContext:
             else:
                 dropped += 1
                 continue
-            # A reply that is nothing but quoted history cleans to empty (~5% of real mail),
-            # so Gmail's snippet preview is the only text left for those.
-            body = self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
-            text = body or self.clean_text(row["snippet"], self.snippet_chars)
+            # A preview must not restore quoted words removed from an available body.
+            text = (
+                self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
+                if row["body_text"] else self.clean_text(row["snippet"], self.snippet_chars)
+            )
+            if not text:
+                continue
             at = str(row["at"] or "").strip()
             message = EmailMessage(
                 at=at,

@@ -478,6 +478,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nameparser"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/1a/9b4b5d076a7bec1c50b3eeb67f06ca413d7b8770ae07b78a62d816607db2/nameparser-2.3.0.tar.gz", hash = "sha256:ae169bcd35d817908644e7ab580cb999a85191414e870c02bda1c52364c9e1f0", size = 751500 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/99/3c9396b487cdfc88b7b4ca4c4c041552924b4b5e2070835ab2df2e4d7194/nameparser-2.3.0-py3-none-any.whl", hash = "sha256:0960c101716aba9e4fbbe51fa94ad57d5d010b550ff3dba5a7b7e6a1331bb05c", size = 256378 },
+]
+
+[[package]]
 name = "openai"
 version = "2.33.0"
 source = { registry = "https://pypi.org/simple" }
@@ -547,6 +556,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "markdown-it-py" },
     { name = "modal" },
+    { name = "nameparser" },
     { name = "openai" },
     { name = "parallel-web" },
     { name = "psycopg2-binary" },
@@ -573,6 +583,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "markdown-it-py", specifier = ">=4.0" },
     { name = "modal", specifier = ">=1.5.0" },
+    { name = "nameparser", specifier = "==2.3.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "parallel-web", specifier = "==1.1.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },

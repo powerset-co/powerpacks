@@ -347,8 +347,6 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
     fingerprints = input_fingerprints(inputs)
-    # Reviewed directory identities can change while source CSVs stay identical.
-    # This free local merge always applies the current decisions.
     if not inputs:
         payload = {
             "status": "not_ready",
