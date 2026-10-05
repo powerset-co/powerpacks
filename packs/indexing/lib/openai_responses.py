@@ -68,6 +68,7 @@ def responses_kwargs(
     schema (when given) is enforced via ``text.format`` strict mode.
     """
     kwargs: dict[str, Any] = {
+        "store": False,  # OpenAI keeps no request
         "max_output_tokens": int(
             os.getenv("POWERPACKS_DEEP_CONTEXT_MAX_OUTPUT_TOKENS", str(max_output_tokens))
         ),

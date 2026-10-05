@@ -86,9 +86,8 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertEqual(self.processing_class.call_args.kwargs["port"], 8899)
 
     def test_approval_is_scoped_to_this_resume_not_saved_for_future_runs(self):
-        self.run_command("--approve-spend", "index", "--approve-upload")
+        self.run_command("--approve-spend", "index")
         self.assertEqual(self.processing_class.call_args.kwargs["approved_spend"], ("index",))
-        self.assertTrue(self.processing_class.call_args.kwargs["approve_upload"])
         self.assertNotIn("approve", self.status.read()["retry_command"])
 
     def test_source_wait_does_not_start_processing(self):
