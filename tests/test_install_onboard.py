@@ -35,6 +35,7 @@ class OnboardingTests(unittest.TestCase):
         self.missing_keys = set()
         self.empty_contacts = False
         self.blank_keys = set()
+        self.operator_id = ""
         self.reject_key_once = False
         self.reject_old_token = False
         self.owner_id = "auth0|operator"
@@ -54,7 +55,8 @@ class OnboardingTests(unittest.TestCase):
                 if case.reject_old_token and self.headers.get("Authorization") == "Bearer old-token":
                     return self.reply({"detail": "expired"}, 401)
                 if self.path == "/v2/team/me":
-                    return self.reply({"user_id": "auth0|operator", "email": "jordan@example.com"})
+                    account = {"user_id": "auth0|operator", "email": "jordan@example.com"}
+                    return self.reply({**account, "operator_id": case.operator_id} if case.operator_id else account)
                 if self.path == "/v2/sets":
                     return self.reply(case.networks)
                 if self.path.startswith("/v2/sets/"):
@@ -352,6 +354,12 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(state["steps"]["credentials"]["status"], "completed")
         self.assertIn("TURBOPUFFER_API_KEY=synthetic-local-key", env.read_text())
+
+    def test_the_accounts_operator_id_is_saved_for_modal_runs(self):
+        self.operator_id = "33333333-3333-3333-3333-333333333333"
+        code, _, _ = self.run_onboarding()
+        self.assertEqual(code, 0)
+        self.assertIn("POWERPACKS_OPERATOR_ID=33333333-3333-3333-3333-333333333333", (self.root / ".env").read_text())
 
     def test_unprovisioned_hosted_search_is_a_warning_and_setup_continues(self):
         self.blank_keys.update({"TURBOPUFFER_API_KEY", "DATABASE_URL"})
