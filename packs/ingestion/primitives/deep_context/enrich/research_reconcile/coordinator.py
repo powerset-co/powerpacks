@@ -171,8 +171,9 @@ class ReconcileDeepResearch:
             on_progress=provider_progress,
             db=self.db,
         )
-        # Research that cannot run at all (no key, provider down) fails the
-        # enrich run, so the next run tries these people again.
+        # Research that cannot start (no Parallel key) fails the enrich run, so
+        # the next run tries these people again. Provider errors come back as
+        # results from the driver.
         research = driver.run_research(params)
         research_completed = plan.reused_completed + research.completed
         print(

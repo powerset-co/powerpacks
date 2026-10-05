@@ -10,8 +10,9 @@ Changelog:
       owner profile from the LinkedIn session and the Gmail address instead of
       asking; a failed Modal run is retried, not re-downloaded, unless it failed
       on the spend cap.
-  2026-10-04: a step that stops with SystemExit (research without a Parallel
-      key) is recorded as failed with its message instead of ending the process.
+  2026-10-04: a step that stops with SystemExit is recorded as failed with its
+      message instead of ending the process; research that cannot run (no
+      Parallel key) is skipped with a warning and the index still builds.
   2026-10-04: indexing goes ahead when a cached profile has no jobs listed (it
       used to raise on every resume); upload consent is asked before a $500+
       spend approval, so the two questions no longer bounce.
@@ -246,9 +247,15 @@ class ProcessingOnboarding:
                 if estimate.estimated_usd >= _AUTO_SPEND_USD:
                     self._approval(SpendStep.ENRICH, estimate.to_payload())
                 pipeline = EnrichmentPipeline(self.db)
-                self._run("enrich", lambda: pipeline.run(total=estimate.research.deduped_total,
-                          budget=estimate.research.estimated_usd,
-                          request_fingerprint=estimate.research.request_fingerprint), "Enriching your contacts")
+                try:
+                    self._run("enrich", lambda: pipeline.run(total=estimate.research.deduped_total,
+                              budget=estimate.research.estimated_usd,
+                              request_fingerprint=estimate.research.request_fingerprint), "Enriching your contacts")
+                except SystemExit as error:
+                    # The run is saved as failed, so the next setup run tries it again.
+                    self._write(InstallState.SKIPPED, f"Research could not run ({error}). Search is built "
+                                "without it; the next setup run will research these people.")
+                    return
                 self._write(InstallState.COMPLETED, "Done")
             elif state.next_action == "review_linkedin":
                 self._write(InstallState.COMPLETED, "Done")
