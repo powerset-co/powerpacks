@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from packs.ingestion.primitives.deep_context.db.models import EnrichmentWork
+
 from packs.powerset.primitives.install import pipeline
 from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
 from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
@@ -48,6 +50,7 @@ class InstallPipelineTests(unittest.TestCase):
         functions = {
             "readiness_payload": lambda report: report,
             "workflow_state": self.workflow_state,
+            "enrichment_work": lambda db: self.leftover,
             "estimate_enrichment": self.estimate_enrichment,
             "estimate_run": lambda args: self.native("index-estimate", options=args),
             "validate_search_index": lambda *args, **kwargs: self.native("search-validate"),
@@ -88,6 +91,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.paid_commands = []
         self.failing_command = ""
         self.exiting_command = ""
+        self.leftover = EnrichmentWork()
         self.fail_at = 0
         self.failure_after = ""
         self.synthesis_cost = 0.1
@@ -452,6 +456,12 @@ class InstallPipelineTests(unittest.TestCase):
                 self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
                 self.fail_at = position
                 result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
+                if command[0] in pipeline._DEFERRED_LABELS:
+                    # Search is built without a deferred step; it is skipped, not failed.
+                    self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+                    self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
+                    self.fail_at = 0
+                    continue
                 self.assertEqual(result["status"], "failed")
                 self.assertEqual(len(self.calls), position)
                 self.assertNotIn("ready", result["steps"])
@@ -508,20 +518,35 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertTrue(any(name == "profile-prefetch" and options["node"].fetch for name, options in self.calls))
 
-    def test_profile_fetch_failure_resumes_without_repeating_completed_work(self):
+    def test_profile_fetch_failure_still_builds_the_index_and_is_tried_next_run(self):
         self.profiles_missing = True
         self.failing_command = "profile-prefetch"
-        self.assertEqual(self.run_pipeline(upload=True)["status"], "failed")
-        self.assertFalse(self.indexed())
+        result = self.run_pipeline(upload=True)
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(self.indexed())
+        self.assertIn("source read failed", result["message"])
         self.failing_command = ""
         self.calls.clear()
         self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
-        self.assertFalse(self.did("collect"))
-        self.assertCountEqual(self.paid_commands, ["profile-prefetch", "index"])
+        self.assertTrue(self.did("profile-prefetch"))
+
+    def test_enrichment_that_fails_still_builds_the_index_and_says_what_to_fix(self):
+        self.enrich = True
+        self.failing_command = "enrich"
+        result = self.run_pipeline("index", upload=True)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
+        self.assertTrue(self.indexed())
+        self.assertIn("source read failed", result["message"])
+
+    def test_people_the_last_enrichment_could_not_finish_are_tried_again(self):
+        self.leftover = EnrichmentWork(lookups=("parent:jordan",))
+        self.run_pipeline("index", upload=True)
+        self.assertTrue(self.did("enrich"))
+        self.leftover = EnrichmentWork()
         self.calls.clear()
-        self.assertEqual(self.run_pipeline()["status"], "completed")
-        self.assertFalse(self.did("profile-prefetch"))
-        self.assertFalse(self.indexed())
+        self.run_pipeline("index", upload=True)
+        self.assertFalse(self.did("enrich"))
 
     def test_saved_wacli_store_reaches_native_readiness_and_collection(self):
         store = self.root / "synthetic-whatsapp-store"
@@ -657,8 +682,13 @@ class InstallPipelineTests(unittest.TestCase):
                 self.reset_pipeline(matrix_root / stage)
                 self.synthesize = self.cluster = self.enrich = True
                 self.failure_after = stage
-                self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
-                                 "failed")
+                result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
+                if stage == "enrich":
+                    # Enrichment failing is deferred: search is still built.
+                    self.assertEqual((result["status"], self.indexed()), ("completed", True))
+                    self.failure_after = ""
+                    continue
+                self.assertEqual(result["status"], "failed")
                 self.assertIn(stage, self.paid_commands)
                 self.failure_after = ""
                 self.calls.clear()

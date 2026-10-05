@@ -19,6 +19,7 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: Finish lists what setup deferred (research, profile lookups) and the fix.
 - 2026-10-05: The bootstrap comes from the `stable` branch, which every release
   moves to its tag, so the launcher always matches the release it installs.
 - 2026-10-05: Restored from 3.13.0 what the onboarding rewrite dropped: where
@@ -195,6 +196,9 @@ result; do not blindly dispatch another paid job.
 ## Finish
 
 Report installation, account access, hosted search, imported sources, and verified
-local search separately. A network's people count does not prove search readiness.
+local search separately. Setup does not stop for research, LinkedIn matching or
+profile lookups: when they fail it builds the index without them and the ready
+message lists what is left (a missing key, no provider credit). Say that the index
+is ready, then list each one with what fixes it; the next setup run picks them up. A network's people count does not prove search readiness.
 Keep internal IDs and provider details in troubleshooting. If the user also asked
 for a search, run the installed search skill once its requested backend is ready.
