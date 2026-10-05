@@ -6,6 +6,8 @@ requests a QR scan. Auth status and the QR run's result retain typed fields unti
 report serialization; the pairing state is the typed `PairingStatus`.
 
 Changelog:
+  2026-10-05: `auth_report` takes `on_connected`, called once the QR scan
+    lands, so a caller can say the history download is under way.
   2026-09-23 (typed rows): `run_auth_with_qr_page`/`run_auth` return the frozen
     `AuthRunResult` and `pairing_full_sync_status` returns `PairingStatus`, so
     `auth_report` reads typed fields instead of `.get(...)` on two dicts. Emitted
@@ -25,7 +27,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -91,7 +93,8 @@ class AuthRunResult:
         }
 
 
-def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> AuthRunResult:
+def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool,
+                          on_connected: Callable[[], None] | None = None) -> AuthRunResult:
     if not shutil.which("qrencode"):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
@@ -149,6 +152,8 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                     # Give the initial archive bootstrap its own complete
                     # timeout window after the user finishes the QR step.
                     deadline = time.time() + timeout
+                    if on_connected:
+                        on_connected()
                 connected = True
             return
         stdout_payload = qr.wa_qr_payload(text) if source == "stdout" else None
@@ -213,8 +218,10 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     )
 
 
-def run_auth(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool = True) -> AuthRunResult:
-    return run_auth_with_qr_page(store, timeout=timeout, idle_exit=idle_exit, open_qr_page=open_qr_page)
+def run_auth(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool = True,
+             on_connected: Callable[[], None] | None = None) -> AuthRunResult:
+    return run_auth_with_qr_page(store, timeout=timeout, idle_exit=idle_exit, open_qr_page=open_qr_page,
+                                 on_connected=on_connected)
 
 
 def auth_report(
@@ -224,9 +231,11 @@ def auth_report(
     auth_timeout: int = DEFAULT_AUTH_TIMEOUT,
     install: bool = True,
     open_qr_page: bool = True,
+    on_connected: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Link the WhatsApp account (QR scan when needed) without syncing or
-    exporting anything; `status` is `linked` or `blocked_user_action`."""
+    """Link the WhatsApp account (QR scan when needed) without exporting
+    anything; `status` is `linked` or `blocked_user_action`. Linking downloads
+    the account's history before it returns; `on_connected` runs once the scan lands."""
     store.mkdir(parents=True, exist_ok=True)
     wacli_info = binary.ensure_wacli_installed(install=install)
     doctor = binary.wacli_json(store, ["doctor"], timeout=60)
@@ -243,6 +252,7 @@ def auth_report(
             timeout=auth_timeout,
             idle_exit=idle_exit,
             open_qr_page=open_qr_page,
+            on_connected=on_connected,
         )
         auth_summary.update(auth_run.to_payload())
     status_after = auth_status(store)
@@ -257,7 +267,7 @@ def auth_report(
         "status": "linked" if linked else "blocked_user_action",
         "pairing": pairing_state.to_payload(),
         "message": (
-            "WhatsApp account is linked. No WhatsApp sync or export was run."
+            "WhatsApp account is linked and its history is downloaded. No contacts were exported."
             if linked
             else "WhatsApp needs a QR scan. Scan it, then rerun the auth command."
         ),

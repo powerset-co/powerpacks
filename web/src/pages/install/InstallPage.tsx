@@ -41,19 +41,24 @@ const STATUS_LABELS: Record<InstallState, string> = {
 }
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
+// Setup takes every login first, then each source's sync, so those are the rows.
 const STEP_GROUPS = [
   { key: "install", label: "Installing Powerpacks", steps: DEFAULT_STEPS },
   {
-    key: "whatsapp",
-    label: "Syncing WhatsApp",
-    steps: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"],
+    key: "logins",
+    label: "Logging in to your accounts",
+    steps: [
+      "linkedin_login",
+      "gmail_tools",
+      "gmail_login",
+      "imessage_access",
+      "whatsapp_tools",
+      "whatsapp_login",
+    ],
   },
-  { key: "imessage", label: "Syncing iMessage", steps: ["imessage_access", "imessage_import"] },
-  {
-    key: "gmail",
-    label: "Syncing Gmail",
-    steps: ["gmail_tools", "gmail_login", "gmail_sync", "gmail_import"],
-  },
+  { key: "whatsapp", label: "Syncing WhatsApp", steps: ["whatsapp_sync", "whatsapp_import"] },
+  { key: "imessage", label: "Syncing iMessage", steps: ["imessage_import"] },
+  { key: "gmail", label: "Syncing Gmail", steps: ["gmail_sync", "gmail_import"] },
   { key: "index", label: "Building your search index", steps: ["index", "validate", "ready"] },
 ]
 
@@ -79,7 +84,7 @@ function installSteps(data?: InstallStatus) {
           ? "skipped"
           : "completed"
         : latest && DONE.has(latest)
-          ? undefined // tools and logins are done; its sync waits its turn
+          ? undefined // part done in an earlier run; the rest waits its turn
           : latest
     return [
       {

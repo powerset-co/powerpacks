@@ -359,12 +359,15 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 return self.returncode
 
         fake = FakeProc()
+        scanned: list[bool] = []
         with mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
                 mock.patch.object(auth.subprocess, "Popen", return_value=fake), \
                 mock.patch.object(qr, "update_qr_page") as update_qr_page:
-            result = auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
+            result = auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s",
+                                   on_connected=lambda: scanned.append(True))
 
         self.assertEqual(fake.signals, [])
+        self.assertEqual(scanned, [True])
         self.assertTrue(result.connected_event)
         self.assertTrue(result.auth_bootstrap_sync_completed)
         self.assertIn("--events", result.command)

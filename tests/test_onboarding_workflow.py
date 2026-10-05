@@ -30,7 +30,7 @@ from packs.ingestion.primitives.setup.automations import accounts
 from packs.ingestion.primitives.setup.automations.shell import CommandResult
 from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
-from packs.powerset.primitives.install.workflow import GMAIL_QUESTION, SourceOnboarding
+from packs.powerset.primitives.install.workflow import GMAIL_QUESTION, WHATSAPP_DOWNLOADING, SourceOnboarding
 
 
 def payload(**record):
@@ -82,9 +82,11 @@ class SourceOnboardingTests(unittest.TestCase):
         InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
             message='Network checked', pid=os.getpid(), account_email='casey@example.com')
         flow = SourceOnboarding(self.root, sources=())
-        self.assertEqual(flow.plan[flow.plan.index('sources') + 1], 'linkedin')
-        for step in ('gmail_import', 'imessage_import', 'whatsapp_import'):
-            self.assertIn(step, flow.plan)
+        sources = flow.plan.index('sources')
+        # Every login comes before every sync, the order the run takes them.
+        self.assertEqual(flow.plan[sources + 1:flow.plan.index('deep_context')], [
+            'linkedin_login', 'gmail_tools', 'gmail_login', 'imessage_access', 'whatsapp_tools', 'whatsapp_login',
+            'linkedin', 'gmail_sync', 'gmail_import', 'imessage_import', 'whatsapp_sync', 'whatsapp_import'])
         self.assertIn('--source linkedin --source gmail --source imessage --source whatsapp', flow.retry_command)
         self.assertNotIn('--gmail-email', flow.retry_command)
         self.assertIn((date.today() - timedelta(days=365)).isoformat(), flow.retry_command)
@@ -364,7 +366,7 @@ class SourceOnboardingTests(unittest.TestCase):
              patch.object(LinkedInConnections, 'login', return_value={
                  'status': 'needs_user_action', 'message': 'Log in to LinkedIn in the Chrome window Powerpacks opened.'}):
             result = SourceOnboarding(self.root, sources=('linkedin', 'imessage')).run()
-        self.assertEqual((result['step'], result['status']), ('linkedin', 'waiting'))
+        self.assertEqual((result['step'], result['status']), ('linkedin_login', 'waiting'))
         self.assertEqual(result['message'], 'Log in to LinkedIn in the Chrome window Powerpacks opened.')
         access.assert_not_called()
         sync.assert_not_called()
@@ -629,7 +631,7 @@ class SourceOnboardingTests(unittest.TestCase):
 
     def test_whatsapp_qr_wait_is_written_before_auth_without_opening_browser(self):
         store = self.root / 'isolated-wacli'
-        def authenticate(actual_store, *, open_qr_page):
+        def authenticate(actual_store, *, open_qr_page, on_connected):
             self.assertEqual(actual_store, store)
             self.assertFalse(open_qr_page)
             self.assertEqual(InstallStatus(self.root).read()['action']['kind'], 'qr')
@@ -642,9 +644,21 @@ class SourceOnboardingTests(unittest.TestCase):
         discover.assert_not_called()
         self.assert_preserved()
 
+    def test_whatsapp_scan_replaces_the_qr_with_the_history_download(self):
+        def authenticate(store, *, open_qr_page, on_connected):
+            on_connected()
+            current = InstallStatus(self.root).read()
+            self.assertEqual((current['step'], current['status'], current['message']),
+                             ('whatsapp_login', 'running', WHATSAPP_DOWNLOADING))
+            self.assertIsNone(current['action'])
+            return {'status': 'blocked_user_action', 'message': 'test stop'}
+        with patch.object(auth, 'auth_report', side_effect=authenticate) as link:
+            SourceOnboarding(self.root, sources=('whatsapp',)).run()
+        link.assert_called_once()
+
     def test_already_linked_whatsapp_never_displays_qr_action(self):
         original_write = InstallStatus.write
-        def authenticate(store, *, open_qr_page):
+        def authenticate(store, *, open_qr_page, on_connected):
             current = InstallStatus(self.root).read()
             self.assertEqual(current['status'], 'running')
             self.assertEqual(current['message'], 'Checking WhatsApp')
