@@ -15,5 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+      # powerset.dev/powerpacks serves the install skill from `stable`, and the skill
+      # runs `stable`'s bootstrap, so both always match the newest release.
+      # Release candidates (tags with a "-") leave it alone.
+      - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-') }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+      - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-') }}
+        run: git push --force origin "${{ steps.release.outputs.tag_name }}^{commit}:refs/heads/stable"
