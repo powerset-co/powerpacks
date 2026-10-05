@@ -5,6 +5,8 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-05: Gmail defaults to the Powerset login's address when no address
+      was given; it asks only when there is no Powerset account.
   2026-10-05: when the automated Google Cloud setup stops, the step says so in
       one line and keeps Google's details for the agent instead of handing the
       user its manual steps (open the console, download the client secret).
@@ -93,12 +95,12 @@ class SourceOnboarding:
         if not set(self.skip_sources) <= set(self.sources):
             raise ValueError("Skip only a selected source")
         self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
-        # Mailboxes msgvault already holds are reused; otherwise Gmail asks once.
+        # Mailboxes msgvault already holds are reused; otherwise Gmail uses the
+        # Powerset login (in run()), and asks only without one.
         if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
             home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
             self.gmail_emails = tuple(sorted(
                 accounts.VaultHealth.from_status(accounts.status_payload(home)).stored_emails - {""}))
-        self.gmail_suggestion = previous.get("account_email") or ""
         self.sync_after = sync_after or saved.sync_after or (
             (date.today() - timedelta(days=365)).isoformat() if Source.GMAIL in self.sources else "")
         wacli_store = wacli_store or saved.wacli_store
@@ -333,9 +335,12 @@ class SourceOnboarding:
                 return self._write(InstallStep.READY, InstallState.COMPLETED, "Powerpacks is installed")
             active = [source for source in self.sources if source not in self.skip_sources]
             if Source.GMAIL in active and not self.gmail_emails:
-                return self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, GMAIL_QUESTION,
-                                   {"kind": "gmail", "text": GMAIL_QUESTION, "suggested": self.gmail_suggestion},
-                                   pid=0)
+                # Gmail defaults to the account the user signed in to Powerset with.
+                account = previous.get("account_email") or ""
+                if not account:
+                    return self._write(InstallStep.GMAIL_LOGIN, InstallState.WAITING, GMAIL_QUESTION,
+                                       {"kind": "gmail", "text": GMAIL_QUESTION}, pid=0)
+                self.gmail_emails = (account,)
             # Tools first (Homebrew can take minutes), then every login back to back while
             # the user is here, then the syncs and imports run without them.
             for source in active:

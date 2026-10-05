@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.16.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.15.1...powerpacks-v3.16.0) (2026-10-05)
+
+
+### Features
+
+* **install:** one approval up front; Gmail uses the Powerset login ([#704](https://github.com/powerset-co/powerpacks/issues/704)) ([2b1d9b8](https://github.com/powerset-co/powerpacks/commit/2b1d9b8c44efdd38742eea781618bd84eeca5240))
+
 ## [3.15.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.15.0...powerpacks-v3.15.1) (2026-10-05)
 
 

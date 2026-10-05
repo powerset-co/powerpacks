@@ -302,7 +302,6 @@ def main() -> None:
     parser.add_argument("--port", type=int)
     parser.add_argument("--approve-spend", choices=("synthesize", "cluster", "enrich", "index"),
                         action="append", default=[])
-    parser.add_argument("--approve-upload", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
     status = InstallStatus(root)
@@ -349,7 +348,7 @@ def main() -> None:
         payload = flow.run()
         if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
             payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend),
-                                           approve_upload=args.approve_upload, port=port).run()
+                                           port=port).run()
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
     message = (payload.get("action") or {}).get("text") or payload.get("message", "Setup stopped")
     print(f"{prefix[payload['status']]}: {message}", flush=True)

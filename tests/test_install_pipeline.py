@@ -195,8 +195,8 @@ class InstallPipelineTests(unittest.TestCase):
         payload = self.native(name, argv=argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload))
 
-    def run_pipeline(self, *spend, upload=False):
-        return ProcessingOnboarding(self.root, approved_spend=spend, approve_upload=upload).run()
+    def run_pipeline(self, *spend):
+        return ProcessingOnboarding(self.root, approved_spend=spend).run()
 
     def did(self, stage):
         return any(name == stage for name, _ in self.calls)
@@ -261,20 +261,13 @@ class InstallPipelineTests(unittest.TestCase):
         self.synthesize = self.cluster = self.enrich = True
         self.synthesis_cost = 499.99
         self.cluster_cost = self.enrichment_cost = 499.99
-        result = self.run_pipeline()
-        self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
-        self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich"])
-        self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-upload")
-        self.subprocess.assert_not_called()
-        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+        self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertCountEqual(self.paid_commands, ["synthesize", "cluster", "enrich", "index"])
 
     def test_local_stages_never_spawn_subprocess_and_cached_index_revalidates_locally(self):
         self.synthesize = self.cluster = self.enrich = True
-        with patch.object(pipeline.subprocess, "run", side_effect=AssertionError("Local stages must run in process")):
-            result = self.run_pipeline()
-            self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
-        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+        # setUp's subprocess fake accepts only the Modal commands.
+        self.assertEqual(self.run_pipeline()["status"], "completed")
         self.calls.clear()
         with patch.object(pipeline.subprocess, "run", side_effect=AssertionError("Completed index must be reused")):
             result = self.run_pipeline()
@@ -314,58 +307,44 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_cached_profiles_without_jobs_do_not_block_indexing(self):
         self.empty_profiles = True
-        result = self.run_pipeline(upload=True)
+        result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertTrue(self.indexed())
 
-    def test_large_index_asks_upload_then_spend_then_finishes(self):
+    def test_large_index_asks_only_for_the_spend_then_finishes(self):
         self.index_cost = 600
         first = self.run_pipeline()
-        self.assertTrue(first["action"]["upload"])
-        second = self.run_pipeline(upload=True)
-        self.assertFalse(second["action"]["upload"])
-        self.assertIn("--approve-upload", second["action"]["continue_command"])
-        self.assertIn("--approve-spend index", second["action"]["continue_command"])
-        third = self.run_pipeline("index", upload=True)
-        self.assertEqual((third["step"], third["status"]), ("ready", "completed"))
+        self.assertEqual(first["action"]["continue_command"], self.retry + " --approve-spend index")
+        second = self.run_pipeline("index")
+        self.assertEqual((second["step"], second["status"]), ("ready", "completed"))
 
-    def test_index_requires_upload_consent_without_redundant_spend_approval(self):
-        for spend in ((), ("index",)):
-            self.calls.clear()
-            result = self.run_pipeline(*spend)
-            self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
-            self.assertEqual(result["action"]["step"], "index")
-            self.assertTrue(result["action"]["upload"])
-            self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-upload")
-            self.assertFalse(self.indexed())
-        self.calls.clear()
-        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+    def test_index_builds_without_asking_to_upload(self):
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertTrue(self.indexed())
 
     def test_index_native_estimate_uses_automatic_budget_and_retains_large_cost_approval(self):
         self.index_cost = 499.99
-        result = self.run_pipeline(upload=True)
+        result = self.run_pipeline()
         self.assertEqual(result["status"], "completed")
         argv = next(options["argv"] for name, options in self.calls if name == "index")
         self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 499.99)
         self.reset_pipeline(self.root / "large-index-estimate")
         self.index_cost = 500
-        result = self.run_pipeline(upload=True)
+        result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertEqual(result["action"]["step"], "index")
-        self.assertFalse(result["action"]["upload"])
         self.assertEqual(result["action"]["estimate"]["estimated_cost_usd"], 500)
-        self.assertEqual(result["action"]["continue_command"],
-                         self.retry + " --approve-spend index --approve-upload")
+        self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-spend index")
         self.assertFalse(self.indexed())
         self.calls.clear()
-        self.assertEqual(self.run_pipeline("index", upload=True)["status"], "completed")
+        self.assertEqual(self.run_pipeline("index")["status"], "completed")
         argv = next(options["argv"] for name, options in self.calls if name == "index")
         self.assertEqual(float(argv[argv.index("--max-usd") + 1]), 500)
 
     def test_full_approved_run_uses_native_stages_then_only_validator_marks_ready(self):
         self.synthesize = self.cluster = self.enrich = True
-        result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
+        result = self.run_pipeline("synthesize", "cluster", "enrich", "index")
         self.assertTrue(self.did("synthesize"))
         self.assertTrue(self.did("cluster"))
         self.assertTrue(self.did("enrich"))
@@ -376,7 +355,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(self.calls[-1][0], "search-validate")
 
     def test_completed_native_index_resumes_without_reupload_and_revalidates(self):
-        self.run_pipeline("index", upload=True)
+        self.run_pipeline("index")
         self.calls.clear()
         result = self.run_pipeline()
         self.assertFalse(self.indexed())
@@ -388,7 +367,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertFalse(self.indexed())
 
     def test_invalid_existing_index_fails_until_explicit_rebuild(self):
-        self.run_pipeline("index", upload=True)
+        self.run_pipeline("index")
         self.validation_status = "fail"
         self.calls.clear()
         result = self.run_pipeline()
@@ -396,21 +375,21 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertFalse(self.indexed())
         self.validation_status = "ok"
         self.calls.clear()
-        result = self.run_pipeline("index", upload=True)
+        result = self.run_pipeline("index")
         self.assertEqual(result["status"], "completed")
         self.assertTrue(self.indexed())
 
     def test_roster_change_prevents_old_index_reuse(self):
-        self.run_pipeline("index", upload=True)
+        self.run_pipeline("index")
         self.csv = "id,full_name\nsynthetic-casey,Casey Example\n"
         self.calls.clear()
         result = self.run_pipeline()
-        self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
-        self.assertFalse(self.indexed())
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertTrue(self.indexed())  # rebuilt for the new roster, not reused
 
     def test_matches_the_judges_left_wait_until_the_index_is_built(self):
         self.review = True
-        result = self.run_pipeline("index", upload=True)
+        result = self.run_pipeline("index")
         self.assertEqual(self.waits, 0)
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertTrue(self.indexed())
@@ -421,7 +400,7 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_native_failure_is_logged_and_stops_before_paid_work(self):
         self.failing_command = "collect"
-        result = self.run_pipeline("synthesize", "index", upload=True)
+        result = self.run_pipeline("synthesize", "index")
         self.assertEqual(result["status"], "failed")
         self.assertIn("source read failed", self.status.log_path.read_text())
         self.assertFalse(self.did("synthesize"))
@@ -429,7 +408,7 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_a_step_that_exits_is_a_recorded_failure_with_its_reason(self):
         self.exiting_command = "collect"
-        result = self.run_pipeline("synthesize", "index", upload=True)
+        result = self.run_pipeline("synthesize", "index")
         self.assertEqual(result["status"], "failed")
         self.assertIn("PARALLEL_API_KEY not set", result["message"])
         self.assertFalse(self.indexed())
@@ -437,7 +416,7 @@ class InstallPipelineTests(unittest.TestCase):
     def test_research_that_cannot_run_is_skipped_and_the_index_still_builds(self):
         self.enrich = True
         self.exiting_command = "enrich"
-        result = self.run_pipeline("index", upload=True)
+        result = self.run_pipeline("index")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
         self.assertIn("PARALLEL_API_KEY not set", result["steps"]["enrich"]["message"])
@@ -445,7 +424,7 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_each_native_stage_failure_resumes_without_repeating_completed_paid_work(self):
         self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
-        self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)["status"],
+        self.assertEqual(self.run_pipeline("synthesize", "cluster", "enrich", "index")["status"],
                          "completed")
         baseline = self.calls.copy()
         matrix_root = self.root
@@ -454,7 +433,7 @@ class InstallPipelineTests(unittest.TestCase):
                 self.reset_pipeline(matrix_root / str(position))
                 self.synthesize = self.cluster = self.enrich = self.seed = self.review = True
                 self.fail_at = position
-                result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
+                result = self.run_pipeline("synthesize", "cluster", "enrich", "index")
                 if command[0] in pipeline._DEFERRED_LABELS:
                     # Search is built without a deferred step; it is skipped, not failed.
                     self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
@@ -473,7 +452,7 @@ class InstallPipelineTests(unittest.TestCase):
                 spend = [stage for stage in ("synthesize", "cluster", "enrich") if getattr(self, stage)]
                 if not indexed:
                     spend.append("index")
-                result = self.run_pipeline(*spend, upload=True)
+                result = self.run_pipeline(*spend)
                 self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
                 self.assertEqual(self.did("collect"), not collected)
                 self.assertEqual(self.indexed(), not indexed)
@@ -506,33 +485,33 @@ class InstallPipelineTests(unittest.TestCase):
         self.seed = True
         result = self.run_pipeline()
         self.assertTrue(self.did("seed"))
-        self.assertEqual(result["action"]["step"], "index")
+        self.assertEqual(result["step"], "ready")
         self.calls.clear()
         self.run_pipeline()
         self.assertFalse(self.did("seed"))
 
     def test_missing_profiles_are_fetched_in_the_same_flow(self):
         self.profiles_missing = True
-        result = self.run_pipeline(upload=True)
+        result = self.run_pipeline()
         self.assertEqual(result["status"], "completed")
         self.assertTrue(any(name == "profile-prefetch" and options["node"].fetch for name, options in self.calls))
 
     def test_profile_fetch_failure_still_builds_the_index_and_is_tried_next_run(self):
         self.profiles_missing = True
         self.failing_command = "profile-prefetch"
-        result = self.run_pipeline(upload=True)
+        result = self.run_pipeline()
         self.assertEqual(result["status"], "completed")
         self.assertTrue(self.indexed())
         self.assertIn("source read failed", result["message"])
         self.failing_command = ""
         self.calls.clear()
-        self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+        self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertTrue(self.did("profile-prefetch"))
 
     def test_enrichment_that_fails_still_builds_the_index_and_says_what_to_fix(self):
         self.enrich = True
         self.failing_command = "enrich"
-        result = self.run_pipeline("index", upload=True)
+        result = self.run_pipeline("index")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
         self.assertTrue(self.indexed())
@@ -540,11 +519,11 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_people_the_last_enrichment_could_not_finish_are_tried_again(self):
         self.leftover = EnrichmentWork(lookups=("parent:jordan",))
-        self.run_pipeline("index", upload=True)
+        self.run_pipeline("index")
         self.assertTrue(self.did("enrich"))
         self.leftover = EnrichmentWork()
         self.calls.clear()
-        self.run_pipeline("index", upload=True)
+        self.run_pipeline("index")
         self.assertFalse(self.did("enrich"))
 
     def test_saved_wacli_store_reaches_native_readiness_and_collection(self):
@@ -559,7 +538,7 @@ class InstallPipelineTests(unittest.TestCase):
     def test_the_review_offer_uses_the_installation_port(self):
         self.review = True
         result = ProcessingOnboarding(self.root, approved_spend=("index",),
-                                      approve_upload=True, port=8899).run()
+                                      port=8899).run()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["action"]["url"], "http://127.0.0.1:8899/?stage=linkedin")
 
@@ -577,7 +556,7 @@ class InstallPipelineTests(unittest.TestCase):
         record["status"] = "failed"
         record["stages"]["indexing"]["payload"] = {"phase": "pipeline", "error": "sandbox exited 1"}
         path.write_text(json.dumps(record))
-        result = self.run_pipeline(upload=True)
+        result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         self.assertFalse(self.did("download"))
         self.assertTrue(self.indexed())
@@ -616,14 +595,14 @@ class InstallPipelineTests(unittest.TestCase):
                            "estimated_cost_usd": 30}
                 with patch.object(pipeline.subprocess, "run", return_value=subprocess.CompletedProcess(
                         [], returncode, json.dumps(payload))) as modal:
-                    result = self.run_pipeline(upload=True)
+                    result = self.run_pipeline()
                 self.assertEqual((result["step"], result["status"]), ("index", expected_status))
                 self.assertEqual(result["action"]["result"]["returncode"], returncode)
                 self.assertEqual(modal.call_count, 1)
                 self.assertNotIn("ready", result["steps"])
                 self.assertFalse(self.did("search-validate"))
                 self.calls.clear()
-                self.assertEqual(self.run_pipeline(upload=True)["status"], "completed")
+                self.assertEqual(self.run_pipeline()["status"], "completed")
                 self.assertFalse(self.did("collect"))
                 self.assertCountEqual(self.paid_commands, ["index"])
 
@@ -656,7 +635,6 @@ class InstallPipelineTests(unittest.TestCase):
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertEqual(result["action"]["step"], "index")
-        self.assertFalse(result["action"]["upload"])
         self.assertEqual(result["action"]["estimate"]["estimated_usd"], 500)
         self.assertEqual(result["action"]["continue_command"], self.retry + " --approve-spend index")
         self.assertFalse(self.indexed())
@@ -680,7 +658,7 @@ class InstallPipelineTests(unittest.TestCase):
                 self.reset_pipeline(matrix_root / stage)
                 self.synthesize = self.cluster = self.enrich = True
                 self.failure_after = stage
-                result = self.run_pipeline("synthesize", "cluster", "enrich", "index", upload=True)
+                result = self.run_pipeline("synthesize", "cluster", "enrich", "index")
                 if stage == "enrich":
                     # Enrichment failing is deferred: search is still built.
                     self.assertEqual((result["status"], self.indexed()), ("completed", True))
@@ -693,7 +671,7 @@ class InstallPipelineTests(unittest.TestCase):
                 spend = [name for name in ("synthesize", "cluster", "enrich") if getattr(self, name)]
                 if stage != "index":
                     spend.append("index")
-                result = self.run_pipeline(*spend, upload=True)
+                result = self.run_pipeline(*spend)
                 self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
                 self.assertFalse(self.did("collect"))
                 self.assertEqual(self.indexed(), stage != "index")
@@ -702,7 +680,7 @@ class InstallPipelineTests(unittest.TestCase):
     def test_changed_roster_never_redispatches_unknown_previous_job_even_when_approved(self):
         self.dispatch()
         self.csv = "id,full_name\nsynthetic-casey,Casey Example\n"
-        result = self.run_pipeline("index", upload=True)
+        result = self.run_pipeline("index")
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertEqual(result["action"]["kind"], "recovery")
         self.assertEqual(result["installer_pid"], 0)
@@ -722,7 +700,7 @@ class InstallPipelineTests(unittest.TestCase):
 
     def test_validator_failure_never_claims_ready(self):
         self.validation_status = "fail"
-        result = self.run_pipeline("index", upload=True)
+        result = self.run_pipeline("index")
         self.assertEqual((result["step"], result["status"]), ("validate", "failed"))
         self.assertNotIn("ready", result["steps"])
 
@@ -730,7 +708,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.status.write(step=InstallStep.DEEP_CONTEXT, status=InstallState.WAITING,
                           message="Ready", pid=0, retry_command=self.retry,
                           network_name="Personal Network", person_count=328)
-        result = self.run_pipeline("index", upload=True)
+        result = self.run_pipeline("index")
         self.assertEqual(result["person_count"], 328)
         self.assertIn("1 people searchable", result["message"])
 
