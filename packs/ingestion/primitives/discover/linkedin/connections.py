@@ -7,14 +7,21 @@ LinkedIn's export columns, which the Modal `import-linkedin` step reads.
 
 One run makes at most LOADS_PER_RUN scroll requests, 10 people each, with a
 random pause between them. A run stops once KNOWN_OVERLAP already-known
-connections have loaded. `connections.json` beside the CSV records whether the
-whole list has been read and the signed-in user's own profile URL; until the
-list is read, each run goes LOADS_PER_RUN further down than the last. A CSV with
-no record is a LinkedIn export (or an earlier setup's copy of one): complete
-as of its date, so only newer people are read. The CSV is rewritten only when
+connections have loaded. `connections.json` beside the CSV records LinkedIn's own
+count, whether the whole list has been read (the run reached that count), and
+the signed-in user's own profile URL; until the list is read, each run goes
+LOADS_PER_RUN further down than the last. A list that stops more than
+SHOWN_COUNT_GAP short of the count (LinkedIn stopped sending cards) says so and
+is read again on the next run. A
+CSV with no record is a LinkedIn export (or an earlier setup's copy of one);
+the next run tops it up from the newest end. The CSV is rewritten only when
 there are new people, so the Modal import reruns only then.
 
 Changelog:
+  2026-10-05: complete means reaching LinkedIn's "N connections" count (within
+      SHOWN_COUNT_GAP), not how
+      the scroll stopped; a run that ended short used to be saved as complete
+      and LinkedIn was never read again.
   2026-10-03: created. Replaces waiting on LinkedIn's emailed export.
 """
 from __future__ import annotations
@@ -47,6 +54,11 @@ LOGIN_TIMEOUT_SECONDS = 900
 SECONDS_PER_LOAD = 3
 LOADS_PER_RUN = 300
 KNOWN_OVERLAP = 25
+# LinkedIn's "N connections" includes people its list never shows: two reads a day
+# apart both stopped at the same 294 of 298, and 6 people in LinkedIn's own export
+# never appeared. A read within this share of the count is the whole list; further
+# short, LinkedIn stopped sending cards.
+SHOWN_COUNT_GAP = 0.05
 
 
 def _read_export(path: Path) -> list[dict[str, str]]:
@@ -125,15 +137,22 @@ class LinkedInConnections:
             return {"status": "failed", "message": "LinkedIn showed no connections."}
         if added:
             CsvIO.write_dict_rows(self.csv_path, EXPORT_COLUMNS, rows)
-        complete = payload["stopped"] != "limit"
+        # Complete means reaching LinkedIn's own count: this run's cards when it read down
+        # the list ("end"/"limit"), everyone known when it stopped at known people.
+        total = payload["total"]
+        read = len(rows) if payload["stopped"] == "known" else len(payload["connections"])
+        complete = read >= total * (1 - SHOWN_COUNT_GAP)
         write_json(self.record_path, {
-            "status": "completed", "complete": complete, "connections": len(rows), "added": len(added),
-            "loads": payload["loads"], "stopped": payload["stopped"],
+            "status": "completed", "complete": complete, "total": total, "connections": len(rows),
+            "added": len(added), "loads": payload["loads"], "stopped": payload["stopped"],
             "owner_url": PROFILE_URL.format(slug=payload["owner_slug"]) if payload["owner_slug"] else "",
             "updated_at": now_iso()})
         message = f"{len(rows):,} LinkedIn connections ({len(added):,} new)"
-        if not complete:
+        if not complete and payload["stopped"] == "limit":
             message += ". The rest keep syncing on your next run; your contacts are ready to process now."
+        elif not complete:
+            message = (f"Read {read:,} of {total:,} LinkedIn connections ({len(added):,} new); LinkedIn stopped "
+                       "sending more. The rest sync on your next run; your contacts are ready to process now.")
         return {
             "status": "completed",
             "message": message,
