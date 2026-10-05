@@ -37,6 +37,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates import judge
 from packs.ingestion.primitives.deep_context.merge_candidates.models import MergePairCandidate, MergePerson
 from packs.ingestion.primitives.deep_context.review import api as review_api
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 # One id bound once must clear SQLite's 32,766-variable limit; bound twice, half that.
 ONCE = 33_000
@@ -138,7 +139,7 @@ class _QueryRecorder:
 
 
 class EnrichmentQueuePlanTest(unittest.TestCase):
-    """The enrichment queue reads research once and identifiers through the person.
+    """The enrichment queue leaves research reuse to the exact fingerprint check.
 
     It runs on every review page load and status poll. A correlated scan of
     `research` per worth-Yes parent and the planner's kind-first identifier walk
@@ -149,16 +150,26 @@ class EnrichmentQueuePlanTest(unittest.TestCase):
             path = Path(temp) / "deep-context.sqlite"
             recorder = _QueryRecorder(Db(path))
             identity_views.enrichment_queue(recorder)
-            (sql,) = recorder.sql
+            self.assertEqual(len(recorder.sql), 4)
+            sql, source_sql, facts_sql, review_sql = recorder.sql
+            self.assertIn("LEFT JOIN imported_people", source_sql)
+            self.assertEqual(facts_sql, "SELECT * FROM facts ORDER BY subject_key")
+            self.assertEqual(review_sql, "SELECT DISTINCT parent_id FROM links WHERE source=? "
+                             "AND machine_action='review' AND decision_action IS NULL")
             with sqlite3.connect(path) as conn:
                 return list(conn.execute("EXPLAIN QUERY PLAN " + sql))
 
-    def test_research_is_scanned_once_not_per_parent(self) -> None:
-        plan = self._plan()
-        details = {row[0]: row[3] for row in plan}
-        scans = [row for row in plan if row[3] == "SCAN done"]
-        self.assertEqual(len(scans), 1, list(details.values()))
-        self.assertTrue(details[scans[0][1]].startswith("LIST SUBQUERY"), list(details.values()))
+    def test_research_is_not_filtered_before_fingerprint_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            recorder = _QueryRecorder(Db(Path(temp) / "deep-context.sqlite"))
+            identity_views.enrichment_queue(recorder)
+        self.assertEqual(len(recorder.sql), 4)
+        sql, source_sql, facts_sql, review_sql = recorder.sql
+        self.assertIn("LEFT JOIN imported_people", source_sql)
+        self.assertEqual(facts_sql, "SELECT * FROM facts ORDER BY subject_key")
+        self.assertEqual(review_sql, "SELECT DISTINCT parent_id FROM links WHERE source=? "
+                         "AND machine_action='review' AND decision_action IS NULL")
+        self.assertNotRegex(sql, r"\b(?:FROM|JOIN)\s+research\b")
 
     def test_identifier_lookups_go_through_the_person(self) -> None:
         steps = [row[3] for row in self._plan()]
@@ -173,6 +184,9 @@ class ResearchQueueEvidenceTest(unittest.TestCase):
     def test_build_queue_reads_evidence_once_for_the_whole_queue(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db = _store(Path(directory), 5, facts=True, bundles=True, identifiers=True)
+            db.replace_imported_people(tuple(
+                PeopleRow(id=f"person-{index}", full_name=f"Jordan {index}") for index in range(5)
+            ))
             eligible = identity_views.enrichment_queue(db)
             self.assertEqual(len(eligible), 5)
             expected = [DossierEvidence.from_db(db, row.person_ids).research_bio() for row in eligible]
@@ -267,6 +281,11 @@ class MergeSurveyTests(unittest.TestCase):
                 ))
                 for i in range(count) if i % 7 == 0
             ))
+            db.replace_imported_people(tuple(
+                PeopleRow(id=person_id, full_name=f"Jordan {i}")
+                for i in range(count)
+                for person_id in ([f"person-{i}", f"sibling-{i}"] if i % 7 == 0 else [f"person-{i}"])
+            ))
             batches: list[int] = []
             narrow = merge_queries.dossier_evidence_rows
 
@@ -293,36 +312,59 @@ class JudgeChunkTests(unittest.TestCase):
     def test_pair_requests_are_built_one_chunk_at_a_time(self) -> None:
         pairs = [
             MergePairCandidate(
-                MergePerson(f"a-{i}", f"a-{i}", f"A {i}", f"a {i}", parent_id=f"parent-a{i}"),
-                MergePerson(f"b-{i}", f"b-{i}", f"B {i}", f"b {i}", parent_id=f"parent-b{i}"),
+                MergePerson(f"a-{i}", f"a-{i}", f"A {i}", f"a {i}", parent_id=f"parent-a{i}", source_names=(f"A {i}",)),
+                MergePerson(f"b-{i}", f"b-{i}", f"B {i}", f"b {i}", parent_id=f"parent-b{i}", source_names=(f"B {i}",)),
                 f"sig-{i}",
             )
             for i in range(judge.MERGE_JUDGE_CHUNK * 2 + 200)
         ]
+        import asyncio
+        from types import SimpleNamespace
+        from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+            OpenAIResponsesCaller, OpenAIResponsesConfig,
+        )
+
         built: list[int] = []
+        completed = []
+        completed_at_chunk_start = []
         seen_at_first_answer: list[int] = []
         real_request = judge.judge_request
 
         def counting_request(*args, **kwargs):
+            if len(built) % judge.MERGE_JUDGE_CHUNK == 0:
+                completed_at_chunk_start.append(len(completed))
             built.append(1)
             return real_request(*args, **kwargs)
 
-        async def answer_requests(requests, *, output_dir, api_key, client, concurrency, request_version, question_version):
+        async def create_response(**request):
+            await asyncio.sleep(0)
             if not seen_at_first_answer:
                 seen_at_first_answer.append(len(built))
-            ((digest, _),) = requests.items()
-            response = {"answers": {"same_person": {"type": "choice", "probabilities": {"yes": 0.2, "no": 0.8}},
-                                    "tone_consistent": {"type": "noul", "noul": 0.5}},
-                        "usage": {"input_tokens": 1, "output_tokens": 1}}
-            return {digest: mock.Mock(response=response, cached=False, attempts=1)}
+            return SimpleNamespace(
+                status="completed",
+                output_text=json.dumps({"decision": "uncertain", "confidence": .8,
+                    "reason": "Synthetic records lack an individual identity tie",
+                    "identity_evidence": "", "tone_consistent": False}),
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1,
+                                      output_tokens_details=None),
+            )
 
-        with tempfile.TemporaryDirectory() as directory, \
-                mock.patch.object(judge, "judge_request", counting_request), \
-                mock.patch.object(judge, "answer_requests", answer_requests):
-            verdicts, _, errors = judge.judge_pairs(pairs, owner_name="Owner", output_dir=Path(directory))
+        client = SimpleNamespace(responses=SimpleNamespace(create=create_response),
+                                 close=mock.AsyncMock())
+        config = OpenAIResponsesConfig(judge.MODEL_ID, judge.REASONING_EFFORT, 64, 120, 0)
+        caller = OpenAIResponsesCaller(config, client=client)
+        with mock.patch.object(judge, "judge_request", counting_request), \
+                mock.patch.object(judge, "OpenAIResponsesCaller", return_value=caller):
+            verdicts, usage, errors = judge.judge_pairs(
+                pairs, owner_name="Owner", config=config, on_verdict=completed.append,
+            )
 
         self.assertEqual((len(verdicts), errors), (len(pairs), 0))
         self.assertLessEqual(seen_at_first_answer[0], judge.MERGE_JUDGE_CHUNK)
+        self.assertEqual(completed_at_chunk_start, [0, judge.MERGE_JUDGE_CHUNK, judge.MERGE_JUDGE_CHUNK * 2])
+        self.assertEqual(len(completed), len(pairs))
+        self.assertEqual((usage.input_tokens, usage.output_tokens), (len(pairs), len(pairs)))
+        client.close.assert_awaited_once()
 
 
 class WorthRowTests(unittest.TestCase):

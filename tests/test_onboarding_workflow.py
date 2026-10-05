@@ -30,7 +30,7 @@ from packs.ingestion.primitives.setup.automations import accounts
 from packs.ingestion.primitives.setup.automations.shell import CommandResult
 from packs.powerset.primitives.install.status import InstallState, InstallStatus, InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
-from packs.powerset.primitives.install.workflow import SourceOnboarding
+from packs.powerset.primitives.install.workflow import GMAIL_QUESTION, SourceOnboarding
 
 
 def payload(**record):
@@ -87,18 +87,14 @@ class SourceOnboardingTests(unittest.TestCase):
             self.assertIn(step, flow.plan)
         self.assertIn('--source linkedin --source gmail --source imessage --source whatsapp', flow.retry_command)
         self.assertNotIn('--gmail-email', flow.retry_command)
-        self.assertEqual(flow.gmail_suggestion, 'casey@example.com')
         self.assertIn((date.today() - timedelta(days=365)).isoformat(), flow.retry_command)
         self.tools.assert_not_called()
 
-    def test_gmail_asks_which_accounts_before_any_tool_or_login(self):
-        InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
-            message='Network checked', pid=os.getpid(), account_email='casey@example.com')
+    def test_gmail_asks_which_accounts_only_without_a_powerset_login(self):
         with patch.object(accounts, 'status_payload', return_value={'accounts': []}), \
              patch.object(LinkedInConnections, 'login') as linkedin:
             result = SourceOnboarding(self.root, sources=()).run()
         self.assertEqual((result['step'], result['status'], result['installer_pid']), ('gmail_login', 'waiting', 0))
-        self.assertEqual(result['action']['suggested'], 'casey@example.com')
         self.assertIn('Which Gmail accounts', result['action']['text'])
         self.tools.assert_not_called()
         linkedin.assert_not_called()
@@ -388,6 +384,16 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['person_count'], 91)
         self.assertEqual(result['message'], 'Gmail: 12 contacts · Messages: 8 contacts')
         self.assertEqual(result['plan'][-5:], ['deep_context', 'enrich', 'index', 'validate', 'ready'])
+
+    def test_gmail_defaults_to_the_powerset_login_without_asking(self):
+        InstallStatus(self.root).write(step=InstallStep.NETWORK, status=InstallState.COMPLETED,
+            message='Network checked', pid=os.getpid(), account_email='casey@example.com')
+        seen = []
+        with patch.object(SourceOnboarding, '_gmail_connect', autospec=True,
+                          side_effect=lambda flow: seen.append(flow.gmail_emails) or False):
+            result = SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01').run()
+        self.assertEqual(seen, [('casey@example.com',)])
+        self.assertNotEqual(result['message'], GMAIL_QUESTION)
 
     def test_fresh_gmail_creates_the_oauth_app_in_process_before_any_account_sync(self):
         with patch.object(accounts, 'status_payload', return_value={

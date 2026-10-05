@@ -22,6 +22,9 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
+from packs.ingestion.primitives.deep_context.db.schema import (
+    DDL, MERGE_VERDICTS_DDL, BINARY_MERGE_VERDICTS_DDL, SCHEMA_VERSION,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.ensure_parents import ensure_parents
 from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
@@ -84,13 +87,6 @@ class FreshInstallTests(unittest.TestCase):
                 chat_db=self.root / "missing-chat.db",
                 wacli_db=self.wacli,
             ).run()
-
-    def project_owner(self) -> None:
-        owner = self.deep_context / "owner.json"
-        owner.write_text('{"name": "Jordan Bravo"}', encoding="utf-8")
-        open_existing_db(self.db_path).project_rows(
-            (OwnerContextRow("owner", owner.read_text(encoding="utf-8"), str(owner), "fp-owner"),)
-        )
 
     def project_owner(self) -> None:
         owner = self.deep_context / "owner.json"
@@ -173,11 +169,12 @@ class FreshInstallTests(unittest.TestCase):
         self.assertFalse(any("--linkedin-url" in line for line in result.advice))
 
     def _make_august_store(self) -> bytes:
-        Db(self.db_path)
+        self.deep_context.mkdir(parents=True, exist_ok=True)
         # An August store predates the research index and WAL; closing the
         # connection checkpoints the edits into the file the bytes are read from.
         with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+            conn.executescript(DDL.replace(MERGE_VERDICTS_DDL, BINARY_MERGE_VERDICTS_DDL))
+            conn.execute("INSERT INTO meta VALUES ('schema_version', '1')")
             conn.execute("INSERT INTO meta VALUES ('legacy_imported_at', '2026-08-19T00:00:00Z')")
             for table in ("person_labels", "person_tags", "share", "imported_people"):
                 conn.execute(f"DROP TABLE {table}")
@@ -233,7 +230,7 @@ class FreshInstallTests(unittest.TestCase):
         before = self.db_path.read_bytes()
         for run in (self.readiness, self.ensure_parents):
             with self.subTest(stage=run.__name__):
-                with self.assertRaisesRegex(SchemaVersionError, "schema is 1, expected 2"):
+                with self.assertRaisesRegex(SchemaVersionError, f"schema is 1, expected {SCHEMA_VERSION}"):
                     run()
                 self.assertEqual(self.db_path.read_bytes(), before)
                 self.assertEqual(list(self.deep_context.glob("*.bkup-schema-*")), [])

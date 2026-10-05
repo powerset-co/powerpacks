@@ -18,7 +18,9 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
     project_imported_people,
     read_imported_people,
 )
-from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactRow, LinkRow
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow, CandidatePeopleProjection, CandidatePersonRow, FactRow, LinkRow,
+)
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue, linkedin_queue
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
@@ -60,7 +62,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         CsvIO.write_dict_rows(self.csv, FIELDS, rows)
 
     def test_roster_survives_removing_import_csv(self) -> None:
-        from packs.ingestion.primitives.deep_context.synthesis.runner import parent_headlines
+        from packs.ingestion.primitives.deep_context.synthesis.runner import person_headlines
 
         self.write([{"id": "person-1", "full_name": "Jordan Bravo", "headline": "Founder",
                      "source_channels": "linkedin_csv", "public_identifier": "jordan-bravo"}])
@@ -68,7 +70,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.csv.rename(self.csv.with_suffix(".csv.bkup"))
         self.assertEqual(queries.imported_people(self.db)[0].headline, "Founder")
         self.assertEqual(queries.imported_people(self.db)[0].id, "person-1")
-        self.assertEqual(list(parent_headlines(self.db).values()), ["Founder"])
+        self.assertEqual(list(person_headlines(self.db).values()), ["Founder"])
         self.assertEqual(ShareEvidence(self.db).load()[0].full_name, "Jordan Bravo")
 
     def test_imported_link_is_reviewable_after_reset_and_reruns_preserve_decisions(self) -> None:
@@ -105,7 +107,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.assertEqual(links(self.db)[0].machine_approved, "auto")
         self.assertEqual(workflow_state(self.db).next_action, "realize")
 
-    def test_merge_promotion_preserves_parent_and_human_worth(self) -> None:
+    def test_merge_promotion_does_not_expand_parent_or_human_worth(self) -> None:
         original = PeopleRow(id="candidate:email:jordan@example.test", full_name="Jordan Bravo",
                              primary_email="jordan@example.test", source_channels="gmail_msgvault")
         CsvIO.write_dict_rows(self.csv, PEOPLE_SCHEMA_COLUMNS, [original.to_row()])
@@ -113,15 +115,15 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         parent_id = canonical_snapshot(self.db).people[0].parent_id
         self.db.decide_worth(parent_id, "yes")
         promoted = original.model_copy(update={"public_identifier": "jordan-bravo"})
-        merged = merge_group("linkedin:jordan-bravo", [promoted])
+        merged = merge_group("legacy-linkedin-person", [promoted])
         CsvIO.write_dict_rows(self.csv, PEOPLE_SCHEMA_COLUMNS, [merged])
         EnsureParents(db=self.db, people_csv=self.csv).run()
         snapshot = canonical_snapshot(self.db)
-        self.assertEqual(len(snapshot.parents), 1)
-        self.assertEqual(snapshot.parents[0].human_worth, "yes")
-        self.assertEqual({person.parent_id for person in snapshot.people}, {parent_id})
+        self.assertEqual(len(snapshot.parents), 2)
+        self.assertEqual(next(row.human_worth for row in snapshot.parents if row.parent_id == parent_id), "yes")
+        self.assertEqual(next(row.parent_id for row in snapshot.people if row.person_id == original.id), parent_id)
 
-    def test_realized_retarget_does_not_create_a_second_review(self) -> None:
+    def test_realized_retarget_does_not_assign_an_unlinked_new_person(self) -> None:
         self.write([{"id": "candidate:email:jordan@example.test", "full_name": "Jordan Bravo"}])
         project_imported_people(self.db, read_imported_people(self.csv))
         parent_id = canonical_snapshot(self.db).people[0].parent_id
@@ -134,8 +136,9 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
                            public_identifier="jordan-bravo",
                            linkedin_url="https://www.linkedin.com/in/jordan-bravo")
         project_imported_people(self.db, (incoming,))
-        self.assertEqual([row.row_key for row in links(self.db)],
-                         ["candidate:email:jordan@example.test", "research:one"])
+        self.assertEqual({row.row_key for row in links(self.db)},
+                         {"candidate:email:jordan@example.test", "research:one", "jordan-bravo"})
+        self.assertEqual(len(canonical_snapshot(self.db).parents), 2)
 
     def test_verified_research_uses_its_slug_and_does_not_merge_unlinked_people(self) -> None:
         self.write([
@@ -153,8 +156,8 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
                            public_identifier="jordan-bravo",
                            linkedin_url="https://www.linkedin.com/in/jordan-bravo")
         project_imported_people(self.db, (incoming,))
-        self.assertEqual(len(canonical_snapshot(self.db).parents), 2)
-        self.assertEqual([row.row_key for row in links(self.db)], ["research:one"])
+        self.assertEqual(len(canonical_snapshot(self.db).parents), 3)
+        self.assertEqual({row.row_key for row in links(self.db)}, {"research:one", "jordan-bravo"})
 
     def test_realize_retarget_keeps_the_old_linkedin_parent_and_share_worth(self) -> None:
         source = self.root / "source.csv"
@@ -167,11 +170,14 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             "source": "gmail_msgvault", "status": "found", "email": "jordan@example.test",
             "public_identifier": "jordan-old", "confidence": "1.00",
         }])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged", directory_csv=directory,
-                            profile_cache_dir=self.root / "cache")
+        merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         parent_id = links(self.db)[0].parent_id
+        self.assertEqual(links(self.db)[0].public_identifier, "")
+        self.db.project_rows((LinkRow("jordan-old", parent_id, "jordan-old", "pub",
+                                      "https://www.linkedin.com/in/jordan-old", source="deep-context-reconcile"),
+                              CandidatePeopleProjection("jordan-old", (CandidatePersonRow("jordan-old", "candidate:email:jordan@example.test", parent_id),))))
         self.db.decide_worth(parent_id, "yes")
         self.db.decide_identity("jordan-old", "retarget", approved="yes",
                                 replacement_url="https://www.linkedin.com/in/jordan-new",
@@ -180,7 +186,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         snapshot = canonical_snapshot(self.db)
         self.assertEqual(len(snapshot.parents), 1)
         self.assertEqual(snapshot.parents[0].human_worth, "yes")
-        self.assertEqual([row.row_key for row in links(self.db)], ["jordan-old"])
+        self.assertEqual({row.row_key for row in links(self.db)}, {"candidate:email:jordan@example.test", "jordan-old"})
         share = ShareList(db=self.db, out_dir=self.root / "share",
                           evidence=ShareEvidence(self.db)).run()
         self.assertEqual((share.status, share.people, share.share_yes), ("completed", 1, 1))
@@ -208,6 +214,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].person_id, "person-1")
+        self.assertEqual(rows[0].superseded_person_ids, ())
         self.assertEqual(rows[0].headline, "CEO @ Example Labs")
         self.assertEqual(rows[0].emails, ("jordan@example.test", "other@example.test"))
         self.assertEqual(
@@ -252,7 +259,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.assertIn("person-ir", {person.person_id for person in canonical_snapshot(self.db).people})
         self.assertIn("person-ir", {row.id for row in queries.imported_people(self.db)})
 
-    def test_projection_gets_one_stable_parent_and_preserves_newer_evidence(self) -> None:
+    def test_projection_preserves_parent_and_endpoints_with_missing_current_name(self) -> None:
         self.write(
             [
                 {
@@ -281,7 +288,8 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         current = canonical_snapshot(self.db)
 
         self.assertEqual(current.people[0].parent_id, parent_id)
-        self.assertEqual(current.people[0].display_name, "Jordan Bravo")
+        self.assertEqual(current.people[0].display_name, "")
+        self.assertEqual(queries.imported_people(self.db)[0].full_name, "")
         self.assertEqual(
             {(row.kind, row.normalized_value) for row in current.identifiers},
             {("email", "first@example.test"), ("phone", "+15550100")},
@@ -291,7 +299,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             {"gmail_msgvault", "imessage"},
         )
 
-    def test_superseded_identity_absorbs_into_existing_parent(self) -> None:
+    def test_superseded_identity_does_not_absorb_existing_parent(self) -> None:
         self.write(
             [
                 {
@@ -320,16 +328,12 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         project_imported_people(self.db, read_imported_people(self.csv))
         current = canonical_snapshot(self.db)
 
-        self.assertEqual(len(current.parents), 1)
-        self.assertEqual(
-            {row.person_id: row.parent_id for row in current.people},
-            {
-                "candidate:email:jordan@example.test": parent_id,
-                "linkedin-person-1": parent_id,
-            },
-        )
+        self.assertEqual(len(current.parents), 2)
+        parents = {row.person_id: row.parent_id for row in current.people}
+        self.assertEqual(parents["candidate:email:jordan@example.test"], parent_id)
+        self.assertNotEqual(parents["linkedin-person-1"], parent_id)
 
-    def test_superseded_identities_merge_existing_families_incrementally(self) -> None:
+    def test_superseded_identities_do_not_merge_existing_families(self) -> None:
         for person_id, email in (
             ("candidate:email:jordan@example.test", "jordan@example.test"),
             ("candidate:phone:+15550100", "other@example.test"),
@@ -361,8 +365,8 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         project_imported_people(self.db, read_imported_people(self.csv))
 
         current = canonical_snapshot(self.db)
-        self.assertEqual(len(current.parents), 1)
-        self.assertEqual(len({row.parent_id for row in current.people}), 1)
+        self.assertEqual(len(current.parents), 3)
+        self.assertEqual(len({row.parent_id for row in current.people}), 3)
         self.assertEqual(len(current.people), 3)
 
     def test_skill_merges_current_sources_before_projecting_parents(self) -> None:

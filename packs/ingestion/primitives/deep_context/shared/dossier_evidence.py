@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
@@ -20,7 +21,6 @@ from packs.ingestion.primitives.deep_context.synthesis.rendering import render_f
 from packs.ingestion.primitives.deep_context.db import context_queries, queries
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import DossierEvidenceRows
-from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
 def _sample(
@@ -170,7 +170,7 @@ class DossierEvidence:
             f"Mentioned identifiers: {', '.join(facts.identifiers)}" if facts.identifiers else "",
         ]
         details.extend(
-            f"Owned {kind}: {', '.join(values)}"
+            f"Unverified extracted contact details ({kind}): {', '.join(values)}"
             for kind, values in facts.owned_identifiers.to_payload().items() if values
         )
         return cls(
@@ -186,11 +186,6 @@ class DossierEvidence:
             from_me=_sample(message_rows, MessageDirection.FROM_ME),
             from_them=_sample(message_rows, MessageDirection.FROM_THEM),
             has_messages=bool(message_rows),
-            self_linkedin_url=next((
-                normalize_linkedin_url(identifier)
-                for identifier in facts.identifiers
-                if "linkedin.com/in/" in identifier.lower() and extract_public_identifier(identifier)
-            ), ""),
             # Research bio remains on its paid-cache-pinned narrow fields.
             dossier="\n\n".join(detail for detail in details if detail),
         )
@@ -255,10 +250,21 @@ class DossierEvidence:
         theirs = "\n".join(f"  them→me: {text}" for text in self.from_them) or "  (no messages from them)"
         email_text = ", ".join(emails) or "none"
         extra = ", ".join(extra_emails)
-        extra_line = f"  [owned identifier seen in messages: {extra}]\n" if extra else ""
+        extra_line = f"  [unverified extracted contact details: {extra}]\n" if extra else ""
         return (
             f"CONTACT {label} — {name}  [emails: {email_text}]\n{extra_line}{facts_block}\nMessages:\n{mine}\n{theirs}"
         )
+
+
+def source_evidence(db: Db, parent_id: str, evidence: DossierEvidence) -> DossierEvidence:
+    """Add original source names and endpoints to the actual identity input."""
+    names = queries.source_names(db, parent_id)
+    contacts = [row.model_dump(include={"id", "full_name", "primary_email", "all_emails",
+                                       "primary_phone", "all_phones"})
+                for row in queries.imported_people(db, parent_id=parent_id)]
+    return replace(evidence, name=names[0] if len(names) == 1 else "",
+                   dossier=evidence.dossier + "\nSource contact names: " + json.dumps(names)
+                   + "\nSource contacts: " + json.dumps(contacts, sort_keys=True))
 
 
 def owner_background(db: Db) -> str:

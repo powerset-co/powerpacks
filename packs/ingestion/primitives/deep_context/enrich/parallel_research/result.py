@@ -7,6 +7,7 @@ identity judging, synthetic-profile assembly, and candidate cards.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -142,6 +143,16 @@ class ResearchResult:
     def basis(self) -> tuple[FieldBasis, ...]:
         return tuple(self.output.basis)
 
+    def identity_citations(self) -> list[dict[str, Any]]:
+        """Project only source URLs, titles and excerpts into identity evidence."""
+        citations = [citation.model_dump(include={"url", "title", "excerpts"}, exclude_none=True)
+                     for field in self.basis for citation in field.citations or ()]
+        unique = []
+        for citation in citations:
+            if citation not in unique:
+                unique.append(citation)
+        return unique
+
     def identity_profile(self) -> JudgeProfile:
         experiences = [
             f"{row.title or '?'} @ {row.company_name or '?'}"
@@ -154,6 +165,7 @@ class ResearchResult:
             if row.school_name or row.degree or row.field_of_study
         ]
         place = self.location.display
+        citations = self.identity_citations()
         return JudgeProfile(
             public_identifier=extract_public_identifier(self.linkedin_url).lower(),
             linkedin_url=self.linkedin_url,
@@ -163,7 +175,7 @@ class ResearchResult:
             experiences=tuple(experiences),
             education=tuple(education),
             location=place,
-            reason=self.reason,
+            reason=json.dumps(citations, ensure_ascii=False) if citations else "",
             has_profile=bool(self.person.full_name or self.positions or self.education or place),
             _present=RESEARCH_PRESENT_FIELDS,
         )

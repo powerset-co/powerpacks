@@ -1,7 +1,7 @@
 # deep_context/synthesis — `deep_synthesize`, `deep_compose`
 
 Two declared nodes share this package (one directory, two modules and two
-manifests): `deep_synthesize` (`synthesize_person_context.py`) builds per-parent
+manifests): `deep_synthesize` (`synthesize_person_context.py`) builds per-contact
 facts with paid, fingerprint-keyed OpenAI Responses calls and then labels them
 with JEV; `deep_compose` (`compose_dossier.py`) renders the dossier artifacts
 and projects the downstream payload from SQLite.
@@ -11,7 +11,7 @@ and the [deep-context skill](../../../skills/deep-context/SKILL.md).
 
 | node | reads | writes | manifest |
 |---|---|---|---|
-| `deep_synthesize` | `deep-context/raw/{parent_id}.json` (optional), `deep-context/owner.json` (optional) | `deep-context/facts/{parent_id}.jsonl` (optional), `deep-context/jev/{request_sha256}.json` (optional) | `deep-context/facts/manifest.json` (`SynthesizePersonContextManifest`) |
+| `deep_synthesize` | `deep-context/raw/{person_id}.json` (optional), `deep-context/owner.json` (optional) | `deep-context/facts/{person_id}.jsonl` (optional), derived `deep-context/facts/parents/{parent_id}.jsonl`, `deep-context/jev/{request_sha256}.json` (optional) | `deep-context/facts/manifest.json` (`SynthesizePersonContextManifest`) |
 | `deep_compose` | — (reads SQLite) | `deep-context/dossiers/{slug}.md` (optional) | `deep-context/dossiers/manifest.json` (`ComposeDossierManifest`) |
 
 ## Manifest / status
@@ -36,4 +36,8 @@ Both inherit the template `not_ready` / `failed`.
 Synthesis is fingerprint-keyed (prompt + system prompt), so a rename or
 re-cluster never re-bills unchanged evidence; a person whose every batch errors
 is not persisted, so it retries next run. `deep_compose` raises without an owner
-profile ("run bin/deep-context owner first"); only parent-owned facts are dossier sources.
+profile ("run bin/deep-context owner first"); parent facts are dossier sources.
+Original contact histories remain owned by the contact after parent merges.
+Derived parent facts combine those histories without replacing their files.
+Legacy mixed histories remain preserved and require reconciliation when their
+message coverage cannot be attributed to the contacts.

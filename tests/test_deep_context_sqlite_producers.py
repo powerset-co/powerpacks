@@ -65,6 +65,7 @@ class SqliteProducerTests(unittest.TestCase):
             linkedin_url="https://www.linkedin.com/in/alice",
             candidate_people=True,
         )
+        self.db.replace_imported_people((PeopleRow(id="person-1", full_name="Alice Example"),))
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -173,6 +174,16 @@ class SqliteProducerTests(unittest.TestCase):
         )
 
     def test_cleared_retarget_is_recorded_as_machine_accepted(self) -> None:
+        url = "https://www.linkedin.com/in/alice-correct"
+        projection.project_profile_results(self.db, ((
+            ProfileTarget("alice-correct", url, "alice", "parent-1"),
+            ProfileResult.from_payload("alice-correct", url, {
+                "state": "content", "normalized_profile": {
+                    "success": True, "full_name": "Alice Example",
+                    "experiences": [{"title": "Engineer", "company_name": "Example Labs"}],
+                },
+            }),
+        ),), self.root / "cache")
         upsert_retargets(
             self.db,
             [
@@ -253,7 +264,8 @@ class SqliteProducerTests(unittest.TestCase):
 
         result, rows = self.export()
         self.assertEqual(result["accepted_identities"], 0)
-        self.assertEqual(rows[0]["public_identifier"], "alice")
+        self.assertEqual(rows[0]["public_identifier"], "")
+        self.assertEqual(row["public_identifier"], "alice")
 
     def test_machine_settlement_rejects_a_missing_judge_fingerprint(self) -> None:
         with self.assertRaisesRegex(StoreError, "lacks decision fingerprint"):
@@ -278,7 +290,7 @@ class SqliteProducerTests(unittest.TestCase):
         raw_profile = {
             "public_identifier": "alice-correct",
             "linkedin_url": "https://www.linkedin.com/in/alice-correct",
-            "full_name": "Alice Correct",
+            "full_name": "Alice Example",
             "experiences": [{"title": "Founder", "company_name": "Correct Robotics"}],
         }
         projection.project_profile_results(
@@ -298,7 +310,7 @@ class SqliteProducerTests(unittest.TestCase):
                             "state": "content",
                             "normalized_profile": {
                                 "success": True,
-                                "full_name": "Alice Correct",
+                                "full_name": "Alice Example",
                                 "experiences": raw_profile["experiences"],
                             },
                             "data": raw_profile,
@@ -360,7 +372,7 @@ class SqliteProducerTests(unittest.TestCase):
             row["linkedin_url"],
             "https://www.linkedin.com/in/alice-human-choice",
         )
-        self.assertEqual(row["full_name"], "")
+        self.assertEqual(row["full_name"], "Alice Example")
 
     def test_synthesis_projects_fixed_facts_artifact(self) -> None:
         facts_dir = self.root / "facts"

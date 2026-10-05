@@ -161,9 +161,8 @@ class SynthesizedFacts:
     owned_identifiers: OwnedIdentifiers = OwnedIdentifiers()
     shared_context: tuple[SharedContextFact, ...] = ()
     confidence: float = 0.0
-    # Same absent-vs-false split as relationship_category. Merged parent facts
-    # never set it, so bool(facts.is_owner) reads False for every parent — fine
-    # today because build_parents.py already excludes owner rows before merging.
+    # Model claim, with the same absent-vs-false split as relationship_category.
+    # Canonical people.is_owner comes from explicit source owner endpoints.
     is_owner: bool | None = None
     network_worth: NetworkWorthFact | None = None
     # JEV's own labels (choice argmax/expected level/noul probability) for the

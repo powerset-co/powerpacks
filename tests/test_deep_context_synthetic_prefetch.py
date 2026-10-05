@@ -20,10 +20,7 @@ from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.db.identity_views import (
-    linkedin_queue, review_questions_pending, unassembled_research,
-)
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.candidate_selection import (
-    RelationshipDecision, cache_relationship_judgment, finish_reviews,
+    linkedin_queue, unassembled_research,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -38,12 +35,14 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
     PrefetchProfiles,
     review_queue_links,
 )
 from packs.ingestion.primitives.enrich import rapidapi_client
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 
 
 def query(db: Db, sql: str):
@@ -98,6 +97,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             primary_email="jordan@example.com",
             retarget_hint="Find the correct profile",
         )
+        self.db.replace_imported_people((PeopleRow(id="person-a", full_name="Jordan Bravo", primary_email="jordan@example.test"),))
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -105,6 +105,10 @@ class SyntheticPrefetchTest(unittest.TestCase):
     def _write_no_linkedin_result(
         self, linkedin_url: str = "",
     ) -> None:
+        roster = {row.id: row for row in queries.imported_people(self.db)}
+        roster.setdefault(self.queue_row.source_person_ids[0], PeopleRow(
+            id=self.queue_row.source_person_ids[0], full_name="Jordan Bravo", primary_email="other@example.test"))
+        self.db.replace_imported_people(tuple(roster.values()))
         person_dir = self.research_dir / "jordan-bravo"
         person_dir.mkdir(exist_ok=True)
         output = TaskRunJsonOutput.model_validate({

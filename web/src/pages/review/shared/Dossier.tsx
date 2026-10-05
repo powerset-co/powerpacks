@@ -16,7 +16,7 @@ export function Dossier({ slug, className }: DossierProps) {
   const dossier = useDossier(slug)
   const classes = cn("dossier-text", className)
   if (dossier.status === "ready") {
-    // The HTML is this machine's own server rendering the person's own markdown file.
+    // The server renders the dossier body stored in SQLite.
     return <div className={classes} dangerouslySetInnerHTML={{ __html: dossier.html }} />
   }
   return (

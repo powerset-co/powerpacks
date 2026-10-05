@@ -13,29 +13,24 @@ any order and on its first and last word, so "Bravo, Jordan" meets
 ``email:casey@example.com``, ``local:casey``, ``phone:15550100``, and
 ``nm:filn:j|bravo``.
 
-Two names are the same name when they are the same words in any order, or the
-same first and last name where a middle name is missing on one side or agrees
-on both. The same name is a merge without the pair judge; the judge module
-then asks whether the facts keep the two records apart. Two different middle
-names, a generation suffix on one side (Jr, Sr, III) and one-word names are
-not the same name. A title (Dr, Mr) is not part of a name, and an email
-address saved as the name is no name.
+Name compatibility only selects pairs; it never establishes identity. An
+identical normalized name and a shared source contact email or phone is the
+only free merge. All other selected pairs need a positive identity judgment.
+Extracted identifier claims do not create pairs. A source email or phone can
+propose a pair only when the names can match; a shared office number cannot
+join two incompatible staff names.
 
-A bucket only proposes a pair. The pair is kept when the two records share a
-phone or a whole email address, or when one name can be a form of the other:
-the same name, a one-word name that is the other's first or last name, or a
-first and a last name that each equal, begin or nearly spell the other's
-("J Bravo", "Jordan B", "Jon Bravo"). A shared first name, a shared last name
-or a shared email handle alone is not kept: "Jordan Bravo" and "Jordan Delta"
-at jordan@ two domains are two people. No bucket joins a one-word name to a
-full name, so "Jordan" meets "Jordan Bravo" only through a shared email handle,
-phone or email: "Jordan" alone could be any Jordan.
+One-word names meet full names only through source email handles or source
+contact identifiers. A first name alone could name many contacts.
 
 Jaro-Winkler follows Winkler's Census record-linkage definition. Its prefix
 weighting is a better fit than Levenshtein distance for given-name spelling
 variants; reference-value tests pin this local implementation.
 
 Changelog:
+- 2026-10-03: every source member name constrains proposals and transitive joins.
+- 2026-10-02: source identifiers and compatible names select pairs; the same
+  name alone never accepts one.
 - 2026-10-01: the same name is a merge without the pair judge. A pair is kept
   on a shared phone or email or on names that can be forms of each other;
   whole-name similarity and a shared email handle alone no longer keep one.
@@ -45,11 +40,15 @@ from __future__ import annotations
 import re
 import sys
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from itertools import combinations
 from typing import TypeVar
 
+from nameparser import Lexicon, Parser
+
 from packs.ingestion.primitives.common.contact_fields import format_phone_digits
+from packs.ingestion.primitives.deep_context.shared.common import normalize_name
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergeDecision,
     MergePair,
@@ -63,21 +62,29 @@ MAX_BLOCKING_BUCKET = 200
 JUDGE_SLAM_DUNK = "slam_dunk"
 SAME_FULL_NAME = "same full name"
 SAME_FIRST_AND_LAST_NAME = "same first and last name, middle names do not differ"
-SAME_NAME_REASONS = frozenset({SAME_FULL_NAME, SAME_FIRST_AND_LAST_NAME})
 # A father and a son: a name carrying one of these is not the same name as one without it.
 GENERATION_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 TITLES = frozenset({"dr", "mr", "mrs", "ms", "prof"})
-# Below a shared phone or email (0.99), so those join first.
-SAME_NAME_CONFIDENCE = 0.95
+PROFESSIONAL_CREDENTIALS = frozenset({
+    "cfa", "cia", "cams", "cpa", "macc", "phd", "md", "mba", "caia", "cfe",
+    "fca", "pe", "csp", "shrm-cp", "ma", "msed", "mphiled", "nacddc",
+})
+_NAME_PARSER = Parser(lexicon=replace(
+    Lexicon.default(),
+    titles=TITLES,
+    given_name_titles=frozenset(),
+    suffix_acronyms=PROFESSIONAL_CREDENTIALS,
+    suffix_words=GENERATION_SUFFIXES | {"esq", "esquire"},
+    suffix_acronyms_ambiguous=Lexicon.default().suffix_acronyms_ambiguous & PROFESSIONAL_CREDENTIALS,
+    honorific_tails=frozenset(),
+))
+_OUTER_QUOTES = {'"': '"', "'": "'", "“": "”", "‘": "’", "「": "」", "『": "』"}
 T = TypeVar("T")
 
 
 @dataclass(frozen=True)
 class _BlockingRecord:
     person: MergePerson
-    name_words: tuple[str, ...]
-    emails: frozenset[str]
-    phones: frozenset[str]
     bucket_keys: frozenset[str]
 
 
@@ -133,6 +140,7 @@ def email_localparts(emails: tuple[str, ...]) -> frozenset[str]:
     return frozenset(email.split("@", 1)[0] for email in emails if "@" in email)
 
 
+@lru_cache(None)
 def name_words(name_key: str) -> tuple[str, ...]:
     """The words of a name, given name first and titles left out: "bravo, dr jordan" reads as jordan bravo.
 
@@ -141,11 +149,16 @@ def name_words(name_key: str) -> tuple[str, ...]:
     """
     if "@" in name_key:
         return ()
-    # Composed and decomposed accents are one spelling.
-    composed = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", name_key))
-    family, comma, given = composed.partition(",")
-    ordered = f"{given} {family}" if comma else composed
-    return tuple(word for word in re.findall(r"[^\W\d_]+", ordered.casefold()) if word not in TITLES)
+    name = unicodedata.normalize("NFC", name_key).strip()
+    if len(name) >= 2 and _OUTER_QUOTES.get(name[0]) == name[-1]:
+        name = name[1:-1]
+    person = _NAME_PARSER.parse(name)
+    ordered = " ".join((person.given, person.middle, person.family))
+    ordered = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", ordered))
+    suffix = re.sub(r"['\u2019]", "", unicodedata.normalize("NFC", person.suffix))
+    return tuple(re.findall(r"[^\W\d_]+", ordered.casefold())) + tuple(
+        word for word in re.findall(r"[^\W\d_]+", suffix.casefold()) if word in GENERATION_SUFFIXES
+    )
 
 
 def _is_full_name(words: tuple[str, ...]) -> bool:
@@ -197,6 +210,12 @@ def names_can_match(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
     return _word_forms_match(first[0], second[0]) and _word_forms_match(first[-1], second[-1])
 
 
+def source_names_can_match(names: tuple[str, ...]) -> bool:
+    """Every original name is present and compatible with every other member."""
+    words = [name_words(name) for name in names]
+    return bool(words) and all(words) and all(names_can_match(a, b) for a, b in combinations(words, 2))
+
+
 def blocking_name_keys(name_key: str) -> set[str]:
     """Return the name bucket keys: first/last initial pairs, plus whole-name keys for a full name."""
     joined = re.sub(r"[.\-']+", "", name_key)
@@ -214,21 +233,18 @@ def blocking_name_keys(name_key: str) -> set[str]:
 
 
 def _blocking_record(person: MergePerson) -> _BlockingRecord:
-    keys = {f"email:{email}" for email in person.all_emails}
+    keys = {f"email:{email}" for email in person.emails}
     keys |= {f"local:{part}" for part in email_localparts(person.emails)}
-    keys |= {f"phone:{digits}" for digits in person.all_phones}
-    keys |= {f"nm:{key}" for key in blocking_name_keys(person.name_key)}
+    keys |= {f"phone:{digits}" for digits in person.phone_digits}
+    keys |= {f"nm:{key}" for name in person.source_names for key in blocking_name_keys(normalize_name(name))}
     return _BlockingRecord(
         person,
-        name_words(person.name_key),
-        person.all_emails,
-        person.all_phones,
         frozenset(keys),
     )
 
 
 def generate_pairs(people: list[MergePerson]) -> list[MergePair]:
-    """Block parent rows, then keep pairs sharing a phone or email or names that can be one name."""
+    """Pair compatible names through name buckets or source contact identifiers."""
     records = [_blocking_record(person) for person in people]
     buckets: dict[str, list[int]] = {}
     for index, record in enumerate(records):
@@ -253,11 +269,7 @@ def generate_pairs(people: list[MergePerson]) -> list[MergePair]:
     selected: list[MergePair] = []
     for left_index, right_index in sorted(candidates):
         left, right = records[left_index], records[right_index]
-        if (
-            left.emails & right.emails
-            or left.phones & right.phones
-            or names_can_match(left.name_words, right.name_words)
-        ):
+        if source_names_can_match(left.person.source_names + right.person.source_names):
             selected.append(MergePair(left.person, right.person))
     return selected
 
@@ -272,9 +284,10 @@ def slam_dunk_verdict(
     first: MergePerson,
     second: MergePerson,
 ) -> MergeDecision | None:
-    """A merge without the pair judge: an identical name with a shared phone or email, or the same name."""
+    """Merge an identical name with a shared source contact phone or email."""
     shared = _shared_contact_identifiers(first, second)
-    if shared and first.name_key and first.name_key == second.name_key:
+    if (shared and first.name_key and first.name_key == second.name_key
+            and source_names_can_match(first.source_names + second.source_names)):
         return MergeDecision(
             same_person=True,
             confidence=0.99,
@@ -282,16 +295,7 @@ def slam_dunk_verdict(
             judge=JUDGE_SLAM_DUNK,
             reason=f"slam dunk: identical name + shared {shared}",
         )
-    reason = same_name_reason(name_words(first.name_key), name_words(second.name_key))
-    if reason is None:
-        return None
-    return MergeDecision(
-        same_person=True,
-        confidence=SAME_NAME_CONFIDENCE,
-        tone_consistent=True,
-        judge=JUDGE_SLAM_DUNK,
-        reason=reason,
-    )
+    return None
 
 
 def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[T]]:
@@ -312,18 +316,24 @@ def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[
 
 
 def accepted_edges(
-    verdicts: list[tuple[str, str, bool, float]],
+    verdicts: list[tuple[str, str, bool | None, float]],
+    *,
+    source_names: dict[str, tuple[str, ...]] | None = None,
 ) -> list[tuple[str, str]]:
     """Join strongest pairs without overriding different-person evidence."""
     groups = {node: {node} for left, right, _, _ in verdicts for node in (left, right)}
-    rejected = [(left, right) for left, right, same, _ in verdicts if not same]
+    rejected = [(left, right) for left, right, same, _ in verdicts if same is False]
     accepted = []
     for left, right, same, _ in sorted(
         verdicts, key=lambda row: (-row[3], min(row[:2]), max(row[:2])),
     ):
-        if not same:
+        if same is not True:
             continue
         joined = groups[left] | groups[right]
+        if source_names is not None and not source_names_can_match(tuple(
+            name for node in joined for name in source_names[node]
+        )):
+            continue
         if any(a in joined and b in joined for a, b in rejected):
             continue
         accepted.append(tuple(sorted((left, right))))

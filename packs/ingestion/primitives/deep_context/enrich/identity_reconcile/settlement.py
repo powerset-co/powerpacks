@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -13,6 +13,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.identity_policy import AFFIRMATIVE_MACHINE_ACTIONS, AFFIRMATIVE_MACHINE_APPROVALS
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.name_policy import profile_name_verdict, profile_names
 
 @dataclass(frozen=True)
 class MachineIdentitySettlement:
@@ -97,6 +99,16 @@ def settle_machine_identities(
             raise StoreError(f"unknown identity candidate: {key}")
         if row.decision_action:
             continue
+        if (settlement.machine_action in AFFIRMATIVE_MACHINE_ACTIONS
+                and settlement.machine_approved in AFFIRMATIVE_MACHINE_APPROVALS
+                and parse_json_object(settlement.judgment_payload_json).get("relationship_decision", {}).get("fingerprint")
+                    != settlement.judgment_fingerprint):
+            url = settlement.machine_proposed_url if settlement.machine_action == "retarget" else row.linkedin_url
+            veto = profile_name_verdict(db, row.parent_id, profile_names(db, row.parent_id, key, url or ""))
+            if veto is not None:
+                settlement = replace(settlement, machine_approved=None, machine_confidence=veto.confidence,
+                                     machine_judgment=veto.value, machine_reason=veto.reason,
+                                     judgment_payload_json=json.dumps(veto.as_dict()))
         projection = settlement.projection(row)
         if all(getattr(projection, field.name) == getattr(row, field.name)
                for field in fields(_IdentityMachineFields) if field.name != "updated_at"):

@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from deep_context_sqlite_test_helpers import query
 
 
@@ -80,6 +81,9 @@ class ParentProjectionTest(unittest.TestCase):
                 ),
             ))
             child_path.unlink()
+            db.replace_imported_people((
+                PeopleRow(id='person-a', full_name='Jordan Bravo'),
+            ))
             BuildParents(db=db, parents_dir=parents).execute()
 
             # Get-or-create: the child's existing parent is absorbed, never
@@ -95,10 +99,14 @@ class ParentProjectionTest(unittest.TestCase):
                 "kind: parent\n"
                 "singleton: true\n"
                 'children: ["jordan-a"]\n'
+                'needs_review: []\n'
                 'emails: ["jordan@example.com"]\n'
                 'phones: ["+15550100"]\n'
+                'confidence: 0.0\n'
                 "---\n\n# Jordan Bravo\n\n"
-                "Single identity — no duplicates detected. Full context in [[jordan-a]].\n"
+                "## Identifiers\n\n"
+                "- jordan@example.com\n"
+                "- +15550100\n\n"
             ))
             parent_dossier = next(
                 row
@@ -146,6 +154,9 @@ class ParentProjectionTest(unittest.TestCase):
                 ),
             ))
 
+            db.replace_imported_people((
+                PeopleRow(id='person-a', full_name='Jordan Bravo'),
+            ))
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
             self.assertEqual(result.orphans_removed, 1)
@@ -244,6 +255,8 @@ class ParentProjectionTest(unittest.TestCase):
                     )
                 )
             db.project_rows(tuple(projection_rows))
+            db.replace_imported_people(tuple(PeopleRow(id=key, full_name="Jordan Bravo")
+                                             for key in ("person-a", "person-b")))
             db.replace_merge_verdicts((MergeVerdictRow(
                 "person-a", "person-b", "jordan-a", "jordan-b", "sig",
                 "llm", 1, 0.99, 1, "synthetic fixture", 1,
@@ -308,6 +321,8 @@ class ParentProjectionTest(unittest.TestCase):
                 PersonRow("bravo-a", "parent-bravo", "bravo-a", "bravo", "Jordan Bravo"),
                 PersonRow("bravo-b", "parent-bravo", "bravo-b", "bravo", "Jordan Bravo"),
             ))
+            db.replace_imported_people(tuple(PeopleRow(id=key, full_name="Jordan Bravo")
+                                             for key in ("alpha-a", "alpha-b", "bravo-a", "bravo-b")))
             db.replace_merge_verdicts((MergeVerdictRow(
                 "alpha-a", "bravo-a", "alpha", "bravo", "evidence-v1",
                 "llm", 1, 0.95, 1, "same synthetic person", 1,
@@ -333,6 +348,8 @@ class ParentProjectionTest(unittest.TestCase):
                 PersonRow("bravo-a", "parent-bravo", "bravo-a", "bravo", "Jordan Bravo"),
                 PersonRow("bravo-b", "parent-bravo", "bravo-b", "bravo", "Jordan Bravo"),
             ))
+            db.replace_imported_people(tuple(PeopleRow(id=key, full_name="Jordan Bravo")
+                                             for key in ("alpha-a", "alpha-b", "bravo-a", "bravo-b")))
             db.replace_merge_verdicts((
                 MergeVerdictRow(
                     "alpha-a", "bravo-a", "alpha", "bravo", "old-evidence",
@@ -370,6 +387,9 @@ class ParentProjectionTest(unittest.TestCase):
             ))
             parents_dir = root / "parents"
 
+            db.replace_imported_people((
+                PeopleRow(id='person-a', full_name='Jordan Bravo'),
+            ))
             first = BuildParents(db=db, parents_dir=parents_dir).execute()
             path = parents_dir / "jordan-bravo-a.md"
             first_bytes = path.read_bytes()
@@ -381,7 +401,7 @@ class ParentProjectionTest(unittest.TestCase):
             )[0][0]
 
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_parent",
                 side_effect=AssertionError("unchanged parent must not render"),
             ):
                 second = BuildParents(db=db, parents_dir=parents_dir).execute()
@@ -422,6 +442,10 @@ class ParentProjectionTest(unittest.TestCase):
                 *_facts(root, "parent-b", "Casey Delta"),
             ))
             parents_dir = root / "parents"
+            db.replace_imported_people((
+                PeopleRow(id='person-a', full_name='Jordan Bravo'),
+                PeopleRow(id='person-b', full_name='Casey Delta'),
+            ))
             BuildParents(db=db, parents_dir=parents_dir).execute()
             jordan = parents_dir / "jordan-bravo-a.md"
             casey = parents_dir / "casey-delta-b.md"
@@ -456,9 +480,8 @@ class ParentProjectionTest(unittest.TestCase):
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
             self.assertEqual(result.parents_changed, 1)
-            # The old singleton contract intentionally does not derive a summary
-            # from structured facts, but the input signal still advances.
-            self.assertEqual(jordan.read_bytes(), jordan_before)
+            self.assertNotEqual(jordan.read_bytes(), jordan_before)
+            self.assertIn("Engineer", jordan.read_text())
             self.assertNotEqual(
                 query(
                     db,
@@ -470,7 +493,7 @@ class ParentProjectionTest(unittest.TestCase):
             self.assertEqual(casey.read_bytes(), casey_before)
             self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_parent",
                 side_effect=AssertionError("advanced input signal must converge"),
             ):
                 converged = BuildParents(db=db, parents_dir=parents_dir).execute()
@@ -489,6 +512,10 @@ class ParentProjectionTest(unittest.TestCase):
                 *_facts(root, "parent-b", "Casey Delta"),
             ))
             parents_dir = root / "parents"
+            db.replace_imported_people((
+                PeopleRow(id='person-a', full_name='Jordan Bravo'),
+                PeopleRow(id='person-b', full_name='Casey Delta'),
+            ))
             BuildParents(db=db, parents_dir=parents_dir).execute()
             jordan = parents_dir / "jordan-bravo-a.md"
             casey = parents_dir / "casey-delta-b.md"
@@ -497,6 +524,11 @@ class ParentProjectionTest(unittest.TestCase):
             casey_mtime = casey.stat().st_mtime_ns
             db.project_rows((
                 PersonRow("person-c", "parent-a", "jordan-c", "jordan", "Jordan Bravo"),
+            ))
+            db.replace_imported_people((
+                PeopleRow(id="person-a", full_name="Jordan Bravo"),
+                PeopleRow(id="person-b", full_name="Casey Delta"),
+                PeopleRow(id="person-c", full_name="Jordan Bravo"),
             ))
 
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
@@ -532,6 +564,10 @@ class ParentProjectionTest(unittest.TestCase):
                 ),
             ))
 
+            db.replace_imported_people((
+                PeopleRow(id='person-a', full_name='Jordan Bravo'),
+                PeopleRow(id='person-b', full_name='Jordan Bravo'),
+            ))
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
             self.assertEqual(result.parents_changed, 2)
@@ -562,6 +598,9 @@ class ParentProjectionTest(unittest.TestCase):
                 ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
                 PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
                 *_facts(root, "parent-a", "Jordan Bravo"),
+            ))
+            db.replace_imported_people((
+                PeopleRow(id='person-a', full_name='Jordan Bravo'),
             ))
             BuildParents(db=db, parents_dir=parents_dir).execute()
             path = parents_dir / "jordan-bravo-a.md"

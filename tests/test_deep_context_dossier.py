@@ -20,6 +20,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.queries import imported_people
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.synthesis.facts import (
     MAX_NOTABLE_EVENTS,
     headline,
@@ -35,6 +37,27 @@ from packs.ingestion.primitives.deep_context.synthesis.validate_dossiers import 
 
 
 class DossierFactsTest(unittest.TestCase):
+    def test_contact_lists_only_source_endpoints_and_keeps_third_party_facts(self) -> None:
+        meta = CollectionBundle.from_payload({
+            "person_id": "person-jordan", "full_name": "Jordan Bravo",
+            "emails": ["jordan@example.com"], "phones": ["+15550100123"],
+            "source_channels": ["gmail_msgvault", "whatsapp"], "messages": [],
+        })
+        facts = SynthesizedFacts.from_payload({
+            "canonical_name": "Jordan Bravo",
+            "identifiers": ["jordan.backup@example.com", "+44 7700 900123"],
+            "notable_events": [{"date": "2026-01-01",
+                "summary": "Casey shared their callback number +44 7700 900123."}],
+        })
+        original = facts.to_payload()
+
+        body = render_dossier(meta, facts, slug="jordan-bravo-current")
+
+        contact = body.split("## Contact\n\n", 1)[1].split("\n\n## Summary", 1)[0]
+        self.assertEqual(contact, "- jordan@example.com\n- +15550100123")
+        self.assertIn("Casey shared their callback number +44 7700 900123.", body)
+        self.assertEqual(facts.to_payload(), original)
+
     def test_merge_policy_and_headline_live_in_concrete_module(self) -> None:
         merged = merge_disjoint_fact_records(filter(None, (
             FactRecord.from_payload({"facts": {
@@ -90,7 +113,7 @@ class DossierFactsTest(unittest.TestCase):
             "packs.ingestion.primitives.deep_context.synthesis.rendering.now_iso",
             return_value="2026-01-02T03:04:05Z",
         ):
-            rendered = render_dossier(meta, merged)
+            rendered = render_dossier(meta, merged, slug="jordan-bravo-persona")
         self.assertEqual(rendered, (
             "---\n"
             "person_id: person-a\n"
@@ -354,6 +377,10 @@ class ComposeDossierTest(unittest.TestCase):
                     }),
                 ),
             ))
+            db.replace_imported_people((PeopleRow(
+                id="person-jordan", full_name="Jordan Bravo",
+                primary_email="jordan@example.com", source_channels="gmail_msgvault",
+            ),))
             dossiers = root / "dossiers"
             parents = root / "parents"
 
@@ -362,7 +389,7 @@ class ComposeDossierTest(unittest.TestCase):
             ).execute()
             first = BuildParents(db=db, parents_dir=parents).execute()
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_parent",
                 side_effect=AssertionError("healed parent artifact must converge"),
             ):
                 second = BuildParents(db=db, parents_dir=parents).execute()
@@ -404,8 +431,10 @@ def _seed_parent(
     facts_json = None if broken else json.dumps({
         "canonical_name": name, "title": "Engineer", "confidence": 0.9,
     })
+    person_id = f"person-{parent_id}"
     db.project_rows((
         ParentRow(parent_id, f"parent-worth:{parent_id}", name, slug),
+        PersonRow(person_id, parent_id, display_name=name),
         ArtifactRow(
             f"source-bundle:{parent_id}", ArtifactKind.SOURCE_BUNDLE.value,
             parent_id, str(root / "raw" / f"{parent_id}.json"),
@@ -431,6 +460,10 @@ def _seed_parent(
             parent_id, parent_id, f"facts:{parent_id}",
             confidence=0.9, facts_json=facts_json,
         ),
+    ))
+    db.replace_imported_people((
+        *(row for row in imported_people(db) if row.id != person_id),
+        PeopleRow(id=person_id, full_name=name, source_channels="gmail_msgvault"),
     ))
 
 

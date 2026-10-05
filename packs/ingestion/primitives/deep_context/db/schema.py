@@ -1,6 +1,7 @@
 """Versioned relational DDL, row-to-table registry, and generated upserts.
 
 Changelog:
+- 2026-10-03: merge verdicts preserve uncertainty; only explicit same can be accepted.
 - 2026-09-30: `RESEARCH_INDEX_DDL` — research(candidate_key). Every identity
   query probes research per link; without it each probe was a full scan.
 - 2026-09-25: `ID_SET`/`id_set` bind an id list as one JSON array for every reader and writer.
@@ -22,8 +23,7 @@ ID_SET = "(SELECT value FROM json_each(?))"
 def id_set(values: Sequence[str]) -> str:
     return json.dumps(list(values))
 
-# Pre-release installs re-migrate instead of carrying an upgrade ladder.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _values(*items: object) -> str:
@@ -47,6 +47,32 @@ IMPORTED_PEOPLE_DDL = """CREATE TABLE imported_people (
   row_json TEXT NOT NULL CHECK (json_valid(row_json)),
   FOREIGN KEY (person_id) REFERENCES people(person_id) ON DELETE CASCADE
 );"""
+
+MERGE_VERDICTS_DDL = """CREATE TABLE merge_verdicts (
+  person_a TEXT NOT NULL, person_b TEXT NOT NULL,
+  slug_a TEXT NOT NULL, slug_b TEXT NOT NULL,
+  signature TEXT NOT NULL CHECK (length(trim(signature)) > 0),
+  judge TEXT NOT NULL CHECK (judge IN ('slam_dunk', 'llm', 'sol')),
+  same_person INTEGER CHECK (same_person IN (0, 1)),
+  confidence REAL NOT NULL,
+  tone_consistent INTEGER NOT NULL CHECK (tone_consistent IN (0, 1)),
+  reason TEXT NOT NULL DEFAULT '',
+  accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1)),
+  updated_at TEXT,
+  PRIMARY KEY (person_a, person_b),
+  FOREIGN KEY (person_a) REFERENCES people(person_id) ON DELETE CASCADE,
+  FOREIGN KEY (person_b) REFERENCES people(person_id) ON DELETE CASCADE,
+  CHECK (accepted = 0 OR same_person IS 1),
+  CHECK (person_a < person_b)
+);"""
+
+# Binary verdict stores predate the Sol same/different/uncertain judge.
+# Delete once no install predates schema v3.
+BINARY_MERGE_VERDICTS_DDL = MERGE_VERDICTS_DDL.replace(
+    "same_person INTEGER CHECK", "same_person INTEGER NOT NULL CHECK",
+).replace("'llm', 'sol'", "'llm'").replace(
+    "  CHECK (accepted = 0 OR same_person IS 1),\n", "",
+)
 
 DDL = f"""
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -201,22 +227,7 @@ CREATE TABLE guidance (
   FOREIGN KEY (candidate_key, parent_id) REFERENCES links(row_key, parent_id) ON DELETE CASCADE
 );
 
-CREATE TABLE merge_verdicts (
-  person_a TEXT NOT NULL, person_b TEXT NOT NULL,
-  slug_a TEXT NOT NULL, slug_b TEXT NOT NULL,
-  signature TEXT NOT NULL CHECK (length(trim(signature)) > 0),
-  judge TEXT NOT NULL CHECK (judge IN ('slam_dunk', 'llm')),
-  same_person INTEGER NOT NULL CHECK (same_person IN (0, 1)),
-  confidence REAL NOT NULL,
-  tone_consistent INTEGER NOT NULL CHECK (tone_consistent IN (0, 1)),
-  reason TEXT NOT NULL DEFAULT '',
-  accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1)),
-  updated_at TEXT,
-  PRIMARY KEY (person_a, person_b),
-  FOREIGN KEY (person_a) REFERENCES people(person_id) ON DELETE CASCADE,
-  FOREIGN KEY (person_b) REFERENCES people(person_id) ON DELETE CASCADE,
-  CHECK (person_a < person_b)
-);
+{MERGE_VERDICTS_DDL}
 
 CREATE TABLE person_tags (
   person_id TEXT PRIMARY KEY,

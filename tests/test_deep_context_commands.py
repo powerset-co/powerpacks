@@ -48,14 +48,14 @@ class DeepContextCommandsTests(unittest.TestCase):
         result = subprocess.run([str(ROOT / 'bin/deep-context'), '--help'], cwd=ROOT,
                                 capture_output=True, text=True, check=True)
         help_text = result.stderr
-        for command in ('  refresh ', '  rejudge ', '  heal ', '  reconcile '):
+        for command in ('  refresh ', '  rejudge ', '  reconcile '):
             self.assertNotIn(command, help_text)
-        for command in ('  synthesize ', '  review ', '  restart '):
+        for command in ('  synthesize ', '  review ', '  restart ', '  heal '):
             self.assertIn(command, help_text)
         self.assertNotIn('--fresh', help_text)
 
     def test_retired_verbs_fail_before_running(self) -> None:
-        for command in ('refresh', 'rejudge', 're-review', 'heal', 'reconcile', 'apply-retargets',
+        for command in ('refresh', 'rejudge', 're-review', 'reconcile', 'apply-retargets',
                         'persist-review-identities'):
             with self.subTest(command=command):
                 result = subprocess.run([str(ROOT / 'bin/deep-context'), command], cwd=ROOT,

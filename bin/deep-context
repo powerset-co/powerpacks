@@ -39,14 +39,11 @@ review_port_from_args() {
 }
 
 review_server_pids() {
-  # Only reconcile_review_web listeners on the port — never someone else's process.
+  # Only review listeners running from this checkout.
   local pid
-  if ! curl -fsS --max-time 2 "http://127.0.0.1:$1/healthz" 2>/dev/null \
-      | python3 -c 'import json,sys; h=json.load(sys.stdin); sys.exit(h.get("primitive") != "reconcile_review_web" or h.get("repo_root") != sys.argv[1])' "$ROOT" 2>/dev/null; then
-    return 0
-  fi
   for pid in $(lsof -tnP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review"; then
+    if [[ "$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" == "$ROOT" ]] \
+        && ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review"; then
       echo "$pid"
     fi
   done
@@ -91,8 +88,14 @@ usage: bin/deep-context <command> [args]
 
   owner        build owner.json from YOUR LinkedIn (run first)
   check        readiness check (sources, Full Disk Access, keys)
+  audit        report identity ownership and independent facts coverage (read-only)
   ensure-parents  project the current imported people into stable SQLite parents
                (creates the store on a fresh install)
+  rebuild      prepare isolated source contacts with proven human decisions
+               (free, local; explicit original, backup and fresh paths)
+  heal         run pending versioned repairs, fact and feedback recovery
+               (completed migrations are a no-op; no paid calls;
+               --state-root PATH --backup-root UNUSED_PATH --operator-id UUID)
   seed         carry legacy decisions, facts and Parallel results onto the cold
                parents by identifier, once (free, local; --legacy-root PATH)
   dry          estimate synthesis cost from existing raw bundles (free)
@@ -162,8 +165,17 @@ case "$cmd" in
   check)
     "${PY[@]}" "$PKG.shared.check_readiness" "$@"
     ;;
+  audit)
+    "${PY[@]}" "$PKG.db.audit_identity" "$@"
+    ;;
   ensure-parents)
     "${PY[@]}" "$PKG.ensure_parents.ensure_parents" "$@"
+    ;;
+  rebuild)
+    "${PY[@]}" "$PKG.migration.rebuild" "$@"
+    ;;
+  heal)
+    "${PY[@]}" "$PKG.migration.heal" "$@"
     ;;
   dry)
     if (( wants_help )); then

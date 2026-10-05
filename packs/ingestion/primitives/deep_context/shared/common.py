@@ -24,14 +24,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     OwnerProfile,
     OwnerWork,
 )
-# wacli's E.164-ish canonicalizer (bare 10 digits -> +1, JID-aware). Despite the
-# alias, this is not primitives.common.contact_fields.normalize_phone (a stricter,
-# no-country-code-default function) and duplicates .canonicalize_phone's digit
-# logic minus JID handling.
-from packs.ingestion.primitives.discover.messages.wacli.util import (
-    canonicalize_phone as normalize_phone,
-)
-
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 normalize_name = normalize_name_key
 
@@ -111,100 +103,6 @@ def phone_digits(raw: str) -> str:
     return digits
 
 
-_IDENT_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
-
-_TOLL_FREE_PREFIXES = ("800", "833", "844", "855", "866", "877", "888")
-
-
-def _name_tokens(name: str) -> set[str]:
-    return {t for t in re.split(r"[^a-z0-9]+", (name or "").lower()) if len(t) >= 3}
-
-
-def _is_toll_free(value: str) -> bool:
-    """NANP toll-free: a 10-digit key (leading 1/+1 already stripped) in 8XX."""
-    digits = phone_digits(value)
-    return len(digits) == 10 and digits.startswith(_TOLL_FREE_PREFIXES)
-
-
-def _phone_country(value: str) -> str:
-    """Coarse country-code comparison key from an E.164 phone."""
-    e164 = normalize_phone(value)
-    if not e164:
-        return ""
-    if len(e164) == 12 and e164[1] in "17":
-        return e164[1]
-    return e164[1:3]
-
-
-def contact_identifiers(
-    values: list[str] | None,
-    *,
-    name: str = "",
-    known: list[str] | tuple[str, ...] = (),
-    owner_emails: list[str] | tuple[str, ...] = (),
-    owner_phones: list[str] | tuple[str, ...] = (),
-) -> list[str]:
-    """Keep contact-owned emails and at most two plausible personal phones.
-
-    Not the same job as contact_fields.identifier_emails/identifier_phones (those
-    extract merge-judge blocking keys); this ranks and caps values for display.
-    """
-    owner_e = {str(e or "").strip().lower() for e in owner_emails} - {""}
-    owner_p = {phone_digits(str(p)) for p in owner_phones} - {""}
-    known_l = {str(v or "").strip().lower() for v in known} - {""}
-    known_p = {phone_digits(str(v)) for v in known if "@" not in str(v) and len(phone_digits(str(v))) >= 7}
-    tokens = _name_tokens(name)
-    out: list[str] = []
-    phones: list[str] = []
-    seen: set[str] = set()
-    for raw in values or []:
-        value = str(raw or "").strip().strip(".,;:")
-        low = value.lower()
-        if not value or low in seen:
-            continue
-        # Accept slash only in phone-like values; reject date-shaped input.
-        if "/" in value:
-            if (
-                re.fullmatch(r"[+()\d\s./\-]+", value)
-                and not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", value.strip())
-                and len(phone_digits(value)) >= 10
-            ):
-                normalized = normalize_phone(value)
-                digits = phone_digits(normalized)
-                if normalized and digits not in owner_p and digits not in seen:
-                    seen.add(digits)
-                    phones.append(normalized)
-            continue
-        if _IDENT_EMAIL_RE.match(value):
-            if low in owner_e:
-                continue
-            local, _, domain = low.partition("@")
-            hay = local + " " + domain.rsplit(".", 1)[0]
-            if low in known_l or any(t in hay for t in tokens):
-                seen.add(low)
-                out.append(value)
-            continue
-        digits = phone_digits(value)
-        if re.fullmatch(r"[+()\d\s.\-]{7,}", value) and len(digits) >= 7:
-            if digits in owner_p or digits in seen:
-                continue
-            seen.add(digits)
-            phones.append(value)
-    phones = [p for p in phones if not _is_toll_free(p)] or phones
-    ranked = [p for p in phones if phone_digits(p) in known_p] + [p for p in phones if phone_digits(p) not in known_p]
-    kept: list[str] = []
-    for phone in ranked:
-        if len(kept) == 2:
-            break
-        if not kept or phone_digits(phone) in known_p:
-            kept.append(phone)
-            continue
-        first, candidate = _phone_country(kept[0]), _phone_country(phone)
-        if first and candidate and first != candidate:
-            kept.append(phone)
-    return out + kept
-
-
 def slugify(name: str, person_id: str) -> str:
     """Stable dossier filename stem: name-slug + short id suffix (collision-proof)."""
     base = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "person"
@@ -223,9 +121,7 @@ def slugify(name: str, person_id: str) -> str:
 
 @dataclass
 class Person:
-    # Opaque lookup key, not one id type: collection.planning.source_parents fills this
-    # with a canonical parent_id (message-store reads run per merged identity); logbook
-    # fills it with a raw people.csv row id — logbook has no parent/child merge concept.
+    # Collection reads per original contact; logbook uses the raw people.csv row id.
     person_id: str
     full_name: str
     emails: list[str] = field(default_factory=list)

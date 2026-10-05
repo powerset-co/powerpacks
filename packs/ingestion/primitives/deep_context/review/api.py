@@ -30,6 +30,7 @@ are form-encoded, a POST from another origin is refused, and an error is
 `{"error": text}`. What each route answers with is a dataclass in payloads.py.
 
 Changelog:
+  2026-10-03: an explicit LinkedIn screen reads review counts without planning synthesis.
   2026-10-02: queued guided research resumes only through an explicit POST.
   2026-10-02: the finished LinkedIn state no longer asks the page to press Finish
     (`auto_continue`): /complete changes nothing in the store, so the page pressed it in a
@@ -64,9 +65,11 @@ from http.server import BaseHTTPRequestHandler
 from typing import Callable, Protocol, get_args
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.db.identity_queries import memberships
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
     linkedin_candidate_shown,
+    linkedin_progress,
     linkedin_queue_parent,
     resolve_identity_key,
 )
@@ -233,6 +236,26 @@ class ReviewApi:
         return True
 
     def _page(self, params: Params) -> ReviewPage:
+        self.linkedin.forget()
+        if _phase_view(params) == "linkedin":
+            linkedin = linkedin_progress(self.db)
+            return ReviewPage(
+                view="linkedin",
+                tab="",
+                title=TITLES["linkedin"],
+                progress=PageProgress(
+                    **asdict(self._decision_progress(linkedin.pending)),
+                    linkedin_done=linkedin.done,
+                    rejected=0,
+                    synthesize_pending=0,
+                ),
+                # LinkedIn reads its own cards; no enrichment panel or status watcher.
+                enrichment=EnrichmentPanel("preparing"),
+                state_token="",
+                needs_synthesis=False,
+                external_updates=False,
+            )
+
         state = self.adapter.snapshot()
         progress = state.progress
         enrichment = self.adapter.enrichment(state)
@@ -520,7 +543,9 @@ class ReviewApi:
 
         try:
             feedback = build_feedback_request(
-                parent, candidate, action="retarget", comment=guidance, retarget_items=[item]
+                parent, candidate, action="retarget", comment=guidance, retarget_items=[item],
+                person_ids=tuple(row.person_id for row in memberships(self.db, row_key=candidate.row_key))
+                if candidate else parent.person_ids,
             )
             threading.Thread(target=post_feedback_quietly, args=(feedback,), daemon=True).start()
         except SystemExit:
@@ -570,8 +595,15 @@ class ReviewApi:
             raise _Refusal(HTTPStatus.BAD_REQUEST, "unknown feedback action")
 
         parent, candidate = self._feedback_subject(_value(form, "pub"), _value(form, "parent_slug").strip())
+        items = self.adapter.retargets()
+        if candidate:
+            items = [item for item in items if item.row_key == candidate.row_key]
+            person_ids = tuple(row.person_id for row in memberships(self.db, row_key=candidate.row_key))
+        else:
+            items = [item for item in items if item.slug == parent.slug]
+            person_ids = parent.person_ids
         request = build_feedback_request(
-            parent, candidate, action=action, comment=comment, retarget_items=self.adapter.retargets()
+            parent, candidate, action=action, comment=comment, retarget_items=items, person_ids=person_ids,
         )
         return submit_directory_feedback(request)
 

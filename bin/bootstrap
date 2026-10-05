@@ -48,7 +48,10 @@ while [[ $# -gt 0 ]]; do
     --source|--skip-source|--gmail-email|--sync-after|--wacli-store)
       source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
     --approve-spend) source_args+=("$1" "${2:?Missing value for $1}"); shift 2 ;;
-    --refresh|--approve-upload) source_args+=("$1"); shift ;;
+    --refresh) source_args+=("$1"); shift ;;
+    # 2026-10-05: skills from 3.15.1 and earlier still pass this; the upload
+    # question is gone. Remove once no installed skill predates 3.15.2.
+    --approve-upload) shift ;;
     *)
       echo "usage: bootstrap [--harness codex|claude-code|pi|all] [--powerset] [--port PORT]" >&2
       exit 2

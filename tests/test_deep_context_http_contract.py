@@ -538,7 +538,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 "POST",
                 "/retarget",
                 {
-                    "guidance": ("Use https://www.linkedin.com/in/jordan-bravo-correct instead"),
+                    "guidance": ("https://www.linkedin.com/in/jordan-bravo-correct"),
                     "pub": self.PUB,
                     "parent_slug": self.SLUG,
                 },
@@ -604,7 +604,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 "POST",
                 "/retarget",
                 {
-                    "guidance": f"Use {replacement_url} instead",
+                    "guidance": replacement_url,
                     "pub": alternate,
                     "parent_slug": self.SLUG,
                 },

@@ -16,6 +16,8 @@ from unittest import mock
 from deep_context_sqlite_test_helpers import seed_identity
 from packs.ingestion.primitives.deep_context.db.models import ENRICH_RUN_KEY, EnrichRun, EnrichRunStatus
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.queries import imported_people
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress, workflow_state
 from packs.ingestion.primitives.deep_context.enrich.estimate import minutes_left
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline as pipeline_module
@@ -141,6 +143,7 @@ class EnrichCommandTest(unittest.TestCase):
         # No Parallel key: nobody was researched, so nobody may count as tried.
         seed_identity(self.db, parent_id="lookup", person_id="person:lookup", row_key="candidate:lookup",
             name="Casey Delta", machine_worth="yes", include_link=False)
+        self.db.replace_imported_people((PeopleRow(id="person:lookup", full_name="Casey Delta"),))
         with mock.patch.object(research_driver, "run_research",
                                side_effect=SystemExit("PARALLEL_API_KEY not set")):
             with self.assertRaises(SystemExit):
@@ -178,8 +181,10 @@ class EnrichCommandTest(unittest.TestCase):
             name="Jordan Bravo", machine_worth="yes", include_link=False)
         seed_identity(self.db, parent_id="attached", person_id="person:attached", row_key="casey-delta",
             name="Casey Delta", machine_worth="yes", linkedin_url="https://www.linkedin.com/in/casey-delta")
-        rows = lambda: [tuple(row) for table in ("parents", "links", "research", "artifacts")
-            for row in self.db.query(f"SELECT * FROM {table} ORDER BY 1")]
+        self.db.replace_imported_people((PeopleRow(id="person", full_name="Jordan Bravo"),))
+        def rows():
+            return [tuple(row) for table in ("parents", "links", "research", "artifacts")
+                    for row in self.db.query(f"SELECT * FROM {table} ORDER BY 1")]
         before = rows()
 
         with (
@@ -206,6 +211,7 @@ class EnrichCommandTest(unittest.TestCase):
         from packs.ingestion.primitives.deep_context.enrich import cli
         seed_identity(self.db, parent_id="parent", person_id="person", row_key="candidate:person",
             name="Jordan Bravo", machine_worth="yes", include_link=False)
+        self.db.replace_imported_people((PeopleRow(id="person", full_name="Jordan Bravo"),))
         seen = []
         self.mock_steps(seen)
         with (
@@ -264,6 +270,7 @@ class EnrichCommandTest(unittest.TestCase):
     def test_enrich_is_agent_action_and_wait_returns_immediately(self):
         seed_identity(self.db, parent_id="parent", person_id="person", row_key="candidate:person",
             name="Jordan Bravo", machine_worth="yes", include_link=False)
+        self.db.replace_imported_people((PeopleRow(id="person", full_name="Jordan Bravo"),))
         with (
             mock.patch.object(review_cli, "CANONICAL_DB", self.db.db_path),
             mock.patch.object(review_cli.time, "sleep", side_effect=AssertionError("must not wait")),
@@ -298,6 +305,10 @@ class EnrichCommandTest(unittest.TestCase):
             name="Casey Delta", machine_worth="yes", include_link=False)
         seed_identity(self.db, parent_id="attached", person_id="person:attached", row_key="jordan-bravo",
             name="Jordan Bravo", machine_worth="yes", linkedin_url="https://www.linkedin.com/in/jordan-bravo")
+        self.db.replace_imported_people((
+            PeopleRow(id="person:lookup", full_name="Casey Delta"),
+            PeopleRow(id="person:attached", full_name="Jordan Bravo"),
+        ))
 
         def research(params):
             for row in params.rows:
@@ -355,6 +366,9 @@ class EnrichCommandTest(unittest.TestCase):
                 paid.assert_not_called()
             seed_identity(self.db, parent_id="new", person_id="person:new", row_key="candidate:new",
                 name="Riley Echo", machine_worth="yes", include_link=False)
+            self.db.replace_imported_people((*imported_people(self.db), PeopleRow(
+                id="person:new", full_name="Riley Echo",
+            )))
             plan = estimate_enrichment(self.db).research
             self.assertEqual([row.parent_id for row in plan.pending], ["new"])
 

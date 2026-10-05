@@ -1,6 +1,7 @@
 """Narrow projector and domain-transaction API for Deep Context SQLite.
 
 Changelog:
+- 2026-10-03: binary merge verdicts migrate without historical acceptance or negative authority.
 - 2026-10-01: `record_enrich_run` and `record_synthesis_run` keep each command's run record in `meta`.
 - 2026-09-30: stores open in WAL, so a long read (the status poll) no longer
   blocks a decision's commit; stores from before v3.8.2 get the research
@@ -62,6 +63,8 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     id_set,
     DDL,
     IMPORTED_PEOPLE_DDL,
+    MERGE_VERDICTS_DDL,
+    BINARY_MERGE_VERDICTS_DDL,
     RESEARCH_INDEX_DDL,
     SCHEMA_VERSION,
     TABLE_BY_TYPE,
@@ -92,14 +95,20 @@ _signature_db.close()
 
 # Stores created before v3.8.2 (delete once no install predates it).
 _pre_index_db = sqlite3.connect(":memory:")
-_pre_index_db.executescript(DDL.replace(RESEARCH_INDEX_DDL, ""))
+_binary_ddl = DDL.replace(MERGE_VERDICTS_DDL, BINARY_MERGE_VERDICTS_DDL)
+_pre_index_db.executescript(_binary_ddl.replace(RESEARCH_INDEX_DDL, ""))
 PRE_INDEX_SCHEMA_SIGNATURE = _schema_signature(_pre_index_db)
 _pre_index_db.close()
 
 _legacy_db = sqlite3.connect(":memory:")
-_legacy_db.executescript(DDL.replace(IMPORTED_PEOPLE_DDL, "").replace(RESEARCH_INDEX_DDL, ""))
+_legacy_db.executescript(_binary_ddl.replace(IMPORTED_PEOPLE_DDL, "").replace(RESEARCH_INDEX_DDL, ""))
 LEGACY_SCHEMA_SIGNATURE = _schema_signature(_legacy_db)
 _legacy_db.close()
+
+_binary_db = sqlite3.connect(":memory:")
+_binary_db.executescript(_binary_ddl)
+BINARY_SCHEMA_SIGNATURE = _schema_signature(_binary_db)
+_binary_db.close()
 
 
 _CHILD_KEYS = {
@@ -182,10 +191,23 @@ class Db:
             ).fetchone()
             found = row["value"] if row else "missing"
             signature = _schema_signature(conn)
-            if found == "1" and signature == LEGACY_SCHEMA_SIGNATURE:
-                conn.execute(IMPORTED_PEOPLE_DDL)
-                conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
-                conn.commit()
+            if ((found == "1" and signature == LEGACY_SCHEMA_SIGNATURE)
+                    or (found == "2" and signature in {BINARY_SCHEMA_SIGNATURE, PRE_INDEX_SCHEMA_SIGNATURE})):
+                with conn:
+                    conn.execute("BEGIN")
+                    if found == "1":
+                        conn.execute(IMPORTED_PEOPLE_DDL)
+                    if signature != BINARY_SCHEMA_SIGNATURE:
+                        conn.execute(RESEARCH_INDEX_DDL)
+                    conn.execute("ALTER TABLE merge_verdicts RENAME TO merge_verdicts_binary")
+                    conn.execute(MERGE_VERDICTS_DDL)
+                    conn.execute(
+                        "INSERT INTO merge_verdicts SELECT person_a,person_b,slug_a,slug_b,signature,judge,"
+                        "CASE WHEN same_person=0 THEN NULL ELSE same_person END,"
+                        "confidence,tone_consistent,reason,0,updated_at FROM merge_verdicts_binary"
+                    )
+                    conn.execute("DROP TABLE merge_verdicts_binary")
+                    conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
                 found = str(SCHEMA_VERSION)
                 signature = _schema_signature(conn)
             if found != str(SCHEMA_VERSION):
@@ -193,9 +215,6 @@ class Db:
                     f"deep-context DB schema is {found}, expected {SCHEMA_VERSION}; "
                     "migrate into a new canonical DB explicitly"
                 )
-            if signature == PRE_INDEX_SCHEMA_SIGNATURE:
-                conn.execute(RESEARCH_INDEX_DDL)
-                signature = _schema_signature(conn)
             if signature != EXPECTED_SCHEMA_SIGNATURE:
                 raise SchemaVersionError(
                     f"deep-context DB layout does not match schema version {SCHEMA_VERSION}; "
@@ -359,7 +378,8 @@ class Db:
             | FactRow
             | SyntheticProfileRow
             | ResearchRow
-            | GuidanceRow,
+            | GuidanceRow
+            | MergeVerdictRow,
             ...,
         ],
     ) -> int:
@@ -382,6 +402,7 @@ class Db:
                 if simple_table in {
                     "owner_context", "parents", "people", "facts",
                     "synthetic_profiles", "research", "guidance",
+                    "merge_verdicts",
                 }:
                     self._write(simple_table, row, conn)
                     continue

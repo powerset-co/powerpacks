@@ -233,6 +233,8 @@ class MessagesDiscovery(Node):
             return None
         payload = ContactsMerger().merge(
             inputs=inputs, output=MERGED_CONTACTS, manifest=MERGED_CONTACTS_MANIFEST,
+            source_manifests=[channel.extract_manifest for channel in self.channels
+                              if channel.contacts_csv in inputs and channel.extract_manifest.exists()],
         )
         if payload["status"] != "ok":
             return failed_child("ensure_contacts", payload)

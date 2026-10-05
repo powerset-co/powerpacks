@@ -1,6 +1,6 @@
 [project]
 name = "powerpacks"
-version = "3.15.1"
+version = "3.16.0"
 description = "Portable people-search skills, primitives, schemas, and contracts for agent runtimes."
 readme = "README.md"
 license = "MIT"
@@ -12,6 +12,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "markdown-it-py>=4.0",
     "modal>=1.5.0",
+    "nameparser==2.3.0",
     "openai>=1.0.0",
     "parallel-web==1.1.0",
     "psycopg2-binary>=2.9.10",

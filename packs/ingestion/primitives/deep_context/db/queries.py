@@ -32,12 +32,39 @@ from packs.ingestion.primitives.pipeline.contract import PeopleRow
 RowT = TypeVar("RowT")
 
 
-def imported_people(db: Db) -> tuple[PeopleRow, ...]:
+def imported_people(db: Db, *, parent_id: str | None = None) -> tuple[PeopleRow, ...]:
     """The full current import roster, with stable ownership in `people`."""
-    return tuple(
-        PeopleRow.model_validate(json.loads(row["row_json"]))
-        for row in db.query("SELECT row_json FROM imported_people ORDER BY person_id")
-    )
+    sql = "SELECT row_json FROM imported_people ORDER BY person_id"
+    params = ()
+    if parent_id is not None:
+        sql = ("SELECT row_json FROM imported_people JOIN people USING(person_id) "
+               "WHERE parent_id=? AND is_owner=0 AND is_ghost=0 ORDER BY person_id")
+        params = (parent_id,)
+    return tuple(PeopleRow.model_validate(json.loads(row["row_json"])) for row in db.query(sql, params))
+
+
+def source_names(db: Db, parent_id: str) -> tuple[str, ...]:
+    """Original source names in stable child order; missing names stay missing."""
+    return tuple(str(row[0] or "") for row in db.query(
+        "SELECT json_extract(i.row_json, '$.full_name') FROM people pe "
+        "LEFT JOIN imported_people i USING(person_id) "
+        "WHERE pe.parent_id=? AND pe.is_owner=0 AND pe.is_ghost=0 ORDER BY pe.person_id",
+        (parent_id,),
+    ))
+
+
+def source_names_by_parent(db: Db) -> dict[str, tuple[str, ...]]:
+    """Original source names for every family in one read, including missing names."""
+    names: dict[str, list[str]] = {}
+    for row in db.query(
+        "SELECT p.parent_id, json_extract(i.row_json, '$.full_name') AS name "
+        "FROM parents p LEFT JOIN people pe ON pe.parent_id=p.parent_id "
+        "AND pe.is_owner=0 AND pe.is_ghost=0 "
+        "LEFT JOIN imported_people i ON i.person_id=pe.person_id "
+        "ORDER BY p.parent_id, pe.person_id"
+    ):
+        names.setdefault(row["parent_id"], []).append(str(row["name"] or ""))
+    return {parent_id: tuple(values) for parent_id, values in names.items()}
 
 
 _BOOLEAN_COLUMNS = frozenset(
@@ -66,7 +93,8 @@ def typed_rows(
     for row in db.query(sql, params):
         values = dict(row)
         for column in _BOOLEAN_COLUMNS.intersection(values):
-            values[column] = bool(values[column])
+            if values[column] is not None:
+                values[column] = bool(values[column])
         result.append(row_type(**values))
     return tuple(result)
 
@@ -141,6 +169,7 @@ def people(
     db: Db,
     *,
     parent_id: str | None = None,
+    parent_ids: Sequence[str] | None = None,
     person_id: str | None = None,
 ) -> tuple[PersonRow, ...]:
     if person_id is not None:
@@ -150,8 +179,11 @@ def people(
             PersonRow,
             (person_id,),
         )
-    where = " WHERE parent_id=?" if parent_id is not None else ""
-    params = (parent_id,) if parent_id is not None else ()
+    selected_parent_ids = (parent_id,) if parent_id is not None else parent_ids
+    if selected_parent_ids is not None and not selected_parent_ids:
+        return ()
+    where = f" WHERE parent_id IN {ID_SET}" if selected_parent_ids is not None else ""
+    params = (id_set(selected_parent_ids),) if selected_parent_ids is not None else ()
     return typed_rows(
         db,
         f"SELECT * FROM people{where} ORDER BY person_id",

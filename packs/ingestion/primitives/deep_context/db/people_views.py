@@ -12,7 +12,7 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _hydrate_parents,
     _json,
 )
-from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_SELECT, WORTH_CTE
+from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_DOSSIER_SELECT, PARENT_SELECT, WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentLookupRow,
@@ -76,6 +76,7 @@ SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
               SELECT json_extract(d.payload_json, '$.body') AS body
               FROM artifacts d
               WHERE d.parent_id=p.parent_id AND d.kind='dossier' AND d.status='projected'
+                AND (d.artifact_key=a.artifact_key OR d.person_id IS NOT NULL)
                 AND d.candidate_key IS NULL AND json_extract(d.payload_json, '$.body')!=''
               GROUP BY body
               ORDER BY min(d.person_id IS NOT NULL), min(d.artifact_key)
@@ -83,6 +84,7 @@ SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
        COALESCE(NULLIF(json_extract(a.payload_json, '$.headline'), ''),
          (SELECT json_extract(d.payload_json, '$.headline') FROM artifacts d
           WHERE d.parent_id=p.parent_id AND d.kind='dossier' AND d.status='projected'
+            AND (d.artifact_key=a.artifact_key OR d.person_id IS NOT NULL)
             AND d.candidate_key IS NULL AND json_extract(d.payload_json, '$.headline')!=''
           ORDER BY d.person_id IS NOT NULL, d.artifact_key LIMIT 1),
          (SELECT json_extract(i.row_json, '$.headline')
@@ -108,9 +110,9 @@ SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
           WHERE pe.parent_id=p.parent_id AND pi.kind='linkedin'
         ) WHERE url IS NOT NULL AND url!='' ORDER BY url) AS linkedin_urls_json
 FROM matched mp JOIN parents p USING(parent_id)
-LEFT JOIN artifacts a ON a.artifact_key='dossier:'||p.parent_id
-  AND a.kind='dossier' AND a.status='projected'
-  AND a.person_id IS NULL AND a.candidate_key IS NULL
+LEFT JOIN artifacts a ON a.artifact_key=(
+  {PARENT_DOSSIER_SELECT}
+)
 ORDER BY mp.match_order, p.display_name, p.parent_id
 """,
                 params,
@@ -161,3 +163,31 @@ def person_detail(db: Db, slug_or_parent_id: str) -> ParentViewRow | None:
             dossier_body=(str(payload.get("body") or "") if isinstance(payload, dict) else ""),
         )
     return hydrated[0]
+
+
+def dossier_body(db: Db, slug_or_parent_id: str) -> str:
+    """Read the requested projected dossier without hydrating a review card."""
+    rows = db.query(
+        """
+WITH requested_people AS MATERIALIZED (
+  SELECT person_id, parent_id FROM people WHERE person_id=? OR child_slug=?
+), requested_parent AS (
+  SELECT p.* FROM parents p
+  WHERE p.parent_id=? OR p.display_slug=? OR p.public_identifier=?
+    OR p.parent_id IN (SELECT parent_id FROM requested_people)
+  ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id LIMIT 1
+)
+SELECT COALESCE(
+  (SELECT COALESCE(json_extract(a.payload_json, '$.body'), '')
+   FROM requested_people pe CROSS JOIN artifacts a
+     ON a.parent_id=pe.parent_id AND a.person_id=pe.person_id
+   WHERE a.kind='dossier' AND a.status='projected'
+   ORDER BY a.projected_at DESC, a.artifact_key LIMIT 1),
+  (SELECT json_extract(a.payload_json, '$.body')
+   FROM requested_parent p JOIN artifacts a ON a.artifact_key=(
+""" + PARENT_DOSSIER_SELECT + """
+  )), '') AS dossier_body
+""",
+        (slug_or_parent_id,) * 5,
+    )
+    return str(rows[0]["dossier_body"])

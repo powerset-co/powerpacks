@@ -38,6 +38,7 @@ def _clean(value: Any) -> str:
 
 def build_feedback_request(parent: ParentViewRow, candidate: CandidateViewRow | None, *, action: str,
                            comment: str, retarget_items: list[GuidanceFeedbackRow] | None = None,
+                           person_ids: tuple[str, ...] | None = None,
                            environ: dict[str, str] | None = None) -> FeedbackRequest:
     slug = parent.slug
     url = candidate.url if candidate else ""
@@ -55,8 +56,10 @@ def build_feedback_request(parent: ParentViewRow, candidate: CandidateViewRow | 
         "action": action,
         "person_name": parent.name,
         "parent_slug": slug,
-        "person_ids": [_clean(v) for v in parent.person_ids
-                       if _clean(v) and not _clean(v).lower().startswith("candidate:")],
+        "person_ids": [_clean(v) for v in (parent.person_ids if person_ids is None else person_ids) if _clean(v)],
+        "candidate_key": candidate.row_key if candidate else "",
+        "match_emails": candidate.match_emails if candidate else (),
+        "match_phones": candidate.match_phones if candidate else (),
         "public_identifier": candidate.pub if candidate else "",
         "linkedin_url": url,
         "proposed_linkedin_url": new_url,

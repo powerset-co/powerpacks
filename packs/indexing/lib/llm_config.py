@@ -81,6 +81,7 @@ def api_call_kwargs(model: str) -> dict[str, Any]:
     For non-reasoning: temperature=0.
     """
     kwargs: dict[str, Any] = {
+        "store": False,  # OpenAI keeps no request
         "max_completion_tokens": int(
             os.getenv("POWERPACKS_LLM_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))
         ),

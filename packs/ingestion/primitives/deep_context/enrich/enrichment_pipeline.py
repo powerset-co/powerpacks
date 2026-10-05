@@ -42,6 +42,8 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
     ReceiptStatus,
 )
 from packs.ingestion.primitives.deep_context.shared.common import ENRICH_MANIFEST
+from packs.ingestion.primitives.deep_context.merge_candidates.linkedin_name_matches import apply_linkedin_name_matches
+from packs.ingestion.primitives.deep_context.synthesis.normalization import normalize_parent_cache
 
 
 # A step that raises is run once more after this wait: every step skips what is already stored,
@@ -210,6 +212,8 @@ class EnrichmentPipeline:
 
     def run(self, *, total: int, budget: float, request_fingerprint: str) -> dict[str, object]:
         """Run every step; SQLite and stage outputs decide what needs work."""
+        if apply_linkedin_name_matches(self.db):
+            normalize_parent_cache(self.db, raw_dir=self.db.db_path.parent / 'raw', facts_dir=self.db.db_path.parent / 'facts')
         errors: list[str] = []
         steps: list[str] = []
         phase = "research"

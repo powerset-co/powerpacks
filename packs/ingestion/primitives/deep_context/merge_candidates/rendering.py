@@ -21,22 +21,10 @@ def render_parent(plan: ParentPlan) -> str:
         emails_yaml=yaml_list(list(plan.emails)),
         phones_yaml=yaml_list(list(plan.phones)),
         confidence=round(merged.confidence, 2),
-        summary=headline(merged) or "_Merged from the confirmed records below._",
+        summary=headline(merged),
         relationship=merged.relationship_to_owner,
         fact_sections=render_fact_sections(merged, field_of_study=False),
         identifiers=(*plan.emails, *plan.phones),
-    )
-
-
-def render_singleton(plan: ParentPlan) -> str:
-    child_slug = plan.confirmed[0].slug
-    return _TEMPLATES.get_template("singleton.md.j2").render(
-        plan=plan,
-        child_slug=child_slug,
-        name_json=json.dumps(plan.name, ensure_ascii=False),
-        children_yaml=yaml_list([child_slug]),
-        emails_yaml=yaml_list(list(plan.emails)),
-        phones_yaml=yaml_list(list(plan.phones)),
     )
 
 

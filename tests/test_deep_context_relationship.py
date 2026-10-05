@@ -122,7 +122,7 @@ class RelationshipTest(unittest.TestCase):
         self.assertEqual((first["status"], second["status"], second["reused"]), ("completed", "completed", 1))
         self.assertEqual(len((self.root / "relationships" / "decisions.jsonl").read_text().splitlines()), 1)
 
-    def test_saved_question_skips_judging_after_prompt_or_model_changes(self):
+    def test_changed_question_or_model_needs_new_spend_approval(self):
         target = "packs.ingestion.primitives.deep_context.shared.openai_responses.OpenAIResponsesCaller.call"
         with patch(target, new_callable=AsyncMock, return_value=self.response):
             self.stage(approve_spend=True).run()
@@ -133,10 +133,10 @@ class RelationshipTest(unittest.TestCase):
         ):
             result = self.stage(model="gpt-6-sol").run()
         call.assert_not_called()
-        self.assertEqual((result["status"], result["reused"]), ("completed", 1))
+        self.assertEqual((result["status"], result["calls"], result["reused"]), ("needs_approval", 1, 0))
         self.assertEqual(self.db.query("SELECT * FROM links"), before)
 
-    def test_question_prompt_includes_the_candidate_identity_uncertainty(self):
+    def test_question_does_not_feed_back_its_own_identity_decision(self):
         with self.db.transaction() as conn:
             conn.execute("UPDATE links SET machine_judgment='needs_review', "
                 "machine_reason='Two different Jordan profiles.' WHERE parent_id='jordan'")
@@ -145,7 +145,8 @@ class RelationshipTest(unittest.TestCase):
             self.stage(approve_spend=True).run()
         candidates = json.loads(call.call_args.kwargs["user_prompt"])["candidates"]
         self.assertEqual(candidates[0]["url"], "https://www.linkedin.com/in/jordan-bravo")
-        self.assertEqual(candidates[0]["identity_reason"], "Two different Jordan profiles.")
+        self.assertNotIn("identity_reason", candidates[0])
+        self.assertNotIn("identity_verdict", candidates[0])
 
     def test_partial_failure_reuses_success_and_limit_does_not_finish_unjudged(self):
         self.parent("casey")

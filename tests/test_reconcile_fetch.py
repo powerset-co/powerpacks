@@ -45,7 +45,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, source_evidence
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
@@ -80,7 +80,6 @@ from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.shared.csv_io import CsvIO
 from deep_context_sqlite_test_helpers import seed_identity
-from deep_context_sqlite_test_helpers import stub_identity_judge
 
 
 def task(
@@ -111,14 +110,23 @@ def profile_db(root: Path) -> Db:
         name="Jordan Bravo",
         machine_worth="maybe",
         linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+        candidate_people=True,
     )
+    db.replace_imported_people((PeopleRow(id="pid-1", full_name="Jordan Bravo", primary_email="jordan@example.test"),))
+    result = ProfileResult.from_payload("jordan-bravo", "https://www.linkedin.com/in/jordan-bravo", {
+        "state": "content", "normalized_profile": {"success": True, "full_name": "Jordan Bravo",
+            "experiences": [{"title": "Engineer", "company_name": "Example"}]}})
+    profile_projection.project_profile_results(db, ((ProfileTarget("jordan-bravo", "https://www.linkedin.com/in/jordan-bravo",
+        "jordan-bravo", "parent-1"), result),), root)
     return db
 
 
 def stub_mapped_identity_judge(answer):
     def results(tasks, **kwargs):
-        return [IdentityJudgeResult(IdentityVerdict.from_payload(answer), IdentityUsage(), '', 'fixture-jev')
-                for task in tasks]
+        from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import jev_judge
+        return [IdentityJudgeResult(IdentityVerdict.from_payload(answer), IdentityUsage(), '',
+            jev_judge.judgment_fingerprint(task, urls))
+            for task, urls in zip(tasks, kwargs['imported_urls'], strict=True)]
     return mock.patch.object(judging.jev_judge, 'judge_batch', side_effect=results)
 
 
@@ -231,7 +239,7 @@ class MappedCandidateJudgeTests(unittest.TestCase):
                 outcome = judging.judge_mapped_candidates(db)
             self.assertEqual(outcome.judge_calls, 1)
 
-    def test_each_valid_verdict_skips_even_without_fingerprint(self) -> None:
+    def test_recognized_verdict_without_current_fingerprint_is_rejudged(self) -> None:
         for verdict in ("confirmed", "wrong_person", "needs_review"):
             with self.subTest(verdict=verdict), TemporaryDirectory() as temp:
                 db = profile_db(Path(temp))
@@ -240,9 +248,8 @@ class MappedCandidateJudgeTests(unittest.TestCase):
                         "UPDATE links SET judgment_fingerprint='', judgment_payload_json=?",
                         (json.dumps({"verdict": verdict, "confidence": 0.7}),),
                     )
-                self.assertEqual(judging.judge_mapped_candidates(
-                    db
-                ).judge_calls, 0)
+                with stub_mapped_identity_judge({"verdict": verdict, "confidence": .7, "reason": "fixture"}):
+                    self.assertEqual(judging.judge_mapped_candidates(db).judge_calls, 1)
 
 
 def current_research_result(
@@ -415,7 +422,7 @@ class LinkedinViewTests(unittest.TestCase):
             judge.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
             ),
-            "012e36347158045a6644624a1b2fa7c7ad356e8e57ebb4aea8e63f2dd6c1c864",
+            "9210a8ccf6f772bedb4b1ffb13d654ebde1eddcf107fb0c7ac2d00ece0a32a19",
         )
 
     def test_failed_cache_is_not_judgeable(self):
@@ -904,7 +911,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
         self.assertIn("Bravo Robotics", " ".join(seen.get("experiences") or []))
 
     def test_cleared_retargets_stay_settled_without_rejudging(self):
-        for mode in ("cached", "grandfathered"):
+        for mode in ("cached",):
             with self.subTest(mode=mode), TemporaryDirectory() as directory:
                 root = Path(directory)
                 cache = root / "cache"
@@ -948,7 +955,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                         ],
                         cache,
                     )
-                    evidence = DossierEvidence.from_db(db, ("parent-1",))
+                    evidence = source_evidence(db, "parent-1", DossierEvidence.from_db(db, ("parent-1",)))
                     profile = judge.prefer_cached_profile(
                         result.identity_profile(),
                         queue.linkedin_view(
@@ -1033,7 +1040,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     "SELECT machine_action, machine_approved, machine_judgment "
                     "FROM links WHERE row_key='jordan-bravo'"
                 )[0]
-                self.assertEqual(tuple(row), ("retarget", "auto", None))
+                self.assertEqual(tuple(row), ("retarget", "auto", "confirmed"))
 
 
 class ResearchProposalPolicyTests(unittest.TestCase):
@@ -1180,7 +1187,6 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             ),
             reason="matched employer",
             source="deep-research",
-            prior=prior,
             stored=stored,
             model="fixture-model",
             effort="medium",
@@ -1207,7 +1213,16 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         self.assertEqual(cached.disposition, "cached")
         self.assertIsNone(cached.task)
 
-    def test_legacy_retarget_to_same_url_is_grandfathered(self):
+    def test_exact_cached_confirmed_below_threshold_remains_unapproved(self):
+        initial = self.proposal(None)
+        stored = StoredJudgment(IdentityVerdict.from_payload({
+            "verdict": "confirmed", "confidence": .1, "reason": "Weak fixture"}),
+            initial.proposal.judge_fingerprint)
+        cached = self.proposal(None, stored)
+        self.assertEqual(cached.disposition, "cached")
+        self.assertEqual(cached.proposal.approved, "")
+
+    def test_legacy_retarget_to_same_url_requires_a_current_judgment(self):
         prepared = self.proposal(
             ReviewExportRow(
                 key="jordan-old",
@@ -1215,8 +1230,8 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 new_linkedin_url="https://www.linkedin.com/in/jordan-new",
             )
         )
-        self.assertEqual(prepared.disposition, "grandfathered")
-        self.assertIsNone(prepared.task)
+        self.assertEqual(prepared.disposition, "pending")
+        self.assertIsNotNone(prepared.task)
 
     def test_matching_fingerprint_is_reused_whatever_the_prior_verdict_said(self):
         """A bought verdict is bought, whichever way it went.

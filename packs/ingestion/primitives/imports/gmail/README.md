@@ -14,6 +14,25 @@ Declared in `packs/ingestion/primitives/pipeline/graph.py`; contract in
 
 Paths are under `.powerpacks/network-import/`.
 
+`source_people.py` reads the source-owned account fields for the importer,
+fan-in and Deep Context. The import manifest retains the selected account paths;
+the readers use those rows and the account manifests' conflicting original names
+so another account or channel cannot replace a withheld name. Observation counts
+include those original names; contact and email counts remain separate.
+
+```mermaid
+flowchart LR
+    Accounts[Selected account people.csv] --> Source[source_people.py]
+    Source --> Import[importer.py]
+    Source --> Merge[merge_people.py]
+    Source --> Context[Deep Context source roster]
+```
+
+| file | role | reads | writes |
+|---|---|---|---|
+| `importer.py` | Import selected contacts | Discovery manifest and account rows | Import people and manifest |
+| `source_people.py` | Read original source observations | Account CSVs, account manifests and current import manifest | None |
+
 ## Manifest / status
 
 `GmailImportManifest` status `completed` when accounts were read, `skipped`

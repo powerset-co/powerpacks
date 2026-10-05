@@ -50,6 +50,9 @@ export function reviewCandidate(overrides: Partial<ReviewCandidate> = {}): Revie
     education: ["Example University"],
     synthetic: false,
     avatar_url: "https://media.example.com/jordan-bravo.jpg",
+    confidence: null,
+    verdict: "",
+    reason: "",
     ...overrides,
   }
 }

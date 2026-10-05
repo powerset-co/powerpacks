@@ -14,15 +14,15 @@ from packs.ingestion.primitives.deep_context.db.identity_views import judge_cand
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     IdentityOrigin,
+    LinkSnapshotRow,
     RESEARCH_CONFIRM_THRESHOLD,
-    ReviewExportRow,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
-    DossierEvidence,
+    DossierEvidence, source_evidence,
     owner_background,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge, jev_judge
@@ -34,8 +34,11 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue imp
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     StoredJudgment,
+    IdentityTask,
     IdentityVerdict,
     JudgeProfile,
+    IdentityJudgeResult,
+    IdentityUsage,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     RetargetProposal,
@@ -81,13 +84,13 @@ def prepare_research_proposal(
     profile: JudgeProfile,
     reason: str,
     source: str,
-    prior: ReviewExportRow | None,
     stored: StoredJudgment | None = None,
     model: str,
     effort: str,
     owner_block: str = "",
+    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
 ) -> PreparedResearchProposal:
-    """Apply the existing main-path cache and grandfather rules once."""
+    """Reuse only the exact current judge request with a valid verdict."""
     evidence = dossier
     fingerprint = proposal_fingerprint(evidence, profile, owner_block, model=model, effort=effort)
     proposal = RetargetProposal(
@@ -103,18 +106,8 @@ def prepare_research_proposal(
     # error may leave a fingerprint beside an empty/malformed payload; equality
     # alone would pin that failure forever as if it were a paid answer.
     if judgment_policy.reuses_stored_verdict(stored, fingerprint, force=False):
-        return PreparedResearchProposal(proposal, None, "cached")
-    prior_fingerprint = (prior.llm_judge_fingerprint or "").strip() if prior else ""
-    if (
-        prior is not None
-        and not prior_fingerprint
-        and (prior.action or "").strip().lower() == "retarget"
-        and (prior.new_linkedin_url or "").strip() == normalize_linkedin_url(new_url)
-    ):
-        # No stored fingerprint (row predates judgment_fingerprint existing) but the
-        # URL still matches what's proposed now — trust the legacy retarget rather
-        # than re-judging it.
-        return PreparedResearchProposal(proposal, None, "grandfathered")
+        return PreparedResearchProposal(replace(proposal, judge_payload=stored.verdict,
+            approved=ApprovedState.AUTO.value if stored.verdict.value == "confirmed" and stored.verdict.confidence >= confirm_threshold else ""), None, "cached")
     task = judge.research_proposal_task(
         evidence,
         profile,
@@ -166,7 +159,6 @@ def propose_retargets(
         for row in subset
         if (result := results.get(row.parent_slug)) and result.linkedin_url and row.row_key and row.parent_id
     ]
-    existing = {row.key: row for row in queries.review_rows(db)}
     stored = queries.stored_judgments(db)
     if targets:
         # Warms the profile cache for every candidate URL before judging, so the
@@ -177,7 +169,7 @@ def propose_retargets(
     profiles = projection.profile_payloads(db)
     proposals: list[RetargetProposal] = []
     pending: list[PreparedResearchProposal] = []
-    cached = grandfathered = judge_errors = 0
+    cached = judge_errors = 0
     for row in subset:
         handle = row.parent_slug
         result: ResearchResult | None = results.get(handle)
@@ -187,7 +179,7 @@ def propose_retargets(
         row_key = row.row_key.lower()
         if not new_url or not row_key:
             continue
-        evidence = DossierEvidence.from_db(db, (row.parent_id,))
+        evidence = source_evidence(db, row.parent_id, DossierEvidence.from_db(db, (row.parent_id,)))
         profile = judge.prefer_cached_profile(
             result.identity_profile(),
             linkedin_view(
@@ -195,7 +187,6 @@ def propose_retargets(
                 profiles.get(row_key),
             ),
         )
-        prior: ReviewExportRow | None = existing.get(row_key)
         prepared = prepare_research_proposal(
             row_key=row_key,
             new_url=new_url,
@@ -203,17 +194,15 @@ def propose_retargets(
             profile=profile,
             reason=result.reason,
             source=source,
-            prior=prior,
             stored=stored.get(row_key),
             model=judge_config.model,
             effort=judge_config.effort,
             owner_block=owner_block,
+            confirm_threshold=confirm_threshold,
         )
         if prepared.disposition == "cached":
             cached += 1
-            continue
-        if prepared.disposition == "grandfathered":
-            grandfathered += 1
+            proposals.append(prepared.proposal)
             continue
         pending.append(prepared)
 
@@ -256,7 +245,7 @@ def propose_retargets(
         proposed=projected,
         judge_calls=len(pending),
         cached_verdicts=cached,
-        grandfathered=grandfathered,
+        grandfathered=0,
         judge_errors=judge_errors,
     )
 
@@ -271,15 +260,11 @@ def _research_result(
     return ResearchResult.from_json(row.result_json) if row is not None else None
 
 
-def judge_mapped_candidates(
-    db: Db,
-    *,
-    heartbeat: Callable[[int, int], None] | None = None,
-) -> RetargetRunResult:
-    """Judge each mapped real LinkedIn still lacking any decision."""
+def mapped_identity_tasks(db: Db) -> list[tuple[LinkSnapshotRow, IdentityTask, tuple[str, ...], IdentityJudgeResult | None]]:
+    """Prepare current requests once for both the spend estimate and execution."""
     candidates = judge_candidates(db)
     if not candidates:
-        return RetargetRunResult(0, 0, 0, 0)
+        return []
     known_urls = queries.imported_linkedin_urls(db, tuple({row.parent_id for row in candidates}))
     profiles = projection.profile_payloads(db)
     research = {row.candidate_key: ResearchResult.from_json(row.result_json)
@@ -290,12 +275,12 @@ def judge_mapped_candidates(
         batch = parent_ids[start:start + RESEARCH_BATCH]
         evidence_rows = context_queries.dossier_evidence_rows(db, batch)
         evidence_by_parent.update(
-            (parent_id, DossierEvidence.from_rows((parent_id,), evidence_rows))
+            (parent_id, source_evidence(db, parent_id, DossierEvidence.from_rows((parent_id,), evidence_rows)))
             for parent_id in batch
         )
         del evidence_rows
-    tasks = []
     prepared = []
+    stored = queries.stored_judgments(db)
     for row in candidates:
         projected = profiles.get(row.row_key)
         if projected is not None and projected.state == PROFILE_ERROR:
@@ -313,19 +298,35 @@ def judge_mapped_candidates(
         profile = linkedin_view(source, profiles.get(row.row_key))
         if result and origin == IdentityOrigin.RESEARCH:
             profile = judge.prefer_cached_profile(result.identity_profile(), profile)
+        profile = replace(profile, linkedin_url=normalize_linkedin_url(profile.linkedin_url))
         evidence = evidence_by_parent[row.parent_id]
-        tasks.append(judge.research_proposal_task(evidence, profile) if origin == IdentityOrigin.RESEARCH
-                     else judge.IdentityTask(evidence, profile, origin))
-        prepared.append((row, url, origin, evidence, profile))
-    if not tasks:
-        return RetargetRunResult(0, 0, 0, 0)
+        task = judge.research_proposal_task(evidence, profile) if origin == IdentityOrigin.RESEARCH else judge.IdentityTask(evidence, profile, origin)
+        fingerprint = jev_judge.judgment_fingerprint(task, known_urls.get(row.parent_id, ()))
+        previous = stored.get(row.row_key)
+        outcome = (IdentityJudgeResult(previous.verdict, IdentityUsage(), "", fingerprint)
+                   if judgment_policy.reuses_stored_verdict(previous, fingerprint, force=False) else None)
+        prepared.append((row, task, known_urls.get(row.parent_id, ()), outcome))
+    return prepared
+
+
+def judge_mapped_candidates(
+    db: Db,
+    *,
+    heartbeat: Callable[[int, int], None] | None = None,
+) -> RetargetRunResult:
+    """Reuse exact current verdicts and settle every mapped machine candidate."""
+    prepared = mapped_identity_tasks(db)
+    pending = [item for item in prepared if item[-1] is None]
+    cached = [item for item in prepared if item[-1] is not None]
     results = jev_judge.judge_batch(
-        tasks, imported_urls=[known_urls.get(row.parent_id, ()) for row, *_ in prepared],
+        [task for _, task, *_ in pending], imported_urls=[urls for _, _, urls, *_ in pending],
         output_dir=db.db_path.parent / "reconcile" / "identity", on_done=heartbeat,
-    )
+    ) if pending else []
     settlements = []
     errors = 0
-    for (row, url, origin, evidence, profile), outcome in zip(prepared, results, strict=True):
+    completed = [(*item[:-1], outcome) for item, outcome in zip(pending, results, strict=True)]
+    for row, task, _, outcome in (*completed, *cached):
+        url, origin = task.linkedin.linkedin_url, task.origin
         verdict = outcome.verdict
         if verdict is None:
             errors += 1
@@ -347,4 +348,4 @@ def judge_mapped_candidates(
                     else WriterSource.RECONCILE.value),
         ))
     projected = settle_machine_identities(db, settlements)
-    return RetargetRunResult(len(projected), len(tasks), 0, 0, errors)
+    return RetargetRunResult(len(projected), len(pending), len(cached), 0, errors)

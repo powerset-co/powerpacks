@@ -2,8 +2,8 @@
 
 Composition requires one global prerequisite up front: the owner profile. Past
 that, each parent is composed in isolation — a parent needs its own source
-bundle, canonical-graph row, parseable/buildable facts, facts artifact, and
-display identity, and rendering itself must succeed. Any one of those failing
+bundle, canonical-graph row, compatible original contact names, parseable facts,
+facts artifact, and display identity, and rendering itself must succeed. Any one failing
 for a given parent SKIPS that parent (logged to stderr and recorded on the
 manifest's ``skip_reasons``) and moves on; it does not abort the run. One bad
 row must not cost every good row after it in ``sorted(facts.items())``.
@@ -14,6 +14,8 @@ index (``index.md``) as one line per parent, e.g.::
     - [[jordan-bravo-a1b2c3d4]] **Jordan Bravo** — Product Manager at Acme Corp
 
 Changelog:
+  2026-10-03: unresolved source identities fail both parent dossier projections
+    while preserving their files and extracted evidence.
   2026-08-08: per-parent isolation replaced abort-on-first-bad-parent; both
     cleanup passes below now preserve a skipped parent's prior dossier
     (file + artifact row) instead of treating it as an orphan.
@@ -40,8 +42,13 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     INDEX_MD,
     emit,
 )
+from packs.ingestion.primitives.deep_context.shared.dossier_policy import (
+    SOURCE_IDENTITY_REVIEW_REASON,
+    unresolved_source_parents,
+)
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.planning import projected_bundles
+from packs.ingestion.primitives.deep_context.synthesis.selection import effective_parent_bundles
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactReplacement,
@@ -62,7 +69,6 @@ from packs.ingestion.primitives.deep_context.db.queries import (
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.synthesis.facts import headline
 from packs.ingestion.primitives.deep_context.synthesis.models import (
-    DossierDepth,
     SynthesizedFacts,
 )
 from packs.ingestion.primitives.deep_context.synthesis.rendering import render_dossier, write_catalog
@@ -116,9 +122,9 @@ class ComposeDossier(Node):
         dossier_artifacts: list[ArtifactRow] = []
         written_slugs: set[str] = set()
 
-        # Only parent-owned facts are dossier sources; synthesis/normalization.py
-        # migrates any remaining legacy child-owned rows before this stage runs.
-        facts: dict[str, FactRow] = {row.parent_id: row for row in fact_rows(self.db, parent_owned=True)}
+        # Dossiers consume derived parent facts; original contact histories stay
+        # independently owned in SQLite and on disk.
+        facts: dict[str, FactRow] = {row.parent_id: row for row in sorted(fact_rows(self.db, parent_owned=True), key=lambda item: item.artifact_key.startswith("parent-facts:"))}
         facts_artifacts = artifact_rows(
             self.db,
             kind=ArtifactKind.FACTS.value,
@@ -127,33 +133,30 @@ class ComposeDossier(Node):
         )
         facts_artifacts_by_key = {row.artifact_key: row for row in facts_artifacts}
         dossier_rows = artifact_rows(self.db, kind=ArtifactKind.DOSSIER.value)
-        # "dossier-parent:" rows are the merge stage's own stub dossier
-        # (build_parents.py), a distinct artifact_key sharing this stage's
+        # "dossier-parent:" rows are the merge stage's complete parent dossier,
+        # a distinct artifact_key sharing this stage's
         # (kind, parent_id) scope. project_rows() below replaces every row in
-        # that scope, so the stub must be re-listed in each ArtifactReplacement
+        # that scope, so the parent dossier must be re-listed in each replacement
         # or it gets silently retracted alongside the composed "dossier:" row.
         parent_dossiers = {
             row.parent_id: row
             for row in dossier_rows
             if row.artifact_key == f"{PARENT_DOSSIER_ARTIFACT_PREFIX}{row.parent_id}"
         }
-        # This run's OWN prior composed-dossier rows (not the merge-stage stub
-        # above) — snapshotted before the loop runs, so it still names a
-        # skipped parent's last-good file/row even though that parent never
-        # reaches the write below this run. This is the fix for the orphan
-        # trap: without it, a skipped parent looks indistinguishable from one
-        # that never had a dossier, and both cleanup passes below would treat
-        # its still-good output as stale.
-        existing_dossiers_by_parent = {
-            row.parent_id: row
+        source_review_parents = unresolved_source_parents(self.db)
+        self.db.project_rows(tuple(
+            replace(row, status=ProjectionStatus.FAILED.value, error=SOURCE_IDENTITY_REVIEW_REASON)
             for row in dossier_rows
-            if row.artifact_key == f"dossier:{row.parent_id}"
-        }
-        bundles = projected_bundles(self.db)
+            if row.parent_id in source_review_parents
+            and row.person_id is None and row.candidate_key is None
+        ))
+        bundles = effective_parent_bundles(self.db)
         skips: list[DossierSkip] = []
-        skipped_parent_ids: set[str] = set()
+        skipped_parent_ids: set[str] = set(source_review_parents)
         for parent_id, fact in sorted(facts.items()):
             try:
+                if parent_id in source_review_parents:
+                    raise StoreError(SOURCE_IDENTITY_REVIEW_REASON)
                 meta: CollectionBundle | None = bundles.get(parent_id)
                 if meta is None:
                     raise StoreError(
@@ -184,9 +187,7 @@ class ComposeDossier(Node):
                     raise StoreError(
                         f"dossier facts artifact is absent for parent: {parent_id}"
                     )
-                depth: DossierDepth | None = DossierDepth.from_payload(
-                    parse_json_object(facts_artifact.payload_json)
-                )
+                depth = FactHistory.from_payload(parse_json_object(facts_artifact.payload_json)).dossier_depth(meta)
                 # Name priority: LLM-synthesized canonical name, then the identity
                 # graph's display name, then the raw bundle's contact name — first
                 # non-blank wins.
@@ -207,20 +208,20 @@ class ComposeDossier(Node):
                 slug = prior.display_slug
                 if slug is None or not slug.strip():
                     raise StoreError(f"dossier slug is absent for parent: {parent_id}")
+                meta = replace(meta, person_id=parent_id, full_name=name)
                 dossier_path = self.dossier_dir / f"{slug}.md"
                 body = render_dossier(
-                    replace(meta, full_name=name),
+                    meta,
                     merged,
                     depth,
-                    owner_emails=owner.emails,
-                    owner_phones=owner.phones,
+                    slug=slug,
                 )
             except (StoreError, TemplateError) as exc:
                 # `StoreError` is every explicit prerequisite check above;
                 # `TemplateError` is what a strict-undefined template raises
-                # when render_dossier is handed an unrenderable shape. Nothing
-                # has been written or projected for this parent at any raise
-                # site above, so skipping here is a clean no-op for it.
+                # when render_dossier is handed an unrenderable shape. Preserve
+                # last-good files; source-name quarantine has already withdrawn
+                # their projected identity above.
                 skips.append(DossierSkip(parent_id=parent_id, reason=str(exc)))
                 skipped_parent_ids.add(parent_id)
                 print(f"[compose] skipped parent={parent_id} reason={exc}", file=sys.stderr)
@@ -268,9 +269,9 @@ class ComposeDossier(Node):
         # by construction, so without this set a transient failure would
         # permanently delete its still-good prior dossier.
         skipped_stems = {
-            Path(existing_dossiers_by_parent[parent_id].path).stem
-            for parent_id in skipped_parent_ids
-            if parent_id in existing_dossiers_by_parent
+            Path(row.path).stem for row in dossier_rows
+            if row.parent_id in skipped_parent_ids
+            and row.person_id is None and row.candidate_key is None
         }
         orphans = 0
         for path in self.dossier_dir.glob("*.md"):

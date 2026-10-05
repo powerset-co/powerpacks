@@ -1,165 +1,57 @@
-"""Consolidate merged parents' extraction histories and legacy child fact caches."""
-
-# Legacy child normalization (2026-08-07): remove after child-owned FACTS artifacts retire.
-
+"""Preserve contact extraction histories and derive parent display facts."""
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import replace
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.normalization import (
-    normalize_cached_bundles,
-)
-from packs.ingestion.primitives.deep_context.collection.planning import (
-    projected_bundles,
-)
-from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactKind,
-    ArtifactReplacement,
-    ArtifactRow,
-    FactRow,
-)
+from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
+from packs.ingestion.primitives.deep_context.db.context_queries import aggregate_people, collection_sources, person_histories
+from packs.ingestion.primitives.common.legacy import restore_contact_facts
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
-from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts
+from packs.ingestion.primitives.deep_context.db.queries import people, facts
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.context_queries import parent_histories
 from packs.ingestion.primitives.deep_context.synthesis.facts import merge_disjoint_fact_records
-from packs.ingestion.primitives.deep_context.synthesis.models import (
-    FactRecord,
-    SynthesizedFacts,
-)
-from packs.ingestion.primitives.deep_context.synthesis import prompting
+from packs.ingestion.primitives.deep_context.synthesis.history import FactHistory
+from packs.ingestion.primitives.deep_context.synthesis.models import FactRecord
 
 
-def normalize_parent_cache(
-    db: Db,
-    *,
-    raw_dir: Path,
-    facts_dir: Path,
-    system_prompt: str,
-    chunk_chars: int,
-    max_batches: int,
-) -> int:
-    """Reuse paid child facts while changing only their canonical owner."""
+def normalize_parent_cache(db: Db, *, raw_dir: Path, facts_dir: Path) -> int:
+    """Reuse original contacts without claiming mixed parent facts belong to them."""
+    members = {}
+    for row in people(db):
+        members.setdefault(row.parent_id, []).append(row.person_id)
+    restored = restore_contact_facts(db, facts_dir)
     normalize_cached_bundles(db, raw_dir)
-    bundles = projected_bundles(db)
-    artifact_rows = {row.artifact_key: row for row in artifacts(db, kind=ArtifactKind.FACTS.value)}
-    histories = parent_histories(db)
-    parent_artifacts: dict[str, list[ArtifactRow]] = {}
-    for artifact in artifact_rows.values():
-        if artifact.person_id is None:
-            parent_artifacts.setdefault(artifact.parent_id, []).append(artifact)
-    for parent_id, rows in parent_artifacts.items():
-        if len(rows) < 2:
-            continue
-        path = Path(facts_dir) / f"{parent_id}.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            shutil.copy2(path, path.with_suffix(path.suffix + ".bkup"))
-        path.write_text("".join(item.serialized + "\n" for item in histories[parent_id].records), encoding="utf-8")
-        project_parent_fact(db, path, parent_id)
-    fact_rows = facts(db)
-    parent_facts = {row.parent_id for row in fact_rows if row.person_id is None}
-    grouped: dict[str, list[FactRow]] = {}
-    for fact in fact_rows:
-        if fact.person_id:
-            grouped.setdefault(fact.parent_id, []).append(fact)
-    facts_dir = Path(facts_dir)
-    facts_dir.mkdir(parents=True, exist_ok=True)
-    migrated = 0
+    histories = person_histories(db)
+    aggregate_ids = aggregate_people(db)
+    required = {row.person_id for row in collection_sources(db)}
+    contact_facts = [row for row in facts(db, parent_owned=False)]
     priority = {"no": 0, "maybe": 1, "yes": 2}
-    for parent_id, child_facts in sorted(grouped.items()):
-        bundle: CollectionBundle | None = bundles.get(parent_id)
-        parent_ready = parent_id in parent_facts
-        judged_facts = [row for row in child_facts if row.machine_worth in priority]
-        if parent_id not in parent_facts and bundle and judged_facts:
-            # Fields merge from every child equally (merge_disjoint_fact_records below), but
-            # network_worth is a judgment call: it comes only from the single child
-            # with the most favorable verdict (yes > maybe > no), subject_key just
-            # breaking ties deterministically.
-            winner = max(
-                judged_facts,
-                key=lambda row: (priority[row.machine_worth], row.subject_key),
-            )
-            source_records = [
-                parse_json_object(artifact_rows[row.artifact_key].payload_json)
-                for row in child_facts
-                if row.artifact_key in artifact_rows
-            ]
-            merged = merge_disjoint_fact_records(
-                record
-                for row in child_facts
-                if (
-                    record := FactRecord.from_payload(
-                        {
-                            "facts": parse_json_object(row.facts_json),
-                        }
-                    )
-                )
-                is not None
-            )
-            if merged is None:
-                continue
-            winner_facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(parse_json_object(winner.facts_json))
-            if winner_facts and winner_facts.network_worth:
-                merged = replace(
-                    merged,
-                    network_worth=winner_facts.network_worth,
-                )
-            # Base payload is the winner's own raw record (carries its model/token
-            # metadata); if that exact record can't be matched back, fall back to
-            # whichever child record was seen last rather than fail the migration.
-            record = dict(
-                next(
-                    (item for item in source_records if item.get("facts") == parse_json_object(winner.facts_json)),
-                    source_records[-1] if source_records else {},
-                )
-            )
-            record.update(
-                {
-                    "facts": merged.to_payload(),
-                    "synthesis_version": prompting.SYNTHESIS_VERSION,
-                    "input_evidence_fingerprint": prompting.input_evidence_fingerprint(
-                        bundle,
-                        system_prompt=system_prompt,
-                        chunk_chars=chunk_chars,
-                        max_batches=max_batches,
-                    ),
-                    "final_confidence": max(
-                        (float(row.confidence or 0) for row in child_facts),
-                        default=0.0,
-                    ),
-                    "messages_available": int(bundle.messages_available or len(bundle.messages)),
-                }
-            )
-            path = facts_dir / f"{parent_id}.jsonl"
-            path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
-            project_parent_fact(db, path, parent_id)
-            migrated += 1
-            parent_ready = True
-
-        if not parent_ready:
+    out_dir = Path(facts_dir) / "parents"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for parent_id, family in members.items():
+        if any(person not in histories or not histories[person].facts.present
+               for person in required.intersection(family)):
             continue
-
-        for fact in child_facts:
-            artifact: ArtifactRow | None = artifact_rows.get(fact.artifact_key)
-            db.project_rows(
-                (
-                    ArtifactReplacement(
-                        ArtifactKind.FACTS.value,
-                        (),
-                        person_id=fact.person_id,
-                    ),
-                )
-            )
-            if artifact:
-                old = Path(artifact.path)
-                # Only delete files this migration itself would have written —
-                # a per-child file living outside facts_dir isn't ours to remove.
-                if old.parent.resolve() == facts_dir.resolve():
-                    old.unlink(missing_ok=True)
-    return migrated
+        contacts = [histories[person] for person in family if person in histories and person not in aggregate_ids]
+        if not contacts:
+            continue
+        history = FactHistory.from_records(item.payload() for contact in contacts for item in contact.records)
+        merged = merge_disjoint_fact_records(FactRecord(contact.facts) for contact in contacts)
+        if merged is None:
+            continue
+        judged = [row for row in contact_facts if row.parent_id == parent_id
+                  and row.person_id not in aggregate_ids and row.machine_worth in priority]
+        winner = max(judged, key=lambda row: (priority[row.machine_worth], row.subject_key)) if judged else None
+        tagged = histories[winner.person_id].facts if winner else None
+        merged = replace(merged, network_worth=tagged.network_worth if tagged else None,
+                         labels=tagged.labels if tagged else {},
+                         present=merged.present | (tagged.present & {"labels"} if tagged else set()))
+        record = history.payload()
+        record["facts"] = merged.to_payload()
+        path = out_dir / f"{parent_id}.jsonl"
+        path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+        project_parent_fact(db, path, parent_id, artifact_key=f"parent-facts:{parent_id}",
+                            excluded_person_ids=tuple(aggregate_ids.intersection(family)))
+    return restored

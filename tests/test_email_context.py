@@ -325,6 +325,30 @@ class RecentEmailsTests(unittest.TestCase):
         self.assertTrue(body.endswith("ENDMARK"))
         self.assertIn(" … ", body)  # middle elided
 
+    def test_quote_only_body_does_not_restore_third_party_preview_as_contact_words(self):
+        context = EmailContext(self.store)
+        for body in (
+            "---------- Forwarded message ----------\nFrom: casey@example.com\nI am CTO at ExampleCo",
+            "On Monday Casey wrote:\n> I am CTO at ExampleCo",
+            "> I am CTO at ExampleCo",
+        ):
+            with self.subTest(body=body):
+                rows, _ = context.select_emails_from_rows([{
+                    "sender_email": "jordan@example.com", "body_text": body,
+                    "snippet": "I am CTO at ExampleCo", "subject": "Fwd: introduction",
+                    "at": "2026-01-01", "conversation_id": "forwarded",
+                }], "jordan@example.com", 5, {"owner@example.com"})
+                self.assertEqual(rows, [])
+
+    def test_forwarded_body_keeps_only_senders_new_words(self):
+        rows, _ = EmailContext(self.store).select_emails_from_rows([{
+            "sender_email": "jordan@example.com",
+            "body_text": "Please meet Casey.\n---------- Forwarded message ----------\nI am CTO at ExampleCo",
+            "snippet": "I am CTO at ExampleCo", "subject": "Fwd: introduction",
+            "at": "2026-01-01", "conversation_id": "forwarded",
+        }], "jordan@example.com", 5, {"owner@example.com"})
+        self.assertEqual([row.snippet for row in rows], ["Please meet Casey."])
+
 
 class DepthSelectionTests(unittest.TestCase):
     """Thread leaders consume the budget before lower-ranked thread depth."""

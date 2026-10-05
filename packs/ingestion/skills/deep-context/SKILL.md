@@ -12,7 +12,7 @@ resolution, synthetic-profile, realization, and validation behavior lives here.
 The durable flow is:
 
 ```text
-messages -> dossiers -> enrich -> check LinkedIn -> realize -> people.csv -> index
+source contacts -> contact facts -> dedupe -> parent dossiers -> enrich -> check LinkedIn -> realize -> people.csv -> index
 ```
 
 All paths are fixed and overwritten in place. Do not add run ids, ledgers, or a
@@ -35,6 +35,19 @@ Use the narrow path when the user names one:
   `packs/search/skills/search/person-lookup.md` (free, read-only), then stop.
 - `$deep-context check` -> run only `bin/deep-context check` (free); report
   `next_command` and stop.
+- `$deep-context audit` -> run only `bin/deep-context audit` (free, read-only).
+  Findings distinguish broken ownership, identity review, and missing independent
+  facts; a finding is not a verdict that two contacts are different people.
+- `$deep-context rebuild`, "clean rebuild", "fresh rebuild", or "rebuild from
+  raw sources" -> follow [Fresh rebuild with current human decisions](recovery.md#fresh-rebuild-with-current-human-decisions).
+  Regenerate source imports, then run `bin/deep-context rebuild` with the explicit
+  original, backup, fresh state and owner paths. Continue on that isolated state
+  with the reviewed source scope and approved paid-stage budget.
+- `$deep-context heal`, "repair bad merges", "recover contact facts", or
+  "apply saved feedback to an existing installation" -> follow
+  [Heal an existing installation](recovery.md#heal-an-existing-installation),
+  then inspect unresolved identity findings in that guide. Paid synthesis or
+  research requires a scoped estimate and approval.
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
@@ -75,6 +88,10 @@ Use the narrow path when the user names one:
   context", or a full rerun -> use the complete staged workflow below.
 
 Do not make a user who asked for a single read-only action walk the full build.
+A lookup `no_match` means no usable projected dossier matched; it does not prove
+the contact is absent. For an investigation, inspect the original contact and
+audit findings before drawing that conclusion. Never present another person's
+dossier as the requested identity merely because an endpoint matches.
 
 ## Privacy and approvals
 
@@ -89,8 +106,8 @@ messages.
   collector always skips them).
 - iMessage collection needs Full Disk Access and may need to run in the user's
   own terminal.
-- Never treat memory, an earlier transcript, or an earlier approval as consent
-  for OpenAI, Parallel, RapidAPI cache misses, or Modal upload.
+- Paid approval must cover the current scope. Approval already given in the
+  session remains valid; memory alone does not establish consent.
 - `bin/deep-context run` is intentionally disabled. Paid stages must be previewed
   and run separately under the cost rules below.
 
@@ -166,6 +183,14 @@ uv run --project . python packs/ingestion/primitives/imports/status.py status
 `deep-context.sqlite.bkup-schema-<UTC timestamp>` beside the store; otherwise
 it only reads. Combine current source imports, then project their people into
 SQLite; `ensure-parents` creates the store on a fresh install.
+For every existing SQLite installation, run
+[Heal an existing installation](recovery.md#heal-an-existing-installation)
+before fan-in, collection or synthesis. `heal` checks SQLite's existing
+`meta.data_migration_version`: completed migrations are a read-only no-op;
+pending repairs run in order and record completion only after success. Do not
+use `deep-context/heal/manifest.json` to skip this check; it is a report only.
+A fresh installation without a canonical SQLite store skips this command.
+
 Imports do not merge people or write identity decisions:
 
 ```bash
@@ -187,9 +212,10 @@ bin/deep-context seed
 bin/deep-context check
 ```
 
-`seed` is free and local. It merges the cold parents a legacy same-person
-family spans, re-owns each legacy raw bundle and facts record to its cold
-parent, replays the human worth and LinkedIn decisions from
+`seed` is free and local. It retains each attributable bundle and facts history
+under its original contact without restoring legacy family merges. Mixed
+parent histories stay in the original files until ownership is resolved.
+It replays uniquely attributable direct human worth and LinkedIn decisions from
 `overrides/review.csv`, and projects Parallel research results and matching
 cached profiles onto the current candidates. Machine review rows and dossiers
 are not carried. Unmatched worth and identity decisions remain in the legacy files; the
@@ -218,8 +244,12 @@ The store's state picks one of three starts; there is no mode flag:
   every decision are kept, and a contact the refresh omitted is not deleted.
   New unresolved contacts enter the worth and lookup queues like any other.
 
-After `ensure-parents`, every stage reads SQLite only; `realize` is the one
-place a CSV is written again.
+After `ensure-parents`, stages use SQLite projections; legacy recovery also
+reads original facts files. `realize` writes the final people CSV.
+Run `bin/deep-context audit` after preparation and again at completion.
+Report structural defects, identity review signals and incomplete contact
+history separately; follow [Contact recovery](recovery.md) for findings.
+An audit finding alone does not authorize paid work or prove a bad identity.
 
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
 source. Stop on unreadable iMessage Full Disk Access.
@@ -274,7 +304,7 @@ cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
 printed by `dry` — do not invent a different scope. Synthesis extracts facts.
 JEV then answers the 34 share-label and 7 worth questions together, storing
-`network_worth` and `labels` in each `facts/<parent_id>.jsonl` and explicitly
+`network_worth` and `labels` in each contact's `facts/<person_id>.jsonl` and explicitly
 projecting that completed payload into SQLite facts. Effective worth reads the
 human override first, then the parent machine decision from enrichment, then
 the best machine verdict on the parent's facts. Existing facts are reused without
@@ -320,13 +350,35 @@ bin/deep-context validate
 
 ### 4. Duplicate people
 
-Identity resolves cheapest evidence first so one human is one review and one
-dossier. The cluster stage merges an identical name with a shared phone or
-email locally, merges the same name unless JEV finds the facts keep the two
-records apart, reuses cached decisions, and sends only the remainder (a short
-or variant form of a name, or a shared phone or email under two names) to the
-JEV pair judge (about $0.0001 per pair). A shared first name, last name or
-email handle alone is not compared. Preview the complete stage first:
+After synthesis and its combined JEV labels/worth pass, unique imported LinkedIn
+name matches merge automatically and set machine LinkedIn acceptance and Worth
+Yes with `deep-context-name-match` provenance. This also runs before pair judging
+and direct enrichment. It needs no facts or identity judge: a full surname and
+matching first name, first-name prefix, or first initial suffice. Ambiguous URLs,
+conflicting source/fact identities, human rejection, and different-person decisions
+withhold the whole proposed merge. Exact human mappings take precedence and remain
+resolved without a new merge or expanded candidate membership. Human decisions
+covering only part of a parent cannot resolve its other children; releasing a
+parent requires all children to have human acceptance of the same URL. Imported name
+matches take precedence over machine profile suggestions. Later contradictory
+evidence withdraws automatic acceptance and withholds the merged parent's export
+and dossier until identity review; exact human acceptance overrides those holds
+for the people it covers. Original contacts and facts remain in SQLite.
+Dry runs report the free matches without applying them.
+
+Identity resolves cheapest evidence first. The cluster stage merges an
+identical name with a shared source contact phone or email locally. Other
+compatible names receive one GPT-6.1-sol high judgment: same person, different
+people, or uncertain. Only an affirmative same-person judgment accepts a pair;
+a matching name alone is not an accepted merge outside the imported LinkedIn rule. Extracted contact details
+cannot create a pair or a free merge, and a shared identifier cannot override
+incompatible names. Reuse same-person and uncertain decisions only when the
+complete request matches. Uncertain pairs remain separate without becoming
+different-person constraints. Explicit different-person decisions persist across
+evidence changes and block contradictory transitive merges; a clean rebuild
+discards these machine decisions too. A shared first name, last name or email
+handle alone is not compared.
+Preview the complete stage first:
 
 ```bash
 bin/deep-context cluster --dry-run
@@ -342,8 +394,8 @@ bin/deep-context parents
 ```
 
 `parents` is free and idempotent — run it after clustering so the canonical
-layer always matches the accepted merges. Report `pairs_slam_dunk` (matched on
-the name or a shared identifier, before the keep-apart check), `pairs_reused`,
+layer always matches the accepted merges. Report `pairs_slam_dunk` (identical
+name and a shared source identifier), `pairs_reused`,
 and `pairs_judged`.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
@@ -496,7 +548,9 @@ bin/deep-context realize
 
 `realize` applies every verified or retargeted LinkedIn (including a pasted
 LinkedIn on a synthetic card) and every detach to the SQLite roster, then
-exports `.powerpacks/network-import/merged/people.csv` from that same roster.
+exports one row per existing parent to
+`.powerpacks/network-import/merged/people.csv`. SQLite keeps the individual
+source-contact rows; an exported parent is never re-imported as source ownership.
 Each accepted LinkedIn fills its work history, education and headline from the
 profile already projected into SQLite; realize never calls a provider. Report
 `rows`, `profiles_filled` and `profiles_missing` in one line. When
@@ -593,6 +647,7 @@ still-unresolved Yes people explicitly.
 ```text
 .powerpacks/deep-context/raw/                    ephemeral sampled bodies + manifest
 .powerpacks/deep-context/facts/                  extracted facts + manifest
+.powerpacks/deep-context/facts/parents/          derived parent facts; original contact files remain
 .powerpacks/deep-context/dossiers/               dossiers + index
 .powerpacks/deep-context/parents/                canonical people + manifest
 .powerpacks/deep-context/reconcile/deep-research/<handle>/00_parallel_result.json

@@ -182,6 +182,8 @@ class OpenAIResponsesCaller:
         schema_name: str,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
+            # Requests carry message text; OpenAI keeps none of them.
+            "store": False,
             "max_output_tokens": int(
                 os.getenv(
                     "POWERPACKS_DEEP_CONTEXT_MAX_OUTPUT_TOKENS",

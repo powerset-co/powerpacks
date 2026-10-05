@@ -9,10 +9,6 @@ from typing import Any, Iterable
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
-from packs.ingestion.primitives.common.legacy import (
-    LEGACY_PARALLEL_HANDLE_RESULT,
-    legacy_parallel_input_fingerprint,
-)
 
 
 @dataclass(frozen=True)
@@ -136,12 +132,7 @@ def filter_already_done(
     processor: str = config.DEFAULT_PROCESSOR,
     beta_header: str = config.DEFAULT_BETA_HEADER,
 ) -> tuple[list[ResearchQueueRow], int]:
-    """Reuse projected paid outputs; changed inputs overwrite the fixed path.
-
-    The only resume evidence is a projected DB artifact row. Driver projects
-    each accepted provider output before reading the next stream event, so a
-    rerun submits only rows that did not reach that checkpoint.
-    """
+    """Reuse only projected outputs with the exact input and provider contract."""
     completed = {
         artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint
         for artifact in projected_research
@@ -160,8 +151,7 @@ def filter_already_done(
             current = input_fingerprint(
                 row, processor=processor, beta_header=beta_header
             )
-            legacy = legacy_parallel_input_fingerprint(build_input(row))
-            if stored in {current, legacy, LEGACY_PARALLEL_HANDLE_RESULT}:
+            if stored == current:
                 skipped += 1
                 continue
         todo.append(row)

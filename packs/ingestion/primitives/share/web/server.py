@@ -77,8 +77,8 @@ def parse_tag_request(body: bytes, known_ids: set[str]) -> TagChanges:
 
 
 def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> dict[str, tuple[ShareDecisionRow, ...]]:
-    """Write the tags and the share rows they re-decide, together, for every
-    person under each parent. Returns the re-decided rows by parent.
+    """Tag every source person and re-decide one share row per parent together.
+    Returns the re-decided rows by parent.
 
     The tags land on the roster ids. A person whose only tags were inherited
     from a merged-away id keeps that note, and from now on the roster row is
@@ -99,8 +99,9 @@ def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> dict[str, t
                               updated_at=updated_at)
             tag_rows.append(PersonTagRow(person_id=member.person_id, tags=join_tags(tags), note=human.note,
                                          updated_at=updated_at))
-            share_rows.append(share_decision(label_row_from_export(labels[member.person_id]), human,
-                                             updated_at=updated_at))
+            if member.person_id in labels:
+                share_rows.append(share_decision(label_row_from_export(labels[member.person_id]), human,
+                                                 updated_at=updated_at))
         decided[parent_id] = tuple(share_rows)
     db.decide_share(tuple(tag_rows), tuple(row for rows in decided.values() for row in rows))
     return decided

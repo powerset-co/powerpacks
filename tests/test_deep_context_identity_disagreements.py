@@ -22,8 +22,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, FactRow, LinkRow, ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.relationship import ReviewRelationships
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponse, OpenAIUsage
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult, ProfileTarget
+from packs.ingestion.primitives.deep_context.enrich.profiles.projection import project_profile_results
 
 class ParentIdentityTest(unittest.TestCase):
     def setUp(self):
@@ -42,6 +46,12 @@ class ParentIdentityTest(unittest.TestCase):
             FactRow(parent, parent, f'facts:{parent}', machine_worth='yes', facts_json=json.dumps({'canonical_name':'Jordan Bravo'})),
             LinkRow(f'{parent}:a', parent, f'{parent}-bravo', 'research', candidate_origin=True, source="deep-context-reconcile",
                 linkedin_url=f'https://www.linkedin.com/in/{parent}-bravo')))
+        self.db.replace_imported_people((*queries.imported_people(self.db),
+            PeopleRow(id=f'person:{parent}', full_name='Jordan Bravo', primary_email=f'{parent}@example.test')))
+        url = f'https://www.linkedin.com/in/{parent}-bravo'
+        profile = ProfileResult.from_payload(f'{parent}-bravo', url, {'state':'content', 'normalized_profile':{
+            'success':True, 'full_name':'Jordan Bravo', 'linkedin_url':url, 'experiences':[{'title':'Engineer'}]}})
+        project_profile_results(self.db, ((ProfileTarget(f'{parent}-bravo', url, f'{parent}:a', parent), profile),), self.root)
 
     def run_stage(self, payload, **kwargs):
         response = OpenAIResponse(payload, OpenAIUsage(100, 50))
@@ -140,6 +150,11 @@ class ParentIdentityTest(unittest.TestCase):
         self.parent()
         self.db.project_rows((LinkRow('jordan:b', 'jordan', 'jordan-bravo', 'research', candidate_origin=True,
             source='deep-context-reconcile', linkedin_url='https://www.linkedin.com/in/jordan-bravo'),))
+        profile = ProfileResult.from_payload('jordan-bravo', 'https://www.linkedin.com/in/jordan-bravo', {
+            'state':'content', 'normalized_profile':{'success':True, 'full_name':'Jordan Bravo',
+                'linkedin_url':'https://www.linkedin.com/in/jordan-bravo', 'experiences':[{'title':'Engineer'}]}})
+        project_profile_results(self.db, ((ProfileTarget('jordan-bravo', 'https://www.linkedin.com/in/jordan-bravo',
+            'jordan:b', 'jordan'), profile),), self.root)
         decision=RelationshipDecision.from_payload('jordan','fingerprint', {'candidates':[
             {'url':'https://www.linkedin.com/in/jordan-bravo','verdict':'yes','reason':'Email agrees','confidence':.95}]})
         finish_reviews(self.db, (decision,))

@@ -110,7 +110,6 @@ class IndexingScaffoldTests(unittest.TestCase):
             payload = PeopleMerge(
                 inputs=[linkedin_csv, gmail_csv],
                 output_dir=out_dir,
-                directory_csv=base / "directory.csv",
             ).run().to_payload()
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["stats"]["input_rows_total"], 2)

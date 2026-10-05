@@ -357,7 +357,7 @@ class MergeMessageContactsTests(unittest.TestCase):
                 ],
             )
             result = subprocess.run(
-                ["python3", str(self.MERGE), "merge", "-i", str(imsg), "-i", str(wa), "-o", str(out)],
+                [sys.executable, str(self.MERGE), "merge", "-i", str(imsg), "-i", str(wa), "-o", str(out)],
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
