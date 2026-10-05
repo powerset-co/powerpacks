@@ -62,9 +62,6 @@ class InstallPipelineTests(unittest.TestCase):
         self.patch = patch.object(pipeline.subprocess, "run", side_effect=self.external)
         self.subprocess = self.patch.start()
         self.addCleanup(self.patch.stop)
-        sleep = patch.object(pipeline.time, "sleep")
-        self.sleep = sleep.start()
-        self.addCleanup(sleep.stop)
 
     def reset_pipeline(self, root):
         self.root = root.resolve()
@@ -179,7 +176,8 @@ class InstallPipelineTests(unittest.TestCase):
     def workflow_state(self, db):
         self.assertEqual(db.db_path, self.root / ".powerpacks/deep-context/deep-context.sqlite")
         payload = self.native("review-status")
-        return SimpleNamespace(next_action=payload["next_action"], selection="synthetic-selection")
+        return SimpleNamespace(next_action=payload["next_action"], selection="synthetic-selection",
+                               progress=SimpleNamespace(linkedin_pending=3 if self.review else 0))
 
     def estimate_enrichment(self, *args, **kwargs):
         payload = self.native("enrich-estimate")
@@ -410,15 +408,16 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual((result["step"], result["status"]), ("index", "waiting"))
         self.assertFalse(self.indexed())
 
-    def test_review_keeps_waiting_until_native_decisions_change(self):
+    def test_matches_the_judges_left_wait_until_the_index_is_built(self):
         self.review = True
         result = self.run_pipeline("index", upload=True)
-        self.assertEqual(self.waits, 2)
-        self.assertTrue(self.sleep.called)
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["steps"]["review"]["status"], "completed")
-        self.assertIn("review", result["plan"])
-        self.assertEqual(result["plan"].index("review") + 1, result["plan"].index("index"))
+        self.assertEqual(self.waits, 0)
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        self.assertTrue(self.indexed())
+        self.assertNotIn("review", result["plan"])
+        self.assertEqual(result["action"]["kind"], "review")
+        self.assertIn("3 LinkedIn matches", result["action"]["text"])
+        self.assertFalse(any(call.args[0][0] == "open" for call in self.subprocess.call_args_list))
 
     def test_native_failure_is_logged_and_stops_before_paid_work(self):
         self.failing_command = "collect"
@@ -557,13 +556,12 @@ class InstallPipelineTests(unittest.TestCase):
             node = next(options["node"] for name, options in self.calls if name == stage)
             self.assertEqual(node.wacli_db, store / "wacli.db")
 
-    def test_review_reuses_requested_installation_port(self):
+    def test_the_review_offer_uses_the_installation_port(self):
         self.review = True
         result = ProcessingOnboarding(self.root, approved_spend=("index",),
                                       approve_upload=True, port=8899).run()
         self.assertEqual(result["status"], "completed")
-        self.assertTrue(any(call.args[0] == ["open", "http://127.0.0.1:8899/?stage=linkedin"]
-                            for call in self.subprocess.call_args_list))
+        self.assertEqual(result["action"]["url"], "http://127.0.0.1:8899/?stage=linkedin")
 
     def dispatch(self):
         self.write(self.people, self.csv)

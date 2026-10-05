@@ -13,6 +13,9 @@ Changelog:
   2026-10-04: a step that stops with SystemExit is recorded as failed with its
       message instead of ending the process; research that cannot run (no
       Parallel key) is skipped with a warning and the index still builds.
+  2026-10-05: setup no longer waits on the LinkedIn review: matches the judges
+      could not settle are left for the user, the index builds, and the ready
+      step offers the review (count and link) for when they have time.
   2026-10-05: enrichment and profile lookups that fail for any reason are
       deferred: search is built without them, the ready message lists what is
       left to fix, and work the last enrichment left is tried once per run.
@@ -26,7 +29,6 @@ import json
 import os
 import shlex
 import subprocess
-import time
 import traceback
 from argparse import Namespace
 from contextlib import chdir, redirect_stderr, redirect_stdout
@@ -73,7 +75,6 @@ _AUTO_SPEND_USD = 500
 _DEFERRED_LABELS = {"enrich": "Research and LinkedIn matching", "profile-prefetch": "LinkedIn profile lookups"}
 # Skipped steps the finished setup still lists for the user to fix.
 _FOLLOW_UP_STEPS = (InstallStep.CREDENTIALS.value, InstallStep.ENRICH.value)
-_REVIEW_POLL_SECONDS = 5
 
 
 class SpendStep(str, Enum):
@@ -251,7 +252,8 @@ class ProcessingOnboarding:
         self._write(InstallState.SKIPPED, f"{_DEFERRED_LABELS[name]} didn't finish ({error}). Search is built "
                     "without it; the next setup run tries again.")
 
-    def _enrich(self) -> None:
+    def _enrich(self) -> int:
+        """Run enrichment; returns how many LinkedIn matches the judges left for the user."""
         self.step = InstallStep.ENRICH
         state = workflow_state(self.db)
         work = enrichment_work(self.db)
@@ -271,30 +273,22 @@ class ProcessingOnboarding:
                               request_fingerprint=estimate.research.request_fingerprint), "Enriching your contacts")
                 except (Exception, SystemExit) as error:
                     self._deferred("enrich", error)
-                    return
+                    return 0
                 self._write(InstallState.COMPLETED, "Done")
             elif state.next_action == "review_linkedin":
+                # Matches the judges could not settle wait for the user until search is built.
+                self.step = InstallStep.ENRICH
                 self._write(InstallState.COMPLETED, "Done")
-                self.step = InstallStep.REVIEW
-                if self.step.value not in self.plan:
-                    self.plan.insert(self.plan.index(InstallStep.INDEX.value), self.step.value)
-                url = f"http://127.0.0.1:{self.port}/?stage=linkedin"
-                subprocess.run(["open", url], check=False)
-                action = {"kind": "review", "url": url, "text": "Review the matches that need your input."}
-                while state.next_action == "review_linkedin":
-                    self._write(InstallState.WAITING, action["text"], action=action, live=True)
-                    time.sleep(_REVIEW_POLL_SECONDS)
-                    state = workflow_state(self.db)
-                self._write(InstallState.COMPLETED, "Done")
-                continue
+                return state.progress.linkedin_pending
             else:
                 raise ValueError(f"Context processing is unfinished: {state.next_action}")
             state = workflow_state(self.db)
         self.step = InstallStep.ENRICH
         self._write(InstallState.COMPLETED, "Done")
+        return 0
 
     def _index(self, previous_input: str, previous_index: bool, previous_mtime: int,
-               dispatched: dict | None) -> None:
+               dispatched: dict | None, review_pending: int) -> None:
         self.step = InstallStep.INDEX
         realize = ExportPeople(db=self.db, out_dir=self.people.parent)
         realized = self._run("realize", realize.run, "Preparing your search index")
@@ -358,8 +352,12 @@ class ProcessingOnboarding:
         steps = self.status.read()["steps"]
         deferred = [steps[name]["message"] for name in _FOLLOW_UP_STEPS
                     if steps.get(name, {}).get("status") == InstallState.SKIPPED.value]
+        # Matches the judges left are offered once search is ready; the user reviews when they have time.
+        offer = {"kind": "review", "url": f"http://127.0.0.1:{self.port}/?stage=linkedin",
+                 "text": f"{review_pending:,} LinkedIn matches need a quick look when you have time."
+                 } if review_pending else None
         self.status.write(step=self.step, status=InstallState.COMPLETED,
-                          message=" ".join([validation["summary"], *deferred]),
+                          message=" ".join([validation["summary"], *deferred]), action=offer,
                           pid=os.getpid(), retry_command=self.retry, plan=self.plan)
 
     def run(self) -> dict:
@@ -385,8 +383,8 @@ class ProcessingOnboarding:
                     dispatched = None
                 self._prepare()
                 self._discover()
-                self._enrich()
-                self._index(previous_input, previous_index, previous_mtime, dispatched)
+                review_pending = self._enrich()
+                self._index(previous_input, previous_index, previous_mtime, dispatched, review_pending)
             except _Stopped:
                 pass
             except (Exception, SystemExit) as error:

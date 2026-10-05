@@ -109,7 +109,8 @@ function actionNote(action: InstallAction): ReactNode {
       </>
     )
   }
-  if (action.kind === "review") return "I’ll continue when your review is complete."
+  if (action.kind === "review")
+    return action.text ?? "A few LinkedIn matches need a quick look when you have time."
   if (action.kind === "gmail")
     return action.text ?? "Finish connecting Gmail in your browser. I’ll continue here."
   if (action.kind === "qr") return "Scan the code with WhatsApp. I’ll continue automatically."
@@ -209,7 +210,9 @@ export function InstallPage() {
             </p>
             <p className="install-note">
               {data?.status === "completed"
-                ? "You can keep asking here in chat."
+                ? action?.kind === "review"
+                  ? actionNote(action)
+                  : "You can keep asking here in chat."
                 : data?.status === "waiting" && action
                   ? actionNote(action)
                   : "I’ll keep going. Ask questions or give me input in chat."}
@@ -224,7 +227,7 @@ export function InstallPage() {
             />
           ) : null}
         </section>
-        {data?.status === "waiting" && action ? (
+        {action && (data.status === "waiting" || action.kind === "review") ? (
           <section className="install-action">
             {action.kind === "qr" ? (
               <div className="install-qr">
