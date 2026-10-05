@@ -400,6 +400,9 @@ class SourceOnboardingTests(unittest.TestCase):
                                       gmail_emails=('casey@example.com',), sync_after='2023-01-01').run()
         self.assertEqual((result['status'], result['step']), ('waiting', 'gmail_login'))
         self.assertEqual(create.call_args.args[0].email, 'casey@example.com')
+        # The user is not handed Google Cloud's manual steps; the agent reads the details.
+        self.assertEqual(result['message'], "Gmail setup stopped in Google Cloud. I'm looking into it.")
+        self.assertEqual(result['action']['details']['message'], 'Sign in to Google')
         health.assert_not_called()
         sync.assert_not_called()
 
