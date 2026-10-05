@@ -6,8 +6,9 @@ primitives stop the flow. It never starts enrichment, provider calls, or uploads
 
 Changelog:
   2026-10-05: LinkedIn's login is its own step, and the plan lists every
-      login step before every sync step, the order a run takes them. Linking
-      WhatsApp only pairs it; its sync step downloads the history.
+      login step before every sync step, the order a run takes them. The
+      WhatsApp scan starts its history download in the background; the WhatsApp
+      sync step waits for it, then fetches older messages and imports.
   2026-10-05: Gmail defaults to the Powerset login's address when no address
       was given; it asks only when there is no Powerset account.
   2026-10-05: when the automated Google Cloud setup stops, the step says so in
@@ -304,6 +305,8 @@ class SourceOnboarding:
             self._write(import_step, InstallState.COMPLETED, "Contacts ready")
             return True
         self._write(sync_step, InstallState.RUNNING, "Reading Messages" if imessage else WHATSAPP_SYNCING)
+        if not imessage:
+            auth.wait_for_history(self.wacli_store)
         result = MessagesDiscovery(include_imessage=imessage, include_whatsapp=not imessage,
                                    wacli_store=self.wacli_store, open_qr_page=False).run()
         if not self._result(sync_step, result.to_payload()):

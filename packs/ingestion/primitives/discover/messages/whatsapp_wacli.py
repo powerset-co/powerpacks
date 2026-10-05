@@ -22,7 +22,10 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli import auth, binary, pairing, sync  # noqa: E402
-from packs.ingestion.primitives.discover.messages.wacli.auth import DEFAULT_AUTH_TIMEOUT  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.auth import (  # noqa: E402
+    DEFAULT_AUTH_TIMEOUT,
+    DEFAULT_IDLE_EXIT,
+)
 from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked  # noqa: E402
 
@@ -61,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_parser = sub.add_parser("auth", help="authenticate WhatsApp without syncing or exporting metadata")
     add_common_args(auth_parser)
+    auth_parser.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
     auth_parser.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
     auth_parser.add_argument("--no-install", action="store_true", help="never download the pinned wacli binary; use the installed one, or block if none is present")
     auth_parser.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
@@ -94,6 +98,7 @@ def main() -> int:
         if args.command == "auth":
             payload = auth.auth_report(
                 store,
+                idle_exit=args.idle_exit,
                 auth_timeout=args.auth_timeout,
                 install=not args.no_install,
                 open_qr_page=not args.no_open_qr_page,
