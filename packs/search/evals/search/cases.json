@@ -2,7 +2,7 @@
   {
     "id": "person-dossier",
     "query": "Tell me everything about Jordan Bravo.",
-    "expected_behavior": "Read search/person-lookup.md and run the free person lookup by name from the installed checkout. Read the returned parent dossier and summarize supported facts with sources and uncertainty. Do not run semantic retrieval, a judge, synthesis, enrichment, or a full deep-context workflow. If information is unavailable, report the actual result rather than inventing a biography."
+    "expected_behavior": "Read search/person-lookup.md and run the free person lookup by name from the installed checkout. Read the returned combined parent and child dossier bodies from SQLite and summarize supported facts with sources and uncertainty. Do not run semantic retrieval, a judge, synthesis, enrichment, or a full deep-context workflow. If information is unavailable, report the actual result rather than inventing a biography."
   },
   {
     "id": "person-email",
@@ -17,12 +17,12 @@
   {
     "id": "person-ambiguous",
     "query": "Tell me about Taylor Example. I know two people with that name.",
-    "expected_behavior": "Look up the name, show the returned distinct parents with distinguishing contact/profile information, and ask which person if ambiguity remains. Read the chosen parent by its returned ID. Never combine two people's dossier facts or treat multiple child aliases of one parent as different people. Offer concrete choices using actual distinguishing details, not a generic request for more information or a skill/backend menu."
+    "expected_behavior": "Look up the name, show a numbered choice list with each returned person's name and a quick summary from their saved headline (role, company, or relationship), using identifying contact details when needed, and ask which person if ambiguity remains. Read the chosen parent by its returned ID. Never combine two people's dossier facts or treat multiple child aliases of one parent as different people. Offer concrete choices using actual distinguishing details, not a generic request for more information or a skill/backend menu."
   },
   {
     "id": "person-no-dossier",
     "query": "Who is Casey Example? The last lookup found the contact but said there was no saved dossier.",
-    "expected_behavior": "Use the person-lookup reference and verify available identity/profile information. Explain that the person exists but lacks a saved parent dossier. Do not say person not found, fabricate relationship facts, or start building dossiers or importing messages. Give the useful known facts first, then offer to check existing saved context for a dossier build; do not end with a dead-end missing-dossier message or imply a build already happened."
+    "expected_behavior": "Use the person-lookup reference and verify available identity/profile information. Explain that the person exists but lacks any saved parent or child dossier. Do not say person not found, fabricate relationship facts, or start building dossiers or importing messages. Give the useful known facts first, then offer to check existing saved context for a dossier build; do not end with a dead-end missing-dossier message or imply a build already happened."
   },
   {
     "id": "person-hosted-only",
@@ -37,6 +37,11 @@
   {
     "id": "person-local-only",
     "query": "Tell me what I know about Morgan Example, using only what's already on this laptop.",
-    "expected_behavior": "Use the local parent dossier lookup and available local profile index, preserving local-only scope. Retry a distinctive name part on a miss. If local sources are missing or no match remains, explain what was actually searched and ask for another identifier. Never call hosted contacts, a provider, or start an index build. Offer relevant next steps using only accessible local sources; do not offer an account switch that violates local-only scope."
+    "expected_behavior": "Use only the canonical local SQLite store for dossier and profile lookup, preserving local-only scope. Retry a distinctive name part on a miss. If local sources are missing or no match remains, explain what was actually searched and ask for another identifier. Never call hosted contacts, a provider, or start an index build. Offer relevant next steps using only accessible local sources; do not offer an account switch that violates local-only scope."
+  },
+  {
+    "id": "person-child-dossier",
+    "query": "Tell me everything about Jordan Bravo. His parent dossier says full context is in a child record.",
+    "expected_behavior": "Use the read-only SQLite lookup and read the returned parent and all saved child dossier bodies. Summarize the supported child facts along with the parent; do not stop at a reference or declare a missing parent dossier means there is no saved context. Do not scan Markdown exports, use index.json, query the search index, or start processing. If a referenced child has no saved body, explain the limitation without inventing its contents."
   }
 ]

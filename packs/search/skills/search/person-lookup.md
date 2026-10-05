@@ -1,13 +1,13 @@
 # Look up a person
 
-Find the person, read their saved parent dossier, and answer the user's question.
+Find the person, read their saved parent and child dossiers, and answer the user's question.
 This is a free lookup, not a ranked search or a request to build deep context.
 Run from the installed checkout identified by the skill; its `.powerpacks/`
 holds the user's data. Do not look in the chat's unrelated working directory.
 For an explicit hosted-network request, start with the contacts section below.
 Otherwise read the local dossier first. Local-only requests never use hosted data.
 
-## Read the parent dossier
+## Read the saved dossiers
 
 For "tell me everything about Jordan Bravo", "find Jordan's dossier", or a
 name/email/phone lookup, start with the existing primitive:
@@ -17,15 +17,23 @@ bin/deep-context lookup --name "Jordan Bravo" --json
 # Or use --email "jordan@example.com" / --phone "+14155550100".
 ```
 
-It resolves child names and identifiers to distinct parents and reads the saved
-parent dossier from SQLite. It does not require the Markdown export to exist.
+It resolves child names and identifiers to distinct parents. For one selected
+parent, `dossier_body` includes its saved parent and child dossier bodies from
+`.powerpacks/deep-context/deep-context.sqlite`, with identical bodies deduplicated.
+Read that returned text; a parent Markdown export may only point to a child.
+The current parent text comes first; saved context survives parent merges even
+when its artifact key still contains an earlier parent ID.
+No Markdown export or search index is required. Unresolved candidate dossiers
+are not the selected person's confirmed context.
 
 - **One person:** summarize `dossier_body`. An empty body means the person was
-  found but has no saved parent dossier; present the available identity/profile
+  found but has no saved parent or child dossier; present the available identity/profile
   information and offer to check whether saved context is available to build one.
-- **Several people:** give concrete choices, such as "Taylor, the designer at
-  North, or Taylor, the engineer at South?" Use returned emails/headlines, not
-  invented distinctions. Do not combine their facts. Once chosen, run
+- **Several people:** show a numbered list with each person's name and a one-line
+  summary from their returned `headline` (role, company, or relationship).
+  Add an identifying contact detail when needed. If no summary is saved, use
+  known identifiers and say the role/relationship is unknown. Ask which person
+  the user means. Do not combine their facts. Once chosen, run
   `bin/deep-context lookup --parent-id "<returned parent_id>" --json`.
 - **No match:** try useful name parts, known aliases, or supplied identifiers
   before asking for help. If a plausible match appears, show its identifying
@@ -38,6 +46,16 @@ parent dossier from SQLite. It does not require the Markdown export to exist.
 Exact names take priority; otherwise every supplied name part must match a name
 on the person or parent. Nicknames work when saved as a child's name; arbitrary
 typos are not automatically corrected.
+
+For another identifier or a name pattern, query the same SQLite store read-only
+with parameterized SQL. `parents` holds `parent_id` and `display_name`; `people`
+maps each `person_id` to its `parent_id`. `person_identifiers` holds `kind` and
+`normalized_value`; `imported_people.row_json` has saved profile fields such as
+`linkedin_url` and `twitter_handle`. Use `LIKE`, `GLOB`, or a registered regex
+to find plausible matches, then read a chosen parent with `lookup --parent-id`.
+Inspect the stored fields rather than inventing columns. Similar text alone does
+not prove identity. Keep dossier reads in this store, without `index.json`,
+Markdown-folder scans, or the separate search index.
 
 ## When only a profile is available
 
@@ -53,21 +71,9 @@ If contacts tools are unavailable or login expired, follow the existing
 `packs/powerset/skills/powerset/SKILL.md` connection/login recovery and resume the
 lookup. An inaccessible source is not "person not found".
 
-For explicit local-only requests, or a LinkedIn URL / Twitter handle, use the
-existing local index if available (`POWERPACKS_LOCAL_SEARCH_DB`, otherwise
-`.powerpacks/search-index/local-search.duckdb`):
-
-```bash
-uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py query \
-  --sql "SELECT person_id, full_name, headline, current_title, current_company, city, linkedin_url FROM local_person_profiles WHERE full_name ILIKE '%Jordan Bravo%'"
-```
-
-Use `primary_email`/`all_emails`, `primary_phone`/`all_phones`,
-`twitter_handle`/`x_twitter_handle`, or `linkedin_url`/`public_identifier` for
-the supplied identifier (normalize LinkedIn URLs to the slug). Escape SQL string
-literals. Read the matched profile, then use its identifiers for dossier lookup.
-Never run semantic retrieval for a person's name or require an index build.
-If the available sources find nobody, say where you looked and offer another
+For local-only requests, use only the SQLite lookup above. Never run semantic
+retrieval for a person's name or require an index build. If the available sources
+find nobody, say where you looked and offer another
 identifier. When hosted access is allowed, another available network/account
 can be an option; name it and never invent access. Local-only stays local.
 
@@ -79,6 +85,9 @@ sections without dumping raw JSON or repeating child records. Keep parent IDs
 and internal paths out of the answer. Link profiles; only link a dossier file
 after verifying it exists, since the text may live only in SQLite. Preserve
 dates, sources, and uncertainty.
+Summarize across the returned parent and children without repeating the same
+facts. A child reference is not the child's content: if only a reference or sparse
+summary is saved, explain that limit rather than claiming a complete dossier.
 Distinguish recorded facts from inferences and missing information. A failed
 lookup never establishes that the user does not know someone. Do not trigger
 collection, synthesis, enrichment, or sharing just to answer a lookup.

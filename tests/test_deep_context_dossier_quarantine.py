@@ -111,7 +111,7 @@ class DossierQuarantineTest(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = lookup_main(["--db", str(self.db.db_path), "--email", "support@example.com"])
         self.assertEqual((code, stdout.getvalue(), stderr.getvalue()),
-                         (0, "Jordan Bravo [parent-jordan]: No parent dossier is available.\n", ""))
+                         (0, "Jordan Bravo [parent-jordan]: No saved dossier is available.\n", ""))
         self.assertNotIn("Jordan Bravo", (self.root / "index.md").read_text())
 
     def test_missing_original_roster_quarantines_both_cached_dossiers(self) -> None:
@@ -249,7 +249,7 @@ class DossierQuarantineTest(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = lookup_main(["--db", str(self.db.db_path), "--name", "Casey Delta"])
         self.assertEqual((code, stdout.getvalue(), stderr.getvalue()),
-                         (0, "Jordan Bravo [parent-jordan]: No parent dossier is available.\n", ""))
+                         (0, "Jordan Bravo [parent-jordan]: No saved dossier is available.\n", ""))
 
     def test_compatible_and_empty_canonical_names_keep_composition_available(self) -> None:
         for name in ("Jordan A. Bravo", ""):

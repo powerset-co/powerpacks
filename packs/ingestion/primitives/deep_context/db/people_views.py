@@ -13,6 +13,7 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _json,
 )
 from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_DOSSIER_SELECT, PARENT_SELECT, WORTH_CTE
+from packs.ingestion.primitives.deep_context.db.models import PARENT_DOSSIER_ARTIFACT_PREFIX
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ParentLookupRow,
@@ -28,7 +29,7 @@ def person_lookup(
     email: str | None = None,
     parent_id: str | None = None,
 ) -> list[ParentLookupRow]:
-    """Resolve names/identifiers to parents; return a dossier only for one parent."""
+    """Resolve to parents; read all saved parent/child dossiers after selection."""
     name_key = normalize_name(name or "")
     tokens = sorted(set(name_key.split()))
     token_sql = " AND ".join(f"instr(name, :token{i})>0" for i in range(len(tokens))) or "0"
@@ -72,8 +73,24 @@ WITH names AS (
 )
 SELECT p.parent_id, p.display_name AS name, p.display_slug AS slug, a.path,
        CASE WHEN (SELECT count(*) FROM matched)=1
-            THEN json_extract(a.payload_json, '$.body') ELSE '' END AS body,
-       COALESCE(json_extract(a.payload_json, '$.headline'),
+            THEN (SELECT group_concat(body, char(10)||char(10)) FROM (
+              SELECT json_extract(d.payload_json, '$.body') AS body,
+                     min(CASE WHEN d.artifact_key=a.artifact_key THEN 0 ELSE 1 END) AS parent_order
+              FROM artifacts d
+              WHERE d.parent_id=p.parent_id AND d.kind='dossier' AND d.status='projected'
+                AND (d.person_id IS NOT NULL OR d.artifact_key LIKE 'dossier:%'
+                     OR d.artifact_key LIKE '{PARENT_DOSSIER_ARTIFACT_PREFIX}%')
+                AND d.candidate_key IS NULL AND json_extract(d.payload_json, '$.body')!=''
+              GROUP BY body
+              ORDER BY parent_order, min(d.person_id IS NOT NULL), min(d.artifact_key)
+            )) ELSE '' END AS body,
+       COALESCE(NULLIF(json_extract(a.payload_json, '$.headline'), ''),
+         (SELECT json_extract(d.payload_json, '$.headline') FROM artifacts d
+          WHERE d.parent_id=p.parent_id AND d.kind='dossier' AND d.status='projected'
+            AND (d.person_id IS NOT NULL OR d.artifact_key LIKE 'dossier:%'
+                 OR d.artifact_key LIKE '{PARENT_DOSSIER_ARTIFACT_PREFIX}%')
+            AND d.candidate_key IS NULL AND json_extract(d.payload_json, '$.headline')!=''
+          ORDER BY d.person_id IS NOT NULL, d.artifact_key LIMIT 1),
          (SELECT json_extract(i.row_json, '$.headline')
           FROM imported_people i JOIN people pe USING(person_id)
           WHERE pe.parent_id=p.parent_id AND json_extract(i.row_json, '$.headline')!=''
