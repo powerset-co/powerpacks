@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store, scrub_deep_context, repair_gmail_contact_keys
+from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store, scrub_deep_context
 from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.shared.common import (
     DEFAULT_PEOPLE_CSV,
@@ -67,7 +67,7 @@ class EnsureParents(Node):
         if repair.repaired or repair.unresolved:
             print(f'[deep-context] repaired {len(repair.repaired)} merged parents; '
                   f'{len(repair.unresolved)} unresolved', file=sys.stderr)
-        repair_gmail_contact_keys(self.db, rekeys)
+        self.db.rekey_people(rekeys)
         projected = project_imported_people(self.db, sources or imported)
         retain_source_identifiers(self.db, sources, imported)
         return EnsureParentsManifest(

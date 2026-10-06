@@ -10,10 +10,11 @@ from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.context_queries import person_histories
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, LinkRow, MergeVerdictRow
 from packs.ingestion.primitives.deep_context.db.projectors import project_person_fact, project_person_source_bundle
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import synthesis_pending
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
 from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import _imported_people, project_imported_people
+from packs.ingestion.primitives.deep_context.migration.heal import Heal
 from packs.ingestion.primitives.deep_context.synthesis.selection import effective_person_bundles
 from packs.ingestion.primitives.deep_context.synthesis.prompting import seed_evidence_fingerprint
 from packs.ingestion.primitives.imports.merge_people import PeopleMerge
@@ -27,7 +28,10 @@ class GmailRekeyTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
-        self.db = Db(self.root / 'deep-context.sqlite')
+        self.feedback = self.root / 'feedback.json'
+        self.feedback.write_text('[]')
+        self.state = self.root / '.powerpacks'
+        self.db = Db(self.state / 'deep-context/deep-context.sqlite')
         self.old = PeopleRow(id='old-jordan', full_name='Jordan Bravo',
                              primary_email='jordan@example.test', source_channels='gmail_msgvault')
         self.new_id = 'candidate:email:jordan@example.test'
@@ -49,16 +53,20 @@ class GmailRekeyTests(unittest.TestCase):
     def fan_in(self, *rows):
         source = self.root / 'gmail.csv'
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in rows or (self.old,)])
-        merge = PeopleMerge(inputs=[source], output_dir=self.root / 'merged')
+        merge = PeopleMerge(inputs=[source], output_dir=self.state / 'network-import/merged')
         merge.run()
         return merge.people_csv
 
     def ensure(self, path):
         EnsureParents(db=self.db, people_csv=path).run()
 
+    def heal(self):
+        return Heal(state_root=self.state, backup_root=self.root / 'backup',
+                    operator_id='00000000-0000-0000-0000-000000000001', feedback_json=self.feedback).run()
+
     def split(self):
         path = self.fan_in()
-        with patch('packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents.repair_gmail_contact_keys'):
+        with patch.object(Db, 'rekey_people'):
             self.ensure(path)
         self.assertEqual(len(queries.parents(self.db)), 2)
         self.assertEqual({row.id for row in queries.imported_people(self.db)}, {self.new_id})
@@ -111,8 +119,20 @@ class GmailRekeyTests(unittest.TestCase):
         ))
         self.db.decide_identity('jordan-profile', 'verify', approved='yes')
         path = self.split()
+        with self.db.transaction() as conn:
+            conn.execute("INSERT OR REPLACE INTO meta VALUES ('data_migration_version','4')")
         link_before = dict(self.db.query("SELECT * FROM links WHERE row_key='jordan-profile'")[0])
         profile_before = dict(self.db.query("SELECT * FROM artifacts WHERE artifact_key='paid-profile'")[0])
+        # Steady-state importing must not repair an already-created shell.
+        self.ensure(path)
+        self.assertEqual(len(queries.parents(self.db)), 2)
+        with patch('packs.ingestion.primitives.deep_context.migration.heal.read_feedback') as feedback:
+            self.assertEqual(self.heal().status, 'completed')
+            self.assertEqual(self.heal().status, 'skipped')
+            feedback.assert_not_called()
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0]['value'], '5')
+        backup = Db(self.root / 'backup/deep-context/deep-context.sqlite')
+        self.assertEqual(len(queries.parents(backup)), 2)
         for _ in range(2):
             self.ensure(path)
             self.assert_repaired()
@@ -125,10 +145,38 @@ class GmailRekeyTests(unittest.TestCase):
         self.db.project_rows((ArtifactRow('paid', 'profile', candidate_parent, '/saved.json', 'saved', 'projected',
                                           person_id=self.new_id, payload_json='{}'),))
         before = queries.people(self.db)
+        with self.db.transaction() as conn:
+            conn.execute("INSERT OR REPLACE INTO meta VALUES ('data_migration_version','4')")
+        self.heal()
         self.ensure(path)
         self.assertEqual({row.person_id: row.parent_id for row in queries.people(self.db)},
                          {row.person_id: row.parent_id for row in before})
         self.assertIn('paid', {row.artifact_key for row in queries.artifacts(self.db)})
+
+    def test_pending_heal_requires_fan_in_before_backup_or_completion(self):
+        with self.db.transaction() as conn:
+            conn.execute("INSERT OR REPLACE INTO meta VALUES ('data_migration_version','4')")
+        with self.assertRaisesRegex(StoreError, 'run fan-in before heal'):
+            self.heal()
+        self.assertFalse((self.root / 'backup').exists())
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0]['value'], '4')
+
+    def test_failed_key_repair_keeps_completed_version_four(self):
+        self.fan_in()
+        with patch('packs.ingestion.primitives.deep_context.migration.heal.repair_gmail_contact_keys',
+                   side_effect=RuntimeError('interrupted repair')):
+            with self.assertRaisesRegex(RuntimeError, 'interrupted repair'):
+                self.heal()
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0]['value'], '4')
+
+    def test_older_store_runs_prior_healing_before_key_migration(self):
+        path = self.fan_in()
+        result = self.heal()
+        self.assertEqual(result.status, 'completed')
+        self.assertTrue((self.state / 'deep-context/heal/feedback.json').is_file())
+        self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0]['value'], '5')
+        self.ensure(path)
+        self.assert_repaired()
 
     def test_shared_secondary_address_is_not_a_rekey(self):
         other = PeopleRow(id='candidate:email:shared@example.test', full_name='Casey Delta',

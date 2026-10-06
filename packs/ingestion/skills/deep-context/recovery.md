@@ -16,7 +16,9 @@ a fresh rebuild or a historical identity split.
 2. Identify the authenticated account's operator UUID. Never infer it from an
    imported connection's historical file path. For a copied store, use the known
    owner's UUID and an authorized feedback snapshot.
-3. Run the free preparation before collection or enrichment:
+3. Complete the normal source fan-in first, then run the free preparation before
+   `ensure-parents`, collection or enrichment. Gmail key repair requires the fresh
+   fan-in manifest and its original source CSVs:
 
 ```bash
 bin/deep-context heal \
@@ -30,11 +32,14 @@ The command first reads SQLite's existing `meta.data_migration_version`. If the
 heal migration is already applied, it returns `skipped` without fetching
 feedback, backing up, or changing the store; the same command is safe to repeat.
 
-When pending, it validates feedback, backs up the state and canonical SQLite,
-runs the existing membership, merge-ownership and Harmonic-profile repairs,
-restores attributable contact facts, applies reviewed feedback, matches imported
-LinkedIn connections and refreshes derived parent facts. It records migration
-version 4 only after all of that succeeds. Original facts and human decisions
+Pending migrations back up the state and canonical SQLite. Version 4 first
+validates feedback, then runs the existing membership,
+merge-ownership and Harmonic-profile repairs, restores attributable contact
+facts, applies reviewed feedback, matches imported LinkedIn connections and
+refreshes derived parent facts. Version 5 repairs proven empty Gmail duplicate
+parents and rekeys their original contacts while preserving the original parent
+and paid history. Stores already at version 4 do not fetch or reapply feedback.
+Each version is recorded only after its work succeeds. Original facts and human decisions
 retain their authority. The backup destination must be unused and outside the
 state directory for a pending migration. After interruption, retry with another
 unused backup path; already committed work is reused.
@@ -49,7 +54,7 @@ held/unmatched choices, restored facts and name matches. SQLite determines
 whether work is pending, even if that report is missing. Completion is not proof
 that every identity is correct: mixed-person histories still require inspection.
 
-Resume the normal skill at fan-in, then `ensure-parents` and `check`. Continue
+Resume the normal skill at `ensure-parents` and `check`. Continue
 collection and the synthesis preview (only pending contact evidence), compose,
 cluster, parents, then preview/run enrichment. The existing
 identity and final Sol stages process unresolved candidates and reuse judgments
