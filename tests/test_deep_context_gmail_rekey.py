@@ -61,7 +61,7 @@ class GmailRekeyTests(unittest.TestCase):
         EnsureParents(db=self.db, people_csv=path).run()
 
     def heal(self):
-        return Heal(state_root=self.state, backup_root=self.root / 'backup',
+        return Heal(state_root=self.state,
                     operator_id='00000000-0000-0000-0000-000000000001', feedback_json=self.feedback).run()
 
     def split(self):
@@ -131,8 +131,6 @@ class GmailRekeyTests(unittest.TestCase):
             self.assertEqual(self.heal().status, 'skipped')
             feedback.assert_not_called()
         self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0]['value'], '5')
-        backup = Db(self.root / 'backup/deep-context/deep-context.sqlite')
-        self.assertEqual(len(queries.parents(backup)), 2)
         for _ in range(2):
             self.ensure(path)
             self.assert_repaired()
@@ -153,12 +151,11 @@ class GmailRekeyTests(unittest.TestCase):
                          {row.person_id: row.parent_id for row in before})
         self.assertIn('paid', {row.artifact_key for row in queries.artifacts(self.db)})
 
-    def test_pending_heal_requires_fan_in_before_backup_or_completion(self):
+    def test_pending_heal_requires_fan_in_before_completion(self):
         with self.db.transaction() as conn:
             conn.execute("INSERT OR REPLACE INTO meta VALUES ('data_migration_version','4')")
         with self.assertRaisesRegex(StoreError, 'run fan-in before heal'):
             self.heal()
-        self.assertFalse((self.root / 'backup').exists())
         self.assertEqual(self.db.query("SELECT value FROM meta WHERE key='data_migration_version'")[0]['value'], '4')
 
     def test_failed_key_repair_keeps_completed_version_four(self):
@@ -224,7 +221,7 @@ class GmailRekeyTests(unittest.TestCase):
                 self.assertEqual(len(queries.parents(self.db)), 2)
                 with self.db.transaction() as conn:
                     conn.execute("INSERT OR REPLACE INTO meta VALUES ('data_migration_version','4')")
-                heal = Heal(state_root=self.state, backup_root=self.root / ('backup-' + channel),
+                heal = Heal(state_root=self.state,
                             operator_id='00000000-0000-0000-0000-000000000001')
                 self.assertEqual(heal.run().status, 'completed')
                 self.ensure(path)

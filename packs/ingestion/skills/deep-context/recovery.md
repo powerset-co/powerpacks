@@ -2,9 +2,8 @@
 
 Use the existing SQLite store and source artifacts. Preserve original contact
 facts and explicit human decisions; a seeded machine merge remains a machine
-decision. Keep a golden copy before replaying changes; do not introduce another
-ledger. A cold rebuild on a separate copy can reuse facts without inheriting
-the old family membership.
+decision. Do not introduce another ledger. A cold rebuild on a separate copy
+can reuse facts without inheriting the old family membership.
 
 ## Heal an existing installation
 
@@ -23,17 +22,16 @@ a fresh rebuild or a historical identity split.
 ```bash
 bin/deep-context heal \
   --state-root /absolute/install/.powerpacks \
-  --backup-root /absolute/backups/pre-recovery.powerpacks \
   --operator-id <expected-operator-uuid>
 ```
 
 For offline replay, add `--feedback-json /absolute/operator-feedback.json`.
 The command first reads SQLite's existing `meta.data_migration_version`. If the
 heal migration is already applied, it returns `skipped` without fetching
-feedback, backing up, or changing the store; the same command is safe to repeat.
+feedback or changing the store; the same command is safe to repeat.
 
-Pending migrations back up the state and canonical SQLite. Version 4 first
-validates feedback, then runs the existing membership,
+Heal updates the existing store in place without creating a backup. Version 4
+first validates feedback, then runs the existing membership,
 merge-ownership and Harmonic-profile repairs, restores attributable contact
 facts, applies reviewed feedback, matches imported LinkedIn connections and
 refreshes derived parent facts. Version 5 repairs proven empty Gmail duplicate
@@ -42,9 +40,8 @@ contacts receive the new key; when another source still uses the old ID, both
 source people stay under the original parent. Stores already at version 4 do
 not fetch or reapply feedback.
 Each version is recorded only after its work succeeds. Original facts and human decisions
-retain their authority. The backup destination must be unused and outside the
-state directory for a pending migration. After interruption, retry with another
-unused backup path; already committed work is reused.
+retain their authority. After interruption, rerun the same command; already
+committed work is reused.
 
 New healing fixes extend the same ordered migrations with the next version;
 never edit an applied migration and expect it to run again. Version 3's historical

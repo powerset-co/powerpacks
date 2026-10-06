@@ -1,4 +1,4 @@
-"""Back up an existing store, restore contact facts and apply scoped feedback.
+"""Restore contact facts and apply scoped feedback and pending data migrations.
 
 Version 4 restores facts and applies feedback before imported LinkedIn matching.
 Version 5 repairs empty Gmail shells and preserves original parents and history.
@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import shutil
 import sqlite3
 
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
@@ -31,7 +30,6 @@ HEAL_MIGRATION_VERSION = 5
 class HealManifest(StageManifest):
     source: str = "heal"
     state_root: str
-    backup_root: str
     operator_id: str
     feedback_snapshot: str
     feedback_csv: str
@@ -46,10 +44,9 @@ class HealManifest(StageManifest):
 
 
 class Heal:
-    def __init__(self, *, state_root: Path, backup_root: Path, operator_id: str,
+    def __init__(self, *, state_root: Path, operator_id: str,
                  feedback_json: Path | None = None):
         self.state = Path(state_root).resolve()
-        self.backup = Path(backup_root).resolve()
         self.operator_id = operator_id
         self.feedback_json = Path(feedback_json).resolve() if feedback_json is not None else None
         self.deep_context = self.state / "deep-context"
@@ -61,22 +58,6 @@ class Heal:
         self.feedback_snapshot = self.deep_context / "heal/feedback.json"
         self.feedback_csv = self.deep_context / "heal/feedback.csv"
 
-    def _backup(self) -> HumanSnapshot:
-        with sqlite3.connect(f"{self.db_path.as_uri()}?mode=ro", uri=True) as original:
-            original.execute("BEGIN")
-            snapshot = HumanSnapshot.read(original, self.state / "network-import/overrides/review.csv")
-
-            def ignore_database(path: str, names: list[str]) -> tuple[str, ...]:
-                return tuple(name for name in names if name in {
-                    "deep-context.sqlite", "deep-context.sqlite-wal",
-                    "deep-context.sqlite-shm", "deep-context.sqlite-journal",
-                }) if Path(path) == self.deep_context else ()
-
-            shutil.copytree(self.state, self.backup, symlinks=True, ignore=ignore_database)
-            with sqlite3.connect(self.backup / "deep-context/deep-context.sqlite") as target:
-                original.backup(target)
-        return snapshot
-
     def run(self) -> HealManifest:
         if not self.db_path.is_file():
             raise StoreError("existing canonical database is missing")
@@ -85,7 +66,7 @@ class Heal:
         applied_version = int(version[0]) if version else 0
         if applied_version >= HEAL_MIGRATION_VERSION:
             return HealManifest(
-                status="skipped", state_root=str(self.state), backup_root=str(self.backup),
+                status="skipped", state_root=str(self.state),
                 operator_id=self.operator_id, feedback_snapshot=str(self.feedback_snapshot),
                 feedback_csv=str(self.feedback_csv), feedback_rows=0,
                 applied=0, held=0, unmatched=0, decisions=(),
@@ -94,10 +75,6 @@ class Heal:
         source_manifest = self.people_csv.with_name("manifest.json")
         if not source_manifest.is_file() or json.loads(source_manifest.read_text()).get("stage") != "merge_people":
             raise StoreError("run fan-in before heal so Gmail key repair can read the original source IDs")
-        if self.state.is_relative_to(self.backup) or self.backup.is_relative_to(self.state):
-            raise StoreError("state and backup must be disjoint")
-        if self.backup.exists():
-            raise StoreError("backup path already exists; choose an unused destination for the pending migration")
         for directory in (self.deep_context, self.facts, self.raw, self.manifest.parent,
                           self.facts / "seed", self.facts / "parents", self.raw / "parents"):
             if directory.is_symlink():
@@ -107,7 +84,9 @@ class Heal:
             if any(path.is_symlink() for path in directory.glob("*")):
                 raise StoreError(f"recovery output files must not be symlinked: {directory}")
         feedback = read_feedback(self.operator_id, feedback_json=self.feedback_json) if applied_version < 4 else None
-        snapshot = self._backup()
+        if feedback is not None:
+            with sqlite3.connect(f"{self.db_path.as_uri()}?mode=ro", uri=True) as original:
+                snapshot = HumanSnapshot.read(original, self.state / "network-import/overrides/review.csv")
         db = Db(self.db_path)
         restored = merged = 0
         decisions = ()
@@ -129,7 +108,7 @@ class Heal:
                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                          (str(HEAL_MIGRATION_VERSION),))
         result = HealManifest(
-            status="completed", state_root=str(self.state), backup_root=str(self.backup),
+            status="completed", state_root=str(self.state),
             operator_id=self.operator_id, feedback_snapshot=str(self.feedback_snapshot),
             feedback_csv=str(self.feedback_csv), feedback_rows=len(feedback.rows) if feedback is not None else 0,
             applied=sum(row.status == CarryStatus.APPLIED for row in decisions),
@@ -145,7 +124,6 @@ class Heal:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Heal existing local facts and scoped operator feedback without paid calls")
     parser.add_argument("--state-root", required=True, type=Path, help="Existing .powerpacks directory")
-    parser.add_argument("--backup-root", required=True, type=Path, help="Unused destination for a pending migration backup; completed migrations skip backup")
     parser.add_argument("--operator-id", required=True)
     parser.add_argument("--feedback-json", type=Path, help="Saved operator-scoped GET /v2/feedback response row list; otherwise fetched read-only")
     args = parser.parse_args(argv)
