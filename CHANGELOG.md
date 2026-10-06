@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.17.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.17.1...powerpacks-v3.17.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* rekey Gmail contacts on their original parents ([#723](https://github.com/powerset-co/powerpacks/issues/723)) ([4d74cf6](https://github.com/powerset-co/powerpacks/commit/4d74cf682eb3b9d1e014311ad95b3f3853e060ad))
+
 ## [3.17.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.17.0...powerpacks-v3.17.1) (2026-10-06)
 
 
