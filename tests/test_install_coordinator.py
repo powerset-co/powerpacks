@@ -12,8 +12,12 @@ from unittest.mock import patch
 
 from packs.powerset.primitives.install.onboard import main
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.powerset.primitives.install.steps import InstallState, InstallStep
+from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.workflow import SourceOnboarding
+from packs.powerset.primitives.install.tools import ImportTools
+from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
+from packs.ingestion.primitives.imports.gmail.importer import GmailImport
+from packs.ingestion.primitives.setup.automations import accounts
 
 
 class InstallCoordinatorTests(unittest.TestCase):
@@ -163,6 +167,36 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertIn("already running", output)
         self.assertEqual(self.events, [])
         self.launch_page.assert_not_called()
+
+    def test_fresh_sources_use_new_powerset_account_and_save_gmail_choice_on_retry(self):
+        self.sources.stop()  # Exercise SourceOnboarding.run after the account step writes its email.
+        self.retry = f"{self.root}/bin/onboard --source gmail --harness pi --port 8899"
+        self.status.write('step.waiting', step=InstallStep.ACCOUNT, pid=0,
+                          retry_command=self.retry, account_email='')
+        self.account_email = 'new-powerset@example.com'
+        previous_cwd = Path.cwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, previous_cwd)
+        with patch.object(ImportTools, 'run', return_value={'status': 'ok'}), \
+             patch.object(accounts, 'status_payload', return_value={
+                 'config': {'oauth_configured': True}, 'database': {'exists': True}, 'accounts': []}), \
+             patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}) as health, \
+             patch.object(GmailDiscovery, 'run', return_value=SimpleNamespace(
+                 to_payload=lambda: {'status': 'completed'})), \
+             patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+            code, output = self.run_command()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(health.call_args.args[1], ['new-powerset@example.com'])
+            retry = self.status.read()['retry_command']
+            self.assertIn('--gmail-email new-powerset@example.com', retry)
+            self.assertIn('--harness pi --port 8899', retry)
+            window = SourceOnboarding(self.root, sources=()).sync_after
+            self.account_email = 'different-powerset@example.com'
+            code, output = self.run_command()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(health.call_args.args[1], ['new-powerset@example.com'])
+            self.assertIn('--harness pi --port 8899', self.status.read()['retry_command'])
+            self.assertEqual(SourceOnboarding(self.root, sources=()).sync_after, window)
 
 
 if __name__ == "__main__":

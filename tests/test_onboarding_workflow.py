@@ -1,8 +1,6 @@
 """Local onboarding reuses source outputs, preserves gates, and stops on errors."""
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import os
 import shlex
@@ -21,6 +19,7 @@ from packs.ingestion.primitives.setup.automations import msgvault_home
 from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup, TestUsers
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
+from packs.ingestion.primitives.discover.messages.extract_whatsapp import WhatsAppExtractor
 from packs.ingestion.primitives.discover.messages.wacli import auth
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked
 from packs.ingestion.primitives.imports import common as import_common
@@ -29,9 +28,11 @@ from packs.ingestion.primitives.imports.messages.importer import MessagesImport
 from packs.ingestion.primitives.setup.automations import accounts
 from packs.ingestion.primitives.setup.automations.shell import CommandResult
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.powerset.primitives.install.steps import InstallState, InstallStep
+from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
 from packs.powerset.primitives.install.workflow import SourceOnboarding
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS
+from packs.shared.csv_io import CsvIO
 
 
 def payload(**record):
@@ -50,6 +51,8 @@ class SourceOnboardingTests(unittest.TestCase):
         self.data.write_text('person_id,name\ncandidate:phone:+15550100,Jordan Bravo\n')
         InstallStatus(self.root).write('install.skills_ready', pid=os.getpid())
         self.tools = patch.object(ImportTools, 'run', return_value={'status': 'ok'}).start()
+        self.linkedin_run = LinkedInConnections.run
+        self.linkedin_login = LinkedInConnections.login
         patch.object(LinkedInConnections, 'run', return_value={
             'status': 'completed', 'outcome': 'read', 'read': 1, 'total': 1, 'connections': 1, 'added': 1}).start()
         patch.object(LinkedInConnections, 'login', return_value={'status': 'completed'}).start()
@@ -102,8 +105,12 @@ class SourceOnboardingTests(unittest.TestCase):
 
     def test_every_missing_mailbox_becomes_a_test_user_before_consent(self):
         added = self.test_users
+        health = {'status': 'needs_user_action', 'accounts': [
+            {'email': 'casey@example.com', 'status': 'authenticated'},
+            {'email': 'jordan@example.com', 'status': 'missing_token'}]}
         with patch.object(msgvault_home, 'load_setup_state', return_value=SimpleNamespace(test_users=('casey@example.com',))), \
-             patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}), \
+             patch.object(accounts, 'check_accounts_payload', side_effect=[health, {'status': 'ok'}]), \
+             patch.object(accounts, 'add_account', return_value={'status': 'ok'}), \
              patch.object(GmailDiscovery, 'run', return_value=payload(status='needs_user_action')):
             SourceOnboarding(self.root, sources=('gmail',),
                              gmail_emails=('casey@example.com', 'jordan@example.com')).run()
@@ -140,7 +147,9 @@ class SourceOnboardingTests(unittest.TestCase):
             wacli_store=store, refresh=True, skip_sources=('whatsapp',))
         original._write('gmail.connect.waiting')
         repeated = SourceOnboarding(self.root, sources=())
-        self.assertEqual(repeated.retry_command, original.retry_command)
+        self.assertEqual(shlex.split(repeated.retry_command),
+                         [arg for arg in shlex.split(original.retry_command) if arg != '--refresh'])
+        self.assertFalse(repeated.refresh)
         override = SourceOnboarding(self.root, sources=('imessage',))
         self.assertEqual(tuple(override.sources), ('imessage',))
         self.assertEqual(override.gmail_emails, ('casey@example.com', 'jordan@example.com'))
@@ -158,6 +167,36 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(override.gmail_emails, ('jordan@example.com',))
         self.assertEqual(override.sync_after, '2025-10-03')
         self.assertEqual(override.run()['step'], 'ready')
+
+    def test_refresh_is_used_once_then_normal_rerun_reuses_gmail_and_saved_window(self):
+        current = import_common.ImportManifest.from_payload('gmail', {
+            'status': 'completed', 'input': {'accounts': [{'account_email': 'casey@example.com'}]}})
+        with patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}) as health, \
+             patch.object(import_common, 'import_manifest_current', return_value=current), \
+             patch.object(GmailDiscovery, 'run', return_value=payload(status='completed')) as discover, \
+             patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+            first = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',),
+                                     sync_after='2023-01-01', refresh=True).run()
+            repeated = SourceOnboarding(self.root, sources=())
+            second = repeated.run()
+        self.assertEqual((first['step'], second['step']), ('deep_context', 'deep_context'))
+        self.assertEqual(repeated.sync_after, '2023-01-01')
+        self.assertEqual(health.call_count, 2)
+        self.assertEqual(discover.call_count, 1)
+        self.assertNotIn('--refresh', second['retry_command'])
+        self.test_users.assert_not_called()
+
+    def test_powerset_gmail_choice_survives_other_mailboxes_added_before_rerun(self):
+        InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(),
+                                       account_email='casey@example.com')
+        with patch.object(SourceOnboarding, '_gmail_connect', return_value=False):
+            first = SourceOnboarding(self.root, sources=('gmail',))
+            first.run()
+        with patch.object(accounts, 'status_payload', return_value={'accounts': [
+                {'email': 'other@example.com'}, {'email': 'casey@example.com'}]}):
+            repeated = SourceOnboarding(self.root, sources=())
+        self.assertEqual(repeated.gmail_emails, ('casey@example.com',))
+        self.assertEqual(repeated.sync_after, first.sync_after)
 
     def test_skip_finishes_without_calling_source_tools(self):
         result = SourceOnboarding(self.root, sources=('gmail',), skip_sources=('gmail',)).run()
@@ -770,6 +809,43 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['step'], 'deep_context')
         self.assertEqual(self.data.read_bytes(), original)
 
+    def test_real_message_sources_import_once_reuse_twice_and_refresh_explicitly(self):
+        def extract_imessage(extractor, *, output_csv, output_jsonl, manifest):
+            CsvIO.write_dict_rows(output_csv, CSV_HEADERS, [{
+                'phone': '+15550100123', 'name': 'Jordan Bravo', 'source': 'imessage',
+                'message_count': '3', 'imessage_message_count': '3'}])
+            return {'status': 'completed'}
+
+        def extract_whatsapp(extractor, *, output_csv, manifest, **kwargs):
+            CsvIO.write_dict_rows(output_csv, CSV_HEADERS, [{
+                'phone': '+15550100456', 'name': 'Casey Delta', 'source': 'whatsapp',
+                'message_count': '4', 'whatsapp_message_count': '4'}])
+            manifest.write_text(json.dumps({'status': 'completed', 'store': str(extractor.store)}))
+            return {'status': 'completed'}
+
+        with patch.object(IMessageExtractor, 'check', return_value={'status': 'ok'}) as check, \
+             patch.object(IMessageExtractor, 'extract', autospec=True, side_effect=extract_imessage) as imessage, \
+             patch.object(auth, 'auth_status', return_value=SimpleNamespace(authenticated=True)), \
+             patch.object(auth, 'auth_report', return_value={'status': 'linked'}) as link, \
+             patch.object(WhatsAppExtractor, 'run', autospec=True, side_effect=extract_whatsapp) as whatsapp:
+            first = SourceOnboarding(self.root, sources=('imessage', 'whatsapp')).run()
+            self.assertEqual(first['step'], 'deep_context', first.get('action'))
+            artifacts = [self.data, self.data.with_name('manifest.json'),
+                         self.root / '.powerpacks/messages/contacts.csv']
+            original = [(path.read_bytes(), path.stat().st_mtime_ns) for path in artifacts]
+            for _ in range(2):
+                repeated = SourceOnboarding(self.root, sources=()).run()
+                self.assertEqual(repeated['step'], 'deep_context')
+                self.assertEqual([(path.read_bytes(), path.stat().st_mtime_ns) for path in artifacts], original)
+            self.assertEqual((imessage.call_count, whatsapp.call_count), (1, 1))
+            self.assertEqual(link.call_count, 3)
+            self.assertEqual(check.call_count, 4)  # Login checks plus the initial extractor check.
+            refreshed = SourceOnboarding(self.root, sources=(), refresh=True).run()
+            self.assertEqual(refreshed['step'], 'deep_context')
+            self.assertEqual((imessage.call_count, whatsapp.call_count), (2, 2))
+            SourceOnboarding(self.root, sources=()).run()
+            self.assertEqual((imessage.call_count, whatsapp.call_count), (2, 2))
+
     def test_discovery_failure_retains_payload_and_does_not_import(self):
         with patch.object(IMessageExtractor, 'check', return_value={'status': 'ok'}), \
              patch.object(MessagesDiscovery, 'run', return_value=payload(status='failed', error='disk full')), \
@@ -798,6 +874,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['steps']['linkedin']['message'], '2 LinkedIn connections (2 new); LinkedIn shows 3')
         manifest = self.root / '.powerpacks/network-import/discover/linkedin/connections.json'
         manifest.parent.mkdir(parents=True)
+        manifest.with_name('Connections.csv').write_text('First Name,Last Name,URL\nJordan,Bravo,https://www.linkedin.com/in/jordan-bravo\n')
         manifest.write_text(json.dumps({'status': 'completed', 'complete': True}))
         with patch.object(LinkedInConnections, 'run') as scrape:
             result = SourceOnboarding(self.root, sources=('linkedin',)).run()
@@ -809,6 +886,51 @@ class SourceOnboardingTests(unittest.TestCase):
             SourceOnboarding(self.root, sources=('linkedin',)).run()
         scrape.assert_called_once()
         self.assertEqual(self.tools.call_count, 2)
+
+    def test_linkedin_completed_record_without_csv_does_not_skip_read(self):
+        manifest = self.root / '.powerpacks/network-import/discover/linkedin/connections.json'
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({'status': 'completed', 'complete': True}))
+        with patch.object(LinkedInConnections, 'run', return_value={
+                'status': 'completed', 'outcome': 'read', 'connections': 1, 'added': 1}) as scrape:
+            SourceOnboarding(self.root, sources=('linkedin',)).run()
+        scrape.assert_called_once()
+
+    def test_real_linkedin_import_reuses_csv_on_normal_rerun_and_refreshes_once(self):
+        def browser(connections, *args, **kwargs):
+            if '--login-only' in args:
+                return {'status': 'ok'}
+            return {'status': 'ok', 'total': 1, 'stopped': 'end', 'loads': 1, 'owner_slug': 'casey',
+                    'connections': [{'name': 'Jordan Bravo', 'slug': 'jordan-bravo',
+                                     'headline': 'Engineer', 'connected_on': '2026-10-01'}]}
+
+        with patch.object(LinkedInConnections, 'run', self.linkedin_run), \
+             patch.object(LinkedInConnections, 'login', self.linkedin_login), \
+             patch.object(LinkedInConnections, '_browser', autospec=True, side_effect=browser) as external:
+            first = SourceOnboarding(self.root, sources=('linkedin',)).run()
+            csv = self.root / '.powerpacks/network-import/discover/linkedin/Connections.csv'
+            original = (csv.read_bytes(), csv.stat().st_mtime_ns)
+            for _ in range(2):
+                repeated = SourceOnboarding(self.root, sources=()).run()
+                self.assertEqual(repeated['step'], 'deep_context')
+                self.assertEqual((csv.read_bytes(), csv.stat().st_mtime_ns), original)
+            self.assertEqual(first['step'], 'deep_context')
+            self.assertEqual(sum('--login-only' not in call.args for call in external.call_args_list), 1)
+            SourceOnboarding(self.root, sources=(), refresh=True).run()
+            SourceOnboarding(self.root, sources=()).run()
+            self.assertEqual(sum('--login-only' not in call.args for call in external.call_args_list), 2)
+
+    def test_linkedin_completed_import_still_checks_expired_browser_login(self):
+        manifest = self.root / '.powerpacks/network-import/discover/linkedin/connections.json'
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({'status': 'completed', 'complete': True}))
+        manifest.with_name('Connections.csv').write_text('First Name,Last Name,URL\nJordan,Bravo,https://www.linkedin.com/in/jordan-bravo\n')
+        with patch.object(LinkedInConnections, 'login', return_value={'status': 'needs_user_action'}) as login, \
+             patch.object(LinkedInConnections, 'run') as scrape:
+            result = SourceOnboarding(self.root, sources=('linkedin',)).run()
+        login.assert_called_once()
+        scrape.assert_not_called()
+        self.assertEqual((result['step'], result['status']), ('linkedin_login', 'waiting'))
 
 
 if __name__ == '__main__':

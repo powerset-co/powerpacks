@@ -152,7 +152,12 @@ class ExportPeople:
         final = tuple(PeopleRow.model_validate(row) for row in merged.values())
         self.db.replace_imported_people(tuple(realized))
 
-        CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in final])
+        rows = [row.to_row() for row in final]
+        if (
+            CsvIO.read_header(self.people_csv) != PEOPLE_SCHEMA_COLUMNS
+            or CsvIO.read_dict_rows(self.people_csv) != rows
+        ):
+            CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, rows)
         payload: dict[str, object] = {
             "primitive": "deep_context_export_people",
             "status": "completed",

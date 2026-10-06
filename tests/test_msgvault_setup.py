@@ -136,6 +136,15 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(project_id, "local-msg-vault-state1")
             self.assertEqual(choice["source"], "state")
 
+    def test_create_project_reuses_existing_project_on_repeated_setup(self):
+        with mock.patch.object(gcloud_project.shutil, "which", return_value="/bin/gcloud"), \
+            mock.patch.object(gcloud_project, "run_command", return_value=shell.CommandResult(ok=True, stdout="{}")) as run:
+            for _ in range(3):
+                result = gcloud_project.create_gcloud_project("local-msg-vault-test", "local-msg-vault")
+                self.assertEqual(result, {"status": "ok", "project": "local-msg-vault-test", "created": False})
+        self.assertEqual(run.call_args_list, [mock.call(
+            ["gcloud", "projects", "describe", "local-msg-vault-test", "--format=json"], timeout=60)] * 3)
+
     def test_choose_project_defaults_from_supplied_email_without_gcloud_state(self):
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.object(gcloud_project, "gcloud_value", side_effect=AssertionError("must not inspect gcloud project")):
@@ -392,6 +401,54 @@ class MsgvaultSetupTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertTrue(result["login_ran"])
 
+    def test_ensure_gcloud_auth_reuses_cached_expected_account_when_another_is_active(self):
+        active = "other@example.com"
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            nonlocal active
+            calls.append(cmd)
+            if cmd[:4] == ["gcloud", "config", "set", "account"]:
+                active = cmd[4]
+            return shell.CommandResult(ok=True, stdout="token")
+
+        with mock.patch.object(gcloud_project.shutil, "which", return_value="/bin/gcloud"), \
+            mock.patch.object(gcloud_project, "gcloud_value", side_effect=lambda args: active), \
+            mock.patch.object(gcloud_project, "run_command", side_effect=fake_run), \
+            mock.patch.object(gcloud_project, "run_visible_command") as login:
+            for _ in range(3):
+                result = gcloud_project.ensure_gcloud_auth(open_browser=True, expected_account="me@example.com")
+                self.assertEqual(result, {"status": "ok", "account": "me@example.com", "login_ran": False})
+
+        login.assert_not_called()
+        self.assertEqual(active, "me@example.com")
+        self.assertEqual(calls.count(["gcloud", "config", "set", "account", "me@example.com", "--quiet"]), 1)
+        self.assertIn(["gcloud", "auth", "print-access-token", "--account", "me@example.com", "--quiet"], calls)
+
+    def test_status_does_not_reuse_missing_or_invalid_configured_client_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            secret = home / "client_secret.json"
+            msgvault_home.write_msgvault_config(home / "config.toml", secret)
+            (home / "msgvault.db").touch()
+            with mock.patch.object(accounts.shutil, "which", return_value="/bin/msgvault"), \
+                mock.patch.object(accounts, "run_command", return_value=shell.CommandResult(ok=True)), \
+                mock.patch.object(accounts, "run_msgvault", return_value=shell.CommandResult(ok=True, stdout='[{"email":"me@example.com"}]')), \
+                mock.patch.object(accounts, "mcp_status", return_value={}), \
+                mock.patch.object(accounts, "gcloud_context", return_value={}):
+                for content in (None, "{}"):
+                    with self.subTest(content=content):
+                        if content is not None:
+                            secret.write_text(content, encoding="utf-8")
+                        result = accounts.status_payload(home)
+                        self.assertFalse(result["config"]["oauth_configured"])
+                        self.assertEqual(result["status"], "needs_setup")
+
+                self.write_secret(secret)
+                result = accounts.status_payload(home)
+                self.assertTrue(result["config"]["oauth_configured"])
+                self.assertEqual(result["status"], "ok")
+
     def test_ensure_gcloud_auth_targets_expected_account(self):
         calls = []
         accounts_iter = iter(["other@example.com", "me@example.com"])
@@ -405,9 +462,14 @@ class MsgvaultSetupTests(unittest.TestCase):
             calls.append(cmd)
             return shell.CommandResult(ok=True, returncode=0)
 
+        def fake_run(cmd, **kwargs):
+            if "--account" in cmd:
+                return shell.CommandResult(ok=False, stderr="No credentials available for the requested account")
+            return shell.CommandResult(ok=True, stdout="token")
+
         with mock.patch.object(gcloud_project.shutil, "which", return_value="/bin/gcloud"), \
             mock.patch.object(gcloud_project, "gcloud_value", side_effect=fake_gcloud_value), \
-            mock.patch.object(gcloud_project, "run_command", return_value=shell.CommandResult(ok=True, stdout="token")), \
+            mock.patch.object(gcloud_project, "run_command", side_effect=fake_run), \
             mock.patch.object(gcloud_project, "run_visible_command", side_effect=fake_visible):
             result = gcloud_project.ensure_gcloud_auth(
                 open_browser=False,
@@ -420,7 +482,7 @@ class MsgvaultSetupTests(unittest.TestCase):
     def test_ensure_gcloud_auth_rejects_wrong_account_after_login(self):
         with mock.patch.object(gcloud_project.shutil, "which", return_value="/bin/gcloud"), \
             mock.patch.object(gcloud_project, "gcloud_value", return_value="other@example.com"), \
-            mock.patch.object(gcloud_project, "run_command", return_value=shell.CommandResult(ok=True, stdout="token")), \
+            mock.patch.object(gcloud_project, "run_command", return_value=shell.CommandResult(ok=False, stderr="No credentials available for the requested account")), \
             mock.patch.object(gcloud_project, "run_visible_command", return_value=shell.CommandResult(ok=True, returncode=0)):
             result = gcloud_project.ensure_gcloud_auth(
                 open_browser=True,

@@ -3,11 +3,12 @@
 Owns the Google Cloud side of setup: reading gcloud config values, detecting
 reauth and project-id-taken errors, login enforcement (optionally pinned to an
 expected account), project id validation, the choose-then-create project flow
-(argument > saved state > current gcloud project > existing local-msg-vault
-project > deterministic default), Gmail API enablement, and Google Console
+(argument > saved state > current local-msg-vault project > deterministic
+default), Gmail API enablement, and Google Console
 URL building/opening.
 
 Changelog:
+  2026-10-06: reuse a requested account's cached login before opening Google sign-in.
   2026-10-05: `choose_project_id` no longer adopts the newest local-msg-vault
       project the account can see; in a shared Google org that was a teammate's
       project, and setup failed without access to it.
@@ -143,16 +144,22 @@ def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[s
     progress("Checking Google Cloud login...")
     expected = expected_account.strip()
     account = gcloud_value(["config", "get-value", "account", "--quiet"])
-    needs_login = bool(expected and account and account.lower() != expected.lower())
-    if account and not needs_login:
-        token = run_command(["gcloud", "auth", "print-access-token", "--quiet"], timeout=30)
+    selected = expected or account
+    different_account = bool(expected and account.lower() != expected.lower())
+    if selected:
+        cmd = ["gcloud", "auth", "print-access-token"]
+        if different_account:
+            cmd.extend(["--account", expected])
+        token = run_command([*cmd, "--quiet"], timeout=30)
         if token.ok:
-            # The account is already pinned: needs_login is exactly "expected is
-            # set and the active account differs", so no second comparison here.
-            progress(f"Google Cloud login confirmed as {account}.")
-            return {"status": "ok", "account": account, "login_ran": False}
+            if different_account:
+                result = run_command(["gcloud", "config", "set", "account", expected, "--quiet"], timeout=30)
+                if not result.ok:
+                    return {"status": "error", "account": account, "message": command_error(result), "login_ran": False}
+            progress(f"Google Cloud login confirmed as {selected}.")
+            return {"status": "ok", "account": selected, "login_ran": False}
         token_error = token.stderr or token.stdout or ""
-        if not is_gcloud_reauth_error(token_error):
+        if not different_account and not is_gcloud_reauth_error(token_error):
             return {
                 "status": "error",
                 "account": account,
