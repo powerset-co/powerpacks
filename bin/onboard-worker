@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Start, inspect, or steer the onboarding agent in a dedicated tmux session.
+
+Standalone stdlib launcher: it can be downloaded before Powerpacks is installed.
+Pipeline progress remains in the coordinator's existing manifest.
+"""
+import argparse
+import ctypes
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+SESSION = "worker"
+TARGET = "worker:0.0"
+WORKER_INSTRUCTIONS = """You are the Powerpacks onboarding worker; the original chat is the advisor.
+Do the task below yourself. Do not dispatch another agent or another installer.
+Read the supplied install skill and user choices; approvals already supplied apply.
+Run the supplied bootstrap or saved retry command with short tool yields. Keep
+watching it with waits of at most 10 seconds so advisor messages can steer you.
+After bootstrap identifies the checkout, read its install skill and use the
+existing install manifest, action, logs and retry_command. Do not invent progress.
+On restart, inspect the manifest and live installer first; observe an existing
+coordinator instead of starting a duplicate. Repair within the authorized scope.
+Print STATUS PAGE: with the exact URL as soon as it appears. Report a human action
+once, keep observing automatic login/permission completion, and continue afterward.
+For a chat-only decision, say NEEDS USER: with the question and wait for the advisor.
+For an unrepaired failure, say BLOCKED: with evidence and the next action. Answer
+advisor questions while work continues. Apply skips using the install skill's
+existing stop-and-resume procedure; preserve every other choice and all data.
+Finish with DONE: only after verifying the requested outcome from real artifacts.
+This prompt does not grant new consent or broader permissions.
+
+Advisor task and already supplied user choices:
+"""
+
+
+def _permission_app():
+    """Capture macOS responsibility before tmux removes the visible ancestry."""
+    if os.environ.get("POWERPACKS_PERMISSION_APP"):
+        return os.environ["POWERPACKS_PERMISSION_APP"]
+    if sys.platform != "darwin":
+        return None
+    responsible = ctypes.CDLL("/usr/lib/libSystem.B.dylib").responsibility_get_pid_responsible_for_pid
+    responsible.argtypes = [ctypes.c_int]
+    responsible.restype = ctypes.c_int
+    pid = responsible(os.getpid())
+    command = subprocess.check_output(["ps", "-p", str(pid), "-o", "comm="], text=True).strip()
+    return command.split(".app/", 1)[0] + ".app" if ".app/" in command else None
+
+
+class Worker:
+    def __init__(self, socket):
+        self.tmux = ["tmux", "-S", str(socket), "-f", "/dev/null"]
+        self.socket = str(socket)
+
+    def _call(self, *args, **kwargs):
+        return subprocess.run([*self.tmux, *args], check=True, capture_output=True, text=True, **kwargs).stdout
+
+    def _exists(self):
+        return subprocess.run([*self.tmux, "has-session", "-t", SESSION],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+    def read(self):
+        if not self._exists():
+            return {"state": "not_started", "socket": self.socket}
+        dead, pid, code = self._call("display-message", "-p", "-t", TARGET,
+                                   "#{pane_dead}|#{pane_pid}|#{pane_dead_status}").strip().split("|")
+        return {"state": "exited" if dead == "1" else "running", "socket": self.socket,
+                "pid": int(pid), "exit_code": int(code) if code else None,
+                "output": self._call("capture-pane", "-p", "-J", "-t", TARGET, "-S", "-150")}
+
+    def start(self, args):
+        current = self.read()
+        if current["state"] == "running":
+            return current
+        codex = shutil.which("codex")
+        if not codex:
+            raise ValueError("Codex CLI is unavailable. Use the host's native background worker.")
+        help_text = subprocess.check_output([codex, "--help"], text=True)
+        if "--no-daemon" not in help_text:
+            raise ValueError("This Codex CLI lacks --no-daemon. Update it or use a native background worker.")
+        if not args.cwd.is_dir():
+            raise ValueError("The worker directory does not exist: " + str(args.cwd))
+        prompt = args.prompt_file.read_text()
+        if not prompt.strip():
+            raise ValueError("The worker needs the task and the user's choices in --prompt-file.")
+        command = [codex, "--no-daemon", "--no-alt-screen", "-C", str(args.cwd.resolve()),
+                   "-s", args.sandbox, "-a", args.approval, WORKER_INSTRUCTIONS + prompt]
+        app = _permission_app()
+        if current["state"] == "exited":
+            # Recreate our dedicated server so a new launch retains its app's macOS responsibility.
+            self._call("kill-server")
+        self._call("new-session", "-d", "-s", SESSION, "-x", "120", "-y", "40", "/bin/sleep", "86400")
+        self._call("set-option", "-w", "-t", TARGET, "remain-on-exit", "on")
+        environment = ["-e", "POWERPACKS_PERMISSION_APP=" + (app or "")]
+        self._call("respawn-pane", "-k", "-t", TARGET, "-c", str(args.cwd.resolve()),
+                  *environment, "exec " + shlex.join(command))
+        return self.read()
+
+    def send(self, message):
+        if self.read()["state"] != "running":
+            raise ValueError("The worker is not running. Start it with the saved task and current choices.")
+        if not message.strip():
+            raise ValueError("Send a nonempty message.")
+        # Bracketed paste keeps multiline instructions together; Enter steers the turn.
+        self._call("load-buffer", "-b", "advisor", "-", input=message)
+        self._call("paste-buffer", "-d", "-p", "-r", "-b", "advisor", "-t", TARGET)
+        self._call("send-keys", "-t", TARGET, "Enter")
+        return {"state": "sent", "socket": self.socket}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--socket", type=Path,
+                        default=Path(tempfile.gettempdir()) / "powerpacks-onboarding.sock")
+    commands = parser.add_subparsers(dest="command", required=True)
+    start = commands.add_parser("start", help="Reuse a live worker; start again after it exits")
+    start.add_argument("--prompt-file", type=Path, required=True)
+    start.add_argument("--cwd", type=Path, default=Path.home())
+    start.add_argument("--sandbox", choices=["read-only", "workspace-write", "danger-full-access"], required=True)
+    start.add_argument("--approval", choices=["on-request", "never"], required=True)
+    commands.add_parser("read", help="Read worker output; running means the process is alive, not search ready")
+    send = commands.add_parser("send", help="Steer the worker without interrupting its coordinator")
+    send.add_argument("message")
+    args = parser.parse_args()
+    try:
+        worker = Worker(args.socket)
+        if args.command == "start":
+            result = worker.start(args)
+        elif args.command == "send":
+            result = worker.send(args.message)
+        else:
+            result = worker.read()
+        print(json.dumps(result))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        detail = error.stderr if isinstance(error, subprocess.CalledProcessError) else str(error)
+        print(json.dumps({"error": (detail or str(error)).strip()}))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

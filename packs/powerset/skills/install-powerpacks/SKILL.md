@@ -6,7 +6,7 @@ allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/pow
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.6.1
+  version: 1.7.0
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -19,6 +19,8 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-05: Codex uses a persistent tmux worker; the advisor relays chat choices
+  and reads its output while the coordinator remains the owner of progress.
 - 2026-10-05: Page lines name no reasons; a stopped or deferred step's reason is in its
   action's details (the ready step's `left_to_fix`).
 - 2026-10-05: A worker runs setup to the end; the main chat stays free. A QR scan,
@@ -109,7 +111,7 @@ The agent cannot read or change the permission mode; only the user can. If they
 restart, they paste the same sentence again. If a command is later denied, or the
 user has had to approve more than one prompt, repeat the full-access steps.
 
-From the one reply: on **approve**, run the command below; otherwise add
+From the one reply: on **approve**, have the worker run the command below; otherwise add
 `--source linkedin`. Pass every extra Gmail address they listed as `--gmail-email`
 (the Powerset login is added on its own). Everything after that is logins the user
 does back to back near the start (Powerset, LinkedIn, Google, each Gmail approval,
@@ -132,14 +134,72 @@ checkout for subsequent commands and read its `AGENTS.md`. Skills folders are no
 workflow data roots. Fresh installs follow the published release; a PR test uses
 that checkout's bootstrap and verifies its commit, not the public launcher.
 
-Dispatch one worker (a sub-agent) to run the coordinator and watch it until search is
-ready; the main chat stays free to answer the user and pass their choices to the worker.
-A QR scan, browser login or permission is not a reason to stop: the status page shows
-it and setup continues by itself once the user is done, so say what is needed once and
-keep watching. Without sub-agents, do the worker's job in this chat the same way. Do
-not end the turn before search is ready unless setup needs an answer only the user can
-give in chat. Do not launch a competing installer. A browser action does not require
-a "done" message.
+### Advisor and background worker
+
+The original chat is the advisor: carry the user's choices and existing approvals
+into one worker, open the status page, answer questions, and relay any changed
+choices immediately. The worker runs and repairs the existing coordinator through
+verified completion. Only it starts or resumes setup; the advisor never starts a
+second installer. A browser action does not require a "done" message.
+
+On Codex with a local CLI and tmux, use `bin/onboard-worker`. It is standalone and
+needs only Python 3, tmux and Codex, so a fresh install can download it before a
+checkout exists:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/onboard-worker -o /tmp/powerpacks-onboard-worker.py
+```
+
+For a PR test, use that checkout's helper and bootstrap instead. Do not download
+stable over a PR test. If tmux or a suitable Codex CLI is unavailable, use the
+host's native background agent; do not install a second agent harness silently.
+Other hosts use their native background agent. Without either, supervise here.
+
+Write a private task file containing the saved skill's absolute path, the exact
+bootstrap command above (including requested options), account/history/source
+choices, existing consent and budget, and the requested outcome. The worker must
+read that skill, execute the command and supervise it, not repeat the advisor's
+up-front question or launch another worker. On an interrupted install, include
+the known checkout and tell it to inspect the live process and saved continuation.
+Never put tokens, passwords or message content in the task or steering messages.
+
+Run the helper from the advisor's current shell. Supply the user's actual sandbox
+and approval policy explicitly; don't infer full access from the install request.
+For an already authorized Full access session, for example:
+
+```bash
+python3 /tmp/powerpacks-onboard-worker.py start --prompt-file /tmp/powerpacks-worker-task.txt --sandbox danger-full-access --approval never
+python3 /tmp/powerpacks-onboard-worker.py read
+python3 /tmp/powerpacks-onboard-worker.py send 'The user says: skip Gmail for now. Keep the other choices and continue.'
+```
+
+`start` reuses a live worker; after an exit it starts a replacement with the supplied
+task. If a reused worker has finished its previous task, send the new authorized
+request; `start` deliberately does not submit it again. Use the same helper/socket
+throughout. The child uses `--no-daemon` to avoid
+an unrelated shared Codex server; the launcher passes the originating Mac app for
+permission guidance. This grants no Full Disk Access. The tmux process can outlive
+the advisor's tool call; `running` means that process is alive, not setup complete.
+Inspect startup output before steering: a CLI login or trust prompt needs handling
+first; process creation alone does not mean the Codex composer is ready.
+
+**Communication:** `send` steers the worker's active turn; `read` returns its recent
+terminal output. This is the shared channel—no new queue or pipeline state file.
+Read the existing manifest as well as the worker output: it owns the exact action,
+progress and retry command. Open each printed `STATUS PAGE:` URL beside chat;
+keep login and review in the default browser. A `NEEDS USER:` or `BLOCKED:` reply
+needs advisor attention; relay the user's answer through `send`. Verify changes
+from the manifest before claiming a source was skipped or search is ready.
+
+**Watching:** while setup is active, check in about every 30 seconds with bounded
+tool waits, and immediately after user input; don't wait 10–20 minutes. The worker
+uses short waits too so it can receive steering during a long import. Quietly
+handle routine progress; surface only a necessary human action, unresolved failure,
+or completion. Do not end supervision merely for a QR scan, login or permission:
+the worker keeps watching and resumes automatically. tmux cannot wake a finished
+chat turn. If the advisor must end its turn, use a supported host follow-up when
+available and authorized; otherwise say the worker continues and reattach on the
+next message. Never promise unsolicited notifications without an actual wakeup.
 
 ## Keep the status page beside chat
 
