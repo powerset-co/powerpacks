@@ -53,7 +53,7 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[tuple[ImportedPerson, 
     # A refreshed Gmail import already has candidate IDs. The retained roster
     # still records which old contact supplied its primary address.
     for person in stored_imported_people(db) if db is not None else ():
-        if person.source_channels == (SourceChannel.GMAIL.value,) and not person.person_id.startswith("candidate:"):
+        if SourceChannel.GMAIL.value in person.source_channels and not person.person_id.startswith("candidate:"):
             key = candidate_key_for(person.index_row.primary_email)
             if key:
                 rekeys.setdefault(person.person_id, set()).add(f"candidate:{key}")
@@ -139,7 +139,7 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[tuple[ImportedPerson, 
     for old_id, keys in rekeys.items():
         for key in keys:
             owners.setdefault(key, set()).add(old_id)
-    return people, {old_id: key for old_id, keys in rekeys.items() if len(keys) == 1 and old_id not in source_ids
+    return people, {old_id: key for old_id, keys in rekeys.items() if len(keys) == 1
                     for key in keys if len(owners[key]) == 1 and key in source_ids}
 
 

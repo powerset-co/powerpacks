@@ -67,7 +67,7 @@ class EnsureParents(Node):
         if repair.repaired or repair.unresolved:
             print(f'[deep-context] repaired {len(repair.repaired)} merged parents; '
                   f'{len(repair.unresolved)} unresolved', file=sys.stderr)
-        self.db.rekey_people(rekeys)
+        self.db.rekey_people(rekeys, retained_ids=frozenset(person.person_id for person in sources))
         projected = project_imported_people(self.db, sources or imported)
         retain_source_identifiers(self.db, sources, imported)
         return EnsureParentsManifest(

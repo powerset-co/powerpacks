@@ -122,8 +122,8 @@ class Heal:
             with db.transaction() as conn:
                 conn.execute("INSERT INTO meta(key,value) VALUES ('data_migration_version','4') "
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-        _, rekeys = read_source_people(self.people_csv, db)
-        repair_gmail_contact_keys(db, rekeys)
+        sources, rekeys = read_source_people(self.people_csv, db)
+        repair_gmail_contact_keys(db, rekeys, retained_ids=frozenset(person.person_id for person in sources))
         with db.transaction() as conn:
             conn.execute("INSERT INTO meta(key,value) VALUES ('data_migration_version',?) "
                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value",

@@ -37,8 +37,10 @@ validates feedback, then runs the existing membership,
 merge-ownership and Harmonic-profile repairs, restores attributable contact
 facts, applies reviewed feedback, matches imported LinkedIn connections and
 refreshes derived parent facts. Version 5 repairs proven empty Gmail duplicate
-parents and rekeys their original contacts while preserving the original parent
-and paid history. Stores already at version 4 do not fetch or reapply feedback.
+parents while preserving the original parent and paid history. Gmail-only
+contacts receive the new key; when another source still uses the old ID, both
+source people stay under the original parent. Stores already at version 4 do
+not fetch or reapply feedback.
 Each version is recorded only after its work succeeds. Original facts and human decisions
 retain their authority. The backup destination must be unused and outside the
 state directory for a pending migration. After interruption, retry with another

@@ -201,6 +201,41 @@ class GmailRekeyTests(unittest.TestCase):
         self.ensure(path)
         self.assertEqual(next(row.parent_id for row in queries.people(self.db) if row.person_id == self.old.id), self.parent)
         self.assertEqual(next(row.person_id for row in queries.facts(self.db)), self.old.id)
+        self.assertEqual({row.parent_id for row in queries.people(self.db)}, {self.parent})
+        self.assertEqual({row.person_id for row in queries.people(self.db)}, {self.old.id, self.new_id})
+
+    def test_messages_sharing_old_id_keep_gmail_under_original_parent(self):
+        messages = self.old.model_copy(update={'source_channels': 'imessage', 'primary_email': '',
+                                               'primary_phone': '+15550100'})
+        path = self.fan_in(self.old, messages)
+        for _ in range(2):
+            self.ensure(path)
+            self.assertEqual({row.parent_id for row in queries.people(self.db)}, {self.parent})
+            self.assertEqual({row.person_id for row in queries.people(self.db)}, {self.old.id, self.new_id})
+            self.assertEqual(next(row.person_id for row in queries.facts(self.db)), self.old.id)
+
+    def test_heal_reconnects_shared_source_shell_without_renaming_original_person(self):
+        for channel in ('linkedin_csv', 'imessage', 'whatsapp'):
+            with self.subTest(channel=channel):
+                other = self.old.model_copy(update={'source_channels': channel, 'primary_email': ''})
+                path = self.fan_in(self.old, other)
+                with patch.object(Db, 'rekey_people'):
+                    self.ensure(path)
+                self.assertEqual(len(queries.parents(self.db)), 2)
+                with self.db.transaction() as conn:
+                    conn.execute("INSERT OR REPLACE INTO meta VALUES ('data_migration_version','4')")
+                heal = Heal(state_root=self.state, backup_root=self.root / ('backup-' + channel),
+                            operator_id='00000000-0000-0000-0000-000000000001')
+                self.assertEqual(heal.run().status, 'completed')
+                self.ensure(path)
+                self.assertEqual({row.parent_id for row in queries.people(self.db)}, {self.parent})
+                self.assertEqual({row.person_id for row in queries.people(self.db)}, {self.old.id, self.new_id})
+                self.assertEqual(next(row.person_id for row in queries.facts(self.db)), self.old.id)
+                self.assertEqual(self.db.query('PRAGMA foreign_key_check'), [])
+                self.assertEqual(heal.run().status, 'skipped')
+                # Set up the next channel with the same original person's paid history.
+                with self.db.transaction() as conn:
+                    conn.execute('DELETE FROM people WHERE person_id=?', (self.new_id,))
 
     def test_merge_verdict_keeps_its_people_slugs_and_result_when_id_order_changes(self):
         other = PeopleRow(id='middle-casey', full_name='Casey Delta', primary_phone='+15550100', source_channels='imessage')

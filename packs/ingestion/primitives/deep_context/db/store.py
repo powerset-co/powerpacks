@@ -267,15 +267,19 @@ class Db:
         conn.execute(f"DELETE FROM {table} WHERE {key_column}=?", (key,))
         conn.executemany(UPSERTS[table], [asdict(row) for row in rows])
 
-    def rekey_people(self, rekeys: dict[str, str]) -> int:
-        """Rename existing people and their references only into unused IDs."""
+    def rekey_people(self, rekeys: dict[str, str], *, retained_ids: frozenset[str]) -> int:
+        """Put unused contact keys on the original parent, retaining other sources."""
         renamed = 0
         with self.transaction() as conn:
             conn.execute("BEGIN DEFERRED")
             conn.execute("PRAGMA defer_foreign_keys=ON")
             for old_id, new_id in rekeys.items():
-                old = conn.execute("SELECT parent_id FROM people WHERE person_id=?", (old_id,)).fetchone()
+                old = conn.execute("SELECT parent_id,parent_slug FROM people WHERE person_id=?", (old_id,)).fetchone()
                 if old is None or conn.execute("SELECT 1 FROM people WHERE person_id=?", (new_id,)).fetchone():
+                    continue
+                if old_id in retained_ids:
+                    self._write("people", PersonRow(new_id, old["parent_id"], parent_slug=old["parent_slug"]), conn)
+                    renamed += 1
                     continue
                 # Keep the original parent, child slug, decisions and artifact bytes.
                 # The schema has delete cascades, so rename all references before commit.
