@@ -59,6 +59,81 @@ if TYPE_CHECKING:
 HARMONIC_PROFILE_MIGRATION = 2
 
 
+def repair_gmail_contact_keys(db: Db, rekeys: dict[str, str]) -> None:
+    """2026-10-06: move exact Gmail source IDs; remove after pre-3.17 installs.
+
+    The source reader supplies only one-to-one old-ID -> primary-email keys.
+    A pre-existing candidate must still be an empty, single-person parent.
+    Paid or reviewed candidates require identity review, not this repair.
+    """
+    repaired = 0
+    nonempty = 0
+    with db.transaction() as conn:
+        conn.execute("BEGIN DEFERRED")
+        conn.execute("PRAGMA defer_foreign_keys=ON")
+        for old_id, new_id in rekeys.items():
+            old = conn.execute("SELECT * FROM people WHERE person_id=?", (old_id,)).fetchone()
+            if old is None:
+                continue
+            candidate = conn.execute("SELECT * FROM people WHERE person_id=?", (new_id,)).fetchone()
+            if candidate is not None:
+                parent_id = candidate["parent_id"]
+                occupied = conn.execute("""
+                    SELECT 1 FROM people WHERE parent_id=:parent AND
+                        (person_id!=:person OR facts_json IS NOT NULL OR is_owner OR is_ghost)
+                    UNION ALL SELECT 1 FROM parents WHERE parent_id=:parent AND
+                        (human_worth IS NOT NULL OR machine_worth IS NOT NULL)
+                    UNION ALL SELECT 1 FROM artifacts WHERE parent_id=:parent
+                    UNION ALL SELECT 1 FROM research WHERE parent_id=:parent
+                    UNION ALL SELECT 1 FROM guidance WHERE parent_id=:parent
+                    UNION ALL SELECT 1 FROM links WHERE parent_id=:parent AND
+                        (decision_action IS NOT NULL OR machine_action IS NOT NULL
+                         OR machine_judgment IS NOT NULL OR judgment_fingerprint IS NOT NULL
+                         OR paid_profile OR authoritative_detach OR kind='synthetic')
+                    UNION ALL SELECT 1 FROM merge_verdicts WHERE person_a=:person OR person_b=:person
+                    UNION ALL SELECT 1 FROM person_tags WHERE person_id=:person
+                    UNION ALL SELECT 1 FROM person_labels WHERE person_id=:person
+                    UNION ALL SELECT 1 FROM share WHERE person_id=:person
+                    LIMIT 1
+                """, {"parent": parent_id, "person": new_id}).fetchone()
+                if occupied:
+                    nonempty += 1
+                    continue
+                conn.execute("DELETE FROM parents WHERE parent_id=?", (parent_id,))
+
+            # Keep the original parent, child slug, decisions and artifact bytes.
+            # The schema has delete cascades, so rename all references before commit.
+            for table in ("imported_people", "person_identifiers", "person_sources", "candidate_people",
+                          "person_tags", "person_labels", "share"):
+                conn.execute(f"UPDATE {table} SET person_id=? WHERE person_id=?", (new_id, old_id))
+            for table in ("artifacts", "facts"):
+                conn.execute(f"UPDATE {table} SET person_id=? WHERE parent_id=? AND person_id=?",
+                             (new_id, old["parent_id"], old_id))
+            conn.execute("UPDATE people SET person_id=? WHERE person_id=?", (new_id, old_id))
+            conn.execute("UPDATE imported_people SET row_json=json_set(row_json,'$.id',?) WHERE person_id=?",
+                         (new_id, new_id))
+            conn.execute("UPDATE facts SET subject_key=? WHERE subject_key=?", (new_id, old_id))
+            for prefix in ("facts:", "source-bundle:"):
+                old_key, new_key = prefix + old_id, prefix + new_id
+                for table, column in (("facts", "artifact_key"), ("research", "artifact_key"),
+                                      ("synthetic_profiles", "source_artifact_key"), ("artifacts", "artifact_key")):
+                    conn.execute(f"UPDATE {table} SET {column}=? WHERE {column}=?", (new_key, old_key))
+            verdicts = conn.execute("SELECT person_a,person_b,slug_a,slug_b FROM merge_verdicts "
+                                    "WHERE person_a=? OR person_b=?", (old_id, old_id)).fetchall()
+            for verdict in verdicts:
+                pair = sorted((new_id if person == old_id else person, slug)
+                              for person, slug in ((verdict["person_a"], verdict["slug_a"]),
+                                                   (verdict["person_b"], verdict["slug_b"])))
+                conn.execute("UPDATE merge_verdicts SET person_a=?,slug_a=?,person_b=?,slug_b=? "
+                             "WHERE person_a=? AND person_b=?", (*pair[0], *pair[1],
+                                                               verdict["person_a"], verdict["person_b"]))
+            repaired += 1
+    if repaired:
+        print(f"[deep-context] repaired {repaired} Gmail contact keys on their original parents", file=sys.stderr)
+    if nonempty:
+        print(f"[deep-context] Gmail key repair left {nonempty} nonempty candidates unchanged", file=sys.stderr)
+
+
 def is_harmonic_bootstrap(source: object) -> bool:
     """Identify partial export profiles. Remove when no pre-v4 install remains."""
     return (isinstance(source, dict)

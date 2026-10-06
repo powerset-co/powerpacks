@@ -183,6 +183,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_rebuild_cli \
   tests.test_deep_context_source_contacts \
   tests.test_deep_context_source_identity \
+  tests.test_deep_context_gmail_rekey \
   tests.test_deep_context_source_owner \
   tests.test_identity_claim_ownership \
   tests.test_indexing_scaffold \

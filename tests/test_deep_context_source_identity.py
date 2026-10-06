@@ -71,6 +71,7 @@ class SourceIdentityTests(unittest.TestCase):
             "full_name": "Wrong Profile Name", "source_artifacts": f'["{original}"]',
             "superseded_person_ids": '["old-profile-alias"]'})
         project_imported_people(self.db, _imported_people((row,)))
+        original_parent = queries.people(self.db)[0].parent_id
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row()])
         merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
@@ -78,6 +79,9 @@ class SourceIdentityTests(unittest.TestCase):
         person = next(row for row in queries.people(self.db) if row.person_id == "candidate:email:first@example.test")
         (roster,) = queries.imported_people(self.db)
         self.assertEqual(person.person_id, "candidate:email:first@example.test")
+        self.assertEqual(person.parent_id, original_parent)
+        self.assertEqual(len(queries.parents(self.db)), 1)
+        self.assertEqual(len(queries.people(self.db)), 1)
         self.assertEqual(person.display_name, "Jordan Original")
         self.assertEqual({(row.kind, row.normalized_value) for row in queries.identifiers(self.db)},
                          {("email", "first@example.test")})
