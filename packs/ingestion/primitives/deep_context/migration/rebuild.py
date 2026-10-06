@@ -122,7 +122,7 @@ class Rebuild:
                    for row in rows):
                 raise StoreError(f"source import contains old profile associations: {path}")
         # The export fallback is excluded above, so this reader does not use a DB.
-        sources = read_source_people(self.people_csv, None)
+        sources, _ = read_source_people(self.people_csv, None)
         if not sources:
             raise StoreError("fresh sources contain no eligible contacts")
         return sources

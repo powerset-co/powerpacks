@@ -36,6 +36,7 @@ IMPORTED_PEOPLE_READER = PACKAGE / "ensure_parents/imported_people.py"
 SOURCE_PEOPLE_READER = PACKAGE / "ensure_parents/source_people.py"
 HUMAN_DECISION_READER = PACKAGE / "migration/human_decisions.py"
 REBUILD_READER = PACKAGE / "migration/rebuild.py"
+HEAL_READER = PACKAGE / "migration/heal.py"
 FEEDBACK_READER = PACKAGE / "migration/feedback.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
 DB_PACKAGE = PACKAGE / "db"
@@ -354,6 +355,7 @@ def _allowed_file_read(
     if (path, scope, ast.unparse(call.func)) in {
         (REBUILD_READER, "Rebuild._validate", "self.owner_profile.read_text"),
         (REBUILD_READER, "Rebuild._validate", "manifest_path.read_text"),
+        (HEAL_READER, "Heal.run", "source_manifest.read_text"),
         (FEEDBACK_READER, "read_feedback", "Path(feedback_json).read_text"),
     }:
         return True
