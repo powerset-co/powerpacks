@@ -60,7 +60,9 @@ class SourceIdentityTests(unittest.TestCase):
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         self.assertEqual({row.person_id for row in queries.people(self.db)}, {row.id for row in self.contacts()})
 
-    def test_historical_gmail_profile_id_restores_exact_primary_contact_key(self):
+    def test_historical_gmail_profile_id_keeps_the_existing_contact_whole(self):
+        # 2026-10-06: a contact the store already holds is not re-keyed to its
+        # address on re-import; it keeps its id, parent, name and identifiers.
         source = self.root / "gmail.csv"
         original = self.root / "gmail_contacts_aggregated.csv"
         CsvIO.write_dict_rows(original, ["email", "display_name"],
@@ -71,19 +73,22 @@ class SourceIdentityTests(unittest.TestCase):
             "full_name": "Wrong Profile Name", "source_artifacts": f'["{original}"]',
             "superseded_person_ids": '["old-profile-alias"]'})
         project_imported_people(self.db, _imported_people((row,)))
+        (before,) = queries.people(self.db)
         CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [row.to_row()])
         merge = PeopleMerge(inputs=[source], output_dir=self.root / "merged")
         merge.run()
-        EnsureParents(db=self.db, people_csv=merge.people_csv).run()
-        person = next(row for row in queries.people(self.db) if row.person_id == "candidate:email:first@example.test")
-        (roster,) = queries.imported_people(self.db)
-        self.assertEqual(person.person_id, "candidate:email:first@example.test")
-        self.assertEqual(person.display_name, "Jordan Original")
-        self.assertEqual({(row.kind, row.normalized_value) for row in queries.identifiers(self.db)},
-                         {("email", "first@example.test")})
-        self.assertEqual((roster.headline, roster.superseded_person_ids), ("", ""))
-        self.assertEqual(links(self.db)[0].public_identifier, "jordan-bravo")
-        self.assertIsNone(next(row.decision_action for row in links(self.db) if row.parent_id == person.parent_id))
+        for _ in range(2):
+            EnsureParents(db=self.db, people_csv=merge.people_csv).run()
+            (person,) = queries.people(self.db)
+            (roster,) = queries.imported_people(self.db)
+            self.assertEqual((person.person_id, person.parent_id), ("legacy-profile-id", before.parent_id))
+            self.assertEqual(person.display_name, "Wrong Profile Name")
+            self.assertEqual({(row.kind, row.normalized_value) for row in queries.identifiers(self.db)},
+                             {("email", "first@example.test"), ("email", "other@example.test"), ("phone", "+15550100")})
+            self.assertEqual(roster.headline, "Wrong lookup title")
+            self.assertEqual(len(queries.parents(self.db)), 1)
+            self.assertEqual(links(self.db)[0].public_identifier, "jordan-bravo")
+            self.assertEqual(links(self.db)[0].parent_id, person.parent_id)
         self.assertEqual(CsvIO.read_dict_rows(source)[0]["id"], "legacy-profile-id")
 
     def test_secondary_email_is_a_separate_contact_only_when_original_source_proves_it(self):
@@ -140,7 +145,9 @@ class SourceIdentityTests(unittest.TestCase):
         self.assertEqual(roster[first.id].superseded_person_ids, first.superseded_person_ids)
         self.assertEqual({row.source for row in queries.sources(self.db, person_id=first.id)}, {"gmail_msgvault"})
 
-    def test_restored_gmail_keys_remove_copied_endpoints_from_old_source_ids(self):
+    def test_existing_source_id_keeps_its_endpoint_and_a_new_source_becomes_a_new_contact(self):
+        # 2026-10-06: the stored contact `source-a` keeps its address; only the
+        # source the store has never seen is projected under its own key.
         first, second = self.contacts()
         first = first.model_copy(update={"id": "source-a"})
         second = second.model_copy(update={"id": "source-b"})
@@ -153,10 +160,10 @@ class SourceIdentityTests(unittest.TestCase):
         merge.run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         owned = {(row.person_id, row.normalized_value) for row in queries.identifiers(self.db)}
-        self.assertEqual(owned, {("candidate:email:first@example.test", "first@example.test"),
+        self.assertEqual(owned, {("source-a", "first@example.test"),
                                  ("candidate:email:second@example.test", "second@example.test")})
         self.assertEqual({row.id for row in queries.imported_people(self.db)},
-                         {"candidate:email:first@example.test", "candidate:email:second@example.test"})
+                         {"source-a", "candidate:email:second@example.test"})
         ExportPeople(db=self.db, out_dir=merge.people_csv.parent).run()
         EnsureParents(db=self.db, people_csv=merge.people_csv).run()
         self.assertEqual({(row.person_id, row.normalized_value) for row in queries.identifiers(self.db)}, owned)

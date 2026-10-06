@@ -1,6 +1,8 @@
 """Project original source contacts into stable SQLite parent families.
 
 Changelog:
+- 2026-10-06: an existing contact keeps its person id across a re-import, and the
+  second parents an earlier run made for re-keyed contacts are folded back.
 - 2026-10-02: preserve original contacts from the fan-in's recorded source CSVs.
 - 2026-09-25: the CLI creates the canonical store when it is missing; this is
   the first cold step, so nothing else has to create it.
@@ -26,6 +28,7 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
 )
 from packs.ingestion.primitives.deep_context.ensure_parents.source_people import (
     read_source_people,
+    repair_split_contacts,
     retain_source_identifiers,
 )
 from packs.ingestion.primitives.deep_context.manifests.ensure_parents_manifest import (
@@ -67,6 +70,10 @@ class EnsureParents(Node):
         if repair.repaired or repair.unresolved:
             print(f'[deep-context] repaired {len(repair.repaired)} merged parents; '
                   f'{len(repair.unresolved)} unresolved', file=sys.stderr)
+        deleted, merged = repair_split_contacts(self.db, sources)
+        if deleted or merged:
+            print(f'[deep-context] folded back {deleted + merged} second parents of existing contacts '
+                  f'({deleted} empty deleted, {merged} merged)', file=sys.stderr)
         projected = project_imported_people(self.db, sources or imported)
         retain_source_identifiers(self.db, sources, imported)
         return EnsureParentsManifest(

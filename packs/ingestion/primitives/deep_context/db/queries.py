@@ -32,6 +32,19 @@ from packs.ingestion.primitives.pipeline.contract import PeopleRow
 RowT = TypeVar("RowT")
 
 
+def parent_has_paid_work(db: Db, parent_id: str) -> bool:
+    """Facts, research or a human decision: anything a rerun would have to pay for or ask again."""
+    return bool(db.query(
+        """
+SELECT 1 WHERE EXISTS (SELECT 1 FROM facts WHERE parent_id=?1)
+   OR EXISTS (SELECT 1 FROM research WHERE parent_id=?1)
+   OR EXISTS (SELECT 1 FROM links WHERE parent_id=?1 AND decision_action IS NOT NULL)
+   OR EXISTS (SELECT 1 FROM parents WHERE parent_id=?1 AND human_worth IS NOT NULL)
+""",
+        (parent_id,),
+    ))
+
+
 def imported_people(db: Db, *, parent_id: str | None = None) -> tuple[PeopleRow, ...]:
     """The full current import roster, with stable ownership in `people`."""
     sql = "SELECT row_json FROM imported_people ORDER BY person_id"

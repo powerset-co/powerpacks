@@ -267,6 +267,11 @@ class Db:
         conn.execute(f"DELETE FROM {table} WHERE {key_column}=?", (key,))
         conn.executemany(UPSERTS[table], [asdict(row) for row in rows])
 
+    def delete_parent(self, parent_id: str) -> None:
+        """Delete one parent family; every row that hangs off it cascades."""
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM parents WHERE parent_id=?", (parent_id,))
+
     def merge_parents(self, survivor_parent_id: str, absorbed_parent_id: str) -> None:
         """Atomically absorb one parent family into a surviving parent."""
         if survivor_parent_id == absorbed_parent_id:
