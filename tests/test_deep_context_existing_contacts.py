@@ -14,6 +14,8 @@ from pathlib import Path
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow,
+    FactRow,
     LinkRow,
     ParentRow,
     PersonIdentifierRow,
@@ -26,7 +28,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import _imported_people, project_imported_people
 from packs.ingestion.primitives.imports.merge_people import PeopleMerge
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.shared.csv_io import CsvIO
 
@@ -125,6 +129,82 @@ class ExistingContactTests(unittest.TestCase):
         self.assertEqual(len(queries.parents(self.db)), 1)
         self.assertEqual(queries.parents(self.db)[0].human_worth, "yes")
         self.assertEqual(self.identifiers(UUID_ID), {EMAIL, SECOND_EMAIL})
+
+
+class PreservationTests(unittest.TestCase):
+    """What the keep rule and the repair must leave alone (PR #722 review, Oct 6)."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.db = Db(self.root / "deep-context.sqlite")
+        self.jordan = PeopleRow(id="old-jordan", full_name="Jordan Bravo", primary_email="jordan@example.test",
+                                primary_phone="+15550100101", source_channels="gmail_msgvault")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def project(self, rows: list[PeopleRow]) -> None:
+        project_imported_people(self.db, _imported_people(tuple(rows)))
+
+    def ensure(self, rows: list[PeopleRow]) -> None:
+        inputs = []
+        for index, row in enumerate(rows):
+            path = self.root / f"source-{index}" / "people.csv"
+            path.parent.mkdir()
+            CsvIO.write_dict_rows(path, PEOPLE_SCHEMA_COLUMNS, [row.to_row()])
+            inputs.append(path)
+        merge = PeopleMerge(inputs=inputs, output_dir=self.root / "merged")
+        merge.run()
+        EnsureParents(db=self.db, people_csv=merge.people_csv).run()
+
+    def test_two_people_sharing_a_phone_stay_two_parents(self) -> None:
+        casey = self.jordan.model_copy(update={"id": "old-casey", "full_name": "Casey Delta",
+                                               "primary_email": "casey@example.test"})
+        self.project([self.jordan, casey])
+        for person in queries.people(self.db):
+            key = f"facts:{person.person_id}"
+            self.db.project_rows((
+                ArtifactRow(key, "facts", person.parent_id, str(self.root / key), "sha", "projected"),
+                FactRow(person.parent_id, person.parent_id, key, machine_worth="yes",
+                        facts_json=json.dumps({"canonical_name": person.display_name})),
+            ))
+        before = {row.person_id: row.parent_id for row in queries.people(self.db)}
+        self.ensure([self.jordan, casey])
+        self.assertEqual({row.person_id: row.parent_id for row in queries.people(self.db)}, before)
+        self.assertEqual(len(queries.parents(self.db)), 2)
+
+    def test_a_new_contact_sharing_a_phone_is_still_imported(self) -> None:
+        casey = PeopleRow(id="candidate:phone:+15550100101", full_name="Casey Delta",
+                          primary_phone="+15550100101", source_channels="imessage")
+        self.project([self.jordan])
+        self.ensure([self.jordan, casey])
+        people = {row.person_id: row.parent_id for row in queries.people(self.db)}
+        self.assertEqual(set(people), {"old-jordan", casey.id})
+        self.assertNotEqual(people["old-jordan"], people[casey.id])
+        self.assertEqual({row.normalized_value for row in queries.identifiers(self.db, person_id="old-jordan")},
+                         {"jordan@example.test", "+15550100101"})
+
+    def test_a_second_parent_holding_a_profile_and_a_verdict_is_merged_not_deleted(self) -> None:
+        shell = self.jordan.model_copy(update={"id": "candidate:email:jordan@example.test", "primary_phone": "",
+                                               "public_identifier": "jordan-bravo",
+                                               "linkedin_url": "https://www.linkedin.com/in/jordan-bravo"})
+        self.project([self.jordan, shell])
+        parent = next(row.parent_id for row in queries.people(self.db) if row.person_id == shell.id)
+        self.db.project_rows((
+            LinkRow("jordan-bravo", parent, "jordan-bravo", "pub", shell.linkedin_url,
+                    source="deep-context-reconcile", machine_action="verify", machine_approved="auto",
+                    machine_judgment="confirmed", judgment_fingerprint="paid-fingerprint",
+                    judgment_payload_json='{"verdict":"confirmed","confidence":0.99}', paid_profile=True),
+            ArtifactRow("profile:paid", "profile", parent, str(self.root / "profile.json"), "saved", "projected",
+                        candidate_key="jordan-bravo", payload_json='{"experience":[{"title":"Engineer"}]}'),
+        ))
+        self.assertTrue(queries.parent_has_paid_work(self.db, parent))
+        self.ensure([self.jordan])
+        self.assertIn("profile:paid", [row.artifact_key for row in queries.artifacts(self.db)])
+        self.assertEqual(self.db.query("SELECT count(*) AS n FROM links WHERE judgment_fingerprint='paid-fingerprint'")[0]["n"], 1)
+        self.assertEqual(len(queries.parents(self.db)), 1)
+        self.assertEqual({row.parent_id for row in queries.people(self.db)}, {queries.parents(self.db)[0].parent_id})
 
 
 if __name__ == "__main__":

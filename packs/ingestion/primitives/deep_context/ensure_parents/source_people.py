@@ -63,6 +63,8 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
     unnamed = 0
     gmail_contacts: dict[Path, dict[str, MsgvaultContactRow]] = {}
     restored_contacts: dict[str, dict[Path, MsgvaultContactRow]] = {}
+    # Rows this reader keys by a Gmail address, the only rows that can re-key a stored contact.
+    gmail_ids: set[str] = set()
     for source in inputs.people_csvs:
         if source not in input_rows:
             continue
@@ -72,6 +74,7 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
         originals = original_source_people(path)
         if originals is not None:
             rows.extend(originals)
+            gmail_ids.update(row.id for row in originals)
             continue
         source_root = next((parent.parent for parent in path.parents if parent.name == ".powerpacks"), path.parent)
         for raw in CsvIO.read_dict_rows(path):
@@ -111,6 +114,7 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
                                all_emails=json.dumps([key.removeprefix("email:")]), primary_phone="", all_phones="")
                 row = PeopleRow.model_validate(contact)
                 restored += 1
+                gmail_ids.add(row.id)
             rows.append(row)
     existing_ids = {row.id for row in rows}
     recovered = 0
@@ -127,6 +131,7 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
                        first_name="", last_name="", superseded_person_ids="")
         unnamed += len(names) != 1
         rows.append(PeopleRow.model_validate(contact))
+        gmail_ids.add(candidate_id)
         recovered += 1
     if recovered:
         print(f"[deep-context] restored {recovered} additional original Gmail source contacts", file=sys.stderr)
@@ -134,41 +139,47 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
         print(f"[deep-context] restored {restored} Gmail source contact keys; legacy lookup aliases omitted", file=sys.stderr)
     if unnamed:
         print(f"[deep-context] {unnamed} historical Gmail contact names unresolved; lookup names omitted", file=sys.stderr)
-    rows = _keep_existing_contacts(rows, people_csv, db)
+    rows = _keep_existing_contacts(rows, people_csv, db, gmail_ids)
     return tuple(person for person in _imported_people(tuple(rows)) if not _is_shared_mailbox(person))
 
 
-def _keep_existing_contacts(rows: list[PeopleRow], people_csv: Path, db: Db | None) -> list[PeopleRow]:
-    """A contact the store already holds under another id stays that person.
+def _keep_existing_contacts(
+    rows: list[PeopleRow], people_csv: Path, db: Db | None, gmail_ids: set[str],
+) -> list[PeopleRow]:
+    """A contact the store already holds stays that person when the re-import would take it apart.
 
-    The source rows re-key a Gmail contact to `candidate:email:<address>`; when
-    the store holds that contact under the fan-in's id, the fan-in row replaces
-    every source row for its addresses, so the contact keeps its id, its name
-    and its identifiers, and nothing downstream sees a new person.
+    Two shapes take a stored contact apart: a Gmail-keyed row carries one of its
+    addresses under another id (the `candidate:email:<address>` re-key), or the
+    rows under its own id carry none of its addresses (a LinkedIn row for a
+    contact whose addresses came from messages). The fan-in row then stands in
+    for its own rows and for the Gmail-keyed rows of its addresses. Rows from
+    other sources are never touched: a new contact that shares a phone with a
+    stored one is still a new contact.
     """
     if db is None:
         return rows
     existing = {row.person_id for row in queries.people(db)}
     keyed = [(row, _contact_keys(emails_from_row(row.to_row()), phones_from_row(row.to_row()))) for row in rows]
-    covered: dict[str, set[tuple[str, str]]] = {}
+    own_keys: dict[str, set[tuple[str, str]]] = {}
     for row, keys in keyed:
-        covered.setdefault(row.id, set()).update(keys)
+        own_keys.setdefault(row.id, set()).update(keys)
     kept: list[ImportedPerson] = []
-    owned: set[tuple[str, str]] = set()
+    kept_emails: set[tuple[str, str]] = set()
     for person in read_imported_people(people_csv):
         if person.person_id not in existing:
             continue
         mine = _contact_keys(person.emails, person.phones)
-        # Source rows under the contact's own id that carry all of its addresses are the
-        # Oct 2 shape and stand. Anything else (its addresses under another id, or under
-        # none) would take the contact apart, so the fan-in row stands in for them.
-        if mine - covered.get(person.person_id, set()):
+        emails = {key for key in mine if key[0] == IdentifierKind.EMAIL.value}
+        rekeyed = any(row.id != person.person_id and row.id in gmail_ids and keys & emails for row, keys in keyed)
+        stripped = bool(mine) and person.person_id in own_keys and not own_keys[person.person_id]
+        if rekeyed or stripped:
             kept.append(person)
-            owned |= mine
+            kept_emails |= emails
     if not kept:
         return rows
     kept_ids = {person.person_id for person in kept}
-    remaining = [row for row, keys in keyed if row.id not in kept_ids and not keys & owned]
+    remaining = [row for row, keys in keyed
+                 if row.id not in kept_ids and not (row.id in gmail_ids and keys & kept_emails)]
     print(f"[deep-context] kept {len(kept)} existing contacts under their current person ids", file=sys.stderr)
     return remaining + [person.index_row for person in kept]
 
@@ -182,28 +193,20 @@ def _contact_keys(emails: Iterable[str], phones: Iterable[str]) -> set[tuple[str
 def repair_split_contacts(db: Db, people: tuple[ImportedPerson, ...]) -> tuple[int, int]:
     """Fold back the second parent an earlier re-key made for a contact the store already held.
 
-    The second parent holds the contact's address under `candidate:<key>`; the
-    first holds its facts. An empty second parent is deleted (its rows cascade);
-    one with paid work is merged into the first, keeping both children.
-    Returns (deleted, merged).
+    The re-key gave the contact's own address a second person, `candidate:email:<address>`,
+    under a second parent; only that exact person is the duplicate. A shared phone or a
+    different person at the same address is not. A second parent holding nothing paid or
+    decided is deleted (its rows cascade); one holding evidence or a decision is merged
+    into the contact's parent, keeping both children. Returns (deleted, merged).
     """
     stored = {row.person_id: row for row in queries.people(db)}
-    owners: dict[tuple[str, str], set[str]] = {}
-    for row in queries.identifiers(db):
-        owners.setdefault((row.kind, row.normalized_value), set()).add(row.person_id)
     deleted = merged = 0
     for person in people:
         prior = stored.get(person.person_id)
         if prior is None:
             continue
-        others: set[str] = set()
-        for kind, values, normalize in ((IdentifierKind.EMAIL.value, person.emails, normalize_email),
-                                        (IdentifierKind.PHONE.value, person.phones, normalize_phone)):
-            for value in values:
-                key = normalize(value)
-                if key:
-                    others.update(owners.get((kind, key), ()))
-                    others.add(f"candidate:{kind}:{key}")
+        others = {f"candidate:{IdentifierKind.EMAIL.value}:{key}"
+                  for key in (normalize_email(email) for email in person.emails) if key}
         for other in sorted(others):
             row = stored.get(other)
             if row is None or other == person.person_id or row.parent_id == prior.parent_id:

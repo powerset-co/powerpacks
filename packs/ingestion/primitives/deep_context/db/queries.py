@@ -33,12 +33,16 @@ RowT = TypeVar("RowT")
 
 
 def parent_has_paid_work(db: Db, parent_id: str) -> bool:
-    """Facts, research or a human decision: anything a rerun would have to pay for or ask again."""
+    """Whether a parent holds anything paid or decided: facts, research, a fetched profile or any
+    other artifact beyond a message bundle, a machine or human identity verdict, or a worth call."""
     return bool(db.query(
         """
 SELECT 1 WHERE EXISTS (SELECT 1 FROM facts WHERE parent_id=?1)
    OR EXISTS (SELECT 1 FROM research WHERE parent_id=?1)
-   OR EXISTS (SELECT 1 FROM links WHERE parent_id=?1 AND decision_action IS NOT NULL)
+   OR EXISTS (SELECT 1 FROM artifacts WHERE parent_id=?1 AND kind!='source_bundle')
+   OR EXISTS (SELECT 1 FROM links WHERE parent_id=?1 AND (
+        decision_action IS NOT NULL OR machine_action IS NOT NULL OR machine_judgment IS NOT NULL
+        OR judgment_fingerprint IS NOT NULL OR judgment_payload_json IS NOT NULL))
    OR EXISTS (SELECT 1 FROM parents WHERE parent_id=?1 AND human_worth IS NOT NULL)
 """,
         (parent_id,),
