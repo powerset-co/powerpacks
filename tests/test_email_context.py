@@ -247,6 +247,15 @@ class SharedConsumerStoreTests(unittest.TestCase):
         self.assertIn("STARTMARK", parts["body_text"])
         self.assertIsNone(parts["head"])
 
+    def test_recent_rows_list_each_email_once(self):
+        # msgvault files the sender as a 'from' recipient too, and one person can be To and Cc.
+        self.con.executescript("""
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES
+                (10, 1, 'from'), (20, 1, 'from'), (30, 1, 'cc');
+        """)
+        rows = self.store.fetch_recent_rows("jane@example.com", 3)
+        self.assertEqual([row["subject"] for row in rows], ["Intro to you", "My new role", "Bob announces a thing"])
+
     def test_participant_phone_names_are_projected(self):
         self.con.execute(
             "UPDATE participants SET phone_number = ? WHERE id = 1",

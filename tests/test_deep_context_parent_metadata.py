@@ -9,6 +9,7 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle, MessageChannel, MessageEntry, MessageObservation,
 )
+from packs.ingestion.primitives.deep_context.db.context_queries import dossier_message_count
 from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow, ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.projectors import project_person_fact, project_person_source_bundle
 from packs.ingestion.primitives.deep_context.db.queries import artifacts
@@ -87,6 +88,8 @@ class ParentMetadataTests(unittest.TestCase):
         self.assertIn("Independent topic 0", body)
         self.assertIn("Independent topic 1", body)
         self.assertEqual(sqlite_counts(self.db).messages.total, expected)
+        # The relationship judge is told the same distinct count the dossier shows.
+        self.assertEqual(dossier_message_count(self.db, parent_id), expected)
         rows = collect_rows(self.db)
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0].messages_used, rows[0].messages_available), (expected, expected))

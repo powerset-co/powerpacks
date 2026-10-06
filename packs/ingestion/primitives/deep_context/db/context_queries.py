@@ -125,8 +125,17 @@ def dossier_message_count(db: Db, parent_id: str) -> int:
             SELECT 1 FROM facts parent WHERE parent.parent_id=f.parent_id AND parent.person_id IS NULL
         ))
     """, (parent_id,))
-    return sum(sum(item.record.messages_used for item in FactHistory.from_payload(
-        json.loads(row["payload_json"] or "{}")).records) for row in payloads)
+    # Distinct observed messages: a re-extraction and a family's shared thread are seen once.
+    # Old records without observations keep their stored tally.
+    seen: set[str] = set()
+    untracked = 0
+    for row in payloads:
+        history = FactHistory.from_payload(json.loads(row["payload_json"] or "{}"))
+        if history.messages:
+            seen |= history.processed
+        else:
+            untracked += sum(item.record.messages_used for item in history.records)
+    return len(seen) + untracked
 
 
 def collection_sources(db: Db) -> tuple[CollectionSourceRow, ...]:

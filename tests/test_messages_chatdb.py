@@ -577,8 +577,55 @@ class ChatDbTests(unittest.TestCase):
                 (
                     "14155550101@s.whatsapp.net",
                     "4155550101@s.whatsapp.net",
+                    "14155550101@lid",
                 ),
             )
+
+    def test_contact_known_only_by_whatsapp_id_reads_its_chat(self) -> None:
+        # WhatsApp hides an unsaved contact's number; import keeps the ID's digits as the phone.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "wacli.db"
+            make_wacli_db(path)
+            with sqlite3.connect(path) as conn:
+                conn.execute(
+                    "INSERT INTO messages VALUES (6, '239100000000001@lid', 'Riley Echo', 'wa-6',"
+                    " '239100000000001:68@lid', 'Riley Echo', 1735690100, 0, 'hi, it is Riley', NULL, NULL, NULL)"
+                )
+            person = Person("person-2", "Riley Echo", phones=["+239100000000001"])
+            reader = context_sources.ContextSources(
+                store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
+                chat_db=Path(tmp) / "missing-chat.db",
+                wacli_db=path,
+                deep_cap=context_sources.CHAT_MESSAGE_CAP,
+            )
+            reader.readiness()
+
+            entries, _ = reader.collect_person(person)
+
+            self.assertEqual([entry.text for entry in entries], ["hi, it is Riley"])
+
+    def test_whatsapp_cap_reports_every_stored_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "wacli.db"
+            make_wacli_db(path)
+            with sqlite3.connect(path) as conn:
+                conn.executemany(
+                    "INSERT INTO messages VALUES (?, '14155550101@s.whatsapp.net', 'Jordan Bravo', ?,"
+                    " '14155550101@s.whatsapp.net', 'Jordan Bravo', ?, 0, ?, NULL, NULL, NULL)",
+                    [(100 + n, f"wa-x{n}", 1735700000 + n, f"note {n}") for n in range(4)],
+                )
+            person = Person("person-1", "Jordan Bravo", phones=["+1 (415) 555-0101"])
+            reader = context_sources.ContextSources(
+                store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
+                chat_db=Path(tmp) / "missing-chat.db",
+                wacli_db=path,
+                deep_cap=3,
+            )
+            reader.readiness()
+
+            entries, available = reader.collect_person(person)
+
+            self.assertEqual((len(entries), available), (3, 6))
 
     def test_logbook_whatsapp_outputs_keep_existing_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

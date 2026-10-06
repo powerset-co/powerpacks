@@ -385,6 +385,20 @@ class ContextSources:
             return [message for message in out if message.fingerprint() not in processed][:self.deep_cap]
         return out
 
+    def _count_whatsapp(self, person: Person) -> int:
+        """True total of the person's stored WhatsApp DMs (so capping is honest)."""
+        if not self.wacli_db.exists():
+            return 0
+
+        def count() -> int:
+            con = wacli_store.open_readonly_db(self.wacli_db)
+            try:
+                return wacli_messages.count_whatsapp_direct_messages(con, person.phones)
+            finally:
+                con.close()
+
+        return _read_source(self.wacli_db, count)
+
     def collect_person(self, person: Person, *, processed: frozenset[str] = frozenset()) -> tuple[list[MessageEntry], int]:
         """Return the bounded cross-source pool and its uncapped available count."""
         readiness = self._require_readiness()
@@ -393,7 +407,7 @@ class ContextSources:
         gmail_total = self._count_gmail(person) if has_gmail else 0
         whatsapp = self._read_whatsapp(person, processed=processed) if person.phones else []
         direct = self._read_imessage(person, processed=processed) + whatsapp if person.phones else []
-        chat_total = self._count_imessage_dms(person) + len(whatsapp) if person.phones else 0
+        chat_total = self._count_imessage_dms(person) + self._count_whatsapp(person) if person.phones else 0
         group = self._read_imessage_group_messages(person, processed=processed) if person.phones else []
 
         # Order here decides who wins the cap below (gmail first, since EmailContext
