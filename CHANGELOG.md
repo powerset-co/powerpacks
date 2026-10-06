@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.17.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.17.0...powerpacks-v3.17.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* preserve synthetic research contact ownership ([#717](https://github.com/powerset-co/powerpacks/issues/717)) ([5ee3f68](https://github.com/powerset-co/powerpacks/commit/5ee3f68b7612d034c00cf1f42097355fd0ab624b))
+
 ## [3.17.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.16.4...powerpacks-v3.17.0) (2026-10-05)
 
 
