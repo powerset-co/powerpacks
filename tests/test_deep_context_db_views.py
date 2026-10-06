@@ -339,6 +339,21 @@ class DeepContextDbViewTests(unittest.TestCase):
 
         self.assertEqual([row.parent_id for row in targets], ["synthetic-yes"])
 
+    def test_parent_research_keeps_synthetic_contact_owners(self) -> None:
+        people = self.add_parent("synthetic-yes", "yes", "yes")
+        self.db.project_rows((
+            PersonRow("owner", "synthetic-yes", is_owner=1),
+            ResearchRow(
+                "parent-research", "synthetic-yes", "no_match",
+                result_json=json.dumps({"person": {"full_name": "Jordan Bravo"}}),
+            ),
+        ))
+
+        targets = synthetic_fallback(self.db)
+
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0].person_ids, tuple(people))
+
     def test_enrichment_queue_is_one_effective_yes_sql_policy(self):
         wrong_people = self.add_parent("wrong", "yes")
         self.add_candidate(

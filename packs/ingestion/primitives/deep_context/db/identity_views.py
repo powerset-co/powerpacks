@@ -346,12 +346,12 @@ def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
     rows = db.query(
         WORTH_CTE
         + """, research_people AS (
-  SELECT r.handle, r.candidate_key, cp.person_id
+  SELECT r.handle, cp.person_id
   FROM research r JOIN candidate_people cp ON cp.row_key=r.candidate_key
   JOIN people pe ON pe.person_id=cp.person_id
   WHERE pe.is_owner=0
   UNION ALL
-  SELECT r.handle, r.candidate_key, pe.person_id
+  SELECT r.handle, pe.person_id
   FROM research r JOIN people pe ON pe.parent_id=r.parent_id
   WHERE pe.is_owner=0 AND NOT EXISTS (
     SELECT 1 FROM candidate_people cp WHERE cp.row_key=r.candidate_key
@@ -362,7 +362,7 @@ SELECT r.parent_id, r.artifact_key, r.result_json, p.display_name,
         AND COALESCE(l.machine_judgment, '')!='confirmed') AS research_link_rejected,
        (SELECT json_group_array(person_id) FROM (
           SELECT person_id FROM research_people rp
-          WHERE rp.handle=r.handle AND rp.candidate_key=r.candidate_key
+          WHERE rp.handle=r.handle
           ORDER BY person_id
         )) AS person_ids_json,
        (SELECT CASE
