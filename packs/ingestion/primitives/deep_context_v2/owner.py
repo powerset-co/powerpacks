@@ -57,6 +57,34 @@ def owner_payload(profile: dict[str, Any], url: str, emails: list[str], phones: 
             "education": education, "work": work, "locations": locations, "notes": "", "linkedin_url": url}
 
 
+def build_owner(data_root: Path, linkedin_url: str, emails: list[str], chat_db: Path = DEFAULT_CHAT_DB) -> dict[str, Any]:
+    """owner.json from the owner's LinkedIn (cache first, one fetch on a miss) and emails, loaded into the
+    store; returns the counts. Raises ValueError when the URL names no profile or the profile cannot be read."""
+    url: str = normalize_linkedin_url(linkedin_url)
+    public_id: str = extract_public_identifier(url)
+    if not public_id:
+        raise ValueError(f"not a LinkedIn profile URL: {linkedin_url}")
+    profiles = load_profiles(data_root, [url], fetch=True)
+    if url not in profiles.found:
+        raise ValueError(f"could not fetch the profile at {url}")
+    record = read_usable_cached_profile(profile_cache_path(data_root / CACHE_RELATIVE_DIR, public_id))
+    normalized: list[str] = []
+    for email in emails:
+        if normalize_email(email) not in normalized:
+            normalized.append(normalize_email(email))
+    phones: list[str] = []
+    for value in chatdb.owner_phone_identifiers(chat_db):
+        if normalize_phone(value) and normalize_phone(value) not in phones:
+            phones.append(normalize_phone(value))
+    payload: dict[str, Any] = owner_payload(record["normalized_profile"], url, normalized, phones)
+    out: Path = data_root / OWNER_JSON
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    owner: OwnerProfile = load_owner(open_store(store_path(data_root)), out)
+    return {"owner_json": str(out), "name": owner.name, "fetched": profiles.fetched, "emails": len(owner.emails),
+            "phones": len(owner.phones), "work": len(owner.work), "education": len(owner.education)}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write owner.json from the owner's own LinkedIn and load it into the store.")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
@@ -64,31 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--email", action="append", default=[], help="an email of the owner's; repeatable")
     parser.add_argument("--chat-db", type=Path, default=DEFAULT_CHAT_DB, help="the Messages store the owner's numbers are read from")
     args = parser.parse_args(argv)
-    url: str = normalize_linkedin_url(args.linkedin_url)
-    public_id: str = extract_public_identifier(url)
-    if not public_id:
-        print(f"not a LinkedIn profile URL: {args.linkedin_url}")
+    try:
+        print(json.dumps(build_owner(args.data_root, args.linkedin_url, args.email, args.chat_db)))
+    except ValueError as error:
+        print(error)
         return 1
-    profiles = load_profiles(args.data_root, [url], fetch=True)
-    if url not in profiles.found:
-        print(f"could not fetch the profile at {url}")
-        return 1
-    record = read_usable_cached_profile(profile_cache_path(args.data_root / CACHE_RELATIVE_DIR, public_id))
-    emails: list[str] = []
-    for email in args.email:
-        if normalize_email(email) not in emails:
-            emails.append(normalize_email(email))
-    phones: list[str] = []
-    for value in chatdb.owner_phone_identifiers(args.chat_db):
-        if normalize_phone(value) and normalize_phone(value) not in phones:
-            phones.append(normalize_phone(value))
-    payload: dict[str, Any] = owner_payload(record["normalized_profile"], url, emails, phones)
-    out: Path = args.data_root / OWNER_JSON
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-    owner: OwnerProfile = load_owner(open_store(store_path(args.data_root)), out)
-    print(json.dumps({"owner_json": str(out), "name": owner.name, "fetched": profiles.fetched, "emails": len(owner.emails),
-                      "phones": len(owner.phones), "work": len(owner.work), "education": len(owner.education)}))
     return 0
 
 

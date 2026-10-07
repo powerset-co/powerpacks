@@ -231,7 +231,7 @@ class OnboardingTests(unittest.TestCase):
         argv = ["onboard", "--root", str(self.root), "--harness", "codex", *source_args]
         with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
                 patch("packs.powerset.primitives.install.workflow.SourceOnboarding") as sources, \
-                patch("packs.ingestion.primitives.deep_context.review.cli.start_server",
+                patch("packs.shared.web.server.start_server",
                       return_value={"url": "http://localhost:8899/install"}):
             sources.return_value.run.return_value = {"status": "waiting", "step": "deep_context",
                                                      "message": "Gmail: 1 contacts"}

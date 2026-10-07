@@ -68,10 +68,11 @@ chat the same way.
 ```bash
 tmux has-session -t deep-context 2>/dev/null || tmux new-session -d -s deep-context -c "$POWERPACKS_REPO_ROOT"
 tmux send-keys -t deep-context 'bin/deep-context-v2 run' Enter
-tmux capture-pane -p -t deep-context -S -200       # read progress
+sleep 30; tmux capture-pane -p -t deep-context -S -200   # read progress: once every 30 s, not in a tight loop
 ```
 
-One session, always named `deep-context`, for the whole job: the run, every rerun after a fix,
+Read the pane every 30 seconds while a command runs; nothing in it changes faster than that, and a
+tight loop only burns the advisor's turns. One session, always named `deep-context`, for the whole job: the run, every rerun after a fix,
 and `finish` all go into it with `send-keys`. If it already exists, use it; never create a
 second. Kill it (`tmux kill-session -t deep-context`) once `finish` has ended, and nothing is
 left in it: the review server and the background index are detached and keep running on their

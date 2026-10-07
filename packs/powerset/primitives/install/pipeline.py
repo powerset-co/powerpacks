@@ -1,42 +1,32 @@
-"""Resume imported contacts through native Deep Context, Modal, and validation.
+"""Resume imported contacts through deep-context v2, Modal indexing, and validation.
 
-Native manifests and SQLite own completed work. Routine processing follows
-the onboarding automatic budget; the installation manifest displays the next action.
-A LinkedIn connections list newer than its import is imported on Modal first,
-an ungated step.
+The v2 store and its stage manifests own completed work. Each paid stage estimates first and runs
+when the estimate is under the onboarding automatic budget; at or over it, the page asks once and
+the retry command carries the approval. A LinkedIn connections list newer than its import is
+imported on Modal first, an ungated step.
 
 Changelog:
+  2026-10-07: deep-context v2. The stages are load, collect, synthesize, dedupe, worth, enrich and
+      realize (packs/ingestion/primitives/deep_context_v2); a v1 store beside the v2 one is archived
+      first. Gone with v1: fan-in, seed, the readiness check, compose, validate-dossiers, parents,
+      profile prefetch and the workflow-state loop. The owner profile is built by v2's owner step
+      from the LinkedIn session and the Gmail address. The review is the page at `/`.
   2026-10-05: every write names a status_prose event; what a run deferred is
       listed with its reason in the ready step's details (`left_to_fix`).
-  2026-10-03: import the scraped LinkedIn connections before fan-in; build the
-      owner profile from the LinkedIn session and the Gmail address instead of
-      asking; a failed Modal run is retried, not re-downloaded, unless it failed
-      on the spend cap.
-  2026-10-04: a step that stops with SystemExit is recorded as failed with its
-      message instead of ending the process; research that cannot run (no
-      Parallel key) is skipped with a warning and the index still builds.
-  2026-10-05: the index no longer asks to upload contacts; the user approves
-      sending data to Parallel and OpenAI once, up front (or setup reads only
-      LinkedIn).
   2026-10-05: setup no longer waits on the LinkedIn review: matches the judges
       could not settle are left for the user, the index builds, and the ready
       step offers the review (count and link) for when they have time.
-  2026-10-05: enrichment and profile lookups that fail for any reason are
-      deferred: search is built without them, the ready message lists what is
-      left to fix, and work the last enrichment left is tried once per run.
-  2026-10-05: missing profiles are fetched under the index step instead of
-      stepping the page back to enrich.
-  2026-10-05: the ready step no longer saves a review count; the page reads
-      the review queue's own count, so the two always agree.
-  2026-10-04: indexing goes ahead when a cached profile has no jobs listed (it
-      used to raise on every resume); upload consent is asked before a $500+
-      spend approval, so the two questions no longer bounce.
+  2026-10-05: enrichment that fails for any reason is deferred: search is built
+      without it, the ready message lists what is left to fix.
+  2026-10-03: import the scraped LinkedIn connections before fan-in; a failed Modal
+      run is retried, not re-downloaded, unless it failed on the spend cap.
 """
 from __future__ import annotations
 
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import traceback
 from argparse import Namespace
@@ -46,39 +36,36 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable
 
-from packs.ingestion.primitives.common.jsonio import parse_last_json, sha256_file
-from packs.ingestion.primitives.common.legacy import scrub_august_deep_context_store
-from packs.ingestion.primitives.deep_context.collection.collect_person_context import CollectPersonContext
-from packs.ingestion.primitives.common.jsonio import read_json
-from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
-from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.workflow_views import enrichment_work, workflow_state
-from packs.ingestion.primitives.deep_context.enrich.enrichment_pipeline import EnrichmentPipeline
-from packs.ingestion.primitives.deep_context.enrich.estimate import estimate_enrichment
-from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
-from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
-from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import BuildParents
-from packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates import ClusterMergeCandidates
-from packs.ingestion.primitives.deep_context.migration.seed import Seed
-from packs.ingestion.primitives.deep_context.realize.export_people import ExportPeople
-from packs.ingestion.primitives.deep_context.shared.build_owner import BuildOwner
-from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
-from packs.ingestion.primitives.deep_context.shared.common import load_env
-from packs.ingestion.primitives.deep_context.shared.readiness_models import readiness_payload
-from packs.ingestion.primitives.deep_context.synthesis.compose_dossier import ComposeDossier
-from packs.ingestion.primitives.deep_context.synthesis.synthesize_person_context import SynthesizePersonContext
-from packs.ingestion.primitives.deep_context.synthesis.validate_dossiers import ValidateDossiers
-from packs.ingestion.primitives.imports.merge_people import PeopleMerge
 from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import estimate_run
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
-from packs.powerset.primitives.install.workflow import _parser as source_parser
+from packs.ingestion.primitives.common.jsonio import parse_last_json, read_json, sha256_file
+from packs.ingestion.primitives.deep_context_v2.collect.collect import DEFAULT_LIMIT as COLLECT_LIMIT
+from packs.ingestion.primitives.deep_context_v2.collect.collect import Collect
+from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.dedupe.dedupe import DEFAULT_LIMIT as DEDUPE_LIMIT
+from packs.ingestion.primitives.deep_context_v2.dedupe.dedupe import Dedupe
+from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
+from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLoad
+from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
+from packs.ingestion.primitives.deep_context_v2.openai import load_env
+from packs.ingestion.primitives.deep_context_v2.owner import build_owner
+from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+from packs.ingestion.primitives.deep_context_v2.run import archive_v1
+from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
+from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Synthesize
+from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT as WORTH_LIMIT
+from packs.ingestion.primitives.deep_context_v2.worth.worth import Worth
+from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
+from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE
 from packs.powerset.primitives.install.steps import PROCESSING_STEPS, InstallState, InstallStep
+from packs.powerset.primitives.install.workflow import _parser as source_parser
 
 _PEOPLE = ".powerpacks/network-import/merged/people.csv"
 _LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
 _INDEX = ".powerpacks/search-index"
+_DATA_ROOT = ".powerpacks"
 _AUTO_SPEND_USD = 500
 # Skipped steps the finished setup still lists for the user to fix.
 _FOLLOW_UP_STEPS = (InstallStep.CREDENTIALS.value, InstallStep.ENRICH.value)
@@ -86,7 +73,8 @@ _FOLLOW_UP_STEPS = (InstallStep.CREDENTIALS.value, InstallStep.ENRICH.value)
 
 class SpendStep(str, Enum):
     SYNTHESIZE = "synthesize"
-    CLUSTER = "cluster"
+    DEDUPE = "dedupe"
+    WORTH = "worth"
     ENRICH = "enrich"
     INDEX = "index"
 
@@ -103,6 +91,11 @@ def _capped(dispatched: dict) -> bool:
     return native.get("phase") == "estimate" and native.get("error") == "estimate exceeds --max-usd cap"
 
 
+def _manifest_payload(manifest: Manifest) -> dict:
+    """A v2 stage manifest as the payload `_run` reads: its status, counts and error."""
+    return {"status": manifest.status, **manifest.counts, "error": manifest.error}
+
+
 class ProcessingOnboarding:
     def __init__(self, root: Path, *, approved_spend: tuple[str, ...] = ()) -> None:
         self.root = root.resolve()
@@ -115,18 +108,16 @@ class ProcessingOnboarding:
         self.approved = {SpendStep(step) for step in approved_spend}
         self.saved, _ = source_parser(add_help=False).parse_known_args(shlex.split(self.retry)[1:])
         self.account_email = previous.get("account_email") or ""
-        store = self.saved.wacli_store
-        self.collection_options = {"wacli_db": store.expanduser() / "wacli.db"} if store else {}
         self.step = InstallStep.DEEP_CONTEXT
+        self.data_root = self.root / _DATA_ROOT
         self.people = self.root / _PEOPLE
         self.index = self.root / _INDEX
-        self.raw_manifest = self.root / ".powerpacks/deep-context/raw/manifest.json"
-        self.imports = self.root / ".powerpacks/network-import/import"
-        self.owner = self.root / ".powerpacks/deep-context/owner.json"
+        self.owner = self.data_root / "deep-context" / "owner.json"
         self.python = ["uv", "run", "--project", ".", "python"]
         self.modal = [*self.python, "packs/indexing/modal/linkedin_modal_pipeline.py"]
         self.download = [*self.modal, "download", "--label", "gmail-index", "--wait", "--dest", _INDEX]
         self.dispatch_path = self.root / ".powerpacks/runs/setup-gmail-modal/status.json"
+        self.conn: sqlite3.Connection | None = None  # the v2 store, opened by _prepare
         # What this run deferred, with why, for the agent to report once search is ready.
         self.left_to_fix: list[dict] = []
 
@@ -157,6 +148,17 @@ class ProcessingOnboarding:
             raise ValueError(f"No result from {name}")
         return payload
 
+    def _stage(self, name: str, node: Node, event: str) -> dict:
+        """One v2 stage through `_run`: its manifest's status, counts and error."""
+        return self._run(name, lambda: _manifest_payload(node.run()), event)
+
+    def _paid(self, step: SpendStep, node: Node, estimating: str, running: str) -> dict:
+        """A paid v2 stage: estimate, ask at the automatic budget, run."""
+        estimate = self._run(f"{step.value} estimate", node.estimate, estimating)
+        if estimate["estimated_cost_usd"] >= _AUTO_SPEND_USD:
+            self._approval(step, estimate)
+        return self._stage(step.value, node, running)
+
     def _modal(self, command: list[str], event: str) -> dict:
         def rehost() -> dict:
             result = subprocess.run(command, cwd=self.root, stdin=subprocess.DEVNULL,
@@ -178,62 +180,33 @@ class ProcessingOnboarding:
                                               "continue_command": shlex.join(continuation)})
         raise _Stopped
 
-    def _collected(self) -> bool:
-        if not self.raw_manifest.is_file():
-            return False
-        record = json.loads(self.raw_manifest.read_text(encoding="utf-8"))
-        imported = [path for path in self.imports.glob("*/**/*")
-                    if path.is_file() and path.name in {"manifest.json", "people.csv"}]
-        return record["status"] == "completed" and all(
-            path.stat().st_mtime_ns <= self.raw_manifest.stat().st_mtime_ns for path in imported)
-
     def _prepare(self) -> None:
         connections, imported = self.root / CONNECTIONS_CSV, self.root / _LINKEDIN_PEOPLE
         if connections.is_file() and (not imported.is_file()
                                       or imported.stat().st_mtime_ns < connections.stat().st_mtime_ns):
             self._modal([*self.modal, "import-linkedin", "--csv", str(CONNECTIONS_CSV), "--dest", _LINKEDIN_PEOPLE],
                         "discover.linkedin")
-        self._run("fan-in", lambda: PeopleMerge(output_dir=self.people.parent).run().to_payload(), "discover.merging")
-        db_path = self.root / ".powerpacks/deep-context/deep-context.sqlite"
-        scrub_august_deep_context_store(db_path)
-        self.db = Db(db_path)
-        self._run("ensure-parents", lambda: EnsureParents(db=self.db, people_csv=self.people).run().to_payload(),
-                  "discover.people")
-        check = CheckReadiness(db=self.db, people_csv=self.people, **self.collection_options)
-        readiness = self._run("check", lambda: readiness_payload(check.run()), "discover.checking")
-        if readiness["checks"]["canonical_sqlite"]["status"] == "seed_required":
-            self._run("seed", lambda: Seed(db=self.db).run().to_payload(), "discover.reusing")
-            readiness = self._run("check", lambda: readiness_payload(check.run()), "discover.checking")
-        if readiness["checks"]["owner_json"]["status"] == "absent" and not self.owner.is_file():
+        archive_v1(self.data_root)
+        self.conn = open_store(store_path(self.data_root))
+        if not self.owner.is_file():
             # The LinkedIn scrape records the signed-in profile; the mailbox is the owner's email.
             linkedin_url = (read_json(self.root / SCRAPE_RECORD, {}) or {}).get("owner_url", "")
             email = next(iter(self.saved.gmail_email), "") or self.account_email
             if not (linkedin_url and email):
-                self._write("discover.owner_needed", action={"command": readiness["next_command"]})
+                command = f"bin/deep-context-v2 owner --linkedin-url <your LinkedIn URL> --email {email or '<your email>'}"
+                self._write("discover.owner_needed", action={"command": command})
                 raise _Stopped
-            self._run("owner", lambda: BuildOwner(db=self.db, linkedin_url=linkedin_url, email=email)
-                      .run().to_payload(), "discover.owner")
-        elif self.owner.is_file():
-            self._run("owner", lambda: BuildOwner(db=self.db).run().to_payload(), "discover.owner")
-        if not self._collected():
-            self._run("collect", lambda: CollectPersonContext(db=self.db, deep_cap=1600,
-                      **self.collection_options).run().to_payload(), "discover.reading")
+            self._run("owner", lambda: build_owner(self.data_root, linkedin_url, [email]), "discover.owner")
+        self._stage("load", ImportLoad(self.conn, self.data_root), "discover.people")
+        self._stage("collect", Collect(self.conn, self.data_root, COLLECT_LIMIT, DEFAULT_CHAT_DB), "discover.reading")
 
     def _discover(self) -> None:
-        synthesize = SynthesizePersonContext(db=self.db)
-        estimate = self._run("synthesize estimate", synthesize.estimate, "discover.estimating")
-        if estimate["people"] or estimate["jev_people"]:
-            if estimate["estimated_cost_ceiling_usd"] >= _AUTO_SPEND_USD:
-                self._approval(SpendStep.SYNTHESIZE, estimate)
-            self._run("synthesize", lambda: synthesize.run().to_payload(), "discover.learning")
-        self._run("compose", lambda: ComposeDossier(db=self.db).run().to_payload(), "discover.composing")
-        self._run("validate", lambda: ValidateDossiers(db=self.db).run(), "discover.validating")
-        cluster = ClusterMergeCandidates(db=self.db)
-        estimate = self._run("cluster estimate", cluster.estimate, "discover.duplicates")
-        if estimate["estimated_cost_usd"] >= _AUTO_SPEND_USD:
-            self._approval(SpendStep.CLUSTER, estimate)
-        self._run("cluster", lambda: cluster.run().to_payload(), "discover.combining")
-        self._run("parents", lambda: BuildParents(db=self.db).run().to_payload(), "discover.grouping")
+        self._paid(SpendStep.SYNTHESIZE, Synthesize(self.conn, self.data_root, limit=SYNTHESIZE_LIMIT),
+                   "discover.estimating", "discover.learning")
+        self._paid(SpendStep.DEDUPE, Dedupe(self.conn, self.data_root, limit=DEDUPE_LIMIT),
+                   "discover.duplicates", "discover.combining")
+        self._paid(SpendStep.WORTH, Worth(self.conn, self.data_root, limit=WORTH_LIMIT),
+                   "discover.grouping", "discover.grouping")
         self._write("discover.done")
 
     def _deferred(self, event: str, error: BaseException) -> None:
@@ -245,51 +218,22 @@ class ProcessingOnboarding:
         self._write(event, details=reason)
 
     def _enrich(self) -> None:
-        """Run enrichment; LinkedIn matches the judges left wait for the user."""
+        """Run enrichment; LinkedIn matches the judges left wait for the user on the review page."""
         self.step = InstallStep.ENRICH
-        state = workflow_state(self.db)
-        work = enrichment_work(self.db)
-        # What the last enrichment could not finish (a lookup or a judgment) is tried once per setup run.
-        retry = state.next_action == "realize" and bool(work.lookups or work.judgments)
-        while state.next_action != "realize" or retry:
-            if state.next_action == "enrich" or retry:
-                retry = False
-                self.step = InstallStep.ENRICH
-                estimate = estimate_enrichment(self.db, state)
-                if estimate.estimated_usd >= _AUTO_SPEND_USD:
-                    self._approval(SpendStep.ENRICH, estimate.to_payload())
-                pipeline = EnrichmentPipeline(self.db)
-                try:
-                    self._run("enrich", lambda: pipeline.run(total=estimate.research.deduped_total,
-                              budget=estimate.research.estimated_usd,
-                              request_fingerprint=estimate.research.request_fingerprint), "enrich.running")
-                except (Exception, SystemExit) as error:
-                    self._deferred("enrich.deferred", error)
-                    return
-                self._write("enrich.done")
-            elif state.next_action == "review_linkedin":
-                # Matches the judges could not settle wait for the user until search is built.
-                self._write("enrich.done")
-                return
-            else:
-                raise ValueError(f"Context processing is unfinished: {state.next_action}")
-            state = workflow_state(self.db)
+        node = Enrich(self.conn, self.data_root, limit=None)
+        try:
+            self._paid(SpendStep.ENRICH, node, "enrich.running", "enrich.running")
+        except _Stopped:
+            raise
+        except (Exception, SystemExit) as error:
+            self._deferred("enrich.deferred", error)
+            return
         self._write("enrich.done")
 
     def _index(self, previous_input: str, previous_index: bool, previous_mtime: int,
                dispatched: dict | None) -> None:
         self.step = InstallStep.INDEX
-        realize = ExportPeople(db=self.db, out_dir=self.people.parent)
-        realized = self._run("realize", realize.run, "index.preparing")
-        if realized["profiles_missing"]:
-            # Fetched under the index row so the page never steps back; a failure is left on enrich to fix.
-            try:
-                self._run("profile-prefetch", lambda: PrefetchProfiles(db=self.db, fetch=True).run().to_payload(),
-                          "index.profiles")
-            except (Exception, SystemExit) as error:
-                self._deferred("profiles.deferred", error)
-            # A cached profile with no jobs listed stays "missing"; realize exports it anyway.
-            self._run("realize", realize.run, "index.preparing")
+        self._stage("realize", Realize(self.conn, self.data_root), "index.preparing")
         unchanged = previous_input == sha256_file(self.people)
         if unchanged:
             os.utime(self.people, ns=(self.people.stat().st_atime_ns, previous_mtime))
@@ -369,4 +313,7 @@ class ProcessingOnboarding:
                 with self.status.log_path.open("a", encoding="utf-8") as log:
                     traceback.print_exc(file=log)
                 self._write("step.failed", details={"error_type": type(error).__name__, "error": str(error)})
+            finally:
+                if self.conn is not None:
+                    self.conn.close()
             return self.status.read()

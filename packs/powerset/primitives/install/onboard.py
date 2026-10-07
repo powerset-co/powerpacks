@@ -277,7 +277,7 @@ class Onboarding:
 def main() -> None:
     from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
     from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
-    from packs.ingestion.primitives.deep_context.review.cli import start_server
+    from packs.shared.web.server import start_server
 
     parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
     parser.add_argument("--root", type=Path, default=Path.cwd())

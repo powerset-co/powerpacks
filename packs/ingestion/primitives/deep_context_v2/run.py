@@ -43,7 +43,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
 from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLoad
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
-from packs.ingestion.primitives.deep_context_v2.review.server import DEFAULT_PORT
+from packs.shared.web.server import DEFAULT_PORT, start_server as start_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Synthesize
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT as WORTH_LIMIT
@@ -52,8 +52,6 @@ from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAUL
 
 ROOT = Path(__file__).resolve().parents[4]
 REVIEW_PID_FILE = Path("deep-context") / "review-server.pid"
-REVIEW_LOG_FILE = Path("deep-context") / "review-server.log"
-REVIEW_START_SECONDS = 20
 INDEX_PID_FILE = Path("deep-context") / "index.pid"
 INDEX_LOG_FILE = Path("deep-context") / "index.log"
 INDEX_PIPELINE = Path("packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py")
@@ -117,47 +115,23 @@ def archive_v1(data_root: Path) -> Path | None:
 # ---- the review server
 
 
-def _review_url(port: int) -> str:
-    return f"http://127.0.0.1:{port}/"
-
-
-def _serving(port: int) -> bool:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/review/page", timeout=2) as response:
-            return response.status == 200
-    except (urllib.error.URLError, OSError, TimeoutError):
-        return False
-
-
 def start_review(data_root: Path, port: int) -> str:
-    """The review server on `port` (reused when one already answers there); returns the page URL."""
-    if not _serving(port):
-        log: Path = data_root / REVIEW_LOG_FILE
-        log.parent.mkdir(parents=True, exist_ok=True)
-        with open(log, "ab") as out:
-            process = subprocess.Popen(
-                [sys.executable, "-m", "packs.ingestion.primitives.deep_context_v2.review.server",
-                 "--data-root", str(data_root), "--port", str(port)],
-                cwd=ROOT, stdout=out, stderr=out, start_new_session=True,
-            )
-        (data_root / REVIEW_PID_FILE).write_text(str(process.pid))
-        deadline: float = time.monotonic() + REVIEW_START_SECONDS
-        while not _serving(port):
-            if time.monotonic() > deadline or process.poll() is not None:
-                raise SystemExit(f"review server did not start; see {log}")
-            time.sleep(0.5)
-    return _review_url(port)
+    """The one local page server on `port` (reused when this checkout's already answers there); returns
+    the review URL. The server is the install's too: packs/shared/web/server.py."""
+    started: dict[str, object] = start_page(data_root.parent, port=port)
+    (data_root / REVIEW_PID_FILE).write_text(str(started["pid"]))
+    return str(started["url"])
 
 
 def stop_review(data_root: Path) -> bool:
-    """Stop the server this command started; True when one was running."""
+    """Stop the page server `run` or `review` started; True when one was running."""
     pid_file: Path = data_root / REVIEW_PID_FILE
     if not pid_file.exists():
         return False
     pid = int(pid_file.read_text().strip() or "0")
     pid_file.unlink()
     try:
-        os.killpg(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         return False
     return True

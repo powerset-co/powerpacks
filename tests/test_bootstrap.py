@@ -54,7 +54,7 @@ class Sandbox:
             target = self.repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
-        write(self.repo / "packs/ingestion/primitives/deep_context/review/cli.py",
+        write(self.repo / "packs/shared/web/server.py",
               'import json\nprint(json.dumps({"url": "http://127.0.0.1:8765/install"}))\n')
         # bin/setup-python is faked, so give the checkout the venv Python it would have made.
         (self.repo / ".venv/bin").mkdir(parents=True, exist_ok=True)
@@ -262,7 +262,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("env.powerset.example", Path(self.sandbox.progress()["log_path"]).read_text())
 
     def test_page_start_failure_is_actionable_before_installing(self) -> None:
-        write(self.sandbox.repo / "packs/ingestion/primitives/deep_context/review/cli.py",
+        write(self.sandbox.repo / "packs/shared/web/server.py",
               'import sys\nprint("port in use", file=sys.stderr)\nsys.exit(1)\n')
         proc = self.sandbox.run("--harness", "codex")
         self.assertEqual(proc.returncode, 1)
@@ -295,7 +295,7 @@ set -euo pipefail
         self.assertEqual(self.sandbox.progress()["status"], "completed")
 
     def test_selected_status_port_is_sent_to_launcher_and_rerun(self) -> None:
-        write(self.sandbox.repo / "packs/ingestion/primitives/deep_context/review/cli.py",
+        write(self.sandbox.repo / "packs/shared/web/server.py",
               'import json,sys\nport=sys.argv[sys.argv.index("--port")+1]\nprint(json.dumps({"url": f"http://127.0.0.1:{port}/install"}))\n')
         proc = self.sandbox.run("--port", "8876")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

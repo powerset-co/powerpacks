@@ -31,7 +31,7 @@ From the canonical Powerpacks repo (`$POWERPACKS_REPO_ROOT`, else
    moved files):
 
    ```bash
-   bin/deep-context stop
+   bin/deep-context-v2 stop
    ```
 
 2. **Dry run** (default — free, read-only) and show the user the table:

@@ -219,7 +219,7 @@ if ! runtime_python="$("$UV_BIN" python find "$python_version" 2>>"$log")"; then
   failed "Python could not be located. Check $log and run this again."
 fi
 POWERPACKS_INSTALL_PYTHON="$runtime_python"
-if ! page="$(cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.ingestion.primitives.deep_context.review.cli start --stage install --port "$port" 2>>"$log")"; then
+if ! page="$(cd "$root" && "$POWERPACKS_INSTALL_PYTHON" -m packs.shared.web.server start --stage install --port "$port" 2>>"$log")"; then
   tail -n 20 "$log" >&2
   failed "The Powerpacks page could not start. Check $log and run this again."
 fi
