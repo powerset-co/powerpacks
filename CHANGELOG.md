@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.19.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.18.1...powerpacks-v3.19.0) (2026-10-07)
+
+
+### Features
+
+* **deep-context:** the store upgrades schema 2 to 3 in place ([#745](https://github.com/powerset-co/powerpacks/issues/745)) ([3ca9010](https://github.com/powerset-co/powerpacks/commit/3ca9010094a12af1310447c8dd496f37b8665825))
+* **install:** onboarding runs deep-context v2 on the one local page server ([#735](https://github.com/powerset-co/powerpacks/issues/735)) ([59c9954](https://github.com/powerset-co/powerpacks/commit/59c9954af4d72ab6beea4a100757af1068948786))
+* **people:** mark a family whose LinkedIn was just fixed as updating, and hold its tags ([#743](https://github.com/powerset-co/powerpacks/issues/743)) ([c9fffaa](https://github.com/powerset-co/powerpacks/commit/c9fffaafdf384268798127e83e02cd79b3b40bb6))
+* **share:** the share list, the People page, the upload and lookup on the v2 store ([#736](https://github.com/powerset-co/powerpacks/issues/736)) ([006f401](https://github.com/powerset-co/powerpacks/commit/006f401bd022222254e0e0aee9b7b7990dc6eccd))
+
+
+### Bug Fixes
+
+* **deep-context:** realize reads blank interaction counts through the people.csv contract ([#742](https://github.com/powerset-co/powerpacks/issues/742)) ([4826de5](https://github.com/powerset-co/powerpacks/commit/4826de5f91351b5c171aef722db45878b3417bb9))
+* **deep-context:** the three defects Jake's 3.18 rerun reported ([#740](https://github.com/powerset-co/powerpacks/issues/740)) ([80fe544](https://github.com/powerset-co/powerpacks/commit/80fe5446ee8c4b4a29d2cf4d2dd9d43149e64657))
+* **share:** a human's word survives merges; every member gets rows; labels, caches and lookup ([#744](https://github.com/powerset-co/powerpacks/issues/744)) ([557900e](https://github.com/powerset-co/powerpacks/commit/557900e89e0478c78bf31f55845c46074d1752f2))
+* **upload:** key shared people by the cloud's uuid, not the store's parent id ([#741](https://github.com/powerset-co/powerpacks/issues/741)) ([b655c4e](https://github.com/powerset-co/powerpacks/commit/b655c4e9016453d1c65e07750f090d3d4f860b6a))
+
 ## [3.18.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.18.0...powerpacks-v3.18.1) (2026-10-07)
 
 
