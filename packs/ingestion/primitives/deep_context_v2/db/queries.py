@@ -18,7 +18,6 @@ BATCH = 500
 
 # Row shapes, in column order, for the writers below.
 CandidateRow = tuple[str, str, int, str, str]            # candidate_id, display_name, is_owner, import_json, imported_at
-NameRow = tuple[str, str]                                 # candidate_id, name
 IdentifierRow = tuple[str, str, str, str]                 # candidate_id, kind, normalized_value, display_value
 SourceRow = tuple[str, str]                               # candidate_id, source
 ConnectionRow = tuple[str, str, str | None, str, str, str]  # linkedin_url, name, email, position, company, imported_at
@@ -50,6 +49,14 @@ def owner_payload_json(conn: sqlite3.Connection) -> str:
 # ---- 01 import
 
 
+def display_names(conn: sqlite3.Connection) -> dict[str, str]:
+    """candidate_id -> its one written name."""
+    names: dict[str, str] = {}
+    for row in conn.execute("SELECT candidate_id, display_name FROM candidates"):
+        names[row["candidate_id"]] = row["display_name"]
+    return names
+
+
 def upsert_candidates(conn: sqlite3.Connection, rows: list[CandidateRow]) -> None:
     """A rerun overwrites the row."""
     for batch in _batches(rows):
@@ -60,12 +67,6 @@ def upsert_candidates(conn: sqlite3.Connection, rows: list[CandidateRow]) -> Non
             "import_json = excluded.import_json, imported_at = excluded.imported_at",
             batch,
         )
-
-
-def insert_candidate_names(conn: sqlite3.Connection, rows: list[NameRow]) -> None:
-    """A name already there is left alone."""
-    for batch in _batches(rows):
-        conn.executemany("INSERT OR IGNORE INTO candidate_names (candidate_id, name) VALUES (?, ?)", batch)
 
 
 def insert_candidate_identifiers(conn: sqlite3.Connection, rows: list[IdentifierRow]) -> None:
@@ -126,9 +127,6 @@ def candidates_to_collect(conn: sqlite3.Connection, limit: int) -> list[Person]:
                 emails.append(identifier["normalized_value"])
             elif kind == IdentifierKind.PHONE:
                 phones.append(identifier["normalized_value"])
-            else:
-                print(f"unknown identifier kind {kind!r}, skipped")  # the DDL allows only the two above
-                continue
         channels: list[str] = []
         for source in conn.execute("SELECT source FROM candidate_sources WHERE candidate_id = ? ORDER BY source", (candidate_id,)):
             channels.append(source["source"])

@@ -119,6 +119,7 @@ CREATE TABLE candidates (
   import_json TEXT NOT NULL CHECK (json_valid(import_json)),
   imported_at TEXT NOT NULL
 );
+-- candidate_names: unread and unwritten since 2026-10-07 (one written name per candidate lives in candidates.display_name); drop at the next schema cut.
 CREATE TABLE candidate_names (
   candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id) ON DELETE CASCADE,
   name TEXT NOT NULL,

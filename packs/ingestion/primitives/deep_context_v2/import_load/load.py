@@ -1,13 +1,18 @@
 """Block 01 Import load: the per-source import CSVs and owner.json into the v2 store.
 
 Gmail rows become email candidates and messages rows become phone candidates, each with its
-names, its one identifier and its channels. The two files never share an id. LinkedIn rows
+names, its one identifier and its channels; the id is minted from the identifier (candidate:email:<address>,
+candidate:phone:+<digits>). A Gmail candidate's name is the one most often written
+for its address in the mail archive's headers (gmail_names.py); the importer's own name column is
+blank whenever two header spellings ever disagreed, which lost the name of people with hundreds of
+messages. The two files never share an id. LinkedIn rows
 become the `connections` lookup, never candidates. Shared mailboxes (role addresses such as
 office@ or billing@) are dropped here; every other keep rule ran in the per-source importer.
 owner.json fills the `owner` row and flags the operator's own candidates.
 
-Nothing is deleted. A candidate row upserts on its id; names, identifiers and sources insert on
-their primary keys and are ignored when present. A rebuild is the store moved to .bkup and a rerun.
+Nothing is deleted. A candidate row (with its one written name) upserts on its id; identifiers and
+sources insert on their primary keys and are ignored when present. A rebuild is the store moved to
+.bkup and a rerun.
 
 Created: 2026-10-06
 """
@@ -21,10 +26,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
+from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, load_owner
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.import_load.gmail_names import header_names
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.shared.csv_io import CsvIO
 
@@ -41,10 +48,9 @@ class Candidate:
     """One import row, ready to write: the candidate row, its names, its identifier, its channels."""
 
     candidate_id: str
-    display_name: str
+    display_name: str   # the one written name: the header name for a Gmail candidate, the CSV name for a phone
     is_owner: bool
     import_json: str
-    names: tuple[str, ...]
     kind: IdentifierKind
     normalized: str
     display: str
@@ -57,26 +63,24 @@ class GmailImport:
     shared_mailboxes_dropped: int
 
 
-def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, display: str, owner: OwnerProfile) -> Candidate:
-    """What both passes share: names, channels, the owner flag, and the row kept whole as evidence."""
-    # Two names at most: the importer's full name, and first+last when it spells differently.
-    full_name: str = row["full_name"].strip()
-    first_last: str = (row["first_name"].strip() + " " + row["last_name"].strip()).strip()
-    names: list[str] = []
-    for name in (full_name, first_last):
-        if name and name not in names:
-            names.append(name)
+def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, display: str, owner: OwnerProfile,
+               header_name: str = "") -> Candidate:
+    """What both passes share: the name, channels, the owner flag, and the row kept whole as evidence."""
+    # One written name. A Gmail candidate's is the one its headers wrote most often; a phone
+    # candidate's is the CSV name. The CSV's first/last columns are not used: the importer splits
+    # "Last, First" names wrongly and a second, broken name would block every pair.
+    full_name: str = header_name or row["full_name"].strip()
     # "imessage,whatsapp" when one phone was seen in both apps.
     sources: list[SourceChannel] = []
     for part in row["source_channels"].split(","):
         sources.append(SourceChannel(part.strip()))
     return Candidate(
-        candidate_id=row["id"],
+        # Minted here from the identifier, never taken from the CSV: an older importer wrote other ids.
+        candidate_id="candidate:" + kind.value + ":" + normalized,
         display_name=full_name,
         # The operator's own addresses and numbers; those candidates are never collected or synthesized.
         is_owner=normalized in owner.emails or normalized in owner.phones,
         import_json=json.dumps(row, ensure_ascii=False),
-        names=tuple(names),
         kind=kind,
         normalized=normalized,
         display=display,
@@ -84,8 +88,10 @@ def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, displ
     )
 
 
-def gmail_candidates(path: Path, owner: OwnerProfile) -> GmailImport:
-    """Email candidates from the Gmail import, and how many shared mailboxes were dropped."""
+def gmail_candidates(path: Path, owner: OwnerProfile, msgvault_db: Path) -> GmailImport:
+    """Email candidates from the Gmail import, named from the archive's headers, and how many shared
+    mailboxes were dropped."""
+    names: dict[str, str] = header_names(msgvault_db)
     candidates: list[Candidate] = []
     dropped: int = 0
     for row in CsvIO.read_dict_rows(path):
@@ -93,7 +99,8 @@ def gmail_candidates(path: Path, owner: OwnerProfile) -> GmailImport:
         if is_role_address(email):  # office@, billing@, support@: a mailbox, not a person
             dropped += 1
             continue
-        candidates.append(_candidate(row, IdentifierKind.EMAIL, normalize_email(email), email, owner))
+        normalized: str = normalize_email(email)
+        candidates.append(_candidate(row, IdentifierKind.EMAIL, normalized, email, owner, names.get(normalized, "")))
     return GmailImport(candidates, dropped)
 
 
@@ -107,20 +114,16 @@ def phone_candidates(path: Path, owner: OwnerProfile) -> list[Candidate]:
 
 
 def write_candidates(conn: sqlite3.Connection, candidates: list[Candidate], now: str) -> None:
-    """Four tables from one list: the candidate rows, then their names, identifiers and sources."""
+    """Three tables from one list: the candidate rows, then their identifiers and sources."""
     candidate_rows: list[queries.CandidateRow] = []
-    name_rows: list[queries.NameRow] = []
     identifier_rows: list[queries.IdentifierRow] = []
     source_rows: list[queries.SourceRow] = []
     for c in candidates:
         candidate_rows.append((c.candidate_id, c.display_name, int(c.is_owner), c.import_json, now))
-        for name in c.names:
-            name_rows.append((c.candidate_id, name))
         identifier_rows.append((c.candidate_id, c.kind.value, c.normalized, c.display))
         for source in c.sources:
             source_rows.append((c.candidate_id, source.value))
     queries.upsert_candidates(conn, candidate_rows)
-    queries.insert_candidate_names(conn, name_rows)
     queries.insert_candidate_identifiers(conn, identifier_rows)
     queries.insert_candidate_sources(conn, source_rows)
 
@@ -139,22 +142,26 @@ def write_connections(conn: sqlite3.Connection, path: Path, now: str) -> int:
 class ImportLoad(Node):
     name = "import_load"
     reads = ()
-    writes = ("candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections", "owner")
+    writes = ("candidates", "candidate_identifiers", "candidate_sources", "connections", "owner")
 
     def required_files(self) -> tuple[Path, ...]:
         # Only the owner is required. Each channel's importer writes its file only when that
         # channel was linked, so a missing CSV means "this user has no such channel".
         return (self.data_root / OWNER_JSON,)
 
+    def __init__(self, conn: sqlite3.Connection, data_root: Path, *, msgvault_db: Path = DEFAULT_MSGVAULT_DB) -> None:
+        super().__init__(conn, data_root)
+        self.msgvault_db = msgvault_db
+
     def execute(self) -> dict[str, int]:
-        conn = self.conn
-        now = now_iso()
+        conn: sqlite3.Connection = self.conn
+        now: str = now_iso()
         # Owner first: the candidate passes need its addresses and numbers for the owner flag.
         owner: OwnerProfile = load_owner(conn, self.data_root / OWNER_JSON)
         # Two passes, one per linked channel file, one identifier kind each.
         gmail = GmailImport([], 0)
         if (self.data_root / GMAIL_CSV).exists():
-            gmail = gmail_candidates(self.data_root / GMAIL_CSV, owner)
+            gmail = gmail_candidates(self.data_root / GMAIL_CSV, owner, self.msgvault_db)
         phones: list[Candidate] = []
         if (self.data_root / MESSAGES_CSV).exists():
             phones = phone_candidates(self.data_root / MESSAGES_CSV, owner)
@@ -172,14 +179,12 @@ class ImportLoad(Node):
             "identifiers_phone": len(phones),
             "shared_mailboxes_dropped": gmail.shared_mailboxes_dropped,
             "connections": connections,
-            "names": 0,
             "owner_flagged": 0,
             "source_gmail_msgvault": 0,
             "source_imessage": 0,
             "source_whatsapp": 0,
         }
         for c in candidates:
-            counts["names"] += len(c.names)
             counts["owner_flagged"] += int(c.is_owner)
             for source in c.sources:
                 counts["source_" + source.value] += 1
@@ -189,11 +194,14 @@ class ImportLoad(Node):
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Load the import CSVs and owner.json into the v2 store.")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
+    parser.add_argument("--msgvault-db", type=Path, default=DEFAULT_MSGVAULT_DB, help="the Gmail archive the names are read from")
     args = parser.parse_args(argv)
     conn = open_store(store_path(args.data_root))
-    manifest = ImportLoad(conn, args.data_root).run()
-    print(manifest.status, " ".join(f"{key}={value}" for key, value in manifest.counts.items()), manifest.error or "")
-    return 0 if manifest.status == "completed" else 1
+    manifest = ImportLoad(conn, args.data_root, msgvault_db=args.msgvault_db).run()
+    print(manifest.status, manifest.counts, manifest.error or "")
+    if manifest.status == "completed":
+        return 0
+    return 1
 
 
 if __name__ == "__main__":
