@@ -21,52 +21,53 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Awaitable
 
 import tiktoken
 
 from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
-from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.shared.openai_responses import (
-    OpenAIResponsesCaller,
-    OpenAIResponsesConfig,
-    estimate_cost_usd,
-)
-from packs.ingestion.primitives.deep_context.synthesis import prompting
-from packs.ingestion.primitives.deep_context.synthesis.facts import collapse_fact_records
-from packs.ingestion.primitives.deep_context.synthesis.models import FactRecord, SynthesizedFacts
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle
+from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, owner_background_block, read_owner
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.node import Node
+from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd
+from packs.ingestion.primitives.deep_context_v2.synthesize import prompt as prompting
+from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 
 MODEL = DEFAULT_SYNTHESIS_MODEL
 REASONING_EFFORT = "medium"  # the pinned default; the resolved config may carry the one env override
-CHUNK_CHARS = 9000
-MAX_BATCHES = 20
-OUTPUT_TOKENS_PER_CALL = 750  # runner.py:268-270: assumed output+reasoning tokens per call, estimate only
-FACT_FIELDS = tuple(prompting.FACT_SCHEMA["required"])
-DEFAULT_LIMIT = 100_000  # more candidates than any store has; --limit N synthesizes the first N pending
+CHUNK_CHARS = 9000           # one batch = up to this many characters of rendered messages
+MAX_BATCHES = 20             # a very long history is cut here; newest messages win
+OUTPUT_TOKENS_PER_CALL = 750  # assumed output+reasoning tokens per call, estimate only
+DEFAULT_LIMIT = 100_000      # more candidates than any store has; --limit N synthesizes the first N pending
 
 
 @dataclass(frozen=True)
 class Work:
+    """One candidate to synthesize: its rendered batch prompts and the reuse key they hash to."""
+
     candidate_id: str
     prompts: tuple[str, ...]
     fingerprint: str
 
 
 def system_prompt(owner: OwnerProfile) -> str:
-    """selection.py:151-153. owner_identity_block reads only .name and .emails."""
-    return (prompting.SYSTEM_PROMPT + prompting.owner_identity_block(owner)
+    """The fixed system text, who the owner is, and the owner's background. Same for every call."""
+    return (prompting.SYSTEM_PROMPT + prompting.owner_identity_block(owner.name, owner.emails)
             + prompting.OWNER_PROMPT_SUFFIX + owner_background_block(owner))
 
 
 def batch_prompts(bundle: CollectionBundle) -> tuple[str, ...]:
-    return tuple(prompting.render_batch(bundle, batch, None)
-                 for batch in prompting.batches(bundle.messages, chunk_chars=CHUNK_CHARS, max_batches=MAX_BATCHES))
+    """One user prompt per batch. Most candidates fit in one; a long history is several."""
+    prompts: list[str] = []
+    for batch in prompting.batches(bundle.messages, chunk_chars=CHUNK_CHARS, max_batches=MAX_BATCHES):
+        prompts.append(prompting.render_batch(bundle, batch))
+    return tuple(prompts)
 
 
 def input_fingerprint(prompts: tuple[str, ...], system: str, config: OpenAIResponsesConfig) -> str:
-    """The paid-cache key: exactly what would be sent, and to what. Change any and the candidate
+    """The paid-cache key: exactly what would be sent, and to what. Change any of it and the candidate
     is synthesized again; change the bundle outside the rendered window and it is not."""
     payload = {
         "synthesis_version": prompting.SYNTHESIS_VERSION,
@@ -86,37 +87,34 @@ class Synthesize(Node):
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
-        self.config = OpenAIResponsesConfig.resolve(
-            model=MODEL, effort=REASONING_EFFORT, concurrency=None, timeout=120, max_retries=3,
-        )
+        # Resolved once; the same effort goes into the request, the fingerprint and the row.
+        self.config = OpenAIResponsesConfig.resolve(model=MODEL, effort=REASONING_EFFORT, timeout=120, max_retries=3)
         self.prompt = system_prompt(read_owner(conn))
 
     def work(self) -> list[Work]:
         """Every bundle whose facts row is absent or carries another fingerprint."""
-        rows = self.conn.execute(
-            "SELECT b.candidate_id, b.payload_json, f.input_fingerprint AS done "
-            "FROM bundles b LEFT JOIN facts f USING (candidate_id) ORDER BY b.candidate_id"
-        ).fetchall()
-        todo = []
-        for row in rows:
-            prompts = batch_prompts(CollectionBundle.from_payload(json.loads(row["payload_json"])))
-            fingerprint = input_fingerprint(prompts, self.prompt, self.config)
+        todo: list[Work] = []
+        for row in queries.bundles_with_facts_fingerprint(self.conn):
+            bundle: CollectionBundle = CollectionBundle.from_payload(json.loads(row["payload_json"]))
+            prompts: tuple[str, ...] = batch_prompts(bundle)
+            fingerprint: str = input_fingerprint(prompts, self.prompt, self.config)
             if fingerprint != row["done"]:
                 todo.append(Work(row["candidate_id"], prompts, fingerprint))
         return todo
 
     def estimate(self) -> dict[str, object]:
+        """The dry run: count calls and input tokens with tiktoken, price them. No API call."""
         encoder = tiktoken.get_encoding("o200k_base")
-        pending = self.work()
-        todo = pending[: self.limit]
-        calls = 0
-        input_tokens = 0
+        pending: list[Work] = self.work()
+        todo: list[Work] = pending[: self.limit]
+        calls: int = 0
+        input_tokens: int = 0
         for item in todo:
             for prompt in item.prompts:
                 calls += 1
                 input_tokens += len(encoder.encode(self.prompt + prompt))
-        bundles = self.conn.execute("SELECT count(*) FROM bundles").fetchone()[0]
-        output_tokens = calls * OUTPUT_TOKENS_PER_CALL
+        bundles: int = queries.count_bundles(self.conn)
+        output_tokens: int = calls * OUTPUT_TOKENS_PER_CALL
         return {
             "bundles": bundles,
             "fresh": bundles - len(pending),
@@ -132,30 +130,30 @@ class Synthesize(Node):
         }
 
     def execute(self) -> dict[str, int]:
-        todo = self.work()[: self.limit]
+        todo: list[Work] = self.work()[: self.limit]
+        written: int
+        failed: int
         written, failed = asyncio.run(self._run(todo))
         if failed:
             raise RuntimeError(f"{failed} of {len(todo)} candidates failed; {written} written, rerun to redo the rest")
         return {"work": len(todo), "facts_written": written, "failed": 0}
 
     async def _run(self, todo: list[Work]) -> tuple[int, int]:
+        """All candidates in flight at once (the client holds the concurrency limit); each row is
+        committed as its candidate finishes, so a stopped run keeps what it paid for."""
         async with OpenAIResponsesCaller(self.config) as caller:
-            tasks = [asyncio.create_task(self._guarded(caller, item)) for item in todo]
-            written = failed = 0
+            tasks: list[asyncio.Task[tuple[Work, dict[str, object] | None]]] = []
+            for item in todo:
+                tasks.append(asyncio.create_task(self._guarded(caller, item)))
+            written: int = 0
+            failed: int = 0
             for task in asyncio.as_completed(tasks):
                 item, facts = await task
                 if facts is None:
                     failed += 1
                     continue
-                self.conn.execute(
-                    "INSERT INTO facts (candidate_id, facts_json, input_fingerprint, model, reasoning_effort, "
-                    "synthesized_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (candidate_id) DO UPDATE SET "
-                    "facts_json = excluded.facts_json, input_fingerprint = excluded.input_fingerprint, "
-                    "model = excluded.model, reasoning_effort = excluded.reasoning_effort, "
-                    "synthesized_at = excluded.synthesized_at",
-                    (item.candidate_id, json.dumps(facts, ensure_ascii=False), item.fingerprint,
-                     self.config.model, self.config.effort, now_iso()),
-                )
+                queries.upsert_facts(self.conn, item.candidate_id, json.dumps(facts, ensure_ascii=False),
+                                     item.fingerprint, self.config.model, self.config.effort, now_iso())
                 self.conn.commit()
                 written += 1
             return written, failed
@@ -169,22 +167,19 @@ class Synthesize(Node):
             return item, None
 
     async def _facts(self, caller: OpenAIResponsesCaller, item: Work) -> dict[str, object]:
-        """runner.py:142-177: every batch at once; one answer is the facts, several collapse."""
-        calls = []
+        """One strict-schema call per batch, all at once. One batch: its answer is the facts.
+        Several: the answers are collapsed into one facts object."""
+        calls: list[Awaitable[dict[str, object]]] = []
         for prompt in item.prompts:
             calls.append(caller.call(system_prompt=self.prompt, user_prompt=prompt, schema=prompting.FACT_SCHEMA,
                                      schema_name="person_facts", context="synthesize"))
-        responses = await asyncio.gather(*calls)
-        chunks = [SynthesizedFacts.from_payload(response.payload) for response in responses]
+        responses: list[dict[str, object]] = await asyncio.gather(*calls)
+        chunks: list[SynthesizedFacts] = []
+        for payload in responses:
+            chunks.append(SynthesizedFacts.from_payload(payload))
         if len(chunks) == 1:
-            merged = chunks[0]
-        else:
-            merged = collapse_fact_records([FactRecord(facts) for facts in chunks])
-        payload = merged.to_payload()
-        facts: dict[str, object] = {}
-        for field in FACT_FIELDS:
-            facts[field] = payload[field]
-        return facts
+            return chunks[0].to_payload()
+        return collapse(chunks).to_payload()
 
 
 def main(argv: list[str] | None = None) -> int:
