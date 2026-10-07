@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -142,6 +143,57 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--sync-after") + 1], "2025-10-03")
         self.assertEqual(argv[argv.index("--wacli-store") + 1], "/tmp/fresh-whatsapp")
         self.assertIn("--refresh", argv)
+
+    def test_pasted_install_reuses_saved_choices_across_repeated_runs(self) -> None:
+        record = self.sandbox.root / "resumed-options.json"
+        manifest = self.sandbox.repo / ".powerpacks/install/manifest.json"
+        store = str(self.sandbox.root / "WhatsApp archive 'personal'")
+        saved = ["--source", "gmail", "--source", "whatsapp", "--skip-source", "whatsapp",
+                 "--gmail-email", "casey@example.com", "--sync-after", "2025-01-01",
+                 "--wacli-store", store, "--port", "8876"]
+        write(manifest, json.dumps({"retry_command": shlex.join(["bin/onboard", *saved, "--refresh"])}))
+        write(self.sandbox.repo / "packs/powerset/primitives/install/onboard.py",
+              'import json,os,shlex,sys\nfrom pathlib import Path\n'
+              'from packs.powerset.primitives.install.status import InstallStatus\n'
+              'args=sys.argv[1:]\nroot=Path(args[args.index("--root")+1])\n'
+              f'Path({str(record)!r}).write_text(json.dumps(args))\n'
+              'args=args[2:]\n'
+              'InstallStatus(root).write("search.ready",people=1,follow_ups="",pid=os.getpid(),'
+              'retry_command=shlex.join(["bin/onboard",*args]))\n'
+              'print("DONE: Search verified")\n')
+        for _ in range(3):
+            proc = self.sandbox.run("--powerset", "--harness", "codex")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            args = json.loads(record.read_text())
+            for option in ("--gmail-email", "--sync-after", "--wacli-store", "--port", "--skip-source"):
+                self.assertIn(option, args)
+                self.assertEqual(args[args.index(option) + 1], saved[saved.index(option) + 1])
+            self.assertEqual([args[i+1] for i, item in enumerate(args) if item == "--source"],
+                             ["gmail", "whatsapp"])
+            self.assertNotIn("--refresh", args)
+        installer = self.sandbox.repo / "install.sh"
+        original = installer.read_text()
+        write(installer, "#!/usr/bin/env bash\nexit 1\n", executable=True)
+        failed = self.sandbox.run("--powerset", "--harness", "codex")
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("--gmail-email casey@example.com", self.sandbox.progress()["retry_command"])
+        write(installer, original, executable=True)
+        resumed = self.sandbox.run("--powerset", "--harness", "codex")
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual(json.loads(record.read_text()), args)
+
+    def test_explicit_sources_replace_saved_sources_and_skips(self) -> None:
+        record = self.sandbox.root / "overridden-options.json"
+        write(self.sandbox.repo / ".powerpacks/install/manifest.json", json.dumps({
+            "retry_command": "bin/onboard --source gmail --skip-source gmail --sync-after 2025-01-01"}))
+        with (self.sandbox.repo / "packs/powerset/primitives/install/onboard.py").open("a") as handle:
+            handle.write(f'\nimport json\nPath({str(record)!r}).write_text(json.dumps(sys.argv[1:]))\n')
+        proc = self.sandbox.run("--powerset", "--source", "imessage", "--sync-after", "2026-01-01")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        args = json.loads(record.read_text())
+        self.assertEqual([args[i+1] for i, item in enumerate(args) if item == "--source"], ["imessage"])
+        self.assertNotIn("--skip-source", args)
+        self.assertEqual(args[args.index("--sync-after")+1], "2026-01-01")
 
     def test_installs_for_every_harness_found_and_reports_done(self) -> None:
         proc = self.sandbox.run(home_dirs=(".codex", ".claude"))

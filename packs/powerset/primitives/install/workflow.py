@@ -120,7 +120,7 @@ class SourceOnboarding:
             (date.today() - timedelta(days=365)).isoformat() if Source.GMAIL in self.sources else "")
         wacli_store = wacli_store or saved.wacli_store
         self.wacli_store = wacli_store or self.root / DEFAULT_STORE
-        self.refresh = refresh or (not sources and saved.refresh)
+        self.refresh = refresh
         self.step = InstallStep.SOURCES
         if all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
@@ -202,16 +202,6 @@ class SourceOnboarding:
             if not self._result(created, "gmail.app.ready", waiting="gmail.app.stopped", failed="gmail.app.failed"):
                 return False
             local = accounts.status_payload(home)
-        # Every mailbox must be an OAuth test user before its consent can succeed.
-        allowed = set(accounts.normalize_email_list(list(msgvault_home.load_setup_state(home, "").test_users)))
-        missing = [email for email in accounts.normalize_email_list(list(self.gmail_emails)) if email not in allowed]
-        if missing:
-            self._write("gmail.allowing")
-            added = TestUsers.from_args(msgvault_parser().parse_args(
-                ["add-test-users", "--home", str(home), "--login-email", self.gmail_emails[0], *missing]),
-                on_stage=self._gmail_stage).run()
-            if not self._result(added, "gmail.allowed", waiting="gmail.app.stopped", failed="gmail.allowing.failed"):
-                return False
         if local["database"]["exists"]:
             health = accounts.check_accounts_payload(home, list(self.gmail_emails))
             if health["status"] == "error":
@@ -222,6 +212,18 @@ class SourceOnboarding:
                       for email in accounts.normalize_email_list(list(self.gmail_emails))]
             health = local
         authorize = [check for check in checks if check["status"] in {"missing_token", "reauthorization_required"}]
+        # An authenticated mailbox has already consented. Add test users only
+        # for mailboxes that need consent, before opening their OAuth window.
+        if authorize:
+            allowed = set(accounts.normalize_email_list(list(msgvault_home.load_setup_state(home, "").test_users)))
+            missing = [check["email"] for check in authorize if check["email"] not in allowed]
+            if missing:
+                self._write("gmail.allowing")
+                added = TestUsers.from_args(msgvault_parser().parse_args(
+                    ["add-test-users", "--home", str(home), "--login-email", self.gmail_emails[0], *missing]),
+                    on_stage=self._gmail_stage).run()
+                if not self._result(added, "gmail.allowed", waiting="gmail.app.stopped", failed="gmail.allowing.failed"):
+                    return False
         for check in authorize:
             self._write("gmail.connect", email=check["email"], details=check)
             while True:
@@ -329,12 +331,9 @@ class SourceOnboarding:
 
     def _linkedin_current(self) -> bool:
         record = read_json(self.root / SCRAPE_RECORD, {}) or {}
-        return bool(record.get("complete")) and not self.refresh
+        return bool(record.get("complete")) and (self.root / CONNECTIONS_CSV).is_file() and not self.refresh
 
     def _linkedin_login(self) -> bool:
-        if self._linkedin_current():
-            self._write("linkedin.login.current")
-            return True
         self._write("linkedin.login.checking")
         return self._result(LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login(), "linkedin.login.done",
                             waiting="linkedin.login.waiting", failed="linkedin.login.failed")
@@ -366,11 +365,11 @@ class SourceOnboarding:
                 return self._write("sources.all_skipped")
             active = [source for source in self.sources if source not in self.skip_sources]
             if Source.GMAIL in active and not self.gmail_emails:
-                # Gmail defaults to the account the user signed in to Powerset with.
                 account = previous.get("account_email") or ""
                 if not account:
                     return self._write("gmail.which_accounts", handed_back=True)
                 self.gmail_emails = (account,)
+                self.retry_command = shlex.join([*shlex.split(self.retry_command), "--gmail-email", account])
             # Tools first (Homebrew can take minutes), then every login back to back while
             # the user is here, then the syncs and imports run without them.
             for source in active:
@@ -413,4 +412,3 @@ def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--wacli-store", type=Path)
     parser.add_argument("--refresh", action="store_true", help="Sync selected sources instead of reusing imported contacts")
     return parser
-

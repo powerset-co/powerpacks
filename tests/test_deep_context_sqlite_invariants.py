@@ -237,6 +237,23 @@ def _load_bundle(path: Path) -> object:
         )
         self.assertEqual([item.rule for item in banned], ["artifact-file-read"])
 
+    def test_export_writer_may_compare_only_its_own_output_bytes(self) -> None:
+        source = '''class ExportPeople:
+    def run(self):
+        if self.people_csv.read_bytes() != content:
+            self.people_csv.write_bytes(content)
+'''
+        relative = "realize/export_people.py"
+        self.assertEqual(self.audit_source(relative, source), [])
+        for changed in (
+            source.replace("self.people_csv.read_bytes()", "self.source_csv.read_bytes()"),
+            source.replace("if self.people_csv.read_bytes() != content:", "if self.people_csv.read_bytes():"),
+            source.replace("self.people_csv.read_bytes()", "CsvIO.read_dict_rows(self.people_csv)"),
+            source.replace("def run(self)", "def consume(self)"),
+        ):
+            with self.subTest(source=changed):
+                self.assertTrue(self.audit_source(relative, changed))
+
     def test_untyped_projector_door_is_retired(self) -> None:
         violations = self.audit_source(
             "review/bad_consumer.py",

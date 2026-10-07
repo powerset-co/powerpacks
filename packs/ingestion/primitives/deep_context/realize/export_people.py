@@ -8,6 +8,7 @@ Original people, facts and decisions stay in SQLite; no provider is called.
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 from pathlib import Path
 
@@ -152,7 +153,14 @@ class ExportPeople:
         final = tuple(PeopleRow.model_validate(row) for row in merged.values())
         self.db.replace_imported_people(tuple(realized))
 
-        CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, [row.to_row() for row in final])
+        buffer = io.StringIO()
+        writer = CsvIO.dict_writer(buffer, fieldnames=PEOPLE_SCHEMA_COLUMNS)
+        writer.writeheader()
+        writer.writerows(row.to_row() for row in final)
+        content = buffer.getvalue().encode("utf-8")
+        if not self.people_csv.exists() or self.people_csv.read_bytes() != content:
+            self.people_csv.parent.mkdir(parents=True, exist_ok=True)
+            self.people_csv.write_bytes(content)
         payload: dict[str, object] = {
             "primitive": "deep_context_export_people",
             "status": "completed",

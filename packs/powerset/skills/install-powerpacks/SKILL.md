@@ -219,6 +219,13 @@ failure. Check `/healthz`, `/api/install`, and `.powerpacks/install/server.log`.
 
 ## Choices and waiting
 
+Rerun the same install instruction to resume. Keep the existing checkout, accounts,
+projects, imports and processing caches. Check access again, but do not force a
+login or recreate a working project. Saved source/account/history choices survive
+the bootstrap; explicit new choices override them. `--refresh` requests a resync
+for that invocation only. Unchanged prepared contacts keep their current index;
+missing outputs or changed inputs are repaired or processed by the normal flow.
+
 Default to LinkedIn, Gmail's past year, iMessage, and WhatsApp. Inform the user
 once and keep going. Apply already-given account/history choices. Gmail defaults to
 the Powerset login's address. Only without a Powerset account does the coordinator

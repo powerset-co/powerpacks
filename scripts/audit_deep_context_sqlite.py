@@ -352,6 +352,14 @@ def _allowed_file_read(
         return True
     called = _name(call.func)
     scope = _scope(call, parents)
+    if (
+        relative == "packs/ingestion/primitives/deep_context/realize/export_people.py"
+        and scope == "ExportPeople.run"
+        and called == "self.people_csv.read_bytes"
+        and isinstance(parents.get(call), ast.Compare)
+        and ast.unparse(parents[call]) == "self.people_csv.read_bytes() != content"
+    ):
+        return True
     if (path, scope, ast.unparse(call.func)) in {
         (REBUILD_READER, "Rebuild._validate", "self.owner_profile.read_text"),
         (REBUILD_READER, "Rebuild._validate", "manifest_path.read_text"),

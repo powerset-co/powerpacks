@@ -3,6 +3,7 @@
 import importlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -51,6 +52,53 @@ def project_profile(db: Db, row_key: str, slug: str, name: str, title: str) -> N
 
 
 class ExportPeopleTests(unittest.TestCase):
+    def test_unchanged_export_preserves_csv_bytes_and_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "source" / "people.csv"
+            CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [
+                imported(id=generate_person_id("jordan-bravo"), public_identifier="jordan-bravo",
+                         linkedin_url=linkedin("jordan-bravo"), full_name="Jordan Bravo",
+                         source_channels="linkedin_csv"),
+            ])
+            db = Db(base / "deep-context.sqlite")
+            EnsureParents(db=db, people_csv=source).run()
+            export = ExportPeople(db=db, out_dir=base / "merged")
+            export.run()
+            before = export.people_csv.read_bytes()
+            os.utime(export.people_csv, ns=(1, 1))
+
+            result = export.run()
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(export.people_csv.read_bytes(), before)
+            self.assertIn(b"\r\n", before)
+            self.assertEqual(export.people_csv.stat().st_mtime_ns, 1)
+
+    def test_changed_identity_rewrites_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "source" / "people.csv"
+            CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [
+                imported(id=generate_person_id("jordan-bravo"), public_identifier="jordan-bravo",
+                         linkedin_url=linkedin("jordan-bravo"), full_name="Jordan Bravo",
+                         source_channels="linkedin_csv"),
+            ])
+            db = Db(base / "deep-context.sqlite")
+            EnsureParents(db=db, people_csv=source).run()
+            export = ExportPeople(db=db, out_dir=base / "merged")
+            export.run()
+            before = export.people_csv.read_bytes()
+            os.utime(export.people_csv, ns=(1, 1))
+            db.decide_identity("jordan-bravo", "detach")
+
+            result = export.run()
+
+            self.assertEqual(result["rejected_identities"], 1)
+            self.assertNotEqual(export.people_csv.read_bytes(), before)
+            self.assertNotEqual(export.people_csv.stat().st_mtime_ns, 1)
+            self.assertEqual(CsvIO.read_dict_rows(export.people_csv)[0]["public_identifier"], "")
+
     def test_one_profile_normalization_failure_still_exports_both_people(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

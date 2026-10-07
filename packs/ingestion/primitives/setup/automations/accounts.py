@@ -12,6 +12,7 @@ account — and `CHECK_BUCKETS` says which payload lists each verdict lands in.
 nested dict.
 
 Changelog:
+  2026-10-06: configured OAuth requires a valid client secret file.
   2026-09-28 (revoked grant): `unauthorized (401)` also means re-authorize; a grant
     revoked at Google fails verify with a 401 on its cached access token.
   2026-09-23 (typed rows): subprocess and visible-run results read their
@@ -59,6 +60,7 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     load_setup_state,
     parse_client_secret_paths,
     run_msgvault,
+    validate_client_secret,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
     CommandResult,
@@ -299,10 +301,11 @@ def status_payload(home: Path) -> dict[str, Any]:
         name: {"path": value, "exists": bool(value and Path(value).expanduser().exists())}
         for name, value in secrets.items()
     }
+    oauth_configured = any(value and validate_client_secret(Path(value).expanduser()).ok for value in secrets.values())
     # "ready" means the user can actually sync: vault configured AND at least one
     # authorized account. Without the account gate the Gmail page jumps to the
     # stats view and the authorize step becomes unreachable.
-    ready = bool(msgvault_path and cfg_path.exists() and secrets and db_path(home).exists() and accounts)
+    ready = bool(msgvault_path and oauth_configured and db_path(home).exists() and accounts)
     setup_state = load_setup_state(home)
     # The emails the user asked to authorize live in setup state as test_users
     # (saved by add-test-users). They're the source of truth for "accounts
@@ -322,7 +325,7 @@ def status_payload(home: Path) -> dict[str, Any]:
         "config": {
             "path": str(cfg_path),
             "exists": cfg_path.exists(),
-            "oauth_configured": bool(secrets),
+            "oauth_configured": oauth_configured,
             "client_secrets": secret_records,
         },
         "accounts": accounts,

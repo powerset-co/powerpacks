@@ -171,6 +171,35 @@ if ! POWERPACKS_INSTALL_PYTHON="$(command -v python3)"; then
   failed "Python is not available. Finish installing the macOS command line tools and run this again."
 fi
 export POWERPACKS_INSTALL_PYTHON
+# Restore saved choices before installation progress replaces the workflow manifest.
+# Explicit choices win; refresh/spend approval apply only to this invocation.
+if [[ "$powerset" == 1 && -f "$root/.powerpacks/install/manifest.json" ]]; then
+  if ! resume_command="$("$POWERPACKS_INSTALL_PYTHON" - "$root" "${bootstrap_args[@]}" <<'PYRESUME'
+import json
+import shlex
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+current = sys.argv[2:]
+saved = shlex.split(json.loads((root / ".powerpacks/install/manifest.json").read_text())["retry_command"])
+options = {"--source", "--skip-source", "--gmail-email", "--sync-after", "--wacli-store", "--port"}
+explicit = set(current) & options
+if "--source" in explicit:
+    explicit.add("--skip-source")
+inherited = []
+if saved and Path(saved[0]).name in {"bootstrap", "onboard"}:
+    for index, option in enumerate(saved[:-1]):
+        if option in options - explicit:
+            inherited.extend((option, saved[index + 1]))
+if inherited:
+    print(shlex.join([str(root / "bin/bootstrap"), *inherited, *current]))
+PYRESUME
+)"; then
+    failed "Saved setup choices could not be read. Ask me to inspect .powerpacks/install/manifest.json before retrying."
+  fi
+  [[ -z "$resume_command" ]] || exec bash -c "$resume_command"
+fi
 export POWERPACKS_INSTALL_RETRY_COMMAND="$retry_command"
 mkdir -p "$root/.powerpacks/install"
 log="$root/.powerpacks/install/install.log"
