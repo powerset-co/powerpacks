@@ -43,7 +43,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, 
 from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposals
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig, load_env
 
-VERSION = "enrich-judge-2026-10-07-connections"  # in every judgment fingerprint: a new judge is a new judgment
+VERSION = "enrich-judge-2026-10-07-owner-domains"  # in every judgment fingerprint: a new judge is a new judgment
 # What a JEV-alone confirmation writes: JEV's two views agreeing carry no Sol confidence or reason (confirmed rows
 # never reach the review card).
 JEV_CONFIRMED = SolVerdict(Verdict.CONFIRMED.value, None, "")
