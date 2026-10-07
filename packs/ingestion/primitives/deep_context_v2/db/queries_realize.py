@@ -4,11 +4,11 @@ Created: 2026-10-07
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, Worth
+from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
 
 @dataclass(frozen=True)
