@@ -219,14 +219,8 @@ def share_routes(conn: sqlite3.Connection, data_root: Path, *, upload_db: Path |
                  upload_dir: Path | None = None) -> ShareRoutes:
     """The routes over one store, rows re-read whenever the store changes."""
     people = SharePeople(conn, data_root)
-    cache: dict[str, Any] = {}
-
     def load() -> tuple:
-        stamp = conn.execute("PRAGMA data_version").fetchone()[0], people.export_rows() is not None and people._stamp
-        if cache.get("stamp") != stamp:
-            cache["rows"] = people.load()
-            cache["stamp"] = stamp
-        return cache["rows"]
+        return people.load()
 
     upload = ShareUpload(store_path(data_root), data_root / PEOPLE_CSV_RELATIVE_PATH, index_db=upload_db or DEFAULT_DB,
                          out_dir=upload_dir or DEFAULT_OUT_DIR)
