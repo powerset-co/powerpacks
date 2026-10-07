@@ -31,7 +31,8 @@ from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, owner_background_block, read_owner
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.node import Node
-from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd
+from packs.indexing.lib.openai_responses import estimate_cost_usd
+from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context_v2.synthesize import prompt as prompting
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 
