@@ -61,11 +61,11 @@ def matches(conn: sqlite3.Connection, *, name: str = "", email: str = "", phone:
         for row in conn.execute("SELECT candidate_id, display_name FROM candidates"):
             names[row["candidate_id"]] = row["display_name"]
         for parent_id, family in members.items():
-            known: set[str] = set()
+            known: list[str] = []
             for member in family:
-                known |= _words(names.get(member.candidate_id, ""))
-                known |= _words(json.loads(member.facts_json).get("canonical_name") or "")
-            if wanted <= known:
+                known.append(names.get(member.candidate_id, ""))
+                known.append(json.loads(member.facts_json).get("canonical_name") or "")
+            if any(wanted <= _words(name) for name in known):
                 parents.add(parent_id)
     found: list[Match] = []
     for parent_id in sorted(parents):

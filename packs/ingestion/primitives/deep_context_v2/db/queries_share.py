@@ -55,10 +55,19 @@ class Share:
 
 
 def current_tags(conn: sqlite3.Connection) -> dict[str, Tags]:
-    """parent_id -> the family's tags."""
+    """parent_id -> the family's tags: the union of every member's tags, so a human's word on any
+    member (a `private`, above all) survives the families merging; the note and time are the latest."""
     found: dict[str, Tags] = {}
-    for row in conn.execute("SELECT parent_id, candidate_id, tags, note, updated_at FROM current_tags"):
-        found[row["parent_id"]] = Tags(row["parent_id"], row["candidate_id"], row["tags"], row["note"], row["updated_at"])
+    for row in conn.execute(
+        "SELECT p.parent_id, t.candidate_id, t.tags, t.note, t.updated_at FROM current_parent p "
+        "JOIN person_tags t USING (candidate_id) ORDER BY p.parent_id, t.updated_at DESC, t.candidate_id"
+    ):
+        held: Tags | None = found.get(row["parent_id"])
+        if held is None:
+            found[row["parent_id"]] = Tags(row["parent_id"], row["candidate_id"], row["tags"], row["note"], row["updated_at"])
+        else:
+            tags: str = "|".join(sorted((set(held.tags.split("|")) | set(row["tags"].split("|"))) - {""}))
+            found[row["parent_id"]] = Tags(held.parent_id, held.candidate_id, tags, held.note, held.updated_at)
     return found
 
 

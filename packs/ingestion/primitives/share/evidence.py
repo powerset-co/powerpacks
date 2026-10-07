@@ -16,7 +16,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import ChannelCount, MemberFacts
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
@@ -63,8 +63,12 @@ class ShareEvidence:
         for member in queries_worth.members_with_facts(self.conn):
             members.setdefault(member.family_key, []).append(member)
         worth: dict[str, sqlite3.Row] = {}
-        for row in self.conn.execute("SELECT parent_id, worth, decided_by, labels_json FROM current_worth"):
+        for row in self.conn.execute("SELECT parent_id, worth, decided_by FROM current_worth"):
             worth[row["parent_id"]] = row
+        # Every member of the family, facts or not: each gets a label and a share row.
+        candidates: dict[str, list[str]] = {}
+        for row in self.conn.execute("SELECT parent_id, candidate_id FROM current_parent ORDER BY parent_id, candidate_id"):
+            candidates.setdefault(row["parent_id"], []).append(row["candidate_id"])
         counts: queries_worth.BundleCounts = queries_worth.bundle_counts(self.conn)
         by_candidate: dict[str, list[ChannelCount]] = {}
         for count in counts.channels:
@@ -81,13 +85,15 @@ class ShareEvidence:
                 channel_counts.extend(by_candidate.get(member.candidate_id, []))
                 groups += counts.groups.get(member.candidate_id, 0)
             decided = worth[parent_id]
-            labels: dict[str, Any] | None = json.loads(decided["labels_json"]) if decided["labels_json"] else None
+            # The labels worth computed stay with the family when a human overrides the worth itself.
+            labels_json: str | None = queries_review.labels_json(self.conn, candidates[parent_id])
+            labels: dict[str, Any] | None = json.loads(labels_json) if labels_json else None
             overlaps: set[str] = set()
             for item in facts["shared_context"]:
                 overlaps.add(item["overlap"])
             people.append(PersonEvidence(
                 person_id=parent_id,
-                candidate_ids=tuple(member.candidate_id for member in family),
+                candidate_ids=tuple(candidates[parent_id]),
                 public_identifier=row["public_identifier"],
                 full_name=row["full_name"],
                 source_channels=tuple(channel for channel in row["source_channels"].split(",") if channel),
