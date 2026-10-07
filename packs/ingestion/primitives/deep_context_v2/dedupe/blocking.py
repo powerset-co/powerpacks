@@ -4,7 +4,9 @@ candidate against every other. Every two members of a bucket are a blocked pair.
 Bucket keys, per written name (lowercased, single-spaced):
 
     "jordan bravo" -> fnli:jordan|b, filn:j|bravo, words:bravo jordan, ends:jordan|bravo
-    "j bravo"      -> fnli:j|b, filn:j|bravo, fn:j
+    "j bravo"      -> fnli:j|b, filn:j|bravo
+
+A one-word name ("Ben") gets no name key: it is never paired by name (decided 2026-10-07).
 
 plus `local:<handle>` from an email candidate's address (the part before @). Phones and whole
 emails make no bucket: a candidate is one identifier, so no two candidates share one. A bucket
@@ -26,7 +28,7 @@ from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind
 from packs.ingestion.primitives.deep_context_v2.names import name_words
 
 MAX_BUCKET = 200
-BUCKET_KINDS: tuple[str, ...] = ("fnli", "filn", "fn", "words", "ends", "local")
+BUCKET_KINDS: tuple[str, ...] = ("fnli", "filn", "words", "ends", "local")
 _JOINERS = re.compile(r"[.\-']+")
 _NOT_LETTERS = re.compile(r"[^a-z ]+")
 _SPACES = re.compile(r"\s+")
@@ -55,14 +57,12 @@ def name_keys(name: str) -> set[str]:
     key: str = _SPACES.sub(" ", name.strip().lower())
     tokens: list[str] = _NOT_LETTERS.sub(" ", _JOINERS.sub("", key)).split()
     keys: set[str] = set()
-    # First name + last initial, first initial + last name; first name alone when there is no real surname.
-    if tokens:
+    # First name + last initial, first initial + last name. One word is no name to bucket on.
+    if len(tokens) >= 2:
         first: str = tokens[0]
         last: str = tokens[-1]
         keys.add(f"fnli:{first}|{last[0]}")
         keys.add(f"filn:{first[0]}|{last}")
-        if len(tokens) == 1 or len(last) == 1:
-            keys.add(f"fn:{first}")
     # A full name also buckets on all its words in any order and on its first and last word.
     words: tuple[str, ...] = name_words(key)
     if len(words) > 1 and len(words[0]) > 1 and len(words[-1]) > 1:

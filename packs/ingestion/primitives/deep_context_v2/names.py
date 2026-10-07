@@ -16,8 +16,8 @@ nickname table: Bob is not Robert. No accent folding: José is not Jose.
 
 `names_can_match`: a name is read into its words, given name first. Two names can match when they
 are the same full name in any word order, or their first words and their last words are each
-equal, a prefix of the other, or spelled alike (Jaro-Winkler 0.85 or more). A one-word name meets
-a full name through its first or last word.
+equal, a prefix of the other, or spelled alike (Jaro-Winkler 0.85 or more). A one-word name is
+never paired by name.
 
 Created: 2026-10-06
 """
@@ -256,14 +256,9 @@ def names_can_match(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
         return False
     if first == second or _same_full_name(first, second):
         return True
-    # A one-word name meets the other through its first or last word.
-    short: tuple[str, ...] = first
-    long: tuple[str, ...] = second
-    if len(second) < len(first):
-        short = second
-        long = first
-    if len(short) == 1:
-        return short[0] == long[0] or short[0] == long[-1]
+    # A one-word name is never paired by name: a first name alone could be anyone's (decided 2026-10-07).
+    if len(first) < 2 or len(second) < 2:
+        return False
     return _word_forms_match(first[0], second[0]) and _word_forms_match(first[-1], second[-1])
 
 
