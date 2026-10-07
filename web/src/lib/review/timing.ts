@@ -13,7 +13,7 @@ export const ENRICHED_MS = 2400
 /** A card's contents (or a row, or the stage) leave for this long before the swap: the
  *  --leave-ms of styles/base.css (and worth.css), which then brings the new contents in over
  *  --arrive-ms. */
-const FADE_MS = 140
+const FADE_MS = 150
 
 /** The fade's wait: it exists only for the animation, so it is 0 under reduced motion. */
 export function fadeMs(reducedMotion: boolean): number {

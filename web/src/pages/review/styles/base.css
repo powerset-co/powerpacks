@@ -497,19 +497,22 @@
   padding: 6px 14px;
 }
 
-/* Motion: everything leaves fast and accelerating (--leave), arrives slower and decelerating
-   (--arrive, an expo-out curve that lands softly). lib/review/timing.ts waits --leave-ms before a swap. */
+/* Motion: the original 100 ms out / 180 ms in swap, 1.5x slower (Arthur, 2026-10-07, after
+   comparing three choreographies side by side). lib/review/timing.ts waits --leave-ms before a swap. */
 .review-page {
-  --leave-ms: 140ms;
-  --leave: cubic-bezier(0.4, 0, 1, 1);
-  --arrive-ms: 380ms;
-  --arrive: cubic-bezier(0.16, 1, 0.3, 1);
+  --leave-ms: 150ms;
+  --leave: ease;
+  --arrive-ms: 270ms;
+  --arrive: cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* The stage leaving before its data is read again. */
 .review-page .stage.leaving {
+  transform: translateY(-5px);
   opacity: 0;
-  transition: opacity var(--leave-ms) var(--leave);
+  transition:
+    opacity var(--leave-ms) var(--leave),
+    transform var(--leave-ms) var(--leave);
 }
 /* Each screen fades in as it loads (the stage is keyed by the load). */
 .review-page .stage {
@@ -524,11 +527,9 @@
 @keyframes stage-enter {
   from {
     opacity: 0;
-    transform: translateY(4px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 @keyframes completion-check {
@@ -546,23 +547,21 @@
 .review-page .decision-card.swapping {
   pointer-events: none;
 }
-/* The frame stays put, so the contents cross-fade in place: the old ones fade out where they
-   are (no travel, which reads as the page scrolling), the new ones settle in from 4 px below,
-   the header first and the body and buttons 40 ms behind. */
+/* The old contents lift 5 px and fade; the new ones rise 6 px into place. */
 .review-page .decision-card.swapping > * {
   opacity: 0;
-  transition: opacity var(--leave-ms) var(--leave);
+  transform: translateY(-5px);
+  transition:
+    opacity var(--leave-ms) var(--leave),
+    transform var(--leave-ms) var(--leave);
 }
 .review-page .decision-card.entering > * {
-  animation: card-content-enter var(--arrive-ms) var(--arrive) both;
-}
-.review-page .decision-card.entering > :nth-child(n + 2) {
-  animation-delay: 40ms;
+  animation: card-content-enter var(--arrive-ms) var(--arrive);
 }
 @keyframes card-content-enter {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
