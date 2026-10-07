@@ -15,11 +15,6 @@ from typing import Any, Sequence, TypeVar
 from packs.ingestion.primitives.deep_context_v2.text_similarity import jaccard, shingles
 
 NEARDUP_THRESHOLD = 0.6
-# Runaway backstops, not editorial limits: nothing on the real corpus reaches them.
-MAX_TOPICS = 1000
-MAX_NOTABLE_EVENTS = 100
-MAX_SHARED_CONTEXT = 100
-STATUS_RANK = {"current": 2, "past": 1, "unknown": 0}
 
 _T = TypeVar("_T")
 
@@ -84,36 +79,34 @@ class SynthesizedFacts:
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> SynthesizedFacts:
-        """Parse one strict-schema answer; every key is present with its schema type."""
-        employers = []
+        """One strict-schema answer. The schema guarantees every key and its type; nothing is coerced."""
+        employers: list[EmployerFact] = []
         for value in payload["employers"]:
-            employers.append(EmployerFact(str(value["name"]), str(value["role"]), str(value["status"])))
-        events = []
+            employers.append(EmployerFact(value["name"], value["role"], value["status"]))
+        events: list[NotableEvent] = []
         for value in payload["notable_events"]:
-            events.append(NotableEvent(str(value["date"]), str(value["summary"])))
-        shared = []
+            events.append(NotableEvent(value["date"], value["summary"]))
+        shared: list[SharedContextFact] = []
         for value in payload["shared_context"]:
-            shared.append(SharedContextFact(str(value["overlap"]), str(value["detail"]), str(value["evidence"])))
+            shared.append(SharedContextFact(value["overlap"], value["detail"], value["evidence"]))
         owned = payload["owned_identifiers"]
         return cls(
-            canonical_name=str(payload["canonical_name"]),
-            aliases=_strings(payload["aliases"]),
+            canonical_name=payload["canonical_name"],
+            aliases=tuple(payload["aliases"]),
             employers=tuple(employers),
-            title=str(payload["title"]),
-            school=str(payload["school"]),
-            field_of_study=str(payload["field_of_study"]),
-            location=str(payload["location"]),
-            relationship_to_owner=str(payload["relationship_to_owner"]),
-            relationship_category=str(payload["relationship_category"]),
-            topics=_strings(payload["topics"]),
+            title=payload["title"],
+            school=payload["school"],
+            field_of_study=payload["field_of_study"],
+            location=payload["location"],
+            relationship_to_owner=payload["relationship_to_owner"],
+            relationship_category=payload["relationship_category"],
+            topics=tuple(payload["topics"]),
             notable_events=tuple(events),
-            identifiers=_strings(payload["identifiers"]),
-            owned_identifiers=OwnedIdentifiers(
-                _strings(owned["emails"]), _strings(owned["phones"]), _strings(owned["urls"])
-            ),
+            identifiers=tuple(payload["identifiers"]),
+            owned_identifiers=OwnedIdentifiers(tuple(owned["emails"]), tuple(owned["phones"]), tuple(owned["urls"])),
             shared_context=tuple(shared),
-            confidence=float(payload["confidence"]),
-            is_owner=bool(payload["is_owner"]),
+            confidence=payload["confidence"],
+            is_owner=payload["is_owner"],
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -145,13 +138,6 @@ class SynthesizedFacts:
             "confidence": self.confidence,
             "is_owner": self.is_owner,
         }
-
-
-def _strings(values: list[object]) -> tuple[str, ...]:
-    items = []
-    for value in values:
-        items.append(str(value))
-    return tuple(items)
 
 
 def _unique(values: list[str]) -> tuple[str, ...]:
@@ -230,23 +216,17 @@ def collapse(facts: list[SynthesizedFacts]) -> SynthesizedFacts:
     if names:
         canonical = Counter(names).most_common(1)[0][0]  # majority; a tie goes to the first seen
 
-    employers: dict[str, EmployerFact] = {}
+    # Batches arrive newest first. The first time an employer name appears, that batch's role and
+    # status are kept: the newest view of each employer wins, and the list reads newest first.
+    employers: list[EmployerFact] = []
+    employer_names: set[str] = set()
     for fact in facts:
         for employer in fact.employers:
             name = employer.name.strip()
-            if not name:
+            if not name or name.lower() in employer_names:
                 continue
-            key = name.lower()
-            candidate = EmployerFact(name, employer.role.strip(), employer.status or "unknown")
-            incumbent = employers.get(key)
-            if incumbent is None:
-                employers[key] = candidate
-                continue
-            # Status only upgrades toward "current"; role keeps the first non-empty value.
-            status = incumbent.status
-            if STATUS_RANK.get(candidate.status, 0) > STATUS_RANK.get(incumbent.status, 0):
-                status = candidate.status
-            employers[key] = EmployerFact(incumbent.name, incumbent.role or candidate.role, status)
+            employer_names.add(name.lower())
+            employers.append(EmployerFact(name, employer.role.strip(), employer.status))
 
     aliases: list[str] = []
     owned: dict[str, list[str]] = {"emails": [], "phones": [], "urls": []}
@@ -318,18 +298,18 @@ def collapse(facts: list[SynthesizedFacts]) -> SynthesizedFacts:
     return SynthesizedFacts(
         canonical_name=canonical,
         aliases=tuple(aliases),
-        employers=tuple(employers.values()),
+        employers=tuple(employers),
         title=_best_scalar(facts, "title"),
         school=_best_scalar(facts, "school"),
         field_of_study=_best_scalar(facts, "field_of_study"),
         location=_best_scalar(facts, "location"),
         relationship_to_owner=relationship,
         relationship_category=category,
-        topics=tuple(topics[:MAX_TOPICS]),
-        notable_events=tuple(events[:MAX_NOTABLE_EVENTS]),
+        topics=tuple(topics),
+        notable_events=tuple(events),
         identifiers=_unique(identifiers),
         owned_identifiers=OwnedIdentifiers(tuple(owned["emails"]), tuple(owned["phones"]), tuple(owned["urls"])),
-        shared_context=tuple(contexts[:MAX_SHARED_CONTEXT]),
+        shared_context=tuple(contexts),
         confidence=confidence,
         is_owner=is_owner,
     )

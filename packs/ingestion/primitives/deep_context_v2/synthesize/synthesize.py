@@ -96,11 +96,11 @@ class Synthesize(Node):
         """Every bundle whose facts row is absent or carries another fingerprint."""
         todo: list[Work] = []
         for row in queries.bundles_with_facts_fingerprint(self.conn):
-            bundle: CollectionBundle = CollectionBundle.from_payload(json.loads(row["payload_json"]))
+            bundle: CollectionBundle = CollectionBundle.from_payload(json.loads(row.payload_json))
             prompts: tuple[str, ...] = batch_prompts(bundle)
             fingerprint: str = input_fingerprint(prompts, self.prompt, self.config)
-            if fingerprint != row["done"]:
-                todo.append(Work(row["candidate_id"], prompts, fingerprint))
+            if fingerprint != row.facts_fingerprint:
+                todo.append(Work(row.candidate_id, prompts, fingerprint))
         return todo
 
     def estimate(self) -> dict[str, object]:
@@ -143,7 +143,7 @@ class Synthesize(Node):
         """All candidates in flight at once (the client holds the concurrency limit); each row is
         committed as its candidate finishes, so a stopped run keeps what it paid for."""
         async with OpenAIResponsesCaller(self.config) as caller:
-            tasks: list[asyncio.Task[tuple[Work, dict[str, object] | None]]] = []
+            tasks: list[asyncio.Task[tuple[Work, SynthesizedFacts | None]]] = []
             for item in todo:
                 tasks.append(asyncio.create_task(self._guarded(caller, item)))
             written: int = 0
@@ -153,13 +153,13 @@ class Synthesize(Node):
                 if facts is None:
                     failed += 1
                     continue
-                queries.upsert_facts(self.conn, item.candidate_id, json.dumps(facts, ensure_ascii=False),
+                queries.upsert_facts(self.conn, item.candidate_id, json.dumps(facts.to_payload(), ensure_ascii=False),
                                      item.fingerprint, self.config.model, self.config.effort, now_iso())
                 self.conn.commit()
                 written += 1
             return written, failed
 
-    async def _guarded(self, caller: OpenAIResponsesCaller, item: Work) -> tuple[Work, dict[str, object] | None]:
+    async def _guarded(self, caller: OpenAIResponsesCaller, item: Work) -> tuple[Work, SynthesizedFacts | None]:
         """One candidate's failure is that candidate's: print it, write nothing, let the others finish."""
         try:
             return item, await self._facts(caller, item)
@@ -167,7 +167,7 @@ class Synthesize(Node):
             print(f"failed one candidate: {type(exc).__name__}: {exc}")  # ids are emails; never printed
             return item, None
 
-    async def _facts(self, caller: OpenAIResponsesCaller, item: Work) -> dict[str, object]:
+    async def _facts(self, caller: OpenAIResponsesCaller, item: Work) -> SynthesizedFacts:
         """One strict-schema call per batch, all at once. One batch: its answer is the facts.
         Several: the answers are collapsed into one facts object."""
         calls: list[Awaitable[dict[str, object]]] = []
@@ -179,8 +179,8 @@ class Synthesize(Node):
         for payload in responses:
             chunks.append(SynthesizedFacts.from_payload(payload))
         if len(chunks) == 1:
-            return chunks[0].to_payload()
-        return collapse(chunks).to_payload()
+            return chunks[0]
+        return collapse(chunks)
 
 
 def main(argv: list[str] | None = None) -> int:

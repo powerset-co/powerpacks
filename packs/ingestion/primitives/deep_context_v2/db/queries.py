@@ -9,6 +9,7 @@ Created: 2026-10-06
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import Person
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind
@@ -113,24 +114,25 @@ def candidates_to_collect(conn: sqlite3.Connection, limit: int) -> list[Person]:
         "SELECT candidate_id, display_name FROM candidates WHERE is_owner = 0 ORDER BY candidate_id LIMIT ?",
         (limit,),
     ):
-        person = Person(row["candidate_id"], row["display_name"])
+        candidate_id: str = row["candidate_id"]
+        emails: list[str] = []
+        phones: list[str] = []
         for identifier in conn.execute(
             "SELECT kind, normalized_value FROM candidate_identifiers WHERE candidate_id = ? ORDER BY kind, normalized_value",
-            (person.person_id,),
+            (candidate_id,),
         ):
             kind: str = identifier["kind"]
             if kind == IdentifierKind.EMAIL:
-                person.emails.append(identifier["normalized_value"])
+                emails.append(identifier["normalized_value"])
             elif kind == IdentifierKind.PHONE:
-                person.phones.append(identifier["normalized_value"])
+                phones.append(identifier["normalized_value"])
             else:
                 print(f"unknown identifier kind {kind!r}, skipped")  # the DDL allows only the two above
                 continue
-        for source in conn.execute(
-            "SELECT source FROM candidate_sources WHERE candidate_id = ? ORDER BY source", (person.person_id,)
-        ):
-            person.source_channels.append(source["source"])
-        people.append(person)
+        channels: list[str] = []
+        for source in conn.execute("SELECT source FROM candidate_sources WHERE candidate_id = ? ORDER BY source", (candidate_id,)):
+            channels.append(source["source"])
+        people.append(Person(candidate_id, row["display_name"], tuple(emails), tuple(phones), tuple(channels)))
     return people
 
 
@@ -150,13 +152,22 @@ def count_bundles(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM bundles").fetchone()[0]
 
 
-def bundles_with_facts_fingerprint(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Every bundle with the fingerprint of the facts row it has, or NULL when it has none yet.
-    Columns: candidate_id, payload_json, done."""
-    return conn.execute(
+@dataclass(frozen=True)
+class BundleWithFacts:
+    candidate_id: str
+    payload_json: str
+    facts_fingerprint: str | None  # None = no facts row yet
+
+
+def bundles_with_facts_fingerprint(conn: sqlite3.Connection) -> list[BundleWithFacts]:
+    """Every bundle with the fingerprint of the facts row it has, or None when it has none yet."""
+    rows: list[BundleWithFacts] = []
+    for row in conn.execute(
         "SELECT b.candidate_id, b.payload_json, f.input_fingerprint AS done "
         "FROM bundles b LEFT JOIN facts f USING (candidate_id) ORDER BY b.candidate_id"
-    ).fetchall()
+    ):
+        rows.append(BundleWithFacts(row["candidate_id"], row["payload_json"], row["done"]))
+    return rows
 
 
 def upsert_facts(conn: sqlite3.Connection, candidate_id: str, facts_json: str, fingerprint: str,

@@ -6,20 +6,20 @@ Created: 2026-10-06
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 
-@dataclass
+@dataclass(frozen=True)
 class Person:
     """A candidate as the message readers take it: its id, name, lookup keys and channels."""
 
     person_id: str
     full_name: str
-    emails: list[str] = field(default_factory=list)
-    phones: list[str] = field(default_factory=list)
-    source_channels: list[str] = field(default_factory=list)
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
+    source_channels: tuple[str, ...]
 
 
 class MessageChannel(StrEnum):

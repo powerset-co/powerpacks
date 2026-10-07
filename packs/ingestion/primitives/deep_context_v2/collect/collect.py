@@ -74,7 +74,7 @@ class Collect(Node):
             bundle: CollectionBundle = CollectionBundle.of(
                 person,
                 messages=messages,
-                groups=sources.imessage_groups(person),                  # names of small iMessage groups shared
+                groups=sources.imessage_groups(person),                  # names of every iMessage group shared, any size: context
                 thread_participants=sources.thread_participants(person),  # who else was on the email threads
                 available=available,
             )

@@ -104,7 +104,6 @@ class ContextSources:
 
     def _read_gmail(self, person: Person) -> list[MessageEntry]:
         """Signature-aware email bodies per address, deduplicated across the candidate's addresses."""
-        seen: set[tuple[str, str]] = set()
         out: list[MessageEntry] = []
         for email in person.emails:
             entries = _read_source(
@@ -115,11 +114,6 @@ class ContextSources:
                 text = entry.snippet.strip()
                 if not text:
                     continue
-                # The same message can arrive once per address the candidate owns.
-                key = (entry.subject.lower(), text[:80].lower())
-                if key in seen:
-                    continue
-                seen.add(key)
                 out.append(
                     MessageEntry.of(
                         MessageChannel.GMAIL, entry.at, from_me=entry.from_role == "me", text=text, subject=entry.subject
