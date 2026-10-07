@@ -30,6 +30,22 @@ def _batches(rows: list, size: int = BATCH) -> list[list]:
     return chunks
 
 
+# ---- owner
+
+
+def upsert_owner(conn: sqlite3.Connection, payload_json: str, fingerprint: str, now: str) -> None:
+    conn.execute(
+        "INSERT INTO owner (owner_key, payload_json, content_fingerprint, projected_at) VALUES ('owner', ?, ?, ?) "
+        "ON CONFLICT (owner_key) DO UPDATE SET payload_json = excluded.payload_json, "
+        "content_fingerprint = excluded.content_fingerprint, projected_at = excluded.projected_at",
+        (payload_json, fingerprint, now),
+    )
+
+
+def owner_payload_json(conn: sqlite3.Connection) -> str:
+    return conn.execute("SELECT payload_json FROM owner WHERE owner_key = 'owner'").fetchone()["payload_json"]
+
+
 # ---- 01 import
 
 

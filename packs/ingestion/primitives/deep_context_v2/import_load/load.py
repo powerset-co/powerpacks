@@ -7,7 +7,7 @@ office@ or billing@) are dropped here; every other keep rule ran in the per-sour
 owner.json fills the `owner` row and flags the operator's own candidates.
 
 Nothing is deleted. A candidate row upserts on its id; names, identifiers and sources insert on
-their primary keys and are ignored when present. A rebuild is rm of the store and a rerun.
+their primary keys and are ignored when present. A rebuild is the store moved to .bkup and a rerun.
 
 Created: 2026-10-06
 """

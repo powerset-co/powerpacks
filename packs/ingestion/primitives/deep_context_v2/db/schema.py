@@ -142,7 +142,7 @@ CREATE INDEX candidate_sources_by_source ON candidate_sources(source, candidate_
 CREATE TABLE connections (
   linkedin_url TEXT NOT NULL PRIMARY KEY,
   name TEXT NOT NULL,
-  email TEXT,
+  email TEXT,                                      -- NULL = the export had none
   position TEXT NOT NULL,
   company TEXT NOT NULL,
   imported_at TEXT NOT NULL
@@ -169,7 +169,7 @@ CREATE TABLE candidate_parent (
   candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id),
   parent_id TEXT NOT NULL,
   reason TEXT NOT NULL CHECK (reason IN {_in(MergeReason)}),
-  verdict_ref TEXT,
+  verdict_ref TEXT,                                -- NULL on free-merge and singleton rows
   created_at TEXT NOT NULL
 );
 CREATE INDEX candidate_parent_by_candidate ON candidate_parent(candidate_id, seq);
@@ -179,7 +179,7 @@ CREATE TABLE pair_verdicts (
   candidate_a TEXT NOT NULL REFERENCES candidates(candidate_id),
   candidate_b TEXT NOT NULL REFERENCES candidates(candidate_id),
   signature TEXT NOT NULL,
-  same_person INTEGER CHECK (same_person IN (0, 1)),
+  same_person INTEGER CHECK (same_person IN (0, 1)),  -- NULL = Sol said uncertain
   confidence REAL NOT NULL,
   reason TEXT NOT NULL,
   judged_at TEXT NOT NULL,
@@ -193,8 +193,8 @@ CREATE TABLE worth (
   worth TEXT NOT NULL CHECK (worth IN {_in(Worth)}),
   decided_by TEXT NOT NULL CHECK (decided_by IN {_in(DecidedBy)}),
   reason TEXT NOT NULL,
-  labels_json TEXT CHECK (labels_json IS NULL OR json_valid(labels_json)),
-  input_fingerprint TEXT,
+  labels_json TEXT CHECK (labels_json IS NULL OR json_valid(labels_json)),  -- NULL on a human row
+  input_fingerprint TEXT,                          -- NULL on a human row; a machine row must carry it
   created_at TEXT NOT NULL,
   CHECK (decided_by = 'human' OR input_fingerprint IS NOT NULL)
 );
@@ -220,7 +220,7 @@ CREATE TABLE research (
   handle TEXT NOT NULL PRIMARY KEY,
   parent_id TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN {_in(ResearchStatus)}),
-  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),  -- NULL unless status is complete, or a usable no_match card
   researched_at TEXT NOT NULL,
   CHECK (status <> 'complete' OR result_json IS NOT NULL)
 );

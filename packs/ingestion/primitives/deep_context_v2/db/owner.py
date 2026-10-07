@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
+from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 
 
@@ -85,21 +86,14 @@ def owner_from_payload(payload: dict[str, object]) -> OwnerProfile:
 
 def load_owner(conn: sqlite3.Connection, owner_json: Path) -> OwnerProfile:
     """Project owner.json into the `owner` row. The file is the operator's own, written at setup."""
-    raw = owner_json.read_bytes()
-    payload = json.loads(raw)
-    owner = owner_from_payload(payload)
-    conn.execute(
-        "INSERT INTO owner (owner_key, payload_json, content_fingerprint, projected_at) VALUES ('owner', ?, ?, ?) "
-        "ON CONFLICT (owner_key) DO UPDATE SET payload_json = excluded.payload_json, "
-        "content_fingerprint = excluded.content_fingerprint, projected_at = excluded.projected_at",
-        (json.dumps(payload, ensure_ascii=False, sort_keys=True), hashlib.sha256(raw).hexdigest(), now_iso()),
-    )
-    return owner
+    raw: bytes = owner_json.read_bytes()
+    payload: dict[str, object] = json.loads(raw)
+    queries.upsert_owner(conn, json.dumps(payload, ensure_ascii=False, sort_keys=True), hashlib.sha256(raw).hexdigest(), now_iso())
+    return owner_from_payload(payload)
 
 
 def read_owner(conn: sqlite3.Connection) -> OwnerProfile:
-    row = conn.execute("SELECT payload_json FROM owner WHERE owner_key = 'owner'").fetchone()
-    return owner_from_payload(json.loads(row["payload_json"]))
+    return owner_from_payload(json.loads(queries.owner_payload_json(conn)))
 
 
 def _span(start: str, end: str) -> str:
