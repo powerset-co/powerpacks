@@ -28,8 +28,8 @@ imports + owner.json -> collect -> synthesize -> dedupe -> worth -> enrich -> pe
 - **Nothing is approved.** Every paid stage prints its estimate and runs. The install's spend
   rule always says yes at these sizes, so the pipeline never stops to ask about money. Do not ask
   either, and do not call the estimate a cap.
-- **The user sees one thing: the Check LinkedIn page.** Everything else is yours to run, watch,
-  fix and rerun. Say what happens in one line when it changes; never paste command output.
+- **Keep progress visible.** Maintain the task checklist below and open the Check LinkedIn
+  page when ready. Say what happens in one line when it changes; never paste command output.
 - **Full Disk Access.** iMessage collection reads `chat.db`, which an agent's shell may not be
   allowed to read. The tmux window below is the user's own terminal session, so it has their grant.
 - Small iMessage group bodies are included on every run under standing owner authorization;
@@ -51,6 +51,27 @@ bin/deep-context-v2 <stage>   # one stage alone: load collect synthesize dedupe 
 Pass `--operator-id <id>` to `run` and `finish` when the account's operator id is known
 (`.codex/AGENTS.md`); it keys the search index. Every stage keys its work, so running a command
 again continues from what is stored and spends nothing on what is done.
+
+## Visible progress
+
+Before a full run, create these tasks in the harness's visible task/plan tool:
+
+1. Confirm owner profile
+2. Load imported contacts
+3. Collect messages and emails
+4. Build dossiers
+5. Merge duplicate people
+6. Assess network worth
+7. Enrich identities
+8. Export people and build the search index
+9. Review LinkedIn matches
+10. Update the index with reviewed matches
+
+This chat keeps the tasks current from the worker's stage output and manifests.
+Mark cached/no-op steps complete rather than dropping them; leave failed steps
+unfinished. The first index build and LinkedIn review may overlap: starting a
+background build does not complete the index task. Mark the final task complete
+only after `finish` succeeds. For a single-stage request, show only its task.
 
 ## How to run it
 
