@@ -40,7 +40,32 @@ from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposal
 from packs.ingestion.primitives.deep_context_v2.node import Node
 
 PRE_MATCH_VERSION = "pre-match-email-2026-10-07"  # the fingerprint of an email-confirmed pre-match
+EMAIL_CONFIRMED_REASON = "A LinkedIn connection with the family's name shares one of its email addresses."
 
+
+def confirm_by_email(conn: sqlite3.Connection, found: Proposals, profiles: Profiles, now: str,
+                     counts: dict[str, int]) -> list[ParentRow]:
+    """Step 4a: every family whose pre-match a shared email confirmed takes that LinkedIn without a judge,
+    once its profile names the member. Writes the verdict and parent rows; returns the parent rows."""
+    parents: list[ParentRow] = []
+    counts["email_confirmed"] = 0
+    counts["email_confirm_no_profile"] = 0
+    by_parent: dict[str, Family] = {}
+    for family in found.families:
+        by_parent[family.parent_id] = family
+    for parent_id, url in sorted(found.by_email.items()):
+        profile: Profile | None = profiles.found.get(url)
+        if profile is None:
+            counts["email_confirm_no_profile"] += 1
+            continue
+        family: Family = by_parent[parent_id]
+        fingerprint: str = judgment_fingerprint(family, [(url, Origin.LINKEDIN_NETWORK.value, profile.fetched_at)],
+                                                PRE_MATCH_VERSION)
+        parents.extend(confirm(conn, family, url, profile.member_id, Origin.LINKEDIN_NETWORK.value,
+                               fingerprint, None, EMAIL_CONFIRMED_REASON, now))
+        counts["email_confirmed"] += 1
+    append_parent_rows(conn, parents)
+    return parents
 
 class Enrich(Node):
     name = "enrich"
@@ -72,24 +97,7 @@ class Enrich(Node):
         counts["profiles_fetched"] = profiles.fetched
         # Step 4a: an email-confirmed pre-match is confirmed without the judge, once its profile names the member.
         now: str = now_iso()
-        parents: list[ParentRow] = []
-        counts["email_confirmed"] = 0
-        counts["email_confirm_no_profile"] = 0
-        by_parent: dict[str, Family] = {}
-        for family in found.families:
-            by_parent[family.parent_id] = family
-        for parent_id, url in sorted(found.by_email.items()):
-            profile: Profile | None = profiles.found.get(url)
-            if profile is None:
-                counts["email_confirm_no_profile"] += 1
-                continue
-            family: Family = by_parent[parent_id]
-            fingerprint: str = judgment_fingerprint(family, [(url, Origin.LINKEDIN_NETWORK.value, profile.fetched_at)],
-                                                    PRE_MATCH_VERSION)
-            parents.extend(confirm(self.conn, family, url, profile.member_id, Origin.LINKEDIN_NETWORK.value,
-                                   fingerprint, now))
-            counts["email_confirmed"] += 1
-        append_parent_rows(self.conn, parents)
+        parents: list[ParentRow] = confirm_by_email(self.conn, found, profiles, now, counts)
         if parents:
             self.conn.commit()
             found = proposals.derive(self.conn)  # the confirmed families are on li: now and do not enter the judge

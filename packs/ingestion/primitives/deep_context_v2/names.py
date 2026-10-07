@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, replace
+from functools import lru_cache
 
 from nameparser import Lexicon, Parser
 
@@ -74,6 +75,7 @@ def _clean(text: str) -> str:
     return " ".join(_DROPPED_MARKS.sub("", folded).split())
 
 
+@lru_cache(maxsize=None)
 def parse_name(text: str) -> Name:
     # An email address saved as the name is not a name.
     """One written name read into a Name: given names (with a parenthetical alternate), middle, family, generation."""

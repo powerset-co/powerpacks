@@ -78,9 +78,15 @@ class Worth(Node):
         super().__init__(conn, data_root)
         self.limit = limit
         self.cache_dir = data_root / JEV_CACHE_DIR
+        self._families: list[Family] | None = None  # built once; estimate and execute both read it
 
     def families(self) -> list[Family]:
         """Every family with its evidence fingerprint, its pre-match, and the request JEV would answer."""
+        if self._families is None:
+            self._families = self._build_families()
+        return self._families
+
+    def _build_families(self) -> list[Family]:
         # Group the candidates with facts by family; read the rest of the evidence once.
         by_family: dict[str, list[MemberFacts]] = {}
         for member in queries.members_with_facts(self.conn):

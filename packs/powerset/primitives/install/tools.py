@@ -48,6 +48,9 @@ class ImportTools:
         ]))
         packages = []
         installed = {}
+        # deep-context runs its pipeline in a tmux session under a second agent, on every Mac.
+        if not shutil.which("tmux"):
+            packages.append(("tmux", ["tmux"]))
         if ImportSource.GMAIL in self.sources and not shutil.which("gcloud"):
             packages.append(("gcloud", ["--cask", "gcloud-cli"]))
         if {ImportSource.GMAIL, ImportSource.LINKEDIN} & set(self.sources):

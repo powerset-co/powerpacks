@@ -239,6 +239,11 @@ PY
 # $update-powerpacks is the single command that also brings the binary current
 # (it downloads a prebuilt binary; a no-op when already at the pin). Best-effort:
 # a download/network failure or unsupported platform must not fail the update.
+# deep-context runs its pipeline in a tmux session under a second agent; an install that predates
+# that requirement gets tmux here. Homebrew only; a Mac without it is told by the deep-context skill.
+if ! command -v tmux >/dev/null 2>&1 && command -v brew >/dev/null 2>&1; then
+  brew install tmux >/dev/null 2>&1 || echo "tmux install failed; run: brew install tmux" >&2
+fi
 wacli_refresh="skipped"
 wacli_version="-"
 wacli_primitive="$REPO/packs/ingestion/primitives/discover/messages/whatsapp_wacli.py"
