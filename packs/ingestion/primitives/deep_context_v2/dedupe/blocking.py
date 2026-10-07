@@ -71,15 +71,13 @@ def name_keys(name: str) -> set[str]:
     return keys
 
 
-def block(candidate_ids: list[str], names: dict[str, list[str]], identifiers: dict[str, list[Identifier]]) -> Blocking:
-    """Bucket every given candidate by its names and email handle; pair every two members of a bucket."""
+def block(candidate_ids: list[str], names: dict[str, str], identifiers: dict[str, list[Identifier]]) -> Blocking:
+    """Bucket every given candidate by its name and email handle; pair every two members of a bucket."""
     # Fill the buckets.
     buckets: dict[str, list[str]] = {}
     bucketed: int = 0
     for candidate_id in candidate_ids:
-        keys: set[str] = set()
-        for name in names[candidate_id]:
-            keys.update(name_keys(name))
+        keys: set[str] = name_keys(names[candidate_id])
         for identifier in identifiers[candidate_id]:
             if identifier.kind == IdentifierKind.EMAIL:
                 keys.add("local:" + identifier.normalized_value.split("@", 1)[0])

@@ -3,8 +3,8 @@
 In order:
 
 1. Block: every candidate with facts goes into name buckets and an email-handle bucket (blocking.py).
-2. Gate: a blocked pair goes on only when every written name of both could be one person's
-   (names.source_names_can_match). A recall gate for the judge, not the identity decision.
+2. Gate: a blocked pair goes on only when the two names could be one person's
+   (names.written_names_can_match). A recall gate for the judge, not the identity decision.
 3. Skip pairs already in one family, and pairs with any saved verdict: a pair is judged once, ever.
 4. Judge: one gpt-6.1-sol call per remaining pair: same, different or uncertain, saved in
    pair_verdicts as it arrives. A failed pair is counted and the run fails before any parent row.
@@ -37,13 +37,14 @@ import tiktoken
 from packs.indexing.lib.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.deep_context_v2.components import connected_components
 from packs.ingestion.primitives.deep_context_v2.db import queries_dedupe as queries
+from packs.ingestion.primitives.deep_context_v2.db.queries import display_names
 from packs.ingestion.primitives.deep_context_v2.db.owner import read_owner
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import Identifier, ParentRow
 from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, MINTED_PARENT_HEX, MINTED_PARENT_PREFIX, MergeReason
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.dedupe import judge
 from packs.ingestion.primitives.deep_context_v2.dedupe.blocking import Blocking, block
-from packs.ingestion.primitives.deep_context_v2.names import names_for_matching, source_names_can_match
+from packs.ingestion.primitives.deep_context_v2.names import names_for_matching, written_names_can_match
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig
 
@@ -58,7 +59,6 @@ class Plan:
     already_joined: int
     already_judged: int
     todo: list[tuple[str, str, str]]          # (a, b, signature) for Sol
-    current: dict[tuple[str, str], int | None]  # every saved verdict: (a, b) -> same_person
 
 
 class Dedupe(Node):
@@ -73,13 +73,13 @@ class Dedupe(Node):
         self.identifiers: dict[str, list[Identifier]] = queries.candidate_identifiers(conn)
         self.fingerprints: dict[str, str] = queries.facts_fingerprints(conn)
         self.parents: dict[str, str] = queries.current_parents(conn)
-        self.written: dict[str, str] = queries.display_names(conn)
+        self.written: dict[str, str] = display_names(conn)
         # The name each candidate is matched on: its written name, or the dossier's when that only
-        # extends a one-word written name. One name per candidate, as a list for the blocking and gate.
-        self.names: dict[str, list[str]] = {}
+        # extends a one-word written name.
+        self.names: dict[str, str] = {}
         dossier: dict[str, str] = queries.dossier_names(conn)
         for candidate_id, written in self.written.items():
-            self.names[candidate_id] = [names_for_matching(written, dossier.get(candidate_id, ""))]
+            self.names[candidate_id] = names_for_matching(written, dossier.get(candidate_id, ""))
         # Every saved verdict, by pair: a pair is judged once, ever. Its signature records what Sol saw
         # and is the reference any parent row carries.
         self.current: dict[tuple[str, str], int | None] = {}
@@ -107,8 +107,8 @@ class Dedupe(Node):
         skipped: int = 0
         todo: list[tuple[str, str, str]] = []
         for a, b in blocking.pairs:
-            # Rule 2: every written name of both must be able to be one person's.
-            if not source_names_can_match(self.names[a] + self.names[b]):
+            # Rule 2: the two names must be able to be one person's.
+            if not written_names_can_match(self.names[a], self.names[b]):
                 continue
             gated += 1
             # Rule 3: already one family, or already judged.
@@ -121,7 +121,7 @@ class Dedupe(Node):
             signature: str = self.signature(a, b)
             self.signatures[(a, b)] = signature
             todo.append((a, b, signature))
-        return Plan(blocking, gated, joined, skipped, todo[: self.limit], self.current)
+        return Plan(blocking, gated, joined, skipped, todo[: self.limit])
 
     def prompts(self, todo: list[tuple[str, str, str]]) -> list[str]:
         """The user prompt of each pair going to Sol, in order."""
@@ -134,8 +134,8 @@ class Dedupe(Node):
         owner_name: str = read_owner(self.conn).name
         rendered: list[str] = []
         for a, b, _ in todo:
-            first = judge.side_of(self.written[a], [self.written[a]], self.identifiers[a], facts[a], bundles[a])
-            second = judge.side_of(self.written[b], [self.written[b]], self.identifiers[b], facts[b], bundles[b])
+            first = judge.side_of(self.written[a], self.identifiers[a], facts[a], bundles[a])
+            second = judge.side_of(self.written[b], self.identifiers[b], facts[b], bundles[b])
             rendered.append(judge.user_prompt(owner_name, first, second))
         return rendered
 
@@ -167,8 +167,12 @@ class Dedupe(Node):
         failed: int = len(plan.todo) - len(answers)
         if failed:
             raise RuntimeError(f"{failed} of {len(plan.todo)} pairs failed; {len(answers)} verdicts saved, rerun to redo the rest")
-        verdicts: dict[tuple[str, str], int | None] = dict(plan.current)
-        verdicts.update(answers)
+        # Every verdict that stands: the ones saved before this run and the ones just paid for.
+        verdicts: dict[tuple[str, str], int | None] = {}
+        for pair, same_person in self.current.items():
+            verdicts[pair] = same_person
+        for pair, same_person in answers.items():
+            verdicts[pair] = same_person
         # Rule 5: join families over the same verdicts; rule 6: a parent of their own for everyone else.
         rows, counts = self.merge(verdicts)
         placed: set[str] = set(self.parents)
@@ -302,8 +306,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(node.estimate(), indent=2))
         return 0
     manifest = node.run()
-    print(manifest.status, " ".join(f"{key}={value}" for key, value in manifest.counts.items()), manifest.error or "")
-    return 0 if manifest.status == "completed" else 1
+    print(manifest.status, manifest.counts, manifest.error or "")
+    if manifest.status == "completed":
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

@@ -8,9 +8,8 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
+from packs.ingestion.primitives.deep_context_v2.db.queries import BATCH, _batches
 from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy
-
-BATCH = 500
 
 # Row shape, in column order, for append_worth.
 WorthRow = tuple[str, str, str, str, str, str, str]  # candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at
@@ -24,7 +23,6 @@ class MemberFacts:
     candidate_id: str
     family_key: str
     facts_json: str
-    facts_fingerprint: str
     synthesized_at: str
 
 
@@ -38,6 +36,15 @@ class ChannelCount:
     messages: int
     first_at: str | None  # None = no message on this channel and direction carried a timestamp
     last_at: str | None
+
+
+@dataclass(frozen=True)
+class BundleCounts:
+    """What worth reads from the bundles: message counts per channel and direction, and how many
+    group chats each candidate's bundle names. No message text leaves the store."""
+
+    channels: list[ChannelCount]
+    groups: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -55,20 +62,11 @@ def members_with_facts(conn: sqlite3.Connection) -> list[MemberFacts]:
     members: list[MemberFacts] = []
     for row in conn.execute(
         "SELECT f.candidate_id, COALESCE(p.parent_id, f.candidate_id) AS family_key, f.facts_json, "
-        "f.input_fingerprint, f.synthesized_at FROM facts f LEFT JOIN current_parent p USING (candidate_id) "
+        "f.synthesized_at FROM facts f LEFT JOIN current_parent p USING (candidate_id) "
         "ORDER BY family_key, f.candidate_id"
     ):
-        members.append(MemberFacts(row["candidate_id"], row["family_key"], row["facts_json"],
-                                   row["input_fingerprint"], row["synthesized_at"]))
+        members.append(MemberFacts(row["candidate_id"], row["family_key"], row["facts_json"], row["synthesized_at"]))
     return members
-
-
-def names_by_candidate(conn: sqlite3.Connection) -> dict[str, str]:
-    """candidate_id -> its one written name."""
-    names: dict[str, str] = {}
-    for row in conn.execute("SELECT candidate_id, display_name FROM candidates"):
-        names[row["candidate_id"]] = row["display_name"]
-    return names
 
 
 def sources_by_candidate(conn: sqlite3.Connection) -> dict[str, list[str]]:
@@ -78,16 +76,19 @@ def sources_by_candidate(conn: sqlite3.Connection) -> dict[str, list[str]]:
     return sources
 
 
-def channel_counts(conn: sqlite3.Connection) -> list[ChannelCount]:
-    """Message counts per candidate, channel and direction, with the first and last timestamp. Only the
-    counts leave this function. (The node authorizer denies json_each, so the bundle is parsed here.)"""
+def bundle_counts(conn: sqlite3.Connection) -> BundleCounts:
+    """One pass over the bundles: message counts per candidate, channel and direction with the first and
+    last timestamp, and the group-chat count per candidate."""
     counts: list[ChannelCount] = []
+    groups: dict[str, int] = {}
     for row in conn.execute("SELECT candidate_id, payload_json FROM bundles ORDER BY candidate_id"):
         candidate_id: str = row["candidate_id"]
+        bundle: dict = json.loads(row["payload_json"])
+        groups[candidate_id] = len(bundle["groups"])
         messages: dict[tuple[str, str], int] = {}  # (channel, direction) -> messages
         first: dict[tuple[str, str], str] = {}
         last: dict[tuple[str, str], str] = {}
-        for message in json.loads(row["payload_json"])["messages"]:
+        for message in bundle["messages"]:
             key: tuple[str, str] = (message["channel"], message["direction"])
             messages[key] = messages.get(key, 0) + 1
             at: str = message["at"]
@@ -99,15 +100,7 @@ def channel_counts(conn: sqlite3.Connection) -> list[ChannelCount]:
                 last[key] = at
         for key in sorted(messages):
             counts.append(ChannelCount(candidate_id, key[0], key[1], messages[key], first.get(key), last.get(key)))
-    return counts
-
-
-def group_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """How many group chats each candidate's bundle names."""
-    groups: dict[str, int] = {}
-    for row in conn.execute("SELECT candidate_id, payload_json FROM bundles"):
-        groups[row["candidate_id"]] = len(json.loads(row["payload_json"])["groups"])
-    return groups
+    return BundleCounts(counts, groups)
 
 
 def all_connections(conn: sqlite3.Connection) -> list[Connection]:
@@ -131,9 +124,9 @@ def latest_machine_worth_fingerprints(conn: sqlite3.Connection) -> dict[str, str
 
 def append_worth(conn: sqlite3.Connection, rows: list[WorthRow]) -> None:
     """Worth is a ledger: every decision is a new row."""
-    for start in range(0, len(rows), BATCH):
+    for batch in _batches(rows, BATCH):
         conn.executemany(
             "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            rows[start:start + BATCH],
+            batch,
         )

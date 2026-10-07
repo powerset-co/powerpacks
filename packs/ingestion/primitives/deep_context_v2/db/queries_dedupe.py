@@ -36,13 +36,6 @@ def all_candidate_ids(conn: sqlite3.Connection) -> list[str]:
     return ids
 
 
-def display_names(conn: sqlite3.Connection) -> dict[str, str]:
-    names: dict[str, str] = {}
-    for row in conn.execute("SELECT candidate_id, display_name FROM candidates"):
-        names[row["candidate_id"]] = row["display_name"]
-    return names
-
-
 def dossier_names(conn: sqlite3.Connection) -> dict[str, str]:
     """candidate_id -> the canonical name in its facts, for every candidate with facts."""
     names: dict[str, str] = {}

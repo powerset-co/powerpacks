@@ -197,8 +197,10 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     conn = open_store(store_path(args.data_root))
     manifest = ImportLoad(conn, args.data_root, msgvault_db=args.msgvault_db).run()
-    print(manifest.status, " ".join(f"{key}={value}" for key, value in manifest.counts.items()), manifest.error or "")
-    return 0 if manifest.status == "completed" else 1
+    print(manifest.status, manifest.counts, manifest.error or "")
+    if manifest.status == "completed":
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

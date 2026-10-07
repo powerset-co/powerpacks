@@ -49,6 +49,14 @@ def owner_payload_json(conn: sqlite3.Connection) -> str:
 # ---- 01 import
 
 
+def display_names(conn: sqlite3.Connection) -> dict[str, str]:
+    """candidate_id -> its one written name."""
+    names: dict[str, str] = {}
+    for row in conn.execute("SELECT candidate_id, display_name FROM candidates"):
+        names[row["candidate_id"]] = row["display_name"]
+    return names
+
+
 def upsert_candidates(conn: sqlite3.Connection, rows: list[CandidateRow]) -> None:
     """A rerun overwrites the row."""
     for batch in _batches(rows):

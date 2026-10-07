@@ -189,15 +189,15 @@ def jaro(first: str, second: str) -> float:
     return (matches / len(first) + matches / len(second) + (matches - transpositions) / matches) / 3
 
 
-def jaro_winkler(first: str, second: str, prefix_weight: float = 0.1) -> float:
-    """Jaro-Winkler similarity with the standard four-character prefix cap."""
+def jaro_winkler(first: str, second: str) -> float:
+    """Jaro-Winkler similarity: Jaro, boosted for a shared prefix of up to four characters."""
     base: float = jaro(first, second)
     prefix: int = 0
     for left, right in zip(first, second):
         if left != right or prefix >= 4:
             break
         prefix += 1
-    return base + prefix * prefix_weight * (1 - base)
+    return base + prefix * 0.1 * (1 - base)
 
 
 def name_words(text: str) -> tuple[str, ...]:
@@ -222,11 +222,20 @@ def _is_full_name(words: tuple[str, ...]) -> bool:
 
 
 def _generations(words: tuple[str, ...]) -> set[str]:
+    """The jr/sr/iii words in a name."""
     found: set[str] = set()
     for word in words:
         if word in GENERATION_SUFFIXES:
             found.add(word)
     return found
+
+
+def _surname(words: tuple[str, ...]) -> str:
+    """The last word that is not a generation suffix: "alex smith jr" has the surname smith."""
+    for word in reversed(words):
+        if word not in GENERATION_SUFFIXES:
+            return word
+    return ""
 
 
 def _same_full_name(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
@@ -238,7 +247,7 @@ def _same_full_name(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
         return False
     if sorted(first) == sorted(second):
         return True
-    if first[0] != second[0] or first[-1] != second[-1]:
+    if first[0] != second[0] or _surname(first) != _surname(second):
         return False
     return _middle_names_agree(first[1:-1], second[1:-1])
 
@@ -271,22 +280,14 @@ def names_can_match(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
     # A one-word name is never paired by name: a first name alone could be anyone's (decided 2026-10-07).
     if len(first) < 2 or len(second) < 2:
         return False
-    return _word_forms_match(first[0], second[0]) and _surnames_match(first[-1], second[-1])
+    if _generations(first) != _generations(second):
+        return False
+    return _word_forms_match(first[0], second[0]) and _surnames_match(_surname(first), _surname(second))
 
 
-def source_names_can_match(names: list[str]) -> bool:
-    """Every written name has words and is compatible with every other one."""
-    words: list[tuple[str, ...]] = []
-    for name in names:
-        read: tuple[str, ...] = name_words(name)
-        if not read:
-            return False
-        words.append(read)
-    for index, left in enumerate(words):
-        for right in words[index + 1:]:
-            if not names_can_match(left, right):
-                return False
-    return bool(words)
+def written_names_can_match(first: str, second: str) -> bool:
+    """The gate on two candidates' names as written: read each into words, then `names_can_match`."""
+    return names_can_match(name_words(first), name_words(second))
 
 
 def names_for_matching(written: str, dossier_name: str) -> str:

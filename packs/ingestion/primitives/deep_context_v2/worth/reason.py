@@ -135,6 +135,7 @@ def _phrase(name: str, option: str, probability: float) -> str:
 
 
 def reason(answers: dict[str, Answer], decision: str) -> str:
+    """At most three phrases, strongest first, as one to three sentences grouped by how sure each is."""
     phrases: list[str] = []
     for name, option, probability in _supporting(answers, decision):
         phrase: str = _phrase(name, option, probability)
@@ -144,34 +145,26 @@ def reason(answers: dict[str, Answer], decision: str) -> str:
             break
     if not phrases:
         return "The combined signals give no clear explanation to single out."
-    # The specific outreach wording already covers the generic contact signal.
-    kept: list[str] = []
+    # Split each phrase into its certainty prefix ("little indication of ", ...) and the rest.
+    by_prefix: dict[str, list[str]] = {"": [], UNCERTAIN: [], SOME_UNCERTAINTY: [], LITTLE: []}
     for phrase in phrases:
-        covered: bool = (phrase.endswith("unsolicited contact")
-                         and phrase.replace("unsolicited contact", "unsolicited outreach or broadcasts") in phrases)
-        if not covered:
-            kept.append(phrase)
-    # Group by how sure the phrase is, then one sentence per group.
-    groups: dict[str, list[str]] = {}
-    for phrase in kept:
         prefix: str = ""
         for candidate in (LITTLE, UNCERTAIN, SOME_UNCERTAINTY):
             if phrase.startswith(candidate):
                 prefix = candidate
-                break
-        groups.setdefault(prefix, []).append(phrase[len(prefix):])
+        by_prefix[prefix].append(phrase[len(prefix):])
     sentences: list[str] = []
-    for prefix, parts in groups.items():
-        conjunction: str = " and "
-        if prefix == LITTLE:
-            conjunction = ", or "
-        joined: str = parts[0]
-        if len(parts) > 1:
-            joined = ", ".join(parts[:-1]) + conjunction + parts[-1]
-        if prefix == LITTLE:
-            sentences.append("There's little evidence of " + joined + ".")
-        elif prefix:
-            sentences.append("The context is less clear about " + joined + ".")
-        else:
-            sentences.append("Looks like " + joined + ".")
+    if by_prefix[""]:
+        sentences.append("Looks like " + _joined(by_prefix[""], " and ") + ".")
+    if by_prefix[UNCERTAIN] or by_prefix[SOME_UNCERTAINTY]:
+        sentences.append("The context is less clear about " + _joined(by_prefix[UNCERTAIN] + by_prefix[SOME_UNCERTAINTY], " and ") + ".")
+    if by_prefix[LITTLE]:
+        sentences.append("There's little evidence of " + _joined(by_prefix[LITTLE], ", or ") + ".")
     return " ".join(sentences)
+
+
+def _joined(parts: list[str], last_joiner: str) -> str:
+    """"a", "a and b", "a, b and c"."""
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + last_joiner + parts[-1]

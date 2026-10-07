@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_worth as queries
+from packs.ingestion.primitives.deep_context_v2.db.queries import display_names
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, read_owner
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import Connection, MemberFacts, WorthRow
 from packs.ingestion.primitives.deep_context_v2.db import schema
@@ -52,6 +53,16 @@ class Family:
     judged: bool                     # every member's latest machine worth row carries the fingerprint
     match: Connection | None         # None = the pre-match did not tie the family to exactly one connection
     request: dict[str, Any] | None   # the JEV request; None for a pre-matched family, which needs none
+    digest: str                      # the request's cache key; "" for a pre-matched family
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """What worth decided for one family, written to every member."""
+
+    worth: str
+    reason: str
+    labels_json: str
 
 
 class Worth(Node):
@@ -70,12 +81,13 @@ class Worth(Node):
         by_family: dict[str, list[MemberFacts]] = {}
         for member in queries.members_with_facts(self.conn):
             by_family.setdefault(member.family_key, []).append(member)
-        names: dict[str, str] = queries.names_by_candidate(self.conn)
+        names: dict[str, str] = display_names(self.conn)
         sources: dict[str, list[str]] = queries.sources_by_candidate(self.conn)
+        bundles: queries.BundleCounts = queries.bundle_counts(self.conn)
         counts: dict[str, list[queries.ChannelCount]] = {}
-        for count in queries.channel_counts(self.conn):
+        for count in bundles.channels:
             counts.setdefault(count.candidate_id, []).append(count)
-        groups: dict[str, int] = queries.group_counts(self.conn)
+        groups: dict[str, int] = bundles.groups
         connections: list[Connection] = queries.all_connections(self.conn)
         judged: dict[str, str] = queries.latest_machine_worth_fingerprints(self.conn)
         owner: OwnerProfile = read_owner(self.conn)
@@ -95,12 +107,14 @@ class Worth(Node):
                 if judged.get(member.candidate_id) != fingerprint:
                     is_judged = False
             request: dict[str, Any] | None = None
+            digest: str = ""
             if match is None:
                 request = jev.build_request(evidence.family_facts(members), summary, owner, evidence.reference_date(members))
+                digest = jev.request_digest(request)
             member_ids: list[str] = []
             for member in members:
                 member_ids.append(member.candidate_id)
-            families.append(Family(key, tuple(member_ids), fingerprint, is_judged, match, request))
+            families.append(Family(key, tuple(member_ids), fingerprint, is_judged, match, request, digest))
         return families
 
     def pending(self, families: list[Family]) -> list[Family]:
@@ -147,33 +161,34 @@ class Worth(Node):
     def execute(self) -> dict[str, int]:
         todo: list[Family] = self.pending(self.families())
         # Rules 1 and 2: a pre-matched family is yes, no call.
-        verdicts: dict[str, tuple[str, str, str]] = {}  # family key -> (worth, reason, labels_json)
-        requests: dict[str, dict[str, Any]] = {}
+        verdicts: dict[str, Verdict] = {}  # family key -> its verdict
+        requests: dict[str, dict[str, Any]] = {}  # digest -> the JEV request
         pre_matched: int = 0
         for family in todo:
             if family.match is None:
-                requests[jev.request_digest(family.request)] = family.request
+                requests[family.digest] = family.request
                 continue
             pre_matched += 1
             text: str = PRE_MATCHED_REASON
             if jev.NOTABLE_POSITION_RE.search(family.match.position):
                 text = NOTABLE_REASON_PREFIX + family.match.position.strip()
-            verdicts[family.key] = (schema.Worth.YES.value, text, "{}")
+            verdicts[family.key] = Verdict(schema.Worth.YES.value, text, "{}")
         # Rule 3: one JEV pass per remaining family, read from the disk cache where it can be.
         load_env()
         answers = asyncio.run(jev.answer_all(requests, self.cache_dir))
         for family in todo:
             if family.match is None:
-                answer = answers[jev.request_digest(family.request)]
+                answer = answers[family.digest]
                 decision: str = jev.predict(answer)
-                verdicts[family.key] = (decision, reason(answer, decision), json.dumps(jev.labels(answer), sort_keys=True))
+                verdicts[family.key] = Verdict(decision, reason(answer, decision), json.dumps(jev.labels(answer), sort_keys=True))
         # Rule 5: one row per member, the same verdict to each.
         now: str = now_iso()
         rows: list[WorthRow] = []
         for family in todo:
-            worth, text, labels_json = verdicts[family.key]
+            verdict: Verdict = verdicts[family.key]
             for candidate_id in family.members:
-                rows.append((candidate_id, worth, schema.DecidedBy.MACHINE.value, text, labels_json, family.fingerprint, now))
+                rows.append((candidate_id, verdict.worth, schema.DecidedBy.MACHINE.value, verdict.reason,
+                             verdict.labels_json, family.fingerprint, now))
         queries.append_worth(self.conn, rows)
         return {"families": len(todo), "pre_matched_yes": pre_matched, "jev_requests": len(requests),
                 "worth_rows": len(rows)}
@@ -190,8 +205,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(node.estimate(), indent=2))
         return 0
     manifest = node.run()
-    print(manifest.status, " ".join(f"{key}={value}" for key, value in manifest.counts.items()), manifest.error or "")
-    return 0 if manifest.status == "completed" else 1
+    print(manifest.status, manifest.counts, manifest.error or "")
+    if manifest.status == "completed":
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

@@ -40,7 +40,6 @@ class Side:
     """One candidate as the judge sees it."""
 
     display_name: str
-    names: tuple[str, ...]
     identifiers: tuple[Identifier, ...]
     facts: SynthesizedFacts
     messages: tuple[MessageEntry, ...]
@@ -81,10 +80,9 @@ def render_side(label: str, side: Side) -> str:
     lines: list[str] = []
     # The name the dossier settled on, and its aliases: the written name may be a first name or a handle.
     if facts.canonical_name:
-        dossier_name: str = facts.canonical_name
-        if facts.aliases:
-            dossier_name = dossier_name + " (also: " + ", ".join(facts.aliases) + ")"
-        lines.append(f"dossier name: {dossier_name}")
+        lines.append(f"dossier name: {facts.canonical_name}")
+    if facts.aliases:
+        lines.append("also known as: " + ", ".join(facts.aliases))
     if facts.relationship_to_owner:
         lines.append(f"relationship: {facts.relationship_to_owner}")
     employers: list[str] = []
@@ -104,26 +102,36 @@ def render_side(label: str, side: Side) -> str:
         lines.append("we discuss: " + ", ".join(facts.topics[:TOPICS]))
     facts_block: str = "  (no extracted facts)"
     if lines:
-        facts_block = "\n".join("  " + line for line in lines)
-    # The tone sample: a few short messages each way.
-    mine: str = "  (no messages from me — tone unavailable)"
+        indented: list[str] = []
+        for line in lines:
+            indented.append("  " + line)
+        facts_block = "\n".join(indented)
+    # A few short messages each way.
+    mine: str = "  (no messages from me)"
     from_me: list[str] = _sample(side.messages, MessageDirection.FROM_ME)
     if from_me:
-        mine = "\n".join("  me→them: " + text for text in from_me)
+        quoted: list[str] = []
+        for text in from_me:
+            quoted.append("  me→them: " + text)
+        mine = "\n".join(quoted)
     theirs: str = "  (no messages from them)"
     from_them: list[str] = _sample(side.messages, MessageDirection.FROM_THEM)
     if from_them:
-        theirs = "\n".join("  them→me: " + text for text in from_them)
+        quoted = []
+        for text in from_them:
+            quoted.append("  them→me: " + text)
+        theirs = "\n".join(quoted)
     emails: str = "none"
-    if _values(side, IdentifierKind.EMAIL):
-        emails = ", ".join(_values(side, IdentifierKind.EMAIL))
+    addresses: list[str] = _values(side, IdentifierKind.EMAIL)
+    if addresses:
+        emails = ", ".join(addresses)
     return f"CONTACT {label} — {side.display_name}  [emails: {emails}]\n{facts_block}\nMessages:\n{mine}\n{theirs}"
 
 
 def user_prompt(owner_name: str, first: Side, second: Side) -> str:
     """The whole user prompt for one pair."""
-    names: str = ("ORIGINAL SOURCE CONTACT NAMES:\nA: " + json.dumps(list(first.names), ensure_ascii=False)
-                  + "\nB: " + json.dumps(list(second.names), ensure_ascii=False))
+    names: str = ("ORIGINAL SOURCE CONTACT NAMES:\nA: " + json.dumps([first.display_name], ensure_ascii=False)
+                  + "\nB: " + json.dumps([second.display_name], ensure_ascii=False))
     phones: str = ("SOURCE CONTACT PHONES:\nA: " + json.dumps(_values(first, IdentifierKind.PHONE))
                    + "\nB: " + json.dumps(_values(second, IdentifierKind.PHONE)))
     return (f"Network owner: {owner_name}\n\n{render_side('A', first)}\n\n{render_side('B', second)}"
@@ -154,8 +162,8 @@ async def judge(caller: OpenAIResponsesCaller, prompt: str) -> Decision:
     return decision_from_answer(answer)
 
 
-def side_of(display_name: str, names: list[str], identifiers: list[Identifier], facts_json: str, bundle_json: str) -> Side:
+def side_of(display_name: str, identifiers: list[Identifier], facts_json: str, bundle_json: str) -> Side:
     """A Side from the stored rows."""
     facts: SynthesizedFacts = SynthesizedFacts.from_payload(json.loads(facts_json))
     bundle: CollectionBundle = CollectionBundle.from_payload(json.loads(bundle_json))
-    return Side(display_name, tuple(names), tuple(identifiers), facts, bundle.messages)
+    return Side(display_name, tuple(identifiers), facts, bundle.messages)

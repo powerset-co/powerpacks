@@ -6,4 +6,4 @@ different when the two sides describe unrelated lives: different professions or 
 
 uncertain only when neither side carries enough to say anything about the person at all.
 
-confidence is confidence in the selected decision. Give a concise reason, and in identity_evidence name the concrete facts that decided it (the shared employer, the unrelated professions, the mailbox name); leave it empty only for uncertain. tone_consistent is informational.
+confidence is confidence in the selected decision. Give a concise reason, and in identity_evidence name the concrete facts that decided it (the shared employer, the unrelated professions, the mailbox name); leave it empty only for uncertain.
