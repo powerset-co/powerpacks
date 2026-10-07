@@ -167,11 +167,13 @@ class UploadPowerset:
             region=config.get("TURBOPUFFER_REGION", tp_backend.DEFAULT_REGION))
         if not self.db.exists():
             raise RuntimeError(SAFE_ERRORS["local_index"])
-        # The cloud and the local index both name a LinkedIn person by uuid5 of linkedin:<slug>; the
-        # store names the family by its parent id. Every row with a slug is keyed by the uuid here.
+        # The check digest is over the store's rows as written: the People page hashes the same rows to
+        # bind its check to its apply. Then the cloud and the local index both name a LinkedIn person by
+        # uuid5 of linkedin:<slug>, so every row with a slug is keyed by that uuid from here on.
+        stored = read_share_rows(self.share_db)
+        digest = share_digest(stored)
         share_rows = tuple(replace(row, person_id=stable_person_id(public_identifier=row.public_identifier))
-                           if row.public_identifier else row for row in read_share_rows(self.share_db))
-        digest = share_digest(share_rows)
+                           if row.public_identifier else row for row in stored)
         current = current.at(Stage.CHECKING_ACCESS, share_digest=digest, progress={
             **current.progress, "total": sum(row.share == SHARE_YES and bool(row.public_identifier)
                                                 for row in share_rows)})

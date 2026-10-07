@@ -32,11 +32,13 @@ class Collect(Node):
     reads = ("candidates", "candidate_identifiers", "candidate_sources")
     writes = ("bundles",)
 
-    def __init__(self, conn: sqlite3.Connection, data_root: Path, limit: int, chat_db: Path) -> None:
+    def __init__(self, conn: sqlite3.Connection, data_root: Path, limit: int, chat_db: Path, *,
+                 msgvault_db: Path = DEFAULT_MSGVAULT_DB) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
         # msgvault and chat.db live under the home directory; only the WhatsApp store is under the data root.
         self.chat_db = chat_db
+        self.msgvault_db = msgvault_db
         self.wacli_db = data_root / WACLI_DB_RELATIVE
 
     # No required_files: a store is opened only for candidates whose channel came from it, and
@@ -47,7 +49,7 @@ class Collect(Node):
         # The store says which channels were linked; only those stores are opened.
         sources: ContextSources = ContextSources(
             channels=queries.channels_present(self.conn),
-            msgvault_db=DEFAULT_MSGVAULT_DB,
+            msgvault_db=self.msgvault_db,
             chat_db=self.chat_db,
             wacli_db=self.wacli_db,
             deep_cap=CHAT_MESSAGE_CAP,
