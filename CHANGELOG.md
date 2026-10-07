@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.19.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.19.0...powerpacks-v3.19.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **upload:** the check digest is over the store's rows, as the People page hashes them ([#747](https://github.com/powerset-co/powerpacks/issues/747)) ([b124cf1](https://github.com/powerset-co/powerpacks/commit/b124cf131c831c50868205fcc0957c1cc5d6b530))
+
 ## [3.19.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.18.1...powerpacks-v3.19.0) (2026-10-07)
 
 
