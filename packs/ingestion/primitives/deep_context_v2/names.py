@@ -15,9 +15,9 @@ middle names agree when both have them, and the generation (Jr, Sr, II, III, IV)
 nickname table: Bob is not Robert. No accent folding: José is not Jose.
 
 `names_can_match`: a name is read into its words, given name first. Two names can match when they
-are the same full name in any word order, or their first words and their last words are each
-equal, a prefix of the other, or spelled alike (Jaro-Winkler 0.85 or more). A one-word name is
-never paired by name.
+are the same full name in any word order, or their first words are equal, a prefix of the other,
+or spelled alike (Jaro-Winkler 0.85 or more) and their last words are equal, a one-letter initial of
+the other, or spelled alike. A one-word name is never paired by name.
 
 Created: 2026-10-06
 """
@@ -244,9 +244,21 @@ def _same_full_name(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
 
 
 def _word_forms_match(first: str, second: str) -> bool:
-    """One word equals, begins or nearly spells the other: jordan/j, ben/benjamin, jon/john."""
+    """A given name equals, begins or nearly spells the other: jordan/j, ben/benjamin, jon/john."""
     if first.startswith(second) or second.startswith(first):
         return True
+    return jaro_winkler(first, second) >= GATE_NAME_SIM
+
+
+def _surnames_match(first: str, second: str) -> bool:
+    """A surname equals the other, is a one-letter initial of it, or nearly spells it (a typo or a
+    transliteration: bleuel/bluel, kamhawi/kamwahi). A longer prefix is no longer a match by itself:
+    Li is not Litwak, Ho is not Hoang; Tan still meets Tang because they nearly spell each other
+    (decided 2026-10-07)."""
+    if first == second:
+        return True
+    if len(first) == 1 or len(second) == 1:
+        return second.startswith(first) or first.startswith(second)
     return jaro_winkler(first, second) >= GATE_NAME_SIM
 
 
@@ -259,7 +271,7 @@ def names_can_match(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
     # A one-word name is never paired by name: a first name alone could be anyone's (decided 2026-10-07).
     if len(first) < 2 or len(second) < 2:
         return False
-    return _word_forms_match(first[0], second[0]) and _word_forms_match(first[-1], second[-1])
+    return _word_forms_match(first[0], second[0]) and _surnames_match(first[-1], second[-1])
 
 
 def source_names_can_match(names: list[str]) -> bool:
