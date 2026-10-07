@@ -69,6 +69,8 @@ class CurrentVerdict:
     origin: str
     verdict: str
     judgment_fingerprint: str
+    confidence: float | None  # Sol's confidence; None when no Sol call made the row
+    reason: str               # Sol's reason; '' when no Sol call made the row
 
 
 @dataclass(frozen=True)
@@ -162,12 +164,13 @@ def current_verdicts(conn: sqlite3.Connection, candidate_ids: list[str]) -> list
     """The given candidates' current LinkedIn verdicts, oldest first."""
     found: list[CurrentVerdict] = []
     for row in conn.execute(
-        "SELECT candidate_id, linkedin_url, member_id, origin, verdict, judgment_fingerprint FROM current_linkedins "
+        "SELECT candidate_id, linkedin_url, member_id, origin, verdict, judgment_fingerprint, confidence, reason "
+        "FROM current_linkedins "
         f"WHERE candidate_id IN ({_marks(candidate_ids)}) ORDER BY seq",
         candidate_ids,
     ):
         found.append(CurrentVerdict(row["candidate_id"], row["linkedin_url"], row["member_id"], row["origin"],
-                                    row["verdict"], row["judgment_fingerprint"]))
+                                    row["verdict"], row["judgment_fingerprint"], row["confidence"], row["reason"]))
     return found
 
 
@@ -211,7 +214,7 @@ def insert_linkedin(conn: sqlite3.Connection, candidate_id: str, url: str, membe
     """One human verdict row; its seq names it in the parent row it confirms."""
     cursor = conn.execute(
         "INSERT INTO candidate_linkedins (candidate_id, linkedin_url, member_id, origin, verdict, decided_by, "
-        "judgment_fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "judgment_fingerprint, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '', ?)",
         (candidate_id, url, member_id, origin, verdict, DecidedBy.HUMAN.value, fingerprint, now),
     )
     return int(cursor.lastrowid)

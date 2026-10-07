@@ -20,6 +20,8 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
+- 2026-10-07 (schema 2): candidate_linkedins carries Sol's confidence and reason, as v1's
+  machine_confidence and machine_reason did, so the review card can show why a profile is pending.
 - 2026-10-06 (page v29-v31): current_parent is latest-wins; current_profile reads any member's
   confirmed row and the synthetic key is the research handle; the LinkedIn export becomes the
   `connections` lookup (candidates.linkedin_url, SourceChannel.LINKEDIN and MergeReason.NAME_MATCH
@@ -41,7 +43,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -210,6 +212,8 @@ CREATE TABLE candidate_linkedins (
   verdict TEXT NOT NULL CHECK (verdict IN {_in(Verdict)}),
   decided_by TEXT NOT NULL CHECK (decided_by IN {_in(DecidedBy)}),
   judgment_fingerprint TEXT NOT NULL,
+  confidence REAL,  -- Sol's confidence in its verdict; NULL when no Sol call made the row (a human, or JEV's two views agreeing)
+  reason TEXT NOT NULL,  -- Sol's reason, shown on the review card; '' when no Sol call made the row
   created_at TEXT NOT NULL,
   CHECK ((origin = 'synthetic') = (linkedin_url LIKE 'synthetic:%')),
   CHECK (origin <> 'synthetic' OR decided_by = 'human')
@@ -241,7 +245,7 @@ CREATE VIEW current_worth AS
   WHERE rn = 1;
 
 CREATE VIEW current_linkedins AS
-  SELECT seq, candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, created_at FROM (
+  SELECT seq, candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, confidence, reason, created_at FROM (
     SELECT l.*, row_number() OVER (
       PARTITION BY candidate_id, member_id ORDER BY (decided_by = 'human') DESC, seq DESC) AS rn
     FROM candidate_linkedins l)

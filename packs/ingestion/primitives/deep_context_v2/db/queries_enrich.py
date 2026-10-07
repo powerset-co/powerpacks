@@ -11,7 +11,7 @@ from packs.ingestion.primitives.deep_context_v2.db.queries import BATCH, _batche
 from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy
 
 # Row shapes, in column order, for the writers below.
-LinkedinRow = tuple[str, str, str, str, str, str, str, str]  # candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, created_at
+LinkedinRow = tuple[str, str, str, str, str, str, str, float | None, str, str]  # candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, confidence, reason, created_at
 ResearchRow = tuple[str, str, str, str | None, str]       # handle, parent_id, status, result_json (NULL on failed), researched_at
 
 
@@ -93,7 +93,7 @@ def insert_linkedin(conn: sqlite3.Connection, row: LinkedinRow) -> int:
     """One verdict row, appended alone so its seq can be named by the parent row it confirms."""
     cursor = conn.execute(
         "INSERT INTO candidate_linkedins (candidate_id, linkedin_url, member_id, origin, verdict, decided_by, "
-        "judgment_fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "judgment_fingerprint, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         row,
     )
     return int(cursor.lastrowid)
@@ -104,7 +104,7 @@ def append_linkedins(conn: sqlite3.Connection, rows: list[LinkedinRow]) -> None:
     for batch in _batches(rows, BATCH):
         conn.executemany(
             "INSERT INTO candidate_linkedins (candidate_id, linkedin_url, member_id, origin, verdict, decided_by, "
-            "judgment_fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "judgment_fingerprint, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             batch,
         )
 

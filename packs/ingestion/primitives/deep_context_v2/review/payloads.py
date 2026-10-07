@@ -227,12 +227,12 @@ def candidates(card: Card) -> tuple[ReviewCandidate, ...]:
         elif pending.profile is not None:
             profile = pending.profile
             shown.append(ReviewCandidate(pending.key, profile.full_name, pending.linkedin_url, profile.headline,
-                                         profile.location, profile.experiences, profile.education, False, "", None,
-                                         "needs_review", ""))
+                                         profile.location, profile.experiences, profile.education, False, "",
+                                         pending.confidence, "needs_review", pending.reason))
         else:
             # Not in the profile cache: the URL alone.
-            shown.append(ReviewCandidate(pending.key, "", pending.linkedin_url, "", "", (), (), False, "", None,
-                                         "needs_review", ""))
+            shown.append(ReviewCandidate(pending.key, "", pending.linkedin_url, "", "", (), (), False, "",
+                                         pending.confidence, "needs_review", pending.reason))
     return tuple(shown)
 
 

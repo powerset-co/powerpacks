@@ -114,14 +114,14 @@ def judgment_fingerprint(family: Family, profiles: list[tuple[str, str, str]], v
 
 
 def confirm(conn: sqlite3.Connection, family: Family, url: str, member_id: str, origin: str,
-            fingerprint: str, now: str) -> list[ParentRow]:
+            fingerprint: str, confidence: float | None, reason: str, now: str) -> list[ParentRow]:
     """A confirmed LinkedIn: one confirmed machine verdict per member, and the parent rows that move every
     member onto li:<member id>, each naming its own member's verdict. Two families confirmed on one
     LinkedIn become one parent by this alone."""
     rows: list[ParentRow] = []
     for candidate_id in family.candidates:
         row: LinkedinRow = (candidate_id, url, member_id, origin, Verdict.CONFIRMED.value, DecidedBy.MACHINE.value,
-                            fingerprint, now)
+                            fingerprint, confidence, reason, now)
         seq: int = queries_enrich.insert_linkedin(conn, row)
         rows.append((candidate_id, LINKEDIN_PARENT_PREFIX + member_id, MergeReason.JUDGE_CONFIRMED.value,
                      f"candidate_linkedins:{seq}", now))

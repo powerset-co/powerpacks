@@ -1,6 +1,8 @@
 """The Sol identity judge's prompt: one LinkedIn profile against one family, in the shape v1 asked.
 
-The system prompt and the answer schema are v1's `linkedin_reconcile` pair, byte for byte. The user prompt
+The answer schema is v1's `linkedin_reconcile` schema byte for byte; the system prompt is v1's with one
+paragraph added for the owner's own connections (decided 2026-10-07: v1's text demanded a contact-to-profile
+bridge and left 7 of 7 own connections at needs_review with no contradiction). The user prompt
 is the owner's background, the contact (written names, the dossier's fields, address-book handles, the
 message count, the full facts), the LinkedIn profile, then a note on where the profile came from: the
 owner's own first-degree connection (strong evidence, decided 2026-10-07) or a speculative research
@@ -11,10 +13,11 @@ Created: 2026-10-07
 from __future__ import annotations
 
 import json
-
-import jinja2
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import jinja2
 
 import jsonschema
 
@@ -32,15 +35,17 @@ SCHEMA: dict[str, Any] = assets.json_file(_HERE, "linkedin_reconcile_schema.txt"
 SCHEMA_NAME = "linkedin_reconcile"
 MODEL = "gpt-6.1-sol"
 REASONING_EFFORT = "medium"
-CONNECTION_NOTE = ("\n\n*** This profile is one of MY OWN first-degree LinkedIn connections, matched to this contact "
-                   "by name. Being connected is strong evidence that this is the person I message with: with a "
-                   "compatible name and no hard contradiction, confirm. ***")
-RESEARCH_NOTE = ("\n\nThis is a speculative web-research proposal. A shared name alone is not corroboration; "
-                 "require employer, school, location, topic, domain, or equivalent evidence. Missing information "
-                 "is not a contradiction. Interview or referral context does not prove employment; evaluate the dates.")
-
-
 TEMPLATE: jinja2.Template = assets.template(_HERE, "identity_prompt.j2")
+
+
+@dataclass(frozen=True)
+class SolVerdict:
+    """One Sol answer: the verdict, Sol's confidence in it, and its one-paragraph reason (kept on the verdict row
+    and shown on the review card)."""
+
+    verdict: str
+    confidence: float | None  # None only for the judge's JEV-alone confirmation, which Sol never saw
+    reason: str
 
 
 def identity_prompt(family: Family, profile: Profile, origin: str, citations: tuple[dict[str, Any], ...], owner_block: str) -> str:
@@ -91,9 +96,9 @@ def identity_prompt(family: Family, profile: Profile, origin: str, citations: tu
     )
 
 
-async def verdict(caller: OpenAIResponsesCaller, prompt: str) -> str:
+async def verdict(caller: OpenAIResponsesCaller, prompt: str) -> SolVerdict:
     """One Sol call: the verdict for one profile."""
     answer: dict[str, Any] = await caller.call(system_prompt=SYSTEM_PROMPT, user_prompt=prompt, schema=SCHEMA,
                                                schema_name=SCHEMA_NAME, context="enrich-judge")
     jsonschema.validate(answer, SCHEMA)
-    return Verdict(answer["verdict"]).value
+    return SolVerdict(Verdict(answer["verdict"]).value, float(answer["confidence"]), answer["reason"])

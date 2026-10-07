@@ -41,6 +41,8 @@ class Pending:
     fingerprint: str      # the judgment the human answers
     profile: Profile | None           # the cached LinkedIn profile; None when not cached, or a synthetic card
     research: dict[str, Any] | None   # the synthetic card's research result (content and basis); None for a LinkedIn
+    confidence: float | None          # Sol's confidence in needs_review; None for a synthetic card
+    reason: str                       # Sol's reason; '' for a synthetic card
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,7 @@ def _synthetic(conn: sqlite3.Connection, facts: SynthesizedFacts) -> list[Pendin
     card: ResearchCard | None = queries_review.research_card(conn, handle)
     if card is not None:
         key: str = SYNTHETIC_PROFILE_PREFIX + handle
-        found.append(Pending(key, key, key, Origin.SYNTHETIC.value, handle, None, json.loads(card.result_json)))
+        found.append(Pending(key, key, key, Origin.SYNTHETIC.value, handle, None, json.loads(card.result_json), None, ""))
     return found
 
 
@@ -76,7 +78,8 @@ def _needs_review(verdicts: list[CurrentVerdict], profiles: Profiles) -> list[Pe
             continue
         seen.add(verdict.member_id)
         found.append(Pending(verdict.member_id, verdict.linkedin_url, verdict.member_id, verdict.origin,
-                             verdict.judgment_fingerprint, profiles.found.get(verdict.linkedin_url), None))
+                             verdict.judgment_fingerprint, profiles.found.get(verdict.linkedin_url), None,
+                             verdict.confidence, verdict.reason))
     return found
 
 

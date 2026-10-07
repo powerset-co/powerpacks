@@ -37,12 +37,16 @@ from packs.ingestion.primitives.deep_context_v2.db.store import open_store, stor
 from packs.ingestion.primitives.deep_context_v2.dedupe.dedupe import mint
 from packs.ingestion.primitives.deep_context_v2.enrich import jev_identity, proposals, research
 from packs.ingestion.primitives.deep_context_v2.enrich import sol_identity
+from packs.ingestion.primitives.deep_context_v2.enrich.sol_identity import SolVerdict
 from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, family_evidence, judgment_fingerprint
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
 from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposals
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig, load_env
 
-VERSION = "enrich-judge-2026-10-07-identity"  # in every judgment fingerprint: a new judge is a new judgment
+VERSION = "enrich-judge-2026-10-07-connections"  # in every judgment fingerprint: a new judge is a new judgment
+# What a JEV-alone confirmation writes: JEV's two views agreeing carry no Sol confidence or reason (confirmed rows
+# never reach the review card).
+JEV_CONFIRMED = SolVerdict(Verdict.CONFIRMED.value, None, "")
 OUTPUT_TOKENS_PER_CALL = 1500  # assumed Sol output+reasoning tokens per profile, estimate only
 JEV_CACHE_RELATIVE_DIR = Path("deep-context") / "identity"  # <data root>/deep-context/identity/<view>/jev/
 # The owner's own connection: being connected on LinkedIn is itself strong evidence (decided 2026-10-07).
@@ -150,27 +154,28 @@ def jev_pairs(task: JudgeTask) -> list[dict[str, dict[str, Any]]]:
     return pairs
 
 
-async def sol(caller: OpenAIResponsesCaller, task: JudgeTask, owner_block: str) -> dict[str, str]:
-    """URL -> verdict, one Sol call per profile (sol_identity). A family may end with at most one confirmed
+async def sol(caller: OpenAIResponsesCaller, task: JudgeTask, owner_block: str) -> dict[str, SolVerdict]:
+    """URL -> Sol's answer, one call per profile (sol_identity). A family may end with at most one confirmed
     profile: when two are confirmed, both go to the human queue instead."""
-    verdicts: dict[str, str] = {}
+    verdicts: dict[str, SolVerdict] = {}
     for candidate in task.candidates:
         prompt: str = sol_identity.identity_prompt(task.family, candidate.profile, candidate.origin, task.citations, owner_block)
         verdicts[candidate.profile.linkedin_url] = await sol_identity.verdict(caller, prompt)
     confirmed: int = 0
-    for verdict in verdicts.values():
-        if verdict == Verdict.CONFIRMED:
+    for answer in verdicts.values():
+        if answer.verdict == Verdict.CONFIRMED:
             confirmed += 1
     if confirmed > 1:
-        for url, verdict in verdicts.items():
-            if verdict == Verdict.CONFIRMED:
-                verdicts[url] = Verdict.NEEDS_REVIEW.value
+        for url, answer in verdicts.items():
+            if answer.verdict == Verdict.CONFIRMED:
+                verdicts[url] = replace(answer, verdict=Verdict.NEEDS_REVIEW.value)
     return verdicts
 
 
-def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, str], now: str) -> dict[str, int]:
-    """One verdict row per member per judged URL. A confirmed URL moves every member onto li:<member id>,
-    except a member already holding a wrong-person verdict on it: that one is split onto a fresh p: id."""
+def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, SolVerdict], now: str) -> dict[str, int]:
+    """One verdict row per member per judged URL, carrying Sol's confidence and reason. A confirmed URL moves
+    every member onto li:<member id>, except a member already holding a wrong-person verdict on it: that one
+    is split onto a fresh p: id."""
     family: Family = task.family
     rows: list[LinkedinRow] = []
     parents: list[ParentRow] = []
@@ -179,12 +184,12 @@ def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, str], n
         url: str = candidate.profile.linkedin_url
         if url not in verdicts:
             continue  # not judged: another member id was confirmed by JEV alone
-        verdict: str = verdicts[url]
-        counts[verdict] += 1
-        if verdict != Verdict.CONFIRMED:
+        answer: SolVerdict = verdicts[url]
+        counts[answer.verdict] += 1
+        if answer.verdict != Verdict.CONFIRMED:
             for candidate_id in family.candidates:
-                rows.append((candidate_id, url, candidate.profile.member_id, candidate.origin, verdict,
-                             DecidedBy.MACHINE.value, task.fingerprint, now))
+                rows.append((candidate_id, url, candidate.profile.member_id, candidate.origin, answer.verdict,
+                             DecidedBy.MACHINE.value, task.fingerprint, answer.confidence, answer.reason, now))
             continue
         # The split: a member already judged someone else on this member id leaves the family, its parent
         # row naming that wrong-person verdict.
@@ -201,7 +206,8 @@ def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, str], n
             else:
                 staying.append(candidate_id)
         moved: Family = replace(family, candidates=tuple(staying))
-        parents.extend(confirm(conn, moved, url, candidate.profile.member_id, candidate.origin, task.fingerprint, now))
+        parents.extend(confirm(conn, moved, url, candidate.profile.member_id, candidate.origin, task.fingerprint,
+                               answer.confidence, answer.reason, now))
     queries_enrich.append_linkedins(conn, rows)
     append_parent_rows(conn, parents)
     counts["parent_rows"] = len(parents)
@@ -259,14 +265,14 @@ async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Pa
                 confirmed.append(candidate.profile.linkedin_url)
             position += 1
         if len(confirmed) == 1:
-            _tally(counts, write(conn, task, {confirmed[0]: Verdict.CONFIRMED.value}, now))
+            _tally(counts, write(conn, task, {confirmed[0]: JEV_CONFIRMED}, now))
             conn.commit()
             continue
         for_sol.append(task)
     config = OpenAIResponsesConfig.resolve(model=sol_identity.MODEL, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
     async with OpenAIResponsesCaller(config) as caller:
 
-        async def guarded(task: JudgeTask) -> tuple[JudgeTask, dict[str, str] | None]:
+        async def guarded(task: JudgeTask) -> tuple[JudgeTask, dict[str, SolVerdict] | None]:
             """The family's verdicts, or None when its Sol call failed (printed without the prompt)."""
             try:
                 return task, await sol(caller, task, owner_block)
@@ -274,7 +280,7 @@ async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Pa
                 print(f"failed one family: {type(exc).__name__}")
                 return task, None
 
-        calls: list[asyncio.Task[tuple[JudgeTask, dict[str, str] | None]]] = []
+        calls: list[asyncio.Task[tuple[JudgeTask, dict[str, SolVerdict] | None]]] = []
         for task in for_sol:
             calls.append(asyncio.create_task(guarded(task)))
         for call in asyncio.as_completed(calls):
