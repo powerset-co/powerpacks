@@ -57,6 +57,7 @@ from packs.ingestion.primitives.deep_context_v2.openai import load_env  # noqa: 
 from packs.ingestion.primitives.share.models import ShareDecisionRow  # noqa: E402
 from packs.ingestion.primitives.share.store import share_rows as read_share_rows  # noqa: E402
 from packs.ingestion.schemas.share_schema import SHARE_YES  # noqa: E402
+from packs.indexing.lib.identity import stable_person_id  # noqa: E402
 from packs.indexing.primitives.upload_powerset import local_index, postgres, turbopuffer_writer  # noqa: E402
 from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
     CloudState,
@@ -166,14 +167,20 @@ class UploadPowerset:
             region=config.get("TURBOPUFFER_REGION", tp_backend.DEFAULT_REGION))
         if not self.db.exists():
             raise RuntimeError(SAFE_ERRORS["local_index"])
-        share_rows = read_share_rows(self.share_db)
+        # The cloud and the local index both name a LinkedIn person by uuid5 of linkedin:<slug>; the
+        # store names the family by its parent id. Every row with a slug is keyed by the uuid here.
+        share_rows = tuple(replace(row, person_id=stable_person_id(public_identifier=row.public_identifier))
+                           if row.public_identifier else row for row in read_share_rows(self.share_db))
         digest = share_digest(share_rows)
         current = current.at(Stage.CHECKING_ACCESS, share_digest=digest, progress={
             **current.progress, "total": sum(row.share == SHARE_YES and bool(row.public_identifier)
                                                 for row in share_rows)})
         current.write(self.manifest_path)
-        people = {person.person_id: person
-                  for person in (LocalPerson.from_csv_row(row) for row in CsvIO.read_dict_rows(self.people_csv))}
+        people: dict[str, LocalPerson] = {}
+        for person in (LocalPerson.from_csv_row(row) for row in CsvIO.read_dict_rows(self.people_csv)):
+            if person.public_identifier:
+                person = replace(person, person_id=stable_person_id(public_identifier=person.public_identifier))
+            people[person.person_id] = person
         con = duckdb.connect(str(self.db), read_only=True)
         psycopg2 = postgres_client.ensure_psycopg2()
         try:
