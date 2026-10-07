@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Thin runner for the deep-context v2 pipeline.
+#
+# Run this DIRECTLY in your own terminal (e.g. Ghostty with Full Disk Access).
+# It only chains the existing primitives in order — no logic of its own — so the
+# work runs under your terminal's TCC grant and can actually read chat.db. The
+# Claude Code Bash tool spawns commands under a helper process that does NOT
+# inherit your terminal's Full Disk Access, which is why iMessage reads fail there.
+#
+# Usage:
+#   bin/deep-context-v2 owner --linkedin-url <url> --email <email>   # your bio, once
+#   bin/deep-context-v2 run      # the whole pipeline, then the review page's URL
+#   bin/deep-context-v2 finish   # after the review: people.csv and the index again
+#   bin/deep-context-v2 review   # the review server and its URL
+#   bin/deep-context-v2 stop     # stop the review server
+#   bin/deep-context-v2 <stage> [flags]   # one stage alone: load collect synthesize dedupe worth enrich realize
+#
+# Reads message BODIES (Gmail + iMessage/WhatsApp DMs, plus small iMessage groups
+# under standing owner authorization). Bundles live in the v2 store only.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+PY=(uv run --project . python -m)
+PKG="packs.ingestion.primitives.deep_context_v2"
+
+usage() {
+  sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+}
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  -h|--help|help|"") usage; exit 0 ;;
+  owner)                       "${PY[@]}" "$PKG.owner" "$@" ;;
+  run|review|stop|finish)      "${PY[@]}" "$PKG.run" "$cmd" "$@" ;;
+  load)                        "${PY[@]}" "$PKG.import_load.load" "$@" ;;
+  collect)                     "${PY[@]}" "$PKG.collect.collect" "$@" ;;
+  synthesize)                  "${PY[@]}" "$PKG.synthesize.synthesize" "$@" ;;
+  dedupe)                      "${PY[@]}" "$PKG.dedupe.dedupe" "$@" ;;
+  worth)                       "${PY[@]}" "$PKG.worth.worth" "$@" ;;
+  enrich)                      "${PY[@]}" "$PKG.enrich.enrich" "$@" ;;
+  realize)                     "${PY[@]}" "$PKG.realize.realize" "$@" ;;
+  *) echo "unknown command: $cmd" >&2; usage; exit 2 ;;
+esac
