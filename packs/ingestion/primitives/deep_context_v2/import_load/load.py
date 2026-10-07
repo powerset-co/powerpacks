@@ -1,7 +1,10 @@
 """Block 01 Import load: the per-source import CSVs and owner.json into the v2 store.
 
 Gmail rows become email candidates and messages rows become phone candidates, each with its
-names, its one identifier and its channels. The two files never share an id. LinkedIn rows
+names, its one identifier and its channels. A Gmail candidate's name is the one most often written
+for its address in the mail archive's headers (gmail_names.py); the importer's own name column is
+blank whenever two header spellings ever disagreed, which lost the name of people with hundreds of
+messages. The two files never share an id. LinkedIn rows
 become the `connections` lookup, never candidates. Shared mailboxes (role addresses such as
 office@ or billing@) are dropped here; every other keep rule ran in the per-source importer.
 owner.json fills the `owner` row and flags the operator's own candidates.
@@ -21,10 +24,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
+from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, load_owner
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.import_load.gmail_names import header_names
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.shared.csv_io import CsvIO
 
@@ -57,10 +62,12 @@ class GmailImport:
     shared_mailboxes_dropped: int
 
 
-def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, display: str, owner: OwnerProfile) -> Candidate:
+def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, display: str, owner: OwnerProfile,
+               header_name: str = "") -> Candidate:
     """What both passes share: names, channels, the owner flag, and the row kept whole as evidence."""
-    # Two names at most: the importer's full name, and first+last when it spells differently.
-    full_name: str = row["full_name"].strip()
+    # Two names at most: the full name, and first+last when it spells differently. For a Gmail
+    # candidate the full name is the one its headers wrote most often; the CSV column is the fallback.
+    full_name: str = header_name or row["full_name"].strip()
     first_last: str = (row["first_name"].strip() + " " + row["last_name"].strip()).strip()
     names: list[str] = []
     for name in (full_name, first_last):
@@ -84,8 +91,10 @@ def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, displ
     )
 
 
-def gmail_candidates(path: Path, owner: OwnerProfile) -> GmailImport:
-    """Email candidates from the Gmail import, and how many shared mailboxes were dropped."""
+def gmail_candidates(path: Path, owner: OwnerProfile, msgvault_db: Path) -> GmailImport:
+    """Email candidates from the Gmail import, named from the archive's headers, and how many shared
+    mailboxes were dropped."""
+    names: dict[str, str] = header_names(msgvault_db)
     candidates: list[Candidate] = []
     dropped: int = 0
     for row in CsvIO.read_dict_rows(path):
@@ -93,7 +102,8 @@ def gmail_candidates(path: Path, owner: OwnerProfile) -> GmailImport:
         if is_role_address(email):  # office@, billing@, support@: a mailbox, not a person
             dropped += 1
             continue
-        candidates.append(_candidate(row, IdentifierKind.EMAIL, normalize_email(email), email, owner))
+        normalized: str = normalize_email(email)
+        candidates.append(_candidate(row, IdentifierKind.EMAIL, normalized, email, owner, names.get(normalized, "")))
     return GmailImport(candidates, dropped)
 
 
@@ -146,6 +156,10 @@ class ImportLoad(Node):
         # channel was linked, so a missing CSV means "this user has no such channel".
         return (self.data_root / OWNER_JSON,)
 
+    def __init__(self, conn: sqlite3.Connection, data_root: Path, *, msgvault_db: Path = DEFAULT_MSGVAULT_DB) -> None:
+        super().__init__(conn, data_root)
+        self.msgvault_db = msgvault_db
+
     def execute(self) -> dict[str, int]:
         conn = self.conn
         now = now_iso()
@@ -154,7 +168,7 @@ class ImportLoad(Node):
         # Two passes, one per linked channel file, one identifier kind each.
         gmail = GmailImport([], 0)
         if (self.data_root / GMAIL_CSV).exists():
-            gmail = gmail_candidates(self.data_root / GMAIL_CSV, owner)
+            gmail = gmail_candidates(self.data_root / GMAIL_CSV, owner, self.msgvault_db)
         phones: list[Candidate] = []
         if (self.data_root / MESSAGES_CSV).exists():
             phones = phone_candidates(self.data_root / MESSAGES_CSV, owner)
@@ -189,9 +203,10 @@ class ImportLoad(Node):
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Load the import CSVs and owner.json into the v2 store.")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
+    parser.add_argument("--msgvault-db", type=Path, default=DEFAULT_MSGVAULT_DB, help="the Gmail archive the names are read from")
     args = parser.parse_args(argv)
     conn = open_store(store_path(args.data_root))
-    manifest = ImportLoad(conn, args.data_root).run()
+    manifest = ImportLoad(conn, args.data_root, msgvault_db=args.msgvault_db).run()
     print(manifest.status, " ".join(f"{key}={value}" for key, value in manifest.counts.items()), manifest.error or "")
     return 0 if manifest.status == "completed" else 1
 
