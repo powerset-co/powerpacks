@@ -65,31 +65,21 @@ SELECT COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
        m.conversation_id, LOWER(sp.email_address) AS sender_email,
        m.subject, m.snippet, mb.body_text
 """
-_RECENT_FROM_SENDER_SQL = _RECENT_SELECT + """
+_RECENT_SQL = _RECENT_SELECT + """
 FROM messages m
 LEFT JOIN participants sp ON sp.id = m.sender_id
 LEFT JOIN message_bodies mb ON mb.message_id = m.id
 WHERE m.message_type = 'email'
   AND (m.deleted_at IS NULL OR m.deleted_at = '')
   AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  AND m.sender_id = ?1
--- Content survives store rebuilds; physical row ids do not.
-ORDER BY at DESC,
-         LOWER(COALESCE(sp.email_address, '')) DESC,
-         COALESCE(m.subject, '') DESC,
-         COALESCE(m.snippet, '') DESC,
-         COALESCE(mb.body_text, '') DESC
-LIMIT ?2
-"""
-_RECENT_TO_RECIPIENT_SQL = _RECENT_SELECT + """
-FROM message_recipients mr
-JOIN messages m ON m.id = mr.message_id
-LEFT JOIN participants sp ON sp.id = m.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = m.id
-WHERE m.message_type = 'email'
-  AND (m.deleted_at IS NULL OR m.deleted_at = '')
-  AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  AND mr.participant_id = ?1
+  -- Each email once: msgvault also files the sender as a 'from' recipient, and one person can be
+  -- both To and Cc.
+  AND m.id IN (
+      SELECT id FROM messages WHERE sender_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?1)
+      UNION
+      SELECT message_id FROM message_recipients
+      WHERE participant_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?1)
+  )
 -- Content survives store rebuilds; physical row ids do not.
 ORDER BY at DESC,
          LOWER(COALESCE(sp.email_address, '')) DESC,
@@ -137,24 +127,10 @@ def _participant_ids(con: sqlite3.Connection, email: str) -> list[int]:
     return ids
 
 
-def _recent_content_key(row: sqlite3.Row) -> tuple[str, str, str, str, str]:
-    """Order equal-time rows by projected content, which survives store rebuilds."""
-    return (
-        str(row["at"] or ""),
-        str(row["sender_email"] or ""),
-        str(row["subject"] or ""),
-        str(row["snippet"] or ""),
-        str(row["body_text"] or ""),
-    )
-
 
 def fetch_recent_rows(con: sqlite3.Connection, email: str, fetch_limit: int) -> list[sqlite3.Row]:
-    rows: list[sqlite3.Row] = []
-    for pid in _participant_ids(con, email):
-        rows.extend(con.execute(_RECENT_FROM_SENDER_SQL, (pid, fetch_limit)).fetchall())
-        rows.extend(con.execute(_RECENT_TO_RECIPIENT_SQL, (pid, fetch_limit)).fetchall())
-    rows.sort(key=_recent_content_key, reverse=True)
-    return rows[:fetch_limit]
+    """The newest `fetch_limit` emails the candidate sent or received, each once."""
+    return con.execute(_RECENT_SQL, (email.lower(), fetch_limit)).fetchall()
 
 
 def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) -> int:

@@ -222,6 +222,18 @@ class ContextSources:
             )
         return out
 
+    def _count_whatsapp(self, person: Person) -> int:
+        """The stored total of the candidate's WhatsApp direct messages, so `capped` is honest."""
+
+        def count() -> int:
+            con = wacli_store.open_readonly_db(self.wacli_db)
+            try:
+                return wacli_messages.count_whatsapp_direct_messages(con, person.phones)
+            finally:
+                con.close()
+
+        return _read_source(self.wacli_db, count)
+
     def _read_whatsapp(self, person: Person) -> list[MessageEntry]:
         """Newest WhatsApp direct-message bodies."""
 
@@ -263,14 +275,16 @@ class ContextSources:
         group: list[MessageEntry] = []
         chat_total = 0
         whatsapp: list[MessageEntry] = []
+        whatsapp_total = 0
         if "whatsapp" in person.source_channels:
             whatsapp = self._read_whatsapp(person)
+            whatsapp_total = self._count_whatsapp(person)
         if "imessage" in person.source_channels:
             direct = self._read_imessage(person)
             chat_total = self._count_imessage_dms(person)
             group = self._read_imessage_group_messages(person)
         direct = direct + whatsapp
-        chat_total = chat_total + len(whatsapp)
+        chat_total = chat_total + whatsapp_total
 
         # This order decides who wins the character cap: Gmail first (already ranked by signal),
         # then direct and group chats newest first, with content breaking equal timestamps.
