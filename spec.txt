@@ -1,0 +1,152 @@
+1. Gather all the information from accounts
+
+Use the existing logic and check if we have the right counts for send/receiving are we dropping or including emails that shouldn't be
+Do we have all the right source data
+
+
+2. What is the shape of that collected data that's passed into the LLM and spat back out 
+
+This is called synthesis right. 
+
+Is the output strongly typed do we collect what we can and summarize the correct facts to the best of our ability
+Do we have all the right identifiers/contacti nformation
+
+1 email -> 1 "identifier" 
+1 imessage -> 1 "identifier"
+
+every single "candidate" per vertical gets a "identifier" that is unique to them. 
+
+at the end of the day when we ingest everyone we shold have lots of source candidates 
+
+linkedin.csv/linkedin candidates are also candidates
+
+Clearly map out the IDs here
+
+no one gets merged no one technically has a "parent" everyone is a child right now with their identifier
+
+Requirements:
+- Each candidate has information available
+- People who have sparse contacts shouldn't even be included unless their LinkedIn (empty) because we said only people w/ 20 interactions get ingested so at the very least everyone should ahve some facts, a name, a contact, etc. We need to understand what that schema is, today is MD? is it jsonl that gets compiled into MD? 
+- This should be the foundation
+
+Any logic that is extraneous to these stages should get deleted or put on the side
+
+I just want look at accounts -> sync -> synthesize -> review do we have the right synthesis outputs with the right ids
+
+--------
+
+Now we have a bunch of "children" yes?
+
+Now we try to do free merges there are a few places we can do this
+
+Across names are free we have edisting logic i expect firstname prefixes to be the usual ones i think nicknames can be harder
+
+There's a sequence here and we need to assume a human will correct us
+
+LinkedIN <> Gmail or Messages or Whatsapp for Full Name Match = same person also look at anyone with their first name in parentehsis maybe it has their english name
+
+Then there's the combinations of like first name prefix w/ full lastname 
+
+I think the existing waterfall here is probably ok but I do wantto review the logic and if it's overly complicated last i checked it was maybe ~50 lines?
+
+Out of an entire corpus majority of people 90% are single sources at least from Gmail or iMessage ie they  dont have multiple numbers, and only a few have multiple emails.
+
+Whats unclear to me is how complex this dedupe logic is with JEV + Sol I think it was quite good so i prefer to analyze and simplify it if possible 
+
+this is the step that i think currently is the most complex and overdesigned
+
+i dont even know why we have ensure parents 
+
+we should have a pool of candidates, they have clear IDs of where they are from. 
+
+we use names to match first, then for duplicates we send them into our dedupe pipeline which has been robust
+
+we need a strict ordering of how do we cluster people into a family 
+
+I think it's match LI to any names that exist across the other sources first (it's naive i know)
+then we dedupe emails based on name also and cluster them but the names of the amils i recall also ahve some dumb things like Front Office when their email handle has actual name. I forget what we did here please fill it in
+
+
+
+Once we have "families" we need to consolidate the facts and this is where bad merging logic previously ie lets just use a phone number to guarantee matches was bad. 
+
+we've fixed this i believe.
+
+
+Also there's some bullshit about like directory.csv ie we use previously mapped people's contact information to a linkedin and try to reuse it. i think we shouldn't conflate that anymore. 
+
+
+we should do that in the enrichment stage after we group everyone together. which i think is the enrichment stage?
+
+
+-----
+
+enrichment stage
+
+at this point every member has a potential linkedin or no based on simple name matching and dedupe merging 
+we have not looked at any historical evidence
+
+now what we should do before enrichment is
+
+look at directory.csv (historical data) + human feedback (user_feedback) 
+ANY SPECIFIC CONTACT now right gets assigned a linkedin if it exists and we need to TYPE THE SOURCE
+
+thearthurchen@gmail.com (contact id example its going to be candidate:email:thearthurhcne@gmail.com?) -> human says it's linkedin.com/in/arthurchen (thats the linkedin) type is (human_override)
+thearthurchen@gmail.com (^) -> linkedin.csv says is linkedin.com/in/arthurchen2 -> linkedin url type is linkedin_network
+thearthurchen@gmail.com (^) -> directory.csv (ie historical shit) says it's linkedin.com/in/arthurchen3 -> linkedin url type is directory_lookup 
+thearthurchen@gmail.com (^) -> seed says linkedin.com/in/arthurchen4 -> linkedin url type is seed
+
+ 
+these are the only types available i think right? that's it at this point
+
+
+
+next for any candidate that as no linkedin and viable information ie enough information in the dossier ie more than 0 facts has an actual name (we have some condition for this already)
+goes to parallel rsearch
+then we get
+thearthurchen@gmail.com -> parallel says linkedin.com/in/arthurchen5 -> linkedin url type is research
+
+that's it right
+
+every contact gets a linkedin url OR if parallel comes back and says shit if i know they get "synthetic" and then the url is synthetic-<conactid>? type synthetic in the linkedin url column and type respectively
+
+
+IS THAT CLEAR SO FAR
+
+so basically we have a bunch of people with potential linkedins irght within a family we haven't picked the linkedin yet
+
+
+the invariant is
+
+if i could cluster linkedin to other contacts by name then the transitive property should hold here i would like to know what cases break that proof im guessing its going to be nicknames and shit but that should bascially validate that we can cluster somewhat intelligently via rules then via jev + sol? 
+
+NOTE: i expect rows no mutated data all the data is split we have not assigned "families yet" i believe
+
+next i think maybe we run the judge here on is this the right linkedin? and we have some threshold w/ jev? or was it gpt-6.1-sol i forget. but basically all the single people is realy easy 
+for single members ie no shared linkedin we just check linkedinurl -> how many dossiers right? ok 1 for those people we just use jev + sol easy yes or no and if we think it's a maybe we throw them into the pile if sol cant figure it out (the existing thresholds seem reasonable) ie if there's not enough context to make a judgement just hold them and we can look another time it should be clearly a yes or clearly a no if it's a no then we just defer to their syntehtic exists or nothing theres not much we can do for now
+
+this should be very easy to do and code 
+
+
+now for people who have multiple this is where we use jev + sol again but indiivudally across each candidate actually i guess we should just judge jev + sol across the whole corpus? i forget.
+
+my thinking is we just check is this the right person at this slice in time potentially why or why not and if someone's profile doesn't agree we kick them out of the family and we group the rest
+
+THEOERTICALLY thats what i think we should do but i think actually whatever logic we have for grouping phone messages/wahtsapp to gmails is actually fine. its more about how do we merge/judge the linkedin
+
+
+IT IS POSSIBLE that we were greedily bunching people up and just combining the entirep rofile an asking is this teh right person which would get some poorly merged people in 
+
+i think we could do that still since honsetly how do you get enough context from a phone message. 
+
+this is basically the entire pipeline i belive
+
+
+ 
+
+
+
+
+
+
+

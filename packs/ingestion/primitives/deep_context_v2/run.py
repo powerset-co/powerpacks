@@ -194,7 +194,7 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
     archive_v1(data_root)
     conn: sqlite3.Connection = open_store(store_path(data_root))
     _stage("load", ImportLoad(conn, data_root, msgvault_db=msgvault_db))
-    _stage("collect", Collect(conn, data_root, COLLECT_LIMIT, chat_db))
+    _stage("collect", Collect(conn, data_root, COLLECT_LIMIT, chat_db, msgvault_db=msgvault_db))
     _stage("synthesize", Synthesize(conn, data_root, limit=SYNTHESIZE_LIMIT))
     _stage("dedupe", Dedupe(conn, data_root, limit=DEDUPE_LIMIT))
     _stage("worth", Worth(conn, data_root, limit=WORTH_LIMIT))

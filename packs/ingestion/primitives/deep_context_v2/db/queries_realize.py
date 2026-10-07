@@ -35,7 +35,7 @@ def members_of_talked_to_parents(conn: sqlite3.Connection) -> list[Member]:
     for row in conn.execute(
         "SELECT cp.parent_id, c.candidate_id, c.display_name, "
         "json_extract(c.import_json, '$.interaction_counts') AS counts, "
-        "json_extract(c.import_json, '$.last_interaction') AS last_interaction "
+        "COALESCE(json_extract(c.import_json, '$.last_interaction'), '') AS last_interaction "
         "FROM current_parent cp JOIN candidates c USING (candidate_id) "
         "WHERE c.is_owner = 0 AND cp.parent_id IN "
         "(SELECT p.parent_id FROM current_parent p JOIN facts f USING (candidate_id)) "
