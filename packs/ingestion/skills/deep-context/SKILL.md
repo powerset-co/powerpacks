@@ -98,7 +98,8 @@ worker reports it; the advisor decides and the worker reruns. Use common sense:
 - **Send every issue up.** Whatever the advisor hits, a stage that failed, a patch it made to this
   checkout, a row it had to work around, a wait that looked wrong, it sends the developers one
   feedback report per issue with the feedback sender (`packs/powerset/skills/feedback/SKILL.md`),
-  without asking: the command, the error text, what was changed and where, the stage's
+  without asking: the command, the error text, the code pointers (`path:line` of where it
+  failed and of every line changed, with the diff when there is one), the stage's
   `manifest.json` path and counts, and the powerpacks version. Never a person's name, a dossier
   or a message. A patch that worked is still an issue: the next install hits it too.
 
