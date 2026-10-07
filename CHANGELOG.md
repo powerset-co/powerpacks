@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.17.2...powerpacks-v3.18.0) (2026-10-07)
+
+
+### Features
+
+* **deep-context-v2:** blocks 01-03, import load, collect, synthesize ([#725](https://github.com/powerset-co/powerpacks/issues/725)) ([607f612](https://github.com/powerset-co/powerpacks/commit/607f612bc9cc3ebbd4742b887697d71a44ba5640))
+* **deep-context-v2:** blocks 05 dedupe and 06 worth ([#727](https://github.com/powerset-co/powerpacks/issues/727)) ([97b5287](https://github.com/powerset-co/powerpacks/commit/97b5287126a23e49855f4d5a8667adb15a2dbcc3))
+* **deep-context-v2:** blocks 07 enrich, 08 review, 09 realize ([#729](https://github.com/powerset-co/powerpacks/issues/729)) ([92a6255](https://github.com/powerset-co/powerpacks/commit/92a625531b21b248d01a9a0c3bf4f36bcbadb4dd))
+* **deep-context:** the skill runs the v2 pipeline end to end ([#731](https://github.com/powerset-co/powerpacks/issues/731)) ([21aafb7](https://github.com/powerset-co/powerpacks/commit/21aafb7fb15504c095f1a195bc76372bfa092a83))
+* supervise onboarding with a persistent tmux worker ([#719](https://github.com/powerset-co/powerpacks/issues/719)) ([3991942](https://github.com/powerset-co/powerpacks/commit/39919428bb4de30f4eddf751f71a7c2611e490e4))
+
+
+### Bug Fixes
+
+* **deep-context-v2:** read every stored message once, count WhatsApp honestly ([#728](https://github.com/powerset-co/powerpacks/issues/728)) ([6d4d50c](https://github.com/powerset-co/powerpacks/commit/6d4d50cd6954144bb59af65cec4597a501be6aa0))
+* reuse completed onboarding setup on reruns ([#721](https://github.com/powerset-co/powerpacks/issues/721)) ([c23fb3c](https://github.com/powerset-co/powerpacks/commit/c23fb3c15220946148479aa95b9760edc7c07943))
+* stop dropping real people at service companies from Gmail ([#615](https://github.com/powerset-co/powerpacks/issues/615)) ([777dee5](https://github.com/powerset-co/powerpacks/commit/777dee54bb868863144321a0c27977b0321e0efc))
+
 ## [3.17.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.17.1...powerpacks-v3.17.2) (2026-10-06)
 
 
