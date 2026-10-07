@@ -62,6 +62,7 @@ CHUNK_CHARS = 9000
 MAX_BATCHES = 20
 OUTPUT_TOKENS_PER_CALL = 750  # runner.py:268-270: assumed output+reasoning tokens per call, estimate only
 FACT_FIELDS = tuple(prompting.FACT_SCHEMA["required"])
+DEFAULT_LIMIT = 100_000  # more candidates than any store has; --limit N synthesizes the first N pending
 
 
 @dataclass(frozen=True)
@@ -100,7 +101,7 @@ class Synthesize(Node):
     reads = ("bundles", "owner", "facts")
     writes = ("facts",)
 
-    def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int | None) -> None:
+    def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
         self.config = OpenAIResponsesConfig.resolve(
@@ -207,7 +208,7 @@ class Synthesize(Node):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="03 Synthesize: facts per candidate (gpt-6-luna).")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="synthesize only the first N pending candidates")
     parser.add_argument("--dry-run", action="store_true", help="tiktoken estimate only; no API call, no manifest")
     args = parser.parse_args(argv)
     node = Synthesize(open_store(store_path(args.data_root)), args.data_root, limit=args.limit)

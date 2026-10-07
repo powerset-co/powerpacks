@@ -55,27 +55,37 @@ from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAUL
 MAX_GROUP_SIZE = 25
 
 
-def _people(conn: sqlite3.Connection, limit: int | None) -> list[Person]:
-    """Each non-owner candidate's own lookup keys: normalized emails and phones, its channels."""
-    rows = conn.execute(
+DEFAULT_LIMIT = 100_000  # more candidates than any store has; --limit N narrows a run to the first N
+
+
+def _people(conn: sqlite3.Connection, limit: int) -> list[Person]:
+    """The candidates to collect, in the shape v1's message readers take.
+
+    A `Person` carries the lookup keys the readers match messages on (the candidate's normalized
+    emails and phones) and its channels (which stores to open for it). One candidate at a time,
+    three small queries each; 600 candidates take well under a second. The owner is skipped:
+    nobody builds a dossier on the operator.
+    """
+    people = []
+    for row in conn.execute(
         "SELECT candidate_id, display_name FROM candidates WHERE is_owner = 0 ORDER BY candidate_id LIMIT ?",
-        (-1 if limit is None else limit,),
-    ).fetchall()
-    people: dict[str, Person] = {}
-    for row in rows:
-        people[row["candidate_id"]] = Person(row["candidate_id"], row["display_name"])
-    for row in conn.execute("SELECT candidate_id, kind, normalized_value FROM candidate_identifiers ORDER BY 1, 2, 3"):
-        if row["candidate_id"] not in people:
-            continue
-        person = people[row["candidate_id"]]
-        if row["kind"] == "email":
-            person.emails.append(row["normalized_value"])
-        else:
-            person.phones.append(row["normalized_value"])
-    for row in conn.execute("SELECT candidate_id, source FROM candidate_sources ORDER BY 1, 2"):
-        if row["candidate_id"] in people:
-            people[row["candidate_id"]].source_channels.append(row["source"])
-    return list(people.values())
+        (limit,),
+    ):
+        person = Person(row["candidate_id"], row["display_name"])
+        for identifier in conn.execute(
+            "SELECT kind, normalized_value FROM candidate_identifiers WHERE candidate_id = ? ORDER BY kind, normalized_value",
+            (person.person_id,),
+        ):
+            if identifier["kind"] == "email":
+                person.emails.append(identifier["normalized_value"])
+            else:
+                person.phones.append(identifier["normalized_value"])
+        for source in conn.execute(
+            "SELECT source FROM candidate_sources WHERE candidate_id = ? ORDER BY source", (person.person_id,)
+        ):
+            person.source_channels.append(source["source"])
+        people.append(person)
+    return people
 
 
 class Collect(Node):
@@ -83,7 +93,7 @@ class Collect(Node):
     reads = ("candidates", "candidate_identifiers", "candidate_sources")
     writes = ("bundles",)
 
-    def __init__(self, conn: sqlite3.Connection, data_root: Path, limit: int | None) -> None:
+    def __init__(self, conn: sqlite3.Connection, data_root: Path, limit: int) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
         self.wacli_db = data_root / context_sources.DEFAULT_WACLI_DB.relative_to(".powerpacks")
@@ -141,7 +151,7 @@ class Collect(Node):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect one bounded message bundle per candidate into the v2 store.")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
-    parser.add_argument("--limit", type=int, help="first N candidates, for a quick check")
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="first N candidates, for a quick check")
     args = parser.parse_args(argv)
     manifest = Collect(open_store(store_path(args.data_root)), args.data_root, args.limit).run()
     print(manifest.status, " ".join(f"{key}={value}" for key, value in manifest.counts.items()), manifest.error or "")
