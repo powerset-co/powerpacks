@@ -21,17 +21,6 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa:
 
 # The converted nodes. Importing them IS the registration (and would already have
 # raised TypeError if any declaration were incomplete).
-import packs.ingestion.primitives.deep_context.enrich.synthetic.assemble  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.shared.build_owner  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.merge_candidates.build_parents  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.collection.collect_person_context  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.synthesis.compose_dossier  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.migration.seed  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.enrich.profiles.prefetch  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.enrich.research_reconcile.reconcile_deep_research  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.synthesis.synthesize_person_context  # noqa: E402,F401
 import packs.ingestion.primitives.discover.gmail.discover  # noqa: E402,F401
 import packs.ingestion.primitives.discover.messages.discover  # noqa: E402,F401
 import packs.ingestion.primitives.enrich.enrich_people  # noqa: E402,F401

@@ -122,10 +122,7 @@ export function spyReview(overrides: Partial<Review> = {}): Review {
     toast: vi.fn(),
     toastError: vi.fn(),
     applyProgress: vi.fn(),
-    transition: vi.fn(),
     leaveAndReload: vi.fn(),
-    setGuidanceDraft: vi.fn(),
-    setCompleting: vi.fn(),
     ...overrides,
   })
 }

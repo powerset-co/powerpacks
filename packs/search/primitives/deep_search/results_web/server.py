@@ -3,7 +3,7 @@
 Flow: `SearchRoutes` answers the list (`/`, manifests only), one run
 (`/run?run_id=`, loaded on first open and cached until its results or labels
 change), `/api/search`, `/tags` and `/feedback`. The deep-context review
-server mounts them under `/searches` (`bin/deep-context review searches`),
+server mounts them under `/searches` (packs/shared/web/server.py),
 with or without a deep-context store; `make_handler` serves them alone for
 tests.
 

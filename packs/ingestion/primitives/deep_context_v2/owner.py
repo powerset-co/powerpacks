@@ -4,7 +4,6 @@ Writes <data root>/deep-context/owner.json once from the owner's profile (cache 
 fetch on a miss) and the emails given: the name, work, education and location LinkedIn lists, plus
 the phone numbers this Mac's Messages account answers to. The import flags the owner's own
 candidates by these emails and phones, and the judges read the bio (db/owner.py renders it).
-Replaces v1's `bin/deep-context owner` for v2.
 
 Created: 2026-10-07
 """

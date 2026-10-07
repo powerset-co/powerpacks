@@ -5,12 +5,11 @@ import { useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 
 import { fetchInstall, installAction } from "@/lib/api/install"
-import { fetchLinkedinCard, fetchStatus } from "@/lib/api/review"
+import { fetchLinkedinCard } from "@/lib/api/review"
 import { errorText } from "@/lib/api/http"
 import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
-import { doingNow } from "@/pages/review/enrich/copy"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
 // Every other word comes with the status (status_prose.py); these show while the page cannot reach setup.
@@ -69,13 +68,6 @@ export function InstallPage() {
   const [expanded, setExpanded] = useState(false)
   const [actionError, setActionError] = useState("")
   const failed = data?.status === "failed" || data?.index_progress?.status === "failed"
-  const { data: processing } = useQuery({
-    queryKey: ["review-status"],
-    queryFn: ({ signal }) => fetchStatus(signal),
-    enabled: data?.step === "enrich" && data.status === "running",
-    refetchInterval: 5_000,
-    retry: false,
-  })
   const word = (key: string) => data?.prose.page[key] ?? ""
   const title = error
     ? OFFLINE.title
@@ -168,14 +160,9 @@ export function InstallPage() {
             >
               {error
                 ? OFFLINE.line
-                : data?.step === "enrich" &&
-                    data.status === "running" &&
-                    processing?.stage === "enrich" &&
-                    processing.step
-                  ? doingNow(processing.step, processing.pending)
-                  : data?.step === "index" && data.index_progress
-                    ? data.index_progress.message
-                    : (data?.message ?? OFFLINE.reading)}
+                : data?.step === "index" && data.index_progress
+                  ? data.index_progress.message
+                  : (data?.message ?? OFFLINE.reading)}
             </ReservedLines>
             <ReservedLines className="install-note" lines={NOTE_LINES.wide} narrowLines={NOTE_LINES.narrow}>
               {note}

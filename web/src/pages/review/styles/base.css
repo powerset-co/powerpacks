@@ -1,7 +1,7 @@
 /* The review page's shared look: the shell, top bar, stage, cards, the person card
    and its facts, buttons, empty states, the scroll cue, the handoff copy, the carousel and
-   the transitions. The worth, enrich and linkedin blocks live beside this file (worth.css,
-   enrich.css, linkedin.css).
+   the transitions. The enrich and linkedin blocks live beside this file (enrich.css,
+   linkedin.css).
 
    Every rule sits under .review-page, the page's root, so nothing reaches another page. A
    rule for one screen is `.review-page[data-stage="x"]`. Colours are the app's tokens
@@ -520,28 +520,12 @@
 .review-page .stage {
   animation: stage-enter var(--arrive-ms) var(--arrive);
 }
-.review-page .stage-complete {
-  height: 100%;
-}
-.review-page .stage-complete .empty-mark {
-  animation: completion-check 200ms ease-out;
-}
 @keyframes stage-enter {
   from {
     opacity: 0;
   }
   to {
     opacity: 1;
-  }
-}
-@keyframes completion-check {
-  from {
-    opacity: 0;
-    transform: scale(0.85);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -630,11 +614,8 @@
   }
 
   .review-page .stage,
-  .review-page[data-stage="worth"] .identity-card,
   .review-page[data-stage="linkedin"] .identity-card,
-  .review-page[data-stage="worth"] .identity-scroll-shell,
   .review-page[data-stage="linkedin"] .identity-scroll-shell,
-  .review-page[data-stage="worth"] .identity-scroll,
   .review-page[data-stage="linkedin"] .identity-scroll {
     min-height: 0;
   }
@@ -645,7 +626,6 @@
     min-height: 0;
   }
 
-  .review-page[data-stage="worth"] .identity-card,
   .review-page[data-stage="linkedin"] .identity-card {
     height: 100%;
     padding: 18px 22px;
@@ -654,7 +634,6 @@
     grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .review-page[data-stage="worth"] .identity-card .avatar,
   .review-page[data-stage="linkedin"] .identity-card .avatar {
     width: 58px;
     height: 58px;
@@ -662,7 +641,6 @@
     font-size: 18px;
   }
 
-  .review-page[data-stage="worth"] .identity-scroll,
   .review-page[data-stage="linkedin"] .identity-scroll {
     height: 100%;
     min-height: 0;
@@ -674,20 +652,8 @@
     padding-right: 4px;
   }
 
-  .review-page[data-stage="worth"] .details,
   .review-page[data-stage="linkedin"] .details {
     margin-top: 14px;
-  }
-
-  .review-page[data-stage="worth"] .carousel-shell {
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .review-page[data-stage="worth"] .carousel-shell > :last-child {
-    flex: 1;
-    min-height: 0;
   }
 }
 

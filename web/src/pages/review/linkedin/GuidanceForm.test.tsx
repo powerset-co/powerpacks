@@ -94,17 +94,4 @@ describe("GuidanceForm", () => {
     const submit = screen.getByRole<HTMLButtonElement>("button", { name: "Retarget" })
     expect([submit.className, submit.type]).toEqual(["button button-primary", "submit"])
   })
-
-  it("tells the page while a draft is typed, and no longer once it is gone (X3)", () => {
-    const { container, review } = renderForm()
-    const field = must(container.querySelector("textarea"))
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(false)
-    fireEvent.change(field, { target: { value: "the founder" } })
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(true)
-    fireEvent.change(field, { target: { value: " " } })
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(false)
-    fireEvent.change(field, { target: { value: "the founder" } })
-    cleanup()
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(false)
-  })
 })

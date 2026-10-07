@@ -36,11 +36,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from packs.ingestion.primitives.deep_context.collection import context_sources as dcs
-from packs.ingestion.primitives.deep_context.shared.common import (
-    Person,
-    emit,
-)
+from packs.ingestion.primitives.common.person import Person
+from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store
 from packs.ingestion.primitives.logbook import logbook_sources as src
@@ -233,6 +230,11 @@ def _drain(writer: EntryWriter, stream: Iterator[dict[str, Any]]) -> int:
 # --- store openers / readiness ---------------------------------------------
 
 
+def emit(payload: dict[str, Any]) -> None:
+    """One compact JSON line on stdout: the manifest the skill reads back."""
+    print(json.dumps(payload, ensure_ascii=False))
+
+
 def _store_depth(channel: str, db: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"channel": channel, "path": str(db), "exists": db.exists()}
     if not db.exists():
@@ -240,15 +242,15 @@ def _store_depth(channel: str, db: Path) -> dict[str, Any]:
         return info
     try:
         if channel == "imessage":
-            probe = dcs.probe_chat_db(db)
-            info["status"] = "ok" if probe.readable else "unreadable_full_disk_access"
-            info["messages"] = probe.messages
-            if probe.readable:
+            probe = chatdb.probe_message_counts(db)
+            info["status"] = "ok" if probe["readable"] else "unreadable_full_disk_access"
+            info["messages"] = probe["messages"]
+            if probe["readable"]:
                 con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
                 try:
                     raw = con.execute("SELECT MIN(date), MAX(date) FROM message").fetchone()
-                    info["earliest"] = dcs.apple_epoch_iso(raw[0]) if raw and raw[0] else None
-                    info["latest"] = dcs.apple_epoch_iso(raw[1]) if raw and raw[1] else None
+                    info["earliest"] = (chatdb.apple_timestamp_to_iso(raw[0]) or "") if raw and raw[0] else None
+                    info["latest"] = (chatdb.apple_timestamp_to_iso(raw[1]) or "") if raw and raw[1] else None
                 finally:
                     con.close()
             return info

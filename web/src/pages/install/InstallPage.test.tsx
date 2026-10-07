@@ -222,28 +222,14 @@ describe("installation progress", () => {
     expect(screen.queryByText("Building your search index")).toBeNull()
   })
 
-  it("reads shared processing progress, then switches to index progress and stops on failure", async () => {
+  it("shows the processing message, then switches to index progress and stops on failure", async () => {
     let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(
       "fetch",
-      vi.fn((url: string) =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify(
-              url === "/api/status"
-                ? {
-                    stage: "enrich",
-                    step: "research",
-                    pending: { lookups: 3 },
-                  }
-                : status,
-            ),
-          ),
-        ),
-      ),
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { client, container } = mount()
-    await screen.findByText("Looking up 3 people")
+    await screen.findByText("Enriching contacts")
     status = {
       ...INSTALL,
       step: "index",

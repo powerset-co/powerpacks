@@ -45,7 +45,7 @@ from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
     write_jsonl as write_jsonl_rows,
 )
 from packs.ingestion.primitives.discover.common import write_csv_rows  # noqa: E402
-from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match  # noqa: E402
+from packs.ingestion.primitives.common.names import source_names_can_match  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli import (  # noqa: E402

@@ -40,8 +40,8 @@ from email.message import Message
 from pathlib import Path
 from typing import Any, Iterator
 
-from packs.ingestion.primitives.deep_context.collection import context_sources as dcs
-from packs.ingestion.primitives.deep_context.shared.common import Person, phone_digits
+from packs.ingestion.primitives.common.person import Person, phone_digits
+from packs.ingestion.primitives.discover.gmail.msgvault import store as gni
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages
 from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store
@@ -156,7 +156,7 @@ def _html_to_text(html_body: str) -> str:
 _RAW_HEAD_COMPRESSED = 2 * 1024 * 1024
 
 
-def _gmail_body(store: "dcs.gni.MsgvaultStore", mid: int) -> str:
+def _gmail_body(store: "gni.MsgvaultStore", mid: int) -> str:
     """Full verbatim body for one message: raw MIME head (incl. forwards + attachment
     names) first, then the extracted text/html fallback. Reads only the head by PK so
     the streaming sort stays blob-free and a fat attachment can't blow up memory."""
@@ -169,21 +169,21 @@ def _gmail_body(store: "dcs.gni.MsgvaultStore", mid: int) -> str:
 
 
 def open_msgvault(msgvault_db: Path) -> Any:
-    return dcs.gni.MsgvaultStore(msgvault_db).connect()
+    return gni.MsgvaultStore(msgvault_db).connect()
 
 
 def _build_gmail_convs(con: Any, person: Person) -> int:
     """Build cand_pid + the materialized lb_convs temp table. Returns thread count."""
     if not person.emails:
         return 0
-    return dcs.gni.MsgvaultStore(connection=con).prepare_logbook_conversations(person.emails)
+    return gni.MsgvaultStore(connection=con).prepare_logbook_conversations(person.emails)
 
 
 def stream_gmail(person: Person, con: Any, *, since_id: int = 0) -> Iterator[dict[str, Any]]:
     """Yield every message in the person's email threads, oldest-first per thread."""
     if not _build_gmail_convs(con, person):
         return
-    store = dcs.gni.MsgvaultStore(connection=con)
+    store = gni.MsgvaultStore(connection=con)
     for row in store.stream_logbook_thread_rows(since_id):
         # Full raw MIME (keeps forwarded/nested messages), fetched by PK on a separate
         # cursor so the sorted scan above never holds a blob.
@@ -214,7 +214,7 @@ def count_gmail(person: Person, con: Any) -> tuple[int, int]:
     threads = _build_gmail_convs(con, person)
     if not threads:
         return 0, 0
-    return dcs.gni.MsgvaultStore(connection=con).count_logbook_messages(), threads
+    return gni.MsgvaultStore(connection=con).count_logbook_messages(), threads
 
 
 # --- iMessage (chat.db) -----------------------------------------------------
@@ -285,7 +285,7 @@ def build_imessage_name_map(wacli_db: Path, msgvault_db: Path, people: list[Pers
     the CSV people (CSV wins). Lets us name an UNNAMED iMessage group by its members."""
     name_map: dict[str, str] = {}
     if msgvault_db.exists():
-        store = dcs.gni.MsgvaultStore(msgvault_db)
+        store = gni.MsgvaultStore(msgvault_db)
         try:
             store.connect()
             for row in store.participant_phone_names():

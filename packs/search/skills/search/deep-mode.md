@@ -175,7 +175,7 @@ in the foreground, and it restarts any review server already on the port
 (state is in SQLite; nothing is lost):
 
 ```bash
-bin/deep-context review searches --run "$(basename <run>)"
+uv run --project . python -m packs.shared.web.server start --stage searches --run "$(basename <run>)"
 ```
 
 It prints `review UI: http://127.0.0.1:8765/searches/run?run_id=<slug>`; that

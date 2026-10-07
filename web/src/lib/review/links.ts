@@ -1,7 +1,6 @@
-// The review page's URLs. The query names are `stage`, `view` (the worth tab), `preview`,
-// `debug` and `index`.
+// The review page's URLs. The query names are `stage`, `view`, `preview`, `debug` and `index`.
 
-import type { ReviewView, WorthTab } from "@/types/review"
+import type { ReviewView } from "@/types/review"
 
 export const REVIEW_PATH = "/"
 
@@ -32,12 +31,7 @@ export function readScreenQuery(search: string): ScreenQuery {
   }
 }
 
-/** A stage's screen, as a stage transition opens it: no preview, the default tab. */
+/** A stage's screen: no preview. */
 export function stageHref(stage: ReviewView): string {
   return `${REVIEW_PATH}?stage=${stage}`
-}
-
-/** A worth tab; a deliberately opened screen stays one. */
-export function tabHref(tab: WorthTab, preview: boolean): string {
-  return `${stageHref("worth")}&view=${tab}${preview ? "&preview=1" : ""}`
 }

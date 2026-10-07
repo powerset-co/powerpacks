@@ -25,13 +25,13 @@ describe("HandoffCopy", () => {
     const toast = vi.fn()
     render(
       <ReviewHarness review={fakeReview({ toast })}>
-        <HandoffCopy phrase="bin/deep-context dry" />
+        <HandoffCopy phrase="bin/deep-context-v2 run" />
       </ReviewHarness>,
     )
-    expect(screen.getByText("bin/deep-context dry").tagName).toBe("CODE")
+    expect(screen.getByText("bin/deep-context-v2 run").tagName).toBe("CODE")
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Copied"))
-    expect(write).toHaveBeenCalledWith("bin/deep-context dry")
+    expect(write).toHaveBeenCalledWith("bin/deep-context-v2 run")
   })
 
   it("names the phrase to type when the clipboard refuses", async () => {
@@ -55,11 +55,13 @@ describe("HandoffCopy", () => {
     const toastError = vi.fn()
     render(
       <ReviewHarness review={fakeReview({ toastError })}>
-        <HandoffCopy phrase="bin/deep-context dry" />
+        <HandoffCopy phrase="bin/deep-context-v2 run" />
       </ReviewHarness>,
     )
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))
-    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Copy failed — type: bin/deep-context dry"))
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Copy failed — type: bin/deep-context-v2 run"),
+    )
   })
 })
 
@@ -91,6 +93,6 @@ describe("SynthesisPending", () => {
     )
     expect(container.querySelector(".empty-mark")).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))
-    await waitFor(() => expect(write).toHaveBeenCalledWith("bin/deep-context dry"))
+    await waitFor(() => expect(write).toHaveBeenCalledWith("bin/deep-context-v2 run"))
   })
 })

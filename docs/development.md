@@ -179,7 +179,7 @@ The examples are ingestion-flavored but the rules apply repo-wide.
 ### Structure — primitives match stages, one concern per file
 
 - Pipeline packages mirror the stages: `discover/`, `imports/`, `enrich/`,
-  `deep_context/`, `logbook/`, `setup/`, with per-vertical subpackages
+  `deep_context_v2/`, `logbook/`, `setup/`, with per-vertical subpackages
   (`gmail/`, `messages/`, `linkedin/`, `twitter/`) and a vertical-local
   `util.py`. No flat primitive dumps. A file that belongs to another stage is
   misfiled even if it works — move it (`imports/gmail/import_steps.py` and

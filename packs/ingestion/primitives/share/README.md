@@ -17,8 +17,8 @@ flowchart LR
 ```
 
 ```bash
-bin/deep-context share          # the tables
-bin/deep-context review people  # the People page: tag people share / private in bulk
+bin/deep-context-v2 share       # the tables
+bin/deep-context-v2 review      # the page server; the People page is /people: tag people share / private in bulk
 ```
 
 `share` is the stage's one node (`share_list.ShareList`, declared in
