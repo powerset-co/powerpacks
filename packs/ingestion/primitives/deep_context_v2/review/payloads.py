@@ -234,11 +234,9 @@ def _section(title: str, lines: list[str]) -> str:
 
 
 def dossier(card: Card) -> str:
-    """The family's dossier under the card: members, messages, and the collapsed facts."""
+    """The family's dossier under the card: message counts and the collapsed facts. The members' written
+    names are not listed: the card's name and contact line already say who the family is."""
     facts = card.facts
-    members: list[str] = []
-    for member in card.members:
-        members.append(member.display_name or member.candidate_id)
     messages: list[str] = []
     for channel, count in card.messages.items():
         messages.append(f"{channel}: {count}")
@@ -258,7 +256,7 @@ def dossier(card: Card) -> str:
     for context in facts.shared_context:
         shared.append(f"{context.overlap}: {context.detail}")
     return "".join([
-        _section("Members", members), _section("Messages", messages), _section("About", about),
+        _section("Messages", messages), _section("About", about),
         _section("Employers", employers), _section("Topics", list(facts.topics)), _section("Notable events", events),
         _section("Shared context", shared),
     ])
