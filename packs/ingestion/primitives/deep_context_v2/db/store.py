@@ -26,9 +26,11 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def open_store(path: Path) -> sqlite3.Connection:
+def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
+    """The store, created with the schema when absent. `shared` lets a threaded server use the one
+    connection from any thread; the server serializes its requests on it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, check_same_thread=not shared)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")

@@ -34,7 +34,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.account_email = "powerset@example.com"
         self.source_choices = []
         self.source_result = {"step": "deep_context", "status": "waiting", "action": {"kind": "processing"}}
-        self.page = patch("packs.ingestion.primitives.deep_context.review.cli.start_server",
+        self.page = patch("packs.shared.web.server.start_server",
                           return_value={"url": "http://127.0.0.1:8899/install"})
         self.launch_page = self.page.start()
         self.account = patch("packs.powerset.primitives.install.onboard.Onboarding")

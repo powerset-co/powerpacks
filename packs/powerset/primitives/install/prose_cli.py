@@ -17,7 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.review.cli import start_server
+from packs.shared.web.server import start_server
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE, ROWS, render, source_counts
 from packs.powerset.primitives.install.steps import DEFAULT_PLAN, InstallStep

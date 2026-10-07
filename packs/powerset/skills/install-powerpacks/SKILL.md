@@ -19,6 +19,8 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-07: processing runs deep-context v2; the review is the page at `/` and
+  `bin/deep-context-v2 finish` rebuilds search after it.
 - 2026-10-05: Codex uses a persistent tmux worker; the advisor relays chat choices
   and reads its output while the coordinator remains the owner of progress.
 - 2026-10-05: Page lines name no reasons; a stopped or deferred step's reason is in its
@@ -313,11 +315,10 @@ the ready step completes, say it in this order, in plain words:
    count the review page shows: `pending` in `curl -fsS http://127.0.0.1:<port>/api/review/linkedin-card`
    (the status page's port). When it is above 0, say: "If you have time, <pending>
    LinkedIn matches need a quick look. Want me to open them?" Only on a yes, open
-   `http://127.0.0.1:<port>/?stage=linkedin` beside chat (the host's browser pane,
-   else the default browser). When they are done, say
-   you are rebuilding search with their decisions and run the saved `retry_command`.
-   They can come back to it later by saying "review my pending contacts"
-   (`bin/deep-context review linkedin`).
+   `http://127.0.0.1:<port>/` beside chat (the host's browser pane, else the default
+   browser). When they are done, say you are rebuilding search with their decisions and
+   run `bin/deep-context-v2 finish`. They can come back to it later by saying "review my
+   pending contacts" (`bin/deep-context-v2 review`).
 
 A network's people count does not prove search readiness; only index validation
 does. Keep internal IDs and provider details in troubleshooting. If the user also

@@ -135,6 +135,8 @@ class Enrich(Node):
         priced: dict[str, object] = judge.estimate(tasks, self.jev_cache, owner_background_block(read_owner(self.conn)))
         for key, value in priced.items():
             result[key] = value
+        # The block's price: the research runs plus the judge at most (profile fetches are not priced).
+        result["estimated_cost_usd"] = round(float(result["research_cost_usd"]) + float(priced["estimated_cost_usd_at_most"]), 4)
         return result
 
 
