@@ -122,10 +122,22 @@ def whatsapp_phone_digit_forms(phone: str | None) -> tuple[str, ...]:
 
 
 def whatsapp_dm_jids(phones: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """Every JID a direct chat with these phones can be filed under.
+
+    WhatsApp hides the number of a contact who has not shared it and files the chat under the
+    contact's ID (``<digits>@lid``); import keeps those digits as the contact's phone, so the full
+    digits are also tried as an ID.
+    """
     jids: list[str] = []
     for phone in phones:
-        for digits in whatsapp_phone_digit_forms(phone):
-            jid = f"{digits}@s.whatsapp.net"
+        forms = whatsapp_phone_digit_forms(phone)
+        if not forms:
+            continue
+        candidates: list[str] = []
+        for digits in forms:
+            candidates.append(f"{digits}@s.whatsapp.net")
+        candidates.append(f"{forms[0]}@lid")
+        for jid in candidates:
             if jid not in jids:
                 jids.append(jid)
     return tuple(jids)
