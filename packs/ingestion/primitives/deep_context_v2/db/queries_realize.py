@@ -4,11 +4,11 @@ Created: 2026-10-07
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, Worth
+from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
 
 @dataclass(frozen=True)
@@ -41,8 +41,9 @@ def members_of_talked_to_parents(conn: sqlite3.Connection) -> list[Member]:
         "(SELECT p.parent_id FROM current_parent p JOIN facts f USING (candidate_id)) "
         "ORDER BY cp.parent_id, c.candidate_id"
     ):
-        # The importer stores the counts as a JSON string inside its row.
-        counts: dict[str, int] = json.loads(row["counts"])
+        # The importer stores the people.csv cell as written: JSON, or blank for a person with no
+        # counted interactions (people_schema is the cell's contract).
+        counts: dict[str, int] = parse_interaction_counts(row["counts"])
         members.append(Member(row["parent_id"], row["candidate_id"], row["display_name"], counts,
                               row["last_interaction"]))
     return members
