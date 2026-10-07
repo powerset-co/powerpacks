@@ -508,11 +508,8 @@
 
 /* The stage leaving before its data is read again. */
 .review-page .stage.leaving {
-  transform: translateY(-8px);
   opacity: 0;
-  transition:
-    opacity var(--leave-ms) var(--leave),
-    transform var(--leave-ms) var(--leave);
+  transition: opacity var(--leave-ms) var(--leave);
 }
 /* Each screen fades in as it loads (the stage is keyed by the load). */
 .review-page .stage {
@@ -527,7 +524,7 @@
 @keyframes stage-enter {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
@@ -549,31 +546,23 @@
 .review-page .decision-card.swapping {
   pointer-events: none;
 }
-/* The old contents drop away together; the new ones rise in one block after another (the
-   header, then the body, then the question and buttons), each 45 ms behind the last. */
+/* The frame stays put, so the contents cross-fade in place: the old ones fade out where they
+   are (no travel, which reads as the page scrolling), the new ones settle in from 4 px below,
+   the header first and the body and buttons 40 ms behind. */
 .review-page .decision-card.swapping > * {
   opacity: 0;
-  transform: translateY(-8px);
-  transition:
-    opacity var(--leave-ms) var(--leave),
-    transform var(--leave-ms) var(--leave);
+  transition: opacity var(--leave-ms) var(--leave);
 }
 .review-page .decision-card.entering > * {
   animation: card-content-enter var(--arrive-ms) var(--arrive) both;
 }
-.review-page .decision-card.entering > :nth-child(2) {
-  animation-delay: 45ms;
-}
-.review-page .decision-card.entering > :nth-child(3) {
-  animation-delay: 90ms;
-}
-.review-page .decision-card.entering > :nth-child(n + 4) {
-  animation-delay: 135ms;
+.review-page .decision-card.entering > :nth-child(n + 2) {
+  animation-delay: 40ms;
 }
 @keyframes card-content-enter {
   from {
     opacity: 0;
-    transform: translateY(14px);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
