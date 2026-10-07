@@ -43,6 +43,7 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import Identif
 from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, MINTED_PARENT_HEX, MINTED_PARENT_PREFIX, MergeReason
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.dedupe import judge
+from packs.ingestion.primitives.deep_context_v2.dedupe.judge import SolDecision, SolSide
 from packs.ingestion.primitives.deep_context_v2.dedupe.blocking import Blocking, block
 from packs.ingestion.primitives.deep_context_v2.names import names_for_matching, written_names_can_match
 from packs.ingestion.primitives.deep_context_v2.node import Node
@@ -101,6 +102,7 @@ class Dedupe(Node):
 
     def plan(self) -> Plan:
         # Rule 1: block every candidate with facts.
+        """Rules 1 to 3: block, gate, skip the joined and the judged; the pairs for Sol with their signatures."""
         blocking: Blocking = block(sorted(self.fingerprints), self.names, self.identifiers)
         gated: int = 0
         joined: int = 0
@@ -134,8 +136,8 @@ class Dedupe(Node):
         owner_name: str = read_owner(self.conn).name
         rendered: list[str] = []
         for a, b, _ in todo:
-            first: judge.Side = judge.side_of(self.written[a], self.identifiers[a], facts[a], bundles[a])
-            second: judge.Side = judge.side_of(self.written[b], self.identifiers[b], facts[b], bundles[b])
+            first: SolSide = judge.side_of(self.written[a], self.identifiers[a], facts[a], bundles[a])
+            second: SolSide = judge.side_of(self.written[b], self.identifiers[b], facts[b], bundles[b])
             rendered.append(judge.user_prompt(owner_name, first, second))
         return rendered
 
@@ -161,6 +163,7 @@ class Dedupe(Node):
         }
 
     def execute(self) -> dict[str, int]:
+        """Rules 4 to 7: judge the planned pairs, join families over the same verdicts, then a parent for everyone else."""
         plan: Plan = self.plan()
         # Rule 4: judge; every answer is saved as it arrives.
         answers: dict[tuple[str, str], int | None] = asyncio.run(self._judge_all(plan.todo, self.prompts(plan.todo)))
@@ -276,7 +279,7 @@ class Dedupe(Node):
         as it arrives, so a stopped run keeps what it paid for. A failed pair is printed and left out."""
         answers: dict[tuple[str, str], int | None] = {}
         async with OpenAIResponsesCaller(self.config) as caller:
-            tasks: list[asyncio.Task[tuple[int, judge.Decision | None]]] = []
+            tasks: list[asyncio.Task[tuple[int, SolDecision | None]]] = []
             for index, prompt in enumerate(prompts):
                 tasks.append(asyncio.create_task(self._guarded(caller, index, prompt)))
             for task in asyncio.as_completed(tasks):
@@ -290,7 +293,7 @@ class Dedupe(Node):
                 answers[(a, b)] = decision.same_person
         return answers
 
-    async def _guarded(self, caller: OpenAIResponsesCaller, index: int, prompt: str) -> tuple[int, judge.Decision | None]:
+    async def _guarded(self, caller: OpenAIResponsesCaller, index: int, prompt: str) -> tuple[int, SolDecision | None]:
         try:
             return index, await judge.judge(caller, prompt)
         except Exception as exc:
@@ -299,6 +302,7 @@ class Dedupe(Node):
 
 
 def mint() -> str:
+    """A fresh p: parent id."""
     return MINTED_PARENT_PREFIX + secrets.token_hex(MINTED_PARENT_HEX // 2)
 
 

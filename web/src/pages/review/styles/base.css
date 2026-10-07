@@ -403,15 +403,26 @@
   stroke-linejoin: round;
 }
 
+/* The name and, beside it, the LinkedIn icon: the heading keeps the name alone. */
+.review-page .name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .review-page .linkedin-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 12px;
+  flex: none;
   color: #6ba7e4;
-  font-size: 13px;
-  font-weight: 700;
   text-decoration: none;
+}
+/* The judge's reason under the badges. */
+.review-page .person-reason {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .review-page input {
@@ -427,7 +438,9 @@
   color: var(--muted);
 }
 
+/* A finished or empty panel arrives like a card's contents: it follows a decision's fade-out. */
 .review-page .empty-state {
+  animation: card-content-enter var(--arrive-ms) var(--arrive);
   min-height: 380px;
   display: flex;
   flex-direction: column;
@@ -486,17 +499,26 @@
   padding: 6px 14px;
 }
 
+/* Motion: the original 100 ms out / 180 ms in swap, 1.5x slower (Arthur, 2026-10-07, after
+   comparing three choreographies side by side). lib/review/timing.ts waits --leave-ms before a swap. */
+.review-page {
+  --leave-ms: 150ms;
+  --leave: ease;
+  --arrive-ms: 270ms;
+  --arrive: cubic-bezier(0.2, 0, 0, 1);
+}
+
 /* The stage leaving before its data is read again. */
 .review-page .stage.leaving {
   transform: translateY(-5px);
   opacity: 0;
   transition:
-    opacity 100ms ease,
-    transform 100ms ease;
+    opacity var(--leave-ms) var(--leave),
+    transform var(--leave-ms) var(--leave);
 }
 /* Each screen fades in as it loads (the stage is keyed by the load). */
 .review-page .stage {
-  animation: stage-enter 180ms ease-out;
+  animation: stage-enter var(--arrive-ms) var(--arrive);
 }
 .review-page .stage-complete {
   height: 100%;
@@ -527,17 +549,16 @@
 .review-page .decision-card.swapping {
   pointer-events: none;
 }
-/* 100 ms out (lib/review/timing.ts waits the same 100 ms before the swap), 180 ms in: long
-   enough for the new card's arrival to be seen. */
+/* The old contents lift 5 px and fade; the new ones rise 6 px into place. */
 .review-page .decision-card.swapping > * {
   opacity: 0;
   transform: translateY(-5px);
   transition:
-    opacity 100ms ease,
-    transform 100ms ease;
+    opacity var(--leave-ms) var(--leave),
+    transform var(--leave-ms) var(--leave);
 }
 .review-page .decision-card.entering > * {
-  animation: card-content-enter 180ms cubic-bezier(0.2, 0, 0, 1);
+  animation: card-content-enter var(--arrive-ms) var(--arrive);
 }
 @keyframes card-content-enter {
   from {

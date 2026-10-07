@@ -76,6 +76,7 @@ def _clean(text: str) -> str:
 
 def parse_name(text: str) -> Name:
     # An email address saved as the name is not a name.
+    """One written name read into a Name: given names (with a parenthetical alternate), middle, family, generation."""
     if "@" in text:
         return Name((), (), "", "")
     # Pull every parenthetical out first; the parser would read it as a nickname.
@@ -135,6 +136,7 @@ def _middle_names_agree(first: tuple[str, ...], second: tuple[str, ...]) -> bool
 
 def same_person_name(a: Name, b: Name) -> bool:
     # Both must be full names: a given name and a surname.
+    """The precision rule: identical surname and generation, given names equal or a two-letter prefix, middles agree."""
     if not a.given or not b.given or not a.family or not b.family:
         return False
     if a.family != b.family or a.generation != b.generation:

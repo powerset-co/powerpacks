@@ -1,12 +1,13 @@
 import type { ReactNode } from "react"
 
-import { FACT, VIEW_LINKEDIN } from "@/lib/review/copy"
+import { FACT } from "@/lib/review/copy"
 import { displayName, profileUrl, summaryOf } from "@/lib/review/person"
 import type { ReviewCandidate, ReviewPerson } from "@/types/review"
 
 import { Dossier } from "./Dossier"
 import { FactList } from "./FactList"
 import { LabelBadges } from "./LabelBadges"
+import { LinkedinLink } from "./LinkedinLink"
 import { ReviewAvatar } from "./ReviewAvatar"
 import { SourceBadges } from "./SourceBadges"
 
@@ -22,8 +23,8 @@ interface PersonCardProps {
   dossier?: boolean
 }
 
-// A person as a card shows them: avatar, source badges, name, label badges and "View
-// LinkedIn", then the facts (Contact, Summary, Location, Work, Education) and the person's
+// A person as a card shows them: avatar, source badges, name with its LinkedIn icon, label
+// badges and the judge's reason, then the facts (Contact, Summary, Location, Work, Education) and the person's
 // dossier.
 export function PersonCard({ person, candidate, personOnly = false, dossier = true }: PersonCardProps) {
   const url = profileUrl(candidate, personOnly)
@@ -39,14 +40,11 @@ export function PersonCard({ person, candidate, personOnly = false, dossier = tr
               <SourceBadges sources={person.sources} />
             </div>
           ) : null}
-          <h2>{displayName(person, candidate, personOnly)}</h2>
+          <div className="name-row">
+            <h2>{displayName(person, candidate, personOnly)}</h2>
+            {url ? <LinkedinLink url={url} /> : null}
+          </div>
           <LabelBadges labels={person.labels} candidate={facts} />
-          {url ? (
-            <a className="linkedin-label" href={url} target="_blank" rel="noreferrer">
-              {VIEW_LINKEDIN}
-              <span aria-hidden="true">↗</span>
-            </a>
-          ) : null}
         </div>
       </div>
       <section className="details">

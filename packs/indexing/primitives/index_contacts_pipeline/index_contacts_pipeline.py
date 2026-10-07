@@ -510,7 +510,7 @@ def maybe_materialize_existing_records(args: argparse.Namespace) -> dict[str, An
     if not people_records.exists() or people_records.stat().st_size <= 0:
         return {"status": "skipped", "reason": "missing_records"}
     if duckdb.exists() and duckdb.stat().st_size > 1024:
-        return {"status": "skipped", "reason": "duckdb_exists", "duckdb": str(duckdb.relative_to(ROOT))}
+        return {"status": "skipped", "reason": "duckdb_exists", "duckdb": root_relative(duckdb)}
     code, payload, stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
     if code != 0:
         return {"status": "failed", "step": "local_duckdb", "payload": payload, "error": tail(stderr)}
@@ -610,7 +610,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
             "people_csv": str(args.people_csv),
             "people_sha256": sha256_file(people_path),
             "output_dir": str(args.output_dir),
-            "duckdb": str(existing_duckdb.relative_to(ROOT)),
+            "duckdb": root_relative(existing_duckdb),
             "manifest": str(manifest_path),
             "estimated_cost_usd": total_cost,
             "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
@@ -624,7 +624,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         }
         write_manifest(manifest_path, payload)
         notify_progress(progress_callback, "index_records", "Local search records are current", status="completed", payload={"reason": "processing_outputs_complete"})
-        notify_progress(progress_callback, "search_duckdb", "Local search database is current", status="completed", payload={"duckdb": str(existing_duckdb.relative_to(ROOT))})
+        notify_progress(progress_callback, "search_duckdb", "Local search database is current", status="completed", payload={"duckdb": root_relative(existing_duckdb)})
         return payload, 0
     if pending_people == 0 and paid_calls == 0:
         progress("duckdb: refreshing local search tables from current records")

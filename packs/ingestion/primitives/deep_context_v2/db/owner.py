@@ -1,6 +1,7 @@
 """The operator's profile: read owner.json into the store, render it for prompts. No provider call.
 
-Emails and phones are normalized here, once, with the same normalizers the import uses for
+The file is written once by `deep_context_v2/owner.py` (the `owner` command) from the owner's own
+LinkedIn. Emails and phones are normalized here, once, with the same normalizers the import uses for
 candidate identifiers, so a caller compares values and never normalizes again.
 
 Created: 2026-10-06
@@ -107,7 +108,9 @@ def _span(start: str, end: str) -> str:
 
 
 def owner_background_block(owner: OwnerProfile) -> str:
-    """The owner's bio as a prompt block. Byte-identical to v1 `shared/common.py:owner_background_block`."""
+    """The owner's bio as a prompt block: v1 `shared/common.py:owner_background_block` plus one line naming the
+    owner's email domains, so a judge can tie an employer LinkedIn lists under its legal name (Brain of Things)
+    to the name a profile uses (Caspar AI, from arthur@caspar.ai)."""
     lines = [f"MAILBOX OWNER BACKGROUND (me): {owner.name}".strip()]
     for education in owner.education:
         note = f" ({education.note})" if education.note else ""
@@ -115,6 +118,13 @@ def owner_background_block(owner: OwnerProfile) -> str:
     for job in owner.work:
         title = f" as {job.title}" if job.title else ""
         lines.append(f"- Work: {job.company}{title} [{_span(job.start, job.end)}]")
+    domains: list[str] = []
+    for email in owner.emails:
+        domain = email.rsplit("@", 1)[-1]
+        if domain not in domains:
+            domains.append(domain)
+    if domains:
+        lines.append(f"- My email domains, past and present employers among them: {', '.join(domains)}")
     if owner.locations:
         lines.append(f"- Locations over time: {', '.join(owner.locations)}")
     if owner.notes:

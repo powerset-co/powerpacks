@@ -1,0 +1,32 @@
+{% macro contact(label, side) %}
+CONTACT {{ label }} — {{ side.display_name }}  [emails: {{ side.emails | join(', ') or 'none' }}]
+{% for line in side.lines %}
+  {{ line }}
+{% else %}
+  (no extracted facts)
+{% endfor %}
+Messages:
+{% for text in side.from_me %}
+  me→them: {{ text }}
+{% else %}
+  (no messages from me)
+{% endfor %}
+{% for text in side.from_them %}
+  them→me: {{ text }}
+{% else %}
+  (no messages from them)
+{% endfor %}
+{% endmacro %}
+Network owner: {{ owner_name }}
+
+{{ contact('A', a) }}
+{{ contact('B', b) }}
+ORIGINAL SOURCE CONTACT NAMES:
+A: {{ a.names_json }}
+B: {{ b.names_json }}
+
+SOURCE CONTACT PHONES:
+A: {{ a.phones_json }}
+B: {{ b.phones_json }}
+
+Are A and B the same person, different people, or uncertain?

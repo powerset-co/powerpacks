@@ -418,8 +418,8 @@ describe("PileTable: an opened row", () => {
       "Founder",
       "Close friend",
     ])
-    const link = must(card.querySelector("a.linkedin-label"))
-    expect(link.textContent).toBe("View LinkedIn↗")
+    const link = must(card.querySelector(".name-row > a.linkedin-label"))
+    expect(link.getAttribute("aria-label")).toBe("View LinkedIn")
     expect(link.getAttribute("href")).toBe("https://www.linkedin.com/in/jordan-bravo")
     expect(facts(loaded, "section.details > dl")).toEqual([
       ["Contact", "jordan@example.com · +15550100"],
