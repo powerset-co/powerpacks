@@ -87,6 +87,7 @@ class ReviewApi:
                                    len(order), position)
 
     def decide(self, form: Params) -> DecideResult:
+        """One human decision on one family: Yes (keep), Skip (detach) or Retarget (fix); answers with the next card."""
         pub: str = _value(form, "pub")
         decision: str = _value(form, "decision")
         slug: str = _value(form, "parent_slug")
@@ -109,6 +110,7 @@ class ReviewApi:
         return DecideResult(True, self.linkedin_card({"exclude": [slug]}))
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> None:
+        """Route a GET: the dossier fragment, the page, or the next card."""
         params: Params = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/api/dossier":
             card: Card = load_card(self.conn, self.data_root, _value(params, "slug"))
@@ -122,6 +124,7 @@ class ReviewApi:
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> None:
         # A page on another site must not be able to decide for the user.
+        """Route a POST: a decision, or the refused describe-the-person retarget."""
         origin: str = handler.headers.get("Origin") or ""
         if origin and urllib.parse.urlparse(origin).hostname not in LOCAL_HOSTS:
             _send_json(handler, {"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)

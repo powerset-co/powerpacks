@@ -83,6 +83,7 @@ def _marks(values: list[str]) -> str:
 
 
 def queue(conn: sqlite3.Connection) -> list[QueueRow]:
+    """The candidate list: every worth-yes p: family with no human LinkedIn row, with what it has pending."""
     rows: list[QueueRow] = []
     for row in conn.execute(QUEUE_SQL):
         rows.append(QueueRow(row["parent_id"], bool(row["needs_review"]), bool(row["has_card"])))
@@ -90,6 +91,7 @@ def queue(conn: sqlite3.Connection) -> list[QueueRow]:
 
 
 def family_members(conn: sqlite3.Connection, parent_id: str) -> list[Member]:
+    """The members of one family: candidate id and written name, in candidate order."""
     members: list[Member] = []
     for row in conn.execute(MEMBERS_SQL, (parent_id,)):
         members.append(Member(row["candidate_id"], row["display_name"]))
@@ -97,6 +99,7 @@ def family_members(conn: sqlite3.Connection, parent_id: str) -> list[Member]:
 
 
 def identifiers(conn: sqlite3.Connection, candidate_ids: list[str]) -> list[IdentifierRow]:
+    """Every email and phone of the given candidates, kind then value."""
     found: list[IdentifierRow] = []
     for row in conn.execute(
         f"SELECT kind, normalized_value, display_value FROM candidate_identifiers WHERE candidate_id IN ({_marks(candidate_ids)}) "
@@ -108,6 +111,7 @@ def identifiers(conn: sqlite3.Connection, candidate_ids: list[str]) -> list[Iden
 
 
 def sources(conn: sqlite3.Connection, candidate_ids: list[str]) -> list[str]:
+    """The channels the given candidates were imported from, once each."""
     found: list[str] = []
     for row in conn.execute(
         f"SELECT DISTINCT source FROM candidate_sources WHERE candidate_id IN ({_marks(candidate_ids)}) ORDER BY source",
@@ -155,6 +159,7 @@ def labels_json(conn: sqlite3.Connection, candidate_ids: list[str]) -> str | Non
 
 
 def current_verdicts(conn: sqlite3.Connection, candidate_ids: list[str]) -> list[CurrentVerdict]:
+    """The given candidates' current LinkedIn verdicts, oldest first."""
     found: list[CurrentVerdict] = []
     for row in conn.execute(
         "SELECT candidate_id, linkedin_url, member_id, origin, verdict, judgment_fingerprint FROM current_linkedins "
@@ -191,6 +196,7 @@ def first_family(conn: sqlite3.Connection) -> str:
 
 
 def query_plan(conn: sqlite3.Connection, sql: str, params: list[str]) -> list[str]:
+    """EXPLAIN QUERY PLAN for one statement, as its detail lines."""
     lines: list[str] = []
     for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params):
         lines.append(row["detail"])
@@ -213,6 +219,7 @@ def insert_linkedin(conn: sqlite3.Connection, candidate_id: str, url: str, membe
 
 def insert_parent(conn: sqlite3.Connection, candidate_id: str, parent_id: str, reason: str, verdict_ref: str,
                   now: str) -> None:
+    """One appended parent row for a human decision."""
     conn.execute(
         "INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, ?, ?, ?, ?)",
         (candidate_id, parent_id, reason, verdict_ref, now),
@@ -220,6 +227,7 @@ def insert_parent(conn: sqlite3.Connection, candidate_id: str, parent_id: str, r
 
 
 def insert_worth_no(conn: sqlite3.Connection, candidate_id: str, reason: str, now: str) -> None:
+    """One human worth-no row for a Skip."""
     conn.execute(
         "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
         "VALUES (?, ?, ?, ?, NULL, NULL, ?)",

@@ -11,6 +11,8 @@ Created: 2026-10-07
 from __future__ import annotations
 
 import json
+
+import jinja2
 from pathlib import Path
 from typing import Any
 
@@ -22,9 +24,11 @@ from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 
+from packs.ingestion.primitives.deep_context_v2 import assets
+
 _HERE = Path(__file__).parent
-SYSTEM_PROMPT: str = (_HERE / "linkedin_reconcile_system.txt").read_text(encoding="utf-8").removesuffix("\n")
-SCHEMA: dict[str, Any] = json.loads((_HERE / "linkedin_reconcile_schema.txt").read_text(encoding="utf-8"))
+SYSTEM_PROMPT: str = assets.text(_HERE, "linkedin_reconcile_system.txt")
+SCHEMA: dict[str, Any] = assets.json_file(_HERE, "linkedin_reconcile_schema.txt")
 SCHEMA_NAME = "linkedin_reconcile"
 MODEL = "gpt-6.1-sol"
 REASONING_EFFORT = "medium"
@@ -36,19 +40,15 @@ RESEARCH_NOTE = ("\n\nThis is a speculative web-research proposal. A shared name
                  "is not a contradiction. Interview or referral context does not prove employment; evaluate the dates.")
 
 
-def _bullets(items: list[str], empty: str) -> str:
-    if not items:
-        return "  " + empty
-    lines: list[str] = []
-    for item in items:
-        lines.append("  - " + item)
-    return "\n".join(lines)
+TEMPLATE: jinja2.Template = assets.template(_HERE, "identity_prompt.j2")
 
 
 def identity_prompt(family: Family, profile: Profile, origin: str, citations: tuple[dict[str, Any], ...], owner_block: str) -> str:
-    """One profile against the family, in the identity judge's shape: the owner's background, the contact
-    (names, facts, handles), the LinkedIn profile, then a note on where the profile came from."""
+    """One profile against the family, rendered from identity_prompt.j2: the owner's background, the
+    contact (names, the dossier's fields, address-book handles, the full facts), the LinkedIn profile, and
+    a note on where the profile came from."""
     facts: SynthesizedFacts = family.facts
+    # The contact's fields, one line each, only the ones the dossier filled.
     fields: list[str] = []
     if facts.relationship_to_owner:
         fields.append(f"relationship: {facts.relationship_to_owner}")
@@ -57,7 +57,7 @@ def identity_prompt(family: Family, profile: Profile, origin: str, citations: tu
         if employer.name:
             employers.append(employer.name)
     if facts.title or employers:
-        fields.append(f"work: {facts.title} @ {', '.join(employers)}".replace(" @ ", " @ ").rstrip(" @"))
+        fields.append(f"work: {facts.title} @ {', '.join(employers)}".rstrip(" @"))
     if facts.school:
         fields.append(f"school: {facts.school}")
     if facts.location:
@@ -78,34 +78,17 @@ def identity_prompt(family: Family, profile: Profile, origin: str, citations: tu
                           "to the proposed person; copied contact facts are not corroboration)")
         else:
             fields.append("(a work-email DOMAIN matching the profile's employer is strong identity proof)")
-    indented: list[str] = []
-    for line in fields:
-        indented.append("  " + line)
-    text: str = owner_block + "\n" + "CONTACT: " + " / ".join(family.names) + "\n" + "\n".join(indented)
-    text += f"\n  messages exchanged: {family.messages}"
-    text += "\n\nFULL DOSSIER FACTS (synthesized from messages):\n" + json.dumps(facts.to_payload(), ensure_ascii=False)
     view: dict[str, Any] = profile.judge_view()
-    text += (f"\n\nLINKEDIN: {profile.linkedin_url}"
-             f"\n  name: {view['full_name'] or '(unknown)'}"
-             f"\n  headline: {view['headline'] or '(none)'}"
-             f"\n  location: {view['location'] or '(unknown)'}"
-             f"\n  experience:\n{_bullets(view['experiences'], '(none)')}"
-             f"\n  education:\n{_bullets(view['education'], '(none)')}")
-    if origin == Origin.LINKEDIN_NETWORK:
-        text += CONNECTION_NOTE
-    else:
-        text += RESEARCH_NOTE
-        if citations:
-            text += "\nResearch source citations (URLs, titles and excerpts): " + json.dumps(list(citations), ensure_ascii=False)
-    return text + "\n\nIs this the same human?"
-
-
-def prompts(family: Family, candidates: tuple, citations: tuple[dict[str, Any], ...], owner_block: str) -> list[str]:
-    """One prompt per proposed profile, for the dry run's token count."""
-    rendered: list[str] = []
-    for candidate in candidates:
-        rendered.append(identity_prompt(family, candidate.profile, candidate.origin, citations, owner_block))
-    return rendered
+    citations_json: str = ""
+    if citations:
+        citations_json = json.dumps(list(citations), ensure_ascii=False)
+    return TEMPLATE.render(
+        owner_block=owner_block, names=list(family.names), fields=fields, messages=family.messages,
+        facts_json=json.dumps(facts.to_payload(), ensure_ascii=False), url=profile.linkedin_url,
+        name=view["full_name"], headline=view["headline"], location=view["location"],
+        experiences=view["experiences"], education=view["education"],
+        own_connection=origin == Origin.LINKEDIN_NETWORK, citations=citations_json,
+    )
 
 
 async def verdict(caller: OpenAIResponsesCaller, prompt: str) -> str:

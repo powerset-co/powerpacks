@@ -14,19 +14,16 @@ from typing import Any, Sequence
 
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageDirection, MessageEntry
 
+from packs.ingestion.primitives.deep_context_v2 import assets
+
 _HERE = Path(__file__).parent
 SYNTHESIS_CONTRACT_VERSION = "relationship-category-v6"
 
 
-def _load(name: str) -> str:
-    """One prompt asset next to this file, minus its file-ending newline."""
-    return (_HERE / f"{name}.txt").read_text(encoding="utf-8").removesuffix("\n")
-
-
-SYSTEM_PROMPT = _load("person_synthesis_system")
-OWNER_PROMPT_SUFFIX = f"\n\n{_load('owner_context_suffix')}\n\n"
-OWNER_IDENTITY_CHECK = _load("owner_identity_check")
-FACT_SCHEMA: dict[str, Any] = json.loads((_HERE / "fact_schema.json").read_text(encoding="utf-8"))
+SYSTEM_PROMPT = assets.text(_HERE, "person_synthesis_system.txt")
+OWNER_PROMPT_SUFFIX = f"\n\n{assets.text(_HERE, 'owner_context_suffix.txt')}\n\n"
+OWNER_IDENTITY_CHECK = assets.text(_HERE, "owner_identity_check.txt")
+FACT_SCHEMA: dict[str, Any] = assets.json_file(_HERE, "fact_schema.json")
 
 
 def owner_identity_block(name: str, emails: Sequence[str]) -> str:

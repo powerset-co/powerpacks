@@ -1,0 +1,38 @@
+{{ owner_block }}
+CONTACT: {{ names | join(' / ') }}
+{% for line in fields %}
+  {{ line }}
+{% endfor %}
+  messages exchanged: {{ messages }}
+
+FULL DOSSIER FACTS (synthesized from messages):
+{{ facts_json }}
+
+LINKEDIN: {{ url }}
+  name: {{ name or '(unknown)' }}
+  headline: {{ headline or '(none)' }}
+  location: {{ location or '(unknown)' }}
+  experience:
+{% for item in experiences %}
+  - {{ item }}
+{% else %}
+  (none)
+{% endfor %}
+  education:
+{% for item in education %}
+  - {{ item }}
+{% else %}
+  (none)
+{% endfor %}
+{% if own_connection %}
+
+*** This profile is one of MY OWN first-degree LinkedIn connections, matched to this contact by name. Being connected is strong evidence that this is the person I message with: with a compatible name and no hard contradiction, confirm. ***
+{% else %}
+
+This is a speculative web-research proposal. A shared name alone is not corroboration; require employer, school, location, topic, domain, or equivalent evidence. Missing information is not a contradiction. Interview or referral context does not prove employment; evaluate the dates.
+{% if citations %}
+Research source citations (URLs, titles and excerpts): {{ citations }}
+{% endif %}
+{% endif %}
+
+Is this the same human?

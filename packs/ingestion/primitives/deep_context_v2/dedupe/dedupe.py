@@ -102,6 +102,7 @@ class Dedupe(Node):
 
     def plan(self) -> Plan:
         # Rule 1: block every candidate with facts.
+        """Rules 1 to 3: block, gate, skip the joined and the judged; the pairs for Sol with their signatures."""
         blocking: Blocking = block(sorted(self.fingerprints), self.names, self.identifiers)
         gated: int = 0
         joined: int = 0
@@ -162,6 +163,7 @@ class Dedupe(Node):
         }
 
     def execute(self) -> dict[str, int]:
+        """Rules 4 to 7: judge the planned pairs, join families over the same verdicts, then a parent for everyone else."""
         plan: Plan = self.plan()
         # Rule 4: judge; every answer is saved as it arrives.
         answers: dict[tuple[str, str], int | None] = asyncio.run(self._judge_all(plan.todo, self.prompts(plan.todo)))
@@ -300,6 +302,7 @@ class Dedupe(Node):
 
 
 def mint() -> str:
+    """A fresh p: parent id."""
     return MINTED_PARENT_PREFIX + secrets.token_hex(MINTED_PARENT_HEX // 2)
 
 

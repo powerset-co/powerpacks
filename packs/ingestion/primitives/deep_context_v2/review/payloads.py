@@ -170,6 +170,7 @@ def person_name(card: Card) -> str:
 
 
 def person(card: Card) -> ReviewPerson:
+    """The card's person as the page draws it: name, channels, badge labels, contact handles."""
     sources: list[str] = []
     for source in card.sources:
         sources.append(SOURCE_NAMES[source])

@@ -81,6 +81,7 @@ def _needs_review(verdicts: list[CurrentVerdict], profiles: Profiles) -> list[Pe
 
 
 def load_card(conn: sqlite3.Connection, data_root: Path, parent_id: str) -> Card:
+    """One family's card: members, identifiers, channels, message counts, collapsed facts, labels, and what is pending."""
     members: list[Member] = queries_review.family_members(conn, parent_id)
     ids: list[str] = []
     for member in members:

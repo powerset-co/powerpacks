@@ -45,6 +45,7 @@ class Profile:
         return bool(self.full_name and (self.experiences or self.location))
 
     def judge_view(self) -> dict[str, Any]:
+        """The profile as both judges see it."""
         return {"public_identifier": self.public_identifier, "linkedin_url": self.linkedin_url,
                 "full_name": self.full_name, "headline": self.headline, "experiences": list(self.experiences),
                 "education": list(self.education), "location": self.location, "has_profile": True}

@@ -52,6 +52,7 @@ class Family:
         return False
 
     def emails(self) -> set[str]:
+        """The members' normalized email addresses."""
         found: set[str] = set()
         for identifier in self.identifiers:
             if identifier.kind == IdentifierKind.EMAIL:

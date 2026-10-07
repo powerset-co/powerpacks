@@ -34,9 +34,11 @@ from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
+from packs.ingestion.primitives.deep_context_v2 import assets
+
 _HERE = Path(__file__).parent
-INSTRUCTIONS: str = (_HERE / "contact_research_instructions.txt").read_text(encoding="utf-8").removesuffix("\n")
-_SCHEMAS: dict[str, Any] = json.loads((_HERE / "contact_research_schema.txt").read_text(encoding="utf-8"))
+INSTRUCTIONS: str = assets.text(_HERE, "contact_research_instructions.txt")
+_SCHEMAS: dict[str, Any] = assets.json_file(_HERE, "contact_research_schema.txt")
 PROMPT_VERSION = "contact-research-2026-10-07"  # in every handle: a new prompt is a new question
 PROCESSOR = "core2x"
 PRICE_PER_RUN_USD = 0.05   # core2x, per completed person
@@ -121,6 +123,7 @@ class ResearchStep(Node):
         self.limit = limit
 
     def subjects(self) -> list[ResearchSubject]:
+        """The worth-yes p: families with no pre-match, no research at their handle and no human LinkedIn verdict, one per handle."""
         families: list[Family] = load_families(self.conn)
         matches: PreMatch = pre_match_families(families, queries_worth.all_connections(self.conn),
                                                queries_enrich.connection_emails(self.conn))
@@ -130,11 +133,13 @@ class ResearchStep(Node):
         return todo
 
     def estimate(self) -> dict[str, object]:
+        """The dry run: how many families would be researched and the price."""
         todo: list[ResearchSubject] = self.subjects()
         return {"families_to_research": len(todo), "processor": PROCESSOR,
                 "estimated_cost_usd": round(len(todo) * PRICE_PER_RUN_USD, 2)}
 
     def execute(self) -> dict[str, int]:
+        """Submit every subject to Parallel and write each answer as it arrives."""
         return submit(self.conn, self.subjects())
 
 

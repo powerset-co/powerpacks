@@ -36,6 +36,7 @@ def enters(family: Family) -> bool:
 
 
 def pre_match_families(families: list[Family], connections: list[Connection], emails: dict[str, str]) -> PreMatch:
+    """Every entering family's matching connections, and the one-match-sharing-an-email confirmations."""
     matched: dict[str, list[str]] = {}
     by_email: dict[str, str] = {}
     for family in families:

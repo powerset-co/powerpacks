@@ -31,6 +31,7 @@ DEFAULT_PORT = 8777
 
 
 def make_handler(api: ReviewApi) -> type[BaseHTTPRequestHandler]:
+    """The HTTP handler class: the built page's routes first, then the API's."""
     app = AppRoutes()
 
     class Handler(BaseHTTPRequestHandler):

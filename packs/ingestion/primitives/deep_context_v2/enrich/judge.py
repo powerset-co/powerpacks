@@ -26,6 +26,7 @@ from typing import Any
 import tiktoken
 
 from packs.indexing.lib.openai_responses import estimate_cost_usd
+from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION, cache_path, request_digest
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import ParentRow, append_parent_rows
@@ -41,7 +42,6 @@ from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, 
 from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposals
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig, load_env
 
-_HERE = Path(__file__).parent
 VERSION = "enrich-judge-2026-10-07-identity"  # in every judgment fingerprint: a new judge is a new judgment
 OUTPUT_TOKENS_PER_CALL = 1500  # assumed Sol output+reasoning tokens per profile, estimate only
 JEV_CACHE_RELATIVE_DIR = Path("deep-context") / "identity"  # <data root>/deep-context/identity/<view>/jev/
@@ -89,6 +89,7 @@ def _citations(row: Research | None) -> tuple[dict[str, Any], ...]:
 
 
 def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[str, str]]) -> JudgePlan:
+    """Who enters the judge and with which profiles: the tasks, plus the counts of families entering, without a profile, and already judged on this evidence."""
     tasks: list[JudgeTask] = []
     entering: int = 0
     no_profile: int = 0
@@ -216,18 +217,21 @@ def estimate(tasks: list[JudgeTask], cache_dir: Path, owner_block: str) -> dict[
     sol_calls: int = 0
     encoder = tiktoken.get_encoding("o200k_base")
     for task in tasks:
+        # JEV: two view requests per profile, each cached on disk under <cache_dir>/<view>/ by its digest.
         for pair in jev_pairs(task):
             for view, request in pair.items():
                 requests += 1
-                if jev_identity.is_cached(cache_dir, view, request):
+                if cache_path(cache_dir / view, request_digest(request)).exists():
                     cached += 1
                     continue
-                jev_tokens += jev_identity.input_tokens(request)
-        for prompt in sol_identity.prompts(task.family, task.candidates, task.citations, owner_block):
+                jev_tokens += len(encoder.encode(json.dumps(request, ensure_ascii=False, sort_keys=True)))
+        # Sol: one call per profile.
+        for candidate in task.candidates:
+            prompt: str = sol_identity.identity_prompt(task.family, candidate.profile, candidate.origin, task.citations, owner_block)
             sol_tokens += len(encoder.encode(sol_identity.SYSTEM_PROMPT + prompt))
             sol_calls += 1
     output: int = sol_calls * OUTPUT_TOKENS_PER_CALL
-    jev_usd: float = jev_identity.cost_usd(jev_tokens)
+    jev_usd: float = jev_tokens * INPUT_PRICE_PER_MILLION / 1_000_000
     sol_usd: float = estimate_cost_usd(sol_tokens, output, sol_identity.MODEL)
     return {"jev_requests": requests, "jev_cached": cached, "jev_input_tokens": jev_tokens,
             "jev_cost_usd": round(jev_usd, 4), "sol_calls_at_most": sol_calls, "sol_input_tokens": sol_tokens,
@@ -261,9 +265,18 @@ async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Pa
         for_sol.append(task)
     config = OpenAIResponsesConfig.resolve(model=sol_identity.MODEL, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
     async with OpenAIResponsesCaller(config) as caller:
+
+        async def guarded(task: JudgeTask) -> tuple[JudgeTask, dict[str, str] | None]:
+            """The family's verdicts, or None when its Sol call failed (printed without the prompt)."""
+            try:
+                return task, await sol(caller, task, owner_block)
+            except Exception as exc:
+                print(f"failed one family: {type(exc).__name__}")
+                return task, None
+
         calls: list[asyncio.Task[tuple[JudgeTask, dict[str, str] | None]]] = []
         for task in for_sol:
-            calls.append(asyncio.create_task(_guarded(caller, task, owner_block)))
+            calls.append(asyncio.create_task(guarded(task)))
         for call in asyncio.as_completed(calls):
             task, verdicts = await call
             if verdicts is None:
@@ -278,13 +291,6 @@ def _tally(counts: dict[str, int], written: dict[str, int]) -> None:
     for key, value in written.items():
         counts[key] = counts.get(key, 0) + value
 
-
-async def _guarded(caller: OpenAIResponsesCaller, task: JudgeTask, owner_block: str) -> tuple[JudgeTask, dict[str, str] | None]:
-    try:
-        return task, await sol(caller, task, owner_block)
-    except Exception as exc:
-        print(f"failed one family: {type(exc).__name__}")  # the message may quote the prompt; never printed
-        return task, None
 
 
 def main(argv: list[str] | None = None) -> int:

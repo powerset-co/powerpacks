@@ -35,6 +35,7 @@ def confirmed_urls(families: list[Family]) -> list[str]:
 
 
 def has_real_profile(family: Family, profiles: Profiles) -> bool:
+    """A confirmed LinkedIn whose profile has a name and positions or a location, or a human-accepted synthetic card."""
     for verdict in family.verdicts:
         if verdict.verdict != Verdict.CONFIRMED:
             continue
@@ -49,6 +50,7 @@ def has_real_profile(family: Family, profiles: Profiles) -> bool:
 
 
 def settle_rows(families: list[Family], profiles: Profiles, now: str) -> list[WorthRow]:
+    """One worth-no row per member for every family with no real profile and under 25 messages, keyed so worth does not judge it again."""
     rows: list[WorthRow] = []
     for family in families:
         # Only a machine yes or maybe: a human row wins, and a no is already settled.

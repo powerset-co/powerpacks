@@ -40,6 +40,7 @@ PROFILE_COLUMNS: tuple[str, ...] = (
 
 
 def message_total(member: Member) -> int:
+    """A candidate's messages across channels, from the importer's counts."""
     total: int = 0
     for count in member.interaction_counts.values():
         total += count
@@ -151,9 +152,11 @@ class Realize(Node):
         return rows, counts
 
     def people_csv(self) -> Path:
+        """Where the export is written: merged/people-v2.csv under the data root."""
         return self.data_root / PEOPLE_CSV_RELATIVE_PATH
 
     def execute(self) -> dict[str, int]:
+        """One row per parent with facts, written to people-v2.csv; the counts say what each row carried."""
         rows, counts = self.build()
         CsvIO.write_dict_rows(self.people_csv(), PEOPLE_SCHEMA_COLUMNS, rows)
         return counts

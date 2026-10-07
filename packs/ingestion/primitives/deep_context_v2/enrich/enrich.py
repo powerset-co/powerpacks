@@ -54,6 +54,7 @@ class Enrich(Node):
         self.jev_cache = data_root / judge.JEV_CACHE_RELATIVE_DIR
 
     def execute(self) -> dict[str, int]:
+        """The five steps in the page's order; every count comes from what each step built."""
         counts: dict[str, int] = {}
         # Steps 1 and 2: the pre-match, then research for the families it does not name.
         found: Proposals = proposals.derive(self.conn)

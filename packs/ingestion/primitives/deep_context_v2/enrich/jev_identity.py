@@ -15,13 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import tiktoken
 
 from packs.ingestion.primitives.deep_context_v2.db.schema import Verdict
 from packs.search.primitives.llm_rerank_candidates.jev.client import (
-    INPUT_PRICE_PER_MILLION, answer_requests, cache_path, request_digest,
+    answer_requests, request_digest,
 )
 from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
+
+from packs.ingestion.primitives.deep_context_v2 import assets
 
 _HERE = Path(__file__).parent
 REQUEST_VERSION = "identity-association-v1"
@@ -49,14 +50,14 @@ class View:
 
 
 def _load_calibration() -> Calibration:
-    raw: dict[str, Any] = json.loads((_HERE / "jev_model.json").read_text())
+    raw: dict[str, Any] = assets.json_file(_HERE, "jev_model.json")
     return Calibration(tuple(raw["features"]), tuple(raw["mean"]), tuple(raw["scale"]), tuple(raw["coefficients"]),
                        float(raw["intercept"]), float(raw["threshold"]))
 
 
 def _load_views() -> dict[str, View]:
     views: dict[str, View] = {}
-    for name, value in json.loads((_HERE / "jev_questions.json").read_text()).items():
+    for name, value in assets.json_file(_HERE, "jev_questions.json").items():
         views[name] = View(value["policy"], value["questions"])
     return views
 
@@ -126,20 +127,6 @@ def classify(network: dict[str, Any], association: dict[str, Any]) -> str:
     if probability(network, association) < MODEL.threshold:
         return Verdict.NEEDS_REVIEW.value
     return Verdict.CONFIRMED.value
-
-
-def is_cached(cache_dir: Path, view: str, request: dict[str, Any]) -> bool:
-    """One cache directory per view under the identity cache: <cache_dir>/<view>/."""
-    return cache_path(cache_dir / view, request_digest(request)).exists()
-
-
-def input_tokens(request: dict[str, Any]) -> int:
-    encoder = tiktoken.get_encoding("o200k_base")
-    return len(encoder.encode(json.dumps(request, ensure_ascii=False, sort_keys=True)))
-
-
-def cost_usd(tokens: int) -> float:
-    return tokens * INPUT_PRICE_PER_MILLION / 1_000_000
 
 
 async def answer_all(pairs: list[dict[str, dict[str, Any]]], cache_dir: Path) -> list[str]:

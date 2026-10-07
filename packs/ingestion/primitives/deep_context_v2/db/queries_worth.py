@@ -70,6 +70,7 @@ def members_with_facts(conn: sqlite3.Connection) -> list[MemberFacts]:
 
 
 def sources_by_candidate(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """candidate_id -> the channels it was imported from."""
     sources: dict[str, list[str]] = {}
     for row in conn.execute("SELECT candidate_id, source FROM candidate_sources ORDER BY candidate_id, source"):
         sources.setdefault(row["candidate_id"], []).append(row["source"])
@@ -104,6 +105,7 @@ def bundle_counts(conn: sqlite3.Connection) -> BundleCounts:
 
 
 def all_connections(conn: sqlite3.Connection) -> list[Connection]:
+    """Every row of the LinkedIn export, by URL."""
     connections: list[Connection] = []
     for row in conn.execute("SELECT linkedin_url, name, position FROM connections ORDER BY linkedin_url"):
         connections.append(Connection(row["linkedin_url"], row["name"], row["position"]))

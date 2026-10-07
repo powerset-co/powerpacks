@@ -82,6 +82,7 @@ def machine_judgments(conn: sqlite3.Connection) -> set[tuple[str, str]]:
 
 
 def research_by_handle(conn: sqlite3.Connection) -> dict[str, Research]:
+    """handle -> its research row, for every row ever written."""
     found: dict[str, Research] = {}
     for row in conn.execute("SELECT handle, status, result_json FROM research"):
         found[row["handle"]] = Research(row["status"], row["result_json"])

@@ -30,6 +30,7 @@ class Proposals:
 
 
 def derive(conn: sqlite3.Connection) -> Proposals:
+    """Every family with its proposed URLs: the pre-matched connections, then a complete research result."""
     families: list[Family] = load_families(conn)
     matches: PreMatch = pre_match_families(families, queries_worth.all_connections(conn),
                                            queries_enrich.connection_emails(conn))

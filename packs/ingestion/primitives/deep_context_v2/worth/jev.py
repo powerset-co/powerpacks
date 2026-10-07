@@ -18,7 +18,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-import tiktoken
 
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
 from packs.ingestion.primitives.deep_context_v2.db.schema import SourceChannel
@@ -26,12 +25,14 @@ from packs.ingestion.primitives.deep_context_v2.synthesize.facts import Synthesi
 from packs.ingestion.primitives.share.questions import build_questions as share_questions
 from packs.ingestion.primitives.share.questions import build_request as share_request
 from packs.search.primitives.llm_rerank_candidates.jev.client import (
-    INPUT_PRICE_PER_MILLION, MAX_CONCURRENCY, answer_requests, cache_path, request_digest,
+    MAX_CONCURRENCY, answer_requests,
 )
 
 REQUEST_VERSION = "deep-context-worth-labels-family-20261006"
+from packs.ingestion.primitives.deep_context_v2 import assets
+
 _HERE = Path(__file__).parent
-WORTH_QUESTIONS: dict[str, dict[str, Any]] = json.loads((_HERE / "worth_questions.json").read_text())
+WORTH_QUESTIONS: dict[str, dict[str, Any]] = assets.json_file(_HERE, "worth_questions.json")
 EMAIL_SOURCES = frozenset((SourceChannel.GMAIL.value,))
 
 # A notable position is worth yes regardless of messages. "Vice President" is not "president".
@@ -134,20 +135,6 @@ def build_request(facts: SynthesizedFacts, channels: ChannelSummary, owner: Owne
     return request
 
 
-def input_tokens(request: dict[str, Any]) -> int:
-    """What the request costs to send, counted the way JEV is billed."""
-    encoder = tiktoken.get_encoding("o200k_base")
-    return len(encoder.encode(json.dumps(request, ensure_ascii=False, sort_keys=True)))
-
-
-def cost_usd(tokens: int) -> float:
-    return tokens * INPUT_PRICE_PER_MILLION / 1_000_000
-
-
-def is_cached(request: dict[str, Any], cache_dir: Path) -> bool:
-    return cache_path(cache_dir, request_digest(request)).exists()
-
-
 # ---- the answers
 
 
@@ -165,6 +152,7 @@ class JevAnswer:
 
 
 def parse_answers(payload: dict[str, dict[str, Any]]) -> dict[str, JevAnswer]:
+    """JEV's raw answers as typed JevAnswer records, by question."""
     answers: dict[str, JevAnswer] = {}
     for name, row in payload.items():
         probabilities: dict[str, float] = {}
@@ -185,7 +173,7 @@ class WorthModel:
 
 
 def _load_model() -> WorthModel:
-    payload: dict[str, Any] = json.loads((_HERE / "model.json").read_text())
+    payload: dict[str, Any] = assets.json_file(_HERE, "model.json")
     coefficients: list[tuple[float, ...]] = []
     for row in payload["coefficients"]:
         coefficients.append(tuple(row))
@@ -227,6 +215,7 @@ def class_scores(answers: dict[str, JevAnswer]) -> tuple[list[float], list[float
 
 
 def best_index(scores: list[float], skip: int) -> int:
+    """The index of the highest score, skipping `skip` (-1 skips nothing)."""
     best: int = -1
     for index, score in enumerate(scores):
         if index != skip and (best < 0 or score > scores[best]):
@@ -235,6 +224,7 @@ def best_index(scores: list[float], skip: int) -> int:
 
 
 def predict(answers: dict[str, JevAnswer]) -> str:
+    """The worth class with the highest logistic score: yes, maybe or no."""
     _, scores = class_scores(answers)
     return MODEL.classes[best_index(scores, -1)]
 
