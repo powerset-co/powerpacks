@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.18.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.18.0...powerpacks-v3.18.1) (2026-10-07)
+
+
+### Features
+
+* renew Gmail consent and reuse scheduled chats ([#730](https://github.com/powerset-co/powerpacks/issues/730)) ([1a7b322](https://github.com/powerset-co/powerpacks/commit/1a7b322f8488354b23ce3e629d1ec24ec306c194))
+
 ## [3.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.17.2...powerpacks-v3.18.0) (2026-10-07)
 
 
