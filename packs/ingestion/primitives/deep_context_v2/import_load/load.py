@@ -1,0 +1,200 @@
+"""Block 01 Import load: the per-source import CSVs and owner.json into the v2 store.
+
+Gmail rows become email candidates and messages rows become phone candidates, each with its
+names, its one identifier and its channels. The two files never share an id. LinkedIn rows
+become the `connections` lookup, never candidates. Shared mailboxes (role addresses such as
+office@ or billing@) are dropped here; every other keep rule ran in the per-source importer.
+owner.json fills the `owner` row and flags the operator's own candidates.
+
+Nothing is deleted. A candidate row upserts on its id; names, identifiers and sources insert on
+their primary keys and are ignored when present. A rebuild is the store moved to .bkup and a rerun.
+
+Created: 2026-10-06
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sqlite3
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
+from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, load_owner
+from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
+from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.node import Node
+from packs.shared.csv_io import CsvIO
+
+# The importers' outputs, under <data_root>/network-import/import/.
+IMPORT_DIR = Path("network-import") / "import"
+GMAIL_CSV = IMPORT_DIR / "gmail" / "people.csv"        # one email per row, ids candidate:email:<address>
+MESSAGES_CSV = IMPORT_DIR / "messages" / "people.csv"  # one phone per row, ids candidate:phone:+<digits>
+CONNECTIONS_CSV = IMPORT_DIR / "linkedin" / "people.csv"
+OWNER_JSON = Path("deep-context") / "owner.json"
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """One import row, ready to write: the candidate row, its names, its identifier, its channels."""
+
+    candidate_id: str
+    display_name: str
+    is_owner: bool
+    import_json: str
+    names: tuple[str, ...]
+    kind: IdentifierKind
+    normalized: str
+    display: str
+    sources: tuple[SourceChannel, ...]
+
+
+@dataclass(frozen=True)
+class GmailImport:
+    candidates: list[Candidate]
+    shared_mailboxes_dropped: int
+
+
+def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, display: str, owner: OwnerProfile) -> Candidate:
+    """What both passes share: names, channels, the owner flag, and the row kept whole as evidence."""
+    # Two names at most: the importer's full name, and first+last when it spells differently.
+    full_name: str = row["full_name"].strip()
+    first_last: str = (row["first_name"].strip() + " " + row["last_name"].strip()).strip()
+    names: list[str] = []
+    for name in (full_name, first_last):
+        if name and name not in names:
+            names.append(name)
+    # "imessage,whatsapp" when one phone was seen in both apps.
+    sources: list[SourceChannel] = []
+    for part in row["source_channels"].split(","):
+        sources.append(SourceChannel(part.strip()))
+    return Candidate(
+        candidate_id=row["id"],
+        display_name=full_name,
+        # The operator's own addresses and numbers; those candidates are never collected or synthesized.
+        is_owner=normalized in owner.emails or normalized in owner.phones,
+        import_json=json.dumps(row, ensure_ascii=False),
+        names=tuple(names),
+        kind=kind,
+        normalized=normalized,
+        display=display,
+        sources=tuple(sources),
+    )
+
+
+def gmail_candidates(path: Path, owner: OwnerProfile) -> GmailImport:
+    """Email candidates from the Gmail import, and how many shared mailboxes were dropped."""
+    candidates: list[Candidate] = []
+    dropped: int = 0
+    for row in CsvIO.read_dict_rows(path):
+        email: str = row["primary_email"]
+        if is_role_address(email):  # office@, billing@, support@: a mailbox, not a person
+            dropped += 1
+            continue
+        candidates.append(_candidate(row, IdentifierKind.EMAIL, normalize_email(email), email, owner))
+    return GmailImport(candidates, dropped)
+
+
+def phone_candidates(path: Path, owner: OwnerProfile) -> list[Candidate]:
+    """Phone candidates from the iMessage and WhatsApp import. Nothing is dropped here."""
+    candidates: list[Candidate] = []
+    for row in CsvIO.read_dict_rows(path):
+        phone: str = row["primary_phone"]
+        candidates.append(_candidate(row, IdentifierKind.PHONE, normalize_phone(phone), phone, owner))
+    return candidates
+
+
+def write_candidates(conn: sqlite3.Connection, candidates: list[Candidate], now: str) -> None:
+    """Four tables from one list: the candidate rows, then their names, identifiers and sources."""
+    candidate_rows: list[queries.CandidateRow] = []
+    name_rows: list[queries.NameRow] = []
+    identifier_rows: list[queries.IdentifierRow] = []
+    source_rows: list[queries.SourceRow] = []
+    for c in candidates:
+        candidate_rows.append((c.candidate_id, c.display_name, int(c.is_owner), c.import_json, now))
+        for name in c.names:
+            name_rows.append((c.candidate_id, name))
+        identifier_rows.append((c.candidate_id, c.kind.value, c.normalized, c.display))
+        for source in c.sources:
+            source_rows.append((c.candidate_id, source.value))
+    queries.upsert_candidates(conn, candidate_rows)
+    queries.insert_candidate_names(conn, name_rows)
+    queries.insert_candidate_identifiers(conn, identifier_rows)
+    queries.insert_candidate_sources(conn, source_rows)
+
+
+def write_connections(conn: sqlite3.Connection, path: Path, now: str) -> int:
+    """The LinkedIn export as a lookup keyed by URL: name, email when the export has one, position,
+    company. Returns how many were written."""
+    rows: list[queries.ConnectionRow] = []
+    for row in CsvIO.read_dict_rows(path):
+        rows.append((row["linkedin_url"], row["full_name"], row["primary_email"] or None,
+                     row["current_title"], row["current_company"], now))
+    queries.upsert_connections(conn, rows)
+    return len(rows)
+
+
+class ImportLoad(Node):
+    name = "import_load"
+    reads = ()
+    writes = ("candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections", "owner")
+
+    def required_files(self) -> tuple[Path, ...]:
+        # Only the owner is required. Each channel's importer writes its file only when that
+        # channel was linked, so a missing CSV means "this user has no such channel".
+        return (self.data_root / OWNER_JSON,)
+
+    def execute(self) -> dict[str, int]:
+        conn = self.conn
+        now = now_iso()
+        # Owner first: the candidate passes need its addresses and numbers for the owner flag.
+        owner: OwnerProfile = load_owner(conn, self.data_root / OWNER_JSON)
+        # Two passes, one per linked channel file, one identifier kind each.
+        gmail = GmailImport([], 0)
+        if (self.data_root / GMAIL_CSV).exists():
+            gmail = gmail_candidates(self.data_root / GMAIL_CSV, owner)
+        phones: list[Candidate] = []
+        if (self.data_root / MESSAGES_CSV).exists():
+            phones = phone_candidates(self.data_root / MESSAGES_CSV, owner)
+        candidates: list[Candidate] = gmail.candidates + phones
+        write_candidates(conn, candidates, now)
+        # The LinkedIn export is a lookup for later stages, not a source of candidates.
+        connections: int = 0
+        if (self.data_root / CONNECTIONS_CSV).exists():
+            connections = write_connections(conn, self.data_root / CONNECTIONS_CSV, now)
+
+        # The manifest counts come from what was just written, not from querying it back.
+        counts: dict[str, int] = {
+            "candidates": len(candidates),
+            "identifiers_email": len(gmail.candidates),
+            "identifiers_phone": len(phones),
+            "shared_mailboxes_dropped": gmail.shared_mailboxes_dropped,
+            "connections": connections,
+            "names": 0,
+            "owner_flagged": 0,
+            "source_gmail_msgvault": 0,
+            "source_imessage": 0,
+            "source_whatsapp": 0,
+        }
+        for c in candidates:
+            counts["names"] += len(c.names)
+            counts["owner_flagged"] += int(c.is_owner)
+            for source in c.sources:
+                counts["source_" + source.value] += 1
+        return counts
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Load the import CSVs and owner.json into the v2 store.")
+    parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
+    args = parser.parse_args(argv)
+    conn = open_store(store_path(args.data_root))
+    manifest = ImportLoad(conn, args.data_root).run()
+    print(manifest.status, " ".join(f"{key}={value}" for key, value in manifest.counts.items()), manifest.error or "")
+    return 0 if manifest.status == "completed" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
