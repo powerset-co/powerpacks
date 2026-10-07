@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from packs.ingestion.primitives.common.contact_fields import is_shared_mailbox, normalize_email, normalize_phone
+from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
 from packs.ingestion.primitives.deep_context_v2.db.owner import load_owner
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
@@ -26,18 +26,11 @@ from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.shared.csv_io import CsvIO
 
 IMPORT_DIR = Path("network-import") / "import"
-CANDIDATE_CSVS = (IMPORT_DIR / "gmail" / "people.csv", IMPORT_DIR / "messages" / "people.csv")
+GMAIL_CSV = IMPORT_DIR / "gmail" / "people.csv"        # one email per row, ids candidate:email:<address>
+MESSAGES_CSV = IMPORT_DIR / "messages" / "people.csv"  # one phone per row, ids candidate:phone:+<digits>
+CANDIDATE_CSVS = (GMAIL_CSV, MESSAGES_CSV)
 CONNECTIONS_CSV = IMPORT_DIR / "linkedin" / "people.csv"
 OWNER_JSON = Path("deep-context") / "owner.json"
-
-
-def _values(row: dict[str, str], primary: str, listed: str) -> list[str]:
-    """The row's primary value and its JSON-list column, as they appear in the CSV, once each."""
-    values: list[str] = []
-    for value in [row[primary]] + json.loads(row[listed] or "[]"):
-        if value and value not in values:
-            values.append(value)
-    return values
 
 
 class ImportLoad(Node):
@@ -57,23 +50,20 @@ class ImportLoad(Node):
         now = now_iso()
         dropped = 0
 
-        for csv_path in CANDIDATE_CSVS:
+        # A Gmail row is one email address; a messages row is one phone number. Never both.
+        files = (
+            (GMAIL_CSV, IdentifierKind.EMAIL, "primary_email", normalize_email),
+            (MESSAGES_CSV, IdentifierKind.PHONE, "primary_phone", normalize_phone),
+        )
+        for csv_path, kind, column, normalize in files:
             for row in CsvIO.read_dict_rows(self.data_root / csv_path):
-                emails = _values(row, "primary_email", "all_emails")
-                phones = _values(row, "primary_phone", "all_phones")
-                if is_shared_mailbox(emails, phones):
-                    dropped += 1
+                value = row[column]
+                if kind is IdentifierKind.EMAIL and is_role_address(value):
+                    dropped += 1  # a shared mailbox (office@, billing@), not a person
                     continue
                 candidate_id = row["id"]
-                identifiers = []  # (kind, normalized value, value as shown in the CSV)
-                for email in emails:
-                    identifiers.append((IdentifierKind.EMAIL, normalize_email(email), email))
-                for phone in phones:
-                    identifiers.append((IdentifierKind.PHONE, normalize_phone(phone), phone))
-                is_owner = False
-                for _, normalized, _ in identifiers:
-                    if normalized in owner.emails or normalized in owner.phones:
-                        is_owner = True
+                normalized = normalize(value)
+                is_owner = normalized in owner.emails or normalized in owner.phones
                 full_name = row["full_name"].strip()
                 first_last = (row["first_name"].strip() + " " + row["last_name"].strip()).strip()
                 names = []
@@ -93,10 +83,10 @@ class ImportLoad(Node):
                     conn.execute(f"DELETE FROM {table} WHERE candidate_id = ?", (candidate_id,))
                 conn.executemany("INSERT INTO candidate_names (candidate_id, name) VALUES (?, ?)",
                                  [(candidate_id, name) for name in names])
-                conn.executemany(
+                conn.execute(
                     "INSERT INTO candidate_identifiers (candidate_id, kind, normalized_value, display_value) "
                     "VALUES (?, ?, ?, ?)",
-                    [(candidate_id, kind.value, value, display) for kind, value, display in identifiers],
+                    (candidate_id, kind.value, normalized, value),
                 )
                 conn.executemany("INSERT INTO candidate_sources (candidate_id, source) VALUES (?, ?)",
                                  [(candidate_id, source.value) for source in sources])
