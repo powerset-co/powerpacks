@@ -127,7 +127,7 @@ class Enrich(Node):
         result: dict[str, object] = {
             "families": len(found.families), "pre_matched_families": len(matches.matched),
             "email_confirmed": len(found.by_email), "research_families": len(todo),
-            "research_cost_usd": round(len(todo) * research.PRICE_PER_RUN_USD, 2),
+            "research_cost_usd": round(len(todo) * research.PARALLEL_PRICE_PER_RUN_USD, 2),
             "profiles_cached": len(profiles.found), "profiles_missing": profiles.missing,
             "judge_entering": planned.entering, "judge_no_profile": planned.no_profile,
             "judge_already_judged": planned.already_judged, "judge_families": len(tasks),

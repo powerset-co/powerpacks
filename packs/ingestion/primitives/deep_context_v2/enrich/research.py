@@ -37,19 +37,20 @@ from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 from packs.ingestion.primitives.deep_context_v2 import assets
 
 _HERE = Path(__file__).parent
-INSTRUCTIONS: str = assets.text(_HERE, "contact_research_instructions.txt")
+RESEARCH_INSTRUCTIONS: str = assets.text(_HERE, "contact_research_instructions.txt")
 _SCHEMAS: dict[str, Any] = assets.json_file(_HERE, "contact_research_schema.txt")
 PROMPT_VERSION = "contact-research-2026-10-07"  # in every handle: a new prompt is a new question
-PROCESSOR = "core2x"
-PRICE_PER_RUN_USD = 0.05   # core2x, per completed person
-BASE_URL = "https://api.parallel.ai"
-BETA_HEADER = "search-extract-2025-10-10,field-basis-2025-11-25"
-BATCH_SIZE = 500           # runs per add_runs call
-STREAM_TIMEOUT = 3600      # Parallel's maximum for one event stream
+# Parallel: the processor tier, its price, the API, and how runs are submitted and read back.
+PARALLEL_PROCESSOR = "core2x"
+PARALLEL_PRICE_PER_RUN_USD = 0.05   # core2x, per completed person
+PARALLEL_BASE_URL = "https://api.parallel.ai"
+PARALLEL_BETA_HEADER = "search-extract-2025-10-10,field-basis-2025-11-25"
+PARALLEL_BATCH_SIZE = 500           # runs per add_runs call
+PARALLEL_STREAM_TIMEOUT = 3600      # Parallel's maximum for one event stream
 # The task spec has no instructions field: the objective rides on the output schema's description.
 _OUTPUT_SCHEMA: dict[str, Any] = dict(_SCHEMAS["output"])
-_OUTPUT_SCHEMA["description"] = INSTRUCTIONS
-TASK_SPEC: dict[str, Any] = {"input_schema": {"json_schema": _SCHEMAS["input"]},
+_OUTPUT_SCHEMA["description"] = RESEARCH_INSTRUCTIONS
+PARALLEL_TASK_SPEC: dict[str, Any] = {"input_schema": {"json_schema": _SCHEMAS["input"]},
                              "output_schema": {"json_schema": _OUTPUT_SCHEMA}}
 
 
@@ -135,8 +136,8 @@ class ResearchStep(Node):
     def estimate(self) -> dict[str, object]:
         """The dry run: how many families would be researched and the price."""
         todo: list[ResearchSubject] = self.subjects()
-        return {"families_to_research": len(todo), "processor": PROCESSOR,
-                "estimated_cost_usd": round(len(todo) * PRICE_PER_RUN_USD, 2)}
+        return {"families_to_research": len(todo), "processor": PARALLEL_PROCESSOR,
+                "estimated_cost_usd": round(len(todo) * PARALLEL_PRICE_PER_RUN_USD, 2)}
 
     def execute(self) -> dict[str, int]:
         """Submit every subject to Parallel and write each answer as it arrives."""
@@ -149,18 +150,18 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, i
     for subject in todo:
         by_handle[subject.handle] = subject
     load_env()
-    client = Parallel(api_key=os.environ["PARALLEL_API_KEY"], base_url=BASE_URL,
-                      default_headers={"parallel-beta": BETA_HEADER}, max_retries=0)
+    client = Parallel(api_key=os.environ["PARALLEL_API_KEY"], base_url=PARALLEL_BASE_URL,
+                      default_headers={"parallel-beta": PARALLEL_BETA_HEADER}, max_retries=0)
     # Submit every run, then read the event stream until the group is done.
     group_id: str = str(client.task_group.create(metadata={"source": "powerpacks"}).task_group_id)
     inputs: list[dict[str, Any]] = []
     for subject in todo:
         inputs.append({"input": {"dossier": subject.dossier}, "metadata": {"handle": subject.handle},
-                       "processor": PROCESSOR})
-    for start in range(0, len(inputs), BATCH_SIZE):
-        client.task_group.add_runs(group_id, inputs=inputs[start:start + BATCH_SIZE], default_task_spec=TASK_SPEC)
+                       "processor": PARALLEL_PROCESSOR})
+    for start in range(0, len(inputs), PARALLEL_BATCH_SIZE):
+        client.task_group.add_runs(group_id, inputs=inputs[start:start + PARALLEL_BATCH_SIZE], default_task_spec=PARALLEL_TASK_SPEC)
     counts: dict[str, int] = {"research_submitted": len(todo), "complete": 0, "no_match": 0, "failed": 0}
-    with client.task_group.events(group_id, api_timeout=STREAM_TIMEOUT, timeout=STREAM_TIMEOUT + 30) as events:
+    with client.task_group.events(group_id, api_timeout=PARALLEL_STREAM_TIMEOUT, timeout=PARALLEL_STREAM_TIMEOUT + 30) as events:
         for event in events:
             if isinstance(event, TaskGroupStatusEvent) and not event.status.is_active:
                 break
@@ -171,7 +172,7 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, i
             if event.run.status == "completed":
                 output = event.output
                 if output is None:
-                    output = client.task_run.result(event.run.run_id, timeout=STREAM_TIMEOUT + 30).output
+                    output = client.task_run.result(event.run.run_id, timeout=PARALLEL_STREAM_TIMEOUT + 30).output
                 row = row_from_output(subject, output.model_dump(mode="json", exclude_none=True), now_iso())
             queries_enrich.upsert_research(conn, row)
             conn.commit()  # each answer is kept the moment it is paid for
