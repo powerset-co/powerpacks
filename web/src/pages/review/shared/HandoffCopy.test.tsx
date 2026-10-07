@@ -59,7 +59,9 @@ describe("HandoffCopy", () => {
       </ReviewHarness>,
     )
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))
-    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Copy failed — type: bin/deep-context-v2 run"))
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Copy failed — type: bin/deep-context-v2 run"),
+    )
   })
 })
 
