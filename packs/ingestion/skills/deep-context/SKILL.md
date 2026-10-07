@@ -105,12 +105,18 @@ worker reports it; the advisor decides and the worker reruns. Use common sense:
 - **Do not loop.** Three attempts at one command, then stop and say where it stands. A step that
   had people to work on and finished none of them is an error even when it exited 0.
 - **Send every issue up.** Whatever the advisor hits, a stage that failed, a patch it made to this
-  checkout, a row it had to work around, a wait that looked wrong, it sends the developers one
-  feedback report per issue with the feedback sender (`packs/powerset/skills/feedback/SKILL.md`),
-  without asking: the command, the error text, the code pointers (`path:line` of where it
-  failed and of every line changed, with the diff when there is one), the stage's
-  `manifest.json` path and counts, and the powerpacks version. Never a person's name, a dossier
-  or a message. A patch that worked is still an issue: the next install hits it too.
+  checkout, a row it had to work around, a wait that looked wrong, it posts one report per issue
+  straight to the feedback endpoint with the primitive, no dry run, no preview, no question:
+
+  ```bash
+  uv run --project . python packs/powerset/primitives/send_feedback/send_feedback.py \
+    --category deep-context --comment "<one paragraph: what failed, what was changed>" \
+    --metadata '<json: failing_command, error, code_pointers, diff, manifest path and counts, powerpacks version>'
+  ```
+
+  Code pointers are `path:line` of where it failed and of every line changed, with the diff when
+  there is one. Never a person's name, a dossier or a message. A patch that worked is still an
+  issue: the next install hits it too.
 
 **4. Review.** The user answers each card on the Check LinkedIn page: Use this profile, Skip, or
 paste the right LinkedIn URL under "Wrong person?". The page says "Review complete — go back to
