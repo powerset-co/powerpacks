@@ -1,47 +1,51 @@
 """Scheduled refresh creation keeps Codex runs in the creation chat."""
 
 import json
+import io
 from pathlib import Path
+import shutil
 import sqlite3
 import tempfile
+import tomllib
 import unittest
-from unittest.mock import patch
-from urllib.parse import parse_qs, urlparse
+from unittest.mock import MagicMock, patch
 
 from packs.ingestion.primitives.refresh import tasks
 
 
-class RefreshTaskTests(unittest.TestCase):
-    def test_codex_creation_uses_native_same_chat_schedule(self):
-        repo = Path("/tmp/powerpacks")
-        with patch.object(tasks.subprocess, "run") as opened:
-            tasks._install_codex(repo)
+class ScheduleTests(unittest.TestCase):
+    def test_cadence_and_clock_time_roundtrip(self):
+        for cadence, day in (("daily", "MO"), ("weekdays", "MO"), ("weekly", "SU")):
+            schedule = tasks.Schedule(cadence, "14:45", day)
+            self.assertEqual(tasks.Schedule.from_rrule(schedule.rrule()), schedule)
 
-        command = opened.call_args.args[0]
-        self.assertEqual(command[0], "open")
-        url = urlparse(command[1])
-        self.assertEqual((url.scheme, url.netloc, url.path), ("codex", "threads", "/new"))
-        request = parse_qs(url.query)["prompt"][0]
-        self.assertIn("automation_update", request)
-        self.assertIn("kind heartbeat", request)
-        self.assertIn("destination thread", request)
-        self.assertIn("attached to this chat", request)
-        self.assertIn('"Start each run in new chat" OFF', request)
-        self.assertIn("Keep this chat open", request)
-        self.assertIn("daily at 6:00 AM", request)
-        self.assertIn(str(repo), request)
-        self.assertIn(tasks.REFRESH_COMMAND, request)
-        self.assertIn("Do not run it now", request)
-        self.assertNotIn("```toml", request)
-        self.assertNotIn("cron", request)
-        self.assertNotIn("archive", request)
+    def test_claude_install_writes_selected_cadence_and_preserves_other_tasks(self):
+        for cadence, day, cron in (("daily", "MO", "30 9 * * *"), ("weekdays", "MO", "30 9 * * 1-5"), ("weekly", "SU", "30 9 * * 0")):
+            with self.subTest(cadence=cadence), tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                config = home / "scheduled-tasks.json"
+                config.write_text(json.dumps({"scheduledTasks": [{"id": "unrelated"}]}))
+                with patch.object(tasks, "_claude_task_files", return_value=[config]), \
+                     patch.object(tasks, "CLAUDE_TASK", home / "skill/SKILL.md"), \
+                     patch.object(tasks, "_claude_closed"):
+                    tasks._install_claude(home, tasks.Schedule(cadence, "09:30", day))
+                rows = json.loads(config.read_text())["scheduledTasks"]
+                self.assertEqual(rows[0], {"id": "unrelated"})
+                self.assertEqual(rows[1]["cronExpression"], cron)
+
+    def test_invalid_time_and_nonlocal_timezone_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "HH:MM"):
+            tasks.Schedule(time="25:01")
+        with patch.object(tasks, "_local_timezone", return_value="America/Los_Angeles"), \
+             self.assertRaisesRegex(ValueError, "computer's timezone"):
+            tasks.Schedule(timezone="America/New_York")
 
 
 class CodexHeartbeatTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.home = Path(temporary.name)
+        self.home = Path(temporary.name).resolve()
         self.app_db = self.home / "codex-dev.db"
         self.threads_db = self.home / "state_5.sqlite"
         self.automation_id = "refresh-message-sources-2"
@@ -50,22 +54,29 @@ class CodexHeartbeatTests(unittest.TestCase):
         self.rollout.write_text("")
         self.folder = self.home / "automations" / self.automation_id
         self.folder.mkdir(parents=True)
-        (self.folder / "automation.toml").write_text(f'id = "{self.automation_id}"\nkind = "heartbeat"\n')
+        config = {"version": 1, "id": self.automation_id, "kind": "heartbeat", "name": tasks.TASK_NAME,
+                  "prompt": tasks.PROMPT, "status": "ACTIVE", "rrule": tasks.Schedule().rrule(),
+                  "target_thread_id": self.thread_id, "created_at": 1, "updated_at": 1}
+        (self.folder / "automation.toml").write_text("\n".join(f"{key} = {json.dumps(value)}" for key, value in config.items()))
         (self.folder / "memory.md").write_text("Past refresh result\n")
         with sqlite3.connect(self.app_db) as conn:
             conn.execute("CREATE TABLE automations (id TEXT PRIMARY KEY, name TEXT, prompt TEXT, kind TEXT, "
-                         "status TEXT, target_thread_id TEXT)")
-            conn.execute("INSERT INTO automations VALUES (?, ?, ?, ?, ?, ?)",
-                         (self.automation_id, tasks.TASK_NAME, tasks.PROMPT, "heartbeat", "ACTIVE", self.thread_id))
-            conn.execute("INSERT INTO automations VALUES (?, ?, ?, ?, ?, ?)",
-                         ("unrelated", "Other task", "Other prompt", "heartbeat", "ACTIVE", self.thread_id))
+                         "status TEXT, target_thread_id TEXT, rrule TEXT, created_at INTEGER, updated_at INTEGER)")
+            conn.execute("INSERT INTO automations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (self.automation_id, tasks.TASK_NAME, tasks.PROMPT, "heartbeat", "ACTIVE", self.thread_id,
+                          tasks.Schedule().rrule(), 1, 1))
+            conn.execute("INSERT INTO automations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         ("unrelated", "Other task", "Other prompt", "heartbeat", "ACTIVE", self.thread_id,
+                          tasks.Schedule().rrule(), 1, 1))
         with sqlite3.connect(self.threads_db) as conn:
             conn.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, created_at_ms INTEGER, "
-                         "rollout_path TEXT, thread_source TEXT, title TEXT)")
-            conn.execute("INSERT INTO threads VALUES (?, ?, ?, ?, ?)",
-                         (self.thread_id, 1000, str(self.rollout), "cli", "Refresh source schedule"))
+                         "rollout_path TEXT, thread_source TEXT, title TEXT, cwd TEXT, sandbox_policy TEXT, approval_mode TEXT)")
+            conn.execute("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (self.thread_id, 1000, str(self.rollout), "cli", "Refresh source schedule", str(self.home),
+                          '{"type":"danger-full-access"}', "never"))
         for name, value in {"CODEX_HOME": self.home, "CODEX_APP_DB": self.app_db,
                             "CODEX_THREADS_DB": self.threads_db,
+                            "CLAUDE_TASK": self.home / "claude-task/SKILL.md",
                             "CLAUDE_SESSIONS": self.home / "claude-sessions",
                             "CLAUDE_PROJECTS": self.home / "claude-projects"}.items():
             patcher = patch.object(tasks, name, value)
@@ -75,6 +86,10 @@ class CodexHeartbeatTests(unittest.TestCase):
         connect = sqlite3.connect
         remove = tasks.shutil.rmtree
         move = tasks.shutil.move
+        popen = tasks.subprocess.Popen
+        copy = tasks.shutil.copy2
+        write = Path.write_text
+        replace = Path.replace
 
         def inside_home(path):
             self.assertTrue(Path(str(path).removeprefix("file:").split("?")[0]).resolve().is_relative_to(self.home.resolve()),
@@ -93,10 +108,34 @@ class CodexHeartbeatTests(unittest.TestCase):
             inside_home(destination)
             return move(source, destination, *args, **kwargs)
 
+        def safe_copy(source, destination, *args, **kwargs):
+            inside_home(source)
+            inside_home(destination)
+            return copy(source, destination, *args, **kwargs)
+
+        def safe_popen(*args, **kwargs):
+            inside_home(kwargs["env"]["CODEX_HOME"])
+            inside_home(kwargs["cwd"])
+            return popen(*args, **kwargs)
+
+        def safe_write(path, *args, **kwargs):
+            inside_home(path)
+            return write(path, *args, **kwargs)
+
+        def safe_replace(path, target):
+            inside_home(path)
+            inside_home(target)
+            return replace(path, target)
+
         for owner, name, function in ((tasks.sqlite3, "connect", safe_connect),
                                      (tasks.shutil, "rmtree", safe_remove),
-                                     (tasks.shutil, "move", safe_move)):
+                                     (tasks.shutil, "move", safe_move), (tasks.shutil, "copy2", safe_copy),
+                                     (tasks.subprocess, "Popen", safe_popen)):
             patcher = patch.object(owner, name, side_effect=function)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for name, function in (("write_text", safe_write), ("replace", safe_replace)):
+            patcher = patch.object(Path, name, new=function)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -107,11 +146,81 @@ class CodexHeartbeatTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "outside temporary home"):
                 mutation()
 
-    def test_native_generated_id_prevents_duplicate_installation(self):
+    def test_schedule_update_preserves_native_id_and_chat_until_app_import(self):
         self.assertEqual(tasks.installed_runners(), ["codex"])
-        with patch.object(tasks.subprocess, "run") as opened:
-            tasks.install("codex", self.home)
-        opened.assert_not_called()
+        self.assertEqual(tasks.read_task(self.home).codex_install_status, "installed")
+        with patch.object(tasks.subprocess, "run") as opened, patch.object(tasks, "_create_codex_thread") as created:
+            tasks.install("codex", self.home, tasks.Schedule("weekdays", "17:15"))
+        created.assert_not_called()
+        opened.assert_called_once_with(["open", f"codex://threads/{self.thread_id}"], check=True)
+        result = tasks.read_task(self.home)
+        self.assertEqual(result.codex_install_status, "pending")
+        self.assertNotIn("codex", result.installs)
+        self.assertEqual((result.schedule_settings.cadence, result.schedule_settings.time), ("weekdays", "17:15"))
+        with sqlite3.connect(self.app_db) as conn:
+            config = tomllib.loads((self.folder / "automation.toml").read_text())
+            conn.execute("UPDATE automations SET rrule = ?, updated_at = ? WHERE id = ?",
+                         (config["rrule"], config["updated_at"], self.automation_id))
+        self.assertEqual(tasks.read_task(self.home).codex_install_status, "installed")
+
+    @unittest.skipUnless(shutil.which("codex"), "Codex CLI is not installed")
+    def test_real_cli_persists_thread_before_pending_schedule_is_written(self):
+        empty = self.home / "empty-codex-home"
+        empty.mkdir()
+        with patch.object(tasks, "CODEX_HOME", empty), \
+             patch.object(tasks, "CODEX_APP_DB", empty / "sqlite/codex-dev.db"), \
+             patch.object(tasks, "CODEX_THREADS_DB", empty / "state_5.sqlite"), \
+             patch.object(tasks.subprocess, "run") as opened:
+            tasks.install("codex", self.home, tasks.Schedule("weekly", "19:30", "FR"))
+            result = tasks.read_task(self.home)
+            self.assertEqual(result.codex_install_status, "pending")
+            self.assertNotIn("codex", result.installs)
+            config = tomllib.loads((empty / "automations" / tasks.TASK_ID / "automation.toml").read_text())
+            with sqlite3.connect(f"file:{empty / 'state_5.sqlite'}?mode=ro", uri=True) as conn:
+                thread = conn.execute("SELECT cwd, rollout_path, sandbox_policy, approval_mode FROM threads WHERE id = ?",
+                                      (config["target_thread_id"],)).fetchone()
+            self.assertEqual(thread[0], str(self.home))
+            self.assertTrue(Path(thread[1]).is_file())
+            self.assertIn(json.loads(thread[2])["type"], ("disabled", "danger-full-access"))
+            self.assertEqual(thread[3], "never")
+            self.assertEqual(config["kind"], "heartbeat")
+            self.assertNotIn("archive", config["prompt"])
+            opened.assert_called_once_with(["open", result.codex_thread_url], check=True)
+            with patch.object(tasks, "_create_codex_thread") as created:
+                tasks.install("codex", self.home, tasks.Schedule("daily", "06:45"))
+            created.assert_not_called()
+
+    def test_native_full_access_policies_are_accepted_and_other_permissions_rejected(self):
+        for policy, approval, accepted in (("disabled", "never", True), ("danger-full-access", "never", True),
+                                          ("read-only", "never", False), ("disabled", "on-request", False)):
+            with self.subTest(policy=policy, approval=approval):
+                with sqlite3.connect(self.threads_db) as conn:
+                    conn.execute("UPDATE threads SET sandbox_policy = ?, approval_mode = ?",
+                                 (json.dumps({"type": policy}), approval))
+                if accepted:
+                    tasks._verify_codex_thread(self.thread_id, self.home)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "Full access"):
+                        tasks._verify_codex_thread(self.thread_id, self.home)
+
+    def test_subprocess_error_and_timeout_leave_configs_and_backups_untouched(self):
+        before = {path: path.read_bytes() for path in self.folder.iterdir()}
+        for ready in (True, False):
+            process = MagicMock()
+            process.__enter__.return_value = process
+            process.stdin = io.BytesIO()
+            process.stdout = io.BytesIO(b'{"id":0,"error":{"message":"Codex startup failed"}}\n')
+            with self.subTest(ready=ready), patch.object(tasks, "_codex_config", return_value=None), \
+                 patch.object(tasks.subprocess, "Popen", return_value=process), \
+                 patch.object(tasks.subprocess, "run") as opened, \
+                 patch.object(tasks.select, "select", return_value=([process.stdout] if ready else [], [], [])), \
+                 self.assertRaisesRegex(RuntimeError, "Codex startup failed" if ready else "timed out"):
+                tasks.install("codex", self.home)
+            process.wait.assert_called_once_with(timeout=5)
+            opened.assert_not_called()
+            self.assertEqual({path: path.read_bytes() for path in self.folder.iterdir()}, before)
+            self.assertFalse(list(self.home.glob("*.bkup")))
+            self.assertFalse((self.home / "automations" / tasks.TASK_ID).exists())
 
     def test_each_heartbeat_run_uses_creation_chat_and_ignores_other_turns(self):
         rows = []

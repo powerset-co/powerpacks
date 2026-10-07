@@ -4,13 +4,20 @@ import { useState, type SVGProps } from "react"
 import { EmptyState } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog"
 import { errorText } from "@/lib/api/http"
 import { fetchTask, setInstalled } from "@/lib/api/tasks"
 import { ago } from "@/lib/copy"
 import { cn } from "@/lib/utils"
-import type { Runner, Task, TaskRun } from "@/types/tasks"
-
-const RUNNER_ORDER: readonly Runner[] = ["codex", "claude"]
+import type { Runner, ScheduleSettings, Task, TaskRun } from "@/types/tasks"
 
 const RUNNER_TITLE: Readonly<Record<Runner, string>> = { codex: "Codex", claude: "Claude" }
 
@@ -26,25 +33,25 @@ const CODEX_POLL_MS = 3_000
 /** The scheduled refresh as a plugin-style tile, then every run it left behind. */
 export function TasksPage() {
   const client = useQueryClient()
-  // Codex installs by opening a prefilled thread; the task exists once Codex creates it.
-  const [awaitingCodex, setAwaitingCodex] = useState(false)
   const task = useQuery({
     queryKey: TASK_KEY,
     queryFn: ({ signal }) => fetchTask(signal),
-    refetchInterval: awaitingCodex ? CODEX_POLL_MS : false,
-    // The user is off in Codex sending the message, so this tab is usually hidden.
+    refetchInterval: (query) =>
+      query.state.data?.codex_install_status === "pending" ? CODEX_POLL_MS : false,
     refetchIntervalInBackground: true,
   })
   const change = useMutation({
-    mutationFn: ({ runner, installed }: { runner: Runner; installed: boolean }) =>
-      setInstalled(runner, installed),
-    onSuccess: (next, { runner, installed }) => {
-      client.setQueryData(TASK_KEY, next)
-      setAwaitingCodex(runner === "codex" && installed)
-    },
+    mutationFn: ({
+      runner,
+      installed,
+      schedule,
+    }: {
+      runner: Runner
+      installed: boolean
+      schedule?: ScheduleSettings
+    }) => setInstalled(runner, installed, schedule),
+    onSuccess: (next) => client.setQueryData(TASK_KEY, next),
   })
-  const codexInstalled = task.data?.installs.includes("codex") ?? false
-  if (awaitingCodex && codexInstalled) setAwaitingCodex(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const runs = task.data?.runs ?? []
   const selected = runs.find((run) => run.id === selectedId) ?? runs[0]
@@ -62,11 +69,11 @@ export function TasksPage() {
               className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3"
             >
               <TaskTile
+                key={JSON.stringify(task.data.schedule_settings)}
                 task={task.data}
                 pending={change.isPending ? change.variables.runner : null}
-                awaitingCodex={awaitingCodex}
                 error={change.error}
-                onChange={(runner, installed) => change.mutate({ runner, installed })}
+                onChange={(runner, installed, schedule) => change.mutate({ runner, installed, schedule })}
               />
             </section>
             <History runs={runs} selected={selected} onSelect={setSelectedId} />
@@ -80,60 +87,218 @@ export function TasksPage() {
 interface TaskTileProps {
   task: Task
   pending: Runner | null
-  awaitingCodex: boolean
   error: Error | null
-  onChange: (runner: Runner, installed: boolean) => void
+  onChange: (runner: Runner, installed: boolean, schedule?: ScheduleSettings) => void
 }
 
-function TaskTile({ task, pending, awaitingCodex, error, onChange }: TaskTileProps) {
-  const installed = new Set(task.installs)
+const DAYS = [
+  ["MO", "Monday"],
+  ["TU", "Tuesday"],
+  ["WE", "Wednesday"],
+  ["TH", "Thursday"],
+  ["FR", "Friday"],
+  ["SA", "Saturday"],
+  ["SU", "Sunday"],
+]
+const FIELD =
+  "h-9 rounded-[var(--radius-s)] border border-line bg-background px-2 text-xs text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+
+function TaskTile({ task, pending, error, onChange }: TaskTileProps) {
+  const [schedule, setSchedule] = useState<ScheduleSettings>(
+    task.schedule_settings ?? {
+      cadence: "daily",
+      time: "06:00",
+      day: "MO",
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+  )
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleRunner, setScheduleRunner] = useState<Runner>("codex")
+  const installed = task.installs.includes("codex")
+  const waiting = task.codex_install_status === "pending"
+  const busy = pending !== null || waiting
   return (
     <article className="flex flex-col gap-3 rounded-[var(--radius-l)] border border-line bg-card p-4">
       <div>
         <h2 className="m-0 text-sm font-semibold">{task.name}</h2>
         <p className="mb-0 mt-1 text-xs leading-relaxed text-muted-foreground">
-          Pulls new Gmail, iMessage and WhatsApp messages every morning at 6.
+          Keep Gmail, iMessage and WhatsApp up to date.
         </p>
       </div>
       <div className="flex flex-wrap gap-2">
-        {RUNNER_ORDER.map((runner) => {
-          const on = installed.has(runner)
-          const busy = pending === runner
+        {(["codex", "claude"] satisfies Runner[]).map((runner) => {
+          const on = task.installs.includes(runner)
+          const working = pending === runner || (runner === "codex" && waiting)
           return (
             <Button
               key={runner}
               size="sm"
               shape="pill"
               variant={on ? "ok" : "default"}
-              disabled={busy}
+              disabled={working}
+              className="group"
               data-runner={runner}
               data-installed={on}
               title={runner === "claude" ? "Restarts Claude Desktop to pick up the change" : undefined}
-              onClick={() => onChange(runner, !on)}
-              className="group"
+              onClick={() => {
+                if (on) onChange(runner, false)
+                else {
+                  setScheduleRunner(runner)
+                  setScheduleOpen(true)
+                }
+              }}
             >
               <RunnerIcon runner={runner} />
-              {busy ? on ? "Removing…" : "Installing…" : <InstallLabel runner={runner} installed={on} />}
+              {working ? (
+                on ? (
+                  "Removing…"
+                ) : (
+                  <span>
+                    Installing
+                    <WaitingDots />
+                  </span>
+                )
+              ) : on ? (
+                <>
+                  <span className="group-hover:hidden">{RUNNER_TITLE[runner]} ✓</span>
+                  <span className="hidden group-hover:inline">Remove</span>
+                </>
+              ) : (
+                `Install ${RUNNER_TITLE[runner]}`
+              )}
             </Button>
           )
         })}
       </div>
-      {awaitingCodex && (
-        <p className="m-0 text-xs text-muted-foreground">Send the prefilled message in Codex to finish.</p>
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent className="w-[min(360px,calc(100%-32px))]">
+          <DialogHeader>
+            <DialogTitle>
+              {task.installs.includes(scheduleRunner)
+                ? "Edit schedule"
+                : `Install ${RUNNER_TITLE[scheduleRunner]}`}
+            </DialogTitle>
+            <DialogDescription>Choose when to refresh.</DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              onChange(scheduleRunner, true, schedule)
+              setScheduleOpen(false)
+            }}
+          >
+            {!task.schedule_settings && (
+              <p className="m-0 text-xs text-muted-foreground">
+                Custom schedule. Saving applies the times below.
+              </p>
+            )}
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                Repeat
+                <select
+                  className={FIELD}
+                  aria-label="Repeat"
+                  value={schedule.cadence}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const cadence = event.target.value
+                    if (cadence === "daily" || cadence === "weekdays" || cadence === "weekly")
+                      setSchedule({ ...schedule, cadence })
+                  }}
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekdays">Weekdays</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </label>
+              {schedule.cadence === "weekly" && (
+                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                  Day
+                  <select
+                    className={FIELD}
+                    aria-label="Day"
+                    value={schedule.day}
+                    disabled={busy}
+                    onChange={(event) => setSchedule({ ...schedule, day: event.target.value })}
+                  >
+                    {DAYS.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                Time
+                <input
+                  className={FIELD}
+                  type="time"
+                  required
+                  value={schedule.time}
+                  disabled={busy}
+                  onChange={(event) => setSchedule({ ...schedule, time: event.target.value })}
+                />
+              </label>
+            </div>
+            <p className="m-0 text-xs text-muted-foreground">{schedule.timezone.replaceAll("_", " ")}</p>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" size="sm" variant="ghost">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button type="submit" size="sm" disabled={busy}>
+                {task.installs.includes(scheduleRunner) ? "Save" : "Create"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      {task.codex_thread_url && (
+        <div className="flex items-center gap-3 text-xs">
+          <a className="font-semibold text-info no-underline hover:underline" href={task.codex_thread_url}>
+            Open chat
+          </a>
+          {installed && (
+            <button
+              className="cursor-pointer border-0 bg-transparent p-0 text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setScheduleRunner("codex")
+                setScheduleOpen(true)
+              }}
+            >
+              Edit schedule
+            </button>
+          )}
+        </div>
       )}
-      {error && <p className="m-0 text-xs text-bad">{errorText(error)}</p>}
+      {waiting && (
+        <p role="status" className="m-0 text-xs text-muted-foreground">
+          Waiting for Codex to register the schedule
+          <WaitingDots />
+        </p>
+      )}
+      {installed && !waiting && <p className="m-0 text-xs text-ok">{task.schedule}</p>}
+      {error && (
+        <p role="alert" className="m-0 text-xs text-bad">
+          {errorText(error)}
+        </p>
+      )}
     </article>
   )
 }
 
-/** "Install", or "Installed" that reads "Remove" on hover. */
-function InstallLabel({ runner, installed }: { runner: Runner; installed: boolean }) {
-  if (!installed) return <>Install {RUNNER_TITLE[runner]}</>
+function WaitingDots() {
   return (
-    <>
-      <span className="group-hover:hidden">{RUNNER_TITLE[runner]} ✓</span>
-      <span className="hidden group-hover:inline">Remove</span>
-    </>
+    <span aria-hidden="true" className="inline-flex">
+      {[0, 150, 300].map((delay) => (
+        <span key={delay} className="motion-safe:animate-pulse" style={{ animationDelay: `${delay}ms` }}>
+          .
+        </span>
+      ))}
+    </span>
   )
 }
 

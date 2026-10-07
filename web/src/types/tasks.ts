@@ -13,6 +13,13 @@ export interface TaskRun {
   resume_command: string | null
 }
 
+export interface ScheduleSettings {
+  cadence: "daily" | "weekdays" | "weekly"
+  time: string
+  day: string
+  timezone: string
+}
+
 export interface Task {
   id: string
   name: string
@@ -20,4 +27,7 @@ export interface Task {
   command: string
   installs: Runner[]
   runs: TaskRun[]
+  schedule_settings: ScheduleSettings | null
+  codex_thread_url: string | null
+  codex_install_status: "not_installed" | "pending" | "installed"
 }

@@ -1,7 +1,7 @@
 """The Scheduled tasks page's JSON routes.
 
 GET  /tasks/api/task       the refresh task: where it's installed and its past runs
-POST /tasks/api/install    runner=background|codex|claude: install it under that runner
+POST /tasks/api/install    runner=codex|claude, cadence, time, day, timezone: install or update
 POST /tasks/api/uninstall  runner=...: remove that runner's install
 
 Changelog:
@@ -17,7 +17,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from packs.ingestion.primitives.refresh.tasks import RUNNERS, install, read_task, uninstall
+from packs.ingestion.primitives.refresh.tasks import RUNNERS, Schedule, install, read_task, uninstall
 
 TASK_PATH = "/tasks/api/task"
 INSTALL_PATH = "/tasks/api/install"
@@ -38,15 +38,21 @@ class TasksApi:
         if parsed.path not in (INSTALL_PATH, UNINSTALL_PATH):
             return False
         length = int(handler.headers.get("Content-Length") or 0)
-        runner = (urllib.parse.parse_qs(handler.rfile.read(length).decode()).get("runner") or [""])[0]
+        fields = urllib.parse.parse_qs(handler.rfile.read(length).decode())
+        runner = (fields.get("runner") or [""])[0]
         if runner not in RUNNERS:
             _send_json(handler, {"error": f"runner must be one of {', '.join(RUNNERS)}"}, HTTPStatus.BAD_REQUEST)
             return True
         try:
             if parsed.path == INSTALL_PATH:
-                install(runner, self.repo)
+                schedule = Schedule((fields.get("cadence") or ["daily"])[0], (fields.get("time") or ["06:00"])[0],
+                                    (fields.get("day") or ["MO"])[0], (fields.get("timezone") or [""])[0])
+                install(runner, self.repo, schedule)
             else:
                 uninstall(runner)
+        except ValueError as error:
+            _send_json(handler, {"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return True
         except Exception as error:  # noqa: BLE001 - the page shows why the install failed
             _send_json(handler, {"error": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return True
