@@ -99,9 +99,12 @@ export function useLinkedinQueue() {
   }
 
   const browse = async (position: number) => {
+    setPhase("deciding")
     try {
-      follow(await fetchLinkedinCard({ debug: true, index: position }))
+      const [next] = await Promise.all([fetchLinkedinCard({ debug: true, index: position }), wait(fadeMs)])
+      follow(next)
     } catch {
+      setPhase("ready")
       toastError(TOAST.cardFailed)
     }
   }

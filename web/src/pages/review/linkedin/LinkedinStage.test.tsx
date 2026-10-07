@@ -494,12 +494,12 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
   })
 
-  it("browses by position without writing, and without the swap", async () => {
+  it("browses by position without writing, swapping the contents as a decision does", async () => {
     await open(first(), debugging())
     server.answer(`GET ${CARD}`, caseyCard({ queue: queuePosition({ index: 1, total: 3 }) }))
     fireEvent.click(button("Next"))
     await waitFor(() => expect(name()).toBe("Casey Delta"))
-    expect(article().className).toBe("decision-card identity-card")
+    expect(article().className).toBe("decision-card identity-card entering")
 
     server.answer(`GET ${CARD}`, first())
     fireEvent.click(button("Previous"))
@@ -531,7 +531,7 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     fireEvent.click(button("Use this profile"))
     await waitFor(() => expect(name()).toBe("Casey Delta"))
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
-    expect(article().className).toBe("decision-card identity-card")
+    expect(article().className).toBe("decision-card identity-card entering")
   })
 
   it("hides the arrows while the card's re-research request is out, so no other card can be decided", async () => {
