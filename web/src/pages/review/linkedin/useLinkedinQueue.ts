@@ -8,7 +8,7 @@ import {
   type DecideRequest,
   type RetargetRequest,
 } from "@/lib/api/review"
-import { STAGE_DONE, TOAST } from "@/lib/review/copy"
+import { TOAST } from "@/lib/review/copy"
 import { wait } from "@/lib/review/timing"
 import type { DecideResult, LinkedinCardPayload } from "@/types/review"
 
@@ -28,7 +28,7 @@ export interface Shown {
  * re-research settles that person in the background: they never come back as a card.
  */
 export function useLinkedinQueue() {
-  const { debug, index, fadeMs, toast, toastError, applyProgress, transition, leaveAndReload } = useReview()
+  const { debug, index, fadeMs, toast, toastError, applyProgress, leaveAndReload } = useReview()
   const [shown, setShown] = useState<Shown | null>(null)
   /** Why the first read failed; "" while it has not. */
   const [failure, setFailure] = useState("")
@@ -61,14 +61,10 @@ export function useLinkedinQueue() {
 
     const pending = response.next.pending
     applyProgress({ linkedin_pending: pending })
-    if (pending === 0) {
-      // The last decision: the check, then the screen loads again on the finished state.
-      transition(STAGE_DONE.linkedin, "linkedin")
-      return
-    }
-
+    // The answer carries the next card, or the finished state after the last decision: either
+    // way it goes straight on screen (no stage-check pause, no reload).
     follow(response.next)
-    toast(message)
+    if (pending > 0) toast(message)
   }
 
   const retarget = async (request: RetargetRequest) => {

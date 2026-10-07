@@ -239,7 +239,7 @@ describe("LinkedinStage: a decision", () => {
     expect([name(), fading()]).toEqual(["Jordan Bravo", false])
   })
 
-  it("runs the wordless stage check after the last decision (L10)", async () => {
+  it("shows the finished panel straight after the last decision, no stage check (L10)", async () => {
     const next = linkedinCard({
       card: null,
       finished: linkedinFinished(),
@@ -248,10 +248,11 @@ describe("LinkedinStage: a decision", () => {
     server.answer(`POST ${DECIDE}`, decideResult({ next }))
     const { review } = await open()
     fireEvent.click(button("Use this profile"))
-    await waitFor(() => expect(review.transition).toHaveBeenCalledExactlyOnceWith("", "linkedin"))
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked"),
+    )
     expect(review.applyProgress).toHaveBeenCalledWith({ linkedin_pending: 0 })
-    // The check replaces the stage: the card stays faded and no toast is said.
-    expect([name(), fading()]).toEqual(["Jordan Bravo", true])
+    expect(review.transition).not.toHaveBeenCalled()
     expect(review.toast).not.toHaveBeenCalled()
     expect(server.posts("/complete")).toEqual([])
   })
