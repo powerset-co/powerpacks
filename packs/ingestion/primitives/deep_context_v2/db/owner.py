@@ -3,11 +3,6 @@
 Emails and phones are normalized here, once, with the same normalizers the import uses for
 candidate identifiers, so a caller compares values and never normalizes again.
 
-From v1: common/contact_fields.py: normalize_email, normalize_phone.
-
-Changelog:
-- 2026-10-06 (PR review): normalize emails and phones in the profile; shape guards removed.
-
 Created: 2026-10-06
 """
 from __future__ import annotations
@@ -51,8 +46,7 @@ class OwnerProfile:
 
 
 def _text(value: object) -> str:
-    # owner.json stores 0 for a current job's end; v1 kept the number and its falsiness printed
-    # "present". Found 2026-10-06 when the v2 system prompt did not hash equal to v1's.
+    # owner.json stores 0 for a current job's end; 0 means "no end", which renders as "present".
     return "" if value is None or value == 0 else str(value).strip()
 
 

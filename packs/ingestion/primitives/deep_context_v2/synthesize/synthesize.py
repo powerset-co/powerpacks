@@ -1,32 +1,14 @@
-"""03 Synthesize: facts per candidate from its own bundle. Worth is not here (stage 06).
+"""Block 03 Synthesize: facts per candidate from its own bundle, with gpt-6-luna.
 
-Rules (spec, stage 03):
-- The unit of work is the candidate; never a parent.
-- Strict output: the 16 fields of v1's fact_schema.json, nothing added. gpt-6-luna,
-  9,000-character batches, at most 20 per candidate. Several batches collapse into one object.
-- Reuse: a candidate whose facts.input_fingerprint equals the fingerprint of what would be
-  sent (system prompt, rendered batches, model, effort) is skipped ($0).
-- The paid path commits one facts row per finished candidate, so a stopped run resumes
-  from its own rows. A candidate whose call fails writes nothing; the run finishes the
-  others, then fails with the count, and a rerun redoes the failed ones.
+Each candidate's bundle is rendered newest-first into 9,000-character batches (at most 20); each
+batch is one strict-schema call; several batches collapse into one facts object of exactly the 16
+schema fields, stored in `facts`. Reuse is keyed on what would be sent: system prompt, rendered
+batches, model and effort. A candidate whose row carries that key is skipped at $0.
 
-From v1:
-- deep_context/synthesis/prompting.py: SYSTEM_PROMPT, OWNER_PROMPT_SUFFIX, owner_identity_block,
-  SYNTHESIS_VERSION, FACT_SCHEMA, batches, render_batch
-- deep_context/synthesis/facts.py: collapse_fact_records
-- deep_context/synthesis/models.py: SynthesizedFacts, FactRecord
-- deep_context/collection/models.py: CollectionBundle
-- deep_context/shared/openai_responses.py: OpenAIResponsesCaller, OpenAIResponsesConfig, estimate_cost_usd
-- packs/indexing/lib/llm_config.py: DEFAULT_SYNTHESIS_MODEL
-Copied (the v1 module imports the v1 store):
-- synthesis/selection.py:151-153 system prompt assembly
-- synthesis/runner.py:142-152,177 batch fan-out, one-or-collapse
-- synthesis/runner.py:213-247,266-272 token estimate (o200k_base, 750 output tokens per call)
-
-Changelog:
-- 2026-10-06 (Astra review): effort resolved once and used in request, fingerprint and row;
-  fingerprint over the rendered prompts; failed candidates no longer drop in-flight results;
-
+The paid path commits one row per finished candidate, so a stopped run resumes from its own
+rows. A candidate whose call fails writes nothing; the others finish, the run fails with the
+count, and a rerun redoes the failed ones. `--dry-run` estimates tokens and cost with tiktoken
+and makes no call.
 
 Created: 2026-10-06
 """

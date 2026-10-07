@@ -1,19 +1,13 @@
-"""Block 01, the import load: the per-source import CSVs and owner.json into the v2 store.
+"""Block 01 Import load: the per-source import CSVs and owner.json into the v2 store.
 
-Spec "01 Import": candidates, names, identifiers, sources, the connections lookup and owner.
-No parent rows, no merge, no verdict. Rows join only on identical id; the Gmail and messages
-CSVs never share one (email ids vs phone ids), so each CSV row is one candidate. The LinkedIn
-export is the `connections` lookup, never a candidate. The one drop applied here is the shared
-mailbox; every other keep rule ran in the per-source importer.
+Gmail and messages rows become candidates with their names, identifiers and channels; each row
+is one candidate because the two files never share an id (email ids vs phone ids). LinkedIn rows
+become the `connections` lookup, never candidates. Shared mailboxes are dropped here; every
+other keep rule ran in the per-source importer. owner.json fills the `owner` row and flags the
+operator's own candidates.
 
 A rerun upserts each candidate and rewrites its names, identifiers and sources; connections
 upsert by URL. Candidate rows are never deleted. A rebuild is rm of the store and a rerun.
-
-From v1:
-  common/contact_fields.py: normalize_email, normalize_phone, is_shared_mailbox
-  packs/shared/csv_io.py: CsvIO.read_dict_rows
-Copied: the shared-mailbox predicate (deep_context/ensure_parents/imported_people.py:165-175)
-  minus its LinkedIn-channel clause; the owner match (deep_context/db/projectors.py:73-79).
 
 Created: 2026-10-06
 """
