@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """The scheduled refresh task: install it into Codex or Claude, list its runs.
 
-Both harnesses run the same prompt (run `refresh_sources.py run`, report) daily
-at 06:00, from the templates in `automations/refresh-message-sources/`:
+Both harnesses run the same prompt (run `refresh_sources.py run`, report),
+defaulting to daily at 06:00. Both support weekdays and weekly schedules:
 
-    codex   install opens `codex://threads/new?prompt=…` asking Codex to create
-            the automation described by automation.toml, so the App's own tool
-            creates it the way the App expects. Remove does what the App's own
-            delete does: drop its codex-dev.db `automations` row, then the
-            $CODEX_HOME/automations/<id> folder. The prompt ends with the App's <heartbeat>
-            decision: a clean run archives itself and says DONT_NOTIFY, a problem
-            says NOTIFY. Runs: state_5.sqlite threads whose title carries
-            `Automation ID: <id>`; each thread's rollout is its transcript.
+    codex   install creates and verifies a persisted chat through app-server,
+            writes its native heartbeat config, and opens that chat. Each run
+            resumes it. The App imports the config before installation is
+            reported complete. Remove does what the App's own
+            delete does: drop its codex-dev.db `automations` row. The folder is
+            backed up and the chat stays open. Runs come from heartbeat turns in
+            the target chat's transcript; older standalone runs use their
+            `Automation ID: <id>` title.
     claude  claude-task.md → ~/.claude/scheduled-tasks/<id>/SKILL.md plus an entry
             in Claude Desktop's claude-code-sessions/<account>/<org>/
             scheduled-tasks.json. Desktop loads that file at launch and writes it
@@ -35,7 +35,8 @@ import sqlite3
 import subprocess
 import sys
 import time
-import urllib.parse
+import select
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from string import Template
@@ -49,11 +50,12 @@ from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 
 Runner = Literal["codex", "claude"]
 RUNNERS: tuple[Runner, ...] = ("codex", "claude")
+CADENCES = ("daily", "weekdays", "weekly")
+DAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+CODEX_TIMEOUT_SECONDS = 30
 
 TASK_ID = "refresh-message-sources"
 TASK_NAME = "Refresh message sources"
-SCHEDULE = "Daily at 6:00 AM"
-CRON = "0 6 * * *"
 REFRESH_COMMAND = "uv run --project . python packs/ingestion/primitives/refresh/refresh_sources.py run"
 ATTENTION = "NEEDS ATTENTION"
 PROMPT = (
@@ -67,7 +69,6 @@ MAX_RUNS = 30
 TEMPLATES = _REPO_ROOT / "automations" / TASK_ID
 
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-CODEX_AUTOMATION = CODEX_HOME / "automations" / TASK_ID / "automation.toml"
 CODEX_APP_DB = CODEX_HOME / "sqlite" / "codex-dev.db"
 CODEX_THREADS_DB = CODEX_HOME / "state_5.sqlite"
 
@@ -79,6 +80,64 @@ CLAUDE_SESSIONS = Path.home() / "Library" / "Application Support" / "Claude" / "
 QUIT_WAIT_SECONDS = 20
 # A session's first lines hold its prompt; the marker is on the prompt's first line.
 CLAUDE_HEAD_LINES = 12
+
+
+def _local_timezone() -> str:
+    return str(Path("/etc/localtime").resolve()).split("/zoneinfo/", 1)[1]
+
+
+@dataclass(frozen=True)
+class Schedule:
+    cadence: Literal["daily", "weekdays", "weekly"] = "daily"
+    time: str = "06:00"
+    day: str = "MO"
+    timezone: str = ""
+
+    def __post_init__(self) -> None:
+        if self.cadence not in CADENCES or self.day not in DAYS:
+            raise ValueError("Choose daily, weekdays, or weekly, with a valid weekday.")
+        if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", self.time) is None:
+            raise ValueError("Time must be HH:MM in 24-hour time.")
+        local = _local_timezone()
+        if self.timezone and self.timezone != local:
+            raise ValueError(f"Schedules use this computer's timezone: {local}.")
+        object.__setattr__(self, "timezone", local)
+
+    def rrule(self) -> str:
+        hour, minute = (int(part) for part in self.time.split(":"))
+        days = "MO,TU,WE,TH,FR" if self.cadence == "weekdays" else self.day
+        rule = f"RRULE:FREQ={'DAILY' if self.cadence == 'daily' else 'WEEKLY'};BYHOUR={hour};BYMINUTE={minute}"
+        return rule if self.cadence == "daily" else f"{rule};BYDAY={days}"
+
+    def cron(self) -> str:
+        hour, minute = (int(part) for part in self.time.split(":"))
+        day = "*" if self.cadence == "daily" else "1-5" if self.cadence == "weekdays" else str((DAYS.index(self.day) + 1) % 7)
+        return f"{minute} {hour} * * {day}"
+
+    def label(self) -> str:
+        hour, minute = (int(part) for part in self.time.split(":"))
+        weekday = dict(zip(DAYS, ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))[self.day]
+        cadence = {"daily": "Daily", "weekdays": "Weekdays", "weekly": f"Every {weekday}"}[self.cadence]
+        return f"{cadence} at {hour % 12 or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}"
+
+    @classmethod
+    def from_rrule(cls, rule: str) -> Schedule | None:
+        try:
+            parts = dict(part.split("=", 1) for part in rule.removeprefix("RRULE:").split(";"))
+        except ValueError:
+            return None
+        if set(parts) - {"FREQ", "INTERVAL", "BYHOUR", "BYMINUTE", "BYDAY", "BYSECOND"}:
+            return None
+        if parts.get("INTERVAL", "1") != "1" or parts.get("BYSECOND", "0") != "0":
+            return None
+        days = parts.get("BYDAY", "")
+        cadence = "daily" if not days or set(days.split(",")) == set(DAYS) else "weekdays" if days == "MO,TU,WE,TH,FR" else "weekly"
+        if parts.get("FREQ") not in ("DAILY", "WEEKLY") or (cadence == "weekly" and days not in DAYS):
+            return None
+        try:
+            return cls(cadence, f"{int(parts['BYHOUR']):02d}:{int(parts['BYMINUTE']):02d}", days if cadence == "weekly" else "MO")
+        except (KeyError, ValueError):
+            return None
 
 
 @dataclass(frozen=True)
@@ -100,17 +159,26 @@ class Task:
     command: str
     installs: list[Runner]
     runs: list[Run]
+    schedule_settings: Schedule | None
+    codex_thread_url: str | None
+    codex_install_status: Literal["not_installed", "pending", "installed"]
 
 
 def read_task(repo: Path) -> Task:
     runs = sorted([*_codex_runs(), *_claude_runs(repo)], key=lambda run: run.started_at, reverse=True)
-    return Task(TASK_ID, TASK_NAME, SCHEDULE, REFRESH_COMMAND, installed_runners(), runs[:MAX_RUNS])
+    config = _codex_config()
+    schedule = Schedule.from_rrule(config["rrule"]) if config else Schedule()
+    thread_url = f"codex://threads/{config['target_thread_id']}" if config and config.get("target_thread_id") else None
+    status = "installed" if config and _codex_imported(config) else "pending" if config else "not_installed"
+    return Task(TASK_ID, TASK_NAME, schedule.label() if schedule else "Custom schedule in Codex", REFRESH_COMMAND,
+                installed_runners(), runs[:MAX_RUNS], schedule, thread_url, status)
 
 
 def installed_runners() -> list[Runner]:
     """Where the task is installed. Cheap: no run history is read."""
     installed: list[Runner] = []
-    if CODEX_AUTOMATION.exists() or _codex_app_has_task():
+    config = _codex_config()
+    if config and _codex_imported(config):
         installed.append("codex")
     if any(_claude_entry(path) is not None for path in _claude_task_files()):
         installed.append("claude")
@@ -120,14 +188,13 @@ def installed_runners() -> list[Runner]:
 # ---------------------------------------------------------------- install / remove
 
 
-def install(runner: Runner, repo: Path) -> None:
-    """A no-op when already installed there, so a second click never makes a copy."""
-    if runner in installed_runners():
-        return
+def install(runner: Runner, repo: Path, schedule: Schedule | None = None) -> None:
+    """Install or update the schedule, preserving its existing chat."""
+    schedule = schedule or Schedule()
     if runner == "codex":
-        _install_codex(repo)
-    else:
-        _install_claude(repo)
+        _install_codex(repo.resolve(), schedule)
+    elif runner not in installed_runners():
+        _install_claude(repo, schedule)
 
 
 def uninstall(runner: Runner) -> None:
@@ -142,37 +209,129 @@ def uninstall(runner: Runner) -> None:
     shutil.rmtree(CLAUDE_TASK.parent, ignore_errors=True)
 
 
-def _install_codex(repo: Path) -> None:
-    """Open a new Codex thread asking Codex to create the automation. The App's own
-    create tool fills in what it expects (its project target, among others); a
-    hand-written automation.toml lacked that, and the App then refused to edit it
-    ("Could not update scheduled task")."""
-    spec = Template((TEMPLATES / "automation.toml").read_text()).substitute(prompt=PROMPT, workspace=repo)
-    request = (
-        f"Create a cron scheduled task with exactly these settings, for the project at {repo}. "
-        f"Do not run it now.\n\n```toml\n{spec}```"
-    )
-    subprocess.run(["open", f"codex://threads/new?{urllib.parse.urlencode({'prompt': request})}"], check=True)
+def _install_codex(repo: Path, schedule: Schedule) -> None:
+    config = _codex_config()
+    thread_id = config.get("target_thread_id") if config else None
+    if thread_id:
+        _verify_codex_thread(thread_id, repo)
+    else:
+        thread_id = _create_codex_thread(repo)
+    now = int(time.time() * 1000)
+    if config is None:
+        config = {"version": 1, "id": TASK_ID, "kind": "heartbeat", "name": TASK_NAME,
+                  "prompt": PROMPT, "status": "ACTIVE", "target_thread_id": thread_id, "created_at": now}
+    config.update(kind="heartbeat", target_thread_id=thread_id, rrule=schedule.rrule(), updated_at=now)
+    path = CODEX_HOME / "automations" / config["id"] / "automation.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        shutil.copy2(path, CODEX_HOME / f"{config['id']}.{time.time_ns()}.bkup")
+    if path.exists():
+        text = path.read_text()
+        for key in ("kind", "target_thread_id", "rrule", "updated_at"):
+            line = f"{key} = {json.dumps(config[key], ensure_ascii=False)}"
+            pattern = rf"^{key}\s*=.*$"
+            text = re.sub(pattern, lambda _: line, text, flags=re.MULTILINE) if re.search(pattern, text, re.MULTILINE) else text + "\n" + line
+    else:
+        text = "\n".join(f"{key} = {json.dumps(value, ensure_ascii=False)}" for key, value in config.items())
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(text + "\n")
+    temporary.replace(path)
+    subprocess.run(["open", f"codex://threads/{thread_id}"], check=True)
+
+
+def _create_codex_thread(repo: Path) -> str:
+    with subprocess.Popen(["codex", "app-server", "--listen", "stdio://"], cwd=repo,
+                          env={**os.environ, "CODEX_HOME": str(CODEX_HOME)}, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0) as process:
+        def request(request_id: int, method: str, params: dict) -> dict:
+            process.stdin.write((json.dumps({"id": request_id, "method": method, "params": params}) + "\n").encode())
+            deadline = time.monotonic() + CODEX_TIMEOUT_SECONDS
+            while select.select([process.stdout], [], [], max(0, deadline - time.monotonic()))[0]:
+                line = process.stdout.readline()
+                if not line:
+                    raise RuntimeError("Codex exited before creating the scheduled task chat.")
+                response = json.loads(line)
+                if response.get("id") != request_id:
+                    continue
+                if "error" in response:
+                    raise RuntimeError(response["error"]["message"])
+                return response["result"]
+            raise RuntimeError("Codex timed out creating the scheduled task chat.")
+
+        try:
+            request(0, "initialize", {"clientInfo": {"name": "powerpacks", "version": "1.0"},
+                                      "capabilities": {"experimentalApi": True}})
+            process.stdin.write(b'{"method":"initialized","params":{}}\n')
+            thread = request(1, "thread/start", {"cwd": str(repo), "ephemeral": False, "historyMode": "legacy",
+                                                "sandbox": "danger-full-access", "approvalPolicy": "never"})["thread"]
+            request(2, "thread/name/set", {"threadId": thread["id"], "name": TASK_NAME})
+            request(3, "thread/settings/update", {"threadId": thread["id"], "approvalPolicy": "never",
+                                                   "sandboxPolicy": {"type": "dangerFullAccess"}})
+            persisted = request(4, "thread/read", {"threadId": thread["id"], "includeTurns": False})["thread"]
+            if persisted["cwd"] != str(repo) or persisted["id"] != thread["id"]:
+                raise RuntimeError("Codex created the scheduled task chat in a different repository.")
+        finally:
+            process.stdin.close()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+    _verify_codex_thread(thread["id"], repo)
+    return thread["id"]
+
+
+def _verify_codex_thread(thread_id: str, repo: Path) -> None:
+    with sqlite3.connect(f"file:{CODEX_THREADS_DB}?mode=ro", uri=True) as conn:
+        row = conn.execute("SELECT cwd, rollout_path, sandbox_policy, approval_mode FROM threads WHERE id = ?", (thread_id,)).fetchone()
+    if row is None or row[0] != str(repo) or not Path(row[1]).is_file():
+        raise RuntimeError("The scheduled task chat is not persisted in this repository.")
+    if json.loads(row[2])["type"] not in ("disabled", "danger-full-access") or row[3] != "never":
+        raise RuntimeError("The scheduled task chat does not have the requested Full access permissions.")
+
+
+def _codex_config() -> dict | None:
+    tasks = _codex_tasks()
+    automation_id = tasks[0][0] if tasks else TASK_ID
+    path = CODEX_HOME / "automations" / automation_id / "automation.toml"
+    if path.exists():
+        return tomllib.loads(path.read_text())
+    if not tasks:
+        return None
+    with sqlite3.connect(f"file:{CODEX_APP_DB}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT id, name, prompt, kind, status, rrule, target_thread_id, created_at, updated_at "
+                           "FROM automations WHERE id = ?", (automation_id,)).fetchone()
+    return {"version": 1, **dict(row)}
+
+
+def _codex_imported(config: dict) -> bool:
+    if config.get("kind") != "heartbeat" or not CODEX_APP_DB.exists():
+        return False
+    with sqlite3.connect(f"file:{CODEX_APP_DB}?mode=ro", uri=True) as conn:
+        row = conn.execute("SELECT kind, target_thread_id, rrule, updated_at FROM automations WHERE id = ? AND status != 'DELETED'",
+                           (config["id"],)).fetchone()
+    return row == ("heartbeat", config["target_thread_id"], config["rrule"], config["updated_at"])
 
 
 def _remove_codex() -> None:
-    """What the Codex App's own delete does: drop its row, then the folder. Once the
-    App has imported the TOML its row wins, so removing the file alone keeps the
-    schedule running."""
-    if CODEX_APP_DB.exists():
+    """Remove the native schedule while preserving its data and target chat."""
+    for automation_id, _ in _codex_tasks():
+        folder = CODEX_HOME / "automations" / automation_id
+        if folder.exists():
+            shutil.move(folder, CODEX_HOME / f"{automation_id}.{time.time_ns()}.bkup")
         with sqlite3.connect(CODEX_APP_DB, timeout=10) as conn:
-            conn.execute("DELETE FROM automations WHERE id = ?", (TASK_ID,))
-    shutil.rmtree(CODEX_AUTOMATION.parent, ignore_errors=True)
+            conn.execute("DELETE FROM automations WHERE id = ?", (automation_id,))
 
 
-def _install_claude(repo: Path) -> None:
+def _install_claude(repo: Path, schedule: Schedule) -> None:
     targets = _claude_task_files()
     if not targets:
         raise RuntimeError("Open Claude Desktop once and sign in, then install again.")
     entry = {
         "id": TASK_ID,
         "displayName": TASK_NAME,
-        "cronExpression": CRON,
+        "cronExpression": schedule.cron(),
         "model": CLAUDE_MODEL,
         "enabled": True,
         "filePath": str(CLAUDE_TASK),
@@ -229,7 +388,9 @@ def _claude_running() -> bool:
 
 
 def _codex_runs() -> list[Run]:
-    return [
+    automations = _codex_tasks()
+    targets = {thread_id for _, thread_id in automations if thread_id}
+    runs = [
         Run(
             id=thread_id,
             runner="codex",
@@ -240,7 +401,42 @@ def _codex_runs() -> list[Run]:
             resume_command=f"codex resume {thread_id}",
         )
         for thread_id, created_ms, rollout in _codex_threads()
+        if thread_id not in targets
     ]
+    if CODEX_THREADS_DB.exists():
+        with sqlite3.connect(f"file:{CODEX_THREADS_DB}?mode=ro", uri=True) as conn:
+            for automation_id, thread_id in automations:
+                if thread_id is None:
+                    continue
+                row = conn.execute("SELECT rollout_path FROM threads WHERE id = ?", (thread_id,)).fetchone()
+                if row:
+                    runs.extend(_codex_heartbeat_runs(automation_id, thread_id, Path(row[0])))
+    return runs
+
+
+def _codex_heartbeat_runs(automation_id: str, thread_id: str, rollout: Path) -> list[Run]:
+    runs = []
+    scheduled = False
+    for row in _rows(rollout):
+        payload = row.get("payload") or {}
+        if row.get("type") == "event_msg" and payload.get("type") == "task_started":
+            scheduled = False
+        elif row.get("type") == "response_item" and payload.get("role") == "user":
+            scheduled = scheduled or f"<automation_id>{automation_id}</automation_id>" in _text(payload.get("content"))
+        elif row.get("type") == "event_msg" and payload.get("type") == "task_complete" and scheduled:
+            error = payload.get("error")
+            summary = _strip_codex_citations(payload.get("last_agent_message") or (error or {}).get("message", ""))
+            status = "failed" if error else _report_status(summary) if summary else "unknown"
+            runs.append(Run(
+                id=payload["turn_id"],
+                runner="codex",
+                started_at=_iso(payload["started_at"]),
+                status=status,
+                summary=summary,
+                open_url=f"codex://threads/{thread_id}",
+                resume_command=f"codex resume {thread_id}",
+            ))
+    return runs
 
 
 def _codex_threads() -> list[tuple[str, int, str]]:
@@ -254,12 +450,15 @@ def _codex_threads() -> list[tuple[str, int, str]]:
         ).fetchall()
 
 
-def _codex_app_has_task() -> bool:
+def _codex_tasks() -> list[tuple[str, str | None]]:
     if not CODEX_APP_DB.exists():
-        return False
+        return []
     with sqlite3.connect(f"file:{CODEX_APP_DB}?mode=ro", uri=True) as conn:
-        row = conn.execute("SELECT 1 FROM automations WHERE id = ? AND status != 'DELETED'", (TASK_ID,)).fetchone()
-    return row is not None
+        return conn.execute(
+            "SELECT id, target_thread_id FROM automations WHERE status != 'DELETED' "
+            "AND (id = ? OR instr(prompt, ?) > 0)",
+            (TASK_ID, f"Task: {TASK_ID}\n"),
+        ).fetchall()
 
 
 def _report_status(summary: str) -> Literal["ok", "failed"]:

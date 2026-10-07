@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Drive Google Console for msgvault OAuth setup.
+/* Drive Google Console setup and msgvault Gmail consent in the saved profile.
  *
  * This is intentionally best-effort. The form work runs in headless Chrome over
  * the persistent profile, so nothing pops up while the saved Google session is
@@ -22,10 +22,7 @@ const path = require("path");
 const { chromium } = require("playwright-core");
 const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/browser.js");
 
-const GMAIL_SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.modify",
-];
+const { GMAIL_SCOPES, authorize } = require("./gmail_consent.js");
 const HUMAN_LOGIN_ACCOUNT_RETRY_MS = 60000;
 
 class StepError extends Error {
@@ -814,6 +811,11 @@ async function failurePayload(error, page, downloadDir, project, clientName) {
 async function main() {
   const args = parseArgs(process.argv);
   const mode = args.mode || "setup";
+  if (mode === "authorize") {
+    const request = JSON.parse(fs.readFileSync(0, "utf8"));
+    result(await authorize(request, { launchChrome, progress, returnFocus }));
+    return;
+  }
   const project = args.project;
   const email = args.email;
   const clientName = args.clientName || "local-msg-vault";
@@ -922,7 +924,9 @@ async function main() {
   result(payload);
 }
 
-main().catch((error) => {
+module.exports = { launchChrome };
+
+if (require.main === module) main().catch((error) => {
   result({ status: "error", message: String(error && error.message ? error.message : error) });
   process.exit(1);
 });

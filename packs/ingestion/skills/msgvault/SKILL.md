@@ -44,6 +44,11 @@ Run these commands from the checkout identified by the installed skill.
 - Reruns: `browser-setup` skips Google Console automation when a valid local
   client secret is already configured. Use `--force-browser-setup` only when
   intentionally creating/replacing the OAuth client.
+- `add-account` reuses the saved Google browser session for the requested
+  mailbox and Gmail scopes. Chrome opens visibly only when Google needs login,
+  MFA, or an unrecognized screen; finish that step there and authorization
+  continues. If it times out, rerun the same command. `--force-auth` preserves
+  the previous token when replacement fails. A healthy account needs no browser.
 
 ## User-facing wording
 

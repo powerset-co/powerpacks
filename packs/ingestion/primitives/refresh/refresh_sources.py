@@ -2,13 +2,13 @@
 """Refresh the already-connected message sources. No model runs in here.
 
 A Codex or Claude scheduled task runs this every morning (tasks.py installs
-it) and reports the JSON it prints. A source that needs the user (expired
-Gmail sign-in, WhatsApp unlinked, Full Disk Access off) is reported, never
-fixed here. Nothing here opens a browser, a QR page or
-System Settings, and nothing runs past import: no fan-in, Deep Context, LLM,
-paid lookup, index or upload.
+it) and reports the JSON it prints. Expired Gmail grants get one renewal attempt
+using the saved Google session, with sign-in handed to the user when needed.
+WhatsApp unlinked and Full Disk Access off are reported. Nothing runs past import:
+no fan-in, Deep Context, LLM, paid lookup, index or upload.
 
     Gmail     auth-check every msgvault account (or just the one asked for) →
+              renew expired stored accounts once → recheck sign-in →
               msgvault sync the healthy ones → rebuild discovery from EVERY stored
               account (skip sync), so an unsynced or expired account keeps its
               archived contacts → Gmail import
@@ -51,7 +51,7 @@ from packs.ingestion.primitives.discover.messages.wacli.auth import auth_status 
 from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport  # noqa: E402
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport  # noqa: E402
-from packs.ingestion.primitives.setup.automations.accounts import check_accounts_payload  # noqa: E402
+from packs.ingestion.primitives.setup.automations import accounts  # noqa: E402
 
 Outcome = Literal["refreshed", "needs_you", "failed", "not_connected"]
 
@@ -109,9 +109,17 @@ def _sync_gmail(only: str | None) -> list[SourceResult]:
     emails = _msgvault_emails()
     if not emails:
         return [SourceResult("gmail", "not_connected", "No Gmail account in msgvault.")]
-    check = check_accounts_payload(MSGVAULT_HOME, [only] if only else emails)
+    selected = [only] if only else emails
+    check = accounts.check_accounts_payload(MSGVAULT_HOME, selected)
     if check["error_accounts"]:
         return [SourceResult("gmail", "failed", "Couldn't reach Google to check sign-ins.", check["error_accounts"])]
+    expired = [email for email in check["expired_accounts"] if email in emails]
+    for email in expired:
+        accounts.add_account(MSGVAULT_HOME, email, "", headless=False, force=True)
+    if expired:
+        check = accounts.check_accounts_payload(MSGVAULT_HOME, selected)
+        if check["error_accounts"]:
+            return [SourceResult("gmail", "failed", "Couldn't reach Google to check sign-ins.", check["error_accounts"])]
 
     config = resolve_discovery_inputs(account_emails=emails)
     for email in check["healthy_accounts"]:
