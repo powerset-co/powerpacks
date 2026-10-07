@@ -59,6 +59,62 @@ if TYPE_CHECKING:
 HARMONIC_PROFILE_MIGRATION = 2
 
 
+def repair_gmail_contact_keys(db: Db, rekeys: dict[str, str], *, retained_ids: frozenset[str]) -> None:
+    """2026-10-06: move exact Gmail source IDs; remove after pre-3.17 installs.
+
+    The source reader supplies only one-to-one old-ID -> primary-email keys.
+    A pre-existing candidate must still be an empty, single-person parent.
+    Paid or reviewed candidates require identity review, not this repair.
+    """
+    nonempty = 0
+    reconnected = 0
+    with db.transaction() as conn:
+        conn.execute("BEGIN DEFERRED")
+        conn.execute("PRAGMA defer_foreign_keys=ON")
+        for old_id, new_id in rekeys.items():
+            old = conn.execute("SELECT parent_id,parent_slug FROM people WHERE person_id=?", (old_id,)).fetchone()
+            if old is None:
+                continue
+            candidate = conn.execute("SELECT parent_id FROM people WHERE person_id=?", (new_id,)).fetchone()
+            if candidate is not None:
+                parent_id = candidate["parent_id"]
+                if parent_id == old["parent_id"]:
+                    continue
+                occupied = conn.execute("""
+                    SELECT 1 FROM people WHERE parent_id=:parent AND
+                        (person_id!=:person OR facts_json IS NOT NULL OR is_owner OR is_ghost)
+                    UNION ALL SELECT 1 FROM parents WHERE parent_id=:parent AND
+                        (human_worth IS NOT NULL OR machine_worth IS NOT NULL)
+                    UNION ALL SELECT 1 FROM artifacts WHERE parent_id=:parent
+                    UNION ALL SELECT 1 FROM research WHERE parent_id=:parent
+                    UNION ALL SELECT 1 FROM guidance WHERE parent_id=:parent
+                    UNION ALL SELECT 1 FROM links WHERE parent_id=:parent AND
+                        (decision_action IS NOT NULL OR machine_action IS NOT NULL
+                         OR machine_judgment IS NOT NULL OR judgment_fingerprint IS NOT NULL
+                         OR paid_profile OR authoritative_detach OR kind='synthetic')
+                    UNION ALL SELECT 1 FROM merge_verdicts WHERE person_a=:person OR person_b=:person
+                    UNION ALL SELECT 1 FROM person_tags WHERE person_id=:person
+                    UNION ALL SELECT 1 FROM person_labels WHERE person_id=:person
+                    UNION ALL SELECT 1 FROM share WHERE person_id=:person
+                    LIMIT 1
+                """, {"parent": parent_id, "person": new_id}).fetchone()
+                if occupied:
+                    nonempty += 1
+                    continue
+                if old_id in retained_ids:
+                    for table in ("people", "links", "candidate_people"):
+                        conn.execute(f"UPDATE {table} SET parent_id=? WHERE parent_id=?", (old["parent_id"], parent_id))
+                    conn.execute("UPDATE people SET parent_slug=? WHERE person_id=?", (old["parent_slug"], new_id))
+                    reconnected += 1
+                conn.execute("DELETE FROM parents WHERE parent_id=?", (parent_id,))
+
+    repaired = reconnected + db.rekey_people(rekeys, retained_ids=retained_ids)
+    if repaired:
+        print(f"[deep-context] repaired {repaired} Gmail contact keys on their original parents", file=sys.stderr)
+    if nonempty:
+        print(f"[deep-context] Gmail key repair left {nonempty} nonempty candidates unchanged", file=sys.stderr)
+
+
 def is_harmonic_bootstrap(source: object) -> bool:
     """Identify partial export profiles. Remove when no pre-v4 install remains."""
     return (isinstance(source, dict)

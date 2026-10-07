@@ -36,19 +36,27 @@ from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.shared.csv_io import CsvIO
 
 
-def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
+def read_source_people(people_csv: Path, db: Db) -> tuple[tuple[ImportedPerson, ...], dict[str, str]]:
     """Read recorded source contacts, or the retained source roster after export."""
     manifest_path = people_csv.parent / "manifest.json"
     if not manifest_path.is_file():
-        return ()
+        return (), {}
     payload = json.loads(manifest_path.read_text())
     if payload.get("primitive") == "deep_context_export_people":
-        return stored_imported_people(db)
+        return stored_imported_people(db), {}
     if payload.get("stage") != "merge_people":
-        return ()
+        return (), {}
     inputs = MergePeopleInput.model_validate(payload["input"])
     input_rows = TypeAdapter(dict[str, int]).validate_python(payload["stats"]["input_rows"])
     rows = []
+    rekeys: dict[str, set[str]] = {}
+    # A refreshed Gmail import already has candidate IDs. The retained roster
+    # still records which old contact supplied its primary address.
+    for person in stored_imported_people(db) if db is not None else ():
+        if SourceChannel.GMAIL.value in person.source_channels and not person.person_id.startswith("candidate:"):
+            key = candidate_key_for(person.index_row.primary_email)
+            if key:
+                rekeys.setdefault(person.person_id, set()).add(f"candidate:{key}")
     restored = 0
     unnamed = 0
     gmail_contacts: dict[Path, dict[str, MsgvaultContactRow]] = {}
@@ -72,6 +80,7 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
                     print("[deep-context] Gmail source contact has no primary email; original ownership unresolved",
                           file=sys.stderr)
                     continue
+                rekeys.setdefault(row.id.strip().lower(), set()).add(f"candidate:{key}")
                 contact = {column: getattr(row, column) for column in (
                     *CONTACT_CARRY_COLUMNS, "first_name", "last_name", "full_name", "source_artifacts",
                     "public_identifier", "linkedin_url",
@@ -124,7 +133,14 @@ def read_source_people(people_csv: Path, db: Db) -> tuple[ImportedPerson, ...]:
         print(f"[deep-context] restored {restored} Gmail source contact keys; legacy lookup aliases omitted", file=sys.stderr)
     if unnamed:
         print(f"[deep-context] {unnamed} historical Gmail contact names unresolved; lookup names omitted", file=sys.stderr)
-    return tuple(person for person in _imported_people(tuple(rows)) if not _is_shared_mailbox(person))
+    people = tuple(person for person in _imported_people(tuple(rows)) if not _is_shared_mailbox(person))
+    source_ids = {person.person_id for person in people}
+    owners: dict[str, set[str]] = {}
+    for old_id, keys in rekeys.items():
+        for key in keys:
+            owners.setdefault(key, set()).add(old_id)
+    return people, {old_id: key for old_id, keys in rekeys.items() if len(keys) == 1
+                    for key in keys if len(owners[key]) == 1 and key in source_ids}
 
 
 def retain_source_identifiers(db: Db, people: tuple[ImportedPerson, ...], imported: tuple[ImportedPerson, ...]) -> None:

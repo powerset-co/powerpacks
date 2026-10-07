@@ -60,13 +60,14 @@ class EnsureParents(Node):
 
     def execute(self) -> EnsureParentsManifest:
         imported = read_imported_people(self.people_csv)
-        sources = read_source_people(self.people_csv, self.db)
+        sources, rekeys = read_source_people(self.people_csv, self.db)
         repair, removed = scrub_deep_context(self.db)
         if removed:
             print(f'[deep-context] invalidated {removed} Harmonic profile artifacts', file=sys.stderr)
         if repair.repaired or repair.unresolved:
             print(f'[deep-context] repaired {len(repair.repaired)} merged parents; '
                   f'{len(repair.unresolved)} unresolved', file=sys.stderr)
+        self.db.rekey_people(rekeys, retained_ids=frozenset(person.person_id for person in sources))
         projected = project_imported_people(self.db, sources or imported)
         retain_source_identifiers(self.db, sources, imported)
         return EnsureParentsManifest(

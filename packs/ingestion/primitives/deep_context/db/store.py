@@ -267,6 +267,49 @@ class Db:
         conn.execute(f"DELETE FROM {table} WHERE {key_column}=?", (key,))
         conn.executemany(UPSERTS[table], [asdict(row) for row in rows])
 
+    def rekey_people(self, rekeys: dict[str, str], *, retained_ids: frozenset[str]) -> int:
+        """Put unused contact keys on the original parent, retaining other sources."""
+        renamed = 0
+        with self.transaction() as conn:
+            conn.execute("BEGIN DEFERRED")
+            conn.execute("PRAGMA defer_foreign_keys=ON")
+            for old_id, new_id in rekeys.items():
+                old = conn.execute("SELECT parent_id,parent_slug FROM people WHERE person_id=?", (old_id,)).fetchone()
+                if old is None or conn.execute("SELECT 1 FROM people WHERE person_id=?", (new_id,)).fetchone():
+                    continue
+                if old_id in retained_ids:
+                    self._write("people", PersonRow(new_id, old["parent_id"], parent_slug=old["parent_slug"]), conn)
+                    renamed += 1
+                    continue
+                # Keep the original parent, child slug, decisions and artifact bytes.
+                # The schema has delete cascades, so rename all references before commit.
+                for table in ("imported_people", "person_identifiers", "person_sources", "candidate_people",
+                              "person_tags", "person_labels", "share"):
+                    conn.execute(f"UPDATE {table} SET person_id=? WHERE person_id=?", (new_id, old_id))
+                for table in ("artifacts", "facts"):
+                    conn.execute(f"UPDATE {table} SET person_id=? WHERE parent_id=? AND person_id=?",
+                                 (new_id, old["parent_id"], old_id))
+                conn.execute("UPDATE people SET person_id=? WHERE person_id=?", (new_id, old_id))
+                conn.execute("UPDATE imported_people SET row_json=json_set(row_json,'$.id',?) WHERE person_id=?",
+                             (new_id, new_id))
+                conn.execute("UPDATE facts SET subject_key=? WHERE subject_key=?", (new_id, old_id))
+                for prefix in ("facts:", "source-bundle:"):
+                    old_key, new_key = prefix + old_id, prefix + new_id
+                    for table, column in (("facts", "artifact_key"), ("research", "artifact_key"),
+                                          ("synthetic_profiles", "source_artifact_key"), ("artifacts", "artifact_key")):
+                        conn.execute(f"UPDATE {table} SET {column}=? WHERE {column}=?", (new_key, old_key))
+                verdicts = conn.execute("SELECT person_a,person_b,slug_a,slug_b FROM merge_verdicts "
+                                        "WHERE person_a=? OR person_b=?", (old_id, old_id)).fetchall()
+                for verdict in verdicts:
+                    pair = sorted((new_id if person == old_id else person, slug)
+                                  for person, slug in ((verdict["person_a"], verdict["slug_a"]),
+                                                       (verdict["person_b"], verdict["slug_b"])))
+                    conn.execute("UPDATE merge_verdicts SET person_a=?,slug_a=?,person_b=?,slug_b=? "
+                                 "WHERE person_a=? AND person_b=?", (*pair[0], *pair[1],
+                                                                   verdict["person_a"], verdict["person_b"]))
+                renamed += 1
+        return renamed
+
     def merge_parents(self, survivor_parent_id: str, absorbed_parent_id: str) -> None:
         """Atomically absorb one parent family into a surviving parent."""
         if survivor_parent_id == absorbed_parent_id:

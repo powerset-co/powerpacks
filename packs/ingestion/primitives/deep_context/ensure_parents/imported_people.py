@@ -58,7 +58,7 @@ from packs.ingestion.primitives.deep_context.db.projectors import project_owner_
 from packs.ingestion.primitives.deep_context.db.queries import imported_people as stored_people_rows
 from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.primitives.imports.merge_people import merge_group
-from packs.ingestion.primitives.deep_context.ensure_parents.assignment import load_assignment
+from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from packs.ingestion.schemas.people_schema import (
     CONTACT_CARRY_COLUMNS,
     normalize_linkedin_url,
@@ -249,15 +249,13 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     existing_people = {row.person_id: row for row in person_rows(db)}
     parent_by_person = {row.person_id: row.parent_id for row in existing_people.values()}
     parent_slugs = {row.parent_id: row.display_slug for row in parent_rows(db)}
-    assignment = load_assignment(db)
     target_by_input: dict[str, str] = {}
     component_targets: list[tuple[tuple[ImportedPerson, ...], str]] = []
     new_parents: list[ParentRow] = []
 
     for component in _components(imported, parent_by_person):
-        child_slugs = tuple(existing_people[person.person_id].child_slug for person in component
-                            if person.person_id in existing_people)
-        target = assignment.resolve(child_slugs, tuple(person.person_id for person in component))
+        target = parent_by_person.get(component[0].person_id) or mint_parent_id(
+            tuple(person.person_id for person in component))
         if target not in parent_slugs:
             representative = component[0]
             parent = ParentRow(

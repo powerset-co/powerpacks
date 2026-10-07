@@ -182,10 +182,16 @@ uv run --project . python packs/ingestion/primitives/imports/status.py status
 `check` sets aside the recognized August SQLite layout as
 `deep-context.sqlite.bkup-schema-<UTC timestamp>` beside the store; otherwise
 it only reads. Combine current source imports, then project their people into
-SQLite; `ensure-parents` creates the store on a fresh install.
+SQLite; `ensure-parents` creates the store on a fresh install. First run fan-in:
+
+```bash
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
+  --people-csv .powerpacks/network-import/merged/people.csv
+```
+
 For every existing SQLite installation, run
 [Heal an existing installation](recovery.md#heal-an-existing-installation)
-before fan-in, collection or synthesis. `heal` checks SQLite's existing
+after fan-in and before `ensure-parents`, collection or synthesis. `heal` checks SQLite's existing
 `meta.data_migration_version`: completed migrations are a read-only no-op;
 pending repairs run in order and record completion only after success. Do not
 use `deep-context/heal/manifest.json` to skip this check; it is a report only.
@@ -194,8 +200,6 @@ A fresh installation without a canonical SQLite store skips this command.
 Imports do not merge people or write identity decisions:
 
 ```bash
-uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
-  --people-csv .powerpacks/network-import/merged/people.csv
 bin/deep-context ensure-parents
 bin/deep-context check
 ```

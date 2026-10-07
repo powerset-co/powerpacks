@@ -84,6 +84,7 @@ EXPECTED_DB_OPERATIONS = {
     "store.Db.decide_share",
     "store.Db.decide_worth",
     "store.Db.merge_parents",
+    "store.Db.rekey_people",
     "store.Db.project_rows",
     "store.Db.prune_synthetic_candidates",
     "store.Db.query",
