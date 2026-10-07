@@ -29,8 +29,7 @@ from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapid
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, extract_public_identifier
 from packs.shared.csv_io import CsvIO
 
-# v2 writes beside v1's merged/people.csv until cutover; the v1 install still hashes that file to
-# decide whether to re-index, so v2 must not overwrite it yet.
+# The file the index builder reads and hashes to decide on a re-index; replaced whole each run.
 PEOPLE_CSV_RELATIVE_PATH = Path("network-import") / "merged" / "people.csv"
 # The people columns a LinkedIn profile fills.
 PROFILE_COLUMNS: tuple[str, ...] = (
