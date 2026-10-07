@@ -262,10 +262,10 @@ TABLES: tuple[str, ...] = (
     "bundles", "facts", "candidate_parent", "pair_verdicts", "worth", "candidate_linkedins", "research",
 )
 VIEWS: tuple[str, ...] = ("current_parent", "current_worth", "current_linkedins", "current_profile")
-# A view is a saved query over these tables; a node that declares the view reads them.
+# A view is a saved query over these tables (and views); a node that declares the view reads them all.
 VIEW_TABLES: dict[str, tuple[str, ...]] = {
     "current_parent": ("candidate_parent",),
-    "current_worth": ("candidate_parent", "worth"),
+    "current_worth": ("current_parent", "candidate_parent", "worth"),
     "current_linkedins": ("candidate_linkedins",),
-    "current_profile": ("candidate_parent", "candidate_linkedins"),
+    "current_profile": ("current_parent", "current_linkedins", "candidate_parent", "candidate_linkedins"),
 }
