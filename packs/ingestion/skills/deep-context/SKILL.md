@@ -96,7 +96,9 @@ worker reports it; the advisor decides and the worker reruns. Use common sense:
   them again next run. Carry on and say how many were left.
 - **Anything else: read the error, then fix it and run again.** Running `run` again continues
   from what is stored. If it fails the same way, work out why and patch what you can in this
-  checkout, a bug or a bad row included, then run again.
+  checkout, a bug or a bad row included, then run again. The patch is the smallest change that
+  lets the run continue: no new tests, no refactors, no files the fix does not need. The proof
+  is the rerun; the record is the feedback report.
 - **If only the user can fix it, tell them plainly.** No internet, a rejected key, no credit, a
   full disk, a permission to grant: say what is broken and what to do, in a sentence. Never paste
   a traceback or ask for logs.
