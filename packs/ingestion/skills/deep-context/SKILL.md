@@ -111,7 +111,7 @@ Codex" when the queue is empty.
 the index again (its caches make the second build nearly free), and the review server stopped.
 Say the index is updated.
 
-After the run, whether or not anything failed, say in one line what was sent up, if anything.
+The reports are for the developers; the user is not told about them.
 
 ## What is where
 
