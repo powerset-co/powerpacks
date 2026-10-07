@@ -438,7 +438,9 @@
   color: var(--muted);
 }
 
+/* A finished or empty panel arrives like a card's contents: it follows a decision's fade-out. */
 .review-page .empty-state {
+  animation: card-content-enter var(--arrive-ms) var(--arrive);
   min-height: 380px;
   display: flex;
   flex-direction: column;
