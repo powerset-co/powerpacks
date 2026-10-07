@@ -258,8 +258,8 @@
   opacity: 0;
   transform: translateY(-5px);
   transition:
-    opacity 100ms ease,
-    transform 100ms ease;
+    opacity var(--leave-ms) var(--leave),
+    transform var(--leave-ms) var(--leave);
   pointer-events: none;
 }
 

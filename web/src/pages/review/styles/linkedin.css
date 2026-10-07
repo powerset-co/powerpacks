@@ -121,9 +121,6 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.review-page .linkedin-option .linkedin-label {
-  margin-top: 0;
-}
 /* A list inside the options list draws the second-level bullet, as a nested list does. */
 .review-page .linkedin-option .fact-list {
   list-style: circle;

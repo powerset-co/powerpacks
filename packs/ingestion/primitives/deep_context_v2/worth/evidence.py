@@ -12,6 +12,7 @@ from packs.ingestion.primitives.deep_context_v2.collect.bundle import MessageDir
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import ChannelCount, MemberFacts
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 from packs.ingestion.primitives.deep_context_v2.worth import jev
+from packs.ingestion.primitives.deep_context_v2.worth.jev import ChannelSummary
 
 
 def family_facts(members: list[MemberFacts]) -> SynthesizedFacts:
@@ -33,7 +34,7 @@ def reference_date(members: list[MemberFacts]) -> str:
 
 
 def channel_summary(members: list[MemberFacts], sources: dict[str, list[str]],
-                     counts: dict[str, list[ChannelCount]], groups: dict[str, int]) -> jev.ChannelSummary:
+                     counts: dict[str, list[ChannelCount]], groups: dict[str, int]) -> ChannelSummary:
     """The members' message counts added together: per channel, from me and from them, first and last."""
     family_sources: set[str] = set()
     per_channel: dict[str, int] = {}
@@ -53,7 +54,7 @@ def channel_summary(members: list[MemberFacts], sources: dict[str, list[str]],
             if count.first_at is not None:
                 timestamps.append(count.first_at)
                 timestamps.append(count.last_at)
-    return jev.ChannelSummary(tuple(sorted(family_sources)), per_channel, min(timestamps, default=None),
+    return ChannelSummary(tuple(sorted(family_sources)), per_channel, min(timestamps, default=None),
                               max(timestamps, default=None), from_me, from_them, group_count)
 
 

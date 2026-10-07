@@ -10,6 +10,8 @@ Created: 2026-10-06
 from __future__ import annotations
 
 import json
+
+import jinja2
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,9 +24,11 @@ from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 
+from packs.ingestion.primitives.deep_context_v2 import assets
+
 _HERE = Path(__file__).parent
-SYSTEM_PROMPT: str = (_HERE / "identity_merge_system.txt").read_text(encoding="utf-8").removesuffix("\n")
-SCHEMA: dict[str, Any] = json.loads((_HERE / "identity_merge_schema.txt").read_text(encoding="utf-8"))
+SYSTEM_PROMPT: str = assets.text(_HERE, "identity_merge_system.txt")
+SCHEMA: dict[str, Any] = assets.json_file(_HERE, "identity_merge_schema.txt")
 SCHEMA_NAME = "identity_merge"
 MODEL = "gpt-6.1-sol"
 REASONING_EFFORT = "high"
@@ -32,11 +36,10 @@ PROMPT_VERSION = "dedupe-2026-10-07-aliases"  # recorded in each verdict's signa
 SAMPLE_MESSAGES = 4      # per direction, newest first
 SAMPLE_CHARS = 200       # per message
 TOPICS = 10
-QUESTION = "Are A and B the same person, different people, or uncertain?"
 
 
 @dataclass(frozen=True)
-class Side:
+class SolSide:
     """One candidate as the judge sees it."""
 
     display_name: str
@@ -46,7 +49,7 @@ class Side:
 
 
 @dataclass(frozen=True)
-class Decision:
+class SolDecision:
     same_person: int | None  # 1 same, 0 different, None uncertain
     confidence: float
     reason: str
@@ -66,7 +69,7 @@ def _sample(messages: tuple[MessageEntry, ...], direction: MessageDirection) -> 
     return texts
 
 
-def _values(side: Side, kind: IdentifierKind) -> list[str]:
+def _values(side: SolSide, kind: IdentifierKind) -> list[str]:
     values: list[str] = []
     for identifier in side.identifiers:
         if identifier.kind == kind:
@@ -74,8 +77,11 @@ def _values(side: Side, kind: IdentifierKind) -> list[str]:
     return values
 
 
-def render_side(label: str, side: Side) -> str:
-    """One CONTACT block: header with the email, the fact lines, then the message samples."""
+TEMPLATE: jinja2.Template = assets.template(_HERE, "pair_prompt.j2")
+
+
+def _side_fields(side: SolSide) -> dict[str, Any]:
+    """One side as the template reads it: the fact lines the dossier filled, the samples, the handles."""
     facts: SynthesizedFacts = side.facts
     lines: list[str] = []
     # The name the dossier settled on, and its aliases: the written name may be a first name or a handle.
@@ -100,45 +106,21 @@ def render_side(label: str, side: Side) -> str:
         lines.append(f"location: {facts.location}")
     if facts.topics:
         lines.append("we discuss: " + ", ".join(facts.topics[:TOPICS]))
-    facts_block: str = "  (no extracted facts)"
-    if lines:
-        indented: list[str] = []
-        for line in lines:
-            indented.append("  " + line)
-        facts_block = "\n".join(indented)
-    # A few short messages each way.
-    mine: str = "  (no messages from me)"
-    from_me: list[str] = _sample(side.messages, MessageDirection.FROM_ME)
-    if from_me:
-        quoted: list[str] = []
-        for text in from_me:
-            quoted.append("  me→them: " + text)
-        mine = "\n".join(quoted)
-    theirs: str = "  (no messages from them)"
-    from_them: list[str] = _sample(side.messages, MessageDirection.FROM_THEM)
-    if from_them:
-        quoted = []
-        for text in from_them:
-            quoted.append("  them→me: " + text)
-        theirs = "\n".join(quoted)
-    emails: str = "none"
-    addresses: list[str] = _values(side, IdentifierKind.EMAIL)
-    if addresses:
-        emails = ", ".join(addresses)
-    return f"CONTACT {label} — {side.display_name}  [emails: {emails}]\n{facts_block}\nMessages:\n{mine}\n{theirs}"
+    return {
+        "display_name": side.display_name, "emails": _values(side, IdentifierKind.EMAIL), "lines": lines,
+        "from_me": _sample(side.messages, MessageDirection.FROM_ME),
+        "from_them": _sample(side.messages, MessageDirection.FROM_THEM),
+        "names_json": json.dumps([side.display_name], ensure_ascii=False),
+        "phones_json": json.dumps(_values(side, IdentifierKind.PHONE)),
+    }
 
 
-def user_prompt(owner_name: str, first: Side, second: Side) -> str:
-    """The whole user prompt for one pair."""
-    names: str = ("ORIGINAL SOURCE CONTACT NAMES:\nA: " + json.dumps([first.display_name], ensure_ascii=False)
-                  + "\nB: " + json.dumps([second.display_name], ensure_ascii=False))
-    phones: str = ("SOURCE CONTACT PHONES:\nA: " + json.dumps(_values(first, IdentifierKind.PHONE))
-                   + "\nB: " + json.dumps(_values(second, IdentifierKind.PHONE)))
-    return (f"Network owner: {owner_name}\n\n{render_side('A', first)}\n\n{render_side('B', second)}"
-            f"\n\n{names}\n\n{phones}\n\n{QUESTION}")
+def user_prompt(owner_name: str, first: SolSide, second: SolSide) -> str:
+    """The whole user prompt for one pair, rendered from pair_prompt.j2."""
+    return TEMPLATE.render(owner_name=owner_name, a=_side_fields(first), b=_side_fields(second))
 
 
-def decision_from_answer(answer: dict[str, Any]) -> Decision:
+def decision_from_answer(answer: dict[str, Any]) -> SolDecision:
     """Validate the answer at the provider boundary. Uncertain is not different. A same or different
     with no identity evidence behind it is saved as uncertain: the answer was paid for and is kept,
     but it does not merge or block anyone."""
@@ -152,18 +134,18 @@ def decision_from_answer(answer: dict[str, Any]) -> Decision:
     reason: str = answer["reason"]
     if evidence:
         reason = reason + " Individual identity evidence: " + evidence
-    return Decision(same, answer["confidence"], reason)
+    return SolDecision(same, answer["confidence"], reason)
 
 
-async def judge(caller: OpenAIResponsesCaller, prompt: str) -> Decision:
+async def judge(caller: OpenAIResponsesCaller, prompt: str) -> SolDecision:
     """One Sol call for one pair."""
     answer: dict[str, Any] = await caller.call(system_prompt=SYSTEM_PROMPT, user_prompt=prompt, schema=SCHEMA,
                                                schema_name=SCHEMA_NAME, context="dedupe")
     return decision_from_answer(answer)
 
 
-def side_of(display_name: str, identifiers: list[Identifier], facts_json: str, bundle_json: str) -> Side:
+def side_of(display_name: str, identifiers: list[Identifier], facts_json: str, bundle_json: str) -> SolSide:
     """A Side from the stored rows."""
     facts: SynthesizedFacts = SynthesizedFacts.from_payload(json.loads(facts_json))
     bundle: CollectionBundle = CollectionBundle.from_payload(json.loads(bundle_json))
-    return Side(display_name, tuple(identifiers), facts, bundle.messages)
+    return SolSide(display_name, tuple(identifiers), facts, bundle.messages)

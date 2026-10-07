@@ -34,7 +34,7 @@ describe("useScreenReview", () => {
   it("hands the stage the screen's settings and the page's toast", () => {
     const { result, toast } = renderReview()
     const { review } = result.current
-    expect([review.preview, review.debug, review.index, review.fadeMs]).toEqual([true, true, 2, 100])
+    expect([review.preview, review.debug, review.index, review.fadeMs]).toEqual([true, true, 2, 150])
     review.toast("Added")
     review.toastError("Could not save")
     expect(toast.say).toHaveBeenCalledWith("Added")
@@ -80,12 +80,12 @@ describe("useScreenReview", () => {
     expect(open).toHaveBeenCalledWith("/?stage=linkedin")
   })
 
-  it("says the message, fades the stage out for 100 ms, then reloads", () => {
+  it("says the message, fades the stage out for 150 ms, then reloads", () => {
     const { result, toast, reload } = renderReview()
     act(() => result.current.review.leaveAndReload("Saved"))
     expect(toast.say).toHaveBeenCalledWith("Saved")
     expect(result.current.leaving).toBe(true)
-    act(() => void vi.advanceTimersByTime(99))
+    act(() => void vi.advanceTimersByTime(149))
     expect(reload).not.toHaveBeenCalled()
     act(() => void vi.advanceTimersByTime(1))
     expect(reload).toHaveBeenCalledTimes(1)

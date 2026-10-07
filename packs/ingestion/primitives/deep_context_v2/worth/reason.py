@@ -8,7 +8,7 @@ Created: 2026-10-06
 """
 from __future__ import annotations
 
-from packs.ingestion.primitives.deep_context_v2.worth.jev import MODEL, Answer, best_index, class_scores, features
+from packs.ingestion.primitives.deep_context_v2.worth.jev import MODEL, JevAnswer, best_index, class_scores, features
 
 REASON_LIMIT = 3
 CLEAR_HIGH = 0.6
@@ -79,7 +79,7 @@ WARMTH_PHRASES: tuple[str, ...] = (
 )
 
 
-def _supporting(answers: dict[str, Answer], decision: str) -> list[tuple[str, str, float]]:
+def _supporting(answers: dict[str, JevAnswer], decision: str) -> list[tuple[str, str, float]]:
     """Per question with a positive total contribution, strongest first: its strongest option ("" on
     a noul answer) and that option's probability. The worth answer itself is left out: it is circular."""
     normalized, scores = class_scores(answers)
@@ -134,7 +134,7 @@ def _phrase(name: str, option: str, probability: float) -> str:
     return UNCERTAIN + positive
 
 
-def reason(answers: dict[str, Answer], decision: str) -> str:
+def reason(answers: dict[str, JevAnswer], decision: str) -> str:
     """The three strongest phrases, as one to three sentences: what it looks like, what is less clear,
     what there is little evidence of."""
     phrases: list[str] = []

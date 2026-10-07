@@ -49,15 +49,9 @@ function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
       <>
         {/* Browsing could reach a card whose decision is out: the arrows wait for this one. */}
         {queue && phase === "ready" ? <CarouselNav queue={queue} onIndex={onBrowse} /> : null}
-        {/* A carousel card is a frame of its own, replaced whole: browsing (and the first
-            decision, which leaves the carousel) never plays the swap. */}
-        <LinkedinCard
-          key={queue ? queue.index : "queue"}
-          card={card}
-          phase={phase}
-          onDecide={onDecide}
-          onRetarget={onRetarget}
-        />
+        {/* One frame for the queue and the carousel alike: browsing swaps the contents the way
+            a decision does, so the carousel shows the card exactly as the review will. */}
+        <LinkedinCard card={card} phase={phase} onDecide={onDecide} onRetarget={onRetarget} />
       </>
     )
   }
