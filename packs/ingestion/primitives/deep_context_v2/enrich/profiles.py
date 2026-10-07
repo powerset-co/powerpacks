@@ -79,11 +79,12 @@ def _experience(row: dict[str, Any]) -> str:
 
 
 def _education(row: dict[str, Any]) -> str:
+    """"degree, field — school", from the cache's keys (schoolName, fieldOfStudy, degree)."""
     degree: list[str] = []
-    for value in (row.get("degree"), row.get("field")):
+    for value in (row.get("degree"), row.get("fieldOfStudy")):
         if _text(value):
             degree.append(_text(value))
-    school: str = _text(row.get("school_name"))
+    school: str = _text(row.get("schoolName")) or _text(row.get("school"))
     if degree and school:
         return ", ".join(degree) + " — " + school
     if degree:
