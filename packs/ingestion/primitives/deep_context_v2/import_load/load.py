@@ -1,7 +1,8 @@
 """Block 01 Import load: the per-source import CSVs and owner.json into the v2 store.
 
 Gmail rows become email candidates and messages rows become phone candidates, each with its
-names, its one identifier and its channels. A Gmail candidate's name is the one most often written
+names, its one identifier and its channels; the id is minted from the identifier (candidate:email:<address>,
+candidate:phone:+<digits>). A Gmail candidate's name is the one most often written
 for its address in the mail archive's headers (gmail_names.py); the importer's own name column is
 blank whenever two header spellings ever disagreed, which lost the name of people with hundreds of
 messages. The two files never share an id. LinkedIn rows
@@ -78,7 +79,8 @@ def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, displ
     for part in row["source_channels"].split(","):
         sources.append(SourceChannel(part.strip()))
     return Candidate(
-        candidate_id=row["id"],
+        # Minted here from the identifier, never taken from the CSV: an older importer wrote other ids.
+        candidate_id="candidate:" + kind.value + ":" + normalized,
         display_name=full_name,
         # The operator's own addresses and numbers; those candidates are never collected or synthesized.
         is_owner=normalized in owner.emails or normalized in owner.phones,
