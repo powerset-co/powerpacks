@@ -22,6 +22,7 @@ export type DecidedBy = "human" | "machine"
 export interface Person {
   parent_id: string
   public_identifier: string
+  in_progress: boolean
   name: string
   has_avatar: boolean
   title: string
@@ -71,6 +72,7 @@ export type PersonColumn = Exclude<keyof Person, "last" | "warmthBucket" | "sear
 export const PERSON_COLUMNS = [
   "parent_id",
   "public_identifier",
+  "in_progress",
   "name",
   "has_avatar",
   "title",

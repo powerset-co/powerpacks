@@ -51,6 +51,7 @@ class SharePerson:
 
     parent_id: str
     public_identifier: str
+    in_progress: bool
     name: str
     has_avatar: bool
     title: str
@@ -206,6 +207,7 @@ class SharePeople:
             people.append(SharePerson(
                 parent_id=parent_id,
                 public_identifier=row["public_identifier"],
+                in_progress=row["public_identifier"] != decision.public_identifier,
                 name=str(fact.get("canonical_name") or "") or row["full_name"],
                 has_avatar=bool(row["profile_picture_url"]),
                 title=row["current_title"] or fact_title,

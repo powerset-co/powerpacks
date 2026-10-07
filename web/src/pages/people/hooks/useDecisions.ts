@@ -65,20 +65,21 @@ export function useDecisions(byId: ReadonlyMap<string, Person>, onWritten: (ids:
 
   const undo = useCallback(async () => {
     const previous = lastUndo.current
-    if (saving.current || !previous) return
+    if (saving.current || !previous || previous.some((change) => byId.get(change.parent_id)?.in_progress))
+      return
     try {
       await write(previous, null)
       setToast({ message: `Undid changes for ${plural(previous.length, "person")}.` })
     } catch (error) {
       setToast({ message: `Couldn't undo. ${errorText(error)}`, error: true })
     }
-  }, [write])
+  }, [byId, write])
 
   /** Writes the action for `ids`; true when the server took it, false when skipped or failed. */
   const apply = useCallback(
     async (action: TagAction, ids: readonly string[]): Promise<boolean> => {
       const rows = ids.map((id) => byId.get(id)).filter((row): row is Person => row !== undefined)
-      if (saving.current || !rows.length) return false
+      if (saving.current || !rows.length || rows.some((row) => row.in_progress)) return false
       const changes = rows.map((row) => ({ parent_id: row.parent_id, tags: nextTags(row, action) }))
       const previous = rows.map((row) => ({ parent_id: row.parent_id, tags: [...row.tags] }))
       try {

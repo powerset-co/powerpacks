@@ -146,6 +146,7 @@
 .worth[data-worth="no"] .dot {
   background: var(--bad);
 }
+.person .src,
 .worth .src {
   color: var(--faint);
   font-size: 10px;
