@@ -6,7 +6,7 @@ import { Link } from "react-router-dom"
 
 import { Toast } from "@/components/shared"
 import { BRAND, documentTitle, LOAD_FAILED } from "@/lib/review/copy"
-import { stageHref } from "@/lib/review/links"
+import { REVIEW_PATH } from "@/lib/review/links"
 
 import { useReviewToast } from "./hooks/useReviewToast"
 import { useScreen } from "./hooks/useScreen"
@@ -23,7 +23,7 @@ const TOAST_PLACE = "inset-x-0 bottom-6 mx-auto w-fit max-w-[calc(100vw-32px)] t
  * the one toast every control reports to.
  */
 export function ReviewPage() {
-  const { screen, error, reload, open } = useScreen()
+  const { screen, error, reload } = useScreen()
   const toast = useReviewToast()
   const title = screen?.page.title
 
@@ -39,7 +39,7 @@ export function ReviewPage() {
   return (
     <div className="review-page" data-stage={screen?.page.view} data-preview={screen?.preview}>
       <header className="topbar">
-        <Link className="brand" to={stageHref("worth")}>
+        <Link className="brand" to={REVIEW_PATH}>
           {BRAND}
         </Link>
         <h1 className="topbar-title">{title}</h1>
@@ -52,7 +52,7 @@ export function ReviewPage() {
           </EmptyPanel>
         </main>
       ) : screen ? (
-        <ReviewScreen key={screen.id} screen={screen} toast={toast} reload={reload} open={open} />
+        <ReviewScreen key={screen.id} screen={screen} toast={toast} reload={reload} />
       ) : (
         <main className="review-main" aria-busy="true" />
       )}

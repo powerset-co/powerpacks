@@ -33,7 +33,7 @@ from packs.ingestion.primitives.common.contact_fields import (
     normalize_email,
     normalize_name_key as normalize_name,
 )
-from packs.ingestion.primitives.deep_context.shared.common import Person
+from packs.ingestion.primitives.common.person import Person
 from packs.ingestion.primitives.discover.messages.wacli.util import (
     canonicalize_phone as normalize_phone,
 )

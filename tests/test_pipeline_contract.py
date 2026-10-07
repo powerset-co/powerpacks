@@ -478,13 +478,6 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertEqual(
             sorted((item["node"], item["path"]) for item in report["dead_outputs"]),
             [
-                ("deep_cluster", ".powerpacks/deep-context/merge-candidates.csv"),
-                ("deep_cluster", ".powerpacks/deep-context/merge-candidates.md"),
-                ("deep_compose", ".powerpacks/deep-context/dossiers/{slug}.md"),
-                ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
-                ("deep_synthesize", ".powerpacks/deep-context/facts/{parent_id}.jsonl"),
-                # synthesize's own JEV request cache: written and re-read by the same node.
-                ("deep_synthesize", ".powerpacks/deep-context/jev/{request_sha256}.json"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("gmail_stage_merge", ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
@@ -500,24 +493,12 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("gmail_stage_merge", report["edges"]["gmail_import"])
         self.assertIn("messages_stage_merge", report["edges"]["messages_import"])
 
-    def test_the_deep_context_stage_is_registered(self) -> None:
-        # Only file-to-file stages remain registered. Review, enrichment, realization and
-        # share read/write SQLite explicitly (share is a deep-context v2 node, not a file node).
+    def test_only_the_file_to_file_stages_are_registered(self) -> None:
+        # Deep-context v2 reads and writes its SQLite store explicitly; its nodes are not file
+        # nodes, so none of them is in this graph.
         names = set(check_graph(self._declared_nodes())["nodes"])
-        self.assertLessEqual(
-            {
-                "deep_owner",
-                "deep_ensure_parents",
-                "deep_collect",
-                "deep_synthesize",
-                "deep_compose",
-                "deep_cluster",
-                "deep_parents",
-                "deep_seed",
-            },
-            names,
-        )
-        self.assertEqual(len(names), 21)
+        self.assertFalse({name for name in names if name.startswith("deep_")})
+        self.assertEqual(len(names), 13)
 
     def test_review_csv_has_no_runtime_writer(self) -> None:
         # Runtime worth and identity decisions live in SQLite. review.csv is

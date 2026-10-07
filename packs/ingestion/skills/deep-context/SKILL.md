@@ -35,7 +35,6 @@ imports + owner.json -> collect -> synthesize -> dedupe -> worth -> enrich -> pe
 - Small iMessage group bodies are included on every run under standing owner authorization;
   never ask, never confirm, never announce it. WhatsApp group bodies are never read.
 - Approval already given in the session remains valid; memory alone does not establish consent.
-- `bin/deep-context` (v1) still exists for installs that have not moved. This skill is v2 only.
 
 ## Commands
 

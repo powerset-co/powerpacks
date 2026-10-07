@@ -387,7 +387,7 @@ class SourceOnboarding:
             imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
             counts = {item.source: item.stats["people"] for item in imports
                       if item.status == "completed" and "people" in item.stats}
-            return self._write("sources.ready", counts=source_counts(counts), action={"command": "bin/deep-context check"},
+            return self._write("sources.ready", counts=source_counts(counts), action={"command": "bin/deep-context-v2 run"},
                                details={"counts": counts}, handed_back=True)
         except PrimitiveBlocked as exc:
             return self._write("step.waiting", details=exc.payload, handed_back=True,

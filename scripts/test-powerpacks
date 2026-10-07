@@ -34,13 +34,9 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_refresh_tasks \
   tests.test_refresh_tasks_api \
   tests.test_refresh_sources \
-  tests.test_install_controller \
   tests.test_install_index_progress \
   tests.test_install_pipeline \
   tests.test_install_coordinator \
-  tests.test_review_page_port \
-  tests.test_openai_not_stored \
-  tests.test_review_env \
   tests.test_candidate_judge_evidence \
   tests.test_candidate_judges \
   tests.test_capability_contract \
@@ -58,7 +54,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_fetch_job_posting \
   tests.test_gmail_import \
   tests.test_import_contacts_quality \
-  tests.test_import_stage_contract \
   tests.test_import_status \
   tests.test_index_contacts_pipeline \
   tests.test_ingestion_messages_contract \
@@ -67,9 +62,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_jev_client \
   tests.test_jev_model \
   tests.test_jev_pipeline \
-  tests.test_jev_worth \
-  tests.test_jev_worth_reasons \
-  tests.test_jev_typed \
   tests.test_job_location \
   tests.test_llm_rerank_candidates \
   tests.test_local_duckdb_backend \
@@ -92,71 +84,10 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_usage_capture \
   tests.test_wacli_payloads \
   tests.test_whatsapp_wacli \
-  tests.test_clean_slate \
-  tests.test_cluster_merge_candidates \
-  tests.test_merge_candidate_conflicts \
-  tests.test_deep_context_merge_repair \
-  tests.test_deep_context_harmonic_migration \
-  tests.test_deep_context_merge_owner \
-  tests.test_identity_jev \
-  tests.test_mapped_identity_batch \
-  tests.test_deep_context_append \
-  tests.test_deep_context_append_sources \
-  tests.test_deep_context_commands \
-  tests.test_deep_context_openai_flex \
-  tests.test_deep_context_collection_sqlite \
-  tests.test_deep_context_collection_failures \
-  tests.test_deep_context_db_parent_merge \
-  tests.test_deep_context_db_projectors \
-  tests.test_deep_context_db_schema \
-  tests.test_deep_context_db_store \
-  tests.test_deep_context_db_views \
-  tests.test_deep_context_settle \
-  tests.test_deep_context_enrich_cli \
-  tests.test_deep_context_context_queries \
-  tests.test_deep_context_sql_scale \
-  tests.test_deep_context_dossier \
-  tests.test_deep_context_enrichment_projection \
-  tests.test_deep_context_dossier_html \
-  tests.test_deep_context_identity_invariants \
-  tests.test_deep_context_identity_queue \
-  tests.test_deep_context_import_hygiene \
   tests.test_role_address \
-  tests.test_deep_context_judgment_policy \
-  tests.test_deep_context_legacy_scrubs \
-  tests.test_deep_context_lookup_sqlite \
-  tests.test_deep_context_seed \
-  tests.test_deep_context_seed_reuse \
-  tests.test_deep_context_owner_projection \
-  tests.test_deep_context_parent_assignment \
-  tests.test_deep_context_parent_projection \
-  tests.test_deep_context_prefetch_rate \
-  tests.test_deep_context_prompt_assets \
-  tests.test_deep_context_reconcile_cli_db \
-  tests.test_deep_context_restart_sqlite \
-  tests.test_deep_context_sqlite_invariants \
-  tests.test_deep_context_sqlite_producers \
-  tests.test_deep_context_sqlite_roster \
-  tests.test_deep_context_prefetch_sqlite \
-  tests.test_deep_context_synthesis \
-  tests.test_deep_context_synthetic_prefetch \
-  tests.test_deep_context_relationship \
-  tests.test_deep_context_identity_disagreements \
-  tests.test_identity_dossier_context \
-  tests.test_research_selection_batch \
-  tests.test_identity_research_claims \
-  tests.test_deep_research_contacts \
-  tests.test_parallel_stream_resume \
   tests.test_profile_transient_failure \
-  tests.test_email_context \
-  tests.test_identity_evidence_identifiers \
   tests.test_ingestion_jsonio \
-  tests.test_llm_config \
   tests.test_logbook \
-  tests.test_messages_chatdb \
-  tests.test_profile_labels \
-  tests.test_profile_models_identity \
-  tests.test_reconcile_fetch \
   tests.test_app_routes \
   tests.test_enrich_people \
   tests.test_icons \
@@ -164,29 +95,8 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_local_searches_browser \
   tests.test_merge_people \
   tests.test_search_json_contract \
-  tests.test_synthesis_jev \
-  tests.test_synthesis_failures \
   tests.test_validate_search_index \
-  tests.test_deep_context_contact_facts \
-  tests.test_deep_context_dossier_quarantine \
-  tests.test_deep_context_identity_audit \
-  tests.test_deep_context_parent_metadata \
-  tests.test_deep_context_rebuild \
-  tests.test_deep_context_rebuild_cli \
-  tests.test_deep_context_source_contacts \
-  tests.test_deep_context_source_identity \
-  tests.test_deep_context_gmail_rekey \
-  tests.test_deep_context_source_owner \
-  tests.test_identity_claim_ownership \
   tests.test_indexing_scaffold \
-  tests.test_linkedin_name_match_regressions \
-  tests.test_linkedin_name_matches \
-  tests.test_merge_candidate_precision \
   tests.test_merge_people_source_identity \
-  tests.test_merge_source_members \
-  tests.test_merge_uncertain \
   tests.test_message_name_conflicts \
-  tests.test_profile_source_names \
-  tests.test_relationship_cache_contract \
-  tests.test_synthesis_usage_accounting \
   tests.test_upload_powerset -v

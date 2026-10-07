@@ -2,26 +2,16 @@
 // every key present as the server sends it. Each takes the fields a test cares about.
 
 import type {
-  ApproveResult,
   DecideResult,
   DecisionProgress,
-  DecisionRow,
   EnrichmentPanel,
   LinkedinCardPayload,
   LinkedinFinished,
   PageProgress,
   QueuePosition,
   ReviewCandidate,
-  ReviewEvent,
   ReviewPage,
   ReviewPerson,
-  ReviewStatus,
-  ReviewView,
-  WorthCardPayload,
-  WorthPendingEntry,
-  WorthResult,
-  WorthDetails,
-  WorthTablePayload,
 } from "@/types/review"
 
 import type { Review } from "@/pages/review/hooks/useReview"
@@ -76,86 +66,27 @@ export function pageProgress(overrides: Partial<PageProgress> = {}): PageProgres
   return { ...decisionProgress(), linkedin_done: 6, rejected: 2, synthesize_pending: 0, ...overrides }
 }
 
-export function enrichmentPanel(overrides: Partial<EnrichmentPanel> = {}): EnrichmentPanel {
-  return {
-    mode: "approval",
-    completed: 0,
-    total: 0,
-    approval_label: "Approve $2.85",
-    error: "",
-    ...overrides,
-  }
+function enrichmentPanel(): EnrichmentPanel {
+  return { mode: "completed", completed: 0, total: 0, approval_label: "", error: "" }
 }
 
-const TITLES: Readonly<Record<ReviewView, string>> = {
-  worth: "Add People",
-  enrich: "Enrich Contacts",
-  linkedin: "Check LinkedIn",
-  done: "All Set",
-}
-
-/** One screen. The title, tab and `external_updates` follow the view unless overridden. */
-export function reviewPage(view: ReviewView = "worth", overrides: Partial<ReviewPage> = {}): ReviewPage {
-  const progress = overrides.progress ?? pageProgress()
-  const enrichment = overrides.enrichment ?? enrichmentPanel()
+/** The Check LinkedIn screen. */
+export function reviewPage(overrides: Partial<ReviewPage> = {}): ReviewPage {
   return {
-    view,
-    tab: view === "worth" ? "review" : "",
-    title: TITLES[view],
-    progress,
-    enrichment,
+    view: "linkedin",
+    tab: "",
+    title: "Check LinkedIn",
+    progress: pageProgress(),
+    enrichment: enrichmentPanel(),
     state_token: "token-1",
     needs_synthesis: false,
-    external_updates: view === "enrich" || view === "done",
+    external_updates: false,
     ...overrides,
   }
 }
 
 export function queuePosition(overrides: Partial<QueuePosition> = {}): QueuePosition {
   return { index: 0, total: 3, ...overrides }
-}
-
-/** A worth card for one person; `worthCard({ card: null })` is the empty queue. */
-export function worthCard(overrides: Partial<WorthCardPayload> = {}): WorthCardPayload {
-  return {
-    card: { person: reviewPerson(), candidate: reviewCandidate() },
-    synthesize_pending: false,
-    queue: null,
-    ...overrides,
-  }
-}
-
-export function worthPending(): WorthPendingEntry[] {
-  return [
-    { key: "worth-casey", name: "Casey Delta" },
-    { key: "worth-jordan", name: "Jordan Bravo" },
-    { key: "worth-riley", name: "Riley Echo" },
-  ]
-}
-
-export function decisionRow(overrides: Partial<DecisionRow> = {}): DecisionRow {
-  return { person: reviewPerson({ sources: [] }), reason: "You said yes", ...overrides }
-}
-
-/** What an opened pile row reads: the person with their sources, and the profile beside them. */
-export function worthDetails(overrides: Partial<WorthDetails> = {}): WorthDetails {
-  return { person: reviewPerson(), candidate: reviewCandidate(), ...overrides }
-}
-
-export function worthTable(overrides: Partial<WorthTablePayload> = {}): WorthTablePayload {
-  const casey = reviewPerson({
-    parent_id: "parent-casey",
-    slug: "casey-delta",
-    name: "Casey Delta",
-    worth_key: "worth-casey",
-    labels: [],
-    sources: [],
-  })
-  return {
-    rows: [decisionRow({ person: casey, reason: "Worth adding" }), decisionRow()],
-    total: 2,
-    ...overrides,
-  }
 }
 
 export function linkedinFinished(overrides: Partial<LinkedinFinished> = {}): LinkedinFinished {
@@ -177,17 +108,6 @@ export function linkedinCard(overrides: Partial<LinkedinCardPayload> = {}): Link
   }
 }
 
-export function worthResult(overrides: Partial<WorthResult> = {}): WorthResult {
-  return {
-    ok: true,
-    pub: "worth-jordan",
-    effective: "yes",
-    progress: decisionProgress({ worth_pending: 2, worth_yes: 6 }),
-    next_stage: "worth",
-    ...overrides,
-  }
-}
-
 export function decideResult(overrides: Partial<DecideResult> = {}): DecideResult {
   return {
     ok: true,
@@ -199,32 +119,6 @@ export function decideResult(overrides: Partial<DecideResult> = {}): DecideResul
     next: linkedinCard({ pending: 3 }),
     ...overrides,
   }
-}
-
-export function approveResult(overrides: Partial<EnrichmentPanel> = {}): ApproveResult {
-  return { ok: true, enrichment: enrichmentPanel({ mode: "running", completed: 0, total: 12, ...overrides }) }
-}
-
-export function reviewStatus(overrides: Partial<ReviewStatus> = {}): ReviewStatus {
-  return {
-    stage: "enrich",
-    next_action: "enrich",
-    state_token: "token-1",
-    step: "",
-    pending: { lookups: 0, linkedin_checks: 0, unsure: 0, profiles: 0 },
-    minutes_left: 0,
-    ...overrides,
-  }
-}
-
-/** A mid-run enrichment event: `completed` of `total` lookups done. */
-export function runningEvent(completed = 3, total = 12): ReviewEvent {
-  return { seq: 1, job: { status: "running", counts: { total, completed } } }
-}
-
-/** A plain change with no job (a decision, a finished run). */
-export function changeEvent(overrides: Partial<ReviewEvent> = {}): ReviewEvent {
-  return { seq: 2, job: null, ...overrides }
 }
 
 /** A JSON answer, as the review server sends it. */
@@ -257,47 +151,8 @@ export function fakeReview(overrides: Partial<Review> = {}): Review {
     toast: noop,
     toastError: noop,
     applyProgress: noop,
-    transition: noop,
     reload: noop,
     leaveAndReload: noop,
-    syncStatus: noop,
-    noteServerStage: noop,
-    setGuidanceDraft: noop,
-    setCompleting: noop,
     ...overrides,
-  }
-}
-
-/**
- * /api/events for jsdom, which has no EventSource: `vi.stubGlobal("EventSource", FakeEventSource)`.
- * `FakeEventSource.opened` lists every stream a test opened (clear it between tests); `open()`
- * and `emit()` play the server.
- */
-export class FakeEventSource {
-  static opened: FakeEventSource[] = []
-
-  readonly url: string
-  closed = false
-  onmessage: ((message: MessageEvent<string>) => void) | null = null
-  onopen: (() => void) | null = null
-
-  constructor(url: string) {
-    this.url = url
-    FakeEventSource.opened.push(this)
-  }
-
-  /** The stream (re)connected. */
-  open(): void {
-    this.onopen?.()
-  }
-
-  /** One message; a string is sent as written (an unreadable message). */
-  emit(event: ReviewEvent | string): void {
-    const data = typeof event === "string" ? event : JSON.stringify(event)
-    this.onmessage?.(new MessageEvent("message", { data }))
-  }
-
-  close(): void {
-    this.closed = true
   }
 }

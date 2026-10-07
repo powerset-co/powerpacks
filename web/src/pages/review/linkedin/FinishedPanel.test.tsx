@@ -39,14 +39,13 @@ const lines = (container: HTMLElement) =>
 describe("FinishedPanel", () => {
   it("shows only the title and the hand-back to Codex, and presses nothing (L11)", async () => {
     finishedQueue()
-    const { container, review } = await open()
+    const { container } = await open()
     expect(container.querySelector(".linkedin-panel > .empty-state")).toBeTruthy()
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
     expect(container.querySelector(".empty-mark")).toBeNull()
     expect(lines(container)).toEqual(["Review complete — go back to Codex."])
     await act(() => Promise.resolve())
     expect(server.posts(COMPLETE)).toEqual([])
-    expect(review.transition).not.toHaveBeenCalled()
   })
 
   it("hands back to Codex once everything is decided (L11)", async () => {
@@ -78,7 +77,7 @@ describe("FinishedPanel", () => {
     finishedQueue({ synthesize_pending: true })
     await open()
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Synthesis has not run")
-    expect(screen.getByText("bin/deep-context dry")).toBeTruthy()
+    expect(screen.getByText("bin/deep-context-v2 run")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Finish" })).toBeNull()
     await act(() => Promise.resolve())
     expect(server.posts(COMPLETE)).toEqual([])

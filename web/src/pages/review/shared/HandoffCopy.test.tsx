@@ -91,6 +91,6 @@ describe("SynthesisPending", () => {
     )
     expect(container.querySelector(".empty-mark")).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Copy" }))
-    await waitFor(() => expect(write).toHaveBeenCalledWith("bin/deep-context dry"))
+    await waitFor(() => expect(write).toHaveBeenCalledWith("bin/deep-context-v2 run"))
   })
 })

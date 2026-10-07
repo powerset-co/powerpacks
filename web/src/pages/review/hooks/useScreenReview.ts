@@ -1,46 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { useReducedMotion } from "@/hooks/useReducedMotion"
-import { stageHref } from "@/lib/review/links"
-import { ENRICHED_MS, fadeMs, STAGE_CHECK_MS } from "@/lib/review/timing"
-import type { DecisionProgress, PageProgress, ReviewStatus, ReviewView } from "@/types/review"
+import { fadeMs } from "@/lib/review/timing"
+import type { DecisionProgress, PageProgress } from "@/types/review"
 
 import type { Review } from "./useReview"
 import type { ReviewToast } from "./useReviewToast"
 import type { Screen } from "./useScreen"
-import { useServerWatch } from "./useServerWatch"
 
 interface ScreenReviewOptions {
   screen: Screen
   toast: ReviewToast
   reload: () => void
-  open: (href: string) => void
 }
 
-/**
- * One screen's state and the `Review` its stage works through: the live counts, the stage
- * check, the leave-and-reload fade, and the server watch. Mounted per screen (the caller is
- * keyed by `screen.id`), so all of it starts over when the next screen loads.
- */
-export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOptions) {
+// The review the Check LinkedIn stage works through: the screen's settings, the live count,
+// the toast, and leave-and-reload (the fade, then the screen is read again).
+export function useScreenReview({ screen, toast, reload }: ScreenReviewOptions) {
   const { page, preview, debug, index } = screen
   const reducedMotion = useReducedMotion()
   const fade = fadeMs(reducedMotion)
-
-  /** The counts click responses carried, laid over the page load's; a response names the
-   *  counts its click could change (a LinkedIn decision only its own). */
+  /** The counts click responses carried, laid over the page load's. */
   const [applied, setApplied] = useState<Partial<DecisionProgress>>({})
   const applyProgress = useCallback(
     (counts: Partial<DecisionProgress>) => setApplied((before) => ({ ...before, ...counts })),
     [],
   )
   const progress: PageProgress = useMemo(() => ({ ...page.progress, ...applied }), [page.progress, applied])
-
-  /** The stage check's words while a stage transition runs; null otherwise. */
-  const [check, setCheck] = useState<string | null>(null)
   const [leaving, setLeaving] = useState(false)
-  const completing = useRef(false)
-  const draft = useRef(false)
   const timers = useRef<number[]>([])
   // A late answer to a screen that has gone must not move the screen opened since.
   const gone = useRef(false)
@@ -52,18 +39,7 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
       pending.forEach((timer) => window.clearTimeout(timer))
     }
   }, [])
-
-  const transition = useCallback(
-    (message: string, stage: ReviewView) => {
-      if (gone.current) return
-      completing.current = true
-      setCheck(message)
-      timers.current.push(window.setTimeout(() => open(stageHref(stage)), STAGE_CHECK_MS))
-    },
-    [open],
-  )
-
-  const { say } = toast
+  const { say, sayError } = toast
   const leaveAndReload = useCallback(
     (message: string) => {
       if (gone.current) return
@@ -73,38 +49,6 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
     },
     [say, reload, fade],
   )
-
-  /** The run completed while the Enrich screen watched: it says so, then the next screen opens. */
-  const [enriched, setEnriched] = useState(false)
-  const onForward = useCallback(
-    (stage: ReviewView) => {
-      if (gone.current) return
-      completing.current = true
-      setEnriched(true)
-      timers.current.push(window.setTimeout(() => open(stageHref(stage)), ENRICHED_MS))
-    },
-    [open],
-  )
-  /** The latest status read: what the waiting screen shows. */
-  const [status, setStatus] = useState<ReviewStatus | null>(null)
-  const { syncStatus, noteServerStage } = useServerWatch({
-    page,
-    preview,
-    completing,
-    draft,
-    onForward,
-    onStale: reload,
-    onStatus: setStatus,
-  })
-
-  const setGuidanceDraft = useCallback((typed: boolean) => {
-    draft.current = typed
-  }, [])
-  const setCompleting = useCallback((inFlight: boolean) => {
-    completing.current = inFlight
-  }, [])
-
-  const { sayError } = toast
   const review: Review = useMemo(
     () => ({
       progress,
@@ -115,32 +59,10 @@ export function useScreenReview({ screen, toast, reload, open }: ScreenReviewOpt
       toast: say,
       toastError: sayError,
       applyProgress,
-      transition,
       reload,
       leaveAndReload,
-      syncStatus,
-      noteServerStage,
-      setGuidanceDraft,
-      setCompleting,
     }),
-    [
-      progress,
-      preview,
-      debug,
-      index,
-      fade,
-      say,
-      sayError,
-      applyProgress,
-      transition,
-      reload,
-      leaveAndReload,
-      syncStatus,
-      noteServerStage,
-      setGuidanceDraft,
-      setCompleting,
-    ],
+    [progress, preview, debug, index, fade, say, sayError, applyProgress, reload, leaveAndReload],
   )
-
-  return { review, progress, check, leaving, status, enriched }
+  return { review, progress, leaving }
 }

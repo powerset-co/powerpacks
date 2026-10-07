@@ -42,21 +42,10 @@ export const SCROLL_DOWN = "Scroll down"
 
 export const CAROUSEL = { previous: "Previous", next: "Next" } as const
 
-/** The words under the check when a stage finishes. LinkedIn's check stands alone: the
- *  finished screen it opens carries the words. Enrich has no check: its own screen says it
- *  is done. */
-export const STAGE_DONE: Readonly<Record<"worth" | "linkedin", string>> = {
-  worth: "People Reviewed",
-  linkedin: "",
-}
-
-/** Under the stage check while the next screen loads. */
-export const PREPARING_NEXT = "Preparing Next Stage"
-
 export const SYNTHESIS = {
   title: "Synthesis has not run",
   body: "Collected messages have no facts yet. Go back to Codex and run:",
-  command: "bin/deep-context dry",
+  command: "bin/deep-context-v2 run",
 } as const
 
 export const HANDOFF = {

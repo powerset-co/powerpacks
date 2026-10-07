@@ -1,8 +1,7 @@
-import { useEffect, useState, type FormEvent, type RefObject } from "react"
+import { useState, type FormEvent, type RefObject } from "react"
 
 import { routeGuidance } from "@/lib/review/guidance"
 
-import { useReview } from "../hooks/useReview"
 import { GUIDANCE } from "./copy"
 
 const MAX_GUIDANCE_CHARS = 2000
@@ -24,15 +23,7 @@ interface GuidanceFormProps {
 // The guidance box: one collapsed box, two routes. A pasted LinkedIn URL applies directly; a
 // description of the right person goes to re-research. `routeGuidance` decides.
 export function GuidanceForm({ open, onToggle, field, disabled, onFix, onRetarget }: GuidanceFormProps) {
-  const { setGuidanceDraft } = useReview()
   const [text, setText] = useState("")
-  const typed = Boolean(text.trim())
-
-  // The page never moves the screen under a typed draft.
-  useEffect(() => {
-    setGuidanceDraft(typed)
-    return () => setGuidanceDraft(false)
-  }, [typed, setGuidanceDraft])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()

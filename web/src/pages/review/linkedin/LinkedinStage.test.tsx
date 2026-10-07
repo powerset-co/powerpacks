@@ -156,7 +156,6 @@ describe("LinkedinStage: a decision", () => {
     expect(live().length).toBeGreaterThan(0)
     expect(review.applyProgress).toHaveBeenCalledWith({ linkedin_pending: 3 })
     expect(review.toast).toHaveBeenCalledExactlyOnceWith("Saved")
-    expect(review.transition).not.toHaveBeenCalled()
     // The next card came with the answer: the queue was read once, when the stage opened.
     expect(server.gets(CARD)).toEqual([CARD])
     expect(server.posts(DECIDE)).toHaveLength(1)
@@ -222,7 +221,6 @@ describe("LinkedinStage: a decision", () => {
     expect(button("Skip").disabled).toBe(false)
     expect(review.applyProgress).not.toHaveBeenCalled()
     expect(review.toast).not.toHaveBeenCalled()
-    expect(review.transition).not.toHaveBeenCalled()
 
     // Nothing was dropped: the same card takes the decision again.
     server.answer(`POST ${DECIDE}`, decideResult({ next: caseyCard() }))
@@ -252,7 +250,6 @@ describe("LinkedinStage: a decision", () => {
       expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked"),
     )
     expect(review.applyProgress).toHaveBeenCalledWith({ linkedin_pending: 0 })
-    expect(review.transition).not.toHaveBeenCalled()
     expect(review.toast).not.toHaveBeenCalled()
     expect(server.posts("/complete")).toEqual([])
   })
@@ -460,22 +457,6 @@ describe("LinkedinStage: the guidance box", () => {
     // The re-research may still save this person's No: the card cannot be decided meanwhile.
     expect(live()).toEqual([])
     expect(server.posts(RETARGET)).toHaveLength(1)
-  })
-
-  it("registers a typed draft with the page and clears it when the card leaves (X3)", async () => {
-    server.answer(`POST ${DECIDE}`, decideResult({ next: caseyCard() }))
-    const { review } = await open()
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(false)
-    writeGuidance("the founder")
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(true)
-    fireEvent.change(guidanceField(), { target: { value: "  " } })
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(false)
-    fireEvent.change(guidanceField(), { target: { value: "the founder" } })
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(true)
-
-    fireEvent.click(button("Use this profile"))
-    await waitFor(() => expect(name()).toBe("Casey Delta"))
-    expect(review.setGuidanceDraft).toHaveBeenLastCalledWith(false)
   })
 })
 

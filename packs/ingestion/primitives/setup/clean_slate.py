@@ -9,23 +9,19 @@ deleted — into a timestamped backup directory OUTSIDE the repo, and everything
 priced in tokens or API credits stays in place, keyed by stable identifiers so
 the next full run (linkedin -> gmail -> messages -> deep-context) cache-hits.
 
-PRESERVED (paid/LLM/human, stable keys):
-  facts/*.jsonl                keyed by contact identity (candidate:email/phone)
-  deep-context.sqlite          human decisions + merge_verdicts paid cache
-  reconcile/verdicts.*         pre-SQLite LinkedIn-judge verdicts, read by nothing now; drop
-                               once no supported install predates powerpacks v1.19.0
-  reconcile/deep-research/     Parallel results, keyed by parent slug
+PRESERVED (paid caches and the user's own inputs, stable keys):
+  deep-context/jev/, identity/ JEV answers, keyed by request digest
   import/linkedin/             source import + RapidAPI enrichment caches
-  profile_cache_v2/            RapidAPI profile cache, keyed by pub
-  owner.json + lookup          owner bio (RapidAPI)
+  profile_cache_v2/            RapidAPI profile cache, keyed by public identifier
+  owner.json                   owner bio
   messages/, msgvault stores   raw local extracts
-  logbook/, memory/             archives
+  logbook/, memory/            archives
 
-SCRUBBED (derived; regenerates free on the next full run):
-  merged/, directory.csv, overrides/ (file mirrors; canonical human decisions stay in SQLite),
-  import/gmail + import/messages*, discover/, search-index/,
-  deep-context index/parents/dossiers/merge-candidates/raw/review state,
-  reconcile summaries (applied.csv, summary.md, manifest.json), prefetch state.
+SCRUBBED (derived; the next `bin/deep-context-v2 run` rebuilds it, paying only for what the
+caches do not hold):
+  merged/, directory.csv, overrides/, import/gmail + import/messages*, discover/, search-index/,
+  deep-context/deep-context-v2.sqlite (facts, verdicts, worth, research and human review decisions:
+  v2 is nuke-and-repay by design), its manifests, logs and pid files, a v1 store's archive.
 
 Dry run by default. --apply moves and writes a manifest into the backup dir.
 
@@ -56,7 +52,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.db.store import Db, DbMaintenance
 
 # Directories/files to scrub, relative to .powerpacks. Globs allowed.
 SCRUB = [
@@ -68,32 +63,24 @@ SCRUB = [
     ("network-import/import/messages.bkup-*", "stale import backups"),
     ("network-import/discover", "staged discovery; regenerated from local stores"),
     ("search-index", "local search artifacts; rebuilt by indexing"),
-    ("deep-context/index.md", "derived index rendering"),
-    ("deep-context/parents", "canonical parent stubs; rebuilt free"),
-    ("deep-context/dossiers", "composed from facts; rebuilt free"),
-    ("deep-context/merge-candidates.csv", "cluster proposals; re-proposed free (judgments cached)"),
-    ("deep-context/merge-candidates.md", "cluster proposals rendering"),
-    ("deep-context/raw", "ephemeral message bundles"),
-    ("deep-context/review", "review-stage manifest"),
-    ("deep-context/review-*.log", "review server logs"),
-    ("deep-context/profile-prefetch", "prefetch manifest; cache itself is preserved"),
-    ("deep-context/reconcile/manifest.json", "reconcile summary; regenerated"),
-    ("deep-context/reconcile/summary.md", "reconcile summary; regenerated"),
-    ("deep-context/reconcile/applied.csv", "reconcile summary; regenerated"),
-    ("deep-context/reconcile/deep-research-sideline-*", "test-sidelined research dirs"),
+    ("deep-context/deep-context-v2.sqlite", "the v2 store: facts, verdicts, worth, research, review decisions"),
+    ("deep-context/deep-context-v2.sqlite-wal", "the store's write-ahead log"),
+    ("deep-context/deep-context-v2.sqlite-shm", "the store's shared memory"),
+    ("deep-context/deep-context-v2.sqlite.bkup-*", "store backups"),
+    ("deep-context/v2-manifests", "stage manifests"),
+    ("deep-context/index.log", "background index log"),
+    ("deep-context/index.pid", "background index pid"),
+    ("deep-context/review-server.log", "page server log"),
+    ("deep-context/review-server.pid", "page server pid"),
+    ("deep-context-v1-*.tar.gz", "a v1 install's archived state"),
 ]
 
 # Explicitly preserved paths, printed for the operator. Nothing outside SCRUB is
 # ever touched; this list exists to make the contract visible and auditable.
 PRESERVE = [
-    ("deep-context/facts", "OpenAI synthesis, keyed by contact identity"),
-    ("deep-context/deep-context.sqlite", "human decisions + paid merge verdicts"),
-    # Pre-SQLite export nothing reads; kept for backups. Drop once no supported install predates v1.19.0.
-    ("deep-context/reconcile/verdicts.jsonl", "LinkedIn-judge verdicts"),
-    ("deep-context/reconcile/verdicts.csv", "LinkedIn-judge verdicts (flat)"),
-    ("deep-context/reconcile/deep-research", "Parallel research results"),
+    ("deep-context/jev", "JEV worth answers, keyed by request digest"),
+    ("deep-context/identity", "JEV identity answers, keyed by request digest"),
     ("deep-context/owner.json", "owner bio"),
-    ("deep-context/owner_profile_lookup.json", "owner profile lookup"),
     ("network-import/import/linkedin", "LinkedIn source import + enrichment caches"),
     ("network-import/profile_cache_v2", "RapidAPI profile cache"),
     ("messages", "raw local message extracts + wacli store"),
@@ -206,22 +193,6 @@ def main(argv: list[str] | None = None) -> int:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(root / target.path), str(dest))
             moved.append(target.path)
-        db_path = root / "deep-context/deep-context.sqlite"
-        if db_path.exists():
-            database = DbMaintenance(Db(db_path))
-            snapshot_path = backup / "deep-context/deep-context.sqlite.before-clean-slate"
-            database.backup_to(snapshot_path)
-            sqlite_snapshot = str(snapshot_path.relative_to(backup))
-            reset = database.reset_scrubbed_artifacts(tuple(
-                (root / target.path).resolve() for target in plan
-            ))
-            derived_reset = {
-                "artifacts": reset.artifacts,
-                "facts": reset.facts,
-                "research": reset.research,
-                "guidance": reset.guidance,
-                "share_rows": reset.share_rows,
-            }
         if moved or sqlite_snapshot:
             manifest = {
                 "primitive": "clean_slate",

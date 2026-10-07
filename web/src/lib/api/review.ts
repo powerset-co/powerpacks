@@ -1,5 +1,5 @@
-// The review page's routes on the Python review server: the JSON routes under /api/review/
-// and the form routes (deep_context/review/api.py), and the status, event and dossier routes beside them.
+// The review page's routes on the Python page server: the JSON routes under /api/review/ and
+// the form routes (deep_context_v2/review/api.py), and the dossier route beside them.
 
 import { body, failure } from "@/lib/api/http"
 import { SAVE_FAILED } from "@/lib/review/copy"
@@ -9,14 +9,7 @@ import type {
   FeedbackAction,
   LinkedinCardPayload,
   LinkedinDecision,
-  ReviewEvent,
   ReviewPage,
-  ReviewStatus,
-  WorthCardPayload,
-  WorthPendingEntry,
-  WorthResult,
-  WorthDetails,
-  WorthTablePayload,
 } from "@/types/review"
 
 const API = "/api/review/"
@@ -30,8 +23,8 @@ const NEEDS_AUTH = "needs_auth"
 
 /**
  * A request the server refused. `message` is the server's words; `http` is the response code
- * (404 on a picked worth card: no longer pending); `status` is the JSON body's `status`, ""
- * without one ("needs_auth" on /feedback: offer the sign-in).
+ * (404: the person is no longer pending); `status` is the JSON body's `status`, "" without
+ * one ("needs_auth" on /feedback: offer the sign-in).
  */
 export class ReviewError extends Error {
   readonly http: number
@@ -97,7 +90,7 @@ export function fetchReviewPage(stage: string, view: string, signal?: AbortSigna
 
 /** Which card of a queue to read. */
 export interface CardQuery {
-  /** Keys (worth) or slugs (LinkedIn) the queue leaves out: the card on screen, saves in flight. */
+  /** Slugs the queue leaves out: the card on screen, saves in flight. */
   exclude?: readonly string[]
   /** The queue position; the first card without one. */
   index?: number
@@ -105,47 +98,11 @@ export interface CardQuery {
   debug?: boolean
 }
 
-export interface WorthCardQuery extends CardQuery {
-  /** One pending person by worth key (the typeahead). */
-  pick?: string
-}
-
 function cardQuery({ exclude = [], index = 0, debug = false }: CardQuery): Record<string, string> {
   return { exclude: exclude.join(","), index: index ? String(index) : "", debug: debug ? "1" : "" }
 }
 
-/** The next undecided person. A `pick` that is no longer pending throws a `ReviewError` that is `gone`. */
-export function fetchWorthCard(card: WorthCardQuery = {}, signal?: AbortSignal): Promise<WorthCardPayload> {
-  const values = { pick: card.pick ?? "", ...cardQuery(card) }
-  return get<WorthCardPayload>(`${API}worth-card${query(values)}`, "Could not load card", signal)
-}
-
-/** The typeahead's names, in queue order. */
-export async function fetchWorthPending(signal?: AbortSignal): Promise<WorthPendingEntry[]> {
-  const payload = await get<{ pending: WorthPendingEntry[] }>(
-    `${API}worth-pending`,
-    "Could not load people",
-    signal,
-  )
-  return payload.pending
-}
-
-/** The person and profile an opened pile row shows. A parent that is gone throws a
- *  `ReviewError` that is `gone`. */
-export function fetchWorthDetails(slug: string, signal?: AbortSignal): Promise<WorthDetails> {
-  return get<WorthDetails>(`${API}worth-details${query({ slug })}`, "Could not load details", signal)
-}
-
-/** One page of a decided pile, from `offset`. */
-export function fetchWorthTable(
-  view: "yes" | "no",
-  offset: number,
-  signal?: AbortSignal,
-): Promise<WorthTablePayload> {
-  const values = { view, offset: String(offset) }
-  return get<WorthTablePayload>(`${API}worth-table${query(values)}`, "Could not load people", signal)
-}
-
+/** The next person to check. */
 export function fetchLinkedinCard(card: CardQuery = {}, signal?: AbortSignal): Promise<LinkedinCardPayload> {
   return get<LinkedinCardPayload>(
     `${API}linkedin-card${query(cardQuery(card))}`,
@@ -168,20 +125,6 @@ export interface DecideRequest {
 export async function postDecide({ new_url, ...rest }: DecideRequest): Promise<DecideResult> {
   const values = new_url === undefined ? rest : { ...rest, new_url }
   return body<DecideResult>(await post(`${API}decide`, values))
-}
-
-export interface WorthRequest {
-  /** The person's `worth_key`. */
-  pub: string
-  worth: "yes" | "no" | "restore"
-  parent_slug: string
-  /** The card's optional "why" box. */
-  note?: string
-}
-
-export async function postWorth({ note, ...rest }: WorthRequest): Promise<WorthResult> {
-  const values = note === undefined ? rest : { ...rest, note }
-  return body<WorthResult>(await post("/worth", values))
 }
 
 export interface RetargetRequest {
@@ -210,34 +153,6 @@ export async function postFeedback(request: FeedbackRequest): Promise<void> {
 /** Opens the Powerset sign-in in the browser on this machine. */
 export async function openSignIn(): Promise<void> {
   await post("/auth/login", {})
-}
-
-export function fetchStatus(signal?: AbortSignal): Promise<ReviewStatus> {
-  return get<ReviewStatus>("/api/status", "Couldn't read the review status.", signal)
-}
-
-/**
- * The server's change stream (/api/events), until the returned function is called. `onEvent`
- * gets each message, null for one that is not JSON; `onOpen` runs on every (re)connect.
- */
-export function watchEvents(onEvent: (event: ReviewEvent | null) => void, onOpen: () => void): () => void {
-  const source = new EventSource("/api/events")
-  source.onmessage = (message: MessageEvent<string>) => onEvent(parseEvent(message.data))
-  source.onopen = onOpen
-  return () => source.close()
-}
-
-function parseEvent(data: string): ReviewEvent | null {
-  try {
-    const payload: unknown = JSON.parse(data)
-    return isReviewEvent(payload) ? payload : null
-  } catch {
-    return null
-  }
-}
-
-function isReviewEvent(payload: unknown): payload is ReviewEvent {
-  return isRecord(payload) && typeof payload.seq === "number"
 }
 
 /** The person's dossier as an HTML fragment (name and contact left out: the card shows them);
