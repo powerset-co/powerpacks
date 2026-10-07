@@ -497,17 +497,26 @@
   padding: 6px 14px;
 }
 
+/* Motion: everything leaves fast and accelerating (--leave), arrives slower and decelerating
+   (--arrive, an expo-out curve that lands softly). lib/review/timing.ts waits --leave-ms before a swap. */
+.review-page {
+  --leave-ms: 140ms;
+  --leave: cubic-bezier(0.4, 0, 1, 1);
+  --arrive-ms: 380ms;
+  --arrive: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 /* The stage leaving before its data is read again. */
 .review-page .stage.leaving {
-  transform: translateY(-5px);
+  transform: translateY(-8px);
   opacity: 0;
   transition:
-    opacity 100ms ease,
-    transform 100ms ease;
+    opacity var(--leave-ms) var(--leave),
+    transform var(--leave-ms) var(--leave);
 }
 /* Each screen fades in as it loads (the stage is keyed by the load). */
 .review-page .stage {
-  animation: stage-enter 180ms ease-out;
+  animation: stage-enter var(--arrive-ms) var(--arrive);
 }
 .review-page .stage-complete {
   height: 100%;
@@ -518,9 +527,11 @@
 @keyframes stage-enter {
   from {
     opacity: 0;
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
+    transform: none;
   }
 }
 @keyframes completion-check {
@@ -538,22 +549,31 @@
 .review-page .decision-card.swapping {
   pointer-events: none;
 }
-/* 100 ms out (lib/review/timing.ts waits the same 100 ms before the swap), 180 ms in: long
-   enough for the new card's arrival to be seen. */
+/* The old contents drop away together; the new ones rise in one block after another (the
+   header, then the body, then the question and buttons), each 45 ms behind the last. */
 .review-page .decision-card.swapping > * {
   opacity: 0;
-  transform: translateY(-5px);
+  transform: translateY(-8px);
   transition:
-    opacity 100ms ease,
-    transform 100ms ease;
+    opacity var(--leave-ms) var(--leave),
+    transform var(--leave-ms) var(--leave);
 }
 .review-page .decision-card.entering > * {
-  animation: card-content-enter 180ms cubic-bezier(0.2, 0, 0, 1);
+  animation: card-content-enter var(--arrive-ms) var(--arrive) both;
+}
+.review-page .decision-card.entering > :nth-child(2) {
+  animation-delay: 45ms;
+}
+.review-page .decision-card.entering > :nth-child(3) {
+  animation-delay: 90ms;
+}
+.review-page .decision-card.entering > :nth-child(n + 4) {
+  animation-delay: 135ms;
 }
 @keyframes card-content-enter {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(14px);
   }
   to {
     opacity: 1;
