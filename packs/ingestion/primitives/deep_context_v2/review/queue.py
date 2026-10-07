@@ -40,7 +40,7 @@ class Pending:
     origin: str           # kept on the human row: where the URL came from
     fingerprint: str      # the judgment the human answers
     profile: Profile | None           # the cached LinkedIn profile; None when not cached, or a synthetic card
-    research: dict[str, Any] | None   # the synthetic card's research content; None for a LinkedIn
+    research: dict[str, Any] | None   # the synthetic card's research result (content and basis); None for a LinkedIn
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ def _synthetic(conn: sqlite3.Connection, facts: SynthesizedFacts) -> list[Pendin
     card: ResearchCard | None = queries_review.research_card(conn, handle)
     if card is not None:
         key: str = SYNTHETIC_PROFILE_PREFIX + handle
-        found.append(Pending(key, key, key, Origin.SYNTHETIC.value, handle, None, json.loads(card.result_json)["content"]))
+        found.append(Pending(key, key, key, Origin.SYNTHETIC.value, handle, None, json.loads(card.result_json)))
     return found
 
 

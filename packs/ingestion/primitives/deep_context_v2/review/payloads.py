@@ -186,8 +186,20 @@ def person(card: Card) -> ReviewPerson:
                         card.parent_id, " · ".join(contacts))
 
 
-def _research_candidate(pending: Pending, research: dict[str, Any]) -> ReviewCandidate:
-    """A synthetic card: the research's person, with no LinkedIn and no picture."""
+# Parallel grades each field it filled low, medium or high; the page shows a number.
+RESEARCH_CONFIDENCE: dict[str, float] = {"low": 0.3, "medium": 0.6, "high": 0.9}
+
+
+def _research_candidate(pending: Pending, result: dict[str, Any]) -> ReviewCandidate:
+    """A synthetic card: the research's person, with no LinkedIn and no picture. Its confidence and reason
+    are Parallel's own grade and reasoning for the person's name."""
+    research: dict[str, Any] = result["content"]
+    confidence: float | None = None
+    reason: str = ""
+    for basis in result.get("basis") or []:
+        if basis.get("field") == "real_name":
+            confidence = RESEARCH_CONFIDENCE.get(basis.get("confidence") or "", None)
+            reason = basis.get("reasoning") or ""
     experiences: list[str] = []
     for row in research.get("work_experience") or []:
         experiences.append(f"{row.get('title') or '?'} @ {row.get('company_name') or '?'}")
@@ -203,7 +215,7 @@ def _research_candidate(pending: Pending, research: dict[str, Any]) -> ReviewCan
         if value:
             places.append(value)
     return ReviewCandidate(pending.key, research.get("real_name") or "", "", research.get("summary") or "",
-                           ", ".join(places), tuple(experiences), tuple(education), True, "", None, "", "")
+                           ", ".join(places), tuple(experiences), tuple(education), True, "", confidence, "synthetic", reason)
 
 
 def candidates(card: Card) -> tuple[ReviewCandidate, ...]:
