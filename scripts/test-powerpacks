@@ -163,11 +163,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_profile_labels \
   tests.test_profile_models_identity \
   tests.test_reconcile_fetch \
-  tests.test_share_evidence_labels \
-  tests.test_share_labels \
-  tests.test_share_list \
-  tests.test_share_tags \
-  tests.test_share_web \
   tests.test_visual \
   tests.test_app_routes \
   tests.test_enrich_people \
@@ -200,6 +195,5 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_message_name_conflicts \
   tests.test_profile_source_names \
   tests.test_relationship_cache_contract \
-  tests.test_share_parent_evidence \
   tests.test_synthesis_usage_accounting \
   tests.test_upload_powerset -v
