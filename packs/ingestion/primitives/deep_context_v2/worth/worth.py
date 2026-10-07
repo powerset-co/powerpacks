@@ -30,12 +30,13 @@ from typing import Any
 from packs.ingestion.primitives.deep_context_v2.db import queries_worth as queries
 from packs.ingestion.primitives.deep_context_v2.db.queries import display_names
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, read_owner
-from packs.ingestion.primitives.deep_context_v2.db.queries_worth import Connection, MemberFacts, WorthRow
+from packs.ingestion.primitives.deep_context_v2.db.queries_worth import BundleCounts, ChannelCount, Connection, MemberFacts, WorthRow
 from packs.ingestion.primitives.deep_context_v2.db import schema
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.worth import evidence, jev
+from packs.ingestion.primitives.deep_context_v2.worth.jev import ChannelSummary, JevAnswer
 from packs.ingestion.primitives.deep_context_v2.worth.pre_match import pre_match
 from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
 
@@ -83,8 +84,8 @@ class Worth(Node):
             by_family.setdefault(member.family_key, []).append(member)
         names: dict[str, str] = display_names(self.conn)
         sources: dict[str, list[str]] = queries.sources_by_candidate(self.conn)
-        bundles: queries.BundleCounts = queries.bundle_counts(self.conn)
-        counts: dict[str, list[queries.ChannelCount]] = {}
+        bundles: BundleCounts = queries.bundle_counts(self.conn)
+        counts: dict[str, list[ChannelCount]] = {}
         for count in bundles.channels:
             counts.setdefault(count.candidate_id, []).append(count)
         groups: dict[str, int] = bundles.groups
@@ -100,7 +101,7 @@ class Worth(Node):
             if len(matches) == 1:
                 match = matches[0]
             # The message counts: the members' bundles added together, counts only.
-            summary: jev.ChannelSummary = evidence.channel_summary(members, sources, counts, groups)
+            summary: ChannelSummary = evidence.channel_summary(members, sources, counts, groups)
             fingerprint: str = evidence.family_key(members)
             is_judged: bool = True
             for member in members:
@@ -179,7 +180,7 @@ class Worth(Node):
         answers = asyncio.run(jev.answer_all(requests, self.cache_dir))
         for family in todo:
             if family.match is None:
-                answer: dict[str, jev.Answer] = answers[family.digest]
+                answer: dict[str, JevAnswer] = answers[family.digest]
                 decision: str = jev.predict(answer)
                 verdicts[family.key] = Verdict(decision, reason(answer, decision), json.dumps(jev.labels(answer), sort_keys=True))
         # Rule 5: one row per member, the same verdict to each.

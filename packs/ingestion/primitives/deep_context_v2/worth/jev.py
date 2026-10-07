@@ -158,19 +158,19 @@ class AnswerKind(StrEnum):
 
 
 @dataclass(frozen=True)
-class Answer:
+class JevAnswer:
     kind: AnswerKind
     noul: float                      # the probability, on a noul answer; 0.0 otherwise
     probabilities: dict[str, float]  # option -> probability, on a choice or score answer; empty otherwise
 
 
-def parse_answers(payload: dict[str, dict[str, Any]]) -> dict[str, Answer]:
-    answers: dict[str, Answer] = {}
+def parse_answers(payload: dict[str, dict[str, Any]]) -> dict[str, JevAnswer]:
+    answers: dict[str, JevAnswer] = {}
     for name, row in payload.items():
         probabilities: dict[str, float] = {}
         for option, value in row.get("probabilities", {}).items():
             probabilities[option] = float(value)
-        answers[name] = Answer(AnswerKind(row["type"]), float(row.get("noul", 0)), probabilities)
+        answers[name] = JevAnswer(AnswerKind(row["type"]), float(row.get("noul", 0)), probabilities)
     return answers
 
 
@@ -196,7 +196,7 @@ def _load_model() -> WorthModel:
 MODEL = _load_model()
 
 
-def features(answers: dict[str, Answer]) -> dict[str, float]:
+def features(answers: dict[str, JevAnswer]) -> dict[str, float]:
     """One feature per noul answer and one per option of every other answer, named as the model was trained."""
     values: dict[str, float] = {}
     for name, answer in answers.items():
@@ -211,7 +211,7 @@ def features(answers: dict[str, Answer]) -> dict[str, float]:
     return values
 
 
-def class_scores(answers: dict[str, Answer]) -> tuple[list[float], list[float]]:
+def class_scores(answers: dict[str, JevAnswer]) -> tuple[list[float], list[float]]:
     """The standardized features and one logistic score per class."""
     values: dict[str, float] = features(answers)
     normalized: list[float] = []
@@ -234,12 +234,12 @@ def best_index(scores: list[float], skip: int) -> int:
     return best
 
 
-def predict(answers: dict[str, Answer]) -> str:
+def predict(answers: dict[str, JevAnswer]) -> str:
     _, scores = class_scores(answers)
     return MODEL.classes[best_index(scores, -1)]
 
 
-def labels(answers: dict[str, Answer]) -> dict[str, str | float]:
+def labels(answers: dict[str, JevAnswer]) -> dict[str, str | float]:
     """noul -> its probability; choice -> the likeliest option and its probability; score -> the
     expected level (2.7, not 3)."""
     result: dict[str, str | float] = {}
@@ -263,13 +263,13 @@ def labels(answers: dict[str, Answer]) -> dict[str, str | float]:
     return result
 
 
-async def answer_all(requests: dict[str, dict[str, Any]], cache_dir: Path) -> dict[str, dict[str, Answer]]:
+async def answer_all(requests: dict[str, dict[str, Any]], cache_dir: Path) -> dict[str, dict[str, JevAnswer]]:
     """Answer every request (keyed by its digest), reading the disk cache first. A fresh answer is
     cached as it arrives, so a stopped run keeps what it paid for."""
     answered = await answer_requests(requests, output_dir=cache_dir, api_key=None, client=None,
                                      concurrency=MAX_CONCURRENCY, request_version=REQUEST_VERSION,
                                      question_version=REQUEST_VERSION)
-    parsed: dict[str, dict[str, Answer]] = {}
+    parsed: dict[str, dict[str, JevAnswer]] = {}
     for digest, answer in answered.items():
         parsed[digest] = parse_answers(answer.response["answers"])
     return parsed

@@ -36,7 +36,7 @@ QUESTION = "Are A and B the same person, different people, or uncertain?"
 
 
 @dataclass(frozen=True)
-class Side:
+class SolSide:
     """One candidate as the judge sees it."""
 
     display_name: str
@@ -46,7 +46,7 @@ class Side:
 
 
 @dataclass(frozen=True)
-class Decision:
+class SolDecision:
     same_person: int | None  # 1 same, 0 different, None uncertain
     confidence: float
     reason: str
@@ -66,7 +66,7 @@ def _sample(messages: tuple[MessageEntry, ...], direction: MessageDirection) -> 
     return texts
 
 
-def _values(side: Side, kind: IdentifierKind) -> list[str]:
+def _values(side: SolSide, kind: IdentifierKind) -> list[str]:
     values: list[str] = []
     for identifier in side.identifiers:
         if identifier.kind == kind:
@@ -74,7 +74,7 @@ def _values(side: Side, kind: IdentifierKind) -> list[str]:
     return values
 
 
-def render_side(label: str, side: Side) -> str:
+def render_side(label: str, side: SolSide) -> str:
     """One CONTACT block: header with the email, the fact lines, then the message samples."""
     facts: SynthesizedFacts = side.facts
     lines: list[str] = []
@@ -128,7 +128,7 @@ def render_side(label: str, side: Side) -> str:
     return f"CONTACT {label} — {side.display_name}  [emails: {emails}]\n{facts_block}\nMessages:\n{mine}\n{theirs}"
 
 
-def user_prompt(owner_name: str, first: Side, second: Side) -> str:
+def user_prompt(owner_name: str, first: SolSide, second: SolSide) -> str:
     """The whole user prompt for one pair."""
     names: str = ("ORIGINAL SOURCE CONTACT NAMES:\nA: " + json.dumps([first.display_name], ensure_ascii=False)
                   + "\nB: " + json.dumps([second.display_name], ensure_ascii=False))
@@ -138,7 +138,7 @@ def user_prompt(owner_name: str, first: Side, second: Side) -> str:
             f"\n\n{names}\n\n{phones}\n\n{QUESTION}")
 
 
-def decision_from_answer(answer: dict[str, Any]) -> Decision:
+def decision_from_answer(answer: dict[str, Any]) -> SolDecision:
     """Validate the answer at the provider boundary. Uncertain is not different. A same or different
     with no identity evidence behind it is saved as uncertain: the answer was paid for and is kept,
     but it does not merge or block anyone."""
@@ -152,18 +152,18 @@ def decision_from_answer(answer: dict[str, Any]) -> Decision:
     reason: str = answer["reason"]
     if evidence:
         reason = reason + " Individual identity evidence: " + evidence
-    return Decision(same, answer["confidence"], reason)
+    return SolDecision(same, answer["confidence"], reason)
 
 
-async def judge(caller: OpenAIResponsesCaller, prompt: str) -> Decision:
+async def judge(caller: OpenAIResponsesCaller, prompt: str) -> SolDecision:
     """One Sol call for one pair."""
     answer: dict[str, Any] = await caller.call(system_prompt=SYSTEM_PROMPT, user_prompt=prompt, schema=SCHEMA,
                                                schema_name=SCHEMA_NAME, context="dedupe")
     return decision_from_answer(answer)
 
 
-def side_of(display_name: str, identifiers: list[Identifier], facts_json: str, bundle_json: str) -> Side:
+def side_of(display_name: str, identifiers: list[Identifier], facts_json: str, bundle_json: str) -> SolSide:
     """A Side from the stored rows."""
     facts: SynthesizedFacts = SynthesizedFacts.from_payload(json.loads(facts_json))
     bundle: CollectionBundle = CollectionBundle.from_payload(json.loads(bundle_json))
-    return Side(display_name, tuple(identifiers), facts, bundle.messages)
+    return SolSide(display_name, tuple(identifiers), facts, bundle.messages)

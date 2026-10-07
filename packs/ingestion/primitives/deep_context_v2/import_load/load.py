@@ -28,6 +28,7 @@ from pathlib import Path
 from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.db.queries import ConnectionRow
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, load_owner
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
@@ -131,7 +132,7 @@ def write_candidates(conn: sqlite3.Connection, candidates: list[Candidate], now:
 def write_connections(conn: sqlite3.Connection, path: Path, now: str) -> int:
     """The LinkedIn export as a lookup keyed by URL: name, email when the export has one, position,
     company. Returns how many were written."""
-    rows: list[queries.ConnectionRow] = []
+    rows: list[ConnectionRow] = []
     for row in CsvIO.read_dict_rows(path):
         rows.append((row["linkedin_url"], row["full_name"], row["primary_email"] or None,
                      row["current_title"], row["current_company"], now))

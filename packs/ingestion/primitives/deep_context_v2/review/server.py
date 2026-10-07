@@ -19,8 +19,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_review
+from packs.ingestion.primitives.deep_context_v2.db.queries_review import QueueRow
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.review import payloads
+from packs.ingestion.primitives.deep_context_v2.review.payloads import LinkedinCard
 from packs.ingestion.primitives.deep_context_v2.review.api import ReviewApi
 from packs.ingestion.primitives.deep_context_v2.review.queue import Card, load_card, review_list
 from packs.shared.web.app import AppRoutes
@@ -50,7 +52,7 @@ def _ms(started: float) -> float:
 def check(conn: sqlite3.Connection, data_root: Path) -> dict[str, object]:
     """The list and one card, timed, with the plans of the SQL each runs. Counts only: no names."""
     started: float = time.perf_counter()
-    rows: list[queries_review.QueueRow] = queries_review.queue(conn)
+    rows: list[QueueRow] = queries_review.queue(conn)
     queue_sql_ms: float = _ms(started)
     started = time.perf_counter()
     order: list[str] = review_list(conn)
@@ -63,7 +65,7 @@ def check(conn: sqlite3.Connection, data_root: Path) -> dict[str, object]:
     parent_id: str = queries_review.first_family(conn)
     started = time.perf_counter()
     card: Card = load_card(conn, data_root, parent_id)
-    card_payload: payloads.LinkedinCard = payloads.LinkedinCard(payloads.person(card), payloads.candidates(card))
+    card_payload: LinkedinCard = LinkedinCard(payloads.person(card), payloads.candidates(card))
     card_ms: float = _ms(started)
     started = time.perf_counter()
     fragment: str = payloads.dossier(card)

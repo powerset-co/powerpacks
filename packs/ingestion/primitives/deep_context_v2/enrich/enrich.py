@@ -31,6 +31,8 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_worth import WorthRow
 from packs.ingestion.primitives.deep_context_v2.db.schema import Origin
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.enrich import judge, proposals, research, settle
+from packs.ingestion.primitives.deep_context_v2.enrich.judge import JudgePlan, JudgeTask
+from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchSubject
 from packs.ingestion.primitives.deep_context_v2.enrich.pre_match import PreMatch, pre_match_families
 from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, judgment_fingerprint, load_families
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
@@ -57,7 +59,7 @@ class Enrich(Node):
         found: Proposals = proposals.derive(self.conn)
         matches: PreMatch = pre_match_families(found.families, queries_worth.all_connections(self.conn),
                                                queries_enrich.connection_emails(self.conn))
-        todo: list[research.Subject] = research.subjects(found.families, matches, found.research)
+        todo: list[ResearchSubject] = research.subjects(found.families, matches, found.research)
         if todo:
             for key, value in research.submit(self.conn, todo).items():
                 counts[key] = value
@@ -91,8 +93,8 @@ class Enrich(Node):
             self.conn.commit()
             found = proposals.derive(self.conn)  # the confirmed families are on li: now and do not enter the judge
         # Step 4b: the judge, on every family with an undecided URL; each family's rows are written as it is decided.
-        planned: judge.Plan = judge.plan(found, profiles.found, queries_enrich.machine_judgments(self.conn))
-        tasks: list[judge.Task] = planned.tasks
+        planned: JudgePlan = judge.plan(found, profiles.found, queries_enrich.machine_judgments(self.conn))
+        tasks: list[JudgeTask] = planned.tasks
         if self.limit is not None:
             tasks = tasks[: self.limit]
         counts["judge_entering"] = planned.entering
@@ -115,10 +117,10 @@ class Enrich(Node):
         found: Proposals = proposals.derive(self.conn)
         matches = pre_match_families(found.families, queries_worth.all_connections(self.conn),
                                               queries_enrich.connection_emails(self.conn))
-        todo: list[research.Subject] = research.subjects(found.families, matches, found.research)
+        todo: list[ResearchSubject] = research.subjects(found.families, matches, found.research)
         profiles: Profiles = load_profiles(self.data_root, proposals.all_urls(found), fetch=False)
-        planned: judge.Plan = judge.plan(found, profiles.found, queries_enrich.machine_judgments(self.conn))
-        tasks: list[judge.Task] = planned.tasks
+        planned: JudgePlan = judge.plan(found, profiles.found, queries_enrich.machine_judgments(self.conn))
+        tasks: list[JudgeTask] = planned.tasks
         if self.limit is not None:
             tasks = tasks[: self.limit]
         result: dict[str, object] = {

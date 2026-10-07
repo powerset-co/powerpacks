@@ -24,7 +24,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context_v2.review import decisions, payloads
 from packs.ingestion.primitives.deep_context_v2.review.decisions import DecisionError
-from packs.ingestion.primitives.deep_context_v2.review.payloads import DecideResult, LinkedinCardPayload
+from packs.ingestion.primitives.deep_context_v2.review.payloads import DecideResult, LinkedinCard, LinkedinCardPayload, LinkedinFinished, QueuePosition
 from packs.ingestion.primitives.deep_context_v2.review.queue import Card, load_card, review_list
 
 MAX_FORM_BYTES = 32_768
@@ -75,15 +75,15 @@ class ReviewApi:
             if parent_id not in excluded:
                 shown.append(parent_id)
         if not shown:
-            return LinkedinCardPayload(None, payloads.LinkedinFinished(False), len(order), None)
+            return LinkedinCardPayload(None, LinkedinFinished(False), len(order), None)
         index: int = 0
         if _value(params, "index").isdigit():
             index = int(_value(params, "index")) % len(shown)
         card: Card = load_card(self.conn, self.data_root, shown[index])
-        position: payloads.QueuePosition | None = None
+        position: QueuePosition | None = None
         if _value(params, "debug") == "1":
-            position = payloads.QueuePosition(index, len(shown))
-        return LinkedinCardPayload(payloads.LinkedinCard(payloads.person(card), payloads.candidates(card)), None,
+            position = QueuePosition(index, len(shown))
+        return LinkedinCardPayload(LinkedinCard(payloads.person(card), payloads.candidates(card)), None,
                                    len(order), position)
 
     def decide(self, form: Params) -> DecideResult:

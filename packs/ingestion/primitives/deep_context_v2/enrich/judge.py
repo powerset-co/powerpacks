@@ -49,7 +49,7 @@ JEV_CACHE_RELATIVE_DIR = Path("deep-context") / "identity"  # <data root>/deep-c
 
 
 @dataclass(frozen=True)
-class Candidate:
+class ProposedProfile:
     """One profile proposed for a family."""
 
     origin: str
@@ -57,16 +57,16 @@ class Candidate:
 
 
 @dataclass(frozen=True)
-class Task:
+class JudgeTask:
     family: Family
-    candidates: tuple[Candidate, ...]  # one per member id, in proposal order
+    candidates: tuple[ProposedProfile, ...]  # one per member id, in proposal order
     fingerprint: str
     citations: tuple[dict[str, Any], ...]  # the research row's source URLs, titles and excerpts
 
 
 @dataclass(frozen=True)
-class Plan:
-    tasks: list[Task]
+class JudgePlan:
+    tasks: list[JudgeTask]
     entering: int        # families that enter the judge
     no_profile: int      # families whose every undecided URL lacks a profile this run
     already_judged: int  # families judged on this evidence before
@@ -88,8 +88,8 @@ def _citations(row: Research | None) -> tuple[dict[str, Any], ...]:
     return tuple(found)
 
 
-def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[str, str]]) -> Plan:
-    tasks: list[Task] = []
+def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[str, str]]) -> JudgePlan:
+    tasks: list[JudgeTask] = []
     entering: int = 0
     no_profile: int = 0
     already: int = 0
@@ -103,7 +103,7 @@ def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[s
         for verdict in family.verdicts:
             if verdict.verdict == Verdict.WRONG_PERSON:
                 wrong_by.setdefault(verdict.member_id, set()).add(verdict.candidate_id)
-        candidates: list[Candidate] = []
+        candidates: list[ProposedProfile] = []
         seen: set[str] = set()
         unfetched: int = 0  # undecided URLs with no profile this run
         profiled: list[tuple[str, str, str]] = []  # every proposal with a profile: (url, origin, fetched at), the key
@@ -116,7 +116,7 @@ def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[s
             if profile.member_id in seen or len(wrong_by.get(profile.member_id, set())) == len(family.candidates):
                 continue
             seen.add(profile.member_id)
-            candidates.append(Candidate(proposal.origin, profile))
+            candidates.append(ProposedProfile(proposal.origin, profile))
         if not candidates and not unfetched:
             continue  # every URL is decided
         entering += 1
@@ -131,12 +131,12 @@ def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[s
         if done:
             already += 1
             continue
-        tasks.append(Task(family, tuple(candidates), fingerprint,
+        tasks.append(JudgeTask(family, tuple(candidates), fingerprint,
                           _citations(proposals.research.get(research.handle(family.facts)))))
-    return Plan(tasks, entering, no_profile, already)
+    return JudgePlan(tasks, entering, no_profile, already)
 
 
-def jev_pairs(task: Task) -> list[dict[str, dict[str, Any]]]:
+def jev_pairs(task: JudgeTask) -> list[dict[str, dict[str, Any]]]:
     """The two view requests for each of the task's profiles."""
     network_urls: list[str] = []
     for candidate in task.candidates:
@@ -149,7 +149,7 @@ def jev_pairs(task: Task) -> list[dict[str, dict[str, Any]]]:
     return pairs
 
 
-async def sol(caller: OpenAIResponsesCaller, task: Task, owner_block: str) -> dict[str, str]:
+async def sol(caller: OpenAIResponsesCaller, task: JudgeTask, owner_block: str) -> dict[str, str]:
     """URL -> verdict, one Sol call per profile (sol_identity). A family may end with at most one confirmed
     profile: when two are confirmed, both go to the human queue instead."""
     verdicts: dict[str, str] = {}
@@ -167,7 +167,7 @@ async def sol(caller: OpenAIResponsesCaller, task: Task, owner_block: str) -> di
     return verdicts
 
 
-def write(conn: sqlite3.Connection, task: Task, verdicts: dict[str, str], now: str) -> dict[str, int]:
+def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, str], now: str) -> dict[str, int]:
     """One verdict row per member per judged URL. A confirmed URL moves every member onto li:<member id>,
     except a member already holding a wrong-person verdict on it: that one is split onto a fresh p: id."""
     family: Family = task.family
@@ -207,7 +207,7 @@ def write(conn: sqlite3.Connection, task: Task, verdicts: dict[str, str], now: s
     return counts
 
 
-def estimate(tasks: list[Task], cache_dir: Path, owner_block: str) -> dict[str, object]:
+def estimate(tasks: list[JudgeTask], cache_dir: Path, owner_block: str) -> dict[str, object]:
     """The dry run: JEV requests and their price, and Sol at most once per family. No call."""
     requests: int = 0
     cached: int = 0
@@ -235,7 +235,7 @@ def estimate(tasks: list[Task], cache_dir: Path, owner_block: str) -> dict[str, 
             "estimated_cost_usd_at_most": round(jev_usd + sol_usd, 4)}
 
 
-async def decide(conn: sqlite3.Connection, tasks: list[Task], cache_dir: Path, owner_block: str, now: str) -> dict[str, int]:
+async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Path, owner_block: str, now: str) -> dict[str, int]:
     """Judge every task and write each family's rows the moment its verdicts are known, committing as it
     goes, so a stopped run keeps what it paid for. JEV answers every profile first (its own disk cache);
     Sol sees the families JEV did not settle on exactly one member id. A failed Sol call is counted and
@@ -246,7 +246,7 @@ async def decide(conn: sqlite3.Connection, tasks: list[Task], cache_dir: Path, o
         pairs.extend(jev_pairs(task))
     jev: list[str] = await jev_identity.answer_all(pairs, cache_dir)
     counts: dict[str, int] = {"judge_failed": 0}
-    for_sol: list[Task] = []
+    for_sol: list[JudgeTask] = []
     position: int = 0
     for task in tasks:
         confirmed: list[str] = []
@@ -261,7 +261,7 @@ async def decide(conn: sqlite3.Connection, tasks: list[Task], cache_dir: Path, o
         for_sol.append(task)
     config = OpenAIResponsesConfig.resolve(model=sol_identity.MODEL, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
     async with OpenAIResponsesCaller(config) as caller:
-        calls: list[asyncio.Task[tuple[Task, dict[str, str] | None]]] = []
+        calls: list[asyncio.Task[tuple[JudgeTask, dict[str, str] | None]]] = []
         for task in for_sol:
             calls.append(asyncio.create_task(_guarded(caller, task, owner_block)))
         for call in asyncio.as_completed(calls):
@@ -279,7 +279,7 @@ def _tally(counts: dict[str, int], written: dict[str, int]) -> None:
         counts[key] = counts.get(key, 0) + value
 
 
-async def _guarded(caller: OpenAIResponsesCaller, task: Task, owner_block: str) -> tuple[Task, dict[str, str] | None]:
+async def _guarded(caller: OpenAIResponsesCaller, task: JudgeTask, owner_block: str) -> tuple[JudgeTask, dict[str, str] | None]:
     try:
         return task, await sol(caller, task, owner_block)
     except Exception as exc:
@@ -296,8 +296,8 @@ def main(argv: list[str] | None = None) -> int:
     conn = open_store(store_path(args.data_root))
     found: Proposals = proposals.derive(conn)
     profiles: Profiles = load_profiles(args.data_root, proposals.all_urls(found), fetch=False)
-    planned: Plan = plan(found, profiles.found, queries_enrich.machine_judgments(conn))
-    tasks: list[Task] = planned.tasks
+    planned: JudgePlan = plan(found, profiles.found, queries_enrich.machine_judgments(conn))
+    tasks: list[JudgeTask] = planned.tasks
     if args.limit is not None:
         tasks = tasks[: args.limit]
     counts: dict[str, object] = {"families_entering": planned.entering, "no_profile": planned.no_profile,

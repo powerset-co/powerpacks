@@ -52,7 +52,7 @@ TASK_SPEC: dict[str, Any] = {"input_schema": {"json_schema": _SCHEMAS["input"]},
 
 
 @dataclass(frozen=True)
-class Subject:
+class ResearchSubject:
     """One family to research: its handle and the dossier Parallel reads."""
 
     parent_id: str
@@ -73,9 +73,9 @@ def handle(facts: SynthesizedFacts) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def subjects(families: list[Family], matches: PreMatch, done: dict[str, Research]) -> list[Subject]:
+def subjects(families: list[Family], matches: PreMatch, done: dict[str, Research]) -> list[ResearchSubject]:
     """The worth-yes p: families with no pre-match, no research at their handle and no human LinkedIn verdict."""
-    todo: list[Subject] = []
+    todo: list[ResearchSubject] = []
     handles: set[str] = set()
     for family in families:
         if not enters(family) or family.parent_id in matches.matched:
@@ -85,7 +85,7 @@ def subjects(families: list[Family], matches: PreMatch, done: dict[str, Research
         if family_handle in done or family_handle in handles:
             continue
         handles.add(family_handle)
-        todo.append(Subject(family.parent_id, family_handle, dossier(family)))
+        todo.append(ResearchSubject(family.parent_id, family_handle, dossier(family)))
     return todo
 
 
@@ -95,7 +95,7 @@ def research_url(result: Research) -> str:
     return normalize_linkedin_url(content["linkedin_url"])
 
 
-def row_from_output(subject: Subject, output: dict[str, Any], now: str) -> ResearchRow:
+def row_from_output(subject: ResearchSubject, output: dict[str, Any], now: str) -> ResearchRow:
     """complete with the URL found; else no_match, keeping the result only when it is a usable card."""
     content: dict[str, Any] = output["content"]
     result_json: str = json.dumps(output, ensure_ascii=False, sort_keys=True)
@@ -120,17 +120,17 @@ class ResearchStep(Node):
         super().__init__(conn, data_root)
         self.limit = limit
 
-    def subjects(self) -> list[Subject]:
+    def subjects(self) -> list[ResearchSubject]:
         families: list[Family] = load_families(self.conn)
         matches: PreMatch = pre_match_families(families, queries_worth.all_connections(self.conn),
                                                queries_enrich.connection_emails(self.conn))
-        todo: list[Subject] = subjects(families, matches, queries_enrich.research_by_handle(self.conn))
+        todo: list[ResearchSubject] = subjects(families, matches, queries_enrich.research_by_handle(self.conn))
         if self.limit is not None:
             todo = todo[: self.limit]
         return todo
 
     def estimate(self) -> dict[str, object]:
-        todo: list[Subject] = self.subjects()
+        todo: list[ResearchSubject] = self.subjects()
         return {"families_to_research": len(todo), "processor": PROCESSOR,
                 "estimated_cost_usd": round(len(todo) * PRICE_PER_RUN_USD, 2)}
 
@@ -138,9 +138,9 @@ class ResearchStep(Node):
         return submit(self.conn, self.subjects())
 
 
-def submit(conn: sqlite3.Connection, todo: list[Subject]) -> dict[str, int]:
+def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, int]:
     """One Parallel task group for every subject; each answer is written and committed as it arrives."""
-    by_handle: dict[str, Subject] = {}
+    by_handle: dict[str, ResearchSubject] = {}
     for subject in todo:
         by_handle[subject.handle] = subject
     load_env()
@@ -161,7 +161,7 @@ def submit(conn: sqlite3.Connection, todo: list[Subject]) -> dict[str, int]:
                 break
             if not isinstance(event, TaskRunEvent) or event.run.is_active:
                 continue
-            subject: Subject = by_handle[str(event.run.metadata["handle"])]
+            subject: ResearchSubject = by_handle[str(event.run.metadata["handle"])]
             row: ResearchRow = (subject.handle, subject.parent_id, ResearchStatus.FAILED.value, None, now_iso())
             if event.run.status == "completed":
                 output = event.output
