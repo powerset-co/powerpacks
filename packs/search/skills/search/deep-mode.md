@@ -1,299 +1,136 @@
-# `$search` deep mode
+# Search from a job or role brief
 
-Use this mode when the recorded Step-1 decision is `surface: people` and
-`depth: deep`: a job-posting URL, pasted JD, detailed role brief, explicit deep
-search, or a request to build a shortlist.
+Use the existing result-driven pond loop. One pond searches one broad candidate
+population through the ordinary pipeline. Review queries and compiled filters
+yourself against the user's request/JD; this is a correctness check, not a routine
+execution question. Preserve scope and corrections across every pond.
 
-The engine is the result-driven pond loop. It searches one broad candidate
-population at a time through the ordinary `search_network_pipeline.py`,
-shows every retrieved row in the viewer for human scoring and notes, and asks
-the user one thing: keep going or done. Diagnosis and the next query are the
-model's job, never the user's. When the recorded mode is `auto`, run
-`decide --autonomous` after each pond instead of pausing; the loop stops after
-at most four ponds. Interactive mode also completes at that point, but an
-explicit user request can reopen it for one more pond at a time.
-Candidate ratings assist review; they never replace saved human labels.
+Default: run one round per pond, then continue if fewer than five unique people
+across the search score at least 4 overall (including when nobody scores at least 3).
+Tell the user you're expanding to find more people. Stop at five qualifying people,
+no supported new pond, or the existing four-pond ceiling. Never widen explicit
+geography or network to reach a target. User stop/limit requests win. Explicit
+step-by-step mode pauses after each pond. Human labels remain separate from scores.
 
-## Checklist
+## Prepare
 
-Track these as native harness tasks:
-
-```
-☐ 1. Prepare the initial query
-      ──▶ Review: show only the query
-☐ 2. Run the pond and open its results in the viewer
-☐ 3. Ask: review in the viewer, leave feedback — another round, or done?
-☐ 4. On "another round": model crafts the next query; state it and run
-      (auto repeats up to four ponds; explicit user requests remain binding)
-☐ 5. Complete
-      ──▶ Present shortlist.csv and the final summary line
-```
-
-The query Review before retrieval is the skill's single spend confirmation and
-the only approval in the whole flow. The per-pond pause is a continue-or-done
-question, not an approval gate. In auto mode there is no per-pond pause;
-review happens at the end.
-
-## Prepare and confirm
-
-Record `.powerpacks/deep-search/<slug>/decision.json` first. The engine enforces
-`surface: people`, `depth: deep`, and the recorded backend. Supply exactly one
-of `--jd-file` or `--jd-url`; URL input is fetched once to `<run>/jd.txt`.
-If `fetch_jd` fails, or warns that extraction was thin (JS-rendered page), ask
-the user to copy-paste the JD text into the chat — never mention flags or file
-paths to them — then write the pasted text to `<run>/jd.txt` yourself and
-continue with `--jd-file`.
+Write `decision.json` with `surface: people`, `depth: deep`, the chosen backend and
+mode in `.powerpacks/deep-search/<slug>`. Supply exactly one of `--jd-file`/`--jd-url`:
 
 ```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/deep_search_loop.py \
-  --jd-file <run>/jd.txt \
-  --run-dir <run> \
-  --set-id <set>
+uv run --env-file .env --project . python packs/search/primitives/deep_search/deep_search_loop.py \
+  --jd-url '<posting URL>' --run-dir <run> --set-id <selected-network-id>
 ```
 
-The first invocation returns `awaiting_query_review` and writes
-`<run>/queries.json`: exactly one broad query generated directly from the JD
-with the general pond prompt. `queries.raw.json` preserves the response and
-injected precedent cards. A second arm exists only if the user edits the file.
+For a pasted JD or role brief, save it verbatim as `<run>/jd.txt` and use
+`--jd-file <run>/jd.txt`. For local search replace `--set-id` with
+`--backend local --db <db>` throughout. Local retrieval may use hosted models;
+explicit offline requests use the main skill's read-only SQL path instead.
 
-Apply the main skill's correctness-only review rule: repair inaccurate queries
-without adding specificity or narrowing the intended candidate population.
-Keep negative criteria out of pond queries; preserve explicit user constraints
-in the compiled payload. Already-correct wording needs no rewrite.
+URL intake writes `jd.txt` and source metadata. If thin or failed, try the official
+board/API or available browser first; only then ask for pasted text. Ashby postings
+are resolved through the public posting API. Do not replace a missing JD with a
+snippet or inferred requirements.
 
-Before presenting, compare every allowed location in `jd.txt` and `source.json`
-(when present) with the query. Preserve allowed locations as OR alternatives;
-repair omitted or narrowed locations. Explicit user location changes override
-the posting and belong in the query. Do not add an in-person, hybrid, or remote
-restriction by default.
+The first call returns `awaiting_query_review` and writes `queries.json`. Read it;
+keep the query broad and positive, without adding exclusions. Preserve explicit
+constraints and all allowed locations as OR alternatives. Do not add workplace
+restrictions. Correct omitted/narrowed geography against JD and source metadata.
+State the query briefly, then repeat the same initialization with `--query-approved`.
+Pause only if the user requested review or a material ambiguity needs their answer.
 
-Present only the generated query, with any correctness correction identified.
-Do not append a targeting or filter summary:
+This initializes `results.json` and `manifest.json`; the same files hold each pond,
+its payload, retrieval scope and result delta. No second orchestration system.
 
-```
-- Query: "<the query>"
-```
+## Compile, review, run
 
-After the user edits or approves the query, initialize the fixed
-search-harness artifacts without retrieving candidates:
+The harness summary gives actual state and next action. Follow them rather than
+loading the full results artifact. If correcting a pending query before compilation:
 
 ```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/deep_search_loop.py \
-  --jd-file <run>/jd.txt \
-  --run-dir <run> \
-  --set-id <set> \
-  --query-approved
+uv run --project . python packs/search/primitives/deep_search/search_harness.py set-query \
+  --run-dir <run> --query '<corrected broad query>'
 ```
 
-This writes `<run>/results.json` and `<run>/manifest.json` using the exact
-`search-harness.v1` and `search-harness.manifest.v1` schemas the viewer reads.
-The results store the JD hash, reviewed queries, and exact retrieval corpus.
-The files are overwritten in place throughout the loop; `decision.json` remains
-the route contract.
-
-## Run one pond
-
-The current query is `pending_query` in `results.json`. It can be edited before
-compilation:
-
 ```bash
-uv run --project . python \
-  packs/search/primitives/deep_search/search_harness.py set-query \
-  --run-dir <run> --query '<one clean candidate population>'
-```
-
-Compile the query through the normal parallel extractors. Retrieval is capped
-at 1,000 so downstream reranking, not query padding, owns precision; pass
-`--limit <N>` to compile-pond for a cheaper pass over the top N (run-pond
-reuses the same cap from the pending payload).
-
-```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/search_harness.py compile-pond \
+uv run --env-file .env --project . python packs/search/primitives/deep_search/search_harness.py compile-pond \
   --run-dir <run>
 ```
 
-Before execution, review the compiled payload yourself and call
-`review-payload` — do not pause for the user (the query approval already covered
-spend; pass `--human-reviewed` only when the user actually edited the payload).
-Compare the query with the compiled geography before execution. Check the
-extractor output for errors as well as missing or narrowed filters; an empty
-location result is not permission to search globally. Repair extraction failures
-and missing filters before retrieval. Preserve explicit user location changes
-from the query, and do not add a workplace restriction by default.
+Default retrieval is capped at 1,000. Preserve a smaller user-requested limit via
+`--limit N`; run-pond reuses it. Read only the pending payload path returned by the
+harness. Correct missing/narrowed location filters and extractor failures before
+retrieval; an empty location result never authorizes a global search. Check:
 
-Apply only the concrete controls the harness exposes:
+- role keywords and stated seniority (not inferred from years of experience);
+- geography and current/past/all temporal requirements;
+- concise traits preserving JD breadth, preferences and OR alternatives;
+- only explicitly requested exclusions.
 
-- keep/drop individual role-keyword chips;
-- correct seniority bands to match stated levels or the documented defaults,
-  not merely to shrink the observed pond;
-- correct location fields to match the query, including explicit user scope changes;
-- correct traits and `temporal: current|past|all` against the user's request/JD;
-  keep wording terse and preserve qualification breadth and alternatives;
-- use named rerank exclusions only when explicitly requested, not as invented
-  restrictions.
-
-One Terra-medium pass proposes two initial recruiter patterns, using the
-JD and current query plus similar prior `pattern_default_edits` and human payload edits:
-prune keyword fan-out and drop structured hard filters that duplicate traits.
-Seniority belongs to the parallel extractor, not precedent retuning. Every proposal includes a
-one-line reason in `pattern_default_edits` and remains editable. The prior
-deterministic table runs only if that call or response fails.
-
-After editing the payload file, mark that exact file reviewed:
+Apply supported payload edits and mark that exact file reviewed:
 
 ```bash
-uv run --project . python \
-  packs/search/primitives/deep_search/search_harness.py review-payload \
-  --run-dir <run> \
-  --rerank-exclusion '<named specialty to penalize>'
-```
-
-Then execute it. Add `--backend local --db <db>` to the compile and run commands
-when `decision.json` selected local search.
-
-```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/search_harness.py run-pond \
+uv run --project . python packs/search/primitives/deep_search/search_harness.py review-payload \
   --run-dir <run>
 ```
 
-The iteration record contains the query/payload snapshot, `edit_delta`,
-`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all retrieved
-rows, result count, cost,
-and deterministic whole-pool statistics: five score bands, level mix,
-geography mix, and top companies. RapidAPI company context is cache-first;
-missing company matches stay unknown. The summary keeps the pond chain,
-deduplicated candidates, finding runs, rerank scores, and total recorded cost.
+Use `--human-reviewed` only for actual human payload edits. Use `--rerank-exclusion`
+only for a named specialty the user asked to penalize. Then execute:
 
-Start the viewer right after the FIRST pond completes, and keep it for the
-whole run. It is the local review server (the one local UI, shared with the
-People page), opened at this run; run it in the background because it serves
-in the foreground, and it restarts any review server already on the port
-(state is in SQLite; nothing is lost):
+```bash
+uv run --env-file .env --project . python packs/search/primitives/deep_search/search_harness.py run-pond \
+  --run-dir <run>
+```
+
+Keep the configured judges consistent across ponds. Use authoritative overall
+ratings, not rerank similarity or a capability screen's native score, for continuation.
+No ranking-model changes or human-label overwrites are part of this workflow.
+
+## Present and continue
+
+After the first pond start the existing viewer in the background:
 
 ```bash
 bin/deep-context review searches --run "$(basename <run>)"
 ```
 
-It prints `review UI: http://127.0.0.1:8765/searches/run?run_id=<slug>`; that
-page is the viewer. Before a deep-context store exists the same server serves
-the searches alone.
+It prints the local viewer URL. Show count, up to five useful people from the bounded
+summary preview with evidence/profile links, and that URL. Never dump full candidate
+records. Later ponds update the same viewer; tell the user to refresh. Missing fit
+explanations stay unknown. Saved human scores/notes remain in the viewer.
 
-The capability screen is Jev by default (`--capability-judge jev`) and needs
-`TYPESAFE_API_KEY` in the environment. Jev reads every hydrated row; no Luna filter
-runs ahead of it. The Jev tree uses a cutoff calibrated to
-93% recall of the Luna screen; it returns a native qualification score and pass
-decision, not a 1–5 rating. `--capability-judge terra` selects the Luna filter and
-Luna rating path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
-See [the Jev README](../../primitives/llm_rerank_candidates/jev/README.md) for metrics.
-
-The viewer shows the judges' overall for either screen, sorted by overall; a person
-the judges never saw shows "Did not pass screen" or "Not judged". Each result has a **Score** button
-for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
-and submitted through the existing Powerset feedback endpoint.
-On approved Powerset JD runs, Jev chooses one of the employee API's 20 fixed
-departments from the JD. The exact request is cached under `<run>/team-department/`.
-Only current staff in that department are requested from the API for prior-work
-embeddings, alongside the pond. After Jev, candidates with a passing capability screen
-receive an independent Team Similarity Rank across the run's deduplicated pass set.
-The rank uses original titles, descriptions, and employer names from five recent jobs;
-it does not change judge scores, result order, tags, or pins. The collapsed Team table
-shows the selected department's stored current staff. The department is saved in
-`<run>/team-embeddings.json`; an empty department never broadens to all staff.
-`<run>/team-status.json` records unavailable company,
-roster, or API data; local-only runs never call the employee API.
-Custom tags are saved in `<run>/tags.json`, shared across browsers, and included
-in tagged-results CSV exports. Existing browser-only tags are imported when a run
-has no saved tag file; an existing file, including cleared tags, takes precedence.
-Never print candidate tables, names, or per-candidate labels in the chat — the
-viewer is the only candidate-review surface. After each pond, say only: the
-pond's query, the result count, and the viewer URL
-(tell the user to refresh after later ponds). When the loop stops, mark task 5
-complete and present `<run>/shortlist.csv`. `/searches` lists every run from
-its `manifest.json` alone (title, company, status, people, cost,
-`search_version`) and opens one run per page at `/searches/run?run_id=<slug>`;
-the list's version chips default to the newest `search_version`, and runs saved
-before the stamp existed show as `unversioned`. The People page is `/people`
-on the same server.
-
-### Hosted results
-
-After each completed pond, upload the viewer snapshot unless the user requested
-offline/local-only results:
+For default automatic continuation:
 
 ```bash
-uv run --project . python \
-  packs/search/primitives/upload_search_results/upload_search_results.py \
-  --run-dir <run> --env-file .env
-```
-
-`uploaded` returns the private viewer URL; include it with the local viewer link.
-`needs_auth` is quiet and normal: keep the local viewer, without requesting login.
-On upload failure, keep the local results and report that hosting failed.
-Repeat this command when the user finishes labeling to refresh the same snapshot;
-it never changes local scores or labels. Hosted search results stay frozen;
-signed-in reviewers can leave their own scores, comments, tags and pins, saved separately
-without syncing back to local files. Anonymous viewers remain read-only.
-Sharing stays off unless the owner enables it in the hosted viewer. Disabling
-sharing revokes the link; do not enable sharing automatically.
-
-## Continue or done
-
-After each pond, point the user at the viewer and ask exactly one plain
-question — for example: "Results are in the viewer — review them and leave
-a score and notes with each candidate’s Score button. Want another round of results
-(I'll craft a new query from what came back), or are you done?" Never mention
-diagnoses, choice numbers, or the action taxonomy to the user.
-
-- **Another round** → run the model's own diagnosis/move call; then state the
-  new query in one line and run the next pond:
-
-```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/search_harness.py decide \
-  --run-dir <run> --choice 2
-```
-
-This command also reopens a run the model previously stopped, then produces
-one more editable query/payload/run round. An explicit user request for another
-round cannot be converted back into a model stop.
-
-- **Done** (or the user is happy) → stop and complete:
-
-```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/search_harness.py decide \
-  --run-dir <run> --choice 3
-```
-
-Auto mode makes the same autonomous call after every pond without pausing:
-
-```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/search_harness.py decide \
+uv run --env-file .env --project . python packs/search/primitives/deep_search/search_harness.py decide \
   --run-dir <run> --autonomous
 ```
 
-The move considers the JD, previous ponds, pool statistics, and reviewed seed
-precedents; the model's own past moves are never
-precedent (nothing in this repo writes `proposal_delta.reviewed`). The raw
-response is checkpointed before parsing. The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
-`add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`
-reuses the existing retrieved pond and permits rerank-exclusion edits;
-it does not launch a new search. Other search actions create one editable
-`pending_query`. `proposal_delta` records the proposed diagnosis/action/query;
-`human_override` records the user's continue-or-stop choice.
-Repeat compile -> review -> run -> continue-or-done, stopping honestly
-at `corpus_sparse` or after the fourth pond.
+If another pond is needed, say “I’m expanding the search to find more people,” state
+its query, and repeat compile → review → run. Diagnose and propose the new pond
+using existing results; the user need not invent queries. Do not repeat an exhausted
+query or relax requirements to manufacture matches. Respect terminal state/reason.
 
-Each run stays reviewable in the viewer because every pond appends one
-iteration to the same `results.json`, including the input edit and result delta.
+For explicit step-by-step review, ask “Another round, or done?” after showing
+results. Another round uses `decide --choice 2`, which can reopen a stopped run for
+one more pond; done uses `decide --choice 3`. Only an explicit additional-round request
+overrides the four-pond cap. Apply user corrections before the next execution.
 
-User edit & feedback capture from the `$search` SKILL applies here too: log each
-user-driven query/payload/pond edit and each result comment with
-`search_feedback.py log --run-dir <run> --kind pond_edit|result_feedback ...`,
-and after the run completes send the one aggregated row with
-`search_feedback.py send --run-dir <run>` (`needs_auth` is a normal quiet outcome).
+At completion, present the useful results and viewer, with `shortlist.csv` as the
+optional export. If the target was not met, state what was found and why the search
+stopped. Preparation, an unrun pending query, or an internal acknowledgment is not a
+completed search. For corrections/result comments follow [feedback.md](feedback.md).
+
+## Hosted viewer
+
+After each completed pond, upload unless the user requested offline/local-only results:
+
+```bash
+uv run --project . python packs/search/primitives/upload_search_results/upload_search_results.py \
+  --run-dir <run> --env-file .env
+```
+
+`uploaded` returns a private URL. `needs_auth`: keep the local viewer quietly; don't
+force login for optional hosting. Upload failure: keep local results and explain
+hosting failed. Refresh the snapshot after labeling with the same command. Never
+enable sharing automatically. Hosted reviewer labels stay separate from local labels.

@@ -15,6 +15,9 @@ JavaScript, preserves readable posting text and locations, and writes:
 Fetch failure (HTTP/network) is fail-loud (exit 1). A page that fetches but yields little text
 exits 0 with status "thin" so the caller can decide to paste the JD
 instead. Prints a small JSON summary either way.
+
+With --list-openings, an official Ashby board URL writes compact opening rows
+to --out as JSON instead; the same public API supplies posting intake.
 """
 from __future__ import annotations
 
@@ -252,6 +255,50 @@ _ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{org}"
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
+def fetch_ashby_board(org: str, timeout: int = 30) -> dict[str, object]:
+    """Fetch the public board shared by posting intake and opening discovery."""
+    req = urllib.request.Request(
+        _ASHBY_API.format(org=urllib.parse.quote(org)),
+        headers={
+            "Accept": "application/json",
+            # The API 403s urllib's default UA; the browser UA (same as fetch()) passes.
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+            ),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        board = json.loads(resp.read().decode("utf-8", errors="replace"))
+    if not isinstance(board, dict) or not isinstance(board.get("jobs"), list):
+        raise ValueError("Ashby response did not contain a jobs list")
+    return board
+
+
+def list_openings(url: str, timeout: int = 30) -> dict[str, object]:
+    """List real postings from an official Ashby board URL without their full JDs."""
+    parsed = urllib.parse.urlparse(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if parsed.scheme != "https" or parsed.hostname != _ASHBY_HOST or len(parts) != 1:
+        raise ValueError("--list-openings requires an official https://jobs.ashbyhq.com/<company> board URL")
+    board = fetch_ashby_board(parts[0], timeout=timeout)
+    jobs = []
+    for job in board["jobs"]:
+        if job.get("isListed") is False:
+            continue
+        locations = [job["location"]] if job.get("location") else []
+        locations.extend(location["location"] for location in job.get("secondaryLocations") or []
+                         if location.get("location"))
+        jobs.append({
+            "title": job["title"],
+            "locations": list(dict.fromkeys(locations)),
+            "department": job.get("department"),
+            "team": job.get("team"),
+            "jobUrl": job["jobUrl"],
+        })
+    return {"source_url": url, "via": "ashby_posting_api", "count": len(jobs), "jobs": jobs}
+
+
 def fetch_ashby(url: str, timeout: int = 30) -> tuple[str, str, dict[str, object]] | None:
     """Ashby job pages are fully JS-rendered (the HTML extracts to 0 chars), but the
     board exposes a public posting API with descriptionHtml. Return (jd_text, title, metadata),
@@ -265,21 +312,9 @@ def fetch_ashby(url: str, timeout: int = 30) -> tuple[str, str, dict[str, object
     if not parts or not job_id_match:
         return None
     org, job_id = parts[0], job_id_match.group(0).lower()
-    req = urllib.request.Request(
-        _ASHBY_API.format(org=urllib.parse.quote(org)),
-        headers={
-            "Accept": "application/json",
-            # The API 403s urllib's default UA; the browser UA (same as fetch()) passes.
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
-            ),
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            board = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        board = fetch_ashby_board(org, timeout=timeout)
+    except (urllib.error.URLError, TimeoutError, ValueError):
         return None
     for job in board.get("jobs") or []:
         if str(job.get("id", "")).lower() != job_id:
@@ -310,8 +345,9 @@ def fetch_ashby(url: str, timeout: int = 30) -> tuple[str, str, dict[str, object
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Fetch a job-posting URL -> clean JD text (URL->JD front-end for $search deep mode).")
-    ap.add_argument("--url", required=True, help="Job-posting URL to fetch")
-    ap.add_argument("--out", required=True, help="Where to write the clean JD text (feeds deep mode --jd-file)")
+    ap.add_argument("--url", required=True, help="Job-posting URL, or official Ashby board URL with --list-openings")
+    ap.add_argument("--list-openings", action="store_true", help="Write compact published Ashby openings to --out as JSON")
+    ap.add_argument("--out", required=True, help="Where to write JD text, or opening-list JSON with --list-openings")
     ap.add_argument("--source-json", default=None, help="Where to write source URL metadata (default: <out dir>/source.json)")
     ap.add_argument("--raw-html", default=None, help="Optional: also write the raw HTML here (debug)")
     ap.add_argument("--timeout", type=int, default=30)
@@ -319,6 +355,17 @@ def main() -> None:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if args.list_openings:
+        try:
+            result = list_openings(args.url, timeout=args.timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, KeyError) as exc:
+            print(json.dumps({"primitive": "fetch_jd", "status": "failed", "url": args.url, "error": str(exc)}, indent=2))
+            raise SystemExit(1)
+        result.update(primitive="fetch_jd", status="ok", out=str(out))
+        out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(result, indent=2))
+        return
+
     source_json = Path(args.source_json) if args.source_json else out.parent / "source.json"
 
     ashby = fetch_ashby(args.url, timeout=args.timeout)

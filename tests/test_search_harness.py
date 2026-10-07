@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
+import io
 import json
 import tempfile
 import unittest
@@ -96,6 +98,184 @@ class SearchHarnessTests(unittest.TestCase):
                                     return_value={"status": "hydrated"})
         self.hydrate_attribution = patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_repeated_initialization_reports_saved_state_without_restarting(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            path = _start(run_dir)
+            results = json.loads(path.read_text())
+            results["status"] = "completed"
+            results["pending_query"] = None
+            path.write_text(json.dumps(results))
+            before = path.read_bytes()
+            args = SimpleNamespace(queries_file=None, query_approved=True, backend="powerset",
+                                   set_id="set-1", db="unused", jd_file=str(run_dir / "jd.txt"),
+                                   env_file=str(run_dir / "missing.env"))
+            summary = search_harness.run_search_harness(args, run_dir, run_dir / "decision.json")
+            self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(summary["status"], "completed")
+        self.assertEqual(summary["next"], "present_results")
+
+    def test_cli_summary_reports_actual_state_and_deduped_overall_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            path = _start(run_dir)
+            results = json.loads(path.read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [
+                {"pond_n": 1, "query": "First pond", "shortlist_grades": [
+                    {"person": "p1", "cross_encoder_status": "ok", "cross_encoder_score_1_to_5": 5,
+                     "candidate_judgment": {"overall_score": 4}},
+                    {"person": "p2", "candidate_judgment": None},
+                ]},
+                {"pond_n": 2, "query": "Second pond", "shortlist_grades": [
+                    {"person": "p1", "cross_encoder_status": "ok", "cross_encoder_score_1_to_5": 5,
+                     "candidate_judgment": {"overall_score": 5}},
+                    {"person": "p3", "cross_encoder_status": "ok", "cross_encoder_score_1_to_5": 4,
+                     "candidate_judgment": {"overall_score": 3}},
+                ]},
+            ]
+            search_harness._save(results, run_dir)
+            output = io.StringIO()
+            with mock.patch("sys.argv", ["search_harness.py", "run-pond", "--run-dir", raw]), \
+                    mock.patch.object(search_harness, "run_pond", return_value=path), \
+                    contextlib.redirect_stdout(output):
+                search_harness.main()
+            summary = json.loads(output.getvalue())
+        self.assertEqual(summary["status"], "awaiting_diagnosis")
+        self.assertEqual(summary["current_pond"], 2)
+        self.assertEqual(summary["deduped_candidate_count"], 3)
+        self.assertEqual(summary["overall_at_least_3"], 2)
+        self.assertEqual(summary["overall_at_least_4"], 1)
+        self.assertEqual(summary["next"], "decide --autonomous")
+        self.assertEqual(summary["manifest"], str(run_dir.resolve() / "manifest.json"))
+        self.assertLess(len(output.getvalue()), 2000)
+        self.assertNotIn("shortlist_grades", summary)
+
+    def test_command_preview_is_bounded_and_uses_overall_rating(self) -> None:
+        results = {"status": "completed", "iterations": [{"pond_n": 1, "shortlist_grades": [
+            {"name": f"Candidate {i}", "title": "Engineer", "company": "Synthetic Co",
+             "linkedin_url": f"https://www.linkedin.com/in/synthetic-{i}",
+             "score": 1 - i / 10, "cross_encoder_status": "ok", "cross_encoder_score_1_to_5": 5,
+             "candidate_judgment": {"overall_score": i % 5 + 1,
+                                    "domain": {"why": "x" * 10000},
+                                    "opportunity": {"why": "y" * 10000}},
+             "private_evidence": "do not emit"} for i in range(10)]}]}
+        summary = search_harness.command_summary(results, Path("/tmp/synthetic-search"))
+        self.assertEqual(len(summary["top_candidates"]), 5)
+        self.assertEqual([row["overall_score"] for row in summary["top_candidates"]], [5, 5, 4, 4, 3])
+        self.assertEqual(set(summary["top_candidates"][0]), {
+            "name", "title", "company", "linkedin_url", "overall_score", "reason"})
+        self.assertNotIn("private_evidence", json.dumps(summary))
+        self.assertLess(len(json.dumps(summary)), 5000)
+
+    def test_review_payload_cli_reports_ready_to_rerank(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            path = _start(run_dir)
+            payload_path = run_dir / "payload.json"
+            payload_path.write_text(json.dumps(_payload()))
+            results = json.loads(path.read_text())
+            results["status"] = "awaiting_payload_review"
+            results["pending_payload"] = {"query": "Engineer", "payload_json": str(payload_path),
+                                          "payload": _payload(), "rerank_only": True}
+            path.write_text(json.dumps(results))
+            output = io.StringIO()
+            with mock.patch("sys.argv", ["search_harness.py", "review-payload", "--run-dir", raw]), \
+                    contextlib.redirect_stdout(output):
+                search_harness.main()
+            summary = json.loads(output.getvalue())
+        self.assertEqual(summary["status"], "ready_to_rerank")
+        self.assertEqual(summary["next"], "run-pond")
+        self.assertEqual(summary["pending_payload"], str(payload_path))
+
+    def test_autonomous_stops_at_five_unique_overall_fours_without_model(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            path = _start(run_dir)
+            results = json.loads(path.read_text())
+            results["status"] = "awaiting_diagnosis"
+            candidates = [{"person": f"p{i}", "cross_encoder_status": "ok",
+                           "cross_encoder_score_1_to_5": 5,
+                           "candidate_judgment": {"overall_score": 4}} for i in range(5)]
+            results["iterations"] = [
+                {"pond_n": 1, "query": "First pond", "shortlist_grades": candidates[:3]},
+                {"pond_n": 2, "query": "Second pond", "shortlist_grades": candidates[2:]},
+            ]
+            path.write_text(json.dumps(results))
+            with mock.patch.object(search_harness, "propose_next_move") as propose:
+                search_harness.decide(run_dir=run_dir, autonomous=True)
+            saved = json.loads(path.read_text())
+        propose.assert_not_called()
+        self.assertEqual(saved["status"], "completed")
+        self.assertEqual(saved["iterations"][-1]["next_move"]["action"], "stop")
+        self.assertEqual(search_harness.overall_counts(saved["summary"])["overall_at_least_4"], 5)
+
+    def test_autonomous_continues_below_five_without_counting_duplicates_or_threes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            path = _start(run_dir)
+            results = json.loads(path.read_text())
+            results["status"] = "awaiting_diagnosis"
+            candidates = [{"person": f"p{i}", "cross_encoder_status": "ok",
+                           "cross_encoder_score_1_to_5": 5,
+                           "candidate_judgment": {"overall_score": 4 if i < 4 else 3}}
+                          for i in range(8)]
+            stats = {"result_count": 8, "reviewed_count": 8, "score_histogram": {},
+                     "level_mix": {}, "geo_mix": {}, "top_companies": {}}
+            results["iterations"] = [
+                {"pond_n": 1, "query": "First pond", "shortlist_grades": candidates},
+                {"pond_n": 2, "query": "Second pond", "shortlist_grades": candidates,
+                 "pool_stats": stats},
+            ]
+            path.write_text(json.dumps(results))
+            proposal = {"diagnosis": "too_few", "action": "add_adjacent_pond",
+                        "next_query": "Infrastructure Engineer", "source": "inferred",
+                        "rationale": "Try another relevant occupation."}
+            with mock.patch.object(search_harness, "propose_next_move", return_value=(proposal, "", {})) as propose:
+                search_harness.decide(run_dir=run_dir, autonomous=True, note="Keep it local.")
+            saved = json.loads(path.read_text())
+        self.assertEqual(saved["status"], "ready_to_compile")
+        self.assertEqual(saved["pending_query"]["query"], "Infrastructure Engineer")
+        self.assertEqual(propose.call_args.args[0]["shortlist"]["overall_at_least_4"], 4)
+        self.assertEqual(propose.call_args.args[0]["human_diagnosis"]["note"], "Keep it local.")
+
+    def test_explicit_continue_can_compile_one_more_pond_after_default_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            path = _start(run_dir)
+            results = json.loads(path.read_text())
+            results["status"] = "completed"
+            stats = {"result_count": 0, "reviewed_count": 0, "score_histogram": {},
+                     "level_mix": {}, "geo_mix": {}, "top_companies": {}}
+            results["iterations"] = [{"pond_n": 4, "query": "Last pond", "shortlist_grades": [],
+                                      "pool_stats": stats}]
+            path.write_text(json.dumps(results))
+            proposal = {"diagnosis": "too_few", "action": "add_adjacent_pond",
+                        "next_query": "Infrastructure Engineer", "source": "inferred",
+                        "rationale": "Try another relevant occupation."}
+            with mock.patch.object(search_harness, "propose_next_move", return_value=(proposal, "", {})):
+                search_harness.decide(run_dir=run_dir, choice=2)
+            env_file = run_dir / "test.env"
+            env_file.write_text("")
+            expanded = run_dir / "expanded.json"
+            expanded.write_text(json.dumps(_payload()))
+            with mock.patch.object(search_harness, "_run_command", return_value={"payload_json": str(expanded)}), \
+                    mock.patch.object(search_harness, "_llm_pattern_defaults", side_effect=lambda **kw: (kw["payload"], [])):
+                search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file))
+            saved = json.loads(path.read_text())
+        self.assertEqual(saved["status"], "awaiting_payload_review")
+        self.assertEqual(saved["pending_payload"]["pond_n"], 5)
+        self.assertEqual(saved["iterations"][-1]["human_override"]["choice"], 2)
+
+    def test_command_summary_excludes_related_run_candidates(self) -> None:
+        results = {"status": "completed", "iterations": [{"pond_n": 1, "shortlist_grades": []}],
+                   "summary": {"deduped_candidate_count": 100, "groups": {"": [
+                       {"name": "Other run candidate", "candidate_judgment": {"overall_score": 5}}]}}}
+        summary = search_harness.command_summary(results, Path("/tmp/synthetic-search"))
+        self.assertEqual(summary["deduped_candidate_count"], 0)
+        self.assertEqual(summary["overall_at_least_4"], 0)
+        self.assertEqual(summary["top_candidates"], [])
 
     def test_summary_preserves_candidate_judgment_across_ponds_without_group_arbitration(self) -> None:
         results = {"iterations": [
@@ -741,6 +921,34 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIn("--force-llm", command)
         self.assertNotIn("--force", command)
 
+    def test_ranking_fix_requires_explicit_user_continuation(self) -> None:
+        def response(action: str) -> SimpleNamespace:
+            proposal = {"diagnosis": "weak_quality", "action": action,
+                        "next_query": "Infrastructure Engineer" if action == "add_adjacent_pond" else None,
+                        "source": "inferred" if action == "add_adjacent_pond" else None,
+                        "rationale": "Improve the results."}
+            return SimpleNamespace(
+                model="gpt-5.6-luna", service_tier="flex",
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=10),
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(proposal)))])
+
+        for explicit, actions, expected in (
+            (False, ["ranking_fix", "add_adjacent_pond"], "add_adjacent_pond"),
+            (False, ["ranking_fix", "ranking_fix"], "corpus_sparse"),
+            (True, ["ranking_fix"], "ranking_fix"),
+        ):
+            with self.subTest(explicit=explicit, actions=actions):
+                client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                    create=mock.Mock(side_effect=[response(action) for action in actions]))))
+                proposal, _, _ = search_harness.propose_next_move(
+                    {"pond_chain": [], "shortlist": {"overall_at_least_4": 0}},
+                    selected=None, user_continue=explicit, iteration={},
+                    prompt=search_harness.NEXT_SEARCH_PROMPT, client=client)
+                self.assertEqual(proposal["action"], expected)
+                self.assertEqual(client.chat.completions.create.call_count, len(actions))
+                if not explicit:
+                    self.assertIn("ranking_fix is not allowed", client.chat.completions.create.call_args.kwargs["messages"][-1]["content"])
+
     def test_paid_next_move_is_checkpointed_before_becoming_the_next_query(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
@@ -820,12 +1028,18 @@ class SearchHarnessTests(unittest.TestCase):
                     "rationale": "The direct pond is exhausted; broaden to transferable systems work.",
                 })))],
             )
+            premature_stop = deepcopy(response)
+            premature_stop.choices[0].message.content = json.dumps({
+                "diagnosis": "exhausted", "action": "stop", "next_query": None,
+                "source": None, "rationale": "Enough candidates.",
+            })
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
-                create=mock.Mock(return_value=response))))
+                create=mock.Mock(side_effect=[premature_stop, response]))))
 
             search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
+        self.assertEqual(client.chat.completions.create.call_count, 2)
         iteration = saved["iterations"][0]
         self.assertEqual(iteration["diagnosis"], "exhausted")
         self.assertIsNone(iteration["human_override"])
@@ -917,7 +1131,7 @@ class SearchHarnessTests(unittest.TestCase):
                          "technical writer developer documentation")
         self.assertEqual(client.chat.completions.create.call_count, 1)
 
-    def test_user_continue_retries_stops_then_widens_geography(self) -> None:
+    def test_user_continue_retries_stops_without_widening_geography(self) -> None:
         usage = SimpleNamespace(
             prompt_tokens=20, completion_tokens=10,
             prompt_tokens_details=SimpleNamespace(cached_tokens=5),
@@ -955,9 +1169,9 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIn('"user_requested_another_round": true', context)
         retry = client.chat.completions.create.call_args_list[1].kwargs["messages"][-1]["content"]
         self.assertIn("stop and corpus_sparse are not allowed", retry)
-        self.assertEqual(saved["status"], "ready_to_compile")
-        self.assertEqual(saved["pending_query"]["query"], "Software Engineer")
-        self.assertEqual(saved["iterations"][0]["next_move"]["action"], "widen_geography")
+        self.assertEqual(saved["status"], "completed")
+        self.assertIsNone(saved["iterations"][0]["next_move"]["next_query"])
+        self.assertEqual(saved["iterations"][0]["next_move"]["action"], "corpus_sparse")
 
     def test_user_continue_reopens_a_completed_model_stop(self) -> None:
         usage = SimpleNamespace(
@@ -1064,7 +1278,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_query"]["query"],
                          "Risk Systems Engineer in the Bay Area")
 
-    def test_duplicate_query_checks_every_prior_pond_then_widens(self) -> None:
+    def test_duplicate_query_checks_every_prior_pond_without_widening(self) -> None:
         def response() -> SimpleNamespace:
             usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
                                     prompt_tokens_details=SimpleNamespace(cached_tokens=5),
@@ -1111,9 +1325,9 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIn('"pond_n": 1', context)
         retry = client.chat.completions.create.call_args_list[1].kwargs["messages"][-1]["content"]
         self.assertIn("duplicates a query already in pond_chain", retry)
-        self.assertEqual(saved["status"], "ready_to_compile")
-        self.assertEqual(saved["pending_query"]["query"], "Software Engineer")
-        self.assertEqual(saved["iterations"][2]["next_move"]["action"], "widen_geography")
+        self.assertEqual(saved["status"], "completed")
+        self.assertIsNone(saved["iterations"][2]["next_move"]["next_query"])
+        self.assertEqual(saved["iterations"][2]["next_move"]["action"], "corpus_sparse")
 
     def test_wrong_specialty_may_return_to_a_prior_population_at_wider_geography(self) -> None:
         usage = SimpleNamespace(
@@ -1157,7 +1371,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_query"]["query"], "Executive Assistant in Europe")
         context = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
         self.assertIn("network is predominantly US-based", context)
-        self.assertIn("widen country to region to global early", context)
+        self.assertIn("change geography only when the user explicitly requests it", context)
 
     def test_interactive_diagnosis_is_saved_before_the_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

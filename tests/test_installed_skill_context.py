@@ -37,6 +37,9 @@ class InstalledSkillContextTests(unittest.TestCase):
                 self.assertEqual(paid.read_text(), "preserve existing paid data\n")
                 self.assertEqual(legacy.read_text(), "preserve legacy paid data\n")
                 self.assertIn(f"{ROOT}/AGENTS.md", (skills / "search/SKILL.md").read_text())
+                for source in (ROOT / "packs/search/skills/search").glob("*.md"):
+                    if source.name != "SKILL.md":
+                        self.assertEqual((skills / "search" / source.name).read_bytes(), source.read_bytes())
                 self.assertTrue((skills / "powerpacks-doctor/SKILL.md").exists())
                 self.assertFalse((skills / "powerpacks-doctor/powerpacks").exists())
                 self.assertFalse((home / ".codex/powerpacks/packs").exists())

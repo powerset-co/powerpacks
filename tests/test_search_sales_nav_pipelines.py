@@ -245,6 +245,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 "semantic_query": "Experienced software engineers who build production systems, own backend or full-stack implementation, and show evidence of technical execution in product or infrastructure teams.",
                 "bm25_queries": ["software engineer"],
                 "metro_areas": ["San Francisco Bay Area"],
+                "set_id": "extractor-network",
             },
             "notes": [],
         }
@@ -260,6 +261,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 model=None,
                 expand_model=search.DEFAULT_EXPAND_MODEL,
                 expand_reasoning_effort=search.DEFAULT_EXPAND_REASONING_EFFORT,
+                set_id="selected-network",
             )
 
             rc = search.cmd_prepare(args)
@@ -268,6 +270,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             run_mock.assert_called_once()
             self.assertTrue((Path(tmp) / "expand_search_request.json").exists())
             self.assertTrue((Path(tmp) / "expand_search_request.full.json").exists())
+            payload = search.read_json(Path(tmp) / "expand_search_request.json")
+            self.assertEqual(payload["role_search_filters"]["set_id"], "selected-network")
 
         self.assertEqual(len(emitted), 1)
         out = emitted[0]
@@ -276,6 +280,11 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertIn("execute_command", out)
         self.assertIn("--execute-approved", out["execute_command"])
         self.assertIn("pipeline.ledger.json", out["execute_command"])
+        self.assertEqual(out["preview"]["set_scope"], "selected-network")
+        execute_args = shlex.split(out["execute_command"])
+        self.assertEqual(execute_args[execute_args.index("--payload-json") + 1], out["payload_json"])
+        self.assertIn("Continue with execute_command", out["message"])
+        self.assertIn("unless the user requested only a preview", out["message"])
 
     def test_cmd_prepare_emits_company_directory_fast_path_without_execute_command(self):
         expand = {
@@ -304,6 +313,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 model=None,
                 expand_model=search.DEFAULT_EXPAND_MODEL,
                 expand_reasoning_effort=search.DEFAULT_EXPAND_REASONING_EFFORT,
+                set_id="selected-network",
             )
 
             rc = search.cmd_prepare(args)
@@ -313,17 +323,46 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertEqual(out["status"], "company_directory_fast_path")
         self.assertEqual(out["tool"], "list_company_people")
         self.assertEqual(out["tool_args"]["company_name"], "OpenAI")
+        self.assertEqual(out["tool_args"]["set_id"], "selected-network")
         self.assertNotIn("execute_command", out)
+
+    def test_local_prepare_ignores_explicit_remote_scope(self):
+        expand = {"role_search_filters": {
+            "semantic_query": "software engineers",
+            "set_id": "extractor-network",
+        }}
+        emitted = []
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(search, "configure_local_backend_mode"), \
+             mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}), \
+             mock.patch.object(search, "apply_local_title_clustering", side_effect=lambda payload, db: payload), \
+             mock.patch.object(search, "compact_preview_local", return_value={}), \
+             mock.patch.object(search, "emit", side_effect=emitted.append):
+            db = Path(tmp) / "network.duckdb"
+            db.touch()
+            args = search.build_parser().parse_args([
+                "prepare", "--backend", "local", "--db", str(db),
+                "--query", "software engineers", "--output-dir", tmp,
+                "--set-id", "selected-network",
+            ])
+            self.assertEqual(search.cmd_prepare(args), 0)
+            payload = search.read_json(Path(tmp) / "expand_search_request.json")
+            self.assertNotIn("set_id", payload["role_search_filters"])
+
+        self.assertIn("set_id", emitted[0]["ignored_remote_scope_keys"])
+        self.assertNotIn("--set-id", emitted[0]["execute_command"])
+        self.assertIn("unless the user requested only a preview", emitted[0]["message"])
 
     def test_cli_parser_exposes_prepare_and_existing_commands(self):
         parser = search.build_parser()
 
-        prepare = parser.parse_args(["prepare", "--query", "software engineers in sf"])
+        prepare = parser.parse_args(["prepare", "--query", "software engineers in sf", "--set-id", "selected-network"])
         run = parser.parse_args(["run"])
         status = parser.parse_args(["status", "--ledger", "x.json"])
         approve = parser.parse_args(["approve", "llm", "--confirm"])
 
         self.assertIs(prepare.func, search.cmd_prepare)
+        self.assertEqual(prepare.set_id, "selected-network")
         self.assertIs(run.func, search.cmd_run)
         self.assertIs(status.func, search.cmd_status)
         self.assertIs(approve.func, search.cmd_approve)
