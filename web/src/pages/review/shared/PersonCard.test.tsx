@@ -45,7 +45,7 @@ describe("PersonCard", () => {
       "Close friend",
     ])
     const link = screen.getByRole("link", { name: "View LinkedIn" })
-    expect(link.textContent).toBe("View LinkedIn↗")
+    expect(link.parentElement?.className).toBe("name-row")
     expect(link.getAttribute("href")).toBe("https://www.linkedin.com/in/jordan-bravo")
     expect(link.getAttribute("target")).toBe("_blank")
     expect(facts()).toEqual([

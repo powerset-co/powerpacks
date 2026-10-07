@@ -28,12 +28,13 @@ function renderOption(candidate: ReviewCandidate, person = reviewPerson(), disab
 }
 
 describe("LinkedinOption (L2)", () => {
-  it("draws a fetched LinkedIn profile: its link, headline, Work and Education", () => {
+  it("draws a fetched LinkedIn profile: the icon link in its name, headline, Work and Education", () => {
     const { option, facts, copy } = renderOption(reviewCandidate())
     expect(option.className).toBe("linkedin-option option-linkedin")
-    expect(copy()).toEqual(["Jordan Bravo", "View LinkedIn↗", "Founder at Example Labs"])
+    expect(copy()).toEqual(["Jordan Bravo", "Founder at Example Labs"])
     const link = screen.getByRole("link", { name: "View LinkedIn" })
     expect(link.className).toBe("linkedin-label")
+    expect(link.parentElement?.className).toBe("name-row")
     expect([link.getAttribute("href"), link.getAttribute("target"), link.getAttribute("rel")]).toEqual([
       "https://www.linkedin.com/in/jordan-bravo",
       "_blank",

@@ -403,15 +403,26 @@
   stroke-linejoin: round;
 }
 
+/* The name and, beside it, the LinkedIn icon: the heading keeps the name alone. */
+.review-page .name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .review-page .linkedin-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 12px;
+  flex: none;
   color: #6ba7e4;
-  font-size: 13px;
-  font-weight: 700;
   text-decoration: none;
+}
+/* The judge's reason under the badges. */
+.review-page .person-reason {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .review-page input {

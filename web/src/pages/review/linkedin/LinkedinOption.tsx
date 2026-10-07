@@ -1,12 +1,13 @@
 import type { ReactNode } from "react"
 
-import { FACT, VIEW_LINKEDIN } from "@/lib/review/copy"
+import { FACT } from "@/lib/review/copy"
 import { displayName, summaryOf } from "@/lib/review/person"
 import { cn } from "@/lib/utils"
 import type { ReviewCandidate, ReviewPerson } from "@/types/review"
 
 import { FactList } from "../shared/FactList"
 import { LabelBadges } from "../shared/LabelBadges"
+import { LinkedinLink } from "../shared/LinkedinLink"
 import { ReviewAvatar } from "../shared/ReviewAvatar"
 import { DECISION, OPTION } from "./copy"
 
@@ -45,9 +46,12 @@ export function LinkedinOption({ person, candidate, disabled, onUse }: LinkedinO
       <div className="profile-card">
         <ReviewAvatar person={person} candidate={candidate} />
         <div className="profile-copy">
-          <h3>{displayName(person, candidate, false)}</h3>
+          <div className="name-row">
+            <h3>{displayName(person, candidate, false)}</h3>
+            {kind === "linked" ? <LinkedinLink url={candidate.url} /> : null}
+          </div>
           <LabelBadges labels={[]} candidate={candidate} />
-          <KindLine kind={kind} url={candidate.url} />
+          <KindLine kind={kind} />
           {headline ? <p>{headline}</p> : null}
         </div>
       </div>
@@ -77,17 +81,12 @@ export function LinkedinOption({ person, candidate, disabled, onUse }: LinkedinO
   )
 }
 
-function KindLine({ kind, url }: { kind: OptionKind; url: string }) {
+function KindLine({ kind }: { kind: OptionKind }) {
   switch (kind) {
     case "researched":
       return <span className="option-kind">{OPTION.researched}</span>
     case "linked":
-      return (
-        <a className="linkedin-label" href={url} target="_blank" rel="noreferrer">
-          {VIEW_LINKEDIN}
-          <span aria-hidden="true">↗</span>
-        </a>
-      )
+      return null
     case "unfetched":
       return <span className="option-kind option-empty">{OPTION.unfetched}</span>
   }
