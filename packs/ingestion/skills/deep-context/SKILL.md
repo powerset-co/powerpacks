@@ -66,17 +66,16 @@ and decides what to do when something fails. Without sub-agents, do the worker's
 chat the same way.
 
 ```bash
-S="deep-context-$(openssl rand -hex 3)"            # a fresh session every time; never reuse or attach to another
-tmux new-session -d -s "$S" -c "$POWERPACKS_REPO_ROOT"
-tmux send-keys -t "$S" 'bin/deep-context-v2 run' Enter
-tmux capture-pane -p -t "$S" -S -200               # read progress
-tmux kill-session -t "$S"                          # when the run has ended, failed or not
+tmux has-session -t deep-context 2>/dev/null || tmux new-session -d -s deep-context -c "$POWERPACKS_REPO_ROOT"
+tmux send-keys -t deep-context 'bin/deep-context-v2 run' Enter
+tmux capture-pane -p -t deep-context -S -200       # read progress
 ```
 
-One session per run, named with a random suffix so two agents or two runs never clobber each
-other. Kill it as soon as the command in it has ended; the review server and the background
-index are detached from it and keep running. `finish` gets its own session the same way, killed
-when it ends. Never leave a session behind.
+One session, always named `deep-context`, for the whole job: the run, every rerun after a fix,
+and `finish` all go into it with `send-keys`. If it already exists, use it; never create a
+second. Kill it (`tmux kill-session -t deep-context`) once `finish` has ended, and nothing is
+left in it: the review server and the background index are detached and keep running on their
+own. A session left over from an interrupted job is reused, not a reason to open another.
 
 The run prints one line per stage. It ends with:
 
