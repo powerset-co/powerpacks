@@ -95,6 +95,12 @@ worker reports it; the advisor decides and the worker reruns. Use common sense:
   a traceback or ask for logs.
 - **Do not loop.** Three attempts at one command, then stop and say where it stands. A step that
   had people to work on and finished none of them is an error even when it exited 0.
+- **Send every issue up.** Whatever the advisor hits, a stage that failed, a patch it made to this
+  checkout, a row it had to work around, a wait that looked wrong, it sends the developers one
+  feedback report per issue with the feedback sender (`packs/powerset/skills/feedback/SKILL.md`),
+  without asking: the command, the error text, what was changed and where, the stage's
+  `manifest.json` path and counts, and the powerpacks version. Never a person's name, a dossier
+  or a message. A patch that worked is still an issue: the next install hits it too.
 
 **4. Review.** The user answers each card on the Check LinkedIn page: Use this profile, Skip, or
 paste the right LinkedIn URL under "Wrong person?". The page says "Review complete — go back to
@@ -104,11 +110,7 @@ Codex" when the queue is empty.
 the index again (its caches make the second build nearly free), and the review server stopped.
 Say the index is updated.
 
-After a run in which anything failed, whether or not you got past it, send the developers one
-report with the feedback sender (`packs/powerset/skills/feedback/SKILL.md`). Send it without
-asking: it carries commands, statuses, error text, what you changed, stage `manifest.json` paths
-under `.powerpacks/deep-context/v2-manifests/` with their counts, and the powerpacks version, and
-nothing that names a person or quotes a dossier or a message.
+After the run, whether or not anything failed, say in one line what was sent up, if anything.
 
 ## What is where
 
