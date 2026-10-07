@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.powerset.primitives.install.steps import InstallState, InstallStep
+from packs.powerset.primitives.install.steps import InstallStep
 
 
 class InstallStatusTests(unittest.TestCase):
@@ -138,8 +138,11 @@ class InstallStatusTests(unittest.TestCase):
     def test_every_write_takes_its_words_and_state_from_the_script(self) -> None:
         record = self.status.write("gmail.connect", pid=os.getpid(), email="casey@example.com",
                                    details={"email": "casey@example.com"})
-        self.assertEqual((record["event"], record["step"], record["status"]), ("gmail.connect", "gmail_login", "waiting"))
-        self.assertEqual(record["message"], "Connect casey@example.com in your browser")
+        self.assertEqual((record["event"], record["step"], record["status"]), ("gmail.connect", "gmail_login", "running"))
+        self.assertEqual(record["message"], "Connecting casey@example.com")
+        self.assertEqual(record["action"], {"kind": "details", "details": {"email": "casey@example.com"}})
+        record = self.status.write("gmail.connect.waiting", pid=os.getpid(), details={"email": "casey@example.com"})
+        self.assertEqual(record["status"], "waiting")
         self.assertIn("I’ll continue here", record["note"])
         self.assertEqual(record["action"], {"kind": "gmail", "details": {"email": "casey@example.com"}})
         self.assertEqual(self.status.read()["prose"]["rows"][1]["label"], "Logging in to your accounts")

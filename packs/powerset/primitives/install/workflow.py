@@ -226,12 +226,9 @@ class SourceOnboarding:
                     return False
         for check in authorize:
             self._write("gmail.connect", email=check["email"], details=check)
-            while True:
-                result = accounts.add_account(home, check["email"], "", headless=False,
-                                              force=check["status"] == "reauthorization_required")
-                if result.get("message") != "msgvault timed out":
-                    break
-                self._write("gmail.connect.expired", details=check)
+            result = accounts.add_account(home, check["email"], "", headless=False,
+                                          force=check["status"] == "reauthorization_required",
+                                          on_progress=lambda _: self._write("gmail.connect.waiting", email=check["email"], details=check))
             if not self._result(result, "gmail.connected", waiting="gmail.connect.waiting", failed="gmail.connect.failed"):
                 return False
         if authorize:

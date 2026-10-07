@@ -2,16 +2,15 @@
 """The scheduled refresh task: install it into Codex or Claude, list its runs.
 
 Both harnesses run the same prompt (run `refresh_sources.py run`, report) daily
-at 06:00, from the templates in `automations/refresh-message-sources/`:
+at 06:00:
 
     codex   install opens `codex://threads/new?prompt=…` asking Codex to create
-            the automation described by automation.toml, so the App's own tool
-            creates it the way the App expects. Remove does what the App's own
-            delete does: drop its codex-dev.db `automations` row, then the
-            $CODEX_HOME/automations/<id> folder. The prompt ends with the App's <heartbeat>
-            decision: a clean run archives itself and says DONT_NOTIFY, a problem
-            says NOTIFY. Runs: state_5.sqlite threads whose title carries
-            `Automation ID: <id>`; each thread's rollout is its transcript.
+            a heartbeat attached to that chat, so each run resumes it. The
+            App's own automation tool creates it. Remove does what the App's own
+            delete does: drop its codex-dev.db `automations` row. The folder is
+            backed up and the chat stays open. Runs come from heartbeat turns in
+            the target chat's transcript; older standalone runs use their
+            `Automation ID: <id>` title.
     claude  claude-task.md → ~/.claude/scheduled-tasks/<id>/SKILL.md plus an entry
             in Claude Desktop's claude-code-sessions/<account>/<org>/
             scheduled-tasks.json. Desktop loads that file at launch and writes it
@@ -67,7 +66,6 @@ MAX_RUNS = 30
 TEMPLATES = _REPO_ROOT / "automations" / TASK_ID
 
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-CODEX_AUTOMATION = CODEX_HOME / "automations" / TASK_ID / "automation.toml"
 CODEX_APP_DB = CODEX_HOME / "sqlite" / "codex-dev.db"
 CODEX_THREADS_DB = CODEX_HOME / "state_5.sqlite"
 
@@ -110,7 +108,7 @@ def read_task(repo: Path) -> Task:
 def installed_runners() -> list[Runner]:
     """Where the task is installed. Cheap: no run history is read."""
     installed: list[Runner] = []
-    if CODEX_AUTOMATION.exists() or _codex_app_has_task():
+    if _codex_tasks():
         installed.append("codex")
     if any(_claude_entry(path) is not None for path in _claude_task_files()):
         installed.append("claude")
@@ -143,26 +141,27 @@ def uninstall(runner: Runner) -> None:
 
 
 def _install_codex(repo: Path) -> None:
-    """Open a new Codex thread asking Codex to create the automation. The App's own
-    create tool fills in what it expects (its project target, among others); a
-    hand-written automation.toml lacked that, and the App then refused to edit it
-    ("Could not update scheduled task")."""
-    spec = Template((TEMPLATES / "automation.toml").read_text()).substitute(prompt=PROMPT, workspace=repo)
+    """Open the chat that creates and receives the recurring task."""
     request = (
-        f"Create a cron scheduled task with exactly these settings, for the project at {repo}. "
-        f"Do not run it now.\n\n```toml\n{spec}```"
+        f'Create an active scheduled task named "{TASK_NAME}" using Codex\'s native '
+        'automation_update tool with kind heartbeat and destination thread, attached to this chat. Run daily at 6:00 AM '
+        'in local time. Keep "Start each run in new chat" OFF so every run resumes this chat. '
+        "Keep this chat open after successful runs. Do not run it now.\n\n"
+        f"Use this saved prompt:\n\nWorking directory: {repo}.\n{PROMPT}\n\n"
+        "Stay quiet while all sources refreshed or are not connected. Notify only when the command "
+        "fails or a source is failed or needs_you."
     )
     subprocess.run(["open", f"codex://threads/new?{urllib.parse.urlencode({'prompt': request})}"], check=True)
 
 
 def _remove_codex() -> None:
-    """What the Codex App's own delete does: drop its row, then the folder. Once the
-    App has imported the TOML its row wins, so removing the file alone keeps the
-    schedule running."""
-    if CODEX_APP_DB.exists():
+    """Remove the native schedule while preserving its data and target chat."""
+    for automation_id, _ in _codex_tasks():
+        folder = CODEX_HOME / "automations" / automation_id
+        if folder.exists():
+            shutil.move(folder, CODEX_HOME / f"{automation_id}.{time.time_ns()}.bkup")
         with sqlite3.connect(CODEX_APP_DB, timeout=10) as conn:
-            conn.execute("DELETE FROM automations WHERE id = ?", (TASK_ID,))
-    shutil.rmtree(CODEX_AUTOMATION.parent, ignore_errors=True)
+            conn.execute("DELETE FROM automations WHERE id = ?", (automation_id,))
 
 
 def _install_claude(repo: Path) -> None:
@@ -229,7 +228,9 @@ def _claude_running() -> bool:
 
 
 def _codex_runs() -> list[Run]:
-    return [
+    automations = _codex_tasks()
+    targets = {thread_id for _, thread_id in automations if thread_id}
+    runs = [
         Run(
             id=thread_id,
             runner="codex",
@@ -240,7 +241,42 @@ def _codex_runs() -> list[Run]:
             resume_command=f"codex resume {thread_id}",
         )
         for thread_id, created_ms, rollout in _codex_threads()
+        if thread_id not in targets
     ]
+    if CODEX_THREADS_DB.exists():
+        with sqlite3.connect(f"file:{CODEX_THREADS_DB}?mode=ro", uri=True) as conn:
+            for automation_id, thread_id in automations:
+                if thread_id is None:
+                    continue
+                row = conn.execute("SELECT rollout_path FROM threads WHERE id = ?", (thread_id,)).fetchone()
+                if row:
+                    runs.extend(_codex_heartbeat_runs(automation_id, thread_id, Path(row[0])))
+    return runs
+
+
+def _codex_heartbeat_runs(automation_id: str, thread_id: str, rollout: Path) -> list[Run]:
+    runs = []
+    scheduled = False
+    for row in _rows(rollout):
+        payload = row.get("payload") or {}
+        if row.get("type") == "event_msg" and payload.get("type") == "task_started":
+            scheduled = False
+        elif row.get("type") == "response_item" and payload.get("role") == "user":
+            scheduled = scheduled or f"<automation_id>{automation_id}</automation_id>" in _text(payload.get("content"))
+        elif row.get("type") == "event_msg" and payload.get("type") == "task_complete" and scheduled:
+            error = payload.get("error")
+            summary = _strip_codex_citations(payload.get("last_agent_message") or (error or {}).get("message", ""))
+            status = "failed" if error else _report_status(summary) if summary else "unknown"
+            runs.append(Run(
+                id=payload["turn_id"],
+                runner="codex",
+                started_at=_iso(payload["started_at"]),
+                status=status,
+                summary=summary,
+                open_url=f"codex://threads/{thread_id}",
+                resume_command=f"codex resume {thread_id}",
+            ))
+    return runs
 
 
 def _codex_threads() -> list[tuple[str, int, str]]:
@@ -254,12 +290,15 @@ def _codex_threads() -> list[tuple[str, int, str]]:
         ).fetchall()
 
 
-def _codex_app_has_task() -> bool:
+def _codex_tasks() -> list[tuple[str, str | None]]:
     if not CODEX_APP_DB.exists():
-        return False
+        return []
     with sqlite3.connect(f"file:{CODEX_APP_DB}?mode=ro", uri=True) as conn:
-        row = conn.execute("SELECT 1 FROM automations WHERE id = ? AND status != 'DELETED'", (TASK_ID,)).fetchone()
-    return row is not None
+        return conn.execute(
+            "SELECT id, target_thread_id FROM automations WHERE status != 'DELETED' "
+            "AND (id = ? OR instr(prompt, ?) > 0)",
+            (TASK_ID, f"Task: {TASK_ID}\n"),
+        ).fetchall()
 
 
 def _report_status(summary: str) -> Literal["ok", "failed"]:

@@ -126,14 +126,16 @@ PROGRESS_PREFIX = "powerpacks-progress "
 
 
 def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] | None = None,
-                          on_progress: Callable[[dict], None] | None = None) -> CommandResult:
+                          on_progress: Callable[[dict], None] | None = None,
+                          input_text: str | None = None) -> CommandResult:
     """Run a command capturing stdout while mirroring stderr live.
 
     Browser automation logs land on stderr as they happen; stdout is kept
     whole so the final JSON payload can be parsed after exit. A stderr line
     starting with `PROGRESS_PREFIX` carries JSON for `on_progress`."""
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL)
     except FileNotFoundError:
         return CommandResult(ok=False, returncode=127, stderr=f"{cmd[0]} not found")
 
@@ -159,11 +161,19 @@ def run_streaming_command(cmd: list[str], *, timeout: int, env: dict[str, str] |
     for thread in threads:
         thread.daemon = True
         thread.start()
+    if input_text is not None:
+        assert proc.stdin is not None
+        proc.stdin.write(input_text)
+        proc.stdin.close()
     try:
         returncode = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         returncode = 124
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
     for thread in threads:
         thread.join(timeout=1)
     return CommandResult(

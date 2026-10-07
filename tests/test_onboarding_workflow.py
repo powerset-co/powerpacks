@@ -26,7 +26,6 @@ from packs.ingestion.primitives.imports import common as import_common
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
 from packs.ingestion.primitives.setup.automations import accounts
-from packs.ingestion.primitives.setup.automations.shell import CommandResult
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
@@ -477,30 +476,29 @@ class SourceOnboardingTests(unittest.TestCase):
                 {'email': 'casey@example.com', 'status': verdict},
                 {'email': 'other@example.com', 'status': 'healthy'}]}
 
-            def authorize(command, *, timeout):
+            def authorize(home, email, app_name, *, force, on_progress):
+                on_progress({"stage": "sign_in"})
                 waiting = InstallStatus(self.root).read()
                 self.assertEqual(waiting['step'], 'gmail_login')
                 self.assertEqual(waiting['status'], 'waiting')
                 self.assertEqual(waiting['installer_pid'], os.getpid())
                 self.assertEqual(waiting['action']['kind'], 'gmail')
                 self.assertEqual(waiting['action']['details']['email'], 'casey@example.com')
-                self.assertEqual(timeout, 900)
-                return CommandResult(ok=True, returncode=0)
+                self.assertEqual(email, "casey@example.com")
+                self.assertEqual(force, verdict == "reauthorization_required")
+                return {"status": "ok"}
 
             with self.subTest(verdict=verdict), \
                  patch.object(accounts, 'check_accounts_payload', side_effect=[health, {'status': 'ok'}]) as check, \
-                 patch.object(accounts, 'run_visible_command', side_effect=authorize) as login, \
+                 patch.object(accounts.oauth_browser, 'authorize_account', side_effect=authorize) as login, \
                  patch.object(import_common, 'import_manifest_current', return_value=None), \
                  patch.object(GmailDiscovery, '__init__', return_value=None) as init, \
                  patch.object(GmailDiscovery, 'run', return_value=payload(status='completed')) as sync, \
                  patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
                 result = SourceOnboarding(self.root, sources=('gmail',),
                     gmail_emails=('casey@example.com', 'other@example.com'), sync_after='2023-01-01').run()
-            command = login.call_args.args[0]
-            self.assertEqual(command[:5], ['msgvault', '--home', str(Path('~/.msgvault').expanduser()),
-                                           'add-account', 'casey@example.com'])
-            self.assertEqual('--force' in command, verdict == 'reauthorization_required')
-            self.assertNotIn('--headless', command)
+            self.assertEqual(login.call_args.args, (Path('~/.msgvault').expanduser(), 'casey@example.com', ''))
+            self.assertEqual(login.call_args.kwargs['force'], verdict == 'reauthorization_required')
             self.assertEqual(login.call_count, 1)
             self.assertEqual(check.call_count, 2)
             for call in check.call_args_list:
@@ -515,7 +513,7 @@ class SourceOnboardingTests(unittest.TestCase):
     def test_configured_gmail_without_database_authorizes_before_health_and_sync(self):
         with patch.object(accounts, 'status_payload', return_value={
                 'config': {'oauth_configured': True}, 'database': {'exists': False}}), \
-             patch.object(accounts, 'run_visible_command', return_value=CommandResult(ok=True, returncode=0)) as login, \
+             patch.object(accounts.oauth_browser, 'authorize_account', return_value={'status': 'ok'}) as login, \
              patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}) as health, \
              patch.object(GmailDiscovery, 'run', return_value=payload(status='completed')) as sync, \
              patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
@@ -531,8 +529,7 @@ class SourceOnboardingTests(unittest.TestCase):
         health = {'status': 'needs_user_action', 'accounts': [
             {'email': 'casey@example.com', 'status': 'reauthorization_required'}]}
         with patch.object(accounts, 'check_accounts_payload', return_value=health) as check, \
-             patch.object(accounts, 'run_visible_command', return_value=CommandResult(
-                 ok=False, returncode=1, message='OAuth app rejected')) as login, \
+             patch.object(accounts.oauth_browser, 'authorize_account', return_value={'status': 'error', 'message': 'OAuth app rejected'}) as login, \
              patch.object(GmailDiscovery, 'run') as sync:
             result = SourceOnboarding(self.root, sources=('gmail',),
                 gmail_emails=('casey@example.com',), sync_after='2023-01-01').run()
@@ -550,7 +547,7 @@ class SourceOnboardingTests(unittest.TestCase):
                  'database': {'exists': True}, 'accounts': []}
         other = {**local, 'accounts': [{'email': 'other@example.com'}]}
         with patch.object(accounts, 'status_payload', side_effect=[local, local, other]), \
-             patch.object(accounts, 'run_visible_command', return_value=CommandResult(ok=True, returncode=0)) as login, \
+             patch.object(accounts.oauth_browser, 'authorize_account', return_value={'status': 'ok'}) as login, \
              patch.object(accounts, 'run_msgvault') as verify, \
              patch.object(GmailDiscovery, 'run') as sync:
             result = SourceOnboarding(self.root, sources=('gmail',),
@@ -659,16 +656,18 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['steps']['imessage_import']['status'], 'completed')
         self.assert_preserved()
 
-    def test_expired_gmail_login_reopens_and_continues_without_chat_nudge(self):
+    def test_gmail_consent_human_handoff_stops_before_sync_and_rerun_resumes(self):
         health = {'status': 'needs_user_action', 'accounts': [
             {'email': 'casey@example.com', 'status': 'reauthorization_required'}]}
-        with patch.object(accounts, 'check_accounts_payload', side_effect=[health, {'status': 'ok'}]), \
-             patch.object(accounts, 'run_visible_command', side_effect=[
-                 CommandResult(ok=False, returncode=124, message='msgvault timed out'), CommandResult(ok=True)]) as login, \
+        with patch.object(accounts, 'check_accounts_payload', side_effect=[health, health, {'status': 'ok'}]), \
+             patch.object(accounts.oauth_browser, 'authorize_account', side_effect=[
+                 {'status': 'needs_user_action', 'message': 'Complete sign-in in Chrome.'}, {'status': 'ok'}]) as login, \
              patch.object(import_common, 'import_manifest_current', return_value=None), \
              patch.object(GmailDiscovery, '__init__', return_value=None), \
              patch.object(GmailDiscovery, 'run', return_value=payload(status='completed')), \
              patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+            first = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',)).run()
+            self.assertEqual(first['status'], 'waiting')
             result = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',)).run()
         self.assertEqual(login.call_count, 2)
         self.assertEqual(result['step'], 'deep_context')

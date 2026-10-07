@@ -93,9 +93,9 @@ paths and rely on the primitives — don't pre-delete or invent folders.
 - **No paid providers, no index.** This skill never calls Parallel.ai, RapidAPI,
   OpenAI, or Modal. Identity resolution for unresolved contacts and the index
   rebuild belong to `$deep-context`.
-- **Consent gates (pause for the user):** msgvault browser/gcloud OAuth-app
-  creation and Gmail account authorization (Steps 3-4). Everything after OAuth
-  is free and local.
+- **Google sign-in:** Steps 3-4 reuse the saved browser session. Pause only when
+  Google needs the user's login, MFA, or an unrecognized screen. Once the user
+  has requested these mailboxes, run their ordinary Gmail consent automatically.
 - **Check every selected token before syncing any mailbox.** Step 1's local
   status proves only that an account row/token file exists; it cannot prove a
   refresh token is still accepted by Google. Step 4's `auth-check` is the
@@ -193,8 +193,8 @@ the whole requested set instead of stopping at the first bad account:
   because of a timeout, DNS failure, or Google 5xx.
 
 If any accounts need authorization, show the **complete list** (missing and
-expired separately) and ask once for explicit consent to open OAuth for all of
-them sequentially. After approval, first make sure Google will accept them:
+expired separately) and authorize the requested mailboxes sequentially. First
+make sure Google will accept them:
 the OAuth app only lets its test users grant access, and `status` lists those
 (with the owner) as `desired_emails`. Add every account missing from
 `desired_emails` in one command (it drives the same Chrome console session and
@@ -216,6 +216,11 @@ no mail and preserves already archived messages):
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <email> --force-auth
 ```
+
+These commands reuse the saved Google session and consent to the requested
+Gmail scopes. When Chrome opens for sign-in or a challenge, the user completes
+it there and the command continues. A timeout leaves the previous token intact;
+rerun the same command.
 
 After all grants complete, rerun the **same all-account `auth-check`**. Do not
 advance until it reports `status: ok` and every selected account is `healthy`.

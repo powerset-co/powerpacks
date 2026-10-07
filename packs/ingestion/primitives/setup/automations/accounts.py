@@ -41,7 +41,7 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -51,6 +51,7 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.setup.automations.gcloud_project import (  # noqa: E402
     gcloud_context,
 )
+from packs.ingestion.primitives.setup.automations import oauth_browser  # noqa: E402
 from packs.ingestion.primitives.setup.automations.mcp import (  # noqa: E402
     mcp_status,
 )
@@ -254,20 +255,24 @@ def msgvault_account_authorize_command(home: Path, email: str, *, force: bool) -
     return shlex.join(cmd)
 
 
-def add_account(home: Path, email: str, app_name: str, *, headless: bool, force: bool) -> dict[str, Any]:
-    """Authorize a Gmail account with `msgvault add-account` (visible OAuth flow)."""
+def add_account(home: Path, email: str, app_name: str, *, headless: bool, force: bool,
+                on_progress: Callable[[dict], None] | None = None) -> dict[str, Any]:
+    """Authorize with the saved Google session, handing sign-in to the user."""
     progress(f"Authorizing msgvault account {email}...")
-    cmd = ["msgvault", "--home", str(home), "add-account", email]
-    if headless:
-        cmd.append("--headless")
+    if not headless:
+        result = oauth_browser.authorize_account(home, email, app_name, force=force, on_progress=on_progress)
+        if result["status"] == "ok":
+            progress("msgvault account authorized.")
+        return {**result, "email": email, "oauth_app": app_name or "default"}
+    cmd = ["msgvault", "--home", str(home), "add-account", email, "--headless"]
     if force:
         cmd.append("--force")
     if app_name:
         cmd.extend(["--oauth-app", app_name])
     result = run_visible_command(cmd, timeout=900)
     if result.ok:
-        progress("msgvault account authorized.")
-        return {"status": "ok", "email": email, "oauth_app": app_name or "default"}
+        return {"status": "needs_user_action", "email": email, "oauth_app": app_name or "default",
+                "message": "Authorize on a machine with a browser, then copy the token as msgvault instructed."}
     return {
         "status": "error",
         "email": email,
