@@ -89,9 +89,11 @@ it("does not call a pending native import installed", async () => {
     ),
   )
   mount()
-  await screen.findByText("Waiting for Codex to register the schedule…")
+  expect((await screen.findByRole("status")).textContent).toBe(
+    "Waiting for Codex to register the schedule...",
+  )
   expect(screen.queryByRole("button", { name: "Save schedule" })).toBeNull()
-  expect(screen.getByRole("button", { name: "Installing…" }).hasAttribute("disabled")).toBe(true)
+  expect(screen.getByRole("button", { name: "Installing" }).hasAttribute("disabled")).toBe(true)
 })
 
 it("shows a creation error without offering a nonexistent chat", async () => {
