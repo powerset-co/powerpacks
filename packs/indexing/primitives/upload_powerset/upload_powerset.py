@@ -52,11 +52,10 @@ import postgres_client  # noqa: E402
 import turbopuffer_search_backend as tp_backend  # noqa: E402
 
 from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
-from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow  # noqa: E402
-from packs.ingestion.primitives.deep_context.db.share_views import share_decisions  # noqa: E402
-from packs.ingestion.primitives.deep_context.db.store import open_existing_db  # noqa: E402
-from packs.ingestion.primitives.deep_context.db.readiness import CANONICAL_DB
-from packs.ingestion.primitives.deep_context.shared.common import load_env  # noqa: E402
+from packs.ingestion.primitives.deep_context_v2.db.store import STORE_RELATIVE_PATH  # noqa: E402
+from packs.ingestion.primitives.deep_context_v2.openai import load_env  # noqa: E402
+from packs.ingestion.primitives.share.models import ShareDecisionRow  # noqa: E402
+from packs.ingestion.primitives.share.store import share_rows as read_share_rows  # noqa: E402
 from packs.ingestion.schemas.share_schema import SHARE_YES  # noqa: E402
 from packs.indexing.primitives.upload_powerset import local_index, postgres, turbopuffer_writer  # noqa: E402
 from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
@@ -75,7 +74,7 @@ from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
-DEFAULT_SHARE_DB = REPO / CANONICAL_DB
+DEFAULT_SHARE_DB = REPO / ".powerpacks" / STORE_RELATIVE_PATH
 DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
 # The namespace family the shared cloud is served from; the upload never targets another.
 UPLOAD_INDEX_VERSION = "v3"
@@ -167,7 +166,7 @@ class UploadPowerset:
             region=config.get("TURBOPUFFER_REGION", tp_backend.DEFAULT_REGION))
         if not self.db.exists():
             raise RuntimeError(SAFE_ERRORS["local_index"])
-        share_rows = share_decisions(open_existing_db(self.share_db))
+        share_rows = read_share_rows(self.share_db)
         digest = share_digest(share_rows)
         current = current.at(Stage.CHECKING_ACCESS, share_digest=digest, progress={
             **current.progress, "total": sum(row.share == SHARE_YES and bool(row.public_identifier)

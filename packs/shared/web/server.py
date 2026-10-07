@@ -6,8 +6,8 @@ only the standard library and the install status modules at load; everything els
 first request once <root>/.powerpacks/deep-context/deep-context-v2.sqlite exists. Until then `/`
 goes to `/install` while setup runs, else to `/searches`. `serve` runs it in the foreground.
 
-The review routes are deep_context_v2's (review/api.py). The People page's routes still read v1's
-store and mount only while that store exists; they move to the v2 store next.
+The review routes are deep_context_v2's (review/api.py); the People page's are the share stage's
+(share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
 - 2026-10-07: created from v1's `deep_context/review/cli.py` and `server.py`: the same persistent
@@ -47,9 +47,7 @@ START_TIMEOUT_SECONDS = 10
 # left on the port is stopped and replaced; anything else on the port is refused.
 PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review|packs\.shared\.web\.server")
 STORE = Path(".powerpacks/deep-context/deep-context-v2.sqlite")
-V1_STORE = Path(".powerpacks/deep-context/deep-context.sqlite")
 INSTALL_MANIFEST = Path(".powerpacks/install/manifest.json")
-NO_PEOPLE = json.dumps({"error": "No people yet. Run bin/deep-context-v2 run to build your network."}).encode()
 STAGES = ("install", "linkedin", "people", "searches")
 
 
@@ -77,25 +75,23 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.ingestion.primitives.deep_context_v2.openai import load_env
     from packs.ingestion.primitives.deep_context_v2.review.api import ReviewApi
     from packs.ingestion.primitives.refresh.api import TasksApi
+    from packs.ingestion.primitives.share.web.server import share_routes
     from packs.search.primitives.deep_search.results_web.api import search_api
     from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
 
     load_env()
     data_root: Path = root / ".powerpacks"
     app = AppRoutes()
-    # One connection, one review request at a time: the API was written for one request at a time.
-    review = ReviewApi(open_store(root / STORE, shared=True), data_root)
-    review_lock = threading.Lock()
+    # One connection for the review and the People page, one store request at a time: both were
+    # written for one request at a time.
+    conn = open_store(root / STORE, shared=True)
+    review = ReviewApi(conn, data_root)
+    share = share_routes(conn, data_root)
+    store_lock = threading.Lock()
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
     searches_json = search_api(searches)
     accounts = AccountsApi()
     tasks = TasksApi()
-    share = None
-    if (root / V1_STORE).is_file():
-        # The People page reads v1's store until it moves to the v2 one.
-        from packs.ingestion.primitives.deep_context.db.store import open_existing_db
-        from packs.ingestion.primitives.share.web.server import share_routes
-        share = share_routes(open_existing_db(root / V1_STORE))
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -104,26 +100,17 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             if searches_json.get(self, parsed) or searches.get(self, parsed):
                 return
-            if share is not None and share.get(self, parsed):
-                return
-            if parsed.path.startswith("/api/people/"):
-                self.send_response(HTTPStatus.NOT_FOUND)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(NO_PEOPLE)))
-                self.end_headers()
-                self.wfile.write(NO_PEOPLE)
-                return
-            with review_lock:
-                review.get(self, parsed)  # answers its own 404
+            with store_lock:
+                if not share.get(self, parsed):
+                    review.get(self, parsed)  # answers its own 404
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if accounts.post(self, parsed) or tasks.post(self, parsed) or searches.post(self, parsed):
                 return
-            if share is not None and share.post(self, parsed):
-                return
-            with review_lock:
-                review.post(self, parsed)
+            with store_lock:
+                if not share.post(self, parsed):
+                    review.post(self, parsed)
 
         def log_message(self, fmt: str, *args: object) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)

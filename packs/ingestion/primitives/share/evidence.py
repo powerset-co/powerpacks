@@ -1,152 +1,102 @@
-"""The share stage's one reader: the roster joined to the canonical store.
+"""The share stage's read boundary: one `PersonEvidence` per family, joined once from the v2 store.
 
-The roster arrives through `ensure_parents.imported_people` — people.csv's only
-Deep Context reader — and everything the stage knows about a person's context
-comes from SQLite: parents (worth), facts (labels, overlaps), artifacts (dossier
-bodies and body-free message bundles). No CSV state is read or written here.
-
-Flow: `ShareEvidence(db).load()` -> `list[PersonEvidence]`.
+A family is a parent id with the members `current_parent` puts under it. Its export row is what
+realize writes (name, public identifier, channels, counts, last interaction); its worth and the
+JEV labels worth saved come from `current_worth`; its facts are the members' facts collapsed as
+every judge sees them; its message statistics come from the members' bundles, counts only.
 
 Changelog:
-  2026-09-26: unjudged LinkedIn imports default to worth yes.
-  2026-09-24: read facts, worth, dossiers, and bundles from SQLite, not files.
-  2026-09-24: created (split out of share.py).
+  2026-10-07: v2. people.csv, dossier artifacts and the v1 parents table are gone; the roster is
+    realize's rows and the facts are the collapsed family facts.
 """
-
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+import sqlite3
+from pathlib import Path
+from typing import Any
 
-from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.db import queries
-from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactKind,
-    FactRow,
-    MachineWorth,
-    ParentSnapshotRow,
-)
-from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import ImportedPerson, stored_imported_people
-from packs.ingestion.primitives.imports.merge_people import merge_group
+from packs.ingestion.primitives.deep_context_v2.db import queries_worth
+from packs.ingestion.primitives.deep_context_v2.db.queries_worth import ChannelCount, MemberFacts
+from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
 from packs.ingestion.primitives.share.models import NO_MESSAGES, MessageStats, PersonEvidence
 from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
-
-def _overlaps(facts: dict[str, Any] | None) -> frozenset[str]:
-    """`facts.shared_context[].overlap` values (school | employer | location | era | other)."""
-    return frozenset(
-        str(entry.get("overlap") or "")
-        for entry in (facts or {}).get("shared_context") or []
-        if isinstance(entry, dict)
-    )
+FROM_ME = "from_me"
 
 
-def _messages(bundle: dict[str, Any] | None) -> MessageStats:
-    """Body-free message stats. Reads ONLY direction/at/channel and the group
-    count — `subject` and `text` are never touched, here or anywhere after."""
-    if not bundle:
+def _messages(counts: list[ChannelCount], groups: int) -> MessageStats:
+    """The family's message statistics from its members' channel counts."""
+    if not counts and not groups:
         return NO_MESSAGES
-    timestamps: list[str] = []
+    first: list[str] = []
+    last: list[str] = []
+    from_me: int = 0
+    from_them: int = 0
     channels: list[str] = []
-    from_me = from_them = 0
-    for message in bundle.get("messages") or []:
-        at = str(message.get("at") or "")
-        if at:
-            timestamps.append(at)
-        channel = str(message.get("channel") or "")
-        if channel and channel not in channels:
-            channels.append(channel)
-        direction = str(message.get("direction") or "")
-        if direction == "from_me":
-            from_me += 1
-        elif direction == "from_them":
-            from_them += 1
-    return MessageStats(
-        first_at=min(timestamps) if timestamps else None,
-        last_at=max(timestamps) if timestamps else None,
-        from_me=from_me,
-        from_them=from_them,
-        group_count=len(bundle.get("groups") or []),
-        channels=tuple(channels),
-    )
+    for count in counts:
+        if count.first_at:
+            first.append(count.first_at)
+        if count.last_at:
+            last.append(count.last_at)
+        if count.direction == FROM_ME:
+            from_me += count.messages
+        else:
+            from_them += count.messages
+        if count.channel not in channels:
+            channels.append(count.channel)
+    return MessageStats(first_at=min(first) if first else None, last_at=max(last) if last else None,
+                        from_me=from_me, from_them=from_them, group_count=groups, channels=tuple(sorted(channels)))
 
 
 class ShareEvidence:
-    """The roster joined to the canonical store, parsed once at the boundary."""
+    """The families joined to the store, parsed once at the boundary."""
 
-    def __init__(self, db: Db) -> None:
-        self.db = db
+    def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
+        self.conn = conn
+        self.data_root = data_root
 
     def load(self) -> list[PersonEvidence]:
-        parent_of_person = {row.person_id: row.parent_id for row in queries.people(self.db)}
-        parents = {row.parent_id: row for row in queries.parents(self.db)}
-        parent_facts = {row.parent_id: row for row in sorted(
-            queries.facts(self.db, parent_owned=True), key=lambda row: row.artifact_key.startswith("parent-facts:"),
-        )}
-        dossiers = self._artifacts(ArtifactKind.DOSSIER.value, lambda payload: str(payload.get("body") or ""))
-        bundles = self._artifacts(ArtifactKind.SOURCE_BUNDLE.value, lambda payload: payload)
-        children: dict[str, list[str]] = {}
-        for person_id, parent_id in parent_of_person.items():
-            children.setdefault(parent_id, []).append(person_id)
-
-        groups: dict[str, list[ImportedPerson]] = {}
-        for imported in stored_imported_people(self.db):
-            groups.setdefault(parent_of_person[imported.person_id], []).append(imported)
+        rows, _counts = Realize(self.conn, self.data_root).build()
+        members: dict[str, list[MemberFacts]] = {}
+        for member in queries_worth.members_with_facts(self.conn):
+            members.setdefault(member.family_key, []).append(member)
+        worth: dict[str, sqlite3.Row] = {}
+        for row in self.conn.execute("SELECT parent_id, worth, decided_by, labels_json FROM current_worth"):
+            worth[row["parent_id"]] = row
+        counts: queries_worth.BundleCounts = queries_worth.bundle_counts(self.conn)
+        by_candidate: dict[str, list[ChannelCount]] = {}
+        for count in counts.channels:
+            by_candidate.setdefault(count.candidate_id, []).append(count)
 
         people: list[PersonEvidence] = []
-        for parent_id, imported in groups.items():
-            person_id = imported[0].person_id
-            merged = merge_group(person_id, [person.index_row.model_copy(update={
-                "source_channels": ",".join(person.source_channels),
-            }) for person in imported])
-            channels = tuple(filter(None, merged["source_channels"].split(",")))
-            aliases = tuple(dict.fromkeys(
-                key for key in (*json.loads(merged["superseded_person_ids"] or "[]"), *children[parent_id])
-                if key != person_id and parent_of_person.get(key, parent_id) == parent_id
-            ))
-            facts = _facts_payload(parent_facts.get(parent_id))
-            people.append(
-                PersonEvidence(
-                    person_id=person_id,
-                    public_identifier=merged["public_identifier"] or None,
-                    full_name=parents[parent_id].display_name or merged["full_name"],
-                    source_channels=channels,
-                    interaction_counts=parse_interaction_counts(merged["interaction_counts"]),
-                    last_interaction=merged["last_interaction"] or None,
-                    superseded_person_ids=aliases,
-                    network_worth=self._worth(parents[parent_id], facts, channels),
-                    dossier=dossiers.get(parent_id) or None,
-                    facts=facts,
-                    shared_overlaps=_overlaps(facts),
-                    messages=_messages(bundles.get(parent_id)),
-                )
-            )
-        return people
-
-    def _artifacts(self, kind: str, extract: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
-        """Map parent_id -> extracted payload, preferring the parent's own artifact."""
-        index: dict[str, Any] = {}
-        rows = sorted(queries.artifacts(self.db, kind=kind, status="projected"),
-                      key=lambda row: (row.person_id is None, row.projected_at or "", row.artifact_key.startswith("dossier:")))
         for row in rows:
-            value = extract(parse_json_object(row.payload_json))
-            if value in (None, "", [], {}):
-                continue
-            index[row.parent_id] = value
-        return index
-
-    def _worth(
-        self, parent: ParentSnapshotRow | None, facts: dict[str, Any] | None, source_channels: tuple[str, ...],
-    ) -> str:
-        """Saved judgments win; unjudged LinkedIn imports default yes, others maybe."""
-        if parent is not None and parent.human_worth:
-            return parent.human_worth
-        if parent is not None and parent.machine_worth:
-            return parent.machine_worth
-        default = MachineWorth.YES if "linkedin_csv" in source_channels else MachineWorth.MAYBE
-        return str((facts or {}).get("network_worth", {}).get("decision") or default.value)
-
-
-def _facts_payload(row: FactRow | None) -> dict[str, Any] | None:
-    return parse_json_object(row.facts_json) if row is not None else None
+            parent_id: str = row["id"]
+            family: list[MemberFacts] = members[parent_id]
+            facts: dict[str, Any] = family_facts(family).to_payload()
+            channel_counts: list[ChannelCount] = []
+            groups: int = 0
+            for member in family:
+                channel_counts.extend(by_candidate.get(member.candidate_id, []))
+                groups += counts.groups.get(member.candidate_id, 0)
+            decided = worth[parent_id]
+            labels: dict[str, Any] | None = json.loads(decided["labels_json"]) if decided["labels_json"] else None
+            overlaps: set[str] = set()
+            for item in facts["shared_context"]:
+                overlaps.add(item["overlap"])
+            people.append(PersonEvidence(
+                person_id=parent_id,
+                candidate_ids=tuple(member.candidate_id for member in family),
+                public_identifier=row["public_identifier"],
+                full_name=row["full_name"],
+                source_channels=tuple(channel for channel in row["source_channels"].split(",") if channel),
+                interaction_counts=parse_interaction_counts(row["interaction_counts"]),
+                last_interaction=row["last_interaction"] or None,
+                network_worth=decided["worth"],
+                worth_labels=labels,
+                facts=facts,
+                shared_overlaps=frozenset(overlaps),
+                messages=_messages(channel_counts, groups),
+            ))
+        return people

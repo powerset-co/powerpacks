@@ -501,8 +501,8 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("messages_stage_merge", report["edges"]["messages_import"])
 
     def test_the_deep_context_stage_is_registered(self) -> None:
-        # Only file-to-file stages remain registered, plus the share node. Review,
-        # enrichment, and realization workers read/write SQLite explicitly.
+        # Only file-to-file stages remain registered. Review, enrichment, realization and
+        # share read/write SQLite explicitly (share is a deep-context v2 node, not a file node).
         names = set(check_graph(self._declared_nodes())["nodes"])
         self.assertLessEqual(
             {
@@ -514,11 +514,10 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 "deep_cluster",
                 "deep_parents",
                 "deep_seed",
-                "share",
             },
             names,
         )
-        self.assertEqual(len(names), 22)
+        self.assertEqual(len(names), 21)
 
     def test_review_csv_has_no_runtime_writer(self) -> None:
         # Runtime worth and identity decisions live in SQLite. review.csv is

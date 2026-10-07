@@ -38,6 +38,7 @@ stored and spends nothing on what is done.
 | 08 Review | `review/server.py` | the views | `candidate_linkedins`, `candidate_parent`, `worth` (human rows) | RapidAPI on a pasted URL |
 | 09 Realize | `realize/realize.py` | the views, the profile cache | `network-import/merged/people.csv` | — |
 | Index | `packs/indexing/.../index_contacts_pipeline.py` | `people.csv` | `search-index/` | OpenAI |
+| Share | `packs/ingestion/primitives/share/share_list.py` | the views, `current_worth` labels, `facts`, `bundles` | `person_labels`, `share` (tags are the page's) | — |
 
 Block 04 is empty by design: a candidate holds one identifier, so the pairs v1's slam dunk
 caught are joined at import.
@@ -56,7 +57,6 @@ Message bodies go to OpenAI for synthesis. Facts (never messages) go to JEV for 
 identity, to Parallel for research, and to OpenAI for the LinkedIn judge. LinkedIn public
 identifiers go to RapidAPI for profiles. Nothing is uploaded anywhere else by this pipeline.
 
-## Not in v2 yet
+## Not in v2
 
-The share list and the People page (`packs/ingestion/primitives/share/`) still read the v1
-store. Re-research from a description on the review page is refused; a pasted URL is applied.
+Re-research from a description on the review page is refused; a pasted URL is applied.

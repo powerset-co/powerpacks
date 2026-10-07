@@ -31,7 +31,7 @@ from packs.indexing.primitives.upload_powerset.models import (
     UploadPlan,
 )
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
-from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow
+from packs.ingestion.primitives.share.models import ShareDecisionRow
 from packs.ingestion.schemas.share_schema import HUMAN_PRIVATE, HUMAN_SHARE, SHARE_YES
 
 

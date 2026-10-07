@@ -9,7 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow
+from packs.ingestion.primitives.share.models import ShareDecisionRow
 
 
 class Stage(StrEnum):

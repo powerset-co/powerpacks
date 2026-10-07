@@ -1,45 +1,37 @@
-"""The share UI's read boundary: one typed row per parent, joined once.
+"""The People page's read boundary: one typed row per family, joined once from the v2 store.
 
-Flow: the roster (people.csv through `imported_people`, the one roster reader)
-+ the canonical store (`share`, `person_labels`, `person_tags`, `people`,
-`parents`, `facts`) -> `SharePerson` rows -> one JSON payload for the page.
-`person_detail(id)` adds what only the drawer shows: the dossier, every label
-cell, the worth note, the contact identifiers.
+Flow: realize's export rows (one per family: name, profile fields, channels, counts) + the store's
+`current_share`, `person_labels`, `current_tags`, `current_worth` and the members' facts ->
+`SharePerson` rows -> one JSON payload for the page. `detail(id)` adds what only the drawer
+shows: the dossier (the review card's fragment), every label cell, the worth reason, the contact
+identifiers.
 
-The page filters client-side, so the list row carries only what a facet or a
-column reads; the 27 probabilities and the dossier stay per-person.
+The page filters client-side, so the list row carries only what a facet or a column reads; the
+27 probabilities and the dossier stay per-person.
 
 Changelog:
+  2026-10-07: v2. A row is a family on its parent id; the roster is realize's rows.
   2026-09-26: created.
 """
-
 from __future__ import annotations
 
-from dataclasses import asdict, astuple, dataclass, fields, replace
+import sqlite3
+from dataclasses import asdict, astuple, dataclass, fields
+from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.db import queries, share_views
-from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactKind,
-    ParentSnapshotRow,
-    PersonTagRow,
-    ShareDecisionRow,
-)
-from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
-    ImportedPerson,
-    stored_imported_people,
-)
-from packs.ingestion.primitives.deep_context.review.dossier_html import markdown_to_html
+from packs.ingestion.primitives.deep_context_v2.db import queries_share, queries_worth
+from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Share, Tags
+from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
+from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+from packs.ingestion.primitives.deep_context_v2.review import payloads
+from packs.ingestion.primitives.deep_context_v2.review.queue import load_card
+from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags
-from packs.ingestion.schemas.share_schema import SHARE_CONFIRM, SHARE_NO, SHARE_YES
-from packs.ingestion.schemas.people_schema import merge_interaction_counts
-
-WORTH_HUMAN = "human"
-WORTH_MACHINE = "machine"
+from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
 # A people.csv channel name -> the channel the page shows (one icon per family).
 CHANNEL_FAMILIES = {
@@ -55,8 +47,7 @@ CHANNEL_FAMILIES = {
 
 @dataclass(frozen=True)
 class SharePerson:
-    """One list row per parent: the roster cells of the people merged under it,
-    the decision and the label cells a facet reads."""
+    """One list row per family: the export cells, the decision and the label cells a facet reads."""
 
     parent_id: str
     public_identifier: str
@@ -96,32 +87,30 @@ class SharePerson:
 
 @dataclass(frozen=True)
 class ShareCounts:
-    total: int
-    upload: int
+    people: int
     confirm: int
-    private: int
+    yes: int
+    no: int
 
     @classmethod
     def of(cls, rows: tuple[SharePerson, ...]) -> "ShareCounts":
         return cls(
-            total=len(rows),
-            upload=sum(row.share == SHARE_YES for row in rows),
-            confirm=sum(row.share == SHARE_CONFIRM for row in rows),
-            private=sum(row.share == SHARE_NO for row in rows),
+            people=len(rows),
+            confirm=sum(row.share == "confirm" for row in rows),
+            yes=sum(row.share == "yes" for row in rows),
+            no=sum(row.share == "no" for row in rows),
         )
 
 
 @dataclass(frozen=True)
 class FactEvent:
-    """One dated line of the relationship, from the dossier's notable events."""
-
     date: str
     summary: str
 
 
 @dataclass(frozen=True)
 class PersonDetail:
-    """What only the drawer shows for one parent."""
+    """What the drawer shows beyond the list row."""
 
     parent_id: str
     linkedin_url: str
@@ -146,224 +135,168 @@ class PersonDetail:
 
 
 def _events(facts: dict[str, Any]) -> tuple[FactEvent, ...]:
-    """The notable events, most recent first; dates are ISO prefixes, so text order is time order."""
-    events = (FactEvent(date=str(row.get("date") or ""), summary=str(row.get("summary") or ""))
-              for row in facts.get("notable_events") or [] if isinstance(row, dict))
-    return tuple(sorted((event for event in events if event.summary), key=lambda event: event.date, reverse=True))
+    return tuple(FactEvent(str(row.get("date") or ""), str(row.get("summary") or ""))
+                 for row in facts.get("notable_events") or [] if isinstance(row, dict))
 
 
 def _shared_context(facts: dict[str, Any]) -> tuple[str, ...]:
-    return tuple(f"{row.get('overlap')}: {row.get('detail')}" if row.get("overlap") else str(row.get("detail"))
-                 for row in facts.get("shared_context") or [] if isinstance(row, dict) and row.get("detail"))
+    return tuple(str(row.get("detail") or "") for row in facts.get("shared_context") or []
+                 if isinstance(row, dict) and row.get("detail"))
 
 
 def _families(channels: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(CHANNEL_FAMILIES.get(channel, channel) for channel in channels))
+    return tuple(dict.fromkeys(CHANNEL_FAMILIES.get(channel, channel) for channel in channels if channel))
 
 
 def _facts_title(facts: dict[str, Any]) -> tuple[str, str]:
-    title = str(facts.get("title") or "")
+    """The dossier's title and employer when the profile has none: the current employer first."""
     employers = [row for row in facts.get("employers") or [] if isinstance(row, dict)]
-    current = next((row for row in employers if str(row.get("status") or "") == "current"), None)
-    company = str((current or (employers[0] if employers else {})).get("name") or "")
-    return title, company
+    current = next((row for row in employers if row.get("status") == "current"), employers[0] if employers else {})
+    return str(facts.get("title") or current.get("role") or ""), str(current.get("name") or "")
 
 
 class SharePeople:
-    """The roster joined to the store. Construct once; `load()` re-reads the
-    store (it changes as the human tags), the roster is read on first use."""
+    """The families joined to the store. Construct once; `load()` re-reads the store (it changes as the
+    human tags); the export rows are rebuilt when the store file changes."""
 
-    def __init__(self, db: Db) -> None:
-        self._families: dict[str, tuple[ImportedPerson, ...]] = {}
-        self._families_stamp = 0
-        self.db = db
+    def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
+        self.conn = conn
+        self.data_root = data_root
+        self._rows: dict[str, dict[str, str]] = {}
+        self._stamp = 0
 
-    @property
-    def roster(self) -> dict[str, ImportedPerson]:
-        return {row.person_id: row for row in stored_imported_people(self.db)}
+    def export_rows(self) -> dict[str, dict[str, str]]:
+        """parent_id -> its export row, rebuilt when the store changed."""
+        stamp = self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime()
+        if stamp != self._stamp:
+            rows, _counts = Realize(self.conn, self.data_root).build()
+            self._rows = {row["id"]: row for row in rows}
+            self._stamp = stamp
+        return self._rows
 
-    def families(self) -> dict[str, tuple[ImportedPerson, ...]]:
-        """The roster people the list decides on, grouped under the store's parent:
-        one row per parent, however many emails and phones the roster kept."""
-        stamp = self.db.db_path.stat().st_mtime_ns
-        if self._families_stamp != stamp:
-            decided = {row.person_id for row in share_views.share_decisions(self.db)}
-            parent_of_person = {row.person_id: row.parent_id for row in queries.people(self.db)}
-            decided_parents = {parent_of_person[person_id] for person_id in decided}
-            families: dict[str, list[ImportedPerson]] = {}
-            for imported in self.roster.values():
-                key = parent_of_person[imported.person_id]
-                if key not in decided_parents:
-                    continue
-                families.setdefault(key, []).append(replace(imported, superseded_person_ids=tuple(
-                    old for old in imported.superseded_person_ids if parent_of_person.get(old, key) == key)))
-            self._families = {parent_id: tuple(members) for parent_id, members in families.items()}
-            self._families_stamp = stamp
-        return self._families
+    def _store_mtime(self) -> int:
+        path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        return Path(path).stat().st_mtime_ns if path else 0
+
+    def _facts(self) -> dict[str, dict[str, Any]]:
+        members: dict[str, list[MemberFacts]] = {}
+        for member in queries_worth.members_with_facts(self.conn):
+            members.setdefault(member.family_key, []).append(member)
+        return {parent_id: family_facts(family).to_payload() for parent_id, family in members.items()}
 
     def load(self) -> tuple[SharePerson, ...]:
-        families = self.families()
-        if not families:
+        decisions: dict[str, Share] = {row.parent_id: row for row in queries_share.current_share(self.conn)}
+        if not decisions:
             return ()
-        decisions = {row.person_id: row for row in share_views.share_decisions(self.db)}
-        labels = {row.person_id: row for row in share_views.person_labels(self.db)}
-        tags = {row.person_id: row for row in share_views.person_tags(self.db)}
-        parents = {row.parent_id: row for row in queries.parents(self.db)}
-        fact_rows = {row.parent_id: row for row in sorted(
-            queries.facts(self.db, parent_owned=True), key=lambda row: row.artifact_key.startswith("parent-facts:"))}
-        facts = {parent_id: parse_json_object(row.facts_json) for parent_id, row in fact_rows.items()}
-        rows = []
-        for parent_id, members in families.items():
-            ordered = _by_weight(members)
-            primary = ordered[0]
-            # The node writes person_labels and share together: a decision always has its label row.
-            decided_by = _decided_by(ordered, decisions)
-            decision = decisions[decided_by.person_id]
-            held = _held((decided_by, *ordered), tags)
-            label = labels[decided_by.person_id]
-            jev = parse_json_object(label.labels_json)
-            parent = parents.get(parent_id)
-            fact = facts.get(parent_id, {})
+        rows = self.export_rows()
+        labels: dict[str, Labels] = queries_share.labels_by_candidate(self.conn)
+        tags: dict[str, Tags] = queries_share.current_tags(self.conn)
+        worth: dict[str, sqlite3.Row] = {}
+        for row in self.conn.execute("SELECT parent_id, worth, decided_by FROM current_worth"):
+            worth[row["parent_id"]] = row
+        facts = self._facts()
+        people: list[SharePerson] = []
+        for parent_id, decision in decisions.items():
+            row = rows[parent_id]
+            label = labels[decision.candidate_id]
+            cells = parse_json_object(label.labels_json)
+            fact = facts[parent_id]
             fact_title, fact_company = _facts_title(fact)
-            rows.append(SharePerson(
+            held = tags.get(parent_id)
+            people.append(SharePerson(
                 parent_id=parent_id,
-                public_identifier=_first(member.public_identifier for member in ordered),
-                name=_name(fact, parent, primary),
-                has_avatar=any(member.avatar_url for member in members),
-                title=_first(member.title for member in ordered) or fact_title,
-                company=_first(member.company for member in ordered) or fact_company,
-                location=_first(member.location for member in ordered) or str(fact.get("location") or ""),
-                channels=_families(tuple(channel for member in ordered for channel in member.source_channels)),
-                interactions=sum(merge_interaction_counts(*(member.interaction_counts for member in members)).values()),
-                last_interaction=max((member.last_interaction for member in members), default=""),
-                recency_days=jev.get("recency_days"),
-                cadence=str(jev.get("cadence") or ""),
-                direction=str(jev.get("direction") or ""),
-                worth=str(label.worth or ""),
-                worth_source=_worth_source(parent, fact),
-                relationship_kind=str(jev.get("relationship_kind") or ""),
-                mode=str(jev.get("mode") or ""),
-                hierarchy=str(jev.get("hierarchy") or ""),
-                intro_source=str(jev.get("intro_source") or ""),
-                seniority=str(jev.get("seniority") or ""),
-                function=str(jev.get("function") or ""),
-                warmth=jev.get("warmth"),
-                labels=tuple(name for name in NOUL_LABELS if float(jev.get(name, 0.0)) >= ACTIVE_P),
-                flag=str(label.flag or ""),
+                public_identifier=row["public_identifier"],
+                name=str(fact.get("canonical_name") or "") or row["full_name"],
+                has_avatar=bool(row["profile_picture_url"]),
+                title=row["current_title"] or fact_title,
+                company=row["current_company"] or fact_company,
+                location=row["location_raw"] or str(fact.get("location") or ""),
+                channels=_families(tuple(row["source_channels"].split(","))),
+                interactions=sum(parse_interaction_counts(row["interaction_counts"]).values()),
+                last_interaction=row["last_interaction"],
+                recency_days=cells.get("recency_days"),
+                cadence=str(cells.get("cadence") or ""),
+                direction=str(cells.get("direction") or ""),
+                worth=label.worth,
+                worth_source=worth[parent_id]["decided_by"],
+                relationship_kind=str(cells.get("relationship_kind") or ""),
+                mode=str(cells.get("mode") or ""),
+                hierarchy=str(cells.get("hierarchy") or ""),
+                intro_source=str(cells.get("intro_source") or ""),
+                seniority=str(cells.get("seniority") or ""),
+                function=str(cells.get("function") or ""),
+                warmth=cells.get("warmth"),
+                labels=tuple(name for name in NOUL_LABELS if float(cells.get(name, 0.0)) >= ACTIVE_P),
+                flag=label.flag,
                 share=decision.share,
                 reason=decision.reason,
                 share_source=decision.source,
                 tags=tuple(sorted(split_tags(held.tags))) if held else (),
-                is_owner=bool(jev.get("is_owner")),
-                linkedin_only=bool(jev.get("linkedin_only")),
-                group_chat_only=bool(jev.get("group_chat_only")),
-                shared_employer=bool(jev.get("shared_employer")),
-                shared_school=bool(jev.get("shared_school")),
-                confidence=fact_rows[parent_id].confidence if parent_id in fact_rows else None,
+                is_owner=bool(cells.get("is_owner")),
+                linkedin_only=bool(cells.get("linkedin_only")),
+                group_chat_only=bool(cells.get("group_chat_only")),
+                shared_employer=bool(cells.get("shared_employer")),
+                shared_school=bool(cells.get("shared_school")),
+                confidence=None,
             ))
-        return tuple(rows)
+        return tuple(people)
 
     def avatar_url(self, parent_id: str) -> str:
-        return _first(member.avatar_url for member in _by_weight(self.families().get(parent_id, ())))
+        row = self.export_rows().get(parent_id)
+        return row["profile_picture_url"] if row else ""
 
     def detail(self, parent_id: str) -> PersonDetail | None:
-        members = self.families().get(parent_id)
-        if not members:
+        row = self.export_rows().get(parent_id)
+        if row is None:
             return None
-        ordered = _by_weight(members)
-        primary = ordered[0]
-        linked = next((member for member in ordered if member.linkedin_url), primary)
-        parent = next(iter(queries.parents(self.db, parent_id=parent_id)), None)
-        fact_rows = sorted(queries.facts(self.db, parent_id=parent_id, parent_owned=True),
-                           key=lambda row: row.artifact_key.startswith("parent-facts:"))
-        facts = parse_json_object(fact_rows[-1].facts_json) if fact_rows else {}
-        decisions = {row.person_id: row for row in share_views.share_decisions(self.db)}
-        decided_by = _decided_by(ordered, decisions)
-        label = next(row for row in share_views.person_labels(self.db) if row.person_id == decided_by.person_id)
+        card = load_card(self.conn, self.data_root, parent_id)
+        facts = card.facts.to_payload()
+        decision = next(share for share in queries_share.current_share(self.conn) if share.parent_id == parent_id)
+        label = queries_share.labels_by_candidate(self.conn)[decision.candidate_id]
         cells = parse_json_object(label.labels_json)
-        tags = {row.person_id: row for row in share_views.person_tags(self.db)}
-        held = _held((decided_by, *ordered), tags)
-        dossier = ""
-        for artifact in sorted(queries.artifacts(self.db, kind=ArtifactKind.DOSSIER.value,
-                                                parent_id=parent_id, status="projected"),
-                               key=lambda row: (row.person_id is None, row.projected_at or "",
-                                                row.artifact_key.startswith("dossier:"))):
-            body = str(parse_json_object(artifact.payload_json).get("body") or "")
-            if body:
-                dossier = body
-        name = _name(facts, parent, primary)
-        known_as = (*(member.display_name for member in ordered), *(str(alias) for alias in facts.get("aliases") or []))
+        held = queries_share.current_tags(self.conn).get(parent_id)
+        worth = self.conn.execute("SELECT reason FROM current_worth WHERE parent_id = ?", (parent_id,)).fetchone()
+        name = str(facts.get("canonical_name") or "") or row["full_name"]
+        known_as = (*(member.display_name for member in card.members), *(str(alias) for alias in facts.get("aliases") or []))
+        emails: list[str] = []
+        phones: list[str] = []
+        for identifier in card.identifiers:
+            (emails if identifier.kind == "email" else phones).append(identifier.display_value)
         return PersonDetail(
             parent_id=parent_id,
-            linkedin_url=linked.linkedin_url,
-            headline=linked.headline or primary.headline,
-            avatar_url=_first(member.avatar_url for member in ordered),
-            worth_reason=str((parent.machine_worth_reason if parent else None)
-                             or (facts.get("network_worth") or {}).get("reason") or ""),
-            note=str((held.note if held else None) or ""),
-            dossier_html=markdown_to_html(dossier) if dossier else "",
+            linkedin_url=row["linkedin_url"],
+            headline=row["headline"],
+            avatar_url=row["profile_picture_url"],
+            worth_reason=str(worth["reason"] if worth else ""),
+            note=held.note if held else "",
+            dossier_html=payloads.dossier(card),
             probabilities={name: float(cells[name]) for name in NOUL_LABELS if name in cells},
             choice_p={name: float(cells[f"{name}_p"]) for name in CHOICE_LABELS if f"{name}_p" in cells},
-            worth_note=str((parent.human_worth_note if parent else None) or ""),
+            worth_note="",
             relationship_to_owner=str(facts.get("relationship_to_owner") or ""),
             events=_events(facts),
             shared_context=_shared_context(facts),
             topics=tuple(str(topic) for topic in facts.get("topics") or []),
             employers=tuple(
-                " · ".join(part for part in (str(row.get("role") or ""), str(row.get("name") or "")) if part)
-                for row in facts.get("employers") or [] if isinstance(row, dict)),
+                " · ".join(part for part in (str(item.get("role") or ""), str(item.get("name") or "")) if part)
+                for item in facts.get("employers") or [] if isinstance(item, dict)),
             school=str(facts.get("school") or ""),
-            location=_first(member.location for member in ordered) or str(facts.get("location") or ""),
+            location=row["location_raw"] or str(facts.get("location") or ""),
             aliases=tuple(dict.fromkeys(alias for alias in known_as if alias and alias != name)),
-            emails=tuple(dict.fromkeys(email for member in ordered for email in member.emails)),
-            phones=tuple(dict.fromkeys(phone for member in ordered for phone in member.phones)),
+            emails=tuple(dict.fromkeys(emails)),
+            phones=tuple(dict.fromkeys(phones)),
         )
-
-
-def _by_weight(members: tuple[ImportedPerson, ...]) -> tuple[ImportedPerson, ...]:
-    """The people under one parent, the one with the most to say first."""
-    return tuple(sorted(members, key=lambda member: (
-        -sum(member.interaction_counts.values()), not member.linkedin_url, member.person_id)))
-
-
-def _decided_by(ordered: tuple[ImportedPerson, ...], decisions: dict[str, ShareDecisionRow]) -> ImportedPerson:
-    """A saved human decision wins over other members' machine decisions."""
-    decided = tuple(member for member in ordered if member.person_id in decisions)
-    return next((member for member in decided if decisions[member.person_id].source == "human"), decided[0])
-
-
-def _held(members: tuple[ImportedPerson, ...], tags: dict[str, PersonTagRow]) -> PersonTagRow | None:
-    return next((tags[key] for member in members for key in (member.person_id, *member.superseded_person_ids)
-                 if key in tags), None)
-
-
-def _name(facts: dict[str, Any], parent: ParentSnapshotRow | None, primary: ImportedPerson) -> str:
-    """The dossier's canonical name, else the parent's, else the roster's."""
-    return str(facts.get("canonical_name") or "") or str((parent.display_name if parent else None) or "") \
-        or primary.display_name
-
-
-def _first(values: Any) -> str:
-    return next((value for value in values if value), "")
-
-def _worth_source(parent: ParentSnapshotRow | None, facts: dict[str, Any]) -> str:
-    """Who decided the effective worth: the human, else the model (on the parent or its fact)."""
-    if parent is not None and parent.human_worth:
-        return WORTH_HUMAN
-    if (parent is not None and parent.machine_worth) or (facts.get("network_worth") or {}).get("decision"):
-        return WORTH_MACHINE
-    return ""
 
 
 PEOPLE_COLUMNS = tuple(field.name for field in fields(SharePerson))
 
 
 def people_payload(rows: tuple[SharePerson, ...]) -> dict[str, Any]:
-    """The page's one payload: the header counts, the column names once, one
-    array per person. Columnar because 28k rows of repeated keys is 22 MB;
-    the same rows as arrays are under 9 MB and parse in well under a second."""
+    """The page's one payload: the header counts, the column names once, one array per person.
+    Columnar because 28k rows of repeated keys is 22 MB; the same rows as arrays are under 9 MB."""
     return {
         "counts": asdict(ShareCounts.of(rows)),
         "columns": list(PEOPLE_COLUMNS),
         "rows": [list(astuple(row)) for row in rows],
     }
+

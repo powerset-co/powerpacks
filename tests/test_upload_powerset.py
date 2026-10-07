@@ -28,8 +28,9 @@ from packs.indexing.primitives.upload_powerset.models import (
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
-from packs.ingestion.primitives.deep_context.db.models import ShareDecisionRow
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context_v2.db import queries, queries_share
+from packs.ingestion.primitives.deep_context_v2.db.store import open_store
+from packs.ingestion.primitives.share.models import ShareDecisionRow
 from packs.indexing.primitives.upload_powerset.manifest import UploadManifest
 from packs.ingestion.schemas.share_schema import (
     FAMILY,
@@ -40,7 +41,6 @@ from packs.ingestion.schemas.share_schema import (
     SHARE_YES,
     WORTH_NO,
 )
-from deep_context_sqlite_test_helpers import seed_identity
 
 OPERATOR = "00000000-0000-0000-0000-0000000000aa"
 OTHER_OPERATOR = "00000000-0000-0000-0000-0000000000bb"
@@ -72,19 +72,18 @@ def share_row(person_id: str, slug: str, *, share: str = SHARE_YES, reason: str 
 
 
 def share_db(root: Path, rows: list[ShareDecisionRow]) -> Path:
-    """A canonical store whose `share` table carries `rows` (people rows satisfy the FK)."""
-    path = root / "deep-context.sqlite"
-    db = Db(path)
-    for index, person_id in enumerate(sorted({row.person_id for row in rows})):
-        seed_identity(
-            db,
-            parent_id=f"parent-{index}",
-            person_id=person_id,
-            row_key=f"row-{index}",
-            name=f"Person {index}",
-            machine_worth="yes",
-        )
-    db.replace_share_rows((), tuple(rows))
+    """A v2 store whose `share` table carries `rows`: one candidate per person, each its own parent."""
+    path = root / "deep-context-v2.sqlite"
+    conn = open_store(path)
+    now = "2026-09-24T00:00:00Z"
+    people = sorted({row.person_id for row in rows})
+    queries.upsert_candidates(conn, [(person_id, f"Person {index}", 0, "{}", now) for index, person_id in enumerate(people)])
+    conn.executemany("INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, ?, 'singleton', NULL, ?)",
+                     [(person_id, person_id, now) for person_id in people])
+    conn.commit()
+    queries_share.replace_share(conn, [], [(row.person_id, row.public_identifier or "", row.share, row.reason, row.labels,
+                                            row.source, row.updated_at) for row in rows])
+    conn.close()
     return path
 
 
@@ -651,7 +650,7 @@ class DryRunTests(unittest.TestCase):
                          mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
                          mock.patch.object(upload_powerset.tp_backend, "namespace_name",
                                            side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
-                         mock.patch.object(upload_powerset, "share_decisions", side_effect=[first, rows]), \
+                         mock.patch.object(upload_powerset, "read_share_rows", side_effect=[first, rows]), \
                          mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=plans), \
                          mock.patch.object(upload_powerset.UploadPowerset, "_apply") as apply, \
                          mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):

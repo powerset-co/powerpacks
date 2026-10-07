@@ -7,42 +7,34 @@ holds the user's data. Do not look in the chat's unrelated working directory.
 For an explicit hosted-network request, start with the contacts section below.
 Otherwise read the local dossier first. Local-only requests never use hosted data.
 
-## Read the saved dossiers
+## Read the saved facts
 
 For "tell me everything about Jordan Bravo", "find Jordan's dossier", or a
 name/email/phone lookup, start with the existing primitive:
 
 ```bash
-bin/deep-context lookup --name "Jordan Bravo" --json
+bin/deep-context-v2 lookup --name "Jordan Bravo" --json
 # Or use --email "jordan@example.com" / --phone "+14155550100".
 ```
 
-It resolves child names and identifiers to distinct parents. For one selected
-parent, `dossier_body` includes its saved parent and child dossier bodies from
-`.powerpacks/deep-context/deep-context.sqlite`, with identical bodies deduplicated.
-Read that returned text; a parent Markdown export may only point to a child.
-The current parent text comes first; saved context survives parent merges even
-when its artifact key still contains an earlier parent ID.
-No Markdown export or search index is required. Unresolved candidate dossiers
-are not the selected person's confirmed context.
+It resolves written names and identifiers to families (one per person the user has talked
+to) and prints each family's saved facts from
+`.powerpacks/deep-context/deep-context-v2.sqlite`: `relationship_to_owner`, employers, school,
+location, topics, notable events, the identifiers, and the one LinkedIn the store confirmed.
+No Markdown export or search index is required.
 
-- **One person:** summarize `dossier_body`. An empty body means the person was
-  found but has no saved parent or child dossier; present the available identity/profile
-  information and offer to check whether saved context is available to build one.
+- **One person:** summarize the facts. Lead with how the user knows them
+  (`relationship_to_owner`), then work and shared history.
 - **Several people:** show a numbered list with each person's name and a one-line
   summary of their relationship to the user from `relationship_to_owner`.
   Show how the user knows them (partner, friend, former teammate, shared history),
   rather than a LinkedIn title. Honor relationship corrections already given in chat.
-  If the returned relationship is vague or missing, read that parent's full saved
-  dossier with `bin/deep-context lookup --parent-id "<returned parent_id>" --json`
-  and use supported relationship/shared context. If it remains unknown, say so;
-  don't substitute a job title or infer closeness from professional identity.
   Add an identifying contact detail when needed and ask which person the user means.
-  Keep each person's facts separate; read the selected parent's full dossier to answer.
+  Keep each person's facts separate.
 - **No match:** try useful name parts, known aliases, or supplied identifiers
   before asking for help. If a plausible match appears, show its identifying
   details and ask "Did you mean this person?" Similar spelling is not identity.
-- **No local database:** this installation has no local dossiers. Continue to
+- **No local database:** this installation has no local facts. Continue to
   available profile/contact lookup below; do not start setup or import data.
 - **Unreadable database:** report the access/setup error; do not treat it as an
   empty database or replace it. Use `powerpacks-doctor` for an unclear setup error.
@@ -52,11 +44,10 @@ on the person or parent. Nicknames work when saved as a child's name; arbitrary
 typos are not automatically corrected.
 
 For another identifier or a name pattern, query the same SQLite store read-only
-with parameterized SQL. `parents` holds `parent_id` and `display_name`; `people`
-maps each `person_id` to its `parent_id`. `person_identifiers` holds `kind` and
-`normalized_value`; `imported_people.row_json` has saved profile fields such as
-`linkedin_url` and `twitter_handle`. Use `LIKE`, `GLOB`, or a registered regex
-to find plausible matches, then read a chosen parent with `lookup --parent-id`.
+with parameterized SQL. `candidates` holds `candidate_id` and `display_name`;
+`current_parent` maps each `candidate_id` to its `parent_id`; `candidate_identifiers`
+holds `kind` and `normalized_value`; `facts.facts_json` has the saved facts. Use `LIKE`
+or `GLOB` to find plausible matches, then read the chosen family with `lookup`.
 Inspect the stored fields rather than inventing columns. Similar text alone does
 not prove identity. Keep dossier reads in this store, without `index.json`,
 Markdown-folder scans, or the separate search index.
