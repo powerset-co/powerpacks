@@ -1,6 +1,7 @@
 """The operator's profile: read owner.json into the store, render it for prompts. No provider call.
 
-Emails and phones are normalized here, once, with the same normalizers the import uses for
+The file is written once by `deep_context_v2/owner.py` (the `owner` command) from the owner's own
+LinkedIn. Emails and phones are normalized here, once, with the same normalizers the import uses for
 candidate identifiers, so a caller compares values and never normalizes again.
 
 Created: 2026-10-06
