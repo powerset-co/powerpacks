@@ -42,7 +42,7 @@ from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     merge_jsonish_lists,
     union_alias_list,
 )
-from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match  # noqa: E402
+from packs.ingestion.primitives.common.names import source_names_can_match  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.source_people import original_source_people  # noqa: E402
 from packs.ingestion.schemas.candidates_schema import candidate_key_for  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402

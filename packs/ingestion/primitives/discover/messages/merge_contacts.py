@@ -44,7 +44,7 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     total_message_count,
 )
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
-from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import source_names_can_match  # noqa: E402
+from packs.ingestion.primitives.common.names import source_names_can_match  # noqa: E402
 from packs.ingestion.schemas.message_contacts import (  # noqa: E402
     CSV_HEADERS,
     GROUP_SEPARATOR,
