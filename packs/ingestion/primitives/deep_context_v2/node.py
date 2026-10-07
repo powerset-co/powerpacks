@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import ClassVar
 
+from packs.ingestion.primitives.deep_context_v2.db.schema import VIEW_TABLES
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 
 MANIFEST_RELATIVE_DIR = Path("deep-context") / "v2-manifests"
@@ -60,11 +61,14 @@ class Node(ABC):
         missing = [str(path) for path in self.required_files() if not path.exists()]
         if missing:
             return self._finish(started, "not_ready", {}, "missing inputs: " + ", ".join(missing))
-        # A write to a child table makes SQLite read the parent for the foreign-key check;
-        # those reads are part of the declared write, not an undeclared read.
-        self._fk_parents = {
-            row[2] for table in self.writes for row in self.conn.execute(f"PRAGMA foreign_key_list({table})")
-        }
+        # A write to a child table makes SQLite read the parent for the foreign-key check, and a
+        # declared view is read through its tables; both are part of the declaration.
+        self._implied_reads: set[str] = set()
+        for table in self.writes:
+            for row in self.conn.execute(f"PRAGMA foreign_key_list({table})"):
+                self._implied_reads.add(row[2])
+        for view in self.reads:
+            self._implied_reads.update(VIEW_TABLES.get(view, ()))
         self.conn.set_authorizer(self._authorizer)
         try:
             counts = self.execute()
@@ -82,7 +86,7 @@ class Node(ABC):
             return sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_READ:
             allowed = (table in self.reads or table in self.writes or table in _ALWAYS_READABLE
-                       or table in self._fk_parents)
+                       or table in self._implied_reads)
             return sqlite3.SQLITE_OK if allowed else sqlite3.SQLITE_DENY
         if action in _WRITE_ACTIONS:
             return sqlite3.SQLITE_OK if table in self.writes else sqlite3.SQLITE_DENY

@@ -145,7 +145,7 @@ def _unique(values: list[str]) -> tuple[str, ...]:
     kept: list[str] = []
     seen: set[str] = set()
     for value in values:
-        text = str(value).strip()
+        text = value.strip()
         if text and text.lower() not in seen:
             kept.append(text)
             seen.add(text.lower())
@@ -195,7 +195,7 @@ def _best_scalar(facts: list[SynthesizedFacts], field: str) -> str:
     """Highest batch confidence wins, then the longer string, then the lexicographically greater one."""
     best: tuple[float, int, str] | None = None
     for fact in facts:
-        value = str(getattr(fact, field)).strip()
+        value: str = getattr(fact, field).strip()
         if not value:
             continue
         candidate = (fact.confidence, len(value), value)
@@ -263,7 +263,7 @@ def collapse(facts: list[SynthesizedFacts]) -> SynthesizedFacts:
     identifiers: list[str] = []
     for fact in facts:
         for topic in fact.topics:
-            text = str(topic).strip()
+            text = topic.strip()
             if text:
                 topic_items.append((text, text))
         for event in fact.notable_events:
@@ -273,7 +273,7 @@ def collapse(facts: list[SynthesizedFacts]) -> SynthesizedFacts:
         for context in fact.shared_context:
             detail = context.detail.strip()
             if detail:
-                context_items.append((detail, SharedContextFact(context.overlap or "other", detail, context.evidence.strip())))
+                context_items.append((detail, SharedContextFact(context.overlap, detail, context.evidence.strip())))
         identifiers.extend(fact.identifiers)
     topics = []
     for _key, text in _collapse_near_duplicates(topic_items):

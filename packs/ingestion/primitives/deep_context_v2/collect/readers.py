@@ -32,7 +32,6 @@ CHAT_MESSAGE_CAP = 1600
 # Bounds characters, not messages: one heavy correspondent cannot make a bundle unbounded.
 SAFETY_CHAR_CAP = 1_800_000
 WACLI_DB_RELATIVE = Path("messages") / "wacli" / "wacli.db"
-MAX_GROUP_NAMES = 25
 MAX_THREADS = 25
 QueryResult = TypeVar("QueryResult")
 _READ_RETRIES = 3
@@ -189,7 +188,7 @@ class ContextSources:
                 name = (candidate or "").strip()
                 if name and name != (row["ci"] or "") and name not in names:
                     names.append(name)
-        return names[:MAX_GROUP_NAMES]
+        return names
 
     def _read_imessage_group_messages(self, person: Person) -> list[MessageEntry]:
         """Bodies from the candidate's small groups; each sender is the owner, the candidate, or another member."""
