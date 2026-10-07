@@ -31,7 +31,7 @@ from packs.shared.csv_io import CsvIO
 
 # v2 writes beside v1's merged/people.csv until cutover; the v1 install still hashes that file to
 # decide whether to re-index, so v2 must not overwrite it yet.
-PEOPLE_CSV_RELATIVE_PATH = Path("network-import") / "merged" / "people-v2.csv"
+PEOPLE_CSV_RELATIVE_PATH = Path("network-import") / "merged" / "people.csv"
 # The people columns a LinkedIn profile fills.
 PROFILE_COLUMNS: tuple[str, ...] = (
     "first_name", "last_name", "full_name", "headline", "summary", "city", "state", "country",
@@ -152,11 +152,11 @@ class Realize(Node):
         return rows, counts
 
     def people_csv(self) -> Path:
-        """Where the export is written: merged/people-v2.csv under the data root."""
+        """Where the export is written: merged/people.csv under the data root (the file the index builder reads)."""
         return self.data_root / PEOPLE_CSV_RELATIVE_PATH
 
     def execute(self) -> dict[str, int]:
-        """One row per parent with facts, written to people-v2.csv; the counts say what each row carried."""
+        """One row per parent with facts, written to people.csv, replaced whole each run; the counts say what each row carried."""
         rows, counts = self.build()
         CsvIO.write_dict_rows(self.people_csv(), PEOPLE_SCHEMA_COLUMNS, rows)
         return counts
