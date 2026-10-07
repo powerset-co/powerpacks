@@ -142,25 +142,28 @@ class ImportLoad(Node):
     writes = ("candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections", "owner")
 
     def required_files(self) -> tuple[Path, ...]:
-        return (
-            self.data_root / GMAIL_CSV,
-            self.data_root / MESSAGES_CSV,
-            self.data_root / CONNECTIONS_CSV,
-            self.data_root / OWNER_JSON,
-        )
+        # Only the owner is required. Each channel's importer writes its file only when that
+        # channel was linked, so a missing CSV means "this user has no such channel".
+        return (self.data_root / OWNER_JSON,)
 
     def execute(self) -> dict[str, int]:
         conn = self.conn
         now = now_iso()
         # Owner first: the candidate passes need its addresses and numbers for the owner flag.
         owner: OwnerProfile = load_owner(conn, self.data_root / OWNER_JSON)
-        # Two passes, one per file, one identifier kind each.
-        gmail: GmailImport = gmail_candidates(self.data_root / GMAIL_CSV, owner)
-        phones: list[Candidate] = phone_candidates(self.data_root / MESSAGES_CSV, owner)
+        # Two passes, one per linked channel file, one identifier kind each.
+        gmail = GmailImport([], 0)
+        if (self.data_root / GMAIL_CSV).exists():
+            gmail = gmail_candidates(self.data_root / GMAIL_CSV, owner)
+        phones: list[Candidate] = []
+        if (self.data_root / MESSAGES_CSV).exists():
+            phones = phone_candidates(self.data_root / MESSAGES_CSV, owner)
         candidates: list[Candidate] = gmail.candidates + phones
         write_candidates(conn, candidates, now)
         # The LinkedIn export is a lookup for later stages, not a source of candidates.
-        connections: int = write_connections(conn, self.data_root / CONNECTIONS_CSV, now)
+        connections: int = 0
+        if (self.data_root / CONNECTIONS_CSV).exists():
+            connections = write_connections(conn, self.data_root / CONNECTIONS_CSV, now)
 
         # The manifest counts come from what was just written, not from querying it back.
         counts: dict[str, int] = {
