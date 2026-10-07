@@ -1,9 +1,15 @@
-"""Step 5, settle: a family with no real profile and under 25 messages is worth no.
+"""Step 5, settle: an own LinkedIn connection is worth yes; any other family with no real profile and
+under 25 messages is worth no. Both rules are v1's (`enrich/settle_policy.py: worth_decision`).
 
-A real profile is a confirmed LinkedIn whose profile has a name and positions or a location, or a
-synthetic card a human accepted. Only a family whose current worth is a machine yes or maybe is
-settled: a human worth row wins in the view, so nothing is written when a member has one, and a family
-already at no needs no row. The row carries the family's worth key, so worth does not judge it again.
+An own connection is a family one of the owner's first-degree connections was proposed for and not
+judged wrong: the owner chose to connect with this person, so they are in until a human says no. A
+real profile is a confirmed LinkedIn whose profile has a name and positions or a location, or a
+synthetic card a human accepted. A human worth row wins in the view, so nothing is written when a
+member has one, and a family already at the settled worth needs no row. The row carries the family's
+worth key, so worth does not judge it again.
+
+Changelog:
+- 2026-10-07 (Arthur): the own-connection yes, dropped in the first port, restored.
 
 Created: 2026-10-07
 """
@@ -22,6 +28,7 @@ from packs.ingestion.primitives.deep_context_v2.worth import evidence
 
 MESSAGE_BAR = 25
 REASON = "settle: no profile, under 25 messages"
+OWN_CONNECTION_REASON = "settle: own LinkedIn connection"
 
 
 def confirmed_urls(families: list[Family]) -> list[str]:
@@ -49,18 +56,33 @@ def has_real_profile(family: Family, profiles: Profiles) -> bool:
     return False
 
 
+def own_connection(family: Family) -> bool:
+    """One of the owner's first-degree connections was proposed for this family and not judged wrong."""
+    for verdict in family.verdicts:
+        if verdict.origin == Origin.LINKEDIN_NETWORK and verdict.verdict != Verdict.WRONG_PERSON:
+            return True
+    return False
+
+
 def settle_rows(families: list[Family], profiles: Profiles, now: str) -> list[WorthRow]:
-    """One worth-no row per member for every family with no real profile and under 25 messages, keyed so worth does not judge it again."""
+    """One worth row per member for every family settle changes: yes for an own connection not already
+    at yes, no for any other family with no real profile and under 25 messages not already at no. Keyed
+    so worth does not judge it again."""
     rows: list[WorthRow] = []
     for family in families:
-        # Only a machine yes or maybe: a human row wins, and a no is already settled.
-        if family.worth.decided_by == DecidedBy.HUMAN or family.worth.worth == Worth.NO:
-            continue
-        if family.messages >= MESSAGE_BAR or has_real_profile(family, profiles):
-            continue
+        if family.worth.decided_by == DecidedBy.HUMAN:
+            continue  # a human row wins in the view
+        if own_connection(family):
+            if family.worth.worth == Worth.YES:
+                continue
+            settled, reason = Worth.YES.value, OWN_CONNECTION_REASON
+        else:
+            if family.worth.worth == Worth.NO or family.messages >= MESSAGE_BAR or has_real_profile(family, profiles):
+                continue
+            settled, reason = Worth.NO.value, REASON
         key: str = evidence.family_key(list(family.members))
         for candidate_id in family.candidates:
-            rows.append((candidate_id, Worth.NO.value, DecidedBy.MACHINE.value, REASON, "{}", key, now))
+            rows.append((candidate_id, settled, DecidedBy.MACHINE.value, reason, "{}", key, now))
     return rows
 
 
@@ -73,14 +95,15 @@ def main(argv: list[str] | None = None) -> int:
     families: list[Family] = load_families(conn)
     profiles: Profiles = load_profiles(args.data_root, confirmed_urls(families), fetch=False)
     rows: list[WorthRow] = settle_rows(families, profiles, "")
-    settled: set[str] = set()
+    settled: dict[str, str] = {}
     for row in rows:
-        settled.add(row[0])
-    families_settled: int = 0
+        settled[row[0]] = row[1]
+    counts: dict[str, int] = {"families_to_yes": 0, "families_to_no": 0, "worth_rows": len(rows)}
     for family in families:
-        if family.candidates[0] in settled:
-            families_settled += 1
-    print(json.dumps({"families_to_settle": families_settled, "worth_rows": len(rows)}, indent=2))
+        worth: str | None = settled.get(family.candidates[0])
+        if worth is not None:
+            counts["families_to_" + worth] += 1
+    print(json.dumps(counts, indent=2))
     return 0
 
 
