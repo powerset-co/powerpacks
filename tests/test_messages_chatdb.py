@@ -577,6 +577,7 @@ class ChatDbTests(unittest.TestCase):
                 (
                     "14155550101@s.whatsapp.net",
                     "4155550101@s.whatsapp.net",
+                    "14155550101@lid",
                 ),
             )
 
