@@ -7,7 +7,7 @@ A candidate with no messages gets no row. A rerun recollects every candidate.
 
 From v1:
 - deep_context.collection.context_sources: ContextSources, CHAT_MESSAGE_CAP, DEFAULT_WACLI_DB, gni.MsgvaultStore
-- deep_context.collection.models: CollectionBundle, MessageChannel
+- deep_context.collection.models: CollectionBundle
 - deep_context.shared.common: Person
 - common.paths: DEFAULT_MSGVAULT_DB
 - discover.messages.extract_imessage: DEFAULT_CHAT_DB
@@ -46,7 +46,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context.collection import context_sources
-from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageChannel
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.node import Node
@@ -61,11 +61,17 @@ def _people(conn: sqlite3.Connection, limit: int | None) -> list[Person]:
         "SELECT candidate_id, display_name FROM candidates WHERE is_owner = 0 ORDER BY candidate_id LIMIT ?",
         (-1 if limit is None else limit,),
     ).fetchall()
-    people = {row["candidate_id"]: Person(row["candidate_id"], row["display_name"]) for row in rows}
+    people: dict[str, Person] = {}
+    for row in rows:
+        people[row["candidate_id"]] = Person(row["candidate_id"], row["display_name"])
     for row in conn.execute("SELECT candidate_id, kind, normalized_value FROM candidate_identifiers ORDER BY 1, 2, 3"):
-        if row["candidate_id"] in people:
-            person = people[row["candidate_id"]]
-            (person.emails if row["kind"] == "email" else person.phones).append(row["normalized_value"])
+        if row["candidate_id"] not in people:
+            continue
+        person = people[row["candidate_id"]]
+        if row["kind"] == "email":
+            person.emails.append(row["normalized_value"])
+        else:
+            person.phones.append(row["normalized_value"])
     for row in conn.execute("SELECT candidate_id, source FROM candidate_sources ORDER BY 1, 2"):
         if row["candidate_id"] in people:
             people[row["candidate_id"]].source_channels.append(row["source"])
@@ -95,8 +101,16 @@ class Collect(Node):
             max_group_size=MAX_GROUP_SIZE,
         )
         sources.readiness(people=people)
-        counts = {"candidates": len(people), "bundles": 0, "no_messages": 0, "capped": 0}
-        counts |= {f"messages_{channel}": 0 for channel in MessageChannel}
+        counts = {
+            "candidates": len(people),
+            "bundles": 0,
+            "no_messages": 0,
+            "capped": 0,
+            "messages_gmail": 0,
+            "messages_imessage": 0,
+            "messages_imessage_group": 0,
+            "messages_whatsapp": 0,
+        }
         for person in people:
             messages, available = sources.collect_person(person)
             if not messages:
@@ -119,7 +133,7 @@ class Collect(Node):
             counts["bundles"] += 1
             counts["capped"] += bundle.capped
             for message in messages:
-                counts[f"messages_{message.channel}"] += 1
+                counts["messages_" + message.channel] += 1
         sources.close()
         return counts
 

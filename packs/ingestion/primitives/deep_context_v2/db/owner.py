@@ -1,5 +1,13 @@
 """The operator's profile: read owner.json into the store, render it for prompts. No provider call.
 
+Emails and phones are normalized here, once, with the same normalizers the import uses for
+candidate identifiers, so a caller compares values and never normalizes again.
+
+From v1: common/contact_fields.py: normalize_email, normalize_phone.
+
+Changelog:
+- 2026-10-06 (PR review): normalize emails and phones in the profile; shape guards removed.
+
 Created: 2026-10-06
 """
 from __future__ import annotations
@@ -10,6 +18,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 
 
@@ -48,30 +57,34 @@ def _text(value: object) -> str:
 
 
 def _strings(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise ValueError(f"expected a list, got {type(value).__name__}")
-    return tuple(_text(item) for item in value if _text(item))
+    items = []
+    for item in value or []:
+        if _text(item):
+            items.append(_text(item))
+    return tuple(items)
 
 
 def owner_from_payload(payload: dict[str, object]) -> OwnerProfile:
-    education = payload.get("education", [])
-    work = payload.get("work", [])
-    if not isinstance(education, list) or not isinstance(work, list):
-        raise ValueError("owner.json: education and work must be lists")
+    emails = []
+    for email in _strings(payload.get("emails")):
+        emails.append(normalize_email(email))
+    phones = []
+    for phone in _strings(payload.get("phones")):
+        phones.append(normalize_phone(phone))
+    education = []
+    for e in payload.get("education") or []:
+        education.append(OwnerEducation(_text(e.get("school")), _text(e.get("start")), _text(e.get("end")), _text(e.get("note"))))
+    work = []
+    for w in payload.get("work") or []:
+        work.append(OwnerWork(_text(w.get("company")), _text(w.get("title")), _text(w.get("start")), _text(w.get("end"))))
     return OwnerProfile(
         name=_text(payload.get("name")),
-        emails=_strings(payload.get("emails", [])),
-        phones=_strings(payload.get("phones", [])),
+        emails=tuple(emails),
+        phones=tuple(phones),
         linkedin_url=_text(payload.get("linkedin_url")),
-        education=tuple(
-            OwnerEducation(_text(e.get("school")), _text(e.get("start")), _text(e.get("end")), _text(e.get("note")))
-            for e in education
-        ),
-        work=tuple(
-            OwnerWork(_text(w.get("company")), _text(w.get("title")), _text(w.get("start")), _text(w.get("end")))
-            for w in work
-        ),
-        locations=_strings(payload.get("locations", [])),
+        education=tuple(education),
+        work=tuple(work),
+        locations=_strings(payload.get("locations")),
         notes=_text(payload.get("notes")),
     )
 
@@ -80,8 +93,6 @@ def load_owner(conn: sqlite3.Connection, owner_json: Path) -> OwnerProfile:
     """Project owner.json into the `owner` row. The file is the operator's own, written at setup."""
     raw = owner_json.read_bytes()
     payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ValueError(f"{owner_json} must contain a JSON object")
     owner = owner_from_payload(payload)
     conn.execute(
         "INSERT INTO owner (owner_key, payload_json, content_fingerprint, projected_at) VALUES ('owner', ?, ?, ?) "
@@ -94,8 +105,6 @@ def load_owner(conn: sqlite3.Connection, owner_json: Path) -> OwnerProfile:
 
 def read_owner(conn: sqlite3.Connection) -> OwnerProfile:
     row = conn.execute("SELECT payload_json FROM owner WHERE owner_key = 'owner'").fetchone()
-    if row is None:
-        raise LookupError("owner row missing: run the import block first")
     return owner_from_payload(json.loads(row["payload_json"]))
 
 

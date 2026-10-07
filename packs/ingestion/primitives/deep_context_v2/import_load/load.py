@@ -37,9 +37,13 @@ CONNECTIONS_CSV = IMPORT_DIR / "linkedin" / "people.csv"
 OWNER_JSON = Path("deep-context") / "owner.json"
 
 
-def _values(row: dict[str, str], primary: str, listed: str) -> tuple[str, ...]:
+def _values(row: dict[str, str], primary: str, listed: str) -> list[str]:
     """The row's primary value and its JSON-list column, as they appear in the CSV, once each."""
-    return tuple(dict.fromkeys(v for v in (row[primary], *json.loads(row[listed] or "[]")) if v))
+    values: list[str] = []
+    for value in [row[primary]] + json.loads(row[listed] or "[]"):
+        if value and value not in values:
+            values.append(value)
+    return values
 
 
 class ImportLoad(Node):
@@ -48,12 +52,14 @@ class ImportLoad(Node):
     writes = ("candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections", "owner")
 
     def required_files(self) -> tuple[Path, ...]:
-        return tuple(self.data_root / path for path in (*CANDIDATE_CSVS, CONNECTIONS_CSV, OWNER_JSON))
+        paths = []
+        for path in CANDIDATE_CSVS + (CONNECTIONS_CSV, OWNER_JSON):
+            paths.append(self.data_root / path)
+        return tuple(paths)
 
     def execute(self) -> dict[str, int]:
         conn = self.conn
-        owner = load_owner(conn, self.data_root / OWNER_JSON)
-        owner_values = {normalize_email(e) for e in owner.emails} | {normalize_phone(p) for p in owner.phones}
+        owner = load_owner(conn, self.data_root / OWNER_JSON)  # emails and phones already normalized
         now = now_iso()
         dropped = 0
 
@@ -65,12 +71,21 @@ class ImportLoad(Node):
                     dropped += 1
                     continue
                 candidate_id = row["id"]
-                identifiers = [(IdentifierKind.EMAIL, normalize_email(e), e) for e in emails]
-                identifiers += [(IdentifierKind.PHONE, normalize_phone(p), p) for p in phones]
-                is_owner = any(value in owner_values for _, value, _ in identifiers)
+                identifiers = []  # (kind, normalized value, value as shown in the CSV)
+                for email in emails:
+                    identifiers.append((IdentifierKind.EMAIL, normalize_email(email), email))
+                for phone in phones:
+                    identifiers.append((IdentifierKind.PHONE, normalize_phone(phone), phone))
+                is_owner = False
+                for _, normalized, _ in identifiers:
+                    if normalized in owner.emails or normalized in owner.phones:
+                        is_owner = True
                 full_name = row["full_name"].strip()
-                first_last = " ".join(filter(None, (row["first_name"].strip(), row["last_name"].strip())))
-                names = dict.fromkeys(name for name in (full_name, first_last) if name)
+                first_last = (row["first_name"].strip() + " " + row["last_name"].strip()).strip()
+                names = []
+                for name in (full_name, first_last):
+                    if name and name not in names:
+                        names.append(name)
                 sources = [SourceChannel(part.strip()) for part in row["source_channels"].split(",")]
 
                 conn.execute(
@@ -105,21 +120,21 @@ class ImportLoad(Node):
               row["current_company"], now) for url, row in by_url.items()],
         )
 
-        def count(sql: str) -> int:
-            return conn.execute(sql).fetchone()[0]
+        def count(sql: str, *params: str) -> int:
+            return conn.execute(sql, params).fetchone()[0]
 
-        counts = {"candidates": count("SELECT COUNT(*) FROM candidates"),
-                  "names": count("SELECT COUNT(*) FROM candidate_names"),
-                  "connections": count("SELECT COUNT(*) FROM connections"),
-                  "shared_mailboxes_dropped": dropped,
-                  "owner_flagged": count("SELECT COUNT(*) FROM candidates WHERE is_owner = 1")}
-        for source in SourceChannel:
-            counts[f"source_{source.value}"] = count(
-                f"SELECT COUNT(*) FROM candidate_sources WHERE source = '{source.value}'")
-        for kind in IdentifierKind:
-            counts[f"identifiers_{kind.value}"] = count(
-                f"SELECT COUNT(*) FROM candidate_identifiers WHERE kind = '{kind.value}'")
-        return counts
+        return {
+            "candidates": count("SELECT COUNT(*) FROM candidates"),
+            "names": count("SELECT COUNT(*) FROM candidate_names"),
+            "connections": count("SELECT COUNT(*) FROM connections"),
+            "shared_mailboxes_dropped": dropped,
+            "owner_flagged": count("SELECT COUNT(*) FROM candidates WHERE is_owner = 1"),
+            "source_gmail_msgvault": count("SELECT COUNT(*) FROM candidate_sources WHERE source = ?", "gmail_msgvault"),
+            "source_imessage": count("SELECT COUNT(*) FROM candidate_sources WHERE source = ?", "imessage"),
+            "source_whatsapp": count("SELECT COUNT(*) FROM candidate_sources WHERE source = ?", "whatsapp"),
+            "identifiers_email": count("SELECT COUNT(*) FROM candidate_identifiers WHERE kind = ?", "email"),
+            "identifiers_phone": count("SELECT COUNT(*) FROM candidate_identifiers WHERE kind = ?", "phone"),
+        }
 
 
 def main(argv: list[str]) -> int:

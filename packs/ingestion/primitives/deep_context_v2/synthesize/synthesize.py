@@ -126,8 +126,12 @@ class Synthesize(Node):
         encoder = tiktoken.get_encoding("o200k_base")
         pending = self.work()
         todo = pending[: self.limit]
-        calls = sum(len(item.prompts) for item in todo)
-        input_tokens = sum(len(encoder.encode(self.prompt + prompt)) for item in todo for prompt in item.prompts)
+        calls = 0
+        input_tokens = 0
+        for item in todo:
+            for prompt in item.prompts:
+                calls += 1
+                input_tokens += len(encoder.encode(self.prompt + prompt))
         bundles = self.conn.execute("SELECT count(*) FROM bundles").fetchone()[0]
         output_tokens = calls * OUTPUT_TOKENS_PER_CALL
         return {
@@ -183,15 +187,21 @@ class Synthesize(Node):
 
     async def _facts(self, caller: OpenAIResponsesCaller, item: Work) -> dict[str, object]:
         """runner.py:142-177: every batch at once; one answer is the facts, several collapse."""
-        responses = await asyncio.gather(*(
-            caller.call(system_prompt=self.prompt, user_prompt=prompt, schema=prompting.FACT_SCHEMA,
-                        schema_name="person_facts", context="synthesize")
-            for prompt in item.prompts
-        ))
+        calls = []
+        for prompt in item.prompts:
+            calls.append(caller.call(system_prompt=self.prompt, user_prompt=prompt, schema=prompting.FACT_SCHEMA,
+                                     schema_name="person_facts", context="synthesize"))
+        responses = await asyncio.gather(*calls)
         chunks = [SynthesizedFacts.from_payload(response.payload) for response in responses]
-        merged = chunks[0] if len(chunks) == 1 else collapse_fact_records(FactRecord(facts) for facts in chunks)
+        if len(chunks) == 1:
+            merged = chunks[0]
+        else:
+            merged = collapse_fact_records([FactRecord(facts) for facts in chunks])
         payload = merged.to_payload()
-        return {field: payload[field] for field in FACT_FIELDS}
+        facts: dict[str, object] = {}
+        for field in FACT_FIELDS:
+            facts[field] = payload[field]
+        return facts
 
 
 def main(argv: list[str] | None = None) -> int:
