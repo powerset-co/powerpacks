@@ -23,7 +23,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import jsonschema
 import tiktoken
 
 from packs.indexing.lib.openai_responses import estimate_cost_usd
@@ -31,33 +30,22 @@ from packs.indexing.lib.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import ParentRow, append_parent_rows
 from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import LinkedinRow, Research
-from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy, IdentifierKind, MergeReason, Origin, Verdict, Worth
+from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy, MergeReason, Origin, Verdict, Worth
 from packs.ingestion.primitives.deep_context_v2.db.owner import owner_background_block, read_owner
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.dedupe.dedupe import mint
 from packs.ingestion.primitives.deep_context_v2.enrich import jev_identity, proposals, research
-from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, judgment_fingerprint
+from packs.ingestion.primitives.deep_context_v2.enrich import sol_identity
+from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, family_evidence, judgment_fingerprint
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
 from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposals
-from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig, load_env
 
 _HERE = Path(__file__).parent
-SYSTEM_PROMPT: str = (_HERE / "linkedin_reconcile_system.txt").read_text(encoding="utf-8").removesuffix("\n")
-SCHEMA: dict[str, Any] = json.loads((_HERE / "linkedin_reconcile_schema.txt").read_text(encoding="utf-8"))
-SCHEMA_NAME = "linkedin_reconcile"
-MODEL = "gpt-6.1-sol"
-REASONING_EFFORT = "medium"
 VERSION = "enrich-judge-2026-10-07-identity"  # in every judgment fingerprint: a new judge is a new judgment
 OUTPUT_TOKENS_PER_CALL = 1500  # assumed Sol output+reasoning tokens per profile, estimate only
 JEV_CACHE_RELATIVE_DIR = Path("deep-context") / "identity"  # <data root>/deep-context/identity/<view>/jev/
 # The owner's own connection: being connected on LinkedIn is itself strong evidence (decided 2026-10-07).
-CONNECTION_NOTE = ("\n\n*** This profile is one of MY OWN first-degree LinkedIn connections, matched to this contact "
-                   "by name. Being connected is strong evidence that this is the person I message with: with a "
-                   "compatible name and no hard contradiction, confirm. ***")
-RESEARCH_NOTE = ("\n\nThis is a speculative web-research proposal. A shared name alone is not corroboration; "
-                 "require employer, school, location, topic, domain, or equivalent evidence. Missing information "
-                 "is not a contradiction. Interview or referral context does not prove employment; evaluate the dates.")
 
 
 @dataclass(frozen=True)
@@ -144,21 +132,8 @@ def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[s
             already += 1
             continue
         tasks.append(Task(family, tuple(candidates), fingerprint,
-                          _citations(proposals.research.get(research.handle(family)))))
+                          _citations(proposals.research.get(research.handle(family.facts)))))
     return Plan(tasks, entering, no_profile, already)
-
-
-def contact(family: Family) -> dict[str, Any]:
-    """The family's evidence: its written names, facts, emails, phones and message count."""
-    emails: list[str] = []
-    phones: list[str] = []
-    for identifier in family.identifiers:
-        if identifier.kind == IdentifierKind.EMAIL:
-            emails.append(identifier.normalized_value)
-        else:
-            phones.append(identifier.normalized_value)
-    return {"source_names": list(family.names), "facts": family.facts.to_payload(), "emails": sorted(emails),
-            "phones": sorted(phones), "message_count": family.messages}
 
 
 def jev_pairs(task: Task) -> list[dict[str, dict[str, Any]]]:
@@ -169,93 +144,18 @@ def jev_pairs(task: Task) -> list[dict[str, dict[str, Any]]]:
             network_urls.append(candidate.profile.linkedin_url)
     pairs: list[dict[str, dict[str, Any]]] = []
     for candidate in task.candidates:
-        pairs.append(jev_identity.requests(contact(task.family), candidate.profile.judge_view(),
+        pairs.append(jev_identity.requests(family_evidence(task.family), candidate.profile.judge_view(),
                                            candidate.origin == Origin.LINKEDIN_NETWORK, network_urls))
     return pairs
 
 
-def _bullets(items: list[str], empty: str) -> str:
-    if not items:
-        return "  " + empty
-    lines: list[str] = []
-    for item in items:
-        lines.append("  - " + item)
-    return "\n".join(lines)
-
-
-def identity_prompt(task: Task, candidate: Candidate, owner_block: str) -> str:
-    """One profile against the family, in the identity judge's shape: the owner's background, the contact
-    (names, facts, handles), the LinkedIn profile, then a note on where the profile came from."""
-    family: Family = task.family
-    facts: SynthesizedFacts = family.facts
-    fields: list[str] = []
-    if facts.relationship_to_owner:
-        fields.append(f"relationship: {facts.relationship_to_owner}")
-    employers: list[str] = []
-    for employer in facts.employers:
-        if employer.name:
-            employers.append(employer.name)
-    if facts.title or employers:
-        fields.append(f"work: {facts.title} @ {', '.join(employers)}".replace(" @ ", " @ ").rstrip(" @"))
-    if facts.school:
-        fields.append(f"school: {facts.school}")
-    if facts.location:
-        fields.append(f"location: {facts.location}")
-    if facts.topics:
-        fields.append("topics: " + ", ".join(facts.topics))
-    shared: list[str] = []
-    for item in facts.shared_context:
-        shared.append(item.detail)
-    if shared:
-        fields.append("shared context: " + "; ".join(shared))
-    evidence: dict[str, Any] = contact(family)
-    handles: list[str] = evidence["emails"] + evidence["phones"]
-    if handles:
-        fields.append("my address-book contact handles for them: " + ", ".join(handles))
-        if candidate.origin == Origin.RESEARCH:
-            fields.append("(a work-email domain is strong evidence only when an independent source ties that employer "
-                          "to the proposed person; copied contact facts are not corroboration)")
-        else:
-            fields.append("(a work-email DOMAIN matching the profile's employer is strong identity proof)")
-    indented: list[str] = []
-    for line in fields:
-        indented.append("  " + line)
-    text: str = owner_block + "\n" + "CONTACT: " + " / ".join(family.names) + "\n" + "\n".join(indented)
-    text += f"\n  messages exchanged: {family.messages}"
-    text += "\n\nFULL DOSSIER FACTS (synthesized from messages):\n" + json.dumps(facts.to_payload(), ensure_ascii=False)
-    view: dict[str, Any] = candidate.profile.judge_view()
-    text += (f"\n\nLINKEDIN: {candidate.profile.linkedin_url}"
-             f"\n  name: {view['full_name'] or '(unknown)'}"
-             f"\n  headline: {view['headline'] or '(none)'}"
-             f"\n  location: {view['location'] or '(unknown)'}"
-             f"\n  experience:\n{_bullets(view['experiences'], '(none)')}"
-             f"\n  education:\n{_bullets(view['education'], '(none)')}")
-    if candidate.origin == Origin.LINKEDIN_NETWORK:
-        text += CONNECTION_NOTE
-    else:
-        text += RESEARCH_NOTE
-        if task.citations:
-            text += "\nResearch source citations (URLs, titles and excerpts): " + json.dumps(list(task.citations), ensure_ascii=False)
-    return text + "\n\nIs this the same human?"
-
-
-def sol_prompts(task: Task, owner_block: str) -> list[str]:
-    prompts: list[str] = []
-    for candidate in task.candidates:
-        prompts.append(identity_prompt(task, candidate, owner_block))
-    return prompts
-
-
 async def sol(caller: OpenAIResponsesCaller, task: Task, owner_block: str) -> dict[str, str]:
-    """URL -> verdict, one call per profile. The family may have at most one confirmed profile: when two are
-    confirmed, both go to the human queue instead."""
+    """URL -> verdict, one Sol call per profile (sol_identity). A family may end with at most one confirmed
+    profile: when two are confirmed, both go to the human queue instead."""
     verdicts: dict[str, str] = {}
     for candidate in task.candidates:
-        answer: dict[str, Any] = await caller.call(system_prompt=SYSTEM_PROMPT,
-                                                   user_prompt=identity_prompt(task, candidate, owner_block),
-                                                   schema=SCHEMA, schema_name=SCHEMA_NAME, context="enrich-judge")
-        jsonschema.validate(answer, SCHEMA)
-        verdicts[candidate.profile.linkedin_url] = Verdict(answer["verdict"]).value
+        prompt: str = sol_identity.identity_prompt(task.family, candidate.profile, candidate.origin, task.citations, owner_block)
+        verdicts[candidate.profile.linkedin_url] = await sol_identity.verdict(caller, prompt)
     confirmed: int = 0
     for verdict in verdicts.values():
         if verdict == Verdict.CONFIRMED:
@@ -323,12 +223,12 @@ def estimate(tasks: list[Task], cache_dir: Path, owner_block: str) -> dict[str, 
                     cached += 1
                     continue
                 jev_tokens += jev_identity.input_tokens(request)
-        for prompt in sol_prompts(task, owner_block):
-            sol_tokens += len(encoder.encode(SYSTEM_PROMPT + prompt))
+        for prompt in sol_identity.prompts(task.family, task.candidates, task.citations, owner_block):
+            sol_tokens += len(encoder.encode(sol_identity.SYSTEM_PROMPT + prompt))
             sol_calls += 1
     output: int = sol_calls * OUTPUT_TOKENS_PER_CALL
     jev_usd: float = jev_identity.cost_usd(jev_tokens)
-    sol_usd: float = estimate_cost_usd(sol_tokens, output, MODEL)
+    sol_usd: float = estimate_cost_usd(sol_tokens, output, sol_identity.MODEL)
     return {"jev_requests": requests, "jev_cached": cached, "jev_input_tokens": jev_tokens,
             "jev_cost_usd": round(jev_usd, 4), "sol_calls_at_most": sol_calls, "sol_input_tokens": sol_tokens,
             "sol_output_tokens_assumed": output, "sol_cost_usd_at_most": round(sol_usd, 4),
@@ -359,7 +259,7 @@ async def decide(conn: sqlite3.Connection, tasks: list[Task], cache_dir: Path, o
             conn.commit()
             continue
         for_sol.append(task)
-    config = OpenAIResponsesConfig.resolve(model=MODEL, effort=REASONING_EFFORT, timeout=300, max_retries=2)
+    config = OpenAIResponsesConfig.resolve(model=sol_identity.MODEL, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
     async with OpenAIResponsesCaller(config) as caller:
         calls: list[asyncio.Task[tuple[Task, dict[str, str] | None]]] = []
         for task in for_sol:

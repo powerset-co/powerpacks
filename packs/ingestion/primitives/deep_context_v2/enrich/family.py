@@ -11,6 +11,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
+from typing import Any
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_dedupe, queries_enrich, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries import display_names
@@ -124,3 +125,16 @@ def confirm(conn: sqlite3.Connection, family: Family, url: str, member_id: str, 
         rows.append((candidate_id, LINKEDIN_PARENT_PREFIX + member_id, MergeReason.JUDGE_CONFIRMED.value,
                      f"candidate_linkedins:{seq}", now))
     return rows
+
+
+def family_evidence(family: Family) -> dict[str, Any]:
+    """The family's evidence: its written names, facts, emails, phones and message count."""
+    emails: list[str] = []
+    phones: list[str] = []
+    for identifier in family.identifiers:
+        if identifier.kind == IdentifierKind.EMAIL:
+            emails.append(identifier.normalized_value)
+        else:
+            phones.append(identifier.normalized_value)
+    return {"source_names": list(family.names), "facts": family.facts.to_payload(), "emails": sorted(emails),
+            "phones": sorted(phones), "message_count": family.messages}

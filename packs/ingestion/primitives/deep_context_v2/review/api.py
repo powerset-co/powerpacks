@@ -94,21 +94,19 @@ class ReviewApi:
         if slug not in review_list(self.conn):
             raise Refusal(HTTPStatus.CONFLICT, "This family was already decided. Reload the page.")
         card: Card = load_card(self.conn, self.data_root, slug)
-        approved: str = ""
         try:
             if decision == "keep":
-                approved = decisions.yes(self.conn, card, pub)
+                decisions.yes(self.conn, card, pub)
             elif decision == "detach":
                 decisions.skip(self.conn, card)
             elif decision == "fix":
-                approved = decisions.retarget(self.conn, self.data_root, card, _value(form, "new_url"))
+                decisions.retarget(self.conn, self.data_root, card, _value(form, "new_url"))
             else:
                 raise Refusal(HTTPStatus.BAD_REQUEST, f"unknown decision: {decision}")
         except DecisionError as error:
             raise Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
         # The next card is read after the write committed, so the decided family is never served back.
-        following: LinkedinCardPayload = self.linkedin_card({"exclude": [slug]})
-        return DecideResult(True, pub, decision, approved, approved, (pub,), following)
+        return DecideResult(True, self.linkedin_card({"exclude": [slug]}))
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> None:
         params: Params = urllib.parse.parse_qs(parsed.query)

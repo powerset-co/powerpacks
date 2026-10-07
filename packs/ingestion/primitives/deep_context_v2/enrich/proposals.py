@@ -42,7 +42,7 @@ def derive(conn: sqlite3.Connection) -> Proposals:
             for url in matches.matched.get(family.parent_id, []):
                 urls.append(Proposal(url, Origin.LINKEDIN_NETWORK.value))
         # A complete research row at the family's current handle proposes its URL.
-        row: Research | None = rows.get(research.handle(family))
+        row: Research | None = rows.get(research.handle(family.facts))
         if row is not None and row.status == ResearchStatus.COMPLETE:
             url: str = research.research_url(row)
             seen: bool = False

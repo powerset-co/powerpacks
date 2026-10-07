@@ -126,12 +126,9 @@ class LinkedinCardPayload:
 
 @dataclass(frozen=True)
 class DecideResult:
+    """The page reads only `next` (and repaints its count from next.pending)."""
+
     ok: bool
-    pub: str
-    action: str
-    approved: str
-    new_url: str
-    resolved_pubs: tuple[str, ...]
     next: LinkedinCardPayload
 
 
@@ -223,9 +220,6 @@ def candidates(card: Card) -> tuple[ReviewCandidate, ...]:
             # Not in the profile cache: the URL alone.
             shown.append(ReviewCandidate(pending.key, "", pending.linkedin_url, "", "", (), (), False, "", None,
                                          "needs_review", ""))
-    if not shown:
-        shown.append(ReviewCandidate(card.parent_id, person_name(card), "", "No LinkedIn found", "", (), (), False, "",
-                                     None, "", ""))
     return tuple(shown)
 
 

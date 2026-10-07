@@ -116,8 +116,9 @@ class Realize(Node):
             row["interaction_counts"] = json.dumps(interaction_counts, ensure_ascii=False)
             row["last_interaction"] = last_interaction
 
-            # The family's one accepted profile: a LinkedIn URL is exported and filled from the cache;
-            # a synthetic key is not a URL, so the row goes out without one and is not indexed.
+            # The family's one accepted profile: a LinkedIn URL is exported and filled from the cache. A
+            # synthetic key is not a URL: the row goes out without one (the index still takes a URL-less
+            # row; the page's "synthetic rows are not indexed" is not what the indexer does, flagged).
             key: str = profile_keys.get(parent_id, "")
             if not key:
                 counts["no_profile_key"] += 1

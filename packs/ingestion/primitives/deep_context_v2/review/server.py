@@ -72,6 +72,8 @@ def check(conn: sqlite3.Connection, data_root: Path) -> dict[str, object]:
     for member in card.members:
         ids.append(member.candidate_id)
     marks: str = ", ".join(["?"] * len(ids))
+    verdicts_sql: str = queries_review.VERDICTS_SQL.format(marks=marks)
+    messages_sql: str = queries_review.MESSAGES_SQL.format(marks=marks)
     return {
         "queue": {"families": len(order), "with_pending_or_card_row": pending, "sql_ms": queue_sql_ms,
                   "total_ms": queue_ms, "plan": queries_review.query_plan(conn, queries_review.QUEUE_SQL, [])},
@@ -81,11 +83,8 @@ def check(conn: sqlite3.Connection, data_root: Path) -> dict[str, object]:
             "candidates_shown": len(card_payload.candidates), "dossier_bytes": len(fragment),
             "card_ms": card_ms, "dossier_ms": dossier_ms,
             "plan_members": queries_review.query_plan(conn, queries_review.MEMBERS_SQL, [parent_id]),
-            "plan_verdicts": queries_review.query_plan(
-                conn, f"SELECT * FROM current_linkedins WHERE candidate_id IN ({marks})", ids),
-            "plan_messages": queries_review.query_plan(
-                conn, "SELECT json_extract(m.value, '$.channel'), COUNT(*) FROM bundles b, "
-                      f"json_each(b.payload_json, '$.messages') m WHERE b.candidate_id IN ({marks}) GROUP BY 1", ids),
+            "plan_verdicts": queries_review.query_plan(conn, verdicts_sql, ids),
+            "plan_messages": queries_review.query_plan(conn, messages_sql, ids),
         },
     }
 

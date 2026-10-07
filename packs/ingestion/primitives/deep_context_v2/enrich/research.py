@@ -31,6 +31,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, loa
 from packs.ingestion.primitives.deep_context_v2.enrich.pre_match import PreMatch, enters, pre_match_families
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
+from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 _HERE = Path(__file__).parent
@@ -64,8 +65,10 @@ def dossier(family: Family) -> str:
     return json.dumps(family.facts.to_payload(), ensure_ascii=False, sort_keys=True)
 
 
-def handle(family: Family) -> str:
-    payload: str = json.dumps({"facts": family.facts.to_payload(), "prompt": PROMPT_VERSION},
+def handle(facts: SynthesizedFacts) -> str:
+    """The research key: the family's collapsed facts and the prompt version. Never the parent id, so a
+    family whose facts are unchanged is never researched twice, and review finds the card by the same key."""
+    payload: str = json.dumps({"facts": facts.to_payload(), "prompt": PROMPT_VERSION},
                               ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -77,7 +80,7 @@ def subjects(families: list[Family], matches: PreMatch, done: dict[str, Research
     for family in families:
         if not enters(family) or family.parent_id in matches.matched:
             continue
-        family_handle: str = handle(family)
+        family_handle: str = handle(family.facts)
         # Two families with identical facts are one question: one run, both read the row by its handle.
         if family_handle in done or family_handle in handles:
             continue

@@ -166,15 +166,21 @@ def current_verdicts(conn: sqlite3.Connection, candidate_ids: list[str]) -> list
     return found
 
 
-def research_cards(conn: sqlite3.Connection, parent_id: str) -> list[ResearchCard]:
-    """The usable no_match research rows written for this parent id, at any handle."""
-    found: list[ResearchCard] = []
-    for row in conn.execute(
-        "SELECT handle, result_json FROM research WHERE parent_id = ? AND status = ? AND result_json IS NOT NULL",
-        (parent_id, ResearchStatus.NO_MATCH.value),
-    ):
-        found.append(ResearchCard(row["handle"], row["result_json"]))
-    return found
+def research_card(conn: sqlite3.Connection, handle: str) -> ResearchCard | None:
+    """The usable no_match research row at this handle, or None."""
+    row = conn.execute(
+        "SELECT handle, result_json FROM research WHERE handle = ? AND status = ? AND result_json IS NOT NULL",
+        (handle, ResearchStatus.NO_MATCH.value),
+    ).fetchone()
+    if row is None:
+        return None
+    return ResearchCard(row["handle"], row["result_json"])
+
+
+# The SQL the card runs per family, for the timing check's query plans.
+VERDICTS_SQL = "SELECT * FROM current_linkedins WHERE candidate_id IN ({marks})"
+MESSAGES_SQL = ("SELECT json_extract(m.value, '$.channel'), COUNT(*) FROM bundles b, "
+                "json_each(b.payload_json, '$.messages') m WHERE b.candidate_id IN ({marks}) GROUP BY 1")
 
 
 def first_family(conn: sqlite3.Connection) -> str:
