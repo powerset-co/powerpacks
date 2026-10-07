@@ -18,8 +18,7 @@ from packs.indexing.primitives.upload_powerset.manifest import (
     CHANGED_CHECK, CHECK_FAILED, CHECK_FIRST, INTERRUPTED, RUN_ACTIVE, UPLOAD_FAILED, Stage,
     UploadManifest, share_digest,
 )
-from packs.ingestion.primitives.deep_context.db.share_views import share_decisions
-from packs.ingestion.primitives.deep_context.db.store import open_existing_db
+from packs.ingestion.primitives.share.store import share_rows
 
 STAGE_MESSAGES = {
     Stage.PLANNING: "Checking your shared people and saved uploads…",
@@ -54,7 +53,7 @@ class ShareUpload:
         return UploadManifest.read(self.manifest_path)
 
     def _current_share_digest(self) -> str:
-        return share_digest(share_decisions(open_existing_db(self.share_db)))
+        return share_digest(share_rows(self.share_db))
 
     def status(self) -> dict[str, Any]:
         try:

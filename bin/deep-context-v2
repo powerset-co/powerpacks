@@ -13,6 +13,8 @@
 #   bin/deep-context-v2 finish   # after the review: people.csv and the index again
 #   bin/deep-context-v2 review   # the review server and its URL
 #   bin/deep-context-v2 stop     # stop the review server
+#   bin/deep-context-v2 share    # the share list from worth and the labels; then the People page at /people
+#   bin/deep-context-v2 lookup --name "Jordan Bravo" [--json]   # a person's facts by name, --email or --phone
 #   bin/deep-context-v2 <stage> [flags]   # one stage alone: load collect synthesize dedupe worth enrich realize
 #
 # Reads message BODIES (Gmail + iMessage/WhatsApp DMs, plus small iMessage groups
@@ -27,7 +29,7 @@ PY=(uv run --project . python -m)
 PKG="packs.ingestion.primitives.deep_context_v2"
 
 usage() {
-  sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 cmd="${1:-}"; shift || true
@@ -43,5 +45,7 @@ case "$cmd" in
   worth)                       "${PY[@]}" "$PKG.worth.worth" "$@" ;;
   enrich)                      "${PY[@]}" "$PKG.enrich.enrich" "$@" ;;
   realize)                     "${PY[@]}" "$PKG.realize.realize" "$@" ;;
+  share)                       "${PY[@]}" "packs.ingestion.primitives.share.share_list" "$@" ;;
+  lookup)                      "${PY[@]}" "$PKG.lookup" "$@" ;;
   *) echo "unknown command: $cmd" >&2; usage; exit 2 ;;
 esac

@@ -1,17 +1,18 @@
 """The People page's data routes: people, tags, and upload progress.
 
-Flow: `ShareRoutes` mounts under `/api/people/` in the review server
-(`bin/deep-context review people`), after `AppRoutes` (the page and its
+Flow: `ShareRoutes` mounts under `/api/people/` in the one page server
+(packs/shared/web/server.py, `/people`), after `AppRoutes` (the page and its
 assets); `make_handler` serves the two alone for tests. GET `/api/people/rows` ->
-`SharePeople.load()` as one columnar payload, one row per parent; POST
-`/api/people/tags` carries the tags each selected parent should hold (absolute
-sets, so undo re-posts the previous sets), writes the tag rows for every person
-under those parents and re-decides their share rows through
+`SharePeople.load()` as one columnar payload, one row per family; POST
+`/api/people/tags` carries the tags each selected family should hold (absolute
+sets, so undo re-posts the previous sets), writes the tag rows for every member
+of those families and re-decides their share rows through
 `labels.share_decision` from `person_labels`, in one transaction.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
 
 Changelog:
+  2026-10-07: v2 store; a decision writes every member of the family.
   2026-09-26: created.
   2026-09-26: serves the React build from web/dist; legacy page and vendor/ removed.
   2026-09-26: the page and its assets moved to packs/shared/web/app.py.
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import sqlite3
 import sys
 import urllib.parse
 from dataclasses import asdict
@@ -30,12 +32,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db import share_views
-from packs.ingestion.primitives.deep_context.db.models import PersonTagRow, ShareDecisionRow
-from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.shared.common import DEFAULT_PEOPLE_CSV
+from packs.ingestion.primitives.deep_context_v2.db import queries_share
+from packs.ingestion.primitives.deep_context_v2.db.queries_share import ShareRow, TagRow
+from packs.ingestion.primitives.deep_context_v2.db.store import store_path
+from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CSV_RELATIVE_PATH
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
-from packs.ingestion.primitives.share.models import HumanTags
+from packs.ingestion.primitives.share.models import HumanTags, PersonLabelRow, ShareDecisionRow
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
 from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
 from packs.ingestion.primitives.share.web.upload import ShareUpload
@@ -76,42 +78,40 @@ def parse_tag_request(body: bytes, known_ids: set[str]) -> TagChanges:
     return changes
 
 
-def decide_tags(db: Db, people: SharePeople, changes: TagChanges) -> dict[str, tuple[ShareDecisionRow, ...]]:
-    """Tag every source person and re-decide one share row per parent together.
-    Returns the re-decided rows by parent.
-
-    The tags land on the roster ids. A person whose only tags were inherited
-    from a merged-away id keeps that note, and from now on the roster row is
-    the one the node reads first (`share_list` resolves the survivor first).
-    """
-    held = TagStore(db).load()
-    labels = {row.person_id: row for row in share_views.person_labels(db)}
-    families = people.families()
+def decide_tags(conn: sqlite3.Connection, people: SharePeople, changes: TagChanges) -> dict[str, ShareDecisionRow]:
+    """Tag every member of each family and re-decide its share row, all in one transaction. Returns
+    the re-decided row by family."""
+    held = TagStore(conn).load()
+    labels = queries_share.labels_by_candidate(conn)
+    members: dict[str, list[str]] = {}
+    for row in conn.execute("SELECT parent_id, candidate_id FROM current_parent"):
+        members.setdefault(row["parent_id"], []).append(row["candidate_id"])
     updated_at = now_iso()
-    tag_rows: list[PersonTagRow] = []
-    decided: dict[str, tuple[ShareDecisionRow, ...]] = {}
+    tag_rows: list[TagRow] = []
+    share_rows: list[ShareRow] = []
+    decided: dict[str, ShareDecisionRow] = {}
     for parent_id, tags in changes.items():
-        share_rows = []
-        for member in families[parent_id]:
-            prior = held.get(member.person_id) or next(
-                (held[old] for old in member.superseded_person_ids if old in held), None)
-            human = HumanTags(person_id=member.person_id, tags=tags, note=prior.note if prior else None,
-                              updated_at=updated_at)
-            tag_rows.append(PersonTagRow(person_id=member.person_id, tags=join_tags(tags), note=human.note,
-                                         updated_at=updated_at))
-            if member.person_id in labels:
-                share_rows.append(share_decision(label_row_from_export(labels[member.person_id]), human,
-                                                 updated_at=updated_at))
-        decided[parent_id] = tuple(share_rows)
-    db.decide_share(tuple(tag_rows), tuple(row for rows in decided.values() for row in rows))
+        prior = held.get(parent_id)
+        human = HumanTags(person_id=parent_id, tags=tags, note=prior.note if prior else "", updated_at=updated_at)
+        family = members[parent_id]
+        label = labels[family[0]]
+        decision = share_decision(label_row_from_export(PersonLabelRow(
+            parent_id, label.public_identifier, label.full_name, label.worth, label.flag, label.labels_json,
+            label.updated_at)), human, updated_at=updated_at)
+        decided[parent_id] = decision
+        for candidate_id in family:
+            tag_rows.append((candidate_id, join_tags(tags), human.note, updated_at))
+            share_rows.append((candidate_id, decision.public_identifier, decision.share, decision.reason,
+                               decision.labels, decision.source, updated_at))
+    queries_share.decide_share(conn, tag_rows, share_rows)
     return decided
 
 
 class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
-    def __init__(self, db: Db, people: SharePeople, load: Callable[[], tuple], upload: ShareUpload) -> None:
-        self.db = db
+    def __init__(self, conn: sqlite3.Connection, people: SharePeople, load: Callable[[], tuple], upload: ShareUpload) -> None:
+        self.conn = conn
         self.people = people
         self.load = load
         self.upload = upload
@@ -179,11 +179,11 @@ class ShareRoutes:
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return True
-        decided = decide_tags(self.db, self.people, changes)
+        decided = decide_tags(self.conn, self.people, changes)
         self._send_json(handler, {"rows": [
-            {"parent_id": parent_id, "share": rows[0].share, "reason": rows[0].reason,
-             "share_source": rows[0].source, "tags": sorted(changes[parent_id])}
-            for parent_id, rows in decided.items()]})
+            {"parent_id": parent_id, "share": row.share, "reason": row.reason,
+             "share_source": row.source, "tags": sorted(changes[parent_id])}
+            for parent_id, row in decided.items()]})
         return True
 
     @staticmethod
@@ -208,22 +208,22 @@ class ShareRoutes:
                    "application/json; charset=utf-8", status=status)
 
 
-def share_routes(db: Db, people_csv: Path = DEFAULT_PEOPLE_CSV, *,
-                 upload_db: Path | None = None, upload_dir: Path | None = None) -> ShareRoutes:
-    """The routes over one store, rows re-read whenever the store file changes."""
-    people = SharePeople(db)
+def share_routes(conn: sqlite3.Connection, data_root: Path, *, upload_db: Path | None = None,
+                 upload_dir: Path | None = None) -> ShareRoutes:
+    """The routes over one store, rows re-read whenever the store changes."""
+    people = SharePeople(conn, data_root)
     cache: dict[str, Any] = {}
 
     def load() -> tuple:
-        stamp = db.db_path.stat().st_mtime_ns
+        stamp = conn.execute("PRAGMA data_version").fetchone()[0], people.export_rows() is not None and people._stamp
         if cache.get("stamp") != stamp:
             cache["rows"] = people.load()
             cache["stamp"] = stamp
         return cache["rows"]
 
-    upload = ShareUpload(db.db_path, people_csv, index_db=upload_db or DEFAULT_DB,
+    upload = ShareUpload(store_path(data_root), data_root / PEOPLE_CSV_RELATIVE_PATH, index_db=upload_db or DEFAULT_DB,
                          out_dir=upload_dir or DEFAULT_OUT_DIR)
-    return ShareRoutes(db, people, load, upload)
+    return ShareRoutes(conn, people, load, upload)
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:

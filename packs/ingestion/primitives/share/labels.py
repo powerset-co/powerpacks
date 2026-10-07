@@ -12,6 +12,8 @@ person for a human to confirm.
 Every threshold is a module constant here; nothing downstream re-derives one.
 
 Changelog:
+  2026-10-07: v2. Worth comes from the v2 store's current_worth; the row types are the share
+    package's own; a flag or identifier that is absent is '' not None.
   2026-09-26: `label_row_from_export` rebuilds the decision inputs from
     `person_labels`, so the share UI re-decides a tagged person without the
     roster or the bundles.
@@ -26,7 +28,7 @@ from datetime import date, datetime
 from typing import Callable
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.db.models import MachineWorth, PersonLabelRow, ShareDecisionRow
+from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy, Worth
 from packs.ingestion.primitives.share.models import (
     GROUP_CHANNELS,
     DeterministicLabels,
@@ -34,6 +36,8 @@ from packs.ingestion.primitives.share.models import (
     JevLabels,
     LabelRow,
     PersonEvidence,
+    PersonLabelRow,
+    ShareDecisionRow,
 )
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
 from packs.ingestion.schemas.share_schema import (
@@ -121,7 +125,7 @@ def deterministic_labels(person: PersonEvidence, *, reference_date: str) -> Dete
         channels="|".join(person.source_channels),
         direction=_direction(person.messages.from_me, person.messages.from_them),
         group_chat_only=bool(person.messages.channels) and set(person.messages.channels) <= GROUP_CHANNELS,
-        linkedin_only=person.linkedin_only,
+        linkedin_only=False,
         network_worth=person.network_worth,
         is_owner=person.is_owner,
         shared_employer=EMPLOYER_OVERLAP in person.shared_overlaps,
@@ -175,16 +179,16 @@ _CONFIRM_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
 # on 87 people, 50 of them recruiters — hiring talk is ordinary here.
 
 
-def confirm_flag(jev: JevLabels | None) -> str | None:
-    """The first flag rule that fires, or None. A flag asks a human; it decides nothing.
+def confirm_flag(jev: JevLabels | None) -> str:
+    """The first flag rule that fires, or ''. A flag asks a human; it decides nothing.
 
     A person Jev never saw raises no flag: no answers, no question to ask."""
     if jev is None:
-        return None
+        return ""
     for name, fired in _CONFIRM_RULES:
         if fired(jev):
             return name
-    return None
+    return ""
 
 
 def active_labels(row: LabelRow) -> tuple[str, ...]:
@@ -205,7 +209,7 @@ def label_row_from_export(row: PersonLabelRow) -> LabelRow:
         person_id=row.person_id,
         public_identifier=row.public_identifier,
         is_owner=bool(cells.get("is_owner")),
-        worth=str(row.worth or MachineWorth.MAYBE.value),
+        worth=row.worth,
         flag=row.flag,
         probabilities={name: float(cells[name]) for name in NOUL_LABELS if name in cells},
     )
@@ -226,9 +230,9 @@ def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) ->
         share, reason = SHARE_NO, HUMAN_PRIVATE
     elif SHARE_TAG in held:
         share, reason = SHARE_YES, HUMAN_SHARE
-    elif row.worth == MachineWorth.NO.value:
+    elif row.worth == Worth.NO.value:
         share, reason = SHARE_NO, WORTH_NO
-    elif row.worth != MachineWorth.YES.value:
+    elif row.worth != Worth.YES.value:
         share, reason = SHARE_NO, WORTH_MAYBE
     elif row.flag:
         share, reason = SHARE_CONFIRM, row.flag
@@ -240,6 +244,6 @@ def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) ->
         share=share,
         reason=reason,
         labels="|".join(active_labels(row)),
-        source="human" if reason.startswith("human_") else "machine",
+        source=DecidedBy.HUMAN.value if reason.startswith("human_") else DecidedBy.MACHINE.value,
         updated_at=updated_at,
     )

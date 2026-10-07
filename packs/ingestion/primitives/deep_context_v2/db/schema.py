@@ -20,6 +20,8 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
+- 2026-10-07 (schema 3): the share stage's tables, person_tags, person_labels and share, keyed by
+  candidate id as the page's decisions are, with current_tags and current_share per parent.
 - 2026-10-07 (schema 2): candidate_linkedins carries Sol's confidence and reason, as v1's
   machine_confidence and machine_reason did, so the review card can show why a profile is pending.
 - 2026-10-06 (page v29-v31): current_parent is latest-wins; current_profile reads any member's
@@ -43,7 +45,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-SCHEMA_VERSION = 2
+from packs.ingestion.schemas.share_schema import SHARE_CONFIRM, SHARE_NO, SHARE_YES
+
+SCHEMA_VERSION = 3
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -92,6 +96,13 @@ class Verdict(StrEnum):
     CONFIRMED = "confirmed"
     WRONG_PERSON = "wrong_person"
     NEEDS_REVIEW = "needs_review"
+
+
+class ShareValue(StrEnum):
+    """The share stage's three-way decision, the words of schemas/share_schema.py."""
+    YES = SHARE_YES
+    NO = SHARE_NO
+    CONFIRM = SHARE_CONFIRM
 
 
 class ResearchStatus(StrEnum):
@@ -231,6 +242,33 @@ CREATE TABLE research (
 );
 CREATE INDEX research_by_parent ON research(parent_id);
 
+-- The share stage. One row per member candidate, written together for a family; the human's tags
+-- are the human's word and never written by a machine. '' is "none" in flag, labels and note.
+CREATE TABLE person_tags (
+  candidate_id TEXT NOT NULL PRIMARY KEY REFERENCES candidates(candidate_id),
+  tags TEXT NOT NULL,          -- '|'-joined, sorted
+  note TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE person_labels (
+  candidate_id TEXT NOT NULL PRIMARY KEY REFERENCES candidates(candidate_id),
+  public_identifier TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  worth TEXT NOT NULL CHECK (worth IN {_in(Worth)}),
+  flag TEXT NOT NULL,
+  labels_json TEXT NOT NULL CHECK (json_valid(labels_json)),
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE share (
+  candidate_id TEXT NOT NULL PRIMARY KEY REFERENCES candidates(candidate_id),
+  public_identifier TEXT NOT NULL,
+  share TEXT NOT NULL CHECK (share IN {_in(ShareValue)}),
+  reason TEXT NOT NULL,
+  labels TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN {_in(DecidedBy)}),
+  updated_at TEXT NOT NULL
+);
+
 CREATE VIEW current_parent AS
   SELECT candidate_id, parent_id, reason, seq FROM (
     SELECT m.*, row_number() OVER (PARTITION BY candidate_id ORDER BY seq DESC) AS rn
@@ -251,6 +289,19 @@ CREATE VIEW current_linkedins AS
     FROM candidate_linkedins l)
   WHERE rn = 1;
 
+CREATE VIEW current_tags AS
+  SELECT parent_id, candidate_id, tags, note, updated_at FROM (
+    SELECT p.parent_id, t.*, row_number() OVER (PARTITION BY p.parent_id ORDER BY t.updated_at DESC, t.candidate_id) AS rn
+    FROM current_parent p JOIN person_tags t USING (candidate_id))
+  WHERE rn = 1;
+
+CREATE VIEW current_share AS
+  SELECT parent_id, candidate_id, public_identifier, share, reason, labels, source, updated_at FROM (
+    SELECT p.parent_id, s.*, row_number() OVER (
+      PARTITION BY p.parent_id ORDER BY (s.source = 'human') DESC, s.updated_at DESC, s.candidate_id) AS rn
+    FROM current_parent p JOIN share s USING (candidate_id))
+  WHERE rn = 1;
+
 CREATE VIEW current_profile AS
   SELECT p.parent_id,
          COALESCE(
@@ -265,12 +316,16 @@ CREATE VIEW current_profile AS
 TABLES: tuple[str, ...] = (
     "meta", "owner", "candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections",
     "bundles", "facts", "candidate_parent", "pair_verdicts", "worth", "candidate_linkedins", "research",
+    "person_tags", "person_labels", "share",
 )
-VIEWS: tuple[str, ...] = ("current_parent", "current_worth", "current_linkedins", "current_profile")
+VIEWS: tuple[str, ...] = ("current_parent", "current_worth", "current_linkedins", "current_profile", "current_tags",
+                          "current_share")
 # A view is a saved query over these tables (and views); a node that declares the view reads them all.
 VIEW_TABLES: dict[str, tuple[str, ...]] = {
     "current_parent": ("candidate_parent",),
     "current_worth": ("current_parent", "candidate_parent", "worth"),
     "current_linkedins": ("candidate_linkedins",),
     "current_profile": ("current_parent", "current_linkedins", "candidate_parent", "candidate_linkedins"),
+    "current_tags": ("current_parent", "candidate_parent", "person_tags"),
+    "current_share": ("current_parent", "candidate_parent", "share"),
 }
