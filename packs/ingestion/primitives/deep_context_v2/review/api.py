@@ -90,6 +90,9 @@ class ReviewApi:
         pub: str = _value(form, "pub")
         decision: str = _value(form, "decision")
         slug: str = _value(form, "parent_slug")
+        # A stale tab can post for a family already decided or moved onto li:; it is no longer in the list.
+        if slug not in review_list(self.conn):
+            raise Refusal(HTTPStatus.CONFLICT, "This family was already decided. Reload the page.")
         card: Card = load_card(self.conn, self.data_root, slug)
         approved: str = ""
         try:
