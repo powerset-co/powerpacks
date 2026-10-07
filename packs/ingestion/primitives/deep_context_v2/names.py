@@ -280,3 +280,15 @@ def source_names_can_match(names: list[str]) -> bool:
             if not names_can_match(left, right):
                 return False
     return bool(words)
+
+
+def names_for_matching(written: str, dossier_name: str) -> str:
+    """The name dedupe blocks and gates on. The written name, unless it is a single word and the
+    dossier's canonical name begins with that word: then the dossier name, which only extends what the
+    source wrote ("Chris" with a dossier of "Chris Furmanski" matches as Chris Furmanski). An empty
+    written name matches nothing."""
+    words: tuple[str, ...] = name_words(written)
+    dossier_words: tuple[str, ...] = name_words(dossier_name)
+    if len(words) == 1 and len(dossier_words) >= 2 and dossier_words[0] == words[0]:
+        return dossier_name
+    return written

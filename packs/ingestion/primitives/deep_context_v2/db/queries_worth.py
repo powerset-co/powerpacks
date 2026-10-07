@@ -63,10 +63,11 @@ def members_with_facts(conn: sqlite3.Connection) -> list[MemberFacts]:
     return members
 
 
-def names_by_candidate(conn: sqlite3.Connection) -> dict[str, list[str]]:
-    names: dict[str, list[str]] = {}
-    for row in conn.execute("SELECT candidate_id, name FROM candidate_names ORDER BY candidate_id, name"):
-        names.setdefault(row["candidate_id"], []).append(row["name"])
+def names_by_candidate(conn: sqlite3.Connection) -> dict[str, str]:
+    """candidate_id -> its one written name."""
+    names: dict[str, str] = {}
+    for row in conn.execute("SELECT candidate_id, display_name FROM candidates"):
+        names[row["candidate_id"]] = row["display_name"]
     return names
 
 

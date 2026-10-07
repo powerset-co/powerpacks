@@ -28,7 +28,7 @@ SCHEMA: dict[str, Any] = json.loads((_HERE / "identity_merge_schema.txt").read_t
 SCHEMA_NAME = "identity_merge"
 MODEL = "gpt-6.1-sol"
 REASONING_EFFORT = "high"
-PROMPT_VERSION = "dedupe-2026-10-06-same-name"  # bump when the prompt or its rendering changes: every pair is judged again
+PROMPT_VERSION = "dedupe-2026-10-07-dossier-name"  # recorded in each verdict's signature; a pair is never judged again
 SAMPLE_MESSAGES = 4      # per direction, newest first
 SAMPLE_CHARS = 200       # per message
 TOPICS = 10
@@ -79,6 +79,12 @@ def render_side(label: str, side: Side) -> str:
     """One CONTACT block: header with the email, the fact lines, then the message samples."""
     facts: SynthesizedFacts = side.facts
     lines: list[str] = []
+    # The name the dossier settled on, and its aliases: the written name may be a first name or a handle.
+    if facts.canonical_name:
+        dossier_name: str = facts.canonical_name
+        if facts.aliases:
+            dossier_name = dossier_name + " (also: " + ", ".join(facts.aliases) + ")"
+        lines.append(f"dossier name: {dossier_name}")
     if facts.relationship_to_owner:
         lines.append(f"relationship: {facts.relationship_to_owner}")
     employers: list[str] = []

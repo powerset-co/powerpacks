@@ -18,7 +18,6 @@ BATCH = 500
 
 # Row shapes, in column order, for the writers below.
 CandidateRow = tuple[str, str, int, str, str]            # candidate_id, display_name, is_owner, import_json, imported_at
-NameRow = tuple[str, str]                                 # candidate_id, name
 IdentifierRow = tuple[str, str, str, str]                 # candidate_id, kind, normalized_value, display_value
 SourceRow = tuple[str, str]                               # candidate_id, source
 ConnectionRow = tuple[str, str, str | None, str, str, str]  # linkedin_url, name, email, position, company, imported_at
@@ -60,12 +59,6 @@ def upsert_candidates(conn: sqlite3.Connection, rows: list[CandidateRow]) -> Non
             "import_json = excluded.import_json, imported_at = excluded.imported_at",
             batch,
         )
-
-
-def insert_candidate_names(conn: sqlite3.Connection, rows: list[NameRow]) -> None:
-    """A name already there is left alone."""
-    for batch in _batches(rows):
-        conn.executemany("INSERT OR IGNORE INTO candidate_names (candidate_id, name) VALUES (?, ?)", batch)
 
 
 def insert_candidate_identifiers(conn: sqlite3.Connection, rows: list[IdentifierRow]) -> None:

@@ -43,7 +43,7 @@ from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.dedupe import judge
 from packs.ingestion.primitives.deep_context_v2.dedupe.blocking import Blocking, block
-from packs.ingestion.primitives.deep_context_v2.names import source_names_can_match
+from packs.ingestion.primitives.deep_context_v2.names import names_for_matching, source_names_can_match
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig
 
@@ -63,18 +63,30 @@ class Plan:
 
 class Dedupe(Node):
     name = "dedupe"
-    reads = ("candidates", "candidate_names", "candidate_identifiers", "facts", "bundles",
-             "current_parent", "pair_verdicts", "owner")
+    reads = ("candidates", "candidate_identifiers", "facts", "bundles", "current_parent", "pair_verdicts", "owner")
     writes = ("pair_verdicts", "candidate_parent")
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
         self.config = OpenAIResponsesConfig.resolve(model=judge.MODEL, effort=judge.REASONING_EFFORT, timeout=600, max_retries=3)
-        self.names: dict[str, list[str]] = queries.candidate_names(conn)
         self.identifiers: dict[str, list[Identifier]] = queries.candidate_identifiers(conn)
         self.fingerprints: dict[str, str] = queries.facts_fingerprints(conn)
         self.parents: dict[str, str] = queries.current_parents(conn)
+        self.written: dict[str, str] = queries.display_names(conn)
+        # The name each candidate is matched on: its written name, or the dossier's when that only
+        # extends a one-word written name. One name per candidate, as a list for the blocking and gate.
+        self.names: dict[str, list[str]] = {}
+        dossier: dict[str, str] = queries.dossier_names(conn)
+        for candidate_id, written in self.written.items():
+            self.names[candidate_id] = [names_for_matching(written, dossier.get(candidate_id, ""))]
+        # Every saved verdict, by pair: a pair is judged once, ever. Its signature records what Sol saw
+        # and is the reference any parent row carries.
+        self.current: dict[tuple[str, str], int | None] = {}
+        self.signatures: dict[tuple[str, str], str] = {}
+        for saved in queries.saved_verdicts(conn):
+            self.current[(saved.candidate_a, saved.candidate_b)] = saved.same_person
+            self.signatures[(saved.candidate_a, saved.candidate_b)] = saved.signature
 
     def signature(self, a: str, b: str) -> str:
         """The pair's evidence: facts fingerprints, written names, identifiers, prompt version."""
@@ -83,16 +95,11 @@ class Dedupe(Node):
             identifiers: list[str] = []
             for identifier in self.identifiers[candidate_id]:
                 identifiers.append(identifier.kind + ":" + identifier.normalized_value)
-            payload["sides"].append({"facts": self.fingerprints[candidate_id], "names": sorted(self.names[candidate_id]),
+            payload["sides"].append({"facts": self.fingerprints[candidate_id], "name": self.written[candidate_id],
                                      "identifiers": sorted(identifiers)})
         return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     def plan(self) -> Plan:
-        # A pair is judged once, ever. Every saved verdict stands, whatever the evidence looks like now;
-        # the signature on the row records what Sol saw.
-        current: dict[tuple[str, str], int | None] = {}
-        for saved in queries.saved_verdicts(self.conn):
-            current[(saved.candidate_a, saved.candidate_b)] = saved.same_person
         # Rule 1: block every candidate with facts.
         blocking: Blocking = block(sorted(self.fingerprints), self.names, self.identifiers)
         gated: int = 0
@@ -108,11 +115,13 @@ class Dedupe(Node):
             if a in self.parents and self.parents.get(b) == self.parents[a]:
                 joined += 1
                 continue
-            if (a, b) in current:
+            if (a, b) in self.current:
                 skipped += 1
                 continue
-            todo.append((a, b, self.signature(a, b)))
-        return Plan(blocking, gated, joined, skipped, todo[: self.limit], current)
+            signature: str = self.signature(a, b)
+            self.signatures[(a, b)] = signature
+            todo.append((a, b, signature))
+        return Plan(blocking, gated, joined, skipped, todo[: self.limit], self.current)
 
     def prompts(self, todo: list[tuple[str, str, str]]) -> list[str]:
         """The user prompt of each pair going to Sol, in order."""
@@ -122,12 +131,11 @@ class Dedupe(Node):
             ids.add(b)
         facts: dict[str, str] = queries.facts_json(self.conn, sorted(ids))
         bundles: dict[str, str] = queries.bundle_payloads(self.conn, sorted(ids))
-        display: dict[str, str] = queries.display_names(self.conn)
         owner_name: str = read_owner(self.conn).name
         rendered: list[str] = []
         for a, b, _ in todo:
-            first = judge.side_of(display[a], self.names[a], self.identifiers[a], facts[a], bundles[a])
-            second = judge.side_of(display[b], self.names[b], self.identifiers[b], facts[b], bundles[b])
+            first = judge.side_of(self.written[a], [self.written[a]], self.identifiers[a], facts[a], bundles[a])
+            second = judge.side_of(self.written[b], [self.written[b]], self.identifiers[b], facts[b], bundles[b])
             rendered.append(judge.user_prompt(owner_name, first, second))
         return rendered
 
@@ -238,7 +246,7 @@ class Dedupe(Node):
             ref: str = ""
             for a, b in same:
                 if self.family_of(a) in inside and self.family_of(b) in inside and not ref:
-                    ref = f"pair_verdicts:{a}|{b}|{self.signature(a, b)}"
+                    ref = f"pair_verdicts:{a}|{b}|{self.signatures[(a, b)]}"
             # One row per candidate moving onto the destination; the destination's own members write nothing.
             for family_id in component:
                 if family_id == destination:

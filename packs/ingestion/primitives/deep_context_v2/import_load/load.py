@@ -47,10 +47,9 @@ class Candidate:
     """One import row, ready to write: the candidate row, its names, its identifier, its channels."""
 
     candidate_id: str
-    display_name: str
+    display_name: str   # the one written name: the header name for a Gmail candidate, the CSV name for a phone
     is_owner: bool
     import_json: str
-    names: tuple[str, ...]
     kind: IdentifierKind
     normalized: str
     display: str
@@ -65,15 +64,11 @@ class GmailImport:
 
 def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, display: str, owner: OwnerProfile,
                header_name: str = "") -> Candidate:
-    """What both passes share: names, channels, the owner flag, and the row kept whole as evidence."""
-    # Two names at most: the full name, and first+last when it spells differently. For a Gmail
-    # candidate the full name is the one its headers wrote most often; the CSV column is the fallback.
+    """What both passes share: the name, channels, the owner flag, and the row kept whole as evidence."""
+    # One written name. A Gmail candidate's is the one its headers wrote most often; a phone
+    # candidate's is the CSV name. The CSV's first/last columns are not used: the importer splits
+    # "Last, First" names wrongly and a second, broken name would block every pair.
     full_name: str = header_name or row["full_name"].strip()
-    first_last: str = (row["first_name"].strip() + " " + row["last_name"].strip()).strip()
-    names: list[str] = []
-    for name in (full_name, first_last):
-        if name and name not in names:
-            names.append(name)
     # "imessage,whatsapp" when one phone was seen in both apps.
     sources: list[SourceChannel] = []
     for part in row["source_channels"].split(","):
@@ -85,7 +80,6 @@ def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, displ
         # The operator's own addresses and numbers; those candidates are never collected or synthesized.
         is_owner=normalized in owner.emails or normalized in owner.phones,
         import_json=json.dumps(row, ensure_ascii=False),
-        names=tuple(names),
         kind=kind,
         normalized=normalized,
         display=display,
@@ -119,20 +113,16 @@ def phone_candidates(path: Path, owner: OwnerProfile) -> list[Candidate]:
 
 
 def write_candidates(conn: sqlite3.Connection, candidates: list[Candidate], now: str) -> None:
-    """Four tables from one list: the candidate rows, then their names, identifiers and sources."""
+    """Three tables from one list: the candidate rows, then their identifiers and sources."""
     candidate_rows: list[queries.CandidateRow] = []
-    name_rows: list[queries.NameRow] = []
     identifier_rows: list[queries.IdentifierRow] = []
     source_rows: list[queries.SourceRow] = []
     for c in candidates:
         candidate_rows.append((c.candidate_id, c.display_name, int(c.is_owner), c.import_json, now))
-        for name in c.names:
-            name_rows.append((c.candidate_id, name))
         identifier_rows.append((c.candidate_id, c.kind.value, c.normalized, c.display))
         for source in c.sources:
             source_rows.append((c.candidate_id, source.value))
     queries.upsert_candidates(conn, candidate_rows)
-    queries.insert_candidate_names(conn, name_rows)
     queries.insert_candidate_identifiers(conn, identifier_rows)
     queries.insert_candidate_sources(conn, source_rows)
 
@@ -151,7 +141,7 @@ def write_connections(conn: sqlite3.Connection, path: Path, now: str) -> int:
 class ImportLoad(Node):
     name = "import_load"
     reads = ()
-    writes = ("candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections", "owner")
+    writes = ("candidates", "candidate_identifiers", "candidate_sources", "connections", "owner")
 
     def required_files(self) -> tuple[Path, ...]:
         # Only the owner is required. Each channel's importer writes its file only when that
@@ -188,14 +178,12 @@ class ImportLoad(Node):
             "identifiers_phone": len(phones),
             "shared_mailboxes_dropped": gmail.shared_mailboxes_dropped,
             "connections": connections,
-            "names": 0,
             "owner_flagged": 0,
             "source_gmail_msgvault": 0,
             "source_imessage": 0,
             "source_whatsapp": 0,
         }
         for c in candidates:
-            counts["names"] += len(c.names)
             counts["owner_flagged"] += int(c.is_owner)
             for source in c.sources:
                 counts["source_" + source.value] += 1

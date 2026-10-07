@@ -43,16 +43,11 @@ def display_names(conn: sqlite3.Connection) -> dict[str, str]:
     return names
 
 
-def candidate_names(conn: sqlite3.Connection) -> dict[str, list[str]]:
-    """Every candidate's written names, sorted; an empty list for a candidate imported without one."""
-    names: dict[str, list[str]] = {}
-    for row in conn.execute(
-        "SELECT c.candidate_id, n.name FROM candidates c LEFT JOIN candidate_names n USING (candidate_id) "
-        "ORDER BY c.candidate_id, n.name"
-    ):
-        names.setdefault(row["candidate_id"], [])
-        if row["name"] is not None:
-            names[row["candidate_id"]].append(row["name"])
+def dossier_names(conn: sqlite3.Connection) -> dict[str, str]:
+    """candidate_id -> the canonical name in its facts, for every candidate with facts."""
+    names: dict[str, str] = {}
+    for row in conn.execute("SELECT candidate_id, json_extract(facts_json, '$.canonical_name') AS name FROM facts"):
+        names[row["candidate_id"]] = row["name"]
     return names
 
 

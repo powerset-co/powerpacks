@@ -10,9 +10,9 @@ In order:
    it names a chief officer, founder, president, chair, partner or managing director.
 3. Every other family gets one JEV pass over its members' facts (collapsed into one) and message
    counts: yes, maybe or no, a reason, and the share labels.
-4. Reuse keys on the family's evidence fingerprint: its members' facts fingerprints and message counts,
-   the matched connection, and the request version. A family whose members' latest machine worth rows
-   all carry it is skipped at $0.
+4. A family is judged once: its key is the request version and its member ids. Only a merge, which
+   makes a new family, brings a new judgment; a family whose members' latest machine worth rows all
+   carry its key is skipped at $0.
 5. One worth row per member candidate, the same verdict and labels to each.
 
 Created: 2026-10-06
@@ -56,8 +56,7 @@ class Family:
 
 class Worth(Node):
     name = "worth"
-    reads = ("current_parent", "candidates", "candidate_names", "candidate_sources", "facts", "bundles",
-             "connections", "worth", "owner")
+    reads = ("current_parent", "candidates", "candidate_sources", "facts", "bundles", "connections", "worth", "owner")
     writes = ("worth",)
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:
@@ -71,7 +70,7 @@ class Worth(Node):
         by_family: dict[str, list[MemberFacts]] = {}
         for member in queries.members_with_facts(self.conn):
             by_family.setdefault(member.family_key, []).append(member)
-        names: dict[str, list[str]] = queries.names_by_candidate(self.conn)
+        names: dict[str, str] = queries.names_by_candidate(self.conn)
         sources: dict[str, list[str]] = queries.sources_by_candidate(self.conn)
         counts: dict[str, list[queries.ChannelCount]] = {}
         for count in queries.channel_counts(self.conn):
@@ -90,7 +89,7 @@ class Worth(Node):
                 match = matches[0]
             # The message counts: the members' bundles added together, counts only.
             summary = evidence.channel_summary(members, sources, counts, groups)
-            fingerprint: str = evidence.fingerprint(members, counts, match)
+            fingerprint: str = evidence.family_key(members)
             is_judged: bool = True
             for member in members:
                 if judged.get(member.candidate_id) != fingerprint:
