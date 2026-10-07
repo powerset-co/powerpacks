@@ -8,7 +8,7 @@ execution question. Preserve scope and corrections across every pond.
 Default: run one round per pond, then continue if fewer than five unique people
 across the search score at least 4 overall (including when nobody scores at least 3).
 Tell the user you're expanding to find more people. Stop at five qualifying people,
-no supported new pond, or the existing four-pond ceiling. Never widen explicit
+or no supported new pond. Never widen explicit
 geography or network to reach a target. User stop/limit requests win. Explicit
 step-by-step mode pauses after each pond. Human labels remain separate from scores.
 
@@ -113,8 +113,7 @@ query or relax requirements to manufacture matches. Respect terminal state/reaso
 
 For explicit step-by-step review, ask “Another round, or done?” after showing
 results. Another round uses `decide --choice 2`, which can reopen a stopped run for
-one more pond; done uses `decide --choice 3`. Only an explicit additional-round request
-overrides the four-pond cap. Apply user corrections before the next execution.
+one more pond; done uses `decide --choice 3`. Apply user corrections before the next execution.
 
 At completion, present the useful results and viewer, with `shortlist.csv` as the
 optional export. If the target was not met, state what was found and why the search

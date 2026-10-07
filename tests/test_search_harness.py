@@ -240,12 +240,12 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(propose.call_args.args[0]["shortlist"]["overall_at_least_4"], 4)
         self.assertEqual(propose.call_args.args[0]["human_diagnosis"]["note"], "Keep it local.")
 
-    def test_explicit_continue_can_compile_one_more_pond_after_default_cap(self) -> None:
+    def test_automatic_continue_compiles_a_fifth_pond(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             path = _start(run_dir)
             results = json.loads(path.read_text())
-            results["status"] = "completed"
+            results["status"] = "awaiting_diagnosis"
             stats = {"result_count": 0, "reviewed_count": 0, "score_histogram": {},
                      "level_mix": {}, "geo_mix": {}, "top_companies": {}}
             results["iterations"] = [{"pond_n": 4, "query": "Last pond", "shortlist_grades": [],
@@ -255,7 +255,7 @@ class SearchHarnessTests(unittest.TestCase):
                         "next_query": "Infrastructure Engineer", "source": "inferred",
                         "rationale": "Try another relevant occupation."}
             with mock.patch.object(search_harness, "propose_next_move", return_value=(proposal, "", {})):
-                search_harness.decide(run_dir=run_dir, choice=2)
+                search_harness.decide(run_dir=run_dir, autonomous=True)
             env_file = run_dir / "test.env"
             env_file.write_text("")
             expanded = run_dir / "expanded.json"
@@ -266,7 +266,6 @@ class SearchHarnessTests(unittest.TestCase):
             saved = json.loads(path.read_text())
         self.assertEqual(saved["status"], "awaiting_payload_review")
         self.assertEqual(saved["pending_payload"]["pond_n"], 5)
-        self.assertEqual(saved["iterations"][-1]["human_override"]["choice"], 2)
 
     def test_command_summary_excludes_related_run_candidates(self) -> None:
         results = {"status": "completed", "iterations": [{"pond_n": 1, "shortlist_grades": []}],
@@ -705,11 +704,11 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIsNone(legacy.scrub_results(
             {"iterations": [], "pending_payload": None}, default_limit=1000)["pending_payload"])
 
-    def test_run_pond_defaults_cap_and_saves_absolute_artifact_paths(self) -> None:
+    def test_fifth_pond_keeps_retrieval_limit_and_awaits_diagnosis(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             _start(run_dir)
-            payload_path = run_dir / "ponds" / "pond-01" / "payload.json"
+            payload_path = run_dir / "ponds" / "pond-05" / "payload.json"
             payload_path.parent.mkdir(parents=True)
             payload_path.write_text(json.dumps(_payload()), encoding="utf-8")
             rows_path = run_dir / "rows.jsonl"
@@ -721,7 +720,7 @@ class SearchHarnessTests(unittest.TestCase):
             results["status"] = "ready_to_run"
             results["hiring_company_ref"] = {"verified_domain": "acme.example"}
             results["pending_payload"] = {  # written before compile-pond --limit existed
-                "pond_n": 1, "query": results["pending_query"]["query"],
+                "pond_n": 5, "query": results["pending_query"]["query"],
                 "payload_json": str(payload_path), "ledger": "ledger", "payload": _payload(),
                 "rerank_exclusions": [], "rerank_only": False, "pattern_default_edits": [],
             }
@@ -748,6 +747,8 @@ class SearchHarnessTests(unittest.TestCase):
 
         self.hydrate_attribution.assert_called_once_with()
 
+        self.assertEqual(saved["status"], "awaiting_diagnosis")
+        self.assertIsNone(saved["iterations"][-1]["next_move"])
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")
         self.assertEqual(command[command.index("--jd-cleaner-output-dir") + 1],
@@ -1398,9 +1399,8 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["iterations"][0]["diagnosis"], "weak_quality")
         self.assertEqual(saved["iterations"][0]["human_override"]["diagnosis"], "weak_quality")
 
-    def test_protocol_caps_retrieval_and_ponds(self) -> None:
+    def test_protocol_caps_retrieval(self) -> None:
         self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)
-        self.assertEqual(search_harness.MAX_PONDS, 4)
         self.assertEqual(search_harness.load_next_search_prompt(),
                          search_harness.NEXT_SEARCH_PROMPT_PATH.read_text().rstrip())
         self.assertIn("Choose one next pond", search_harness.NEXT_SEARCH_PROMPT)

@@ -36,7 +36,7 @@ flowchart TD
 ```
 
 The default automatic loop stops at five unique candidates rated overall 4 or 5,
-no supported next pond, or four ponds. Counts cover this run across its ponds,
+or no supported next pond. Counts cover this run across its ponds,
 not other saved runs. Explicit interactive mode asks continue-or-done after each pond.
 An explicit request for another round can reopen a completed run.
 

@@ -3,7 +3,7 @@
 
 Each pond is query -> compiled payload -> reviewed payload -> run -> next move.
 Automatic continuation targets five unique candidates rated overall 4 or 5,
-within the existing four-pond cap and the user's search constraints.
+while preserving the user's search constraints.
 """
 from __future__ import annotations
 
@@ -80,7 +80,6 @@ from packs.search.primitives.deep_search.results_web.model import index_search, 
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
-MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
 PIN_FIELDS = ("taste_score", "pin_confidence", "pin_judgment")
 RETRIEVAL_LIMIT = 1000
@@ -850,9 +849,6 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     if results.get("status") != "ready_to_compile" or not results.get("pending_query"):
         raise ValueError("search has no query ready to compile")
     pond_n = max((int(row.get("pond_n") or 0) for row in results.get("iterations") or []), default=0) + 1
-    previous = (results.get("iterations") or [{}])[-1]
-    if pond_n > MAX_PONDS and (previous.get("human_override") or {}).get("choice") != 2:
-        raise ValueError("search already reached the four-pond cap")
     query = str(results["pending_query"]["query"])
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     prepare_dir = pond_dir / "prepare"
@@ -1613,12 +1609,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     results["iterations"].append(iteration)
     results["pending_query"] = None
     results["pending_payload"] = None
-    if pond_n >= MAX_PONDS and not pending.get("rerank_only"):
-        iteration["next_move"] = {"action": "stop", "next_query": None,
-                                  "rationale": "Automatic search stopped at the four-pond cap."}
-        results["status"] = "completed"
-    else:
-        results["status"] = "awaiting_diagnosis"
+    results["status"] = "awaiting_diagnosis"
     _save(results, run_dir)
     if team_future is not None:
         _finish_team(run_dir, results, team_future)
@@ -1907,12 +1898,10 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         _save(results, run_dir)
         return run_dir / "results.json"
     enough = overall_counts(build_search_summary(results, 0))["overall_at_least_4"] >= 5
-    capped = int(iteration["pond_n"]) >= MAX_PONDS
-    if autonomous and (capped or enough):
+    if autonomous and enough:
         iteration["next_move"] = {
             "action": "stop", "next_query": None, "source": None,
-            "rationale": ("Four-pond cap reached." if capped else
-                          "Found at least five unique candidates with overall ratings of 4 or 5."),
+            "rationale": "Found at least five unique candidates with overall ratings of 4 or 5.",
         }
         results["status"] = "completed"
         _save(results, run_dir)

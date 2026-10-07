@@ -111,8 +111,8 @@ Record `surface`, `backend`, `depth`, `mode`, and a one-sentence `reason`:
   and lookups. Bare “find candidates” needs role context; a profile URL alone is a
   lookup, not a role brief. An explicit fast request overrides automatic deep intake.
   Company hiring intake discovers/selects a posting first.
-- **mode:** `auto` for deep by default, bounded at four ponds and five unique people
-  rated at least 4 overall; `interactive` only for explicit step-by-step review.
+- **mode:** `auto` for deep by default, continuing until five unique people
+  rate at least 4 overall or no supported new pond remains; `interactive` only for explicit step-by-step review.
   Fast searches and other surfaces use `interactive` (no extra execution question).
 - Uncertain route → `people`, the applicable backend, `fast`, `interactive`; record
   the uncertainty without blocking. Ask only when missing role/company identity
