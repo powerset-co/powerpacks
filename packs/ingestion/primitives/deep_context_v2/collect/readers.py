@@ -65,27 +65,34 @@ def apple_epoch_iso(value: object) -> str:
 
 
 class ContextSources:
-    """One run's open message stores and fixed tuning.
+    """One run's message stores and fixed tuning.
 
-    The Gmail archive is opened once here, and the owner's own mailbox addresses are read from it:
-    they decide a message's direction (from the owner, or from the candidate). iMessage and
-    WhatsApp are opened per read.
+    A store is read only for candidates whose channels came from it, so a user who never linked
+    a channel never has that store opened. `channels` is the set across the run's candidates. When
+    Gmail is among them the archive is opened once here and the owner's own mailbox addresses are
+    read from it: they decide a message's direction (from the owner, or from the candidate).
+    iMessage and WhatsApp are opened per read.
     """
 
-    def __init__(self, *, msgvault_db: Path, chat_db: Path, wacli_db: Path, deep_cap: int, max_group_size: int) -> None:
+    def __init__(self, *, channels: set[str], msgvault_db: Path, chat_db: Path, wacli_db: Path,
+                 deep_cap: int, max_group_size: int) -> None:
         self.msgvault_db = msgvault_db
         self.chat_db = chat_db
         self.wacli_db = wacli_db
         self.deep_cap = deep_cap
         self.max_group_size = max_group_size
-        self.msgvault: sqlite3.Connection = gmail.open_msgvault(msgvault_db)
-        self.accounts: set[str] = _read_source(msgvault_db, lambda: gmail.account_emails(self.msgvault))
+        self.msgvault: sqlite3.Connection | None = None
+        self.accounts: set[str] = set()
+        if "gmail_msgvault" in channels:
+            self.msgvault = gmail.open_msgvault(msgvault_db)
+            self.accounts = _read_source(msgvault_db, lambda: gmail.account_emails(self.msgvault))
 
     def close(self) -> None:
-        self.msgvault.close()
+        if self.msgvault is not None:
+            self.msgvault.close()
 
     def thread_participants(self, person: Person) -> tuple[ThreadParticipants, ...]:
-        if not person.emails:
+        if "gmail_msgvault" not in person.source_channels:
             return ()
         rows = _read_source(
             self.msgvault_db, lambda: gmail.thread_participant_rosters(self.msgvault, person.emails, MAX_THREADS)
@@ -135,7 +142,7 @@ class ContextSources:
         empty: QueryResult,
     ) -> QueryResult:
         """Resolve the candidate's chat.db handles, then run one query; no handles, `empty`."""
-        if not person.phones or not self.chat_db.exists():
+        if "imessage" not in person.source_channels:
             return empty
 
         def read() -> QueryResult:
@@ -224,8 +231,6 @@ class ContextSources:
 
     def _read_whatsapp(self, person: Person) -> list[MessageEntry]:
         """Newest WhatsApp direct-message bodies."""
-        if not self.wacli_db.exists():
-            return []
 
         def read() -> list[sqlite3.Row]:
             con = wacli_store.open_readonly_db(self.wacli_db)
@@ -258,17 +263,21 @@ class ContextSources:
         """The bounded cross-source pool, chronological, and the uncapped available count."""
         gmail_messages: list[MessageEntry] = []
         gmail_total = 0
-        if person.emails:
+        if "gmail_msgvault" in person.source_channels:
             gmail_messages = self._read_gmail(person)
             gmail_total = self._count_gmail(person)
         direct: list[MessageEntry] = []
         group: list[MessageEntry] = []
         chat_total = 0
-        if person.phones:
+        whatsapp: list[MessageEntry] = []
+        if "whatsapp" in person.source_channels:
             whatsapp = self._read_whatsapp(person)
-            direct = self._read_imessage(person) + whatsapp
-            chat_total = self._count_imessage_dms(person) + len(whatsapp)
+        if "imessage" in person.source_channels:
+            direct = self._read_imessage(person)
+            chat_total = self._count_imessage_dms(person)
             group = self._read_imessage_group_messages(person)
+        direct = direct + whatsapp
+        chat_total = chat_total + len(whatsapp)
 
         # This order decides who wins the character cap: Gmail first (already ranked by signal),
         # then direct and group chats newest first, with content breaking equal timestamps.

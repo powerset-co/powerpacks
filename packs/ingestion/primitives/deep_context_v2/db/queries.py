@@ -80,6 +80,15 @@ def upsert_connections(conn: sqlite3.Connection, rows: list[ConnectionRow]) -> N
 # ---- 02 collect
 
 
+def channels_present(conn: sqlite3.Connection) -> set[str]:
+    """Which message channels the candidates came from. An unlinked channel has no candidates, so this
+    is also the list of message stores a run opens."""
+    channels: set[str] = set()
+    for row in conn.execute("SELECT DISTINCT source FROM candidate_sources"):
+        channels.add(row["source"])
+    return channels
+
+
 def candidates_to_collect(conn: sqlite3.Connection, limit: int) -> list[Person]:
     """Every non-owner candidate as a Person: its normalized emails and phones (the keys the message
     readers match on) and its channels (which stores to open). Nobody builds a dossier on the operator."""

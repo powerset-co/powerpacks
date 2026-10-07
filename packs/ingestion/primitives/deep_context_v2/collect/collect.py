@@ -43,7 +43,9 @@ class Collect(Node):
 
     def execute(self) -> dict[str, int]:
         people: list[Person] = queries.candidates_to_collect(self.conn, self.limit)
+        # The store says which channels were linked; only those stores are opened.
         sources: ContextSources = ContextSources(
+            channels=queries.channels_present(self.conn),
             msgvault_db=DEFAULT_MSGVAULT_DB,
             chat_db=DEFAULT_CHAT_DB,
             wacli_db=self.wacli_db,
