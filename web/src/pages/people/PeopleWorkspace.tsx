@@ -224,7 +224,7 @@ export function PeopleWorkspace({ rows }: { rows: Person[] }) {
           <BulkBar
             label={barLabel}
             selection={selection.selected.size > 0}
-            saving={decisions.saving}
+            disabled={decisions.saving || targets.some((id) => byId.get(id)?.in_progress)}
             onAction={(action) => void label(action, targets)}
             onClear={selection.selected.size ? clearSelection : closeDrawer}
           />

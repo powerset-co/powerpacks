@@ -81,6 +81,9 @@ def parse_tag_request(body: bytes, known_ids: set[str]) -> TagChanges:
 def decide_tags(conn: sqlite3.Connection, people: SharePeople, changes: TagChanges) -> dict[str, ShareDecisionRow]:
     """Tag every member of each family and re-decide its share row, all in one transaction. Returns
     the re-decided row by family."""
+    for row in people.load():
+        if row.parent_id in changes and row.in_progress:
+            raise ValueError(f"{row.name} is being updated; finish the run first")
     held = TagStore(conn).load()
     labels = queries_share.labels_by_candidate(conn)
     members: dict[str, list[str]] = {}
@@ -179,7 +182,11 @@ class ShareRoutes:
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return True
-        decided = decide_tags(self.conn, self.people, changes)
+        try:
+            decided = decide_tags(self.conn, self.people, changes)
+        except ValueError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
+            return True
         self._send_json(handler, {"rows": [
             {"parent_id": parent_id, "share": row.share, "reason": row.reason,
              "share_source": row.source, "tags": sorted(changes[parent_id])}

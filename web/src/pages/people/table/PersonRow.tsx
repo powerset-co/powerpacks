@@ -62,6 +62,7 @@ export const PersonRow = memo(function PersonRow({
         <span className="who">
           <b>{row.name}</b>
         </span>
+        {row.in_progress ? <span className="src shrink-0">Updating</span> : null}
       </div>
       <SourcePills role="cell" className="sources c-sources" channels={toChannels(row.channels)} />
       <div role="cell" className="rel c-rel">

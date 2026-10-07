@@ -9,25 +9,25 @@ interface BulkBarProps {
   label: string | null
   // Whether the bar acts on a selection (Clear selection) or the open person (Close).
   selection: boolean
-  saving: boolean
+  disabled: boolean
   onAction: (action: TagAction) => void
   onClear: () => void
 }
 
 // Share / Keep private for the selection or the open person, on the shared action bar.
-export function BulkBar({ label, selection, saving, onAction, onClear }: BulkBarProps) {
+export function BulkBar({ label, selection, disabled, onAction, onClear }: BulkBarProps) {
   return (
     <ActionBar label={label} name={selection ? "Selection" : "Open person"}>
       <Button
         variant="ok"
         shape="pill"
         className={BAR_BUTTON}
-        disabled={saving}
+        disabled={disabled}
         onClick={() => onAction("share")}
       >
         Share <Kbd className="ml-0.5">S</Kbd>
       </Button>
-      <Button shape="pill" className={BAR_BUTTON} disabled={saving} onClick={() => onAction("private")}>
+      <Button shape="pill" className={BAR_BUTTON} disabled={disabled} onClick={() => onAction("private")}>
         Keep private <Kbd className="ml-0.5">P</Kbd>
       </Button>
       <ActionBarRule />

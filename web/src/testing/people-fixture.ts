@@ -9,6 +9,7 @@ type Cells = Record<PersonColumn, PersonCell>
 export const BASE: Cells = {
   parent_id: "",
   public_identifier: "",
+  in_progress: false,
   name: "",
   has_avatar: false,
   title: "",

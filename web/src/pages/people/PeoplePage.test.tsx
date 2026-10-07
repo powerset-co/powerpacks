@@ -139,6 +139,34 @@ describe("PeoplePage", () => {
     expect(fetch.mock.calls.filter(([url]) => !url.endsWith("/upload"))).toHaveLength(2)
   })
 
+  it("marks an updating person and disables drawer, bulk and keyboard tag edits", async () => {
+    const payload = structuredClone(PAYLOAD)
+    const row = must(payload.rows[0])
+    row[payload.columns.indexOf("in_progress")] = true
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.endsWith("/rows") ? Promise.resolve(respond(payload)) : serve(url, init),
+    )
+    vi.stubGlobal("fetch", fetch)
+    const { container } = renderPage()
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    const updating = must(container.querySelector<HTMLElement>('.row[data-id="p1"]'))
+    expect(within(updating).getByText("Updating")).toBeTruthy()
+    fireEvent.click(updating)
+    const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
+    expect(within(drawer).getByText("Jordan Bravo is being updated; finish the run first.")).toBeTruthy()
+    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Share" }).disabled).toBe(true)
+    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Keep private" }).disabled).toBe(
+      true,
+    )
+    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
+    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Share S" }).disabled).toBe(true)
+    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Keep private P" }).disabled).toBe(true)
+    fireEvent.keyDown(document, { key: "s" })
+    fireEvent.keyDown(document, { key: "p" })
+    expect(fetch.mock.calls.some(([url]) => url.endsWith("/tags"))).toBe(false)
+  })
+
   it("opens the drawer on a row click and closes it on the next", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()

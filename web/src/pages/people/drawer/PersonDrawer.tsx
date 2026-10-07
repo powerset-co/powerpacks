@@ -54,7 +54,13 @@ export function PersonDrawer(props: PersonDrawerProps) {
       {row ? (
         <>
           <DrawerHeader row={row} detail={ready} onClose={onClose} />
-          <DrawerActions row={row} saving={saving} disabled={saving || swap.leaving} onAction={onAction} />
+          {row.in_progress ? <p className="dim">{row.name} is being updated; finish the run first.</p> : null}
+          <DrawerActions
+            row={row}
+            saving={saving}
+            disabled={saving || swap.leaving || row.in_progress}
+            onAction={onAction}
+          />
           <DecisionSection row={row} detail={ready} {...section("decision")} />
           {detail.status === "loading" ? <DetailLoading /> : null}
           {detail.status === "failed" ? <DetailFailed onRetry={onRetry} /> : null}
