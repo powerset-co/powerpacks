@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from packs.indexing.lib.identity import stable_person_id
 from packs.indexing.primitives.upload_powerset import postgres, turbopuffer_writer, upload_powerset
 from packs.indexing.primitives.upload_powerset.models import (
     PersonProfile,
@@ -44,10 +45,12 @@ from packs.ingestion.schemas.share_schema import (
 
 OPERATOR = "00000000-0000-0000-0000-0000000000aa"
 OTHER_OPERATOR = "00000000-0000-0000-0000-0000000000bb"
-NEW_PERSON = "11111111-1111-5111-8111-111111111111"
-CLOUD_PERSON = "22222222-2222-5222-8222-222222222222"
+# A LinkedIn person's id everywhere outside the store is uuid5 of linkedin:<slug> (indexing/lib/identity.py):
+# the local index, the cloud and the uploader's share rows agree on it.
+NEW_PERSON = stable_person_id(public_identifier="jordan-bravo")
+CLOUD_PERSON = stable_person_id(public_identifier="casey-lane")
 NO_SLUG_PERSON = "33333333-3333-5333-8333-333333333333"
-STALE_PERSON = "44444444-4444-5444-8444-444444444444"
+STALE_PERSON = stable_person_id(public_identifier="riley-echo")
 
 NAMESPACE_NAMES = {
     "people": "aleph_people_v1",
@@ -222,7 +225,7 @@ class PlanBucketTests(unittest.TestCase):
             cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}),
         )
         people_ns = next(ns for ns in plan.namespaces if ns.logical == "people")
-        self.assertEqual(plan.persons_upsert, (NEW_PERSON, CLOUD_PERSON))
+        self.assertEqual(plan.persons_upsert, tuple(sorted((NEW_PERSON, CLOUD_PERSON))))
         self.assertEqual(people_ns.upsert_ids, (NEW_PERSON,))
         self.assertEqual(people_ns.patch_person_ids, (CLOUD_PERSON,))
 
