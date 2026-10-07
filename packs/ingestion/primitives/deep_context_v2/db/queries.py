@@ -127,9 +127,6 @@ def candidates_to_collect(conn: sqlite3.Connection, limit: int) -> list[Person]:
                 emails.append(identifier["normalized_value"])
             elif kind == IdentifierKind.PHONE:
                 phones.append(identifier["normalized_value"])
-            else:
-                print(f"unknown identifier kind {kind!r}, skipped")  # the DDL allows only the two above
-                continue
         channels: list[str] = []
         for source in conn.execute("SELECT source FROM candidate_sources WHERE candidate_id = ? ORDER BY source", (candidate_id,)):
             channels.append(source["source"])

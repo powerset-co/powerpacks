@@ -135,7 +135,8 @@ def _phrase(name: str, option: str, probability: float) -> str:
 
 
 def reason(answers: dict[str, Answer], decision: str) -> str:
-    """At most three phrases, strongest first, as one to three sentences grouped by how sure each is."""
+    """The three strongest phrases, as one to three sentences: what it looks like, what is less clear,
+    what there is little evidence of."""
     phrases: list[str] = []
     for name, option, probability in _supporting(answers, decision):
         phrase: str = _phrase(name, option, probability)

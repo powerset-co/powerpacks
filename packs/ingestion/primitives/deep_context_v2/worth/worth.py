@@ -100,7 +100,7 @@ class Worth(Node):
             if len(matches) == 1:
                 match = matches[0]
             # The message counts: the members' bundles added together, counts only.
-            summary = evidence.channel_summary(members, sources, counts, groups)
+            summary: jev.ChannelSummary = evidence.channel_summary(members, sources, counts, groups)
             fingerprint: str = evidence.family_key(members)
             is_judged: bool = True
             for member in members:
@@ -118,7 +118,8 @@ class Worth(Node):
         return families
 
     def pending(self, families: list[Family]) -> list[Family]:
-        """The families not yet judged on their current evidence, the first `limit` of them."""
+        """The families with no machine worth row under their key (the version and their members), the
+        first `limit` of them. New facts or messages do not make a family pending; a new member does."""
         todo: list[Family] = []
         for family in families:
             if not family.judged:
@@ -178,7 +179,7 @@ class Worth(Node):
         answers = asyncio.run(jev.answer_all(requests, self.cache_dir))
         for family in todo:
             if family.match is None:
-                answer = answers[family.digest]
+                answer: dict[str, jev.Answer] = answers[family.digest]
                 decision: str = jev.predict(answer)
                 verdicts[family.key] = Verdict(decision, reason(answer, decision), json.dumps(jev.labels(answer), sort_keys=True))
         # Rule 5: one row per member, the same verdict to each.

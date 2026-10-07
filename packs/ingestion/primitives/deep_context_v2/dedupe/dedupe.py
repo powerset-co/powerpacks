@@ -134,8 +134,8 @@ class Dedupe(Node):
         owner_name: str = read_owner(self.conn).name
         rendered: list[str] = []
         for a, b, _ in todo:
-            first = judge.side_of(self.written[a], self.identifiers[a], facts[a], bundles[a])
-            second = judge.side_of(self.written[b], self.identifiers[b], facts[b], bundles[b])
+            first: judge.Side = judge.side_of(self.written[a], self.identifiers[a], facts[a], bundles[a])
+            second: judge.Side = judge.side_of(self.written[b], self.identifiers[b], facts[b], bundles[b])
             rendered.append(judge.user_prompt(owner_name, first, second))
         return rendered
 
@@ -174,6 +174,8 @@ class Dedupe(Node):
         for pair, same_person in answers.items():
             verdicts[pair] = same_person
         # Rule 5: join families over the same verdicts; rule 6: a parent of their own for everyone else.
+        rows: list[ParentRow]
+        counts: dict[str, int]
         rows, counts = self.merge(verdicts)
         placed: set[str] = set(self.parents)
         for row in rows:
@@ -185,7 +187,9 @@ class Dedupe(Node):
                 rows.append((candidate_id, mint(), MergeReason.SINGLETON.value, None, now))
                 singletons += 1
         queries.append_parent_rows(self.conn, rows)
-        counts.update({"gated_pairs": plan.gated, "judged": len(answers), "singletons": singletons})
+        counts["gated_pairs"] = plan.gated
+        counts["judged"] = len(answers)
+        counts["singletons"] = singletons
         return counts
 
     def family_of(self, candidate_id: str) -> str:
@@ -241,16 +245,19 @@ class Dedupe(Node):
             if len(linkedin) > 1:
                 counts["components_two_linkedins"] += 1
                 continue
-            destination: str = mint()
+            destination: str
             if linkedin:
                 destination = linkedin[0]
             elif existing:
                 destination = existing[0]
+            else:
+                destination = mint()
             # The verdict behind the join: the first same pair whose families are both in the component.
             ref: str = ""
             for a, b in same:
-                if self.family_of(a) in inside and self.family_of(b) in inside and not ref:
+                if self.family_of(a) in inside and self.family_of(b) in inside:
                     ref = f"pair_verdicts:{a}|{b}|{self.signatures[(a, b)]}"
+                    break
             # One row per candidate moving onto the destination; the destination's own members write nothing.
             for family_id in component:
                 if family_id == destination:

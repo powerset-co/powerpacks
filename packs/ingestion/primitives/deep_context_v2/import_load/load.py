@@ -10,8 +10,9 @@ become the `connections` lookup, never candidates. Shared mailboxes (role addres
 office@ or billing@) are dropped here; every other keep rule ran in the per-source importer.
 owner.json fills the `owner` row and flags the operator's own candidates.
 
-Nothing is deleted. A candidate row upserts on its id; names, identifiers and sources insert on
-their primary keys and are ignored when present. A rebuild is the store moved to .bkup and a rerun.
+Nothing is deleted. A candidate row (with its one written name) upserts on its id; identifiers and
+sources insert on their primary keys and are ignored when present. A rebuild is the store moved to
+.bkup and a rerun.
 
 Created: 2026-10-06
 """
@@ -153,8 +154,8 @@ class ImportLoad(Node):
         self.msgvault_db = msgvault_db
 
     def execute(self) -> dict[str, int]:
-        conn = self.conn
-        now = now_iso()
+        conn: sqlite3.Connection = self.conn
+        now: str = now_iso()
         # Owner first: the candidate passes need its addresses and numbers for the owner flag.
         owner: OwnerProfile = load_owner(conn, self.data_root / OWNER_JSON)
         # Two passes, one per linked channel file, one identifier kind each.
