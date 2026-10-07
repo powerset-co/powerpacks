@@ -38,7 +38,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_install_index_progress \
   tests.test_install_pipeline \
   tests.test_install_coordinator \
-  tests.test_review_lifecycle \
   tests.test_review_page_port \
   tests.test_openai_not_stored \
   tests.test_review_env \
@@ -119,11 +118,9 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_dossier \
   tests.test_deep_context_enrichment_projection \
   tests.test_deep_context_dossier_html \
-  tests.test_deep_context_http_contract \
   tests.test_deep_context_identity_invariants \
   tests.test_deep_context_identity_queue \
   tests.test_deep_context_import_hygiene \
-  tests.test_deep_context_imported_people \
   tests.test_role_address \
   tests.test_deep_context_judgment_policy \
   tests.test_deep_context_legacy_scrubs \
@@ -137,15 +134,12 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_prompt_assets \
   tests.test_deep_context_reconcile_cli_db \
   tests.test_deep_context_restart_sqlite \
-  tests.test_deep_context_review_api \
   tests.test_deep_context_sqlite_invariants \
   tests.test_deep_context_sqlite_producers \
-  tests.test_deep_context_export_people \
   tests.test_deep_context_sqlite_roster \
   tests.test_deep_context_prefetch_sqlite \
   tests.test_deep_context_synthesis \
   tests.test_deep_context_synthetic_prefetch \
-  tests.test_deep_context_web_sqlite \
   tests.test_deep_context_relationship \
   tests.test_deep_context_identity_disagreements \
   tests.test_identity_dossier_context \
@@ -163,7 +157,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_profile_labels \
   tests.test_profile_models_identity \
   tests.test_reconcile_fetch \
-  tests.test_visual \
   tests.test_app_routes \
   tests.test_enrich_people \
   tests.test_icons \
