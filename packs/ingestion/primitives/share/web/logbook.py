@@ -62,7 +62,7 @@ class PeopleLogbook:
             return {
                 "status": state.value,
                 "people": list(self._people),
-                "result": self._build.to_payload() if state is LogbookState.COMPLETED else None,
+                "result": self._build.to_payload() if self._build is not None and state is LogbookState.COMPLETED else None,
                 "error": self._error if state is LogbookState.FAILED else None,
             }
 
