@@ -162,10 +162,9 @@ class Realize(Node):
 
 
 def index_command(people_csv: Path, data_root: Path) -> str:
-    """The indexing pipeline's dry run over this people.csv: it prices the build before any spend."""
-    return ("uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py "
-            f"run --dry-run --input {people_csv} --output-dir {data_root / 'search-index'} "
-            "--default-operator-id <operator-id>")
+    """The index build over this people.csv, on Modal (what `bin/deep-context-v2 run` and `finish` run)."""
+    return ("uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people "
+            f"--people-csv {people_csv} --dest {data_root / 'search-index'}")
 
 
 def main(argv: list[str] | None = None) -> int:

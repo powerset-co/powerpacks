@@ -9,7 +9,8 @@ Created: 2026-07-13. Rewritten 2026-10-07 for the v2 pipeline (`packs/ingestion/
 
 Changelog:
 - 2026-10-07: v2. One command runs the whole pipeline with nothing to approve; the index is built
-  from what the machine decided before the review; a second build after the review updates it.
+  on Modal from what the machine decided before the review; a second build after the review updates it.
+  `run` and `finish` stop at once without an operator id.
   The pipeline runs in its own tmux window under a second agent; this chat advises.
 
 This is the one processing skill after setup (the install skill), `$import-gmail`, or
@@ -49,9 +50,12 @@ bin/deep-context-v2 lookup --name "Jordan Bravo" [--json]   # a person's facts; 
 bin/deep-context-v2 <stage>   # one stage alone: load collect synthesize dedupe worth enrich realize
 ```
 
-Pass `--operator-id <id>` to `run` and `finish` when the account's operator id is known
-(`.codex/AGENTS.md`); it keys the search index. Every stage keys its work, so running a command
-again continues from what is stored and spends nothing on what is done.
+The index is built on Modal, the same build the install runs: people.csv (names, contact
+identifiers, profile facts; no message text) uploads to the operator's folder on the team volume
+and the finished DuckDB downloads to `.powerpacks/search-index`. `run` and `finish` need the
+account's operator id and stop at once without one: `$powerset login` writes
+`POWERPACKS_OPERATOR_ID` to `.env`; `--operator-id <id>` overrides it. Every stage keys its work,
+so running a command again continues from what is stored and spends nothing on what is done.
 
 ## Visible progress
 
@@ -145,7 +149,8 @@ paste the right LinkedIn URL under "Wrong person?". The page says "Review comple
 Codex" when the queue is empty.
 
 **5. Finish.** Run `bin/deep-context-v2 finish`: people.csv again with the reviewed LinkedIns,
-the index again (its caches make the second build nearly free), and the review server stopped.
+the index again on Modal (its shared caches make the second build nearly free), and the review
+server stopped.
 Say the index is updated.
 
 The reports are for the developers; the user is not told about them.

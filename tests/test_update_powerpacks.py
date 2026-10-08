@@ -303,6 +303,7 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
                 ("/v2/integrations/powerset-api/key", "Bearer fixture-bearer"),
                 ("/v2/integrations/turbopuffer/key", "Bearer fixture-bearer"),
                 ("/v2/integrations/powerpacks/database-url", "Bearer fixture-bearer"),
+                ("/v2/team/me", "Bearer fixture-bearer"),
                 ("/v2/integrations/typesafe/key", "Bearer fixture-bearer"),
             ])
             refreshed_env = (checkout / ".env").read_text()

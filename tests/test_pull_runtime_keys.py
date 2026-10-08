@@ -52,6 +52,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 "/v2/integrations/powerset-api/key",
                 "/v2/integrations/turbopuffer/key",
                 "/v2/integrations/powerpacks/database-url",
+                "/v2/team/me",
             ])
 
     def test_update_rejects_empty_or_non_string_typesafe_response(self):
