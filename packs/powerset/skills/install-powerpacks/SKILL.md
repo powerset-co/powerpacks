@@ -141,21 +141,13 @@ that checkout's bootstrap and verifies its commit, not the public launcher.
 
 ### Advisor and background worker
 
-The original chat is the advisor: carry the user's choices and existing approvals
-into one worker, open the status page, answer questions, and relay any changed
-choices immediately. The worker runs and repairs the existing coordinator through
-verified completion. Only it starts or resumes setup; the advisor never starts a
-second installer. A browser action does not require a "done" message.
-
-The advisor owns the harness's visible checklist and all user-facing messages:
-install and connect → sync sources → discover → enrich → build index → verify.
-Update it from the install manifest and worker output, including cached/skipped
-steps; a running process or an open page does not mean a step is complete.
-The worker owns execution and targeted repairs, returning technical evidence. Its replies
-are to the advisor; it does not create a second checklist or question the user.
-Carry the user's actual choices and applicable limits into its brief. Do not
-turn an advisor precaution into a claimed user instruction or introduce trial
-runs and approval stops that the active instructions do not require.
+Read [tmux-worker.md](tmux-worker.md) before starting; include it in the worker's
+brief. If you downloaded only this SKILL.md, first save
+`https://raw.githubusercontent.com/powerset-co/powerpacks/stable/packs/shared/skills/tmux-worker.md`
+as `tmux-worker.md` beside it. A PR test uses that checkout's copy. It owns supervision, recovery, stopping and feedback (`category: install`).
+The advisor's tasks are install/connect → sync sources → discover → enrich →
+build index → verify, checked against the install manifest and worker output.
+Only the worker starts/resumes the coordinator; the advisor relays chat choices.
 
 On Codex with a local CLI and tmux, use `bin/onboard-worker`. It is standalone and
 needs only Python 3, tmux and Codex, so a fresh install can download it before a
@@ -213,20 +205,8 @@ keep login and review in the default browser. A `NEEDS USER:` or `BLOCKED:` repl
 needs advisor attention; relay the user's answer through `send`. Verify changes
 from the manifest before claiming a source was skipped or search is ready.
 
-**Watching:** while setup is active, check in about every 30 seconds with bounded
-tool waits, and immediately after user input; don't wait 10–20 minutes. The worker
-uses short waits too so it can receive steering during a long import. Quietly
-handle routine progress; surface only a necessary human action, unresolved failure,
-or completion. Do not end supervision merely for a QR scan, login or permission:
-the worker keeps watching and resumes automatically. tmux cannot wake a finished
-chat turn. If the advisor must end its turn, use a supported host follow-up when
-available and authorized; otherwise say the worker continues and reattach on the
-next message. Never promise unsolicited notifications without an actual wakeup.
-After verified completion, have the worker exit and close only its owned tmux
-session once no command remains. Keep the status/review server available. On a
-user-requested stop, stop the owned coordinator too and preserve its outputs.
-Check for its detached index job and cancel that specific job when stopping the
-workflow; report if it could not be stopped. Leave unrelated sessions/jobs alone.
+Keep observing login, QR and permission completion; no "done" reply is needed.
+Keep the status/review server available when the worker finishes.
 
 ## Keep the status page beside chat
 
@@ -308,34 +288,10 @@ Read command output, saved progress, and `.powerpacks/install/install.log`:
 | `FAILED:` | Inspect the exact failure, repair within scope, rerun the saved coordinator. |
 | `STOP:` | Explain the environment required; do not continue on another computer. |
 
-Use the manifest's canonical `retry_command` to resume. Native artifacts and
-SQLite, not UI labels, decide completed work. Never delete `.powerpacks`, replace
-configuration, reset reviews, or bypass applicable spend limits to recover.
-For unclear setup failures, use the installed `powerpacks-doctor` skill. Read the
-error, make the smallest necessary local repair, and rerun the same coordinator;
-reuse completed work. A source patch may be necessary: preserve it and report
-it before any updater can replace it. No unrelated refactors or resets.
-After three attempts at the same failure, report the remaining cause and next
-action; don't loop. Involve the user only for an actual decision or something
-only they can do, such as sign-in, permission, or restoring service access.
-If the index build failed, rerun the saved `retry_command` against Modal's cache.
-
-The advisor sends one technical report per distinct failure, repair or misleading
-progress state using the worker's evidence. The worker does not send a duplicate.
-Use the existing sender directly, without another confirmation:
-
-```bash
-uv run --project . python packs/powerset/primitives/send_feedback/send_feedback.py \
-  --category install --comment "<what failed, what changed, rerun outcome>" \
-  --metadata '<json: sanitized command and error, code pointers, patch, manifest status/counts, version>'
-```
-
-Include only technical evidence. Remove credentials, account/person identifiers,
-message content, summaries and private paths from commands, errors and patches;
-do not attach raw logs, manifests or databases. If feedback fails, keep the
-sanitized report locally for a later retry and continue onboarding; never turn
-reporting into another login detour. The advisor mentions only issues affecting
-the user's outcome, not routine feedback delivery.
+Use the manifest's canonical `retry_command` to resume, following the shared
+[repair and feedback instructions](tmux-worker.md#repair-and-finish). Never delete
+`.powerpacks`, replace configuration or reset reviews to recover. If the index
+build failed, rerun that continuation against Modal's cache.
 
 ## Finish
 

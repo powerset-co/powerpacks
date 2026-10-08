@@ -29,11 +29,8 @@ On restart, inspect the manifest and live installer first; observe an existing
 coordinator instead of starting a duplicate. Use its retry_command for processing
 as well as setup; standalone stages leave the install page stale. If a required
 restriction cannot be represented by that command, report it to the advisor.
-Own targeted repairs and verified reruns within the authorized scope. Follow the
-skill's recovery limit and return sanitized technical evidence for each issue.
-The advisor sends feedback; do not send duplicate reports or expose private data.
-The advisor owns the visible checklist and user messages; do not use task tools
-or address the user directly. Do not invent trial runs or approval requirements.
+Read tmux-worker.md beside the installed skill for roles, repair and feedback.
+Follow those shared instructions; the advisor owns user messages and reports.
 Print STATUS PAGE: with the exact URL as soon as it appears. Report a human action
 once, keep observing automatic login/permission completion, and continue afterward.
 For a chat-only decision, say NEEDS USER: with the question and wait for the advisor.
