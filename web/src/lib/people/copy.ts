@@ -1,6 +1,7 @@
 // The page's words for machine values, ported 1:1 from the legacy people.js.
 
-import type { LastUpload, UploadPlan } from "@/lib/api/upload"
+import type { ChannelCoverage, LogbookResult } from "@/lib/api/logbook"
+import type { UploadPlan } from "@/lib/api/upload"
 import { CHANNELS } from "@/lib/channels"
 import { parseDate, plural } from "@/lib/copy"
 import type { CalmPhase, UploadPhase } from "@/lib/people/upload"
@@ -111,7 +112,6 @@ export const UPLOAD = {
   share: "Share network",
   shareChanges: "Share changes",
   view: "View upload",
-  neverShared: "Never shared",
   check: "Check network",
   checkAgain: "Check again",
   confirm: "Confirm sharing",
@@ -160,12 +160,6 @@ export const PLAN_ROWS: readonly { key: keyof UploadPlan; label: string }[] = [
 ]
 export const PLAN_ALWAYS: keyof UploadPlan = "with_linkedin"
 
-const LAST_UPLOAD: Readonly<Record<LastUpload["status"], (last: LastUpload) => string>> = {
-  completed: (last) => `Shared ${(last.uploaded + last.skipped).toLocaleString()}`,
-  failed: () => "Upload failed",
-  interrupted: () => "Upload interrupted",
-}
-
 /** "Sep 27"; an unparseable value as written. */
 export function dayMonth(value: string): string {
   const date = parseDate(value)
@@ -181,13 +175,56 @@ export function finishedAt(value: string): string {
   return `Finished ${when}`
 }
 
-/** The trigger's muted line: "Shared 128 · Sep 27", "Upload interrupted · Sep 27", "Never shared". */
-export function lastUploadLine(last: LastUpload | null): string {
-  if (!last) return UPLOAD.neverShared
-  return `${LAST_UPLOAD[last.status](last)} · ${dayMonth(last.finished_at)}`
-}
-
 /** The page toast when an upload finishes while the dialog is closed. */
 export function sharedToast(count: number): string {
   return `Shared ${plural(count, "person")}.`
+}
+
+// The Build and View logbook actions on the bar and in the drawer, the reader, and the toasts.
+export const LOGBOOK = {
+  build: "Build logbook",
+  building: "Building logbook…",
+  view: "View logbook",
+  explainer: "Raw Gmail, iMessage and WhatsApp messages, including groups, saved on this computer.",
+  title: "Logbook",
+  back: "People",
+  all: "All logbooks",
+  none: "No saved logbooks yet. Build one from People.",
+  gone: "These logbooks aren't saved on this computer.",
+  empty: "No messages in this conversation.",
+  refresh: "Refresh logbook",
+  refreshing: "Refreshing logbook…",
+  filter: "Filter conversations",
+  oldest: "Oldest",
+  newest: "Newest",
+  jump: "Jump to month",
+  senders: "Senders",
+  everyone: "Show everyone",
+  fewer: "Show fewer",
+  unread: "Couldn't read saved logbooks.",
+  retry: "Retry",
+} as const
+
+/** Why a channel added nothing: its store is not on this computer, or could not be read. */
+function channelGap({ channel, status }: ChannelCoverage): string | null {
+  const title = sentence(channel)
+  if (status === "missing") return `${title} isn't set up on this computer.`
+  if (status === "unreadable") {
+    return `${title} couldn't be read.`
+  }
+  return null
+}
+
+/** "Building a logbook for 3 people. Raw Gmail, … saved on this computer." */
+export function logbookStartedToast(count: number): string {
+  return `Building a logbook for ${plural(count, "person")}. ${LOGBOOK.explainer}`
+}
+
+/** "Saved 1,204 messages from 38 conversations." then each channel it could not read. */
+export function logbookDoneToast(result: LogbookResult): string {
+  const saved = result.messages
+    ? `Saved ${plural(result.messages, "message")} from ${plural(result.files, "conversation")}.`
+    : "No messages found on this computer."
+  const gaps = result.channels.map(channelGap).filter((gap) => gap !== null)
+  return [saved, ...gaps].join(" ")
 }

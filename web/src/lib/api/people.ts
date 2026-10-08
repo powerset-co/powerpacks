@@ -13,7 +13,7 @@ import {
 
 const API = "/api/people/"
 
-type PersonCells = Omit<Person, "last" | "warmthBucket" | "search">
+type PersonCells = Omit<Person, "last" | "warmthBucket" | "search" | "logbook">
 
 /** One `Person` per columnar row, decoded by column name, with the derived fields. Throws
  *  when the server stopped sending a column the page reads. */
@@ -30,6 +30,7 @@ export function decodePeople(payload: PeoplePayload): Person[] {
       last: lastBucket(row.recency_days),
       warmthBucket: warmthBucket(row.warmth),
       search: `${row.name} ${row.title} ${row.company} ${row.location}`.toLowerCase(),
+      logbook: null,
     }
   })
 }

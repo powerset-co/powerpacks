@@ -10,6 +10,8 @@ of those families and re-decides their share rows through
 `labels.share_decision` from `person_labels`, in one transaction.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
+GET `/api/people/logbook` reads build status; POST builds the selected parents' local raw archive.
+GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
 
 Changelog:
   2026-10-07: v2 store; a decision writes every member of the family.
@@ -39,6 +41,11 @@ from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CS
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags, PersonLabelRow, ShareDecisionRow
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
+from packs.ingestion.primitives.logbook.logbook_common import LOGBOOK_ROOT
+from packs.ingestion.primitives.share.web.logbook import PeopleLogbook
+from packs.ingestion.primitives.share.web.logbook_archive import (
+    LogbookArchive, conversation_payload, entries_payload, entry_payload,
+)
 from packs.ingestion.primitives.share.web.model import SharePeople, SharePerson, people_payload
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
@@ -114,11 +121,14 @@ class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
     def __init__(self, conn: sqlite3.Connection, people: SharePeople,
-                 load: Callable[[], tuple[SharePerson, ...]], upload: ShareUpload) -> None:
+                 load: Callable[[], tuple[SharePerson, ...]], upload: ShareUpload, *,
+                 logbook_root: Path = LOGBOOK_ROOT, logbook_stores: dict[str, Path] | None = None) -> None:
         self.conn = conn
         self.people = people
         self.load = load
         self.upload = upload
+        self.logbook = PeopleLogbook(conn, root=logbook_root, stores=logbook_stores)
+        self.archive = LogbookArchive(conn, logbook_root, gmail_store=self.logbook.stores["gmail"])
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
@@ -126,6 +136,12 @@ class ShareRoutes:
             self._send_json(handler, people_payload(self.load()))
         elif parsed.path == f"{API_PREFIX}upload":
             self._send_json(handler, self.upload.status())
+        elif parsed.path == f"{API_PREFIX}logbook":
+            self._send_json(handler, self.logbook.status())
+        elif parsed.path == f"{API_PREFIX}logbook/entries":
+            self._send_json(handler, entries_payload(self.archive.entries()))
+        elif parsed.path in {f"{API_PREFIX}logbook/entry", f"{API_PREFIX}logbook/conversation"}:
+            self._send_saved(handler, parsed.path, query)
         elif parsed.path == f"{API_PREFIX}person":
             detail = self.people.detail((query.get("id") or [""])[0])
             if detail is None:
@@ -137,7 +153,8 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
+        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
+                               f"{API_PREFIX}logbook"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         host = (handler.headers.get("Host") or "").strip()
@@ -146,6 +163,9 @@ class ShareRoutes:
         # The page's own origin only: same scheme, host and port, and that host is this machine.
         if origin and (origin != f"{scheme}://{host}" or hostname not in LOCAL_HOSTS):
             self._send(handler, b"cross-origin request rejected", "text/plain", status=HTTPStatus.FORBIDDEN)
+            return True
+        if parsed.path == f"{API_PREFIX}logbook":
+            self._start_logbook(handler)
             return True
         if parsed.path in {f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
             length = int(handler.headers.get("Content-Length") or 0)
@@ -185,6 +205,43 @@ class ShareRoutes:
             for parent_id, row in decided.items()]})
         return True
 
+    def _start_logbook(self, handler: BaseHTTPRequestHandler) -> None:
+        """Build the logbook for `{"people": [parent_id, ...]}`, the page's selection."""
+        length = int(handler.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_TAGS_REQUEST_BYTES:
+            self._send_json(handler, {"error": "request body must be 1 byte to 4 MiB"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            request = json.loads(handler.rfile.read(length))
+        except json.JSONDecodeError:
+            request = None
+        people = request.get("people") if isinstance(request, dict) else None
+        if not isinstance(people, list) or not people or not all(isinstance(value, str) for value in people):
+            self._send_json(handler, {"error": "people must be a non-empty list of parent ids"},
+                            status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            status = self.logbook.start(people)
+        except LookupError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except RuntimeError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
+        else:
+            self._send_json(handler, status)
+
+    def _send_saved(self, handler: BaseHTTPRequestHandler, path: str, query: dict[str, list[str]]) -> None:
+        """One saved entry, or one of its conversations; the slug and path only key the manifest."""
+        slug = (query.get("slug") or [""])[0]
+        try:
+            if path == f"{API_PREFIX}logbook/entry":
+                payload = entry_payload(self.archive.entry(slug))
+            else:
+                payload = conversation_payload(*self.archive.conversation(slug, (query.get("path") or [""])[0]))
+        except LookupError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+        else:
+            self._send_json(handler, payload)
+
     @staticmethod
     def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str = "text/html; charset=utf-8",
               status: int = HTTPStatus.OK, *, cache: str = "no-store") -> None:
@@ -208,7 +265,8 @@ class ShareRoutes:
 
 
 def share_routes(conn: sqlite3.Connection, data_root: Path, *, upload_db: Path | None = None,
-                 upload_dir: Path | None = None) -> ShareRoutes:
+                 upload_dir: Path | None = None, logbook_root: Path | None = None,
+                 logbook_stores: dict[str, Path] | None = None) -> ShareRoutes:
     """The routes over one store, rows re-read whenever the store changes."""
     people = SharePeople(conn, data_root)
     def load() -> tuple[SharePerson, ...]:
@@ -216,7 +274,8 @@ def share_routes(conn: sqlite3.Connection, data_root: Path, *, upload_db: Path |
 
     upload = ShareUpload(store_path(data_root), data_root / PEOPLE_CSV_RELATIVE_PATH, index_db=upload_db or DEFAULT_DB,
                          out_dir=upload_dir or DEFAULT_OUT_DIR)
-    return ShareRoutes(conn, people, load, upload)
+    return ShareRoutes(conn, people, load, upload, logbook_root=logbook_root or data_root / "logbook",
+                       logbook_stores=logbook_stores)
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:

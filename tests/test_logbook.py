@@ -6,6 +6,8 @@ year, add a new year heading once, never rewrite frontmatter).
 """
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -107,11 +109,6 @@ class TestFilenamesAndFormatting(unittest.TestCase):
 class TestEntryWriter(unittest.TestCase):
     def setUp(self):
         self._tmp = Path(tempfile.mkdtemp())
-        self._orig = lx.LOGBOOK_ROOT
-        lx.LOGBOOK_ROOT = self._tmp
-
-    def tearDown(self):
-        lx.LOGBOOK_ROOT = self._orig
 
     def _row(self, **kw):
         base = {"channel": "imessage", "kind": "dm", "container_id": "dm",
@@ -122,7 +119,7 @@ class TestEntryWriter(unittest.TestCase):
         return base
 
     def test_export_writes_frontmatter_year_and_messages(self):
-        w = lx.EntryWriter("alice", append=False, prior={})
+        w = lx.EntryWriter(self._tmp, "alice", append=False, prior={})
         w.write(self._row(watermark=1, at="2020-03-01T10:00:00", year=2020, text="one"))
         w.write(self._row(watermark=2, at="2021-04-01T10:00:00", year=2021, text="two"))
         containers = w.close()
@@ -136,13 +133,13 @@ class TestEntryWriter(unittest.TestCase):
         self.assertEqual(containers[rel]["last_year"], 2021)
 
     def test_sync_appends_without_rewriting_frontmatter_or_dup_year(self):
-        w = lx.EntryWriter("bob", append=False, prior={})
+        w = lx.EntryWriter(self._tmp, "bob", append=False, prior={})
         w.write(self._row(watermark=5, at="2020-03-01T10:00:00", year=2020, text="first"))
         containers = w.close()
         rel = next(iter(containers))
         prior = {(c["channel"], c["container_id"]): c for c in containers.values()}
 
-        w2 = lx.EntryWriter("bob", append=True, prior=prior)
+        w2 = lx.EntryWriter(self._tmp, "bob", append=True, prior=prior)
         w2.write(self._row(watermark=6, at="2020-09-01T10:00:00", year=2020, text="same-year"))
         w2.write(self._row(watermark=7, at="2021-01-01T10:00:00", year=2021, text="next-year"))
         containers2 = w2.close()
@@ -161,7 +158,7 @@ class TestEntryWriter(unittest.TestCase):
     def test_imessage_and_whatsapp_dm_do_not_collide(self):
         # Regression: both DMs use container_id "dm"; keying the open file by
         # container_id alone routed WhatsApp messages into the iMessage dm.md.
-        w = lx.EntryWriter("carol", append=False, prior={})
+        w = lx.EntryWriter(self._tmp, "carol", append=False, prior={})
         w.write(self._row(channel="imessage", container_id="dm", text="imsg-hi", watermark=1))
         w.write(self._row(channel="whatsapp", container_id="dm", text="wa-hi", watermark=2))
         containers = w.close()
@@ -173,6 +170,33 @@ class TestEntryWriter(unittest.TestCase):
         self.assertNotIn("wa-hi", imsg)       # WhatsApp must NOT leak into iMessage file
         self.assertIn("wa-hi", wa)
         self.assertNotIn("imsg-hi", wa)
+
+
+class TestCliExport(unittest.TestCase):
+    def test_exporting_one_slug_keeps_the_other_entries_in_the_catalog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            wacli = tmp / "wacli.db"
+            with sqlite3.connect(wacli) as con:
+                con.execute("CREATE TABLE messages (chat_jid TEXT, msg_id TEXT, ts INTEGER, from_me INTEGER, text TEXT)")
+                con.executemany("INSERT INTO messages VALUES (?, ?, 1700000000, 0, 'hi')",
+                                [("15550100@s.whatsapp.net", "a"), ("15550101@s.whatsapp.net", "b")])
+            csv = tmp / "people.csv"
+            csv.write_text("Founder,Cell,Emails,WhatsApp Groups\nJordan Bravo,+15550100,,\nCasey Delta,+15550101,,\n",
+                           encoding="utf-8")
+            jordan, casey = (person.slug for person in lc.load_people_from_csv(csv)[0])
+            argv = ["export", "--csv", str(csv), "--channels", "whatsapp", "--wacli-db", str(wacli)]
+            # The CLI writes to the repo-relative .powerpacks/logbook: run it from the temp dir.
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with mock.patch.object(lx, "emit"):
+                    lx.main([*argv, "--slug", jordan])
+                    lx.main([*argv, "--slug", casey])
+            finally:
+                os.chdir(cwd)
+            manifest = json.loads((tmp / lc.MANIFEST_JSON).read_text(encoding="utf-8"))
+            self.assertEqual(set(manifest["entries"]), {jordan, casey})
 
 
 class TestDeepenCommands(unittest.TestCase):

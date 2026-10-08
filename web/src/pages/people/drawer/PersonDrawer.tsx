@@ -21,14 +21,17 @@ interface PersonDrawerProps {
   open: boolean
   detail: DetailState
   saving: boolean
+  building: boolean
   onAction: (action: TagAction) => void
+  onLogbook: () => void
+  onView: (slugs: string[]) => void
   onClose: () => void
   onRetry: () => void
 }
 
 // The person in the shared drawer. Which sections are open carries across people.
 export function PersonDrawer(props: PersonDrawerProps) {
-  const { open, saving, onAction, onClose, onRetry } = props
+  const { open, saving, building, onAction, onLogbook, onView, onClose, onRetry } = props
   const [sections, setSections] = useState<ReadonlySet<SectionKey>>(OPEN_BY_DEFAULT)
   const next = useMemo(() => ({ row: props.row, detail: props.detail }), [props.row, props.detail])
   const swap = useDrawerSwap(props.row?.parent_id ?? null, next, open)
@@ -59,6 +62,11 @@ export function PersonDrawer(props: PersonDrawerProps) {
             row={row}
             saving={saving}
             disabled={saving || swap.leaving || row.in_progress}
+            building={building}
+            onLogbook={onLogbook}
+            onView={() => {
+              if (row.logbook) onView([row.logbook])
+            }}
             onAction={onAction}
           />
           <DecisionSection row={row} detail={ready} {...section("decision")} />

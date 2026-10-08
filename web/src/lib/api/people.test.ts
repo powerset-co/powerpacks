@@ -11,6 +11,8 @@ describe("decodePeople", () => {
   it("decodes columns by name and derives last, warmthBucket, search", () => {
     const [jordan] = decodePeople(PAYLOAD)
     expect(jordan).toMatchObject({
+      // Unknown until the saved logbooks are read.
+      logbook: null,
       parent_id: "p1",
       name: "Jordan Bravo",
       channels: ["gmail", "linkedin"],

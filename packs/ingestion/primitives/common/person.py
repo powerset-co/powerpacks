@@ -35,7 +35,7 @@ def slugify(name: str, person_id: str) -> str:
 
 @dataclass
 class Person:
-    # The logbook uses the raw people.csv row id.
+    # The People logbook uses a parent id; the CLI uses the raw people.csv row id.
     person_id: str
     full_name: str
     emails: list[str] = field(default_factory=list)

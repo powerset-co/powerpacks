@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.20.0...powerpacks-v3.21.0) (2026-10-08)
+
+
+### Features
+
+* **deep-context:** every family gets JEV's labels; settle keeps them ([#761](https://github.com/powerset-co/powerpacks/issues/761)) ([834f417](https://github.com/powerset-co/powerpacks/commit/834f41734c62e4f15c8442d4ecd0fcb7a7a8af2a))
+* **people:** build and read logbooks inside People (port of [#626](https://github.com/powerset-co/powerpacks/issues/626)) ([#760](https://github.com/powerset-co/powerpacks/issues/760)) ([855e45a](https://github.com/powerset-co/powerpacks/commit/855e45a363951ecb9bde7447d09b994102d5020e))
+
+
+### Bug Fixes
+
+* correct v2 name matching and local persistence ([#750](https://github.com/powerset-co/powerpacks/issues/750)) ([55b2e53](https://github.com/powerset-co/powerpacks/commit/55b2e535e1a3041fde6d6fb7133f2a94c37466c7))
+* **people:** the drawer timeline's line and dots sit inside the list; no 'Decided by AI' ([#757](https://github.com/powerset-co/powerpacks/issues/757)) ([e562893](https://github.com/powerset-co/powerpacks/commit/e5628938c4c19e39a1470dc31ac2fefef6b340b3))
+* **share:** family and partners are not shared by default ([#762](https://github.com/powerset-co/powerpacks/issues/762)) ([af6c49c](https://github.com/powerset-co/powerpacks/commit/af6c49c74730e46ee431194596ad6681534e51b3))
+* **worth:** keep the request version ([#763](https://github.com/powerset-co/powerpacks/issues/763)) ([18a7855](https://github.com/powerset-co/powerpacks/commit/18a7855dc260b132c482ab6927c8714e06977e35))
+
 ## [3.20.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.19.1...powerpacks-v3.20.0) (2026-10-08)
 
 

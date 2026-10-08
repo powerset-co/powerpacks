@@ -82,23 +82,12 @@
 .stat-confirm[aria-pressed="true"] b {
   color: var(--warn);
 }
-.head-note {
-  margin-left: auto;
-  padding-bottom: 12px;
-  color: var(--faint);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-/* The share button after the count: the last upload in the note's muted line, then the button. */
 .head-share {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-left: 12px;
+  margin-left: auto;
   padding-bottom: 8px;
-}
-.head-share .head-note {
-  padding-bottom: 0;
 }
 
 .quick {
@@ -134,6 +123,17 @@
 }
 .bar-chips .chip {
   min-height: 26px;
+}
+.bar-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--warn);
+  font-size: 12px;
+}
+.bar-notice + .bar-count {
+  margin-left: 8px;
 }
 .bar-count {
   margin-left: auto;

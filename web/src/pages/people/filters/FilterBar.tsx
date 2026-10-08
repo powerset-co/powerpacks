@@ -1,4 +1,4 @@
-import { forwardRef, memo } from "react"
+import { forwardRef, memo, type ReactNode } from "react"
 
 import { SearchField } from "@/components/shared"
 import { countOf } from "@/lib/copy"
@@ -15,12 +15,14 @@ interface FilterBarProps {
   onText: (text: string) => void
   onRemove: (key: FacetKey, value: string) => void
   onClear: () => void
+  // A line before the count while something the filters read is unavailable.
+  notice: ReactNode
 }
 
 // Search box, the held facet chips, and how many people are showing.
 export const FilterBar = memo(
   forwardRef<HTMLInputElement, FilterBarProps>(
-    ({ text, filters, shown, inTab, onText, onRemove, onClear }, searchRef) => (
+    ({ text, filters, shown, inTab, onText, onRemove, onClear, notice }, searchRef) => (
       <section className="bar" data-bar>
         <SearchField
           ref={searchRef}
@@ -32,6 +34,7 @@ export const FilterBar = memo(
           onChange={(event) => onText(event.target.value)}
         />
         <ActiveChips filters={filters} onRemove={onRemove} onClear={onClear} />
+        {notice}
         <span className="bar-count num" data-count aria-live="polite">
           {countOf(shown, inTab, "person")}
         </span>

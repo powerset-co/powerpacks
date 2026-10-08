@@ -5,6 +5,7 @@ which source contacts become candidate people at all. Everything after the
 floor is identity-neutral mapping.
 
 Changelog:
+  2026-09-30: accept saved surname initials such as "Jo K".
   2026-09-25: restored the floor deleted by #486 (usable name, at least one
     message, group-only contacts need GROUP_ONLY_MIN_MESSAGES). Email-keyed
     contacts stay eligible; the phone-shape check applies to phone keys only.
@@ -29,7 +30,6 @@ GROUP_ONLY_MIN_MESSAGES = 10
 
 MIN_NAME_TOKENS = 2
 MIN_TOKEN_LEN = 2
-MIN_TOTAL_ALPHA = 5
 BLOCKED_LAST_NAME_TOKENS = frozenset({"hinge", "raya", "tinder", "bumble"})
 MIN_PHONE_DIGITS = 10
 MAX_PHONE_DIGITS = 15
@@ -54,11 +54,9 @@ def _last_name_tokens(cleaned: str) -> set[str]:
 
 
 def _has_searchable_name(cleaned: str) -> bool:
-    """True when the saved name has enough real tokens/letters to research."""
-    tokens = [token for token in cleaned.split(" ") if len(token) >= MIN_TOKEN_LEN]
-    if len(tokens) < MIN_NAME_TOKENS:
-        return False
-    return sum(1 for ch in cleaned if ch.isalpha()) >= MIN_TOTAL_ALPHA
+    """A first name and surname (including an initial) are searchable."""
+    tokens = [token for token in cleaned.split() if any(ch.isalpha() for ch in token)]
+    return len(tokens) >= MIN_NAME_TOKENS and sum(ch.isalpha() for ch in tokens[0]) >= MIN_TOKEN_LEN
 
 
 def _digits(value: str) -> str:

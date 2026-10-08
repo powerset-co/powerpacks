@@ -34,19 +34,22 @@ function posts(fetch: ReturnType<typeof serve>): string[] {
   return fetch.mock.calls.filter(([, init]) => init?.method === "POST").map(([url]) => url)
 }
 
+let client: QueryClient
+
 function show(onToast = vi.fn()) {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <QueryClientProvider client={client}>
       <ShareUpload onToast={onToast} />
     </QueryClientProvider>,
   )
   return onToast
 }
 
-/** Opens the dialog once the saved status has loaded (the trigger's muted line shows it). */
+/** Opens the share dialog. */
 async function openDialog(label: string) {
-  await waitFor(() => expect(document.querySelector(".head-note")).toBeTruthy())
-  fireEvent.click(screen.getByRole("button", { name: label }))
+  await waitFor(() => expect(client.getQueryData(["people-upload"])).toBeTruthy())
+  fireEvent.click(await screen.findByRole("button", { name: label }))
   return screen.findByRole("dialog")
 }
 
@@ -73,11 +76,11 @@ describe("ShareUpload trigger", () => {
     ],
     [uploadStatus({ status: "uploading", last_upload: SHARED }), "View upload", "Shared 128 · Sep 27"],
     [uploadStatus({ status: "checking" }), "View upload", "Never shared"],
-  ])("labels the button and the last upload (%#)", async (status, label, line) => {
+  ])("shows the button without the last-upload caption (%#)", async (status, label, line) => {
     serve({ get: () => status })
     show()
-    expect(await screen.findByText(line)).toBeTruthy()
-    expect(screen.getByRole("button", { name: label })).toBeTruthy()
+    expect(await screen.findByRole("button", { name: label })).toBeTruthy()
+    expect(screen.queryByText(line)).toBeNull()
   })
 })
 

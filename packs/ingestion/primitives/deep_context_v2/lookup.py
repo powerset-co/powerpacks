@@ -65,7 +65,7 @@ def matches(conn: sqlite3.Connection, *, name: str = "", email: str = "", phone:
             for member in family:
                 known.append(names.get(member.candidate_id, ""))
                 known.append(json.loads(member.facts_json).get("canonical_name") or "")
-            if any(wanted <= _words(name) for name in known):
+            if wanted and any(wanted <= _words(name) for name in known):
                 parents.add(parent_id)
     found: list[Match] = []
     for parent_id in sorted(parents):

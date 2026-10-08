@@ -11,18 +11,19 @@ interface QuickFiltersProps {
 
 // Named facet selections counted within the tab; pressing the active one clears it.
 export const QuickFilters = memo(function QuickFilters({ filters, counts, onPick }: QuickFiltersProps) {
+  const available = QUICK.map((quick, position) => ({ quick, position, count: counts[position] ?? 0 }))
+    .filter(({ count }) => count > 0)
+    .sort((a, b) => Number(!!a.quick.set.logbook) - Number(!!b.quick.set.logbook) || b.count - a.count)
   return (
     <section className="quick" data-quick aria-label="Quick filters">
-      {QUICK.map((quick, position) => {
+      {available.map(({ quick, position, count }) => {
         const active = quickActive(quick, filters)
-        const count = counts[position] ?? 0
         return (
           <Chip
             key={quick.name}
             className="chip"
             pressed={active}
             count={count}
-            disabled={!count && !active}
             data-quick-index={position}
             onClick={() => onPick(active ? null : quick)}
           >
