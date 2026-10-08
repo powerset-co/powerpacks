@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.21.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.21.1...powerpacks-v3.21.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* end timeline line at the final event dot ([#768](https://github.com/powerset-co/powerpacks/issues/768)) ([f85a9a2](https://github.com/powerset-co/powerpacks/commit/f85a9a231b11c0b95460d774942a958d0c3cc61d))
+
+## [3.21.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.21.0...powerpacks-v3.21.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* proxy and batch LinkedIn avatar images ([#766](https://github.com/powerset-co/powerpacks/issues/766)) ([b922029](https://github.com/powerset-co/powerpacks/commit/b922029755dde556fdd2f69f77ed78f96c8592e2))
+
 ## [3.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.20.0...powerpacks-v3.21.0) (2026-10-08)
 
 

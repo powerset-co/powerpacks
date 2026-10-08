@@ -1,4 +1,4 @@
-// The debug carousel (`?debug=1`): browse a queue by position without deciding.
+// Browse the ordered review history without deciding.
 
 import type { QueuePosition } from "@/types/review"
 

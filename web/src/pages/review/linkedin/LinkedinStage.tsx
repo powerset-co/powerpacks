@@ -18,14 +18,22 @@ export function LinkedinStage() {
   const { shown, failure, decide, retarget, browse } = useLinkedinQueue()
   return (
     <div className="linkedin-stage">
-      {shown?.payload.card ? <p className="queue-left">{leftToCheck(shown.payload.pending)}</p> : null}
+      {shown?.payload.queue && shown.phase === "ready" ? (
+        <CarouselNav queue={shown.payload.queue} onIndex={browse} />
+      ) : null}
+      {shown?.payload.card ? (
+        <p className="queue-left">
+          {shown.payload.queue?.status ? "Previously reviewed · " : ""}
+          {leftToCheck(shown.payload.pending)}
+        </p>
+      ) : null}
       <div className="linkedin-panel" aria-busy={!shown && !failure ? true : undefined}>
         {failure ? (
           <EmptyPanel title={LOAD_FAILED}>
             <p>{failure}</p>
           </EmptyPanel>
         ) : shown ? (
-          <Panel shown={shown} onDecide={decide} onRetarget={retarget} onBrowse={browse} />
+          <Panel shown={shown} onDecide={decide} onRetarget={retarget} />
         ) : null}
       </div>
     </div>
@@ -38,22 +46,13 @@ interface PanelProps {
   shown: NonNullable<Queue["shown"]>
   onDecide: Queue["decide"]
   onRetarget: Queue["retarget"]
-  onBrowse: Queue["browse"]
 }
 
-function Panel({ shown, onDecide, onRetarget, onBrowse }: PanelProps) {
+function Panel({ shown, onDecide, onRetarget }: PanelProps) {
   const { payload, phase } = shown
-  const { card, queue } = payload
+  const { card } = payload
   if (card) {
-    return (
-      <>
-        {/* Browsing could reach a card whose decision is out: the arrows wait for this one. */}
-        {queue && phase === "ready" ? <CarouselNav queue={queue} onIndex={onBrowse} /> : null}
-        {/* One frame for the queue and the carousel alike: browsing swaps the contents the way
-            a decision does, so the carousel shows the card exactly as the review will. */}
-        <LinkedinCard card={card} phase={phase} onDecide={onDecide} onRetarget={onRetarget} />
-      </>
-    )
+    return <LinkedinCard card={card} phase={phase} onDecide={onDecide} onRetarget={onRetarget} />
   }
 
   const finished = must(payload.finished, "the finished state")

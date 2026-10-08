@@ -324,7 +324,7 @@
   text-decoration: underline;
 }
 
-/* Debug-only queue carousel (?debug=1): arrows flanking the card. */
+/* Review history: the same carousel arrows, outside the card. */
 .review-page .carousel-shell {
   position: relative;
 }
@@ -349,10 +349,10 @@
   background: var(--secondary);
 }
 .review-page .carousel-prev {
-  left: 10px;
+  left: -48px;
 }
 .review-page .carousel-next {
-  right: 10px;
+  right: -48px;
 }
 
 .review-page .identity-scroll {

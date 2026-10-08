@@ -1,9 +1,10 @@
-"""The local UI's React app: the shell page and its two built assets.
+"""The local UI's React app: its shell, built assets, and cached profile-image signing.
 
 Flow: the review server (and the People test server) asks `AppRoutes.get` first.
 GET `/install` (installation), `/` (the review flow), `/people`, `/searches`, `/searches/run`, `/accounts` or `/tasks` (any
 query) -> `app.html`, a `#root` mount whose asset URLs are absolute so any nested route resolves them; GET `/app/assets/app.js|app.css` -> the build in
-the repo's `web/dist/` (see `web/README.md`). Everything else falls through.
+the repo's `web/dist/` (see `web/README.md`). POST `/api/profile-image/sign/batch` signs
+LinkedIn CDN URLs server-side for the gateway's saved images. Everything else falls through.
 
 Changelog:
   2026-10-02: the shell answers /install before project dependencies are ready.
@@ -21,6 +22,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
+from packs.shared.web.profile_images import post_profile_images
+
 WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 APP_HTML = Path(__file__).resolve().parent / "app.html"
 ASSET_PREFIX = "/app/assets/"
@@ -33,7 +36,7 @@ ASSETS = {
 
 
 class AppRoutes:
-    """The shell page and its assets, mountable in any stdlib handler."""
+    """The app and avatar routes, mountable in any stdlib handler."""
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path in PAGE_PATHS:
@@ -47,6 +50,9 @@ class AppRoutes:
         else:
             _send(handler, asset[0].read_bytes(), asset[1], cache="no-cache")
         return True
+
+    def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
+        return post_profile_images(handler, parsed)
 
 
 def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str, *, cache: str,

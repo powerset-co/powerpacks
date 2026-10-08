@@ -53,7 +53,7 @@ class SharePerson:
     public_identifier: str
     in_progress: bool
     name: str
-    has_avatar: bool
+    avatar_url: str
     title: str
     company: str
     location: str
@@ -209,7 +209,7 @@ class SharePeople:
                 public_identifier=row["public_identifier"],
                 in_progress=row["public_identifier"] != decision.public_identifier,
                 name=str(fact.get("canonical_name") or "") or row["full_name"],
-                has_avatar=bool(row["profile_picture_url"]),
+                avatar_url=row["profile_picture_url"],
                 title=row["current_title"] or fact_title,
                 company=row["current_company"] or fact_company,
                 location=row["location_raw"] or str(fact.get("location") or ""),
@@ -242,10 +242,6 @@ class SharePeople:
                 confidence=None,
             ))
         return tuple(people)
-
-    def avatar_url(self, parent_id: str) -> str:
-        row = self.export_rows().get(parent_id)
-        return row["profile_picture_url"] if row else ""
 
     def detail(self, parent_id: str) -> PersonDetail | None:
         row = self.export_rows().get(parent_id)

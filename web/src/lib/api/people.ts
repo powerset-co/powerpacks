@@ -57,7 +57,3 @@ export async function writeTags(changes: TagChange[]): Promise<TagResult[]> {
   if (!response.ok) throw await failure(response, "Try again.")
   return (await body<{ rows: TagResult[] }>(response)).rows
 }
-
-export function avatarUrl(id: string): string {
-  return `${API}avatar?id=${encodeURIComponent(id)}`
-}
