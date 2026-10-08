@@ -1,6 +1,6 @@
 import { body } from "./http"
 
-const BATCH_DELAY_MS = 100
+const BATCH_DELAY_MS = 25
 const MAX_BATCH_SIZE = 100
 // Signed paths last 30 days; refresh well before they expire.
 const CACHE_MS = 24 * 60 * 60 * 1000
