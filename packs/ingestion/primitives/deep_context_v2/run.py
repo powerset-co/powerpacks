@@ -116,6 +116,17 @@ def archive_v1(data_root: Path) -> Path | None:
     return archive
 
 
+def stages(conn: sqlite3.Connection, data_root: Path, msgvault_db: Path = DEFAULT_MSGVAULT_DB,
+           chat_db: Path = DEFAULT_CHAT_DB) -> list[tuple[str, Node]]:
+    """The stages before realize, in order. `run` and the install (install/pipeline.py) both walk this list."""
+    return [("load", ImportLoad(conn, data_root, msgvault_db=msgvault_db)),
+            ("collect", Collect(conn, data_root, COLLECT_LIMIT, chat_db, msgvault_db=msgvault_db)),
+            ("synthesize", Synthesize(conn, data_root, limit=SYNTHESIZE_LIMIT)),
+            ("dedupe", Dedupe(conn, data_root, limit=DEDUPE_LIMIT)),
+            ("worth", Worth(conn, data_root, limit=WORTH_LIMIT)),
+            ("enrich", Enrich(conn, data_root, limit=None))]
+
+
 # ---- the review server
 
 
@@ -223,12 +234,8 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
     operator_id = resolve_operator_id(operator_id)
     archive_v1(data_root)
     conn: sqlite3.Connection = open_store(store_path(data_root))
-    _stage("load", ImportLoad(conn, data_root, msgvault_db=msgvault_db))
-    _stage("collect", Collect(conn, data_root, COLLECT_LIMIT, chat_db, msgvault_db=msgvault_db))
-    _stage("synthesize", Synthesize(conn, data_root, limit=SYNTHESIZE_LIMIT))
-    _stage("dedupe", Dedupe(conn, data_root, limit=DEDUPE_LIMIT))
-    _stage("worth", Worth(conn, data_root, limit=WORTH_LIMIT))
-    _stage("enrich", Enrich(conn, data_root, limit=None))
+    for name, node in stages(conn, data_root, msgvault_db, chat_db):
+        _stage(name, node)
     conn.close()
     people_csv: Path = realize(data_root)
     log: Path = index_in_background(data_root, people_csv, operator_id)
