@@ -41,10 +41,10 @@ describe("FinishedPanel", () => {
     finishedQueue()
     const { container } = await open()
     expect(container.querySelector(".linkedin-panel > .empty-state")).toBeTruthy()
-    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Review Complete")
     expect(container.querySelector(".empty-mark")).toBeNull()
     expect(lines(container)).toEqual([
-      "Review complete — updating your index.",
+      "Updating your index.",
       "You can search your confirmed contacts while you wait.",
     ])
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull()

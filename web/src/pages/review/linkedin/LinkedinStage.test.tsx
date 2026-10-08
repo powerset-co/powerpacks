@@ -247,7 +247,7 @@ describe("LinkedinStage: a decision", () => {
     const { review } = await open()
     fireEvent.click(button("Use this profile"))
     await waitFor(() =>
-      expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked"),
+      expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Review Complete"),
     )
     expect(review.applyProgress).toHaveBeenCalledWith({ linkedin_pending: 0 })
     expect(review.toast).not.toHaveBeenCalled()
