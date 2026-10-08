@@ -2,8 +2,9 @@
 
 `run` goes load -> collect -> synthesize -> dedupe -> worth -> enrich, prints each paid stage's
 estimate and runs it (the install's spend rule always says yes, so nothing stops to ask). Then
-realize writes people.csv from everything decided so far and the indexing pipeline builds the
-search index in the background, so the user can search what was found without reviewing first;
+realize writes people.csv from everything decided so far and the index is built on Modal in the
+background (the install's build; people.csv goes to the operator's folder on the team volume), so the
+user can search what was found without reviewing first;
 the review server starts and its URL is printed: the review page is the one thing the user sees.
 `finish` is for after the review: realize and the index again (the index caches, so the second
 build costs about nothing) and the review server stopped. `review` and `stop` manage the server.
@@ -42,6 +43,7 @@ from packs.ingestion.primitives.deep_context_v2.dedupe.dedupe import Dedupe
 from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
 from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLoad
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
+from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.shared.web.server import DEFAULT_PORT, start_server as start_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
@@ -54,7 +56,8 @@ ROOT = Path(__file__).resolve().parents[4]
 REVIEW_PID_FILE = Path("deep-context") / "review-server.pid"
 INDEX_PID_FILE = Path("deep-context") / "index.pid"
 INDEX_LOG_FILE = Path("deep-context") / "index.log"
-INDEX_PIPELINE = Path("packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py")
+MODAL_PIPELINE = Path("packs/indexing/modal/linkedin_modal_pipeline.py")
+INDEX_MAX_USD = "499.99"  # the install's automatic spend rule: Modal refuses only above this
 # v1's state under <data root>/deep-context, archived and removed before a v2 run. owner.json,
 # identity/ (the JEV caches) and the v2 store are not in this list because v2 reads them.
 V1_STATE = ("deep-context.sqlite", "deep-context.sqlite-wal", "deep-context.sqlite-shm", "deep_context.sqlite",
@@ -155,10 +158,32 @@ def realize(data_root: Path) -> Path:
     return node.people_csv()
 
 
-def index_command(data_root: Path, people_csv: Path, operator_id: str) -> list[str]:
-    """The indexing pipeline over people.csv: it estimates, then builds, reusing every cached artifact."""
-    return [sys.executable, str(INDEX_PIPELINE), "run", "--operator-id", operator_id,
-            "--people-csv", str(people_csv), "--output-dir", str(data_root / "search-index")]
+def index_command(data_root: Path, people_csv: Path) -> list[str]:
+    """The index build on Modal, the same one the install runs: people.csv goes to the operator's folder
+    on the team volume, the sandbox classifies and builds the DuckDB against the shared caches, and the
+    result lands in search-index/. The operator id comes from POWERPACKS_OPERATOR_ID (.env, or
+    --operator-id)."""
+    return [sys.executable, str(MODAL_PIPELINE), "index-people", "--people-csv", str(people_csv),
+            "--dest", str(data_root / "search-index"), "--max-usd", INDEX_MAX_USD]
+
+
+def resolve_operator_id(flag: str) -> str:
+    """The account's operator id, checked before anything runs: --operator-id, else POWERPACKS_OPERATOR_ID
+    from .env (written by $powerset login). The Modal index files everything under it; without one the
+    build would land under the placeholder operator, so the run stops here instead."""
+    load_env()
+    operator_id: str = flag or os.environ.get("POWERPACKS_OPERATOR_ID", "")
+    if not operator_id or operator_id.startswith("00000000-"):
+        raise SystemExit("deep-context: no operator id. Run `$powerset login` (it writes POWERPACKS_OPERATOR_ID "
+                         "to .env) or pass --operator-id <id>.")
+    return operator_id
+
+
+def index_env(operator_id: str) -> dict[str, str]:
+    """The index build's environment: the resolved operator id."""
+    env: dict[str, str] = dict(os.environ)
+    env["POWERPACKS_OPERATOR_ID"] = operator_id
+    return env
 
 
 def index_in_background(data_root: Path, people_csv: Path, operator_id: str) -> Path:
@@ -166,7 +191,7 @@ def index_in_background(data_root: Path, people_csv: Path, operator_id: str) -> 
     wait_for_index(data_root)
     log: Path = data_root / INDEX_LOG_FILE
     with open(log, "ab") as out:
-        process = subprocess.Popen(index_command(data_root, people_csv, operator_id), cwd=ROOT,
+        process = subprocess.Popen(index_command(data_root, people_csv), cwd=ROOT, env=index_env(operator_id),
                                    stdout=out, stderr=out, start_new_session=True)
     (data_root / INDEX_PID_FILE).write_text(str(process.pid))
     return log
@@ -191,6 +216,7 @@ def wait_for_index(data_root: Path) -> None:
 
 
 def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_id: str) -> int:
+    operator_id = resolve_operator_id(operator_id)
     archive_v1(data_root)
     conn: sqlite3.Connection = open_store(store_path(data_root))
     _stage("load", ImportLoad(conn, data_root, msgvault_db=msgvault_db))
@@ -214,11 +240,12 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
 
 def finish(data_root: Path, operator_id: str) -> int:
     """After the review: people.csv and the index again (cached, so about free), the review server stopped."""
+    operator_id = resolve_operator_id(operator_id)
     people_csv: Path = realize(data_root)
     wait_for_index(data_root)
-    command: list[str] = index_command(data_root, people_csv, operator_id)
+    command: list[str] = index_command(data_root, people_csv)
     print("index: " + " ".join(command), flush=True)
-    code: int = subprocess.run(command, cwd=ROOT).returncode
+    code: int = subprocess.run(command, cwd=ROOT, env=index_env(operator_id)).returncode
     if stop_review(data_root):
         print("review server stopped", flush=True)
     return code
@@ -231,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="the review server's port")
     parser.add_argument("--msgvault-db", type=Path, default=DEFAULT_MSGVAULT_DB, help="the Gmail archive")
     parser.add_argument("--chat-db", type=Path, default=DEFAULT_CHAT_DB, help="an iMessage store other than this Mac's")
-    parser.add_argument("--operator-id", default="local", help="the indexing pipeline's operator id")
+    parser.add_argument("--operator-id", default="", help="the Modal index's operator id; default POWERPACKS_OPERATOR_ID from .env")
     args = parser.parse_args(argv)
     data_root: Path = args.data_root.resolve()
     if args.command == "run":

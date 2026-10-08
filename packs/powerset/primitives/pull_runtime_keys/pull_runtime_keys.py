@@ -237,6 +237,7 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
     result.update(refresh_cross_encoder(env_path, token=token))
     for key in SHARED_KEYS:
         result[key.lower()] = _refresh_shared_key(env_path, key, token)
+    result["operator_id"] = _refresh_operator_id(env_path, token)
     if existing_typesafe:
         return result
     path, field = KEY_SOURCES["TYPESAFE_API_KEY"]
@@ -248,6 +249,17 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
     write_env(env_path, {"TYPESAFE_API_KEY": key})
     result["typesafe_api_key"] = "installed"
     return result
+
+
+def _refresh_operator_id(env_path: Path, token: str) -> str:
+    """The account's operator id into .env: the Modal index files every run under it, and installs from
+    before 2026-10-05 never received one. Servers that do not send it leave .env as it is."""
+    state, payload = fetch_endpoint(api_base(env_path), "/v2/team/me", token)
+    value = payload.get("operator_id") if state == "ok" and isinstance(payload, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return "error" if state == "ok" else state
+    write_env(env_path, {"POWERPACKS_OPERATOR_ID": value})
+    return "refreshed"
 
 
 def _refresh_shared_key(env_path: Path, key: str, token: str) -> str:
