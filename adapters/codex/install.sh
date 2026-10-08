@@ -75,6 +75,11 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" codex \
   "$SKILLS_DIR/.powerpacks-install.json"
 
+# SessionEnd hook: after a Powerpacks session ends, writes
+# .powerpacks/reflect/<session>/ locally; nothing leaves the machine.
+# POWERPACKS_REFLECT=off disables it.
+uv run --project "$REPO_ROOT" python "$REPO_ROOT/packs/powerset/primitives/reflect/hooks_install.py" --harness codex --config-dir "$CODEX_HOME" --command "$REPO_ROOT/bin/reflect hook end" || echo "warning: could not register the reflect hook" >&2
+
 if [[ "${POWERPACKS_SKIP_AGENT_BOOTSTRAP:-}" == "1" ]]; then
   echo "skipped local Codex profile generation (POWERPACKS_SKIP_AGENT_BOOTSTRAP=1)"
 elif uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then

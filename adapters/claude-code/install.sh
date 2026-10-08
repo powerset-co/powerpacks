@@ -63,6 +63,11 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 # hand-bumped). Lets update-powerpacks/doctor detect stale installs.
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" claude-code "$SKILLS_DIR/.powerpacks-install.json"
 
+# SessionEnd hook: after a Powerpacks session ends, writes
+# .powerpacks/reflect/<session>/ locally; nothing leaves the machine.
+# POWERPACKS_REFLECT=off disables it.
+uv run --project "$REPO_ROOT" python "$REPO_ROOT/packs/powerset/primitives/reflect/hooks_install.py" --harness claude-code --config-dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" --command "$REPO_ROOT/bin/reflect hook end" || echo "warning: could not register the reflect hook" >&2
+
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks install-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound"
 echo "  import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
