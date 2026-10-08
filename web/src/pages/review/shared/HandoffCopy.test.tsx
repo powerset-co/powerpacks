@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { fakeReview } from "@/testing/review-fixture"
 import { ReviewHarness } from "@/testing/review-harness"
 
-import { GoBack } from "./GoBack"
 import { HandoffCopy } from "./HandoffCopy"
 import { SynthesisPending } from "./SynthesisPending"
 
@@ -62,20 +61,6 @@ describe("HandoffCopy", () => {
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith("Copy failed — type: bin/deep-context-v2 run"),
     )
-  })
-})
-
-describe("GoBack", () => {
-  it("hands over the phrase for Codex", async () => {
-    const write = stubClipboard(() => Promise.resolve())
-    const { container } = render(
-      <ReviewHarness review={fakeReview()}>
-        <GoBack />
-      </ReviewHarness>,
-    )
-    expect(container.querySelector(".handoff-note")?.textContent).toBe("Review complete — go back to Codex.")
-    fireEvent.click(screen.getByRole("button", { name: "Copy" }))
-    await waitFor(() => expect(write).toHaveBeenCalledWith("Review complete, continue"))
   })
 })
 

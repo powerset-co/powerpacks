@@ -45,6 +45,8 @@ from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLo
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+from packs.ingestion.primitives.deep_context_v2.review.api import REVIEW_MANIFEST
+from packs.ingestion.primitives.share.share_list import Share
 from packs.shared.web.server import DEFAULT_PORT, start_server as start_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Synthesize
@@ -153,6 +155,7 @@ def realize(data_root: Path) -> Path:
     conn: sqlite3.Connection = open_store(store_path(data_root))
     node = Realize(conn, data_root)
     _stage("realize", node)
+    _stage("share", Share(conn, data_root))  # the share list over everything confirmed so far: free, seconds
     conn.close()
     print(f"people.csv: {node.people_csv()}", flush=True)
     return node.people_csv()
@@ -229,6 +232,7 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
     people_csv: Path = realize(data_root)
     log: Path = index_in_background(data_root, people_csv, operator_id)
     print(f"index: building in the background from what was decided so far (log {log})", flush=True)
+    (data_root / REVIEW_MANIFEST).unlink(missing_ok=True)  # this review's completion is new
     url: str = start_review(data_root, port)
     pending: int = pending_reviews(port)
     if pending:

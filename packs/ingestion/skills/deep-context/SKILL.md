@@ -42,7 +42,7 @@ imports + owner.json -> collect -> synthesize -> dedupe -> worth -> enrich -> pe
 ```bash
 bin/deep-context-v2 owner --linkedin-url <the user's LinkedIn> --email <their email> [--email ...]
 bin/deep-context-v2 run       # the whole pipeline; ends with the Check LinkedIn URL
-bin/deep-context-v2 finish    # after the review: people.csv and the index again
+bin/deep-context-v2 finish    # after the review: people.csv, the share list and the index again
 bin/deep-context-v2 review    # the Check LinkedIn server and its URL (if it was stopped)
 bin/deep-context-v2 stop      # stop the page server, once the user is done with it
 bin/deep-context-v2 share     # the share list; then the People page at http://127.0.0.1:8765/people
@@ -70,7 +70,7 @@ prints stage lines; it never creates, updates or reports tasks, and never speaks
 5. Merge duplicate people
 6. Assess network worth
 7. Enrich identities
-8. Export people and build the search index
+8. Export people, decide the share list and build the search index
 9. Review LinkedIn matches
 10. Update the index with reviewed matches
 
@@ -149,13 +149,17 @@ worker reports it; the advisor decides and the worker reruns. Use common sense:
   issue: the next install hits it too.
 
 **4. Review.** The user answers each card on the Check LinkedIn page: Use this profile, Skip, or
-paste the right LinkedIn URL under "Wrong person?". The page says "Review complete — go back to
-Codex" when the queue is empty.
+paste the right LinkedIn URL under "Wrong person?". Nothing comes back through chat: when the
+queue is empty the server writes `.powerpacks/deep-context/v2-manifests/review.json` (status
+`completed`) and the page says "Review complete — updating your index". Watch for that file on
+the same 30-second cadence as the pane.
 
-**5. Finish.** When the user comes back from the page (they paste "Review complete, continue"),
-run `bin/deep-context-v2 finish`: people.csv again with the reviewed LinkedIns and the index again
-on Modal (its shared caches make the second build nearly free). The page stays up through the
-build. Then run `bin/deep-context-v2 stop` to take the page down, and say the index is updated.
+**5. Finish.** The moment `review.json` says completed, send `bin/deep-context-v2 finish` into
+the tmux session: people.csv again with the reviewed LinkedIns, the share list, and the index
+again on Modal (its shared caches make the second build nearly free). Then
+`bin/deep-context-v2 stop` takes the page down; kill the tmux session; say the index is updated.
+If the user says they are done before the queue is empty, or asks for something that needs the
+index, run the same three commands with what was reviewed; `finish` takes a partial review.
 
 The reports are for the developers; the user is not told about them.
 

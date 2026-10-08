@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { linkedinCard, linkedinFinished, motionMedia } from "@/testing/review-fixture"
@@ -37,40 +37,18 @@ const lines = (container: HTMLElement) =>
   [...container.querySelectorAll(".empty-state > p")].map((line) => line.textContent)
 
 describe("FinishedPanel", () => {
-  it("shows only the title and the hand-back to Codex, and presses nothing (L11)", async () => {
+  it("says the review is complete and the index is updating, and presses nothing (L11)", async () => {
     finishedQueue()
     const { container } = await open()
     expect(container.querySelector(".linkedin-panel > .empty-state")).toBeTruthy()
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
     expect(container.querySelector(".empty-mark")).toBeNull()
-    expect(lines(container)).toEqual(["Review complete — go back to Codex."])
+    expect(lines(container)).toEqual([
+      "Review complete — updating your index. You can search your confirmed contacts while you wait.",
+    ])
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull()
     await act(() => Promise.resolve())
     expect(server.posts(COMPLETE)).toEqual([])
-  })
-
-  it("hands back to Codex once everything is decided (L11)", async () => {
-    const write = vi.fn(() => Promise.resolve())
-    vi.stubGlobal("navigator", { clipboard: { writeText: write } })
-    finishedQueue()
-    const { container, review } = await open()
-    expect(lines(container)).toEqual(["Review complete — go back to Codex."])
-    expect(container.querySelector(".handoff-copy code")?.textContent).toBe("Review complete, continue")
-    expect(screen.queryByRole("button", { name: "Finish" })).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: "Copy" }))
-    await waitFor(() => expect(review.toast).toHaveBeenCalledExactlyOnceWith("Copied"))
-    expect(write).toHaveBeenCalledExactlyOnceWith("Review complete, continue")
-  })
-
-  it("names the phrase to type when the clipboard refuses (L11)", async () => {
-    vi.stubGlobal("navigator", { clipboard: { writeText: () => Promise.reject(new Error("denied")) } })
-    finishedQueue()
-    const { review } = await open()
-    fireEvent.click(screen.getByRole("button", { name: "Copy" }))
-    await waitFor(() =>
-      expect(review.toastError).toHaveBeenCalledExactlyOnceWith(
-        "Copy failed — type: Review complete, continue",
-      ),
-    )
   })
 
   it("shows the synthesis handoff instead when synthesis has not run (S8)", async () => {
