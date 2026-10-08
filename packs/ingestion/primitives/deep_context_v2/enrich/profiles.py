@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
+
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.enrich import proposals
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
@@ -58,34 +60,79 @@ class Profiles:
     fetched: int               # distinct URLs fetched from RapidAPI this run
 
 
-def _text(value: object) -> str:
+class CacheDate(BaseModel):
+    year: int
+
+
+class CacheExperience(BaseModel):
+    """One position as the profile normalizer writes it: every key present, a value LinkedIn omitted is null."""
+
+    title: str | None
+    company_name: str | None
+    starts_at: CacheDate | None
+    ends_at: CacheDate | None
+
+
+class CacheEducation(BaseModel):
+    """One school. `school` is always written; the rest pass through from RapidAPI only when it sent them."""
+
+    school: str | None
+    starts_at: CacheDate | None = None
+    ends_at: CacheDate | None = None
+    schoolName: str | None = None
+    degree: str | None = None
+    fieldOfStudy: str | None = None
+
+
+class CacheProfile(BaseModel):
+    """A cache record's normalized_profile, in the keys the judges read."""
+
+    member_id: str
+    full_name: str
+    headline: str
+    location_str: str
+    city: str
+    state: str
+    country: str
+    experiences: list[CacheExperience]
+    education: list[CacheEducation]
+
+
+class ProfileRecord(BaseModel):
+    """One file of the shared RapidAPI profile cache, as read_usable_cached_profile returns it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    fetched_at: str
+    normalized_profile: CacheProfile
+
+
+def _text(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _year(value: CacheDate | None) -> str:
     if value is None:
         return ""
-    return str(value).strip()
+    return str(value.year)
 
 
-def _year(value: object) -> str:
-    if isinstance(value, dict):
-        return _text(value.get("year"))
-    return ""
-
-
-def _experience(row: dict[str, Any]) -> str:
-    line: str = f"{_text(row.get('title')) or '?'} @ {_text(row.get('company_name')) or '?'}"
-    start: str = _year(row.get("starts_at"))
-    end: str = _year(row.get("ends_at"))
+def _experience(row: CacheExperience) -> str:
+    line: str = f"{_text(row.title) or '?'} @ {_text(row.company_name) or '?'}"
+    start: str = _year(row.starts_at)
+    end: str = _year(row.ends_at)
     if start or end:
         line += f", {start}-{end or 'present'}"
     return line
 
 
-def _education(row: dict[str, Any]) -> str:
+def _education(row: CacheEducation) -> str:
     """"degree, field — school", from the cache's keys (schoolName, fieldOfStudy, degree)."""
     degree: list[str] = []
-    for value in (row.get("degree"), row.get("fieldOfStudy")):
+    for value in (row.degree, row.fieldOfStudy):
         if _text(value):
             degree.append(_text(value))
-    school: str = _text(row.get("schoolName")) or _text(row.get("school"))
+    school: str = _text(row.schoolName) or _text(row.school)
     if degree and school:
         return ", ".join(degree) + " — " + school
     if degree:
@@ -93,28 +140,36 @@ def _education(row: dict[str, Any]) -> str:
     return school
 
 
-def profile_from_record(url: str, record: dict[str, Any]) -> Profile:
+def profile_from_record(url: str, record: ProfileRecord) -> Profile:
     """A cache record as a Profile. The identity is the URL asked for; a renamed address answers with the
     same member id."""
-    profile: dict[str, Any] = record["normalized_profile"]
+    profile: CacheProfile = record.normalized_profile
     experiences: list[str] = []
-    for row in profile.get("experiences") or []:
+    for row in profile.experiences:
         experiences.append(_experience(row))
     education: list[str] = []
-    for row in profile.get("education") or []:
-        line: str = _education(row)
+    for school in profile.education:
+        line: str = _education(school)
         if line:
             education.append(line)
-    location: str = _text(profile.get("location_str"))
+    location: str = _text(profile.location_str)
     if not location:
         parts: list[str] = []
-        for value in (profile.get("city"), profile.get("state"), profile.get("country")):
+        for value in (profile.city, profile.state, profile.country):
             if _text(value):
                 parts.append(_text(value))
         location = ", ".join(parts)
-    return Profile(url, extract_public_identifier(url), _text(profile.get("member_id")), _text(profile.get("full_name")),
-                   _text(profile.get("headline")), location, tuple(experiences), tuple(education),
-                   _text(record.get("fetched_at")))
+    return Profile(url, extract_public_identifier(url), _text(profile.member_id), _text(profile.full_name),
+                   _text(profile.headline), location, tuple(experiences), tuple(education),
+                   _text(record.fetched_at))
+
+
+def read_profile_record(cache_dir: Path, public_id: str) -> ProfileRecord | None:
+    """The cached record for one public identifier, parsed; None when the cache has no usable profile."""
+    cached: dict[str, Any] | None = read_usable_cached_profile(profile_cache_path(cache_dir, public_id))
+    if cached is None:
+        return None
+    return ProfileRecord.model_validate(cached)
 
 
 def load_profiles(data_root: Path, urls: list[str], fetch: bool) -> Profiles:
@@ -131,7 +186,7 @@ def load_profiles(data_root: Path, urls: list[str], fetch: bool) -> Profiles:
     client: RapidApiClient | None = None  # None = fetching is off, or nothing missed the cache yet
     for url in distinct:
         public_id: str = extract_public_identifier(url)
-        record: dict[str, Any] | None = read_usable_cached_profile(profile_cache_path(cache_dir, public_id))
+        record: ProfileRecord | None = read_profile_record(cache_dir, public_id)
         if record is None and fetch:
             # The client writes what it fetched into the same cache; read it back from there.
             if client is None:
@@ -139,8 +194,8 @@ def load_profiles(data_root: Path, urls: list[str], fetch: bool) -> Profiles:
                 client = RapidApiClient()
             client.get_profile(public_id, url, cache_dir=cache_dir)
             fetched += 1
-            record = read_usable_cached_profile(profile_cache_path(cache_dir, public_id))
-        if record is None or not _text(record["normalized_profile"].get("member_id")):
+            record = read_profile_record(cache_dir, public_id)
+        if record is None or not _text(record.normalized_profile.member_id):
             missing += 1
             continue
         found[url] = profile_from_record(url, record)

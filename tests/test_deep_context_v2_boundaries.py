@@ -5,7 +5,9 @@ import unittest
 
 from pydantic import ValidationError
 
+from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
 from packs.ingestion.primitives.deep_context_v2.db.schema import SourceChannel
+from packs.ingestion.primitives.deep_context_v2.enrich.profiles import ProfileRecord, profile_from_record
 from packs.ingestion.primitives.deep_context_v2.import_load.import_row import ImportRow
 
 
@@ -36,6 +38,51 @@ class ImportRowTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("source_channels", message)
         self.assertIn("interaction_counts", message)
+
+
+def _record(**experience: object) -> dict[str, object]:
+    """A profile cache record as read_usable_cached_profile returns it (raw_response and extras left out)."""
+    job: dict[str, object] = {"title": "Engineer", "company_name": "Acme", "company": "Acme",
+                              "starts_at": {"year": 2016, "month": 3, "day": None}, "ends_at": None}
+    job.update(experience)
+    return {
+        "fetched_at": "2026-10-01T00:00:00Z", "public_identifier": "jordan-bravo", "raw_response": {},
+        "normalized_profile": {
+            "success": True, "member_id": "4242", "full_name": "Jordan Bravo", "headline": "", "location_str": "",
+            "city": "Oakland", "state": "", "country": "United States", "experiences": [job],
+            "education": [{"school": "UCLA", "school_name": "UCLA", "degree": "BS"}],
+        },
+    }
+
+
+class ProfileRecordTests(unittest.TestCase):
+    def test_parses_a_cached_profile_and_rejects_a_malformed_one(self) -> None:
+        profile = profile_from_record("https://www.linkedin.com/in/jordan-bravo", ProfileRecord.model_validate(_record()))
+        self.assertEqual(profile.experiences, ("Engineer @ Acme, 2016-present",))
+        self.assertEqual(profile.education, ("BS — UCLA",))
+        self.assertEqual(profile.location, "Oakland, United States")
+
+        with self.assertRaises(ValidationError) as caught:
+            ProfileRecord.model_validate(_record(starts_at={"year": "sometime"}))
+        self.assertIn("normalized_profile.experiences.0.starts_at.year", str(caught.exception))
+
+
+class OwnerProfileTests(unittest.TestCase):
+    def test_parses_owner_json_and_rejects_a_malformed_one(self) -> None:
+        payload: dict[str, object] = {
+            "name": "Arthur Chen", "emails": ["Arthur@Example.com"], "phones": ["+1 (408) 555-0100"],
+            "linkedin_url": "https://www.linkedin.com/in/arthur", "notes": "", "locations": ["San Francisco"],
+            "work": [{"company": "Powerset", "title": "Engineer", "start": 2025, "end": 0}],
+            "education": [{"school": "UCLA", "start": 2007, "end": 2010, "note": "BS"}],
+        }
+        owner = OwnerProfile.model_validate(payload)
+        self.assertEqual(owner.emails, ("arthur@example.com",))
+        self.assertEqual(owner.phones, ("+14085550100",))
+        self.assertEqual((owner.work[0].start, owner.work[0].end), ("2025", ""))
+
+        with self.assertRaises(ValidationError) as caught:
+            OwnerProfile.model_validate({**payload, "work": [{"company": "Powerset", "start": 2025, "end": 0}]})
+        self.assertIn("work.0.title", str(caught.exception))
 
 
 if __name__ == "__main__":

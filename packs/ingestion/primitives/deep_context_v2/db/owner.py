@@ -11,33 +11,48 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, ConfigDict, field_validator
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 
 
-@dataclass(frozen=True)
-class OwnerEducation:
+
+def _year(value: int) -> str:
+    # owner.json stores a year, or 0 when unknown or, for an end, current; 0 renders as "present".
+    return "" if value == 0 else str(value)
+
+
+Year = Annotated[str, BeforeValidator(_year)]
+
+
+class OwnerEducation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     school: str
-    start: str
-    end: str
+    start: Year
+    end: Year
     note: str
 
 
-@dataclass(frozen=True)
-class OwnerWork:
+class OwnerWork(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     company: str
     title: str
-    start: str
-    end: str
+    start: Year
+    end: Year
 
 
-@dataclass(frozen=True)
-class OwnerProfile:
+class OwnerProfile(BaseModel):
+    """owner.json, parsed. Emails and phones are normalized here, once."""
+
+    model_config = ConfigDict(frozen=True)
+
     name: str
     emails: tuple[str, ...]
     phones: tuple[str, ...]
@@ -47,55 +62,34 @@ class OwnerProfile:
     locations: tuple[str, ...]
     notes: str
 
+    @field_validator("emails")
+    @classmethod
+    def _normalize_emails(cls, emails: tuple[str, ...]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        for email in emails:
+            normalized.append(normalize_email(email))
+        return tuple(normalized)
 
-def _text(value: object) -> str:
-    # owner.json stores 0 for a current job's end; 0 means "no end", which renders as "present".
-    return "" if value is None or value == 0 else str(value).strip()
-
-
-def _strings(value: object) -> tuple[str, ...]:
-    items = []
-    for item in cast(list[str] | None, value) or []:
-        if _text(item):
-            items.append(_text(item))
-    return tuple(items)
-
-
-def owner_from_payload(payload: dict[str, object]) -> OwnerProfile:
-    emails = []
-    for email in _strings(payload.get("emails")):
-        emails.append(normalize_email(email))
-    phones = []
-    for phone in _strings(payload.get("phones")):
-        phones.append(normalize_phone(phone))
-    education = []
-    for e in cast(list[dict[str, object]] | None, payload.get("education")) or []:
-        education.append(OwnerEducation(_text(e.get("school")), _text(e.get("start")), _text(e.get("end")), _text(e.get("note"))))
-    work = []
-    for w in cast(list[dict[str, object]] | None, payload.get("work")) or []:
-        work.append(OwnerWork(_text(w.get("company")), _text(w.get("title")), _text(w.get("start")), _text(w.get("end"))))
-    return OwnerProfile(
-        name=_text(payload.get("name")),
-        emails=tuple(emails),
-        phones=tuple(phones),
-        linkedin_url=_text(payload.get("linkedin_url")),
-        education=tuple(education),
-        work=tuple(work),
-        locations=_strings(payload.get("locations")),
-        notes=_text(payload.get("notes")),
-    )
+    @field_validator("phones")
+    @classmethod
+    def _normalize_phones(cls, phones: tuple[str, ...]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        for phone in phones:
+            normalized.append(normalize_phone(phone))
+        return tuple(normalized)
 
 
 def load_owner(conn: sqlite3.Connection, owner_json: Path) -> OwnerProfile:
     """Project owner.json into the `owner` row. The file is the operator's own, written at setup."""
     raw: bytes = owner_json.read_bytes()
     payload: dict[str, object] = json.loads(raw)
+    owner = OwnerProfile.model_validate(payload)
     queries.upsert_owner(conn, json.dumps(payload, ensure_ascii=False, sort_keys=True), hashlib.sha256(raw).hexdigest(), now_iso())
-    return owner_from_payload(payload)
+    return owner
 
 
 def read_owner(conn: sqlite3.Connection) -> OwnerProfile:
-    return owner_from_payload(json.loads(queries.owner_payload_json(conn)))
+    return OwnerProfile.model_validate_json(queries.owner_payload_json(conn))
 
 
 def _span(start: str, end: str) -> str:
