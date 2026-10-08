@@ -57,6 +57,7 @@ Message bodies go to OpenAI for synthesis. Facts (never messages) go to JEV for 
 identity, to Parallel for research, and to OpenAI for the LinkedIn judge. LinkedIn public
 identifiers go to RapidAPI for profiles. Nothing is uploaded anywhere else by this pipeline.
 
-## Not in v2
+## Re-research on the review page
 
-Re-research from a description on the review page is refused; a pasted URL is applied.
+Re-research from a description on the review page runs one Parallel research with the words beside the family's
+facts (about $0.05); a profile found is applied as the Retarget, nothing found leaves the family pending.

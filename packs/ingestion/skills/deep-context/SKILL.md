@@ -204,4 +204,5 @@ points at it.
 
 ## Not in v2
 
-- Re-research from a description on the review page: refused with a message; paste a URL instead.
+- Re-research from a description on the review page: one paid Parallel research (about $0.05) in the
+  background; a profile found is applied, nothing found leaves the person in the queue.
