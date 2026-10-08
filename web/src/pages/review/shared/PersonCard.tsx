@@ -10,6 +10,7 @@ import { LabelBadges } from "./LabelBadges"
 import { LinkedinLink } from "./LinkedinLink"
 import { ReviewAvatar } from "./ReviewAvatar"
 import { SourceBadges } from "./SourceBadges"
+import { SyntheticBadge } from "./SyntheticBadge"
 
 interface PersonCardProps {
   person: ReviewPerson
@@ -42,7 +43,11 @@ export function PersonCard({ person, candidate, personOnly = false, dossier = tr
           ) : null}
           <div className="name-row">
             <h2>{displayName(person, candidate, personOnly)}</h2>
-            {url ? <LinkedinLink url={url} /> : null}
+            {candidate?.synthetic && !personOnly ? (
+              <SyntheticBadge />
+            ) : url ? (
+              <LinkedinLink url={url} />
+            ) : null}
           </div>
           <LabelBadges labels={person.labels} candidate={facts} />
         </div>

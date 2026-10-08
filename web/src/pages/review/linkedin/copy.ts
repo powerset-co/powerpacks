@@ -20,7 +20,6 @@ export function leftToCheck(count: number): string {
 export const OPTIONS_INTRO = "We found more than one possible profile — pick the right one."
 
 export const OPTION = {
-  researched: "Researched profile — no LinkedIn confirmed",
   unfetched: "LinkedIn — profile not fetched yet",
   researchSummary: "Research summary",
 } as const

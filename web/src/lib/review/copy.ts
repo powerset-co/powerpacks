@@ -23,6 +23,13 @@ export const FACT = {
 
 export const VIEW_LINKEDIN = "View LinkedIn"
 
+/** The badge beside a researched profile's name, and what it means. */
+export const SYNTHETIC = {
+  badge: "Synthetic",
+  explain:
+    "A synthetic profile: no LinkedIn was confirmed, so this is built from your messages and public sources. Treat it as a best guess.",
+} as const
+
 export const SHOW_FEWER = "show fewer"
 export function showMore(hidden: number): string {
   return `+ show ${hidden} more`
