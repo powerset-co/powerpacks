@@ -171,10 +171,6 @@ class ReviewApi:
             if found is None or found.status != ResearchStatus.COMPLETE.value:
                 print(f"[retarget] {card.parent_id}: research found no profile", file=sys.stderr, flush=True)
                 return
-            # The reviewer may have decided the family while research ran; their decision stands.
-            if card.parent_id not in review_list(conn):
-                print(f"[retarget] {card.parent_id}: decided meanwhile, research kept", file=sys.stderr, flush=True)
-                return
             url: str = decisions.retarget(conn, self.data_root, card, research.research_url(found))
             print(f"[retarget] {card.parent_id}: {url}", file=sys.stderr, flush=True)
         except Exception as error:
