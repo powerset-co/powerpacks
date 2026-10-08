@@ -177,6 +177,54 @@ describe("PeoplePage", () => {
     expect(screen.getByText("3 people", { selector: "[data-count]" })).toBeTruthy()
   })
 
+  it("restores filters, sort, person and open sections from the URL after remounting", async () => {
+    vi.stubGlobal("fetch", vi.fn(serve))
+    const first = renderPage()
+    await waitFor(() => expect(first.container.querySelectorAll(".row")).toHaveLength(3))
+    fireEvent.click(must(first.container.querySelector('[data-facet-key="worth"][data-facet-value="yes"]')))
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), {
+      target: { value: "Jordan" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^Interactions/ }))
+    fireEvent.click(must(first.container.querySelector(".row")))
+    const relationship = await screen.findByRole("button", { name: "Relationship", expanded: false })
+    fireEvent.click(relationship)
+    const path = must(at())
+    const params = new URLSearchParams(path.split("?")[1])
+    expect(params.get("person")).toBe("p1")
+    expect(params.get("q")).toBe("Jordan")
+    expect(params.getAll("filter.worth")).toEqual(["yes"])
+    expect(params.get("sort")).toBe("messages")
+    expect(params.get("sections")).toContain("relationship")
+    first.unmount()
+
+    const second = renderPage(path)
+    await screen.findByRole("button", { name: "Relationship", expanded: true })
+    await waitFor(() => expect(second.container.querySelectorAll(".row")).toHaveLength(1))
+    expect(second.container.querySelector("[data-drawer] h2")?.textContent).toBe("Jordan Bravo")
+    expect(screen.getByRole<HTMLInputElement>("searchbox", { name: "Search people" }).value).toBe("Jordan")
+    expect(
+      second.container
+        .querySelector('[data-facet-key="worth"][data-facet-value="yes"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true")
+    expect(second.container.querySelector('[data-section="relationship"]')?.getAttribute("data-open")).toBe(
+      "true",
+    )
+    fireEvent.click(must(second.container.querySelector(".row")))
+    expect(new URLSearchParams(must(at()).split("?")[1]).has("person")).toBe(false)
+  })
+
+  it("keeps the selected tab and all sections closed after refresh", async () => {
+    vi.stubGlobal("fetch", vi.fn(serve))
+    const { container } = renderPage("/people?tab=no&person=p1&sections=")
+    await waitFor(() =>
+      expect(container.querySelector('[data-tab="no"]')?.getAttribute("aria-pressed")).toBe("true"),
+    )
+    await screen.findByRole("button", { name: "Relationship", expanded: false })
+    expect(container.querySelector('[data-section][data-open="true"]')).toBeNull()
+  })
+
   it("shows only the share action beside the tab totals", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
@@ -343,7 +391,7 @@ describe("PeoplePage logbook", () => {
     // Keys the list would act on do nothing while reading.
     fireEvent.keyDown(document.body, { key: "s" })
     fireEvent.keyDown(document.body, { key: "Escape" })
-    await waitFor(() => expect(at()).toBe("/people"))
+    await waitFor(() => expect(at()?.split("?")[0]).toBe("/people"))
     expect(route.fetch.mock.calls.filter(([url]) => url.endsWith("/tags"))).toHaveLength(0)
 
     // Escape went Back: the same nodes, filters, sort, selection and scroll.
@@ -377,7 +425,7 @@ describe("PeoplePage logbook", () => {
     expect(within(pane).getByText("No text")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "People" }))
-    await waitFor(() => expect(at()).toBe("/people"))
+    await waitFor(() => expect(at()?.split("?")[0]).toBe("/people"))
     expect(drawer.getAttribute("data-open")).toBe("true")
     expect(container.querySelector("[data-drawer] h2")?.textContent).toBe("Casey Delta")
     expect(document.activeElement).toBe(view)
@@ -434,7 +482,7 @@ describe("PeoplePage logbook", () => {
     expect(route.posts).toEqual([{ people: ["p2"] }])
     // The refreshed scope replaced the reader's entry: Back still leads to People.
     fireEvent.click(screen.getByRole("button", { name: "People" }))
-    await waitFor(() => expect(at()).toBe("/people"))
+    await waitFor(() => expect(at()?.split("?")[0]).toBe("/people"))
   })
 
   it("still lists People when the saved logbooks can't be read, and says so instead of claiming none", async () => {
@@ -537,7 +585,7 @@ describe("PeoplePage logbook", () => {
     ).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "People" }))
-    await waitFor(() => expect(at()).toBe("/people"))
+    await waitFor(() => expect(at()?.split("?")[0]).toBe("/people"))
   })
 
   it("jumps by month on the timeline and marks the month scrolled into view", async () => {
@@ -642,7 +690,7 @@ describe("PeoplePage logbook", () => {
       }),
     )
     await waitFor(() => expect(screen.getByText(/^No messages found on this computer\./)).toBeTruthy())
-    expect(at()).toBe("/people")
+    expect(at()?.split("?")[0]).toBe("/people")
   })
 
   it("says why a build was refused and keeps the selection", async () => {
@@ -674,6 +722,6 @@ describe("PeoplePage logbook", () => {
 
     await waitFor(() => expect(screen.getByText("Couldn't build the logbook. disk full")).toBeTruthy())
     expect(drawer.getAttribute("data-open")).toBe("true")
-    expect(at()).toBe("/people")
+    expect(at()?.split("?")[0]).toBe("/people")
   })
 })
