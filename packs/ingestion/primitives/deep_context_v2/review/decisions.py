@@ -90,6 +90,8 @@ def reject(conn: sqlite3.Connection, card: Card) -> None:
             for pending in card.pending:
                 queries_review.insert_linkedin(conn, member.candidate_id, pending.linkedin_url, pending.member_id,
                                                pending.origin, Verdict.WRONG_PERSON.value, pending.fingerprint, now)
+
+
 def skip(conn: sqlite3.Connection, card: Card) -> None:
     """This family is wrong: every pending URL or card is wrong_person for every member, and worth is no.
     A family with nothing pending has no URL to reject; it gets the worth rows alone."""

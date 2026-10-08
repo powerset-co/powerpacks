@@ -155,10 +155,12 @@ class ReviewApi:
         guidance: str = _value(form, "guidance").strip()
         if not guidance or len(guidance) > MAX_TEXT_CHARS:
             raise Refusal(HTTPStatus.BAD_REQUEST, f"describe the person in 1-{MAX_TEXT_CHARS} characters")
-        if slug not in review_list(self.conn):
-            raise Refusal(HTTPStatus.CONFLICT, "This family was already decided. Reload the page.")
-        card: Card = load_card(self.conn, self.data_root, slug)
+        self._pending()
+        if slug not in self.queue:
+            raise Refusal(HTTPStatus.NOT_FOUND, "This family is not in the review.")
+        card: Card = self._card(slug)
         decisions.reject(self.conn, card)
+        self.queue[slug].status = "fix"
         subject: ResearchSubject = research.guided_subject(card.parent_id, card.facts, guidance)
         threading.Thread(target=self._research, args=(card, subject), daemon=True).start()
 
@@ -184,9 +186,10 @@ class ReviewApi:
         slug: str = _value(form, "parent_slug")
         if not comment or len(comment) > MAX_TEXT_CHARS:
             raise Refusal(HTTPStatus.BAD_REQUEST, f"comment must be 1-{MAX_TEXT_CHARS} characters")
-        if slug not in review_list(self.conn):
-            raise Refusal(HTTPStatus.NOT_FOUND, "This family is no longer pending.")
-        card: Card = load_card(self.conn, self.data_root, slug)
+        self._pending()
+        if slug not in self.queue:
+            raise Refusal(HTTPStatus.NOT_FOUND, "This family is not in the review.")
+        card: Card = self._card(slug)
         pending: list[str] = []
         for item in card.pending:
             pending.append(item.linkedin_url)

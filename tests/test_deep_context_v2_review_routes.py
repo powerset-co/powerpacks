@@ -44,10 +44,10 @@ class RouteTests(unittest.TestCase):
             self.api.retarget({"parent_slug": ["p:1"], "guidance": ["  "]})
         self.assertEqual(refused.exception.status, HTTPStatus.BAD_REQUEST)
 
-    def test_retarget_of_a_decided_family_is_a_conflict(self) -> None:
+    def test_retarget_of_an_unknown_family_is_not_found(self) -> None:
         with self.assertRaises(api.Refusal) as refused:
             self.api.retarget({"parent_slug": ["p:gone"], "guidance": ["the one at Stripe"]})
-        self.assertEqual(refused.exception.status, HTTPStatus.CONFLICT)
+        self.assertEqual(refused.exception.status, HTTPStatus.NOT_FOUND)
 
     def test_retarget_rejects_the_pending_profile_at_once(self) -> None:
         pending = mock.Mock(linkedin_url="https://www.linkedin.com/in/wrong-evan", member_id="m1", origin="research",
@@ -57,6 +57,7 @@ class RouteTests(unittest.TestCase):
              mock.patch.object(api, "load_card", return_value=card), \
              mock.patch.object(api.threading, "Thread") as thread:
             self.api.retarget({"parent_slug": ["p:1"], "guidance": ["the one at Stripe"]})
+            self.assertEqual(self.api._pending(), 0)
         thread.return_value.start.assert_called_once()
         rows = self.conn.execute("SELECT candidate_id, linkedin_url, verdict FROM candidate_linkedins").fetchall()
         self.assertEqual([tuple(r) for r in rows], [("c1", "https://www.linkedin.com/in/wrong-evan", "wrong_person")])
