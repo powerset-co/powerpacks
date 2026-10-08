@@ -61,12 +61,12 @@
   list-style: none;
 }
 /* The line runs from the first dot to the last, inside the list's box so nothing is clipped. */
-.timeline::before {
+.timeline li:not(:last-child)::after {
   content: "";
   position: absolute;
-  left: 3.5px;
+  left: -14.5px;
   top: 10px;
-  bottom: 10px;
+  height: calc(100% + 10px);
   width: 1px;
   background: var(--line-strong);
 }
@@ -80,6 +80,7 @@
 /* The dot sits on the line, centred at 4px from the list's left edge. */
 .timeline li::before {
   content: "";
+  z-index: 1;
   position: absolute;
   left: -18px;
   top: 6px;
