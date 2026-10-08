@@ -1,0 +1,122 @@
+import { useEffect, useRef } from "react"
+
+import { EmptyState, Spinner } from "@/components/shared"
+import { answer, newConversation, send, stop, useAgent } from "@/lib/agent/store"
+import { useCodexAccount } from "@/lib/agent/useCodexAccount"
+import { isDesktop } from "@/lib/desktop"
+
+import { ApprovalCard } from "./ApprovalCard"
+import { CodexGate } from "./CodexGate"
+import { Composer } from "./Composer"
+import { Transcript } from "./Transcript"
+
+// Within this distance of the bottom, new output keeps the transcript pinned to the end.
+const STICK_PX = 120
+
+const STARTERS = [
+  { title: "Search my network", prompt: "Find people in my network who founded developer tools companies." },
+  { title: "Import Gmail contacts", prompt: "Import my Gmail contacts." },
+  { title: "Build dossiers", prompt: "Process my contacts with Deep Context and build dossiers." },
+  { title: "Build the search index", prompt: "Build the local search index." },
+] as const
+
+function Welcome() {
+  return (
+    <div className="rise-in flex flex-col items-center gap-6 pt-[12vh] text-center">
+      <span
+        aria-hidden
+        className="size-3.5 rounded-[4px] bg-primary shadow-[0_0_0_5px_var(--primary-soft)]"
+      />
+      <div className="flex flex-col gap-1.5">
+        <h1 className="m-0 text-xl font-semibold">What should we work on?</h1>
+        <p className="m-0 text-muted-foreground">
+          Codex runs Powerpacks on this computer: searches, imports, Deep Context and the search index.
+        </p>
+      </div>
+      <ul
+        className="m-0 grid w-full list-none grid-cols-2 gap-2.5 p-0 max-[680px]:grid-cols-1"
+        aria-label="Suggestions"
+      >
+        {STARTERS.map(({ title, prompt }) => (
+          <li key={title}>
+            <button
+              type="button"
+              onClick={() => void send(prompt)}
+              className="flex w-full cursor-pointer flex-col gap-1 rounded-[var(--radius-m)] border border-line bg-card px-3.5 py-3 text-left transition-[border-color,background-color] duration-fast ease-out hover:border-line-strong hover:bg-surface-2"
+            >
+              <span className="text-[13px] font-semibold">{title}</span>
+              <span className="text-xs text-muted-foreground">{prompt}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function Conversation() {
+  const agent = useAgent()
+  const scroller = useRef<HTMLDivElement>(null)
+  const pinned = useRef(true)
+  const waiting = agent.running && agent.approvals.length === 0 && agent.entries.at(-1)?.kind !== "agent"
+
+  useEffect(() => {
+    const element = scroller.current
+    if (element && pinned.current) element.scrollTop = element.scrollHeight
+  }, [agent.entries, agent.approvals, waiting])
+
+  return (
+    <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+      <div
+        ref={scroller}
+        className="overflow-y-auto"
+        onScroll={(event) => {
+          const element = event.currentTarget
+          pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_PX
+        }}
+      >
+        <div className="mx-auto flex max-w-[760px] flex-col gap-4 px-5 pb-8 pt-6" aria-live="polite">
+          {agent.entries.length === 0 ? <Welcome /> : <Transcript entries={agent.entries} />}
+          {agent.approvals.map((approval) => (
+            <ApprovalCard
+              key={String(approval.requestId)}
+              approval={approval}
+              onAnswer={(choice) => void answer(approval, choice)}
+            />
+          ))}
+          {waiting && (
+            <p className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
+              <Spinner />
+              Working
+            </p>
+          )}
+        </div>
+      </div>
+      <Composer
+        running={agent.running}
+        canReset={agent.entries.length > 0}
+        onSend={(text) => void send(text)}
+        onStop={() => void stop()}
+        onReset={newConversation}
+      />
+    </main>
+  )
+}
+
+/** Codex, signed in with ChatGPT, running Powerpacks skills in the checkout. Desktop app only. */
+export function AgentPage() {
+  if (!isDesktop()) {
+    return <EmptyState>The agent runs in the Powerpacks desktop app.</EmptyState>
+  }
+  return <SignedInAgent />
+}
+
+function SignedInAgent() {
+  const codex = useCodexAccount()
+  if (codex.status?.installed && codex.status.account) return <Conversation />
+  return (
+    <main className="overflow-y-auto px-5">
+      <CodexGate codex={codex} />
+    </main>
+  )
+}

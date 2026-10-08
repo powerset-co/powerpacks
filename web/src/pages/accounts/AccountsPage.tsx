@@ -2,13 +2,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Link } from "react-router-dom"
 
-import { EmptyState, SourcePill } from "@/components/shared"
+import { EmptyState, SourcePill, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { fetchAccounts, reconnectGmail, syncAccount } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
 import { ago, stamp } from "@/lib/copy"
+import { isDesktop } from "@/lib/desktop"
 import type { Account, AccountHealth, Job, JobsPayload } from "@/types/accounts"
+
+import { CodexCard } from "./CodexCard"
 
 const HEALTH: Readonly<Record<AccountHealth, { label: string; variant: "ok" | "warn" | "bad" | "muted" }>> = {
   ok: { label: "Healthy", variant: "ok" },
@@ -59,6 +62,7 @@ export function AccountsPage() {
         {accounts.data && <ScheduleLine scheduled={accounts.data.scheduled} />}
         {actionError && <p className="m-0 text-xs text-bad">{actionError}</p>}
         <ul className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Accounts">
+          {isDesktop() && <CodexCard />}
           {accounts.data?.accounts.map((account) => (
             <AccountCard
               key={`${account.source}:${account.name}`}
@@ -172,15 +176,6 @@ function CardAction({ account, onReconnect, onSync }: Omit<AccountCardProps, "jo
     <Button size="sm" onClick={onSync}>
       Sync
     </Button>
-  )
-}
-
-function Spinner() {
-  return (
-    <span
-      aria-hidden
-      className="inline-block size-3 animate-spin rounded-full border-[1.5px] border-current border-t-transparent"
-    />
   )
 }
 

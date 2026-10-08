@@ -1,0 +1,19 @@
+// The app's commands get permissions (`allow-<command>`), so capabilities/default.json can
+// grant them to the local page, which Tauri treats as a remote origin.
+const COMMANDS: &[&str] = &[
+    "boot_state",
+    "boot_retry",
+    "codex_status",
+    "codex_login",
+    "codex_start_thread",
+    "codex_call",
+    "codex_respond",
+];
+
+fn main() {
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+    )
+    .expect("tauri build");
+}

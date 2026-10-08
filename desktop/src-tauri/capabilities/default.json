@@ -1,0 +1,26 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The splash and the local Powerpacks page may call the app's commands and listen to its events.",
+  "windows": [
+    "main"
+  ],
+  "local": true,
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:8765/*",
+      "http://localhost:8765/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "allow-boot-state",
+    "allow-boot-retry",
+    "allow-codex-status",
+    "allow-codex-login",
+    "allow-codex-start-thread",
+    "allow-codex-call",
+    "allow-codex-respond"
+  ]
+}

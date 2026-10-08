@@ -254,3 +254,12 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+
+/* The desktop app (desktop/src-tauri) on macOS draws the window buttons over the top-left corner
+   of the page: every top bar leaves them room. Unlayered so it outranks the pages' own rules. */
+html[data-desktop="mac"] header.topbar {
+  padding-left: 88px;
+}
+html[data-desktop="mac"] [data-topbar-brand] {
+  padding-left: 64px;
+}

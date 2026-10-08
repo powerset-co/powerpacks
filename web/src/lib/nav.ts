@@ -1,6 +1,8 @@
 // The local UI's pages, in top-bar order. The review server serves each at its href.
 
-export type PageKey = "searches" | "people" | "accounts" | "tasks"
+import { isDesktop } from "@/lib/desktop"
+
+export type PageKey = "agent" | "searches" | "people" | "accounts" | "tasks"
 
 export interface Page {
   key: PageKey
@@ -11,12 +13,17 @@ export interface Page {
 /** Where an unknown path lands. */
 export const HOME: Page = { key: "people", label: "People", href: "/people" }
 
-export const PAGES: readonly Page[] = [
+const BROWSER_PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   { key: "accounts", label: "Accounts", href: "/accounts" },
 ]
+
+/** The Codex agent; only the desktop app can run it, so only the desktop app shows it. */
+export const AGENT: Page = { key: "agent", label: "Agent", href: "/agent" }
+
+export const PAGES: readonly Page[] = isDesktop() ? [AGENT, ...BROWSER_PAGES] : BROWSER_PAGES
 
 /** The page a routed path belongs to: its href or a path under it; any other path is HOME,
  *  which the router's catch-all redirects to. */

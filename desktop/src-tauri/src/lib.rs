@@ -1,0 +1,174 @@
+//! The Powerpacks desktop app: a native window around the local Powerpacks page, with Codex as
+//! the in-app agent.
+//!
+//! The window opens on the bundled splash (`desktop/splash`), `boot` brings up the page server
+//! and navigates the window to it, and `codex` runs the agent. Links that leave the local page
+//! open in the system browser, where Google, ChatGPT and LinkedIn sign-ins are allowed.
+
+mod boot;
+mod codex;
+mod paths;
+
+use std::sync::Arc;
+
+use serde_json::Value;
+use tauri::webview::NewWindowResponse;
+use tauri::{AppHandle, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_opener::OpenerExt;
+
+use boot::{Boot, BootState};
+use codex::Codex;
+
+const MAIN_WINDOW: &str = "main";
+const SPLASH_PAGE: &str = "index.html";
+const WINDOW_SIZE: (f64, f64) = (1360.0, 860.0);
+const WINDOW_MIN_SIZE: (f64, f64) = (960.0, 640.0);
+
+#[tauri::command]
+fn boot_state(boot: State<'_, Arc<Boot>>) -> BootState {
+    boot.snapshot()
+}
+
+#[tauri::command]
+fn boot_retry(app: AppHandle) {
+    boot::launch(app);
+}
+
+#[tauri::command]
+async fn codex_status(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+) -> Result<Value, String> {
+    codex.status(&app, boot.root().as_deref()).await
+}
+
+/// Starts ChatGPT sign-in and opens its page in the system browser.
+#[tauri::command]
+async fn codex_login(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+) -> Result<Value, String> {
+    let login = codex.login(&app, boot.root().as_deref()).await?;
+    let auth_url = login
+        .get("authUrl")
+        .and_then(Value::as_str)
+        .ok_or("Codex returned no sign-in page.")?;
+    app.opener()
+        .open_url(auth_url, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    Ok(login)
+}
+
+#[tauri::command]
+async fn codex_start_thread(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+) -> Result<Value, String> {
+    let root = boot.root().ok_or("Powerpacks is not installed yet.")?;
+    codex.start_thread(&app, &root).await
+}
+
+#[tauri::command]
+async fn codex_call(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    if !codex::PAGE_METHODS.contains(&method.as_str()) {
+        return Err(format!("{method} is not available to the page."));
+    }
+    codex
+        .call(&app, boot.root().as_deref(), &method, params)
+        .await
+}
+
+/// Answers a Codex server request (an approval) by its JSON-RPC id.
+#[tauri::command]
+async fn codex_respond(
+    app: AppHandle,
+    codex: State<'_, Codex>,
+    id: Value,
+    result: Value,
+) -> Result<(), String> {
+    codex.respond(&app, id, result).await
+}
+
+/// The local page and the bundled splash stay in the window; everything else opens outside.
+fn is_local(url: &Url) -> bool {
+    match url.scheme() {
+        "tauri" | "about" | "data" | "blob" => true,
+        "http" | "https" => {
+            url.host_str() == Some("tauri.localhost")
+                || (matches!(url.host_str(), Some(boot::HOST) | Some("localhost"))
+                    && url.port() == Some(boot::PORT))
+        }
+        _ => false,
+    }
+}
+
+fn open_outside(app: &AppHandle, url: &Url) {
+    if matches!(url.scheme(), "http" | "https" | "mailto") {
+        let _ = app.opener().open_url(url.as_str(), None::<&str>);
+    }
+}
+
+fn main_window(app: &AppHandle) -> tauri::Result<()> {
+    let (navigation_app, popup_app) = (app.clone(), app.clone());
+    let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App(SPLASH_PAGE.into()))
+        .title("Powerpacks")
+        .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
+        .min_inner_size(WINDOW_MIN_SIZE.0, WINDOW_MIN_SIZE.1)
+        .background_color(tauri::window::Color(0x1a, 0x16, 0x14, 0xff))
+        .on_navigation(move |url| {
+            let local = is_local(url);
+            if !local {
+                open_outside(&navigation_app, url);
+            }
+            local
+        })
+        .on_new_window(move |url, _features| {
+            open_outside(&popup_app, &url);
+            NewWindowResponse::Deny
+        });
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    builder.build()?;
+    Ok(())
+}
+
+pub fn run() {
+    paths::adopt_login_path();
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_opener::init())
+        .manage(Arc::new(Boot::default()))
+        .manage(Codex::default())
+        .invoke_handler(tauri::generate_handler![
+            boot_state,
+            boot_retry,
+            codex_status,
+            codex_login,
+            codex_start_thread,
+            codex_call,
+            codex_respond,
+        ])
+        .setup(|app| {
+            main_window(app.handle())?;
+            boot::launch(app.handle().clone());
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("Powerpacks failed to start");
+}

@@ -136,7 +136,7 @@ export function InstallPage() {
       className="review-page install-page"
       data-status={error ? "disconnected" : failed ? "failed" : data?.status}
     >
-      <header className="topbar">
+      <header className="topbar" data-tauri-drag-region>
         <span className="brand">POWERPACKS</span>
         <h1 className="topbar-title">Getting started</h1>
         <span />

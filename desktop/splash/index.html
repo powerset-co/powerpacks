@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Powerpacks</title>
+<!-- The window's first page while desktop/src-tauri/src/boot.rs starts or installs the local
+     Powerpacks page. Tokens copy web/src/styles/index.css (design.md). -->
+<style>
+  :root {
+    --background: #1a1614; --card: #242120; --foreground: #f0eae2; --muted: #9c8e84;
+    --faint: #6f635b; --border: #3a3432; --primary: #dd3d17; --bad: #f87171;
+    --ease: cubic-bezier(.2, 0, 0, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--background); color: var(--foreground);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: grid; grid-template-rows: 52px 1fr; -webkit-font-smoothing: antialiased; user-select: none;
+  }
+  .drag { -webkit-app-region: drag; }
+  main { display: grid; place-items: center; padding: 24px; }
+  .stack { width: min(520px, 100%); display: flex; flex-direction: column; align-items: center; gap: 20px;
+           animation: enter 320ms var(--ease) both; }
+  .brand { display: inline-flex; align-items: center; gap: 12px; font-size: 12px; font-weight: 800; letter-spacing: .16em; }
+  .mark { width: 14px; height: 14px; border-radius: 4px; background: var(--primary);
+          box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 22%, transparent);
+          animation: breathe 1600ms var(--ease) infinite alternate; }
+  [data-phase="failed"] .mark, [data-phase="ready"] .mark { animation: none; }
+  .status { display: flex; align-items: center; gap: 8px; color: var(--muted); min-height: 20px; }
+  .spinner { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid currentColor;
+             border-top-color: transparent; animation: spin 800ms linear infinite; }
+  [data-phase="failed"] .spinner { display: none; }
+  [data-phase="failed"] .status { color: var(--bad); text-align: center; user-select: text; }
+  .log { width: 100%; max-height: 180px; overflow: hidden; margin: 0; padding: 12px 14px; list-style: none;
+         background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+         font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint);
+         display: flex; flex-direction: column; justify-content: flex-end; user-select: text; }
+  .log:empty { display: none; }
+  .log li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log li:last-child { color: var(--muted); }
+  button { font: inherit; font-weight: 600; color: var(--foreground); background: var(--card);
+           border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; cursor: pointer;
+           transition: border-color 120ms var(--ease), background 120ms var(--ease); }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  button[hidden] { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
+                       to { box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 28%, transparent); } }
+  @keyframes enter { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-phase="starting">
+  <div class="drag" data-tauri-drag-region></div>
+  <main>
+    <div class="stack">
+      <div class="brand"><span class="mark" aria-hidden="true"></span>POWERPACKS</div>
+      <p class="status" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span id="message">Starting Powerpacks</span></p>
+      <ol class="log" id="log" aria-label="Installer output"></ol>
+      <button id="retry" type="button" hidden>Try again</button>
+    </div>
+  </main>
+<script>
+  const tauri = window.__TAURI__
+  const message = document.getElementById("message")
+  const log = document.getElementById("log")
+  const retry = document.getElementById("retry")
+
+  function render(state) {
+    document.body.dataset.phase = state.phase
+    message.textContent = state.message
+    log.replaceChildren(...state.lines.slice(-8).map((line) => {
+      const item = document.createElement("li")
+      item.textContent = line
+      return item
+    }))
+    retry.hidden = state.phase !== "failed"
+  }
+
+  retry.addEventListener("click", () => tauri.core.invoke("boot_retry"))
+  tauri.event.listen("boot://state", (event) => render(event.payload))
+  tauri.core.invoke("boot_state").then(render)
+</script>
+</body>
+</html>

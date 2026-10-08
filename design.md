@@ -115,7 +115,8 @@ motion timings are our existing product choices, not copied Carbon branding.
 
 ## People and Logbook
 
-Top navigation order: Searches, People, Scheduled tasks, Accounts. Logbook belongs
+Top navigation order: Searches, People, Scheduled tasks, Accounts. The desktop app (`desktop/`)
+puts Agent first; a plain browser never shows it. Logbook belongs
 inside People: use the Has logbook filter and a person's View logbook action,
 not another top-level tab. An existing archive offers View logbook; Refresh
 logbook lives in the reader.
