@@ -1,43 +1,30 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 
-import { readView, writeView } from "./view"
+import { DEFAULT_VIEW, readView, writeView, type PeopleView } from "./view"
 
-const KEY = "powerpacks:people-filters:v2"
-const SAVED = { tab: "no", filters: { worth: ["yes"] }, text: "acme", sort: { key: "last", dir: -1 } }
-
-const store = (value: unknown) => sessionStorage.setItem(KEY, JSON.stringify(value))
-
-beforeEach(() => sessionStorage.clear())
-
-describe("saved view", () => {
-  it("round-trips the view", () => {
-    writeView({
+describe("view query parameters", () => {
+  it("round-trips multiple facet values, search, tab and descending sort", () => {
+    const view: PeopleView = {
       tab: "no",
-      filters: new Map([["worth", new Set(["yes"])]]),
-      text: "acme",
+      filters: new Map([["worth", new Set(["yes", "maybe"])]]),
+      text: "Acme & partners + friends",
       sort: { key: "last", dir: -1 },
-    })
-    const view = readView()
-    expect(view?.tab).toBe("no")
-    expect([...(view?.filters.get("worth") ?? [])]).toEqual(["yes"])
-    expect(view?.sort).toEqual({ key: "last", dir: -1 })
+    }
+    const params = writeView(view, new URLSearchParams("person=p1"))
+    expect(readView(new URLSearchParams(params.toString()))).toEqual(view)
+    expect(params.get("person")).toBe("p1")
   })
 
-  it("rejects a saved unknown sort key or direction", () => {
-    store({ ...SAVED, sort: { key: "gone", dir: 1 } })
-    expect(readView()).toBeNull()
-    store({ ...SAVED, sort: { key: "name", dir: 2 } })
-    expect(readView()).toBeNull()
+  it("uses defaults for missing or invalid tab and sort", () => {
+    expect(readView(new URLSearchParams())).toEqual(DEFAULT_VIEW)
+    expect(readView(new URLSearchParams("tab=gone&sort=gone&dir=gone&filter.gone=x"))).toEqual(DEFAULT_VIEW)
   })
 
-  it("rejects an unknown tab or facet, non-string values, and junk", () => {
-    store({ ...SAVED, tab: "maybe" })
-    expect(readView()).toBeNull()
-    store({ ...SAVED, filters: { gone: ["x"] } })
-    expect(readView()).toBeNull()
-    store({ ...SAVED, filters: { worth: [1] } })
-    expect(readView()).toBeNull()
-    sessionStorage.setItem(KEY, "{")
-    expect(readView()).toBeNull()
+  it("removes cleared filters, search and sort while preserving other parameters", () => {
+    const params = writeView(
+      DEFAULT_VIEW,
+      new URLSearchParams("filter.worth=yes&q=acme&sort=last&dir=desc&person=p1"),
+    )
+    expect(params.toString()).toBe("person=p1&tab=confirm")
   })
 })

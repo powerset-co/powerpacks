@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 
 import { Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
@@ -9,6 +10,7 @@ import type { FacetKey, FacetSet, QuickFilter, TagAction } from "@/lib/people/fa
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
+import { writeView } from "@/lib/people/view"
 import { personKey, type Decision, type Person } from "@/types/people"
 
 import { BulkBar, type LogbookAction } from "./BulkBar"
@@ -45,7 +47,9 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     () => (catalog.data ? withLogbooks(people, catalog.data) : people),
     [people, catalog.data],
   )
-  const filters = useFilters(rows)
+  const [params, setParams] = useSearchParams()
+  const initialParams = reading ? new URLSearchParams() : params
+  const filters = useFilters(rows, initialParams)
   const { view } = filters
   const { matching, counts, quickCounts } = useMemo(() => filterRows(rows, view), [rows, view])
   const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
@@ -55,7 +59,16 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     return counts
   }, [rows])
   const selection = useSelection(matching, personKey)
-  const drawer = useDrawer()
+  const drawer = useDrawer(initialParams)
+  const { sections } = drawer
+  useEffect(() => {
+    if (reading) return
+    const next = writeView(view, params)
+    if (drawer.openId) next.set("person", drawer.openId)
+    else next.delete("person")
+    next.set("sections", [...sections].join(","))
+    if (next.toString() !== params.toString()) setParams(next, { replace: true })
+  }, [view, drawer.openId, sections, reading, params, setParams])
   const [focusAt, setFocus] = useState(-1)
   const focus = Math.min(focusAt, matching.length - 1)
   const table = useRef<PeopleTableHandle>(null)
@@ -253,6 +266,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             row={shownRow}
             open={openId !== null}
             detail={drawer.detail}
+            section={drawer.section}
             saving={decisions.saving}
             building={logbook.building}
             onAction={(action) => {
