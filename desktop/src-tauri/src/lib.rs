@@ -8,6 +8,7 @@
 
 mod boot;
 mod codex;
+mod linkedin;
 mod onboard;
 mod paths;
 mod signin;
@@ -57,10 +58,54 @@ async fn codex_login(
     codex.login(&app, boot.root().as_deref()).await
 }
 
-/// Shows a provider's sign-in page inside the app; `finish` is the callback URL it ends on.
+/// Shows a provider's sign-in page inside the app's sign-in modal; `finish` is the callback
+/// URL it ends on, `bounds` the modal body in CSS pixels.
 #[tauri::command]
-fn signin_open(app: AppHandle, url: String, finish: String) -> Result<(), String> {
-    signin::open(&app, &url, &finish)
+fn signin_open(
+    app: AppHandle,
+    url: String,
+    finish: String,
+    bounds: signin::Bounds,
+) -> Result<(), String> {
+    signin::open(&app, &url, &finish, bounds)
+}
+
+#[tauri::command]
+fn signin_place(app: AppHandle, bounds: signin::Bounds) -> Result<(), String> {
+    signin::place(&app, bounds)
+}
+
+/// Reads the LinkedIn connections list in the sign-in view; see linkedin.rs.
+#[tauri::command]
+async fn linkedin_read(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+) -> Result<linkedin::Progress, String> {
+    let root = boot::require_root(&boot)?;
+    tauri::async_runtime::spawn_blocking(move || linkedin::read(&app, &root))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Bring the window forward, after a sign-in that had to happen in the browser.
+#[tauri::command]
+fn app_focus(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Open a web page in the system browser (Google sign-in, which refuses embedded views).
+#[tauri::command]
+fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed: Url = url.parse().map_err(|error| format!("Bad URL: {error}"))?;
+    if parsed.scheme() != "https" {
+        return Err("Only https pages open outside the app.".into());
+    }
+    app.opener()
+        .open_url(parsed.as_str(), None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -205,8 +250,7 @@ fn main_window(app: &AppHandle) -> tauri::Result<()> {
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
-    let window = builder.build()?;
-    signin::follow_window(&window.as_ref().window());
+    builder.build()?;
     Ok(())
 }
 
@@ -233,7 +277,11 @@ pub fn run() {
             codex_call,
             codex_respond,
             signin_open,
+            signin_place,
             signin_close,
+            linkedin_read,
+            app_focus,
+            open_external,
             onboard_continue,
             debug_state,
             debug_skip_setup,

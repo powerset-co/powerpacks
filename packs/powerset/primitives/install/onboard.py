@@ -113,7 +113,7 @@ class Onboarding:
         while True:
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                code = auth.cmd_login(args, on_authorize_url=show)
+                code = auth.cmd_login(args, on_authorize_url=show) if DESKTOP else auth.cmd_login(args)
             result = json.loads(output.getvalue()) if output.getvalue().strip() else {}
             if not code or result.get("error") != "login timed out":
                 break

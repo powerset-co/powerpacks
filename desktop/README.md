@@ -19,7 +19,8 @@ flowchart LR
 | `src-tauri/src/boot.rs` | Launch: source, `uv sync`, page server, setup, then the page | — |
 | `src-tauri/src/source.rs` | Installs or refreshes the bundled code in `~/powerpacks`; leaves a git checkout alone | `.powerpacks/desktop/source-version` |
 | `src-tauri/src/onboard.rs` | Runs `bin/onboard` and resumes it with what the user answered on the install page | `.powerpacks/install/manifest.json` |
-| `src-tauri/src/signin.rs` | The in-window sign-in pane: open, close, follow the window | `signin://finished` |
+| `src-tauri/src/signin.rs` | The sign-in view: open at the modal's bounds, move, close | `signin://finished` |
+| `src-tauri/src/linkedin.rs` | Reads the LinkedIn connections list in the sign-in view | `app-read-request.json`, `app-read.json` |
 | `src-tauri/src/codex.rs` | One `codex app-server`: ChatGPT sign-in, chats, approvals; only the search skills | `codex://notification`, `codex://request` |
 | `src-tauri/src/paths.rs` | The Powerpacks folder, and a PATH that puts the bundled binaries first | `$POWERPACKS_REPO_ROOT` |
 | `src-tauri/src/lib.rs` | Window, commands, and the link policy | — |
@@ -27,10 +28,14 @@ flowchart LR
 Setup is clicked through on the install page (`web/src/pages/install/DesktopSetup.tsx`); no agent
 runs it. Chat (`web/src/pages/agent/`) searches people, companies and dossiers.
 
-Sign-ins stay in the window: `src-tauri/src/signin.rs` docks a second web view under the page's
-"Signing in to …" strip (`web/src/components/shared/SignInBar.tsx`) showing the provider's own
-page, and closes it when the sign-in reaches its callback. Powerset and ChatGPT use it today;
-Google refuses OAuth inside embedded web views, so Gmail still needs its own route.
+Sign-ins stay in the window: the sign-in modal (`web/src/components/shared/SignInModal.tsx`)
+dims the app and places a second web view (`src-tauri/src/signin.rs`) in its card, showing the
+provider's own page, and closes when the sign-in reaches its callback. Powerset, ChatGPT and
+LinkedIn use it; for LinkedIn, `src-tauri/src/linkedin.rs` then scrolls the connections list in
+that view and hands the rows to the importer. Google refuses sign-in inside embedded web views,
+so Gmail consent opens in the browser through msgvault's own flow, using Powerpacks' Google
+OAuth client (`POWERPACKS_GOOGLE_CLIENT_ID` / `POWERPACKS_GOOGLE_CLIENT_SECRET` in `.env`), and
+the app comes forward again when it lands.
 
 ## Build
 

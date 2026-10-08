@@ -28,3 +28,13 @@ export interface SetupAnswer {
 export async function continueSetup(answer: SetupAnswer = {}): Promise<void> {
   await invoke("onboard_continue", { answer })
 }
+
+/** Bring the app forward after a sign-in that had to happen in the browser. */
+export function focusApp(): Promise<void> {
+  return invoke("app_focus").then(() => undefined)
+}
+
+/** Open a page in the system browser. */
+export function openExternal(url: string): Promise<void> {
+  return invoke("open_external", { url }).then(() => undefined)
+}

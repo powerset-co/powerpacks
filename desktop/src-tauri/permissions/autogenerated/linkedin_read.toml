@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-linkedin-read"
+description = "Enables the linkedin_read command without any pre-configured scope."
+commands.allow = ["linkedin_read"]
+
+[[permission]]
+identifier = "deny-linkedin-read"
+description = "Denies the linkedin_read command without any pre-configured scope."
+commands.deny = ["linkedin_read"]

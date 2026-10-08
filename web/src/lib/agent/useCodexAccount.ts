@@ -65,8 +65,8 @@ export function useCodexAccount(): CodexAccountState {
     connect: () => {
       setActionError(null)
       startCodexLogin()
-        .then(async ({ loginId: id, authUrl }) => {
-          await openSignIn({ title: "ChatGPT", url: authUrl, finish: CODEX_CALLBACK })
+        .then(({ loginId: id, authUrl }) => {
+          openSignIn({ title: "ChatGPT", url: authUrl, finish: CODEX_CALLBACK })
           setLoginId(id)
         })
         .catch((error: unknown) => setActionError(errorText(error)))

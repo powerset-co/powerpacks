@@ -337,6 +337,25 @@ def copy_client_secret(source: Path, home: Path, app_name: str, *, copy_secret: 
     }
 
 
+ENV_CLIENT_ID = "POWERPACKS_GOOGLE_CLIENT_ID"
+ENV_CLIENT_SECRET = "POWERPACKS_GOOGLE_CLIENT_SECRET"
+
+
+def write_env_client_secret(home: Path, client_id: str, client_secret: str) -> Path:
+    """Write Powerpacks' own Google OAuth client (a Desktop-app client, whose secret Google treats
+    as public) as msgvault's client_secret.json and point its config at it."""
+    dest = destination_secret_path(home, "")
+    home.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps({"installed": {
+        "client_id": client_id, "client_secret": client_secret, "project_id": "powerpacks",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "redirect_uris": ["http://localhost"]}}, indent=2))
+    os.chmod(dest, 0o600)
+    write_msgvault_config(config_path(home), dest)
+    return dest
+
+
 def configured_client_secret(home: Path, app_name: str) -> dict[str, Any] | None:
     """Return the configured client secret record for an app, or None when unconfigured."""
     key = app_name or "default"

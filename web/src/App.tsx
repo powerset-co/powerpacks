@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
-import { DebugMenu, SignInBar, TopBar } from "@/components/shared"
+import { DebugMenu, SignInModal, TopBar } from "@/components/shared"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
@@ -51,7 +51,7 @@ export function App() {
           <Route path="*" element={<Navigate to={HOME.href} replace />} />
         </Route>
       </Routes>
-      <SignInBar />
+      <SignInModal />
       <DebugMenu />
     </BrowserRouter>
   )

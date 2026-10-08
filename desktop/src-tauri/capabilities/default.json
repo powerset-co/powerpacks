@@ -28,6 +28,10 @@
     "allow-debug-state",
     "allow-debug-skip-setup",
     "allow-signin-open",
-    "allow-signin-close"
+    "allow-signin-place",
+    "allow-signin-close",
+    "allow-linkedin-read",
+    "allow-app-focus",
+    "allow-open-external"
   ]
 }

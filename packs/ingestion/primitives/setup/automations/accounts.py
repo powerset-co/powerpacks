@@ -37,6 +37,8 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
+import time
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -253,6 +255,37 @@ def msgvault_account_authorize_command(home: Path, email: str, *, force: bool) -
     if force:
         cmd.append("--force-auth")
     return shlex.join(cmd)
+
+
+def authorize_in_browser(home: Path, email: str, *, force: bool, on_url: Callable[[str], None],
+                         timeout_seconds: int = 900) -> dict[str, Any]:
+    """`msgvault add-account` as it runs on its own: it opens Google's consent in the default
+    browser and receives the callback itself. `on_url` gets the consent URL for the page."""
+    cmd = ["msgvault", "--home", str(home), "--local", "--no-log-file", "add-account", email]
+    if force:
+        cmd.append("--force")
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except OSError as error:
+        return {"status": "error", "email": email, "message": f"msgvault could not start: {error}"}
+    output: list[str] = []
+    try:
+        assert proc.stdout is not None
+        deadline = time.monotonic() + timeout_seconds
+        for line in proc.stdout:
+            output.append(line)
+            if line.strip().startswith("https://accounts.google.com/"):
+                on_url(line.strip())
+            if time.monotonic() > deadline:
+                proc.terminate()
+                return {"status": "needs_user_action", "email": email, "message": "Google sign-in timed out."}
+        ok = proc.wait(timeout=30) == 0
+    except (OSError, subprocess.TimeoutExpired):
+        proc.terminate()
+        return {"status": "needs_user_action", "email": email, "message": "msgvault authorization did not finish."}
+    if ok:
+        return {"status": "ok", "email": email, "oauth_app": "default"}
+    return {"status": "error", "email": email, "message": "".join(output[-5:]).strip() or "msgvault add-account failed."}
 
 
 def add_account(home: Path, email: str, app_name: str, *, headless: bool, force: bool,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-signin-place"
+description = "Enables the signin_place command without any pre-configured scope."
+commands.allow = ["signin_place"]
+
+[[permission]]
+identifier = "deny-signin-place"
+description = "Denies the signin_place command without any pre-configured scope."
+commands.deny = ["signin_place"]

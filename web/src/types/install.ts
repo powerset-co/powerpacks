@@ -16,8 +16,10 @@ export interface InstallAction {
     | "details"
     | "signin"
   text?: string
-  // signin: the provider's sign-in page, shown inside the desktop app
+  // signin: the provider's sign-in page. Powerset and LinkedIn show inside the desktop app;
+  // Google only allows its own in the browser, so the app opens it there and waits.
   url?: string
+  provider?: "powerset" | "linkedin" | "google"
   command?: string
   // approval: the spend step and its estimate (packs/powerset/primitives/install/pipeline.py)
   step?: string
