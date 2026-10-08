@@ -35,6 +35,23 @@
 .drawer-inner p.dim {
   color: var(--muted);
 }
+/* The name with the LinkedIn icon beside it, as the review cards draw it. */
+.who .name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.who .name-row h2 {
+  margin: 0;
+}
+.who .linkedin-label {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: #6ba7e4;
+  text-decoration: none;
+}
 .timeline {
   position: relative;
   display: grid;

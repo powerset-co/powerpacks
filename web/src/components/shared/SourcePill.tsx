@@ -13,14 +13,16 @@ interface SourcePillProps {
   size?: SourcePillSize
   // How many emails or messages, already worded ("42", "~2k"); none draws the glyph alone.
   count?: string
+  // What hovering says; the channel's name when not given.
+  title?: string
 }
 
-export function SourcePill({ channel, size, count }: SourcePillProps) {
+export function SourcePill({ channel, size, count, title }: SourcePillProps) {
   const Icon = CHANNEL_ICON[channel]
-  const { title, colors } = CHANNELS[channel]
+  const { title: name, colors } = CHANNELS[channel]
   return (
-    <span data-c={channel} title={title} className={cn(sourcePillVariants({ size }), colors)}>
-      <Icon role="img" aria-label={title} />
+    <span data-c={channel} title={title ?? name} className={cn(sourcePillVariants({ size }), colors)}>
+      <Icon role="img" aria-label={name} />
       {count}
     </span>
   )
