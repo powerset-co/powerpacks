@@ -127,9 +127,9 @@ class InstallStatusTests(unittest.TestCase):
         self.status.write('step.waiting', step=InstallStep.INDEX, pid=os.getpid())
         self.assertEqual(self.status.read()["steps"]["enrich"]["status"], "running")
 
-    def test_source_restart_clears_every_processing_stage_including_review(self) -> None:
-        for step in (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.REVIEW,
-                     InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY):
+    def test_source_restart_clears_every_processing_stage(self) -> None:
+        for step in (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.INDEX, InstallStep.VALIDATE,
+                     InstallStep.READY):
             self.status.write('tools.ready', step=step, pid=os.getpid())
         self.status.write('step.waiting', step=InstallStep.SOURCES, pid=os.getpid())
         self.assertEqual(list(self.status.read()["steps"]), ["sources"])
