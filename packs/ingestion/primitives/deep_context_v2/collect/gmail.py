@@ -14,7 +14,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from packs.ingestion.primitives.deep_context_v2.text_similarity import jaccard, shingles
 
@@ -174,7 +174,7 @@ def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) 
     return int(con.execute(sql, params).fetchone()["n"])
 
 
-def thread_participant_rosters(con: sqlite3.Connection, emails: list[str], max_threads: int) -> list[dict[str, Any]]:
+def thread_participant_rosters(con: sqlite3.Connection, emails: Sequence[str], max_threads: int) -> list[dict[str, Any]]:
     """Who was on the candidate's most recent threads: subject plus `name <email>` per recipient."""
     normalized = []
     for email in emails:

@@ -39,7 +39,7 @@ from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CS
 from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
 from packs.ingestion.primitives.share.models import HumanTags, PersonLabelRow, ShareDecisionRow
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
-from packs.ingestion.primitives.share.web.model import SharePeople, people_payload
+from packs.ingestion.primitives.share.web.model import SharePeople, SharePerson, people_payload
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 from packs.shared.web.app import AppRoutes
@@ -113,7 +113,8 @@ def decide_tags(conn: sqlite3.Connection, people: SharePeople, changes: TagChang
 class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
-    def __init__(self, conn: sqlite3.Connection, people: SharePeople, load: Callable[[], tuple], upload: ShareUpload) -> None:
+    def __init__(self, conn: sqlite3.Connection, people: SharePeople,
+                 load: Callable[[], tuple[SharePerson, ...]], upload: ShareUpload) -> None:
         self.conn = conn
         self.people = people
         self.load = load
@@ -164,12 +165,12 @@ class ShareRoutes:
                 return True
             checked = body.get("checked") if isinstance(body, dict) else None
             try:
-                status = self.upload.start(dry_run=parsed.path.endswith("/check"),
-                                           checked=checked if isinstance(checked, str) else None)
+                upload_status = self.upload.start(dry_run=parsed.path.endswith("/check"),
+                                                  checked=checked if isinstance(checked, str) else None)
             except ValueError as exc:
                 self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
             else:
-                self._send_json(handler, status)
+                self._send_json(handler, upload_status)
             return True
         length = int(handler.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_TAGS_REQUEST_BYTES:
@@ -219,7 +220,7 @@ def share_routes(conn: sqlite3.Connection, data_root: Path, *, upload_db: Path |
                  upload_dir: Path | None = None) -> ShareRoutes:
     """The routes over one store, rows re-read whenever the store changes."""
     people = SharePeople(conn, data_root)
-    def load() -> tuple:
+    def load() -> tuple[SharePerson, ...]:
         return people.load()
 
     upload = ShareUpload(store_path(data_root), data_root / PEOPLE_CSV_RELATIVE_PATH, index_db=upload_db or DEFAULT_DB,

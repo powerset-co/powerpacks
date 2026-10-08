@@ -20,7 +20,7 @@ from packs.indexing.primitives.upload_powerset.manifest import (
 )
 from packs.ingestion.primitives.share.store import share_rows
 
-STAGE_MESSAGES = {
+STAGE_MESSAGES: dict[str, str] = {
     Stage.PLANNING: "Checking your shared people and saved uploads…",
     Stage.CHECKING_ACCESS: "Connecting to your shared network…",
     Stage.CHECKING_PEOPLE: "Comparing your people with the shared network…",

@@ -178,9 +178,9 @@ SCORE_LABELS = tuple(SCORE_QUESTIONS)
 NOUL_LABELS = tuple(NOUL_QUESTIONS)
 
 
-def build_questions() -> dict[str, dict]:
+def build_questions() -> dict[str, dict[str, Any]]:
     """The frozen question set: 6 choice, 1 score, 27 noul."""
-    questions: dict[str, dict] = {}
+    questions: dict[str, dict[str, Any]] = {}
     for name, (instructions, options) in CHOICE_QUESTIONS.items():
         questions[name] = {"type": "choice", "instructions": instructions, "criteria": options}
     for name, (instructions, levels) in SCORE_QUESTIONS.items():
@@ -198,7 +198,7 @@ def build_request(
     channels: dict[str, Any],
     owner: dict[str, Any],
     reference_date: str,
-) -> dict:
+) -> dict[str, Any]:
     """The one bounded share-label request for one person."""
     return {
         "model": MODEL_ID,

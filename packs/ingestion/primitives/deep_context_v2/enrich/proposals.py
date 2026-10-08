@@ -45,7 +45,7 @@ def derive(conn: sqlite3.Connection) -> Proposals:
         # A complete research row at the family's current handle proposes its URL.
         row: Research | None = rows.get(research.handle(family.facts))
         if row is not None and row.status == ResearchStatus.COMPLETE:
-            url: str = research.research_url(row)
+            url = research.research_url(row)
             seen: bool = False
             for proposal in urls:
                 if proposal.linkedin_url == url:

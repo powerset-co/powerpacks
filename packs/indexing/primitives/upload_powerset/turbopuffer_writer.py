@@ -136,6 +136,7 @@ def fetch_person_doc_ids(ns: Any, logical: str, person_ids: Sequence[str]) -> di
     un-share reach documents this laptop never held.
     """
     key = NAMESPACE_BY_LOGICAL[logical].doc_key
+    assert key is not None
     by_person: dict[str, list[str]] = {}
     for chunk in _chunks(list(person_ids), 200):
         last_id: str | None = None

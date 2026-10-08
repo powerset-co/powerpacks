@@ -25,7 +25,7 @@ Changelog:
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Callable
+from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy, Worth
@@ -133,7 +133,7 @@ def deterministic_labels(person: PersonEvidence, *, reference_date: str) -> Dete
     )
 
 
-def labels_from_answers(answers: dict[str, dict]) -> JevLabels:
+def labels_from_answers(answers: dict[str, dict[str, Any]]) -> JevLabels:
     """Reduce one Jev response: choice -> argmax option, score -> expected level, noul -> p."""
     choices: dict[str, str] = {}
     choice_p: dict[str, float] = {}
@@ -154,7 +154,7 @@ def labels_from_answers(answers: dict[str, dict]) -> JevLabels:
     )
 
 
-def labels_from_saved(labels: dict) -> JevLabels:
+def labels_from_saved(labels: dict[str, Any]) -> JevLabels:
     """Parse the labels persisted with a person's synthesized facts."""
     return JevLabels(
         choices={name: str(labels[name]) for name in CHOICE_LABELS},

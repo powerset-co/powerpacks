@@ -164,9 +164,9 @@ def _collapse_near_duplicates(items: Sequence[tuple[str, _T]]) -> list[tuple[str
     for index, (text, _payload) in enumerate(items):
         text_shingles = shingles(text)
         match = None
-        for cluster, anchor in enumerate(anchor_shingles):
+        for cluster_index, anchor in enumerate(anchor_shingles):
             if jaccard(text_shingles, anchor) >= NEARDUP_THRESHOLD:
-                match = cluster
+                match = cluster_index
                 break
         if match is None:
             clusters.append([index])

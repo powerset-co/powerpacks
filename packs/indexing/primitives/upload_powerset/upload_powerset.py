@@ -358,13 +358,15 @@ class UploadPowerset:
             for rows in local_index.namespace_row_chunks(con, namespace_plan.logical, namespace_plan.upsert_ids,
                                                          local_allowed, plan.operator_id, live):
                 if namespace.person_grain:
+                    key = namespace.doc_key
+                    assert key is not None
                     for row in rows:
-                        key = namespace.doc_key
                         row[key] = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))
                 docs_upserted[namespace_plan.logical] += turbopuffer_writer.upsert_docs(
                     ns, namespace_plan.logical, rows)
                 if namespace.person_grain:
-                    uploaded_people.update(local_by_cloud.get(str(row[namespace.doc_key]), str(row[namespace.doc_key]))
+                    assert key is not None
+                    uploaded_people.update(local_by_cloud.get(str(row[key]), str(row[key]))
                                            for row in rows)
             if namespace_plan.patch_person_ids:
                 doc_ids = turbopuffer_writer.fetch_person_doc_ids(
@@ -378,6 +380,7 @@ class UploadPowerset:
                             tuple(local_by_cloud.get(person_id, person_id) for person_id in chunk),
                             local_allowed, plan.operator_id, live)
                         key = namespace.doc_key
+                        assert key is not None
                         by_person: dict[str, list[dict[str, Any]]] = {}
                         for row in local_rows:
                             cloud_id = plan.cloud_id_by_person.get(str(row[key]), str(row[key]))

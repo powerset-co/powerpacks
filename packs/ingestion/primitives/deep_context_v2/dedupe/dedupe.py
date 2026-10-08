@@ -91,13 +91,14 @@ class Dedupe(Node):
 
     def signature(self, a: str, b: str) -> str:
         """The pair's evidence: facts fingerprints, written names, identifiers, prompt version."""
-        payload: dict[str, object] = {"prompt_version": judge.PROMPT_VERSION, "sides": []}
+        sides: list[dict[str, object]] = []
+        payload: dict[str, object] = {"prompt_version": judge.PROMPT_VERSION, "sides": sides}
         for candidate_id in (a, b):
             identifiers: list[str] = []
             for identifier in self.identifiers[candidate_id]:
                 identifiers.append(identifier.kind + ":" + identifier.normalized_value)
-            payload["sides"].append({"facts": self.fingerprints[candidate_id], "name": self.written[candidate_id],
-                                     "identifiers": sorted(identifiers)})
+            sides.append({"facts": self.fingerprints[candidate_id], "name": self.written[candidate_id],
+                          "identifiers": sorted(identifiers)})
         return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     def plan(self) -> Plan:

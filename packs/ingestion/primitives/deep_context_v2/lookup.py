@@ -69,10 +69,10 @@ def matches(conn: sqlite3.Connection, *, name: str = "", email: str = "", phone:
                 parents.add(parent_id)
     found: list[Match] = []
     for parent_id in sorted(parents):
-        family = members.get(parent_id)
-        if family is None:
+        family_members = members.get(parent_id)
+        if family_members is None:
             continue  # a family without facts has nothing to read
-        facts = family_facts(family).to_payload()
+        facts = family_facts(family_members).to_payload()
         emails: list[str] = []
         phones: list[str] = []
         for row in conn.execute(

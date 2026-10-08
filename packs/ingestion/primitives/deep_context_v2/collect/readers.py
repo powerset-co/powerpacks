@@ -59,7 +59,7 @@ def _read_source(path: Path, read: Callable[[], QueryResult]) -> QueryResult:
             time.sleep(_RETRY_DELAY_SECONDS * attempt)
 
 
-def apple_epoch_iso(value: object) -> str:
+def apple_epoch_iso(value: int | float | None) -> str:
     return chatdb.apple_timestamp_to_iso(value) or ""
 
 
@@ -83,8 +83,9 @@ class ContextSources:
         self.msgvault: sqlite3.Connection | None = None
         self.accounts: set[str] = set()
         if "gmail_msgvault" in channels:
-            self.msgvault = gmail.open_msgvault(msgvault_db)
-            self.accounts = _read_source(msgvault_db, lambda: gmail.account_emails(self.msgvault))
+            connection = gmail.open_msgvault(msgvault_db)
+            self.msgvault = connection
+            self.accounts = _read_source(msgvault_db, lambda: gmail.account_emails(connection))
 
     def close(self) -> None:
         if self.msgvault is not None:
@@ -93,8 +94,10 @@ class ContextSources:
     def thread_participants(self, person: Person) -> tuple[ThreadParticipants, ...]:
         if "gmail_msgvault" not in person.source_channels:
             return ()
+        connection = self.msgvault
+        assert connection is not None  # Gmail candidates require the store opened at construction.
         rows = _read_source(
-            self.msgvault_db, lambda: gmail.thread_participant_rosters(self.msgvault, person.emails, MAX_THREADS)
+            self.msgvault_db, lambda: gmail.thread_participant_rosters(connection, person.emails, MAX_THREADS)
         )
         threads = []
         for row in rows:
@@ -103,11 +106,13 @@ class ContextSources:
 
     def _read_gmail(self, person: Person) -> list[MessageEntry]:
         """Signature-aware email bodies per address, deduplicated across the candidate's addresses."""
+        connection = self.msgvault
+        assert connection is not None  # Called only for Gmail candidates.
         out: list[MessageEntry] = []
         for email in person.emails:
             entries = _read_source(
                 self.msgvault_db,
-                lambda: gmail.recent_emails_for(self.msgvault, email, self.deep_cap, self.accounts),
+                lambda: gmail.recent_emails_for(connection, email, self.deep_cap, self.accounts),
             )
             for entry in entries:
                 text = entry.snippet.strip()
@@ -121,10 +126,12 @@ class ContextSources:
         return out
 
     def _count_gmail(self, person: Person) -> int:
+        connection = self.msgvault
+        assert connection is not None  # Called only for Gmail candidates.
         total = 0
         for email in person.emails:
             total += _read_source(
-                self.msgvault_db, lambda: gmail.count_messages_for(self.msgvault, email, self.accounts)
+                self.msgvault_db, lambda: gmail.count_messages_for(connection, email, self.accounts)
             )
         return total
 
@@ -153,7 +160,7 @@ class ContextSources:
 
     def _read_imessage(self, person: Person) -> list[MessageEntry]:
         """Direct-message bodies; group bodies come from `_read_imessage_group_messages`."""
-        rows = self._chat_query(
+        rows: list[sqlite3.Row] = self._chat_query(
             person,
             lambda connection, handles: list(
                 chatdb.query_direct_messages(connection, handles, limit=self.deep_cap, newest_first=True)
@@ -177,7 +184,7 @@ class ContextSources:
 
     def _read_imessage_groups(self, person: Person) -> list[str]:
         """Names of the named iMessage group chats the candidate belongs to."""
-        rows = self._chat_query(
+        rows: list[sqlite3.Row] = self._chat_query(
             person,
             lambda connection, handles: list(chatdb.query_group_chats_for_handles(connection, handles)),
             [],
@@ -201,7 +208,8 @@ class ContextSources:
             )
             return rows, frozenset(handles)
 
-        rows, contact_handle_ids = self._chat_query(person, query, ([], frozenset()))
+        empty: tuple[list[sqlite3.Row], frozenset[int]] = ([], frozenset())
+        rows, contact_handle_ids = self._chat_query(person, query, empty)
         out: list[MessageEntry] = []
         for row in rows:
             text = chatdb.message_text(row)

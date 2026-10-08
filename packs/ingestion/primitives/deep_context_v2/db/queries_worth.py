@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from typing import Any
 
 from packs.ingestion.primitives.deep_context_v2.db.queries import BATCH, _batches
 from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy
@@ -84,7 +85,7 @@ def bundle_counts(conn: sqlite3.Connection) -> BundleCounts:
     groups: dict[str, int] = {}
     for row in conn.execute("SELECT candidate_id, payload_json FROM bundles ORDER BY candidate_id"):
         candidate_id: str = row["candidate_id"]
-        bundle: dict = json.loads(row["payload_json"])
+        bundle: dict[str, Any] = json.loads(row["payload_json"])
         groups[candidate_id] = len(bundle["groups"])
         messages: dict[tuple[str, str], int] = {}  # (channel, direction) -> messages
         first: dict[tuple[str, str], str] = {}
