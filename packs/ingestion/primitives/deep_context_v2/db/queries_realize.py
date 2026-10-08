@@ -9,7 +9,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, Worth
-from packs.ingestion.primitives.deep_context_v2.import_load.import_row import ImportRow
+from packs.ingestion.primitives.deep_context_v2.db.import_row import ImportRow
 
 
 @dataclass(frozen=True)

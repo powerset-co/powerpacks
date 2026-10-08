@@ -9,7 +9,7 @@ from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
 from packs.ingestion.primitives.deep_context_v2.db.schema import SourceChannel
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import ProfileRecord, profile_from_record
 from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchSubject, row_from_output
-from packs.ingestion.primitives.deep_context_v2.import_load.import_row import ImportRow
+from packs.ingestion.primitives.deep_context_v2.db.import_row import ImportRow
 
 
 def _cells(**overrides: str) -> dict[str, str]:

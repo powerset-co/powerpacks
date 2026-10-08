@@ -28,12 +28,12 @@ from pathlib import Path
 from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.db.import_row import ImportRow
 from packs.ingestion.primitives.deep_context_v2.db.queries import ConnectionRow
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, load_owner
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.import_load.gmail_names import header_names
-from packs.ingestion.primitives.deep_context_v2.import_load.import_row import ImportRow
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.shared.csv_io import CsvIO
 
