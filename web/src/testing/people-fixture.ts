@@ -11,7 +11,7 @@ export const BASE: Cells = {
   public_identifier: "",
   in_progress: false,
   name: "",
-  has_avatar: false,
+  avatar_url: "",
   title: "",
   company: "",
   location: "",

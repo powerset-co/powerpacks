@@ -1,7 +1,6 @@
 import { memo, type MouseEvent } from "react"
 
-import { Avatar, SourcePills } from "@/components/shared"
-import { avatarUrl } from "@/lib/api/people"
+import { ProxiedLinkedinAvatar, SourcePills } from "@/components/shared"
 import { toChannels } from "@/lib/channels"
 import { monthYear } from "@/lib/copy"
 import { sentence } from "@/lib/people/copy"
@@ -58,7 +57,7 @@ export const PersonRow = memo(function PersonRow({
         />
       </div>
       <div role="cell" className="person c-person">
-        <Avatar name={row.name} size={26} src={row.has_avatar ? avatarUrl(row.parent_id) : undefined} />
+        <ProxiedLinkedinAvatar name={row.name} size={26} src={row.avatar_url || undefined} />
         <span className="who">
           <b>{row.name}</b>
         </span>
