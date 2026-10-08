@@ -1,10 +1,12 @@
-"""Streaming, uncapped, group-aware message-body readers for $logbook.
+"""Uncapped, group-aware message-body readers for $logbook.
 
-Every reader is a GENERATOR that iterates a single ordered cursor row-by-row
-(never ``fetchall``) so resident memory stays flat regardless of archive size —
-one message in flight at a time. Rows come out grouped by container
-(thread / DM / group) and ordered by time within a container, so the renderer can
-open one output file per container and emit ``## YYYY`` on year change.
+Every reader is a generator. Gmail iterates one ordered cursor row by row and
+fetches each body by id, so one message is in flight at a time. iMessage and
+WhatsApp fetch one container's rows at once (a person's DMs, or one group) and
+sort them by time, so memory grows with the largest single conversation. Rows
+come out grouped by container (thread / DM / group) and ordered by time within a
+container, so the renderer can open one output file per container and emit
+``## YYYY`` on year change.
 
 Each yielded row is a normalized dict:
 
@@ -13,7 +15,7 @@ Each yielded row is a normalized dict:
      "container_id": <gmail thread id | "dm" | chat guid/jid>,
      "container_title": <subject | group name | "">,
      "msg_id": <stable per-message id>,            # for dedupe
-     "watermark": <monotonic int>,                 # gmail messages.id / chat ROWID / wacli rowid
+     "watermark": <increasing store id>,           # gmail messages.id / chat ROWID / wacli rowid
      "at": <iso8601>, "year": <int|None>,
      "sender": <display name | "me">,
      "direction": "from_me"|"from_them",
@@ -21,14 +23,22 @@ Each yielded row is a normalized dict:
      "text": <full verbatim body>}
 
 The ``watermark`` is the incremental cursor: ``sync`` re-reads only rows whose
-watermark exceeds the per-channel max recorded last run (filtered in SQL).
+watermark exceeds the per-channel max recorded last run (filtered in SQL). It is
+insertion order, not message time: history backfilled after a sync gets higher
+ids, so ``sync`` appends those older messages at the end of the file.
 
 Reuses the message-discovery ``chatdb`` reader for Apple handle resolution,
 reaction filtering, attributed-body decoding, immutable reads, and timestamps.
 The wacli store reader likewise owns WhatsApp schema capabilities, JID matching,
 group resolution, body queries, and timestamps.
-The candidate-pid temp table is built through ``MsgvaultStore`` (``dcs.gni``)
+The candidate-pid temp table is built through ``MsgvaultStore`` (``gni``)
 on our own read-only msgvault connection.
+
+Changelog:
+  2026-09-30: one person-jid set (phone jids + the ``@lid`` ids discovery maps
+  to the phones) drives WhatsApp DMs, counts, group membership (senders and
+  silent participants) and deepen targets; Apple handles are read per call, not cached per process (the
+  People server outlives new handles).
 """
 
 from __future__ import annotations
@@ -42,9 +52,10 @@ from typing import Any, Iterator
 
 from packs.ingestion.primitives.common.person import Person, phone_digits
 from packs.ingestion.primitives.discover.gmail.msgvault import store as gni
-from packs.ingestion.primitives.discover.messages import chatdb
+from packs.ingestion.primitives.discover.messages import chatdb, extract_whatsapp
 from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages
 from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store
+from packs.ingestion.primitives.discover.messages.wacli.util import canonicalize_phone
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"[ \t]+")
@@ -228,11 +239,7 @@ def stream_imessage_dm(person: Person, chat_db: Path, *, since_rowid: int = 0) -
     except chatdb.DatabaseError:
         return
     try:
-        handle_ids = chatdb.resolve_handle_ids(
-            con,
-            (*person.phones, *person.emails),
-            cache_key=chat_db,
-        )
+        handle_ids = chatdb.resolve_handle_ids(con, (*person.phones, *person.emails))
         if not handle_ids:
             return
         for row in chatdb.query_direct_messages(con, handle_ids, since_rowid=since_rowid):
@@ -267,11 +274,7 @@ def count_imessage_dm(person: Person, chat_db: Path) -> tuple[int, int]:
     except chatdb.DatabaseError:
         return 0, 0
     try:
-        handle_ids = chatdb.resolve_handle_ids(
-            con,
-            (*person.phones, *person.emails),
-            cache_key=chat_db,
-        )
+        handle_ids = chatdb.resolve_handle_ids(con, (*person.phones, *person.emails))
         n = chatdb.count_direct_messages(con, handle_ids)
         return n, (1 if n else 0)
     except chatdb.DatabaseError:
@@ -342,11 +345,7 @@ def resolve_imessage_groups(
     except chatdb.DatabaseError:
         return []
     try:
-        handle_ids = chatdb.resolve_handle_ids(
-            con,
-            (*person.phones, *person.emails),
-            cache_key=chat_db,
-        )
+        handle_ids = chatdb.resolve_handle_ids(con, (*person.phones, *person.emails))
         if not handle_ids:
             return []
         groups = list(chatdb.query_group_chats_for_handles(con, handle_ids))
@@ -430,11 +429,13 @@ def stream_whatsapp_dm(person: Person, wacli_db: Path, *, since_rowid: int = 0) 
     except wacli_store.DatabaseError:
         return
     try:
-        for row in wacli_messages.query_whatsapp_messages(
-            con,
-            phones=person.phones,
-            since_rowid=since_rowid,
-        ):
+        rows = wacli_messages.query_whatsapp_messages(con, phones=person.phones, since_rowid=since_rowid)
+        lid_jids = [jid for jid in _person_jids(con, wacli_db, person) if jid.endswith("@lid")]
+        for jid in lid_jids:
+            rows.extend(wacli_messages.query_whatsapp_messages(con, chat_jid=jid, since_rowid=since_rowid))
+        if lid_jids:
+            rows.sort(key=lambda row: float(row["ts"] or 0))
+        for row in rows:
             text = wacli_messages.whatsapp_message_text(row)
             if not text:
                 continue
@@ -458,6 +459,23 @@ def stream_whatsapp_dm(person: Person, wacli_db: Path, *, since_rowid: int = 0) 
         con.close()
 
 
+def _person_jids(con: Any, wacli_db: Path, person: Person) -> tuple[str, ...]:
+    """Every WhatsApp user id that is this person: the jids of their phones plus the
+    privacy ``@lid`` ids discovery maps to those phones through the session lid map
+    and contacts (``extract_whatsapp.phone_for_jid``). DMs, counts, group membership
+    and deepen targets all read this one set."""
+    phones = {phone for value in person.phones if (phone := canonicalize_phone(value))}
+    if not phones:
+        return ()
+    lid_map = wacli_store.load_lid_map(wacli_db.parent)
+    contacts = extract_whatsapp.load_contacts_by_jid(con)
+    lids = sorted({jid for jid in (*lid_map, *contacts) if jid.endswith("@lid")})
+    return (
+        *wacli_store.whatsapp_dm_jids(person.phones),
+        *(jid for jid in lids if extract_whatsapp.phone_for_jid(jid, contacts, lid_map) in phones),
+    )
+
+
 def count_whatsapp_dm(person: Person, wacli_db: Path) -> tuple[int, int]:
     if not wacli_db.exists():
         return 0, 0
@@ -466,7 +484,7 @@ def count_whatsapp_dm(person: Person, wacli_db: Path) -> tuple[int, int]:
     except wacli_store.DatabaseError:
         return 0, 0
     try:
-        n = wacli_messages.count_whatsapp_direct_messages(con, person.phones)
+        n = wacli_messages.count_whatsapp_direct_messages(con, _person_jids(con, wacli_db, person))
         return n, (1 if n else 0)
     except wacli_store.DatabaseError:
         return 0, 0
@@ -475,11 +493,9 @@ def count_whatsapp_dm(person: Person, wacli_db: Path) -> tuple[int, int]:
 
 
 def resolve_whatsapp_groups(wacli_db: Path, names: list[str], person: Person | None = None) -> list[dict[str, Any]]:
-    """Group chats (jid + title) matching CSV ``names`` and/or the person's membership.
-
-    Membership can't use ``group_participants`` (those are privacy ``@lid`` ids with
-    no phone mapping in the store). Instead we use the phone-based ``messages.sender_jid``
-    — groups the person has actually spoken in. Name matching covers CSV-listed groups."""
+    """Group chats (jid + title) matching CSV ``names`` and/or the person's membership:
+    groups where one of the person's jids (``_person_jids``) sent a message or is a
+    listed participant, silent members included."""
     if not wacli_db.exists():
         return []
     try:
@@ -487,8 +503,8 @@ def resolve_whatsapp_groups(wacli_db: Path, names: list[str], person: Person | N
     except wacli_store.DatabaseError:
         return []
     try:
-        phones = person.phones if person is not None else []
-        return wacli_messages.resolve_whatsapp_groups(con, names, phones)
+        members = _person_jids(con, wacli_db, person) if person is not None else ()
+        return wacli_messages.resolve_whatsapp_groups(con, names, members)
     except wacli_store.DatabaseError:
         return []
     finally:
@@ -508,7 +524,7 @@ def whatsapp_target_jids(wacli_db: Path, person: Person, group_names: list[str])
             pass
     if con is not None:
         try:
-            jids.extend(wacli_messages.existing_whatsapp_direct_jids(con, person.phones))
+            jids.extend(wacli_messages.existing_whatsapp_direct_jids(con, _person_jids(con, wacli_db, person)))
         finally:
             con.close()
     return list(dict.fromkeys(jids))

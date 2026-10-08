@@ -8,16 +8,34 @@ Subcommands (all local, no spend):
   export   --csv F            full (re)build: stream every message -> markdown
   sync     --csv F            incremental + APPEND-ONLY (never overwrites)
 
+``build_logbook(people, ...)`` is the typed entry both CLI builds and the People
+page call: it builds only the given entries, keeps every other entry in the
+manifest and index, moves a rebuilt entry's prior files to ``<slug>.bkup-<utc>/``,
+and reports each channel as ok / missing / unreadable. Export builds each entry
+in ``.building-<utc>/`` and swaps it in only when its streams finished, so a
+failing reader leaves that entry and the catalog as they were.
+
+``sync`` appends past each channel's watermark, which is store insertion order,
+not message time: history backfilled after a sync lands at the end of the file
+out of date order. ``export`` rebuilds in date order.
+
 Output (one fixed dir, gitignored):
   .powerpacks/logbook/<slug>/<channel>/<thread|dm|group>.md
   .powerpacks/logbook/index.md         catalog
   .powerpacks/logbook/manifest.json    counts + per-container stable-id watermarks
 
-Memory: one ordered cursor per (entry, channel), iterated row-by-row; one output
-file open at a time; only the current container's small stat buffer in RAM. Peak
-RSS is bounded by the work, not the corpus.
+Memory: one output file open at a time. Gmail streams one message at a time;
+iMessage and WhatsApp hold one conversation's rows while writing it, so peak
+memory follows the largest single conversation, not the whole corpus.
 
 Changelog:
+  2026-09-30: export stages each entry and swaps it in after its streams finish;
+  the catalog is written even when a build fails; person slugs of the batch are
+  reserved from group slugs; an unreadable chat.db reports ``unreadable``.
+  2026-09-30: ``build_logbook`` typed entry. Export keeps unrelated catalog entries
+  (it used to reset the manifest), sets prior files aside instead of deleting them,
+  leaves missing/unreadable channels untouched, and keeps each group chat's slug
+  across builds. CLI export/sync print the build result.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.shared.common (deduped there); no behavior change.
 """
 
@@ -28,11 +46,13 @@ import hashlib
 import json
 import re
 import shlex
-import shutil
 import sqlite3
 import subprocess
 import time
-from datetime import date
+from collections import Counter
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -111,10 +131,10 @@ def _format_message(row: dict[str, Any]) -> str:
 class EntryWriter:
     """Routes a per-(entry, channel) row stream into one file per container.
 
-    On ``export`` it overwrites; on ``sync`` it appends to existing container
+    On ``export`` it writes fresh files; on ``sync`` it appends to existing container
     files (resumed via ``prior``: (channel, container_id) -> {rel_path, last_year})
-    and only creates a file for genuinely new containers. New messages are always
-    chronologically later than what's stored, so appending is correct.
+    and only creates a file for genuinely new containers. Appended rows are newer
+    by store id, which is usually but not always newer by date (see module doc).
 
     The open-file identity is keyed by ``(channel, container_id)``, NOT container_id
     alone: the iMessage DM and the WhatsApp DM both use container_id "dm", so keying
@@ -122,11 +142,11 @@ class EntryWriter:
     iMessage dm.md instead of opening its own whatsapp/dm.md.
     """
 
-    def __init__(self, entry_slug: str, *, append: bool, prior: dict[str, Any]):
+    def __init__(self, root: Path, entry_slug: str, *, append: bool, prior: dict[str, Any]):
+        self.root = root
         self.entry_slug = entry_slug
         self.append = append
         self.prior = prior or {}
-        self.dir = LOGBOOK_ROOT / entry_slug
         self.containers: dict[str, dict[str, Any]] = {}
         self._fh = None
         self._cur_key: tuple[str, str] | None = None
@@ -140,12 +160,12 @@ class EntryWriter:
         resumed = self.prior.get(key)
         if resumed and self.append:
             rel_path = resumed["rel_path"]
-            path = LOGBOOK_ROOT / rel_path
+            path = self.root / rel_path
             new_file = not path.exists()
             self._last_year = resumed.get("last_year")
         else:
             rel_path = f"{self.entry_slug}/{_container_filename(channel, kind, row)}"
-            path = LOGBOOK_ROOT / rel_path
+            path = self.root / rel_path
             new_file = True
             self._last_year = None
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,12 +239,63 @@ class EntryWriter:
         return self.containers
 
 
-def _drain(writer: EntryWriter, stream: Iterator[dict[str, Any]]) -> int:
-    n = 0
+def _drain(writer: EntryWriter, stream: Iterator[dict[str, Any]], written: Counter[str]) -> None:
     for row in stream:
         writer.write(row)
-        n += 1
-    return n
+        written[row["channel"]] += 1
+
+
+# --- the typed build result ---------------------------------------------------
+
+
+class ChannelStatus(StrEnum):
+    """Whether a build could read a channel's local store."""
+
+    OK = "ok"
+    MISSING = "missing"
+    UNREADABLE = "unreadable"
+
+
+@dataclass(frozen=True)
+class ChannelCoverage:
+    """One channel of a build: how far its store reaches and what the build wrote from it."""
+
+    channel: str
+    status: ChannelStatus
+    messages: int
+    earliest: str | None
+    latest: str | None
+
+
+@dataclass(frozen=True)
+class LogbookBuild:
+    """What one build wrote: the entries it built, their totals, and per-channel coverage."""
+
+    root: Path
+    entries: tuple[str, ...]
+    messages: int
+    files: int
+    channels: tuple[ChannelCoverage, ...]
+    elapsed_seconds: float
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "root": str(self.root),
+            "entries": list(self.entries),
+            "messages": self.messages,
+            "files": self.files,
+            "channels": [
+                {
+                    "channel": row.channel,
+                    "status": row.status.value,
+                    "messages": row.messages,
+                    "earliest": row.earliest,
+                    "latest": row.latest,
+                }
+                for row in self.channels
+            ],
+            "elapsed_seconds": self.elapsed_seconds,
+        }
 
 
 # --- store openers / readiness ---------------------------------------------
@@ -243,7 +314,8 @@ def _store_depth(channel: str, db: Path) -> dict[str, Any]:
     try:
         if channel == "imessage":
             probe = chatdb.probe_message_counts(db)
-            info["status"] = "ok" if probe["readable"] else "unreadable_full_disk_access"
+            # Unreadable is no Full Disk Access OR a corrupt / foreign file; the probe can't tell.
+            info["status"] = "ok" if probe["readable"] else "unreadable"
             info["messages"] = probe["messages"]
             if probe["readable"]:
                 con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
@@ -276,6 +348,21 @@ def _store_depth(channel: str, db: Path) -> dict[str, Any]:
     except sqlite3.Error as exc:
         info["status"] = f"error: {type(exc).__name__}"
     return info
+
+
+def _channel_status(depth: dict[str, Any]) -> ChannelStatus:
+    if not depth["exists"]:
+        return ChannelStatus.MISSING
+    return ChannelStatus.OK if depth["status"] == "ok" else ChannelStatus.UNREADABLE
+
+
+def default_paths() -> dict[str, Path]:
+    """The local message stores Logbook reads, at their default locations."""
+    return {
+        "gmail": Path(DEFAULT_MSGVAULT_DB).expanduser(),
+        "imessage": Path(DEFAULT_CHAT_DB).expanduser(),
+        "whatsapp": Path(DEFAULT_WACLI_DB).expanduser(),
+    }
 
 
 def _paths(args: argparse.Namespace) -> dict[str, Path]:
@@ -488,103 +575,174 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _run_build(args: argparse.Namespace, *, append: bool) -> dict[str, Any]:
-    paths = _paths(args)
-    channels = _channels(args)
-    include_groups = not getattr(args, "no_groups", False)
-    people, group_targets = load_people_from_csv(Path(args.csv), limit=args.limit, slug=args.slug)
+EntryStreams = Callable[[dict[str, int]], list[Iterator[dict[str, Any]]]]
 
-    prior_manifest = (
-        json.loads(MANIFEST_JSON.read_text(encoding="utf-8")) if (append and MANIFEST_JSON.exists()) else {}
+
+def build_logbook(
+    people: list[Person],
+    group_targets: list[GroupTarget] | None = None,
+    *,
+    paths: dict[str, Path],
+    channels: list[str] | None = None,
+    root: Path = LOGBOOK_ROOT,
+    include_groups: bool = True,
+    append: bool = False,
+    input_csv: str = "",
+) -> LogbookBuild:
+    """Archive every message the local stores hold for ``people`` and their groups.
+
+    Export (the default) rebuilds each selected entry from the stores after moving its
+    prior files aside; sync appends past each entry's watermark. Only the entries built
+    here change: the manifest and index keep every other entry. A channel whose store is
+    missing or unreadable is reported, and its archive is left as it was.
+    """
+    channels = list(CHANNEL_DIR) if channels is None else channels
+    depth = {channel: _store_depth(channel, paths[channel]) for channel in channels}
+    statuses = {channel: _channel_status(depth[channel]) for channel in channels}
+    readable = [channel for channel in channels if statuses[channel] is ChannelStatus.OK]
+    manifest_path = root / MANIFEST_JSON.name
+    prior_entries: dict[str, Any] = (
+        json.loads(manifest_path.read_text(encoding="utf-8")).get("entries", {}) if manifest_path.exists() else {}
     )
-    prior_entries = prior_manifest.get("entries", {}) if isinstance(prior_manifest, dict) else {}
-    entries: dict[str, dict[str, Any]] = dict(prior_entries) if append else {}
+    entries = dict(prior_entries)
+    built: dict[str, dict[str, dict[str, Any]]] = {}
+    written: Counter[str] = Counter()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
-    gmail_con = src.open_msgvault(paths["gmail"]) if "gmail" in channels and paths["gmail"].exists() else None
+    # Export writes each entry here first and swaps it in only after every stream read
+    # cleanly, so a reader failure leaves the archive and the catalog as they were.
+    staging = root / f".building-{stamp}"
+
+    def build_entry(slug: str, name: str, kind: str, entry_channels: list[str], streams: EntryStreams) -> None:
+        prior = prior_entries.get(slug, {}) if append else {}
+        resumed = {(c["channel"], c["container_id"]): c for c in prior.get("containers", {}).values()}
+        writer = EntryWriter(root if append else staging, slug, append=append, prior=resumed)
+        try:
+            for stream in streams(prior.get("watermark", {})):
+                _drain(writer, stream, written)
+        finally:
+            containers = writer.close()
+        if not append:
+            _set_aside(root, slug, entry_channels, stamp)
+            _swap_in(staging, root, slug)
+        built[slug] = containers
+        _record_entry(entries, slug, name, kind, containers, replaced=[] if append else entry_channels)
+
+    gmail_con = src.open_msgvault(paths["gmail"]) if "gmail" in readable else None
     t0 = time.time()
-    total_msgs = 0
+    completed = False
     try:
         # 1) People: gmail threads + imessage/whatsapp DMs under the person slug.
         for person in people:
-            prior_e = prior_entries.get(person.slug, {})
-            wm = prior_e.get("watermark", {}) if append else {}
-            containers_prior = prior_e.get("containers", {}) if append else {}
-            prior_by_cid = {(c["channel"], c["container_id"]): c for c in containers_prior.values()}
-            if not append:
-                _clear_entry(person.slug, channels)
-            writer = EntryWriter(person.slug, append=append, prior=prior_by_cid)
-            if gmail_con is not None:
-                total_msgs += _drain(writer, src.stream_gmail(person, gmail_con, since_id=wm.get("gmail", 0)))
-            if "imessage" in channels:
-                total_msgs += _drain(
-                    writer, src.stream_imessage_dm(person, paths["imessage"], since_rowid=wm.get("imessage", 0))
-                )
-            if "whatsapp" in channels:
-                total_msgs += _drain(
-                    writer, src.stream_whatsapp_dm(person, paths["whatsapp"], since_rowid=wm.get("whatsapp", 0))
-                )
-            containers = writer.close()
-            _record_entry(entries, person.slug, person.full_name, "person", containers, append)
+            build_entry(person.slug, person.full_name, "person", readable,
+                        _person_streams(person, readable, paths, gmail_con))
 
         # 2) Groups: each named/discovered group is its own top-level slug.
         for gjid, gtitle, channel, gslug in _resolve_group_entries(
-            group_targets, people, paths, channels, include_groups
+            group_targets or [], people, paths, readable, include_groups, prior_entries
         ):
-            prior_e = prior_entries.get(gslug, {})
-            wm = prior_e.get("watermark", {}) if append else {}
-            prior_by_cid = {
-                (c["channel"], c["container_id"]): c for c in (prior_e.get("containers", {}) if append else {}).values()
-            }
-            if not append:
-                _clear_entry(gslug, [channel])
-            writer = EntryWriter(gslug, append=append, prior=prior_by_cid)
-            since = wm.get(channel, 0)
-            if channel == "whatsapp":
-                total_msgs += _drain(
-                    writer, src.stream_whatsapp_group(paths["whatsapp"], gjid, gtitle, since_rowid=since)
-                )
-            else:
-                total_msgs += _drain(
-                    writer, src.stream_imessage_group(paths["imessage"], gjid[0], gtitle, gjid[1], since_rowid=since)
-                )
-            containers = writer.close()
-            _record_entry(entries, gslug, gtitle, "group", containers, append)
+            build_entry(gslug, gtitle, "group", [channel], _group_streams(gjid, gtitle, channel, paths))
+        completed = True
     finally:
         if gmail_con is not None:
             gmail_con.close()
+        # The catalog lists exactly what is on disk: the entries swapped in before a failure.
+        elapsed = round(time.time() - t0, 1)
+        _write_manifest(root, channels, entries, sum(written.values()), elapsed, append, input_csv,
+                        status="completed" if completed else "failed")
+        _write_index(root, entries)
+        if staging.exists() and not any(staging.iterdir()):
+            staging.rmdir()
 
-    manifest = _write_manifest(args, channels, entries, total_msgs, round(time.time() - t0, 1), append)
-    _write_index(entries)
-    return manifest
+    return LogbookBuild(
+        root=root,
+        entries=tuple(slug for slug in built if slug in entries),
+        messages=sum(written.values()),
+        files=sum(len(containers) for containers in built.values()),
+        channels=tuple(
+            ChannelCoverage(channel, statuses[channel], written[channel],
+                            depth[channel].get("earliest"), depth[channel].get("latest"))
+            for channel in channels
+        ),
+        elapsed_seconds=elapsed,
+    )
 
 
-def _clear_entry(slug: str, channels: list[str]) -> None:
-    for ch in channels:
-        d = LOGBOOK_ROOT / slug / CHANNEL_DIR[ch]
-        if d.exists():
-            shutil.rmtree(d)
+def _person_streams(person: Person, readable: list[str], paths: dict[str, Path], gmail_con: Any) -> EntryStreams:
+    def streams(watermark: dict[str, int]) -> list[Iterator[dict[str, Any]]]:
+        out = []
+        if gmail_con is not None:
+            out.append(src.stream_gmail(person, gmail_con, since_id=watermark.get("gmail", 0)))
+        if "imessage" in readable:
+            out.append(src.stream_imessage_dm(person, paths["imessage"], since_rowid=watermark.get("imessage", 0)))
+        if "whatsapp" in readable:
+            out.append(src.stream_whatsapp_dm(person, paths["whatsapp"], since_rowid=watermark.get("whatsapp", 0)))
+        return out
+
+    return streams
+
+
+def _group_streams(gjid: Any, gtitle: str, channel: str, paths: dict[str, Path]) -> EntryStreams:
+    def streams(watermark: dict[str, int]) -> list[Iterator[dict[str, Any]]]:
+        since = watermark.get(channel, 0)
+        if channel == "whatsapp":
+            return [src.stream_whatsapp_group(paths["whatsapp"], gjid, gtitle, since_rowid=since)]
+        return [src.stream_imessage_group(paths["imessage"], gjid[0], gtitle, gjid[1], since_rowid=since)]
+
+    return streams
+
+
+def _set_aside(root: Path, slug: str, channels: list[str], stamp: str) -> None:
+    """Move an entry's channel folders aside before a rebuild: the archive may hold
+    messages the stores no longer do, so nothing is deleted."""
+    for channel in channels:
+        folder = root / slug / CHANNEL_DIR[channel]
+        if folder.exists():
+            backup = root / f"{slug}.bkup-{stamp}"
+            backup.mkdir(parents=True, exist_ok=True)
+            folder.rename(backup / CHANNEL_DIR[channel])
+
+
+def _swap_in(staging: Path, root: Path, slug: str) -> None:
+    """Move a fully built entry's channel folders from staging into the archive."""
+    built = staging / slug
+    if not built.exists():
+        return
+    (root / slug).mkdir(parents=True, exist_ok=True)
+    for folder in built.iterdir():
+        folder.rename(root / slug / folder.name)
+    built.rmdir()
 
 
 def _record_entry(
-    entries: dict[str, Any], slug: str, name: str, kind: str, containers: dict[str, dict[str, Any]], append: bool
+    entries: dict[str, Any],
+    slug: str,
+    name: str,
+    kind: str,
+    containers: dict[str, dict[str, Any]],
+    *,
+    replaced: list[str],
 ) -> None:
-    if not containers and not (append and slug in entries):
+    """Fold one built entry into the catalog: the containers it wrote, plus every prior
+    container of a channel this build did not rewrite (``replaced``)."""
+    kept = {
+        rel_path: meta
+        for rel_path, meta in entries.get(slug, {}).get("containers", {}).items()
+        if meta.get("channel") not in replaced
+    }
+    merged = kept | containers
+    if not merged:
+        entries.pop(slug, None)
         return
-    existing = entries.get(slug, {}) if append else {}
-    merged = dict(existing.get("containers", {}))
-    merged.update(containers)
-    watermark: dict[str, int] = dict(existing.get("watermark", {}))
-    msgs = 0
+    watermark: dict[str, int] = {}
     for meta in merged.values():
-        msgs += int(meta.get("messages", 0))
-        ch = meta.get("channel")
-        if ch:
-            watermark[ch] = max(watermark.get(ch, 0), int(meta.get("watermark", 0)))
+        channel = meta["channel"]
+        watermark[channel] = max(watermark.get(channel, 0), int(meta.get("watermark", 0)))
     entries[slug] = {
         "slug": slug,
         "name": name,
         "kind": kind,
-        "messages": msgs,
+        "messages": sum(int(meta.get("messages", 0)) for meta in merged.values()),
         "files": len(merged),
         "watermark": watermark,
         "containers": merged,
@@ -597,18 +755,31 @@ def _resolve_group_entries(
     paths: dict[str, Path],
     channels: list[str],
     include_groups: bool,
+    prior_entries: dict[str, Any],
 ):
-    """Yield (jid_or_(rowid,guid), title, channel, slug) for every group entry to build."""
+    """Yield (jid_or_(rowid,guid), title, channel, slug) for every group entry to build.
+
+    A group keeps the slug the catalog already gave its chat; a new chat whose name
+    slug is taken by another entry gets a short id suffix."""
+    known = {
+        container["container_id"]: slug
+        for slug, entry in prior_entries.items()
+        if entry.get("kind") == "group"
+        for container in entry.get("containers", {}).values()
+    }
+    # Person slugs of this batch count as taken too: a group must never share a person's folder.
+    taken: set[str] = set(prior_entries) | {person.slug for person in people}
     seen_ids: set[str] = set()  # dedupe by container id (jid/guid), across all passes
-    seen_slugs: set[str] = set()  # disambiguate only genuinely-distinct groups w/ same name
 
     def _emit(container_key: str, target, title: str, channel: str):
         if container_key in seen_ids:
             return None  # same group already emitted (e.g. CSV-named AND membership)
-        base = group_slug(title)
-        gslug = base if base not in seen_slugs else f"{base}-{_short(container_key)}"
+        gslug = known.get(container_key)
+        if gslug is None:
+            base = group_slug(title)
+            gslug = base if base not in taken else f"{base}-{_short(container_key)}"
         seen_ids.add(container_key)
-        seen_slugs.add(gslug)
+        taken.add(gslug)
         return (target, title, channel, gslug)
 
     # CSV-named WhatsApp groups are extracted by default (user listed them explicitly).
@@ -638,29 +809,41 @@ def _resolve_group_entries(
                     yield row
 
 
-def _write_manifest(args, channels, entries, total_msgs, seconds, append) -> dict[str, Any]:
-    total_files = sum(e.get("files", 0) for e in entries.values())
+def _write_manifest(
+    root: Path,
+    channels: list[str],
+    entries: dict[str, Any],
+    total_msgs: int,
+    seconds: float,
+    append: bool,
+    input_csv: str,
+    *,
+    status: str,
+) -> None:
     manifest = {
         "source": "logbook",
-        "status": "completed",
+        "status": status,
         "mode": "sync" if append else "export",
-        "input_csv": str(args.csv),
+        "input_csv": input_csv,
         "channels": channels,
         "privacy": {
             "reads_bodies": True,
             "persists_verbatim": True,
             "scope": "Gmail threads + iMessage/WhatsApp DMs + named/membership groups",
         },
-        "totals": {"entries": len(entries), "files": total_files, "messages_written": total_msgs},
+        "totals": {
+            "entries": len(entries),
+            "files": sum(e.get("files", 0) for e in entries.values()),
+            "messages_written": total_msgs,
+        },
         "elapsed_seconds": seconds,
         "entries": entries,
         "generated_at": now_iso(),
     }
-    write_json(MANIFEST_JSON, manifest)
-    return {k: v for k, v in manifest.items() if k != "entries"} | {"entries_count": len(entries)}
+    write_json(root / MANIFEST_JSON.name, manifest)
 
 
-def _write_index(entries: dict[str, Any]) -> None:
+def _write_index(root: Path, entries: dict[str, Any]) -> None:
     lines = [
         "# Logbook index",
         "",
@@ -675,16 +858,31 @@ def _write_index(entries: dict[str, Any]) -> None:
         lines.append(
             f"| [{e.get('name') or slug}]({slug}/) | {e.get('kind')} | {e.get('files', 0)} | {e.get('messages', 0)} | {', '.join(chans)} |"
         )
-    INDEX_MD.parent.mkdir(parents=True, exist_ok=True)
-    INDEX_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    index = root / INDEX_MD.name
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _cli_build(args: argparse.Namespace, *, append: bool) -> dict[str, Any]:
+    people, group_targets = load_people_from_csv(Path(args.csv), limit=args.limit, slug=args.slug)
+    build = build_logbook(
+        people,
+        group_targets,
+        paths=_paths(args),
+        channels=_channels(args),
+        include_groups=not args.no_groups,
+        append=append,
+        input_csv=str(args.csv),
+    )
+    return {"command": "sync" if append else "export", **build.to_payload(), "generated_at": now_iso()}
 
 
 def cmd_export(args: argparse.Namespace) -> dict[str, Any]:
-    return _run_build(args, append=False)
+    return _cli_build(args, append=False)
 
 
 def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
-    return _run_build(args, append=True)
+    return _cli_build(args, append=True)
 
 
 # --- CLI --------------------------------------------------------------------
