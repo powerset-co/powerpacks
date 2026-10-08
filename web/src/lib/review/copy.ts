@@ -55,11 +55,8 @@ export const SYNTHESIS = {
   command: "bin/deep-context-v2 run",
 } as const
 
-export const HANDOFF = {
-  note: "Review complete — go back to Codex.",
-  phrase: "Review complete, continue",
-  copy: "Copy",
-} as const
+/** The copy button beside a phrase or command. */
+export const COPY = "Copy"
 
 export const TOAST = {
   added: "Added",

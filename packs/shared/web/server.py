@@ -232,12 +232,14 @@ def owned_listener(host: str, port: int, root: Path) -> dict[str, object] | None
     live = health(host, port)
     if live and live.get("primitive") == PRIMITIVE and live.get("repo_root") == str(root):
         return live
-    _stop_other_page(host, port)
+    stop_page(host, port)
     return None
 
 
-def _stop_other_page(host: str, port: int) -> None:
-    """Stop another checkout's page (any release) holding the port; refuse anything else."""
+def stop_page(host: str, port: int) -> None:
+    """Stop the page (any checkout, any release) holding the port; refuse anything else. A review
+    starts on a fresh server so it runs the code the checkout has now, not what a page left running
+    from before an update has loaded."""
     listeners = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
                                capture_output=True, text=True).stdout.split()
     for pid in listeners:

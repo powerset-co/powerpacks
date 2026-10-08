@@ -1,4 +1,4 @@
-import { copyFailed, HANDOFF, TOAST } from "@/lib/review/copy"
+import { COPY, copyFailed, TOAST } from "@/lib/review/copy"
 
 import { useReview } from "../hooks/useReview"
 
@@ -23,7 +23,7 @@ export function HandoffCopy({ phrase }: HandoffCopyProps) {
     <div className="handoff-copy">
       <code>{phrase}</code>
       <button className="button button-outline" type="button" onClick={() => void copy()}>
-        {HANDOFF.copy}
+        {COPY}
       </button>
     </div>
   )

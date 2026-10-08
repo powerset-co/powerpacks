@@ -7,7 +7,7 @@ background (the install's build; people.csv goes to the operator's folder on the
 user can search what was found without reviewing first;
 the review server starts and its URL is printed: the review page is the one thing the user sees.
 `finish` is for after the review: realize and the index again (the index caches, so the second
-build costs about nothing) and the review server stopped. `review` and `stop` manage the server.
+build costs about nothing). The page stays up until `stop`; `review` starts it again.
 
 Every stage keys its work, so a rerun after a failure or a code fix continues from what is
 stored and spends nothing on what is done. A stage that fails ends the run with its error on
@@ -45,7 +45,8 @@ from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLo
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
-from packs.shared.web.server import DEFAULT_PORT, start_server as start_page
+from packs.ingestion.primitives.share.share_list import Share
+from packs.shared.web.server import DEFAULT_PORT, start_server as start_page, stop_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Synthesize
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT as WORTH_LIMIT
@@ -119,8 +120,10 @@ def archive_v1(data_root: Path) -> Path | None:
 
 
 def start_review(data_root: Path, port: int) -> str:
-    """The one local page server on `port` (reused when this checkout's already answers there); returns
-    the review URL. The server is the install's too: packs/shared/web/server.py."""
+    """The one local page server on `port`, started fresh so it runs this checkout's code (a page left up
+    across an update would keep serving the old review); returns the review URL. The server is the
+    install's too: packs/shared/web/server.py."""
+    stop_page("127.0.0.1", port)
     started: dict[str, object] = start_page(data_root.parent, port=port)
     (data_root / REVIEW_PID_FILE).write_text(str(started["pid"]))
     return str(started["url"])
@@ -153,6 +156,7 @@ def realize(data_root: Path) -> Path:
     conn: sqlite3.Connection = open_store(store_path(data_root))
     node = Realize(conn, data_root)
     _stage("realize", node)
+    _stage("share", Share(conn, data_root))  # the share list over everything confirmed so far: free, seconds
     conn.close()
     print(f"people.csv: {node.people_csv()}", flush=True)
     return node.people_csv()
@@ -239,18 +243,16 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
 
 
 def finish(data_root: Path, operator_id: str) -> int:
-    """After the review: people.csv and the index again (cached, so about free), the review server stopped."""
+    """After the review: people.csv and the index again (cached, so about free). The review server stays up;
+    the agent runs `stop` once the user is done with the page."""
     operator_id = resolve_operator_id(operator_id)
+    wait_for_index(data_root)  # a first build still reading people.csv finishes before realize rewrites it
     people_csv: Path = realize(data_root)
-    wait_for_index(data_root)
     command: list[str] = index_command(data_root, people_csv)
     print("index: " + " ".join(command), flush=True)
     code: int = subprocess.run(command, cwd=ROOT, env=index_env(operator_id)).returncode
     if code != 0:
-        print("index: the Modal build did not complete; the review server stays up, run finish again", flush=True)
-        return code
-    if stop_review(data_root):
-        print("review server stopped", flush=True)
+        print("index: the Modal build did not complete; run finish again", flush=True)
     return code
 
 

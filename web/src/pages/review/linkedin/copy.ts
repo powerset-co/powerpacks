@@ -47,4 +47,8 @@ export function feedbackContext(name: string): string {
   return `Feedback on ${name} — wrong or missing info?`
 }
 
-export const FINISHED = { title: "LinkedIn Profiles Checked" } as const
+export const FINISHED = {
+  title: "Review Complete",
+  note: "Updating your index.",
+  hint: "You can search your confirmed contacts while you wait.",
+} as const
