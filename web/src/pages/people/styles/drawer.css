@@ -35,14 +35,40 @@
 .drawer-inner p.dim {
   color: var(--muted);
 }
+/* The name with the LinkedIn icon beside it, as the review cards draw it. */
+.who .name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.who .name-row h2 {
+  margin: 0;
+}
+.who .linkedin-label {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: #6ba7e4;
+  text-decoration: none;
+}
 .timeline {
   position: relative;
   display: grid;
   gap: 10px;
   margin: 2px 0 0;
-  padding: 0 0 0 14px;
+  padding: 0 0 0 18px;
   list-style: none;
-  border-left: 1px solid var(--line-strong);
+}
+/* The line runs from the first dot to the last, inside the list's box so nothing is clipped. */
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  background: var(--line-strong);
 }
 .timeline li {
   position: relative;
@@ -51,11 +77,11 @@
   font-size: 12.5px;
   line-height: 1.5;
 }
-/* The dot sits on the line: the line's centre is the border plus the padding left of the item. */
+/* The dot sits on the line, centred at 4px from the list's left edge. */
 .timeline li::before {
   content: "";
   position: absolute;
-  left: -14.5px;
+  left: -18px;
   top: 6px;
   width: 8px;
   height: 8px;
@@ -63,7 +89,6 @@
   border-radius: 50%;
   background: var(--card);
   border: 1.5px solid var(--muted);
-  transform: translateX(-50%);
 }
 .timeline li:first-child::before {
   background: var(--primary);
