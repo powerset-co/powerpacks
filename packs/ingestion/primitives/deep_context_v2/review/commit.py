@@ -4,10 +4,10 @@
 Retarget from the reviewer's words is researched here, one Parallel batch for all of them (a stored answer
 to the same facts and words is reused); a URL found is confirmed, nothing found rejects the pending profile.
 
-A row whose family is no longer in the review (a rerun merged it away, or an earlier finish already applied
-it) is dropped; a decision that cannot be applied any more (its pending profile is gone) is logged and
-dropped. Each row leaves the queue as it is dealt with, so a finish that stops midway resumes, and a row
-the reviewer writes while finish runs is never swept away.
+A row whose family is no longer in the review (an earlier finish already applied it) is dropped. A row
+that cannot be applied, which is a pasted URL whose profile RapidAPI did not return, stays in the queue
+and finish says so; the next finish tries it again. Each applied row leaves the queue as it commits, so a
+finish that stops midway resumes, and a row the reviewer writes while finish runs is never swept away.
 
 Created: 2026-10-08
 """
@@ -77,7 +77,8 @@ def commit_review(conn: sqlite3.Connection, data_root: Path) -> int:
                 outcome = apply(conn, data_root, cards[parent_id], queue[parent_id], handles.get(parent_id, ""))
                 applied += 1
             except DecisionError as error:
-                outcome = f"not applied: {error}"
+                print(f"commit: {parent_id}: kept in the queue, {error}", flush=True)
+                continue
         with conn:
             queries_review.delete_queued(conn, parent_id)
         print(f"commit: {parent_id}: {outcome}", flush=True)

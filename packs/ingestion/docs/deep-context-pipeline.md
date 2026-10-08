@@ -61,6 +61,7 @@ identifiers go to RapidAPI for profiles. Nothing is uploaded anywhere else by th
 
 The review page writes no ledger row. Each decision (Yes, Skip, pasted Retarget, described Retarget) is one row in
 `review_queue`, edited in place when the reviewer browses back; `finish` applies the queue once through the Yes,
-Skip and Retarget writers and empties it. For a Retarget from a description, `finish` runs one Parallel
+Skip and Retarget writers and removes each applied row. A pasted URL is taken as typed; finish fetches its profile
+for the member id, and a URL RapidAPI cannot return stays queued for the next finish. For a Retarget from a description, `finish` runs one Parallel
 research with the words beside the family's facts (about $0.05, plus one profile fetch when a URL is found), applies
 a URL found, and otherwise rejects the pending profile and leaves the family worth yes without a LinkedIn.

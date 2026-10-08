@@ -67,13 +67,19 @@ def yes(conn: sqlite3.Connection, card: Card, key: str) -> str:
     return picked.linkedin_url
 
 
-def fetch_profile(data_root: Path, pasted: str) -> tuple[str, Profile]:
-    """The pasted URL and its profile (cache first, one RapidAPI call on a miss); the page checks a pasted
-    URL this way when it is typed, so a bad one is refused then, not at finish."""
+def pasted_url(pasted: str) -> str:
+    """The pasted text as a LinkedIn profile URL. The page takes the reviewer's word for it; only a text that
+    names no /in/ profile is refused, since it would send an empty identifier to the paid fetch."""
     url: str = normalize_linkedin_url(pasted)
-    # A text that names no /in/ profile would send an empty identifier to the paid fetch.
     if not extract_public_identifier(url):
         raise DecisionError("That is not a LinkedIn profile URL. Nothing was saved.")
+    return url
+
+
+def fetch_profile(data_root: Path, pasted: str) -> tuple[str, Profile]:
+    """The pasted URL and its profile: cache first, one RapidAPI call on a miss. The profile's member id is
+    what the parent ledger keys the family by, so finish needs it."""
+    url: str = pasted_url(pasted)
     profiles: Profiles = load_profiles(data_root, [url], fetch=True)
     profile: Profile | None = profiles.found.get(url)
     if profile is None:

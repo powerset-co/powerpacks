@@ -121,7 +121,7 @@ class ReviewApi:
             if decision == ReviewDecision.KEEP:
                 key = decisions.chosen(card, pub).key
             elif decision == ReviewDecision.FIX:
-                key = decisions.fetch_profile(self.data_root, _value(form, "new_url"))[0]
+                key = decisions.pasted_url(_value(form, "new_url"))
             elif decision != ReviewDecision.DETACH:
                 raise Refusal(HTTPStatus.BAD_REQUEST, f"unknown decision: {decision}")
         except DecisionError as error:

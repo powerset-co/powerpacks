@@ -55,8 +55,9 @@ class ReviewQueueTests(unittest.TestCase):
             # Editing replaces the queued decision; the count does not move.
             answer = api.decide({"parent_slug": ["p:c1"], "decision": ["keep"], "pub": ["123"]}).next
             self.assertEqual((answer.card.person.slug, answer.pending), ("p:c2", 1))
+            # A pasted URL is taken as is: no profile fetch on the page.
             profile = Profile(URL, "jordan-bravo", "456", "Jordan Bravo", "", "", (), (), NOW)
-            with patch(PROFILES, return_value=Profiles({URL: profile}, 0, 0)):
+            with patch(PROFILES, side_effect=AssertionError("no fetch on the page")):
                 answer = api.decide({"parent_slug": ["p:c1"], "decision": ["fix"], "new_url": [URL]}).next
             self.assertEqual(answer.pending, 1)
             self.assertEqual(conn.execute("SELECT decision, key FROM review_queue WHERE parent_id='p:c1'").fetchone()[:],
