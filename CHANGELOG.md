@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.20.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.19.1...powerpacks-v3.20.0) (2026-10-08)
+
+
+### Features
+
+* **deep-context:** the server records the finished review; run and finish decide the share list ([#756](https://github.com/powerset-co/powerpacks/issues/756)) ([9435585](https://github.com/powerset-co/powerpacks/commit/943558557a013c22b817e5db769b998a8ce63315))
+* **review:** a Synthetic badge beside a researched profile's name, with what it means on hover ([#751](https://github.com/powerset-co/powerpacks/issues/751)) ([0d96c64](https://github.com/powerset-co/powerpacks/commit/0d96c644a1b451bcb21e909bd005ec865caaacac))
+
+
+### Bug Fixes
+
+* **deep-context:** finish keeps the review up when the Modal build fails; realize points at finish ([#754](https://github.com/powerset-co/powerpacks/issues/754)) ([18a1ca6](https://github.com/powerset-co/powerpacks/commit/18a1ca69ae6f8f9d4e511c06fa10fc665de597b7))
+* **deep-context:** the index is built on Modal again, under a checked operator id ([#752](https://github.com/powerset-co/powerpacks/issues/752)) ([a65f8d2](https://github.com/powerset-co/powerpacks/commit/a65f8d2e5275eec597bd255e6aca3ef883a2ee95))
+* **review:** the Synthetic tooltip says the profile comes from web research ([#755](https://github.com/powerset-co/powerpacks/issues/755)) ([cb227fa](https://github.com/powerset-co/powerpacks/commit/cb227fae64d9e5d8160b8ca1a69a18c91c1cf1c0))
+
+
+### Documentation
+
+* **deep-context:** restore visible progress tasks ([#738](https://github.com/powerset-co/powerpacks/issues/738)) ([808b116](https://github.com/powerset-co/powerpacks/commit/808b1161c461a48c1f104e1804f52a1f35be3eb8))
+* **deep-context:** the visible tasks are the advisor's, never the worker's ([#753](https://github.com/powerset-co/powerpacks/issues/753)) ([28b384f](https://github.com/powerset-co/powerpacks/commit/28b384f16693bff6b6a4f57eb0e92ca3bdf31a35))
+
 ## [3.19.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.19.0...powerpacks-v3.19.1) (2026-10-07)
 
 
