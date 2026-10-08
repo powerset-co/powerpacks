@@ -600,6 +600,42 @@
 .review-page .person-label-more:focus .person-label-tooltip {
   display: block;
 }
+/* The Synthetic badge beside a researched profile's name; its tooltip says what that means. */
+.review-page .synthetic-badge {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  cursor: help;
+}
+.review-page .synthetic-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max-content;
+  max-width: min(300px, 70vw);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  box-shadow: 0 4px 16px #0002;
+}
+.review-page .synthetic-badge:hover .synthetic-tooltip,
+.review-page .synthetic-badge:focus .synthetic-tooltip {
+  display: block;
+}
 
 /* A window tall and wide enough locks the page to one screen: the stage fills what the top
    bar leaves, and a card scrolls inside itself. */

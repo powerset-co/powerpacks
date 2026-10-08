@@ -8,6 +8,7 @@ import type { ReviewCandidate, ReviewPerson } from "@/types/review"
 import { FactList } from "../shared/FactList"
 import { LabelBadges } from "../shared/LabelBadges"
 import { LinkedinLink } from "../shared/LinkedinLink"
+import { SyntheticBadge } from "../shared/SyntheticBadge"
 import { ReviewAvatar } from "../shared/ReviewAvatar"
 import { DECISION, OPTION } from "./copy"
 
@@ -49,6 +50,7 @@ export function LinkedinOption({ person, candidate, disabled, onUse }: LinkedinO
           <div className="name-row">
             <h3>{displayName(person, candidate, false)}</h3>
             {kind === "linked" ? <LinkedinLink url={candidate.url} /> : null}
+            {kind === "researched" ? <SyntheticBadge /> : null}
           </div>
           <LabelBadges labels={[]} candidate={candidate} />
           <KindLine kind={kind} />
@@ -84,7 +86,7 @@ export function LinkedinOption({ person, candidate, disabled, onUse }: LinkedinO
 function KindLine({ kind }: { kind: OptionKind }) {
   switch (kind) {
     case "researched":
-      return <span className="option-kind">{OPTION.researched}</span>
+      return null
     case "linked":
       return null
     case "unfetched":

@@ -90,6 +90,8 @@ describe("PersonCard", () => {
     const { container } = renderCard(reviewPerson(), syntheticCandidate())
     expect(container.querySelector(".avatar img")).toBeNull()
     expect(screen.queryByRole("link")).toBeNull()
+    expect(container.querySelector(".name-row .synthetic-badge")?.firstChild?.textContent).toBe("Synthetic")
+    expect(screen.getByRole("tooltip").textContent).toMatch(/synthetic profile/)
   })
 
   it("leaves out the facts a profile lacks", () => {

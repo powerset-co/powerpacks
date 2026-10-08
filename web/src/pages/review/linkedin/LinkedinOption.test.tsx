@@ -54,8 +54,9 @@ describe("LinkedinOption (L2)", () => {
   it("draws a researched profile: no link, no picture, its research summary as a fact", () => {
     const { option, facts, copy } = renderOption(syntheticCandidate({ headline: "Runs Example Labs" }))
     expect(option.className).toBe("linkedin-option option-synthetic")
-    expect(copy()).toEqual(["Jordan Bravo", "Researched profile — no LinkedIn confirmed"])
-    expect(option.querySelector(".profile-copy > span")?.className).toBe("option-kind")
+    expect(option.querySelector(".name-row .synthetic-badge")?.firstChild?.textContent).toBe("Synthetic")
+    expect(option.querySelector(".option-kind")).toBeNull()
+    expect(copy()[0]?.startsWith("Jordan BravoSynthetic")).toBe(true)
     expect(screen.queryByRole("link")).toBeNull()
     expect(facts()).toEqual([
       ["Work", "Founder, Example LabsEngineer, Acme"],
