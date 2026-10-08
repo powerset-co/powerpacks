@@ -14,6 +14,11 @@ people like someone or who worked with them continue below. For searches, start
 with **Choose the network**, including its visible scope statement, before company intake. A request to preview or review step by
 step still means pause.
 
+For ordinary and deep searches, this chat advises and one native sub-agent runs
+the commands in tmux: follow [tmux-worker.md](tmux-worker.md). This chat owns the
+tasks, scope, reviews, recovery decisions and user messages until useful results
+are verified. Quick person/dossier lookups stay in this chat.
+
 ## Locate the tools
 
 Run commands from the configured canonical checkout, not the conversation folder
@@ -122,6 +127,8 @@ Record `surface`, `backend`, `depth`, `mode`, and a one-sentence `reason`:
 Write the existing `decision.json` in `.powerpacks/search/<slug>` for fast or
 `.powerpacks/deep-search/<slug>` for deep before running. Use a fresh run for a new
 query/refinement, carrying forward scope and corrections; deep ponds share one run.
+For an interrupted command, resume the same run from its saved state; do not
+create a new run or repeat completed paid work just because the worker stopped.
 
 ## Run the search
 
@@ -173,6 +180,10 @@ Disconnected MCP: follow [Powerset recovery](../powerset/SKILL.md#connection-rec
 login only if authentication requires it. Retain the pending request and resume.
 Never bypass membership checks, write replacement retrieval code, or silently use
 Sales Navigator. If a requested “extended search” has no defined surface, clarify it.
+
+Keep the search unfinished until retrieval and the requested ranking complete,
+or a supported stopping reason is verified. Follow [tmux-worker.md](tmux-worker.md)
+for bounded recovery and [feedback.md](feedback.md) for sanitized technical reports.
 
 For local zero-match diagnosis read [search-sql](../search-sql/SKILL.md#integration-with-a-parent-search).
 Apply user corrections to the next execution and log them via [feedback.md](feedback.md).

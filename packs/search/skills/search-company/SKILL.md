@@ -8,6 +8,11 @@ description: Resolve company names, company descriptions, investor/funding filte
 Use this when the user asks for company search directly, or when they want the
 company set behind a people search inspected first.
 
+For multi-step resolution, follow [the advisor/tmux worker instructions](../search/tmux-worker.md).
+This chat owns scope, tasks, recovery and user messages; one worker runs the
+commands. A quick company lookup can run directly. Technical issues use
+[sanitized feedback](../search/feedback.md#technical-issues).
+
 Examples:
 
 - `/search-company database companies`
@@ -18,7 +23,9 @@ Examples:
 
 Fresh company resolution only: do not scan, discover, reuse, or resume prior
 company search artifacts, state files, CSVs, JSONL, or manifests. Resolve the
-company set from the user's current request every time.
+company set from the user's current request every time. An interrupted command
+within that request can resume its completed steps; do not redo a successful
+resolver call merely because the worker stopped.
 
 1. Decompose the request into the `role-search-filters` company fields only:
    `company_names`, `company_semantic_queries`, `entity_types`, `sector_types`,

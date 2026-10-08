@@ -4,6 +4,8 @@ Use the existing result-driven pond loop. One pond searches one broad candidate
 population through the ordinary pipeline. Review queries and compiled filters
 yourself against the user's request/JD; this is a correctness check, not a routine
 execution question. Preserve scope and corrections across every pond.
+Use the [advisor/tmux worker](tmux-worker.md) throughout: the advisor reviews the
+returned query/payload and steers; the worker runs all commands in the same session.
 
 Default: run one round per pond, then continue if fewer than five unique people
 across the search score at least 4 overall (including when nobody scores at least 3).
