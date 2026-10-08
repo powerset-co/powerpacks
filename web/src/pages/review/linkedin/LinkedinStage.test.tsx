@@ -458,20 +458,21 @@ describe("LinkedinStage: the guidance box", () => {
   })
 })
 
-describe("LinkedinStage: the debug carousel (L14)", () => {
+describe("LinkedinStage: review history", () => {
   const debugging = () => spyReview({ debug: true })
   const first = () => linkedinCard({ queue: queuePosition({ index: 0, total: 3 }) })
 
   it("reads the queue position the URL names", async () => {
     await open(linkedinCard({ queue: queuePosition({ index: 2 }) }), spyReview({ debug: true, index: 2 }))
-    expect(server.gets(CARD)).toEqual([`${CARD}?index=2&debug=1`])
+    expect(server.gets(CARD)).toEqual([`${CARD}?index=2`])
     expect(button("Previous")).toBeTruthy()
     expect(button("Next")).toBeTruthy()
   })
 
-  it("has no carousel outside debug", async () => {
-    await open()
-    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
+  it("shows the same arrows outside the card without debug", async () => {
+    await open(first())
+    expect(button("Next").closest("article")).toBeNull()
+    expect(button("Previous")).toBeTruthy()
   })
 
   it("browses by position without writing, swapping the contents as a decision does", async () => {
@@ -487,10 +488,10 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     fireEvent.click(button("Previous"))
     await waitFor(() => expect(server.gets(CARD)).toHaveLength(4))
     expect(server.gets(CARD)).toEqual([
-      `${CARD}?debug=1`,
-      `${CARD}?index=1&debug=1`,
-      `${CARD}?debug=1`,
-      `${CARD}?index=2&debug=1`,
+      `${CARD}?index=0`,
+      `${CARD}?index=1`,
+      `${CARD}?index=0`,
+      `${CARD}?index=2`,
     ])
     expect(server.posts(DECIDE)).toEqual([])
     expect(server.posts(RETARGET)).toEqual([])
@@ -505,13 +506,29 @@ describe("LinkedinStage: the debug carousel (L14)", () => {
     expect(button("Next")).toBeTruthy()
   })
 
-  it("leaves the carousel on a decision: the answer's card is the plain queue's", async () => {
-    server.answer(`POST ${DECIDE}`, decideResult({ next: caseyCard() }))
+  it("keeps history available after a decision and on the finished screen", async () => {
+    server.answer(
+      `POST ${DECIDE}`,
+      decideResult({ next: caseyCard({ queue: queuePosition({ index: 1, total: 3 }) }) }),
+    )
     await open(first(), debugging())
     fireEvent.click(button("Use this profile"))
     await waitFor(() => expect(name()).toBe("Casey Delta"))
-    expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
-    expect(article().className).toBe("decision-card identity-card entering")
+    expect(button("Previous")).toBeTruthy()
+    server.answer(
+      `POST ${DECIDE}`,
+      decideResult({
+        next: linkedinCard({
+          card: null,
+          finished: linkedinFinished(),
+          pending: 0,
+          queue: queuePosition({ index: 3, total: 4 }),
+        }),
+      }),
+    )
+    fireEvent.click(button("Skip"))
+    await screen.findByRole("heading", { name: "Review Complete" })
+    expect(button("Previous")).toBeTruthy()
   })
 
   it("hides the arrows while the card's re-research request is out, so no other card can be decided", async () => {

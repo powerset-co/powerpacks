@@ -89,10 +89,11 @@ export interface ReviewCandidate {
   reason: string
 }
 
-/** The debug carousel's position (`?debug=1`). */
+/** Position in the ordered review history. */
 export interface QueuePosition {
   index: number
   total: number
+  status?: string
 }
 
 /** What replaces the LinkedIn card when the queue has nothing to show. */

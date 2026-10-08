@@ -98,8 +98,12 @@ export interface CardQuery {
   debug?: boolean
 }
 
-function cardQuery({ exclude = [], index = 0, debug = false }: CardQuery): Record<string, string> {
-  return { exclude: exclude.join(","), index: index ? String(index) : "", debug: debug ? "1" : "" }
+function cardQuery({ exclude = [], index, debug = false }: CardQuery): Record<string, string> {
+  return {
+    exclude: exclude.join(","),
+    index: index === undefined ? "" : String(index),
+    debug: debug ? "1" : "",
+  }
 }
 
 /** The next person to check. */

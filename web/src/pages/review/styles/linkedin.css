@@ -3,7 +3,13 @@
    feedback popover. Loaded after base.css (LinkedinStage imports it), under the same
    .review-page root. */
 
-/* The debug carousel's arrows sit against the stage. */
+/* Reserve room for the existing arrows beside the card, including on phones. */
+.review-page[data-stage="linkedin"] .review-main {
+  width: min(100% - 104px, 760px);
+  overflow: visible;
+}
+
+/* The carousel's arrows sit against the stage. */
 .review-page .linkedin-stage {
   position: relative;
 }

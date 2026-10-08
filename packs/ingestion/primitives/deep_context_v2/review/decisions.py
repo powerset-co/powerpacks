@@ -54,8 +54,10 @@ def yes(conn: sqlite3.Connection, card: Card, key: str) -> str:
     with conn:
         if chosen.origin == Origin.SYNTHETIC:
             for member in card.members:
-                queries_review.insert_linkedin(conn, member.candidate_id, chosen.linkedin_url, chosen.member_id,
+                seq = queries_review.insert_linkedin(conn, member.candidate_id, chosen.linkedin_url, chosen.member_id,
                                                Origin.SYNTHETIC.value, Verdict.CONFIRMED.value, chosen.fingerprint, now)
+                queries_review.insert_parent(conn, member.candidate_id, card.parent_id, MergeReason.HUMAN.value,
+                                             f"candidate_linkedins:{seq}", now)
         else:
             _confirm(conn, card, chosen.linkedin_url, chosen.member_id, chosen.origin, chosen.fingerprint, now)
     return chosen.linkedin_url
@@ -85,4 +87,5 @@ def skip(conn: sqlite3.Connection, card: Card) -> None:
             for pending in card.pending:
                 queries_review.insert_linkedin(conn, member.candidate_id, pending.linkedin_url, pending.member_id,
                                                pending.origin, Verdict.WRONG_PERSON.value, pending.fingerprint, now)
-            queries_review.insert_worth_no(conn, member.candidate_id, SKIP_REASON, now)
+            queries_review.insert_parent(conn, member.candidate_id, card.parent_id, MergeReason.HUMAN.value, "", now)
+            queries_review.insert_worth(conn, member.candidate_id, "no", SKIP_REASON, now)

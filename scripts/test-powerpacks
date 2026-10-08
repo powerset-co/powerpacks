@@ -103,6 +103,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_message_name_conflicts \
   tests.test_share_in_progress \
   tests.test_share_v2 \
+  tests.test_review_history \
   tests.test_logbook_people \
   tests.test_logbook_archive \
   tests.test_logbook_build \

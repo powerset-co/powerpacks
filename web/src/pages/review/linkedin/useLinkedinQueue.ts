@@ -23,9 +23,8 @@ export interface Shown {
 
 /**
  * The LinkedIn queue, one card at a time. The stage reads its first card on mount. A
- * decision's answer carries the next card, read after the write, so a decided person never
- * comes back; a queued re-research reads the next card itself, leaving that person out. The
- * re-research settles that person in the background: they never come back as a card.
+ * decision's answer carries the next pending card. Browsing uses the stable review order,
+ * including previous decisions, which can be edited through the same endpoint.
  */
 export function useLinkedinQueue() {
   const { debug, index, fadeMs, toast, toastError, applyProgress, leaveAndReload } = useReview()
@@ -35,7 +34,7 @@ export function useLinkedinQueue() {
 
   useEffect(() => {
     const read = new AbortController()
-    fetchLinkedinCard({ debug, index }, read.signal).then(
+    fetchLinkedinCard({ index: debug || index ? index : undefined }, read.signal).then(
       (payload) => setShown({ payload, phase: "ready" }),
       (error: unknown) => {
         if (!read.signal.aborted) setFailure(errorText(error))
@@ -97,7 +96,7 @@ export function useLinkedinQueue() {
   const browse = async (position: number) => {
     setPhase("deciding")
     try {
-      const [next] = await Promise.all([fetchLinkedinCard({ debug: true, index: position }), wait(fadeMs)])
+      const [next] = await Promise.all([fetchLinkedinCard({ index: position }), wait(fadeMs)])
       follow(next)
     } catch {
       setPhase("ready")
@@ -112,7 +111,7 @@ export function useLinkedinQueue() {
     decide: (request: DecideRequest, message: string) => void decide(request, message),
     /** Queues the PAID re-research, then moves on to the next card. */
     retarget: (request: RetargetRequest) => void retarget(request),
-    /** The debug carousel: reads the card at a queue position. Nothing is written. */
+    /** Reads a card at its original position, including completed reviews. */
     browse: (position: number) => void browse(position),
   }
 }
