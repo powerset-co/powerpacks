@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.21.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.21.0...powerpacks-v3.21.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* proxy and batch LinkedIn avatar images ([#766](https://github.com/powerset-co/powerpacks/issues/766)) ([b922029](https://github.com/powerset-co/powerpacks/commit/b922029755dde556fdd2f69f77ed78f96c8592e2))
+
 ## [3.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.20.0...powerpacks-v3.21.0) (2026-10-08)
 
 
