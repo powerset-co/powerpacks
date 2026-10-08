@@ -163,11 +163,8 @@ class ReviewApi:
         # Its own connection: the server's is serialized on the request thread.
         conn: sqlite3.Connection = open_store(store_path(self.data_root))
         try:
-            # The same words were asked before: the stored answer is reused; only a failed run is paid again.
+            research.submit(conn, [subject])
             found = queries_enrich.research_by_handle(conn).get(subject.handle)
-            if found is None or found.status == ResearchStatus.FAILED.value:
-                research.submit(conn, [subject])
-                found = queries_enrich.research_by_handle(conn).get(subject.handle)
             if found is None or found.status != ResearchStatus.COMPLETE.value:
                 print(f"[retarget] {card.parent_id}: research found no profile", file=sys.stderr, flush=True)
                 return
