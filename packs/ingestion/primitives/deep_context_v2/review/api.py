@@ -5,8 +5,9 @@ GET  /api/review/linkedin-card?exclude=&index=      the next family's card, or t
 GET  /api/dossier?slug=                            the family's dossier as an HTML fragment
 POST /api/review/decide   form pub, decision, parent_slug, new_url:
                           keep = Yes, detach = Skip, fix = Retarget to new_url; answers with the next card
-POST /retarget            form pub, parent_slug, guidance: PAID re-research of the family from the reviewer's
-                          words, in the background; a URL found is applied as the Retarget, else nothing changes
+POST /retarget            form pub, parent_slug, guidance: the pending profile is wrong (rejected now, the queue
+                          advances); a PAID re-research from the reviewer's words runs in the background and a
+                          URL it finds is applied as the Retarget
 POST /feedback            form pub, parent_slug, comment, action: files the comment with Powerset
 POST /auth/login          runs the Powerset sign-in on this machine
 
@@ -146,9 +147,10 @@ class ReviewApi:
         return DecideResult(True, self.linkedin_card({"after": [slug]}))
 
     def retarget(self, form: Params) -> None:
-        """Re-research one pending family from the reviewer's words, in the background: Parallel reads the
-        family's facts with the words beside them; a URL it finds is applied exactly as a pasted one
-        (profile fetched, confirmed as the human's call). Found nothing: the family stays pending."""
+        """The pending profile is wrong: rejected now, so the family leaves the queue. Then, in the background,
+        Parallel reads the family's facts with the reviewer's words beside them; a URL it finds is applied
+        exactly as a pasted one (profile fetched, confirmed as the human's call). Found nothing: the family
+        stays worth yes without a LinkedIn."""
         slug: str = _value(form, "parent_slug")
         guidance: str = _value(form, "guidance").strip()
         if not guidance or len(guidance) > MAX_TEXT_CHARS:
@@ -156,6 +158,7 @@ class ReviewApi:
         if slug not in review_list(self.conn):
             raise Refusal(HTTPStatus.CONFLICT, "This family was already decided. Reload the page.")
         card: Card = load_card(self.conn, self.data_root, slug)
+        decisions.reject(self.conn, card)
         subject: ResearchSubject = research.guided_subject(card.parent_id, card.facts, guidance)
         threading.Thread(target=self._research, args=(card, subject), daemon=True).start()
 

@@ -205,5 +205,5 @@ points at it.
 ## Re-research on the review page
 
 - Re-research from a description on the review page: one paid Parallel research (about $0.05, plus one
-  profile fetch when a URL is found) in the background; a profile found is applied, nothing found leaves
-  the person in the queue.
+  profile fetch when a URL is found) in the background; the queue advances at once; a profile found is applied, nothing found leaves the person
+  worth yes without a LinkedIn.

@@ -60,5 +60,5 @@ identifiers go to RapidAPI for profiles. Nothing is uploaded anywhere else by th
 ## Re-research on the review page
 
 Re-research from a description on the review page runs one Parallel research with the words beside the family's
-facts (about $0.05, plus one profile fetch when a URL is found); a profile found is applied as the Retarget,
-nothing found leaves the family pending.
+facts (about $0.05, plus one profile fetch when a URL is found); the pending profile is rejected at once so the
+queue advances; a profile found is applied as the Retarget, nothing found leaves the family worth yes without a LinkedIn.

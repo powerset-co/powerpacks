@@ -7,6 +7,9 @@ one transaction; nothing is written for one member and forgotten for the others.
                       No parent change: the family keeps its p: id.
   Retarget            the pasted URL's profile (cache first, one RapidAPI call on a miss), then the same
                       rows as Yes with origin human_override. No judge. A failed fetch writes nothing.
+  Retarget by words   the pending URL or card is wrong (rejected now, so the family leaves the queue); the
+                      research runs after, and a URL it finds is the Retarget above. Nothing found: the
+                      family stays worth yes without a LinkedIn.
   Skip                every member: a wrong_person human verdict on each pending URL or card, so it is
                       never proposed again, and a human worth no.
 
@@ -78,14 +81,21 @@ def retarget(conn: sqlite3.Connection, data_root: Path, card: Card, pasted: str)
     return url
 
 
-def skip(conn: sqlite3.Connection, card: Card) -> None:
-    """This family is wrong: every pending URL or card is wrong_person for every member, and worth is no.
-    A family with nothing pending has no URL to reject; it gets the worth rows alone."""
+def reject(conn: sqlite3.Connection, card: Card) -> None:
+    """What is pending is the wrong person: a wrong_person human verdict on each pending URL or card for
+    every member, so it is never proposed again. Worth is untouched."""
     now: str = now_iso()
     with conn:
         for member in card.members:
             for pending in card.pending:
                 queries_review.insert_linkedin(conn, member.candidate_id, pending.linkedin_url, pending.member_id,
                                                pending.origin, Verdict.WRONG_PERSON.value, pending.fingerprint, now)
+def skip(conn: sqlite3.Connection, card: Card) -> None:
+    """This family is wrong: every pending URL or card is wrong_person for every member, and worth is no.
+    A family with nothing pending has no URL to reject; it gets the worth rows alone."""
+    reject(conn, card)
+    now: str = now_iso()
+    with conn:
+        for member in card.members:
             queries_review.insert_parent(conn, member.candidate_id, card.parent_id, MergeReason.HUMAN.value, "", now)
             queries_review.insert_worth(conn, member.candidate_id, "no", SKIP_REASON, now)

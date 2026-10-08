@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.deep_context_v2.enrich import research
 from packs.ingestion.primitives.deep_context_v2.review import api
@@ -34,6 +35,8 @@ class RouteTests(unittest.TestCase):
         (self.root / "deep-context").mkdir(parents=True)
         self.conn: sqlite3.Connection = open_store(self.root / "deep-context" / "deep-context-v2.sqlite")
         self.addCleanup(self.conn.close)
+        queries.upsert_candidates(self.conn, [("c1", "Evan Lin", 0, "{}", "2026-10-08T00:00:00Z")])
+        self.conn.commit()
         self.api = api.ReviewApi(self.conn, self.root)
 
     def test_retarget_needs_a_description(self) -> None:
@@ -45,6 +48,18 @@ class RouteTests(unittest.TestCase):
         with self.assertRaises(api.Refusal) as refused:
             self.api.retarget({"parent_slug": ["p:gone"], "guidance": ["the one at Stripe"]})
         self.assertEqual(refused.exception.status, HTTPStatus.CONFLICT)
+
+    def test_retarget_rejects_the_pending_profile_at_once(self) -> None:
+        pending = mock.Mock(linkedin_url="https://www.linkedin.com/in/wrong-evan", member_id="m1", origin="research",
+                            fingerprint="f1")
+        card = mock.Mock(parent_id="p:1", facts=FACTS, members=(mock.Mock(candidate_id="c1"),), pending=(pending,))
+        with mock.patch.object(api, "review_list", return_value=["p:1"]), \
+             mock.patch.object(api, "load_card", return_value=card), \
+             mock.patch.object(api.threading, "Thread") as thread:
+            self.api.retarget({"parent_slug": ["p:1"], "guidance": ["the one at Stripe"]})
+        thread.return_value.start.assert_called_once()
+        rows = self.conn.execute("SELECT candidate_id, linkedin_url, verdict FROM candidate_linkedins").fetchall()
+        self.assertEqual([tuple(r) for r in rows], [("c1", "https://www.linkedin.com/in/wrong-evan", "wrong_person")])
 
     def test_feedback_needs_a_comment(self) -> None:
         with self.assertRaises(api.Refusal):
