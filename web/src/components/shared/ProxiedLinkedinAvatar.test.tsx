@@ -1,19 +1,28 @@
-import { cleanup, fireEvent, render } from "@testing-library/react"
-import { afterEach, describe, expect, it } from "vitest"
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ProxiedLinkedinAvatar } from "./ProxiedLinkedinAvatar"
+
+vi.mock("@/lib/api/thumbnails", () => ({
+  thumbnail: vi.fn((src: string) =>
+    Promise.resolve(`https://proxy.powerset.dev/profile-image?url=${encodeURIComponent(src)}`),
+  ),
+}))
 
 afterEach(cleanup)
 
 describe("ProxiedLinkedinAvatar", () => {
-  it("requests the local proxy and reveals only a loaded image", () => {
+  it("requests the local proxy and reveals only a loaded image", async () => {
     const src = "https://media.licdn.com/dms/image/example?token=expired&v=beta"
     const { container, getByText, rerender } = render(
       <ProxiedLinkedinAvatar name="Jordan Bravo" src={src} size={40} />,
     )
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull())
     const img = container.querySelector("img")
     if (!img) throw new Error("Missing avatar image")
-    expect(img.getAttribute("src")).toBe(`/api/profile-image?url=${encodeURIComponent(src)}`)
+    expect(img.getAttribute("src")).toBe(
+      `https://proxy.powerset.dev/profile-image?url=${encodeURIComponent(src)}`,
+    )
     expect(getByText("JB")).toBeTruthy()
     expect(img.dataset.loaded).toBeUndefined()
     fireEvent.load(img)

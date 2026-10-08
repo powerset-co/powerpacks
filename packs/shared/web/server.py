@@ -106,7 +106,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if accounts.post(self, parsed) or tasks.post(self, parsed) or searches.post(self, parsed):
+            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:
                 if not share.post(self, parsed):
@@ -203,8 +203,11 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             self._dispatch("do_GET")
 
         def do_POST(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            if app.post(self, parsed):
+                return
             _load_project_packages(root)
-            if install.post(self, urllib.parse.urlparse(self.path).path):
+            if install.post(self, parsed.path):
                 return
             self._dispatch("do_POST")
 

@@ -1,5 +1,6 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
+import { thumbnail } from "@/lib/api/thumbnails"
 import { cn } from "@/lib/utils"
 
 import { initials } from "./initials"
@@ -33,12 +34,24 @@ export function ProxiedLinkedinAvatar({ name, src, size }: ProxiedLinkedinAvatar
 
 // Keyed by src, so a new person's picture starts hidden and fades in over the initials.
 function AvatarImage({ src }: { src: string }) {
+  const proxied = src.startsWith("https://media.licdn.com/")
+  const [resolved, setResolved] = useState<string | undefined>(proxied ? undefined : src)
   const [loaded, setLoaded] = useState(false)
+  useEffect(() => {
+    if (!proxied) return
+    let active = true
+    void thumbnail(src).then((url) => {
+      if (active) setResolved(url)
+    })
+    return () => {
+      active = false
+    }
+  }, [src, proxied])
+
+  if (!resolved) return null
   return (
     <img
-      src={
-        src.startsWith("https://media.licdn.com/") ? `/api/profile-image?url=${encodeURIComponent(src)}` : src
-      }
+      src={resolved}
       alt=""
       loading="lazy"
       referrerPolicy="no-referrer"
