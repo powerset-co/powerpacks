@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from parallel import Parallel
-from parallel.types import TaskGroupStatusEvent, TaskRunEvent
+from parallel.types import RunInputParam, TaskGroupStatusEvent, TaskRunEvent, TaskSpecParam
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import Research, ResearchRow
@@ -50,7 +50,7 @@ PARALLEL_STREAM_TIMEOUT = 3600      # Parallel's maximum for one event stream
 # The task spec has no instructions field: the objective rides on the output schema's description.
 _OUTPUT_SCHEMA: dict[str, Any] = dict(_SCHEMAS["output"])
 _OUTPUT_SCHEMA["description"] = RESEARCH_INSTRUCTIONS
-PARALLEL_TASK_SPEC: dict[str, Any] = {"input_schema": {"json_schema": _SCHEMAS["input"]},
+PARALLEL_TASK_SPEC: TaskSpecParam = {"input_schema": {"json_schema": _SCHEMAS["input"]},
                              "output_schema": {"json_schema": _OUTPUT_SCHEMA}}
 
 
@@ -94,6 +94,7 @@ def subjects(families: list[Family], matches: PreMatch, done: dict[str, Research
 
 def research_url(result: Research) -> str:
     """The LinkedIn URL a complete research row proposes."""
+    assert result.result_json is not None
     content: dict[str, Any] = json.loads(result.result_json)["content"]
     return normalize_linkedin_url(content["linkedin_url"])
 
@@ -154,7 +155,7 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, i
                       default_headers={"parallel-beta": PARALLEL_BETA_HEADER}, max_retries=0)
     # Submit every run, then read the event stream until the group is done.
     group_id: str = str(client.task_group.create(metadata={"source": "powerpacks"}).task_group_id)
-    inputs: list[dict[str, Any]] = []
+    inputs: list[RunInputParam] = []
     for subject in todo:
         inputs.append({"input": {"dossier": subject.dossier}, "metadata": {"handle": subject.handle},
                        "processor": PARALLEL_PROCESSOR})
@@ -167,7 +168,8 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, i
                 break
             if not isinstance(event, TaskRunEvent) or event.run.is_active:
                 continue
-            subject: ResearchSubject = by_handle[str(event.run.metadata["handle"])]
+            assert event.run.metadata is not None
+            subject = by_handle[str(event.run.metadata["handle"])]
             row: ResearchRow = (subject.handle, subject.parent_id, ResearchStatus.FAILED.value, None, now_iso())
             if event.run.status == "completed":
                 output = event.output

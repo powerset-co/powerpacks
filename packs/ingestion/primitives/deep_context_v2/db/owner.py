@@ -13,6 +13,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
 from packs.ingestion.primitives.deep_context_v2.db import queries
@@ -54,7 +55,7 @@ def _text(value: object) -> str:
 
 def _strings(value: object) -> tuple[str, ...]:
     items = []
-    for item in value or []:
+    for item in cast(list[str] | None, value) or []:
         if _text(item):
             items.append(_text(item))
     return tuple(items)
@@ -68,10 +69,10 @@ def owner_from_payload(payload: dict[str, object]) -> OwnerProfile:
     for phone in _strings(payload.get("phones")):
         phones.append(normalize_phone(phone))
     education = []
-    for e in payload.get("education") or []:
+    for e in cast(list[dict[str, object]] | None, payload.get("education")) or []:
         education.append(OwnerEducation(_text(e.get("school")), _text(e.get("start")), _text(e.get("end")), _text(e.get("note"))))
     work = []
-    for w in payload.get("work") or []:
+    for w in cast(list[dict[str, object]] | None, payload.get("work")) or []:
         work.append(OwnerWork(_text(w.get("company")), _text(w.get("title")), _text(w.get("start")), _text(w.get("end"))))
     return OwnerProfile(
         name=_text(payload.get("name")),

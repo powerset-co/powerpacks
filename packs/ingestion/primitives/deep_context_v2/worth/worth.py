@@ -179,6 +179,7 @@ class Worth(Node):
         pre_matched: int = 0
         for family in todo:
             if family.match is None:
+                assert family.request is not None
                 requests[family.digest] = family.request
                 continue
             pre_matched += 1

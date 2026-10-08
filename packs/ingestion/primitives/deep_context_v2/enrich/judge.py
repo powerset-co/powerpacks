@@ -214,7 +214,7 @@ def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, SolVerd
     return counts
 
 
-def estimate(tasks: list[JudgeTask], cache_dir: Path, owner_block: str) -> dict[str, object]:
+def estimate(tasks: list[JudgeTask], cache_dir: Path, owner_block: str) -> dict[str, int | float]:
     """The dry run: JEV requests and their price, and Sol at most once per family. No call."""
     requests: int = 0
     cached: int = 0
@@ -318,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     for task in tasks:
         profiles_judged += len(task.candidates)
     counts["profiles_to_judge"] = profiles_judged
-    estimated: dict[str, object] = estimate(tasks, args.data_root / JEV_CACHE_RELATIVE_DIR,
+    estimated: dict[str, int | float] = estimate(tasks, args.data_root / JEV_CACHE_RELATIVE_DIR,
                                             owner_background_block(read_owner(conn)))
     for key, value in estimated.items():
         counts[key] = value

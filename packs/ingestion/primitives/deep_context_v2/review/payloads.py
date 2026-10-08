@@ -149,7 +149,7 @@ def _labels(labels_json: str | None) -> tuple[str, ...]:
             scores[title] = max(scores.get(title, 0.0), float(labels[key]))
     kind: str = str(labels.get("relationship_kind") or "")
     if kind and kind != "unknown" and "relationship_kind_p" in labels:
-        title: str = kind.replace("_", " ").capitalize()
+        title = kind.replace("_", " ").capitalize()
         scores[title] = max(scores.get(title, 0.0), float(labels["relationship_kind_p"]))
     ranked: list[tuple[float, str]] = []
     for title, score in scores.items():

@@ -93,7 +93,7 @@ def block(candidate_ids: list[str], names: dict[str, str], identifiers: dict[str
         skipped[kind] = 0
     pairs: set[tuple[str, str]] = set()
     for key, members in buckets.items():
-        kind: str = key.split(":", 1)[0]
+        kind = key.split(":", 1)[0]
         if len(members) < 2:
             continue
         if len(members) > MAX_BUCKET:

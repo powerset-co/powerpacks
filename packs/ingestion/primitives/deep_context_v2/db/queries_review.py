@@ -157,7 +157,8 @@ def labels_json(conn: sqlite3.Connection, candidate_ids: list[str]) -> str | Non
     ).fetchone()
     if row is None:
         return None
-    return row["labels_json"]
+    labels: str | None = row["labels_json"]
+    return labels
 
 
 def current_verdicts(conn: sqlite3.Connection, candidate_ids: list[str]) -> list[CurrentVerdict]:
@@ -193,9 +194,10 @@ MESSAGES_SQL = ("SELECT json_extract(m.value, '$.channel'), COUNT(*) FROM bundle
 
 def first_family(conn: sqlite3.Connection) -> str:
     """The family with the most members: the heaviest card, for the timing check."""
-    return conn.execute(
+    parent_id: str = conn.execute(
         "SELECT parent_id FROM current_parent GROUP BY parent_id ORDER BY COUNT(*) DESC, parent_id LIMIT 1"
     ).fetchone()["parent_id"]
+    return parent_id
 
 
 def query_plan(conn: sqlite3.Connection, sql: str, params: list[str]) -> list[str]:
@@ -217,7 +219,8 @@ def insert_linkedin(conn: sqlite3.Connection, candidate_id: str, url: str, membe
         "judgment_fingerprint, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '', ?)",
         (candidate_id, url, member_id, origin, verdict, DecidedBy.HUMAN.value, fingerprint, now),
     )
-    return int(cursor.lastrowid)
+    assert cursor.lastrowid is not None  # A successful INSERT into this rowid table sets lastrowid.
+    return cursor.lastrowid
 
 
 def insert_parent(conn: sqlite3.Connection, candidate_id: str, parent_id: str, reason: str, verdict_ref: str,

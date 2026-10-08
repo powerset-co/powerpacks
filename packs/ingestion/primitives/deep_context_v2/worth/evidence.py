@@ -52,6 +52,7 @@ def channel_summary(members: list[MemberFacts], sources: dict[str, list[str]],
             elif count.direction == MessageDirection.FROM_THEM:
                 from_them += count.messages
             if count.first_at is not None:
+                assert count.last_at is not None
                 timestamps.append(count.first_at)
                 timestamps.append(count.last_at)
     return ChannelSummary(tuple(sorted(family_sources)), per_channel, min(timestamps, default=None),

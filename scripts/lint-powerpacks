@@ -17,3 +17,4 @@ fi
 # Baseline lint gate: fail on syntax errors and undefined names without taking
 # on the repository's existing style debt yet.
 "$UV_BIN" run --project . ruff check --select E9,F63,F7,F82 packs scripts bin adapters tests
+"$UV_BIN" run --project . --group dev mypy

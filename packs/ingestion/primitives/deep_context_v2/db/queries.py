@@ -23,8 +23,8 @@ SourceRow = tuple[str, str]                               # candidate_id, source
 ConnectionRow = tuple[str, str, str | None, str, str, str]  # linkedin_url, name, email, position, company, imported_at
 
 
-def _batches(rows: list, size: int = BATCH) -> list[list]:
-    chunks: list[list] = []
+def _batches[T](rows: list[T], size: int = BATCH) -> list[list[T]]:
+    chunks: list[list[T]] = []
     for start in range(0, len(rows), size):
         chunks.append(rows[start:start + size])
     return chunks
@@ -43,7 +43,8 @@ def upsert_owner(conn: sqlite3.Connection, payload_json: str, fingerprint: str, 
 
 
 def owner_payload_json(conn: sqlite3.Connection) -> str:
-    return conn.execute("SELECT payload_json FROM owner WHERE owner_key = 'owner'").fetchone()["payload_json"]
+    payload_json: str = conn.execute("SELECT payload_json FROM owner WHERE owner_key = 'owner'").fetchone()["payload_json"]
+    return payload_json
 
 
 # ---- 01 import
@@ -147,7 +148,8 @@ def upsert_bundle(conn: sqlite3.Connection, candidate_id: str, payload_json: str
 
 
 def count_bundles(conn: sqlite3.Connection) -> int:
-    return conn.execute("SELECT COUNT(*) FROM bundles").fetchone()[0]
+    count: int = conn.execute("SELECT COUNT(*) FROM bundles").fetchone()[0]
+    return count
 
 
 @dataclass(frozen=True)

@@ -96,7 +96,8 @@ def insert_linkedin(conn: sqlite3.Connection, row: LinkedinRow) -> int:
         "judgment_fingerprint, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         row,
     )
-    return int(cursor.lastrowid)
+    assert cursor.lastrowid is not None  # A successful INSERT into this rowid table sets lastrowid.
+    return cursor.lastrowid
 
 
 def append_linkedins(conn: sqlite3.Connection, rows: list[LinkedinRow]) -> None:

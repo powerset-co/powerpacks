@@ -164,7 +164,7 @@ class SharePeople:
         self.conn = conn
         self.data_root = data_root
         self._rows: dict[str, dict[str, str]] = {}
-        self._stamp = 0
+        self._stamp: int | tuple[int, int] = 0
 
     def export_rows(self) -> dict[str, dict[str, str]]:
         """parent_id -> its export row, rebuilt when the store changed."""

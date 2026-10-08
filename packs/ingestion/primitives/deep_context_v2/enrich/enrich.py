@@ -58,7 +58,7 @@ def confirm_by_email(conn: sqlite3.Connection, found: Proposals, profiles: Profi
         if profile is None:
             counts["email_confirm_no_profile"] += 1
             continue
-        family: Family = by_parent[parent_id]
+        family = by_parent[parent_id]
         fingerprint: str = judgment_fingerprint(family, [(url, Origin.LINKEDIN_NETWORK.value, profile.fetched_at)],
                                                 PRE_MATCH_VERSION)
         parents.extend(confirm(conn, family, url, profile.member_id, Origin.LINKEDIN_NETWORK.value,
@@ -132,19 +132,20 @@ class Enrich(Node):
         tasks: list[JudgeTask] = planned.tasks
         if self.limit is not None:
             tasks = tasks[: self.limit]
+        research_cost: float = round(len(todo) * research.PARALLEL_PRICE_PER_RUN_USD, 2)
         result: dict[str, object] = {
             "families": len(found.families), "pre_matched_families": len(matches.matched),
             "email_confirmed": len(found.by_email), "research_families": len(todo),
-            "research_cost_usd": round(len(todo) * research.PARALLEL_PRICE_PER_RUN_USD, 2),
+            "research_cost_usd": research_cost,
             "profiles_cached": len(profiles.found), "profiles_missing": profiles.missing,
             "judge_entering": planned.entering, "judge_no_profile": planned.no_profile,
             "judge_already_judged": planned.already_judged, "judge_families": len(tasks),
         }
-        priced: dict[str, object] = judge.estimate(tasks, self.jev_cache, owner_background_block(read_owner(self.conn)))
+        priced: dict[str, int | float] = judge.estimate(tasks, self.jev_cache, owner_background_block(read_owner(self.conn)))
         for key, value in priced.items():
             result[key] = value
         # The block's price: the research runs plus the judge at most (profile fetches are not priced).
-        result["estimated_cost_usd"] = round(float(result["research_cost_usd"]) + float(priced["estimated_cost_usd_at_most"]), 4)
+        result["estimated_cost_usd"] = round(float(research_cost) + float(priced["estimated_cost_usd_at_most"]), 4)
         return result
 
 

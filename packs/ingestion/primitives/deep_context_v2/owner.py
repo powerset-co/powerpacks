@@ -67,6 +67,7 @@ def build_owner(data_root: Path, linkedin_url: str, emails: list[str], chat_db: 
     if url not in profiles.found:
         raise ValueError(f"could not fetch the profile at {url}")
     record = read_usable_cached_profile(profile_cache_path(data_root / CACHE_RELATIVE_DIR, public_id))
+    assert record is not None
     normalized: list[str] = []
     for email in emails:
         if normalize_email(email) not in normalized:
