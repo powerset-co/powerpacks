@@ -16,7 +16,7 @@ import urllib.error
 from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 import nats
@@ -244,6 +244,27 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
             await clients[0].close()
             await self.until(lambda: self.worker.call_count == 2)
             self.assertEqual(len(clients), 2)
+            await self.stop_loop()
+
+    async def test_refresh_reconnects_with_fresh_credentials_without_a_warning(self):
+        clients = []
+        connect = nats.connect
+
+        async def connected(*args, **kwargs):
+            client = await connect(*args, **kwargs)
+            clients.append(client)
+            return client
+
+        connection = Mock(return_value=self.connection)
+        with patch.object(asks_loop, "_connection", connection), \
+                patch.object(asks_loop, "REFRESH_SECONDS", 0), \
+                patch.object(asks_loop, "HEARTBEAT_SECONDS", 0.2), \
+                patch.object(nats, "connect", side_effect=connected), \
+                self.assertNoLogs(asks_loop.__name__, level="WARNING"):
+            self.loop = asyncio.create_task(asks_loop._run(
+                repo_root=self.root, env_file=self.env_file, device_id=self.device_id))
+            await self.until(lambda: len(clients) >= 2)
+            self.assertGreaterEqual(connection.call_count, 2)
             await self.stop_loop()
 
 

@@ -2,12 +2,14 @@
 
 Changelog:
 - 2026-10-08: add the local NATS loop with durable task delivery.
+- 2026-10-08: re-fetch the connection and reconnect every REFRESH_SECONDS, before a 24 h credential expires.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as aut
 from packs.search.primitives.ask_status import ask_status
 
 HEARTBEAT_SECONDS = 30
+REFRESH_SECONDS = 20 * 3600
 SIGNED_OUT_SECONDS = 300
 MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
@@ -82,7 +85,10 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
 
     async def watch() -> None:
         subscribed = set()
+        connected_at = time.monotonic()
         while not closed.is_set():
+            if time.monotonic() - connected_at >= REFRESH_SECONDS:
+                return
             for directory in ("deep-search", "search"):
                 for path in (repo_root / ".powerpacks" / directory).glob("*/ask.json"):
                     ask_id = json.loads(path.read_text(encoding="utf-8"))["ask_id"]
@@ -117,13 +123,17 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
 async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
     backoff = 1
     while True:
+        started = time.monotonic()
         try:
             connection = await asyncio.to_thread(_connection, env_file)
             await _connected(connection, repo_root=repo_root, env_file=env_file, device_id=device_id)
+            backoff = 1  # a refresh: the watcher returned, reconnect at once with fresh credentials
         except SystemExit:
             await asyncio.sleep(SIGNED_OUT_SECONDS)
             backoff = 1
         except Exception as exc:
+            if time.monotonic() - started > MAX_BACKOFF_SECONDS:
+                backoff = 1
             _LOG.warning("Ask loop: %s; retrying in %ss", type(exc).__name__, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
