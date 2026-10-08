@@ -1,6 +1,6 @@
 export { ActionBar, ActionBarRule } from "./ActionBar"
 export { Appear } from "./Appear"
-export { Avatar, type AvatarSize } from "./Avatar"
+export { ProxiedLinkedinAvatar, type AvatarSize } from "./ProxiedLinkedinAvatar"
 export { Chip } from "./Chip"
 export { CountRoll } from "./CountRoll"
 export { DetailsSection } from "./DetailsSection"

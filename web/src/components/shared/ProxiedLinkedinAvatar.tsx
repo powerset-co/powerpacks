@@ -11,13 +11,13 @@ const SIZE_CLASS: Record<AvatarSize, string> = {
   40: "size-10 basis-10 text-xs",
 }
 
-interface AvatarProps {
+interface ProxiedLinkedinAvatarProps {
   name: string
   src?: string
   size: AvatarSize
 }
 
-export function Avatar({ name, src, size }: AvatarProps) {
+export function ProxiedLinkedinAvatar({ name, src, size }: ProxiedLinkedinAvatarProps) {
   return (
     <span
       className={cn(
@@ -36,12 +36,15 @@ function AvatarImage({ src }: { src: string }) {
   const [loaded, setLoaded] = useState(false)
   return (
     <img
-      src={src}
+      src={
+        src.startsWith("https://media.licdn.com/") ? `/api/profile-image?url=${encodeURIComponent(src)}` : src
+      }
       alt=""
       loading="lazy"
       referrerPolicy="no-referrer"
       data-loaded={loaded || undefined}
       onLoad={() => setLoaded(true)}
+      onError={() => setLoaded(false)}
       className={cn(
         "absolute inset-0 z-[1] size-full object-cover opacity-0 transition-opacity duration-fast ease-out",
         loaded && "opacity-100",

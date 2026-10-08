@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { BASE, PAYLOAD } from "@/testing/people-fixture"
 import { PERSON_COLUMNS } from "@/types/people"
 
-import { avatarUrl, decodePeople, fetchPersonDetail, writeTags } from "./people"
+import { decodePeople, fetchPersonDetail, writeTags } from "./people"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -56,9 +56,5 @@ describe("requests", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
       JSON.stringify({ people: [{ parent_id: "p1", tags: ["share"] }] }),
     )
-  })
-
-  it("encodes avatar ids", () => {
-    expect(avatarUrl("a b")).toBe("/api/people/avatar?id=a%20b")
   })
 })

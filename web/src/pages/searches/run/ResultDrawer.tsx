@@ -1,4 +1,4 @@
-import { Avatar, Drawer, DrawerClose } from "@/components/shared"
+import { ProxiedLinkedinAvatar, Drawer, DrawerClose } from "@/components/shared"
 import { useDrawerSwap } from "@/hooks/useDrawerSwap"
 import { teamLikeness } from "@/lib/searches/copy"
 import type { ResultRow } from "@/lib/searches/ranking"
@@ -58,7 +58,7 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
   return (
     <>
       <div className="drawer-top">
-        <Avatar name={row.name} size={40} src={row.avatar_url || undefined} />
+        <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
         <div className="who">
           <h2>{row.name}</h2>
           <div className="sub review-role">

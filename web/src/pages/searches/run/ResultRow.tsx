@@ -1,6 +1,6 @@
 import { memo, type MouseEvent } from "react"
 
-import { Avatar } from "@/components/shared"
+import { ProxiedLinkedinAvatar } from "@/components/shared"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
 import type { PondCandidate } from "@/types/searches"
 
@@ -76,7 +76,7 @@ export const ResultRow = memo(function ResultRow({
             </span>
           ) : null}
           <div className="result-person">
-            <Avatar name={row.name} size={40} src={row.avatar_url || undefined} />
+            <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
             <span className="result-who">
               <b>{row.name}</b>
               <span className="result-title">

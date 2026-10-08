@@ -132,15 +132,6 @@ class ShareRoutes:
                 self._send_json(handler, {"error": "person not found"}, status=HTTPStatus.NOT_FOUND)
             else:
                 self._send_json(handler, asdict(detail))
-        elif parsed.path == f"{API_PREFIX}avatar":
-            url = self.people.avatar_url((query.get("id") or [""])[0])
-            if not url:
-                self._send(handler, b"", "text/plain", status=HTTPStatus.NOT_FOUND)
-                return True
-            handler.send_response(HTTPStatus.FOUND)
-            handler.send_header("Location", url)
-            handler.send_header("Referrer-Policy", "no-referrer")
-            handler.end_headers()
         else:
             return False
         return True
