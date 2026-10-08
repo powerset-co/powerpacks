@@ -59,7 +59,9 @@ so running a command again continues from what is stored and spends nothing on w
 
 ## Visible progress
 
-Before a full run, create these tasks in the harness's visible task/plan tool:
+The tasks are this chat's, the advisor's: before a full run, create them in the harness's
+visible task/plan tool and keep them current yourself. The worker in tmux runs commands and
+prints stage lines; it never creates, updates or reports tasks, and never speaks to the user.
 
 1. Confirm owner profile
 2. Load imported contacts
@@ -72,8 +74,8 @@ Before a full run, create these tasks in the harness's visible task/plan tool:
 9. Review LinkedIn matches
 10. Update the index with reviewed matches
 
-This chat keeps the tasks current from the worker's stage output and manifests.
-Mark cached/no-op steps complete rather than dropping them; leave failed steps
+This chat keeps the tasks current from the worker's pane and the stage manifests, and is the
+one voice the user hears about progress. Mark cached/no-op steps complete rather than dropping them; leave failed steps
 unfinished. The first index build and LinkedIn review may overlap: starting a
 background build does not complete the index task. Mark the final task complete
 only after `finish` succeeds. For a single-stage request, show only its task.
@@ -88,8 +90,10 @@ profile and fetches it once if it is not cached.
 **2. Run, in tmux, under a second agent.** Start a tmux session in the user's terminal and
 dispatch one worker (a sub-agent) into it to run `bin/deep-context-v2 run` and watch it to the
 end. This chat is the advisor: it stays free to answer the user, reads the worker's progress,
-and decides what to do when something fails. Without sub-agents, do the worker's job in this
-chat the same way.
+keeps the visible tasks, and decides what to do when something fails. The worker's brief says
+so: run and watch the commands in the session, patch and rerun on failure, report issues through
+`send_feedback`; no task tool, no messages to the user. Without sub-agents, do the worker's job
+in this chat the same way.
 
 ```bash
 tmux has-session -t deep-context 2>/dev/null || tmux new-session -d -s deep-context -c "$POWERPACKS_REPO_ROOT"
