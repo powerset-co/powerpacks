@@ -28,7 +28,7 @@ from packs.search.primitives.llm_rerank_candidates.jev.client import (
     MAX_CONCURRENCY, answer_requests,
 )
 
-REQUEST_VERSION = "deep-context-worth-labels-family-20261006"
+REQUEST_VERSION = "deep-context-worth-labels-family-20261008"  # every family is labelled, pre-matched too
 from packs.ingestion.primitives.deep_context_v2 import assets
 
 _HERE = Path(__file__).parent

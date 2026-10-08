@@ -67,7 +67,7 @@ def own_connection(family: Family) -> bool:
 def settle_rows(families: list[Family], profiles: Profiles, now: str) -> list[WorthRow]:
     """One worth row per member for every family settle changes: yes for an own connection not already
     at yes, no for any other family with no real profile and under 25 messages not already at no. Keyed
-    so worth does not judge it again."""
+    so worth does not judge it again; the family's JEV labels ride along, so the People page keeps them."""
     rows: list[WorthRow] = []
     for family in families:
         if family.worth.decided_by == DecidedBy.HUMAN:
@@ -82,7 +82,7 @@ def settle_rows(families: list[Family], profiles: Profiles, now: str) -> list[Wo
             settled, reason = Worth.NO.value, REASON
         key: str = evidence.family_key(list(family.members))
         for candidate_id in family.candidates:
-            rows.append((candidate_id, settled, DecidedBy.MACHINE.value, reason, "{}", key, now))
+            rows.append((candidate_id, settled, DecidedBy.MACHINE.value, reason, family.worth.labels_json, key, now))
     return rows
 
 
