@@ -21,6 +21,7 @@ class FamilyWorth:
 
     worth: str
     decided_by: str
+    labels_json: str  # JEV's labels on that row; "{}" when the row carries none
 
 
 @dataclass(frozen=True)
@@ -45,8 +46,8 @@ class Research:
 def family_worth(conn: sqlite3.Connection) -> dict[str, FamilyWorth]:
     """parent_id -> its current worth, for every family with a worth row."""
     worth: dict[str, FamilyWorth] = {}
-    for row in conn.execute("SELECT parent_id, worth, decided_by FROM current_worth"):
-        worth[row["parent_id"]] = FamilyWorth(row["worth"], row["decided_by"])
+    for row in conn.execute("SELECT parent_id, worth, decided_by, labels_json FROM current_worth"):
+        worth[row["parent_id"]] = FamilyWorth(row["worth"], row["decided_by"], row["labels_json"] or "{}")
     return worth
 
 

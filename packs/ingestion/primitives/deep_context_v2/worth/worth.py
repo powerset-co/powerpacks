@@ -56,8 +56,8 @@ class Family:
     fingerprint: str
     judged: bool                     # every member's latest machine worth row carries the fingerprint
     match: Connection | None         # None = the pre-match did not tie the family to exactly one connection
-    request: dict[str, Any] | None   # the JEV request; None for a pre-matched family, which needs none
-    digest: str                      # the request's cache key; "" for a pre-matched family
+    request: dict[str, Any]          # the JEV request: every family is labelled, pre-matched or not
+    digest: str                      # the request's cache key
 
 
 @dataclass(frozen=True)
@@ -116,11 +116,11 @@ class Worth(Node):
             for member in members:
                 if judged.get(member.candidate_id) != fingerprint:
                     is_judged = False
-            request: dict[str, Any] | None = None
-            digest: str = ""
-            if match is None:
-                request = jev.build_request(evidence.family_facts(members), summary, owner, evidence.reference_date(members))
-                digest = request_digest(request)
+            # Every family gets JEV's labels, a pre-matched one included: its worth is yes by the match, its
+            # relationship labels come from the same answer as everyone else's.
+            request: dict[str, Any] = jev.build_request(evidence.family_facts(members), summary, owner,
+                                                        evidence.reference_date(members))
+            digest: str = request_digest(request)
             member_ids: list[str] = []
             for member in members:
                 member_ids.append(member.candidate_id)
@@ -157,7 +157,6 @@ class Worth(Node):
                 pre_matched += 1
                 if jev.NOTABLE_POSITION_RE.search(family.match.position):
                     notable += 1
-                continue
             calls += 1
             if cache_path(self.cache_dir, request_digest(family.request)).exists():
                 cached += 1
@@ -171,30 +170,29 @@ class Worth(Node):
         }
 
     def execute(self) -> dict[str, int]:
-        """Rules 1 to 5: free yes for pre-matched families, one JEV pass for the rest, one worth row per member."""
+        """Rules 1 to 5: one JEV pass over every pending family for the labels; a pre-matched family is yes by
+        its match, the rest by JEV's answer; one worth row per member."""
         todo: list[Family] = self.pending(self.families())
-        # Rules 1 and 2: a pre-matched family is yes, no call.
-        verdicts: dict[str, Verdict] = {}  # family key -> its verdict
         requests: dict[str, dict[str, Any]] = {}  # digest -> the JEV request
-        pre_matched: int = 0
         for family in todo:
-            if family.match is None:
-                assert family.request is not None
-                requests[family.digest] = family.request
-                continue
-            pre_matched += 1
-            text: str = PRE_MATCHED_REASON
-            if jev.NOTABLE_POSITION_RE.search(family.match.position):
-                text = NOTABLE_REASON_PREFIX + family.match.position.strip()
-            verdicts[family.key] = Verdict(schema.Worth.YES.value, text, "{}")
-        # Rule 3: one JEV pass per remaining family, read from the disk cache where it can be.
+            requests[family.digest] = family.request
         load_env()
         answers = asyncio.run(jev.answer_all(requests, self.cache_dir))
+        verdicts: dict[str, Verdict] = {}  # family key -> its verdict
+        pre_matched: int = 0
         for family in todo:
-            if family.match is None:
-                answer: dict[str, JevAnswer] = answers[family.digest]
+            answer: dict[str, JevAnswer] = answers[family.digest]
+            labels_json: str = json.dumps(jev.labels(answer), sort_keys=True)
+            if family.match is not None:
+                # Rules 1 and 2: already in the network, so yes; the labels are JEV's all the same.
+                pre_matched += 1
+                text: str = PRE_MATCHED_REASON
+                if jev.NOTABLE_POSITION_RE.search(family.match.position):
+                    text = NOTABLE_REASON_PREFIX + family.match.position.strip()
+                verdicts[family.key] = Verdict(schema.Worth.YES.value, text, labels_json)
+            else:
                 decision: str = jev.predict(answer)
-                verdicts[family.key] = Verdict(decision, reason(answer, decision), json.dumps(jev.labels(answer), sort_keys=True))
+                verdicts[family.key] = Verdict(decision, reason(answer, decision), labels_json)
         # Rule 5: one row per member, the same verdict to each.
         now: str = now_iso()
         rows: list[WorthRow] = []
