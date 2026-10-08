@@ -14,10 +14,10 @@ people like someone or who worked with them continue below. For searches, start
 with **Choose the network**, including its visible scope statement, before company intake. A request to preview or review step by
 step still means pause.
 
-For ordinary and deep searches, this chat advises and one native sub-agent runs
-the commands in tmux: follow [tmux-worker.md](tmux-worker.md). This chat owns the
-tasks, scope, reviews, recovery decisions and user messages until useful results
-are verified. Quick person/dossier lookups stay in this chat.
+For ordinary and deep searches, follow [tmux-worker.md](tmux-worker.md) with session
+`powerpacks-search` and feedback category `search`. Track scope/intake,
+prepare/review, retrieve/rank and results; retrieve/rank stays open across deep
+ponds until the stopping rule is met. Quick person/dossier lookups run directly.
 
 ## Locate the tools
 
@@ -127,8 +127,6 @@ Record `surface`, `backend`, `depth`, `mode`, and a one-sentence `reason`:
 Write the existing `decision.json` in `.powerpacks/search/<slug>` for fast or
 `.powerpacks/deep-search/<slug>` for deep before running. Use a fresh run for a new
 query/refinement, carrying forward scope and corrections; deep ponds share one run.
-For an interrupted command, resume the same run from its saved state; do not
-create a new run or repeat completed paid work just because the worker stopped.
 
 ## Run the search
 
@@ -182,8 +180,7 @@ Never bypass membership checks, write replacement retrieval code, or silently us
 Sales Navigator. If a requested “extended search” has no defined surface, clarify it.
 
 Keep the search unfinished until retrieval and the requested ranking complete,
-or a supported stopping reason is verified. Follow [tmux-worker.md](tmux-worker.md)
-for bounded recovery and [feedback.md](feedback.md) for sanitized technical reports.
+or a supported stopping reason is verified.
 
 For local zero-match diagnosis read [search-sql](../search-sql/SKILL.md#integration-with-a-parent-search).
 Apply user corrections to the next execution and log them via [feedback.md](feedback.md).

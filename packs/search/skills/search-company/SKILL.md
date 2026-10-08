@@ -8,10 +8,9 @@ description: Resolve company names, company descriptions, investor/funding filte
 Use this when the user asks for company search directly, or when they want the
 company set behind a people search inspected first.
 
-For multi-step resolution, follow [the advisor/tmux worker instructions](../search/tmux-worker.md).
-This chat owns scope, tasks, recovery and user messages; one worker runs the
-commands. A quick company lookup can run directly. Technical issues use
-[sanitized feedback](../search/feedback.md#technical-issues).
+For multi-step resolution, follow [tmux-worker.md](tmux-worker.md) with session
+`powerpacks-search` and feedback category `search`. Track set/investor resolution,
+company resolution and results. A quick company lookup runs directly.
 
 Examples:
 

@@ -37,9 +37,15 @@ class InstalledSkillContextTests(unittest.TestCase):
                 self.assertEqual(paid.read_text(), "preserve existing paid data\n")
                 self.assertEqual(legacy.read_text(), "preserve legacy paid data\n")
                 self.assertIn(f"{ROOT}/AGENTS.md", (skills / "search/SKILL.md").read_text())
-                for source in (ROOT / "packs/search/skills/search").glob("*.md"):
-                    if source.name != "SKILL.md":
-                        self.assertEqual((skills / "search" / source.name).read_bytes(), source.read_bytes())
+                for pack, name in (("search", "search"), ("search", "search-company"),
+                                   ("powerset", "install-powerpacks"), ("ingestion", "deep-context")):
+                    if harness == "pi" and name == "deep-context":
+                        continue
+                    for source in (ROOT / "packs" / pack / "skills" / name).glob("*.md"):
+                        if source.name != "SKILL.md":
+                            installed = skills / name / source.name
+                            self.assertFalse(installed.is_symlink())
+                            self.assertEqual(installed.read_bytes(), source.read_bytes())
                 self.assertTrue((skills / "powerpacks-doctor/SKILL.md").exists())
                 self.assertFalse((skills / "powerpacks-doctor/powerpacks").exists())
                 self.assertFalse((home / ".codex/powerpacks/packs").exists())
@@ -57,6 +63,36 @@ class InstalledSkillContextTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), str(ROOT))
+
+    def test_shared_worker_updates_install_as_independent_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            checkout = base / "checkout"
+            shared = checkout / "packs/shared/skills/tmux-worker.md"
+            shared.parent.mkdir(parents=True)
+            sources = []
+            for name in ("search", "search-company"):
+                source = checkout / "packs/search/skills" / name / "SKILL.md"
+                source.parent.mkdir(parents=True)
+                source.write_text(f"---\nname: {name}\ndescription: Search\n---\n\nRead tmux-worker.md.\n")
+                (source.parent / "tmux-worker.md").symlink_to("../../../shared/skills/tmux-worker.md")
+                sources.append(source)
+            for content in ("Original worker instructions\n", "Updated worker instructions\n"):
+                shared.write_text(content)
+                for source in sources:
+                    destination = base / "installed" / source.parent.name / "SKILL.md"
+                    result = subprocess.run(
+                        [sys.executable, str(ROOT / "bin/install-skill"), str(checkout),
+                         str(source), str(destination)], text=True, capture_output=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    installed = destination.parent / "tmux-worker.md"
+                    self.assertFalse(installed.is_symlink())
+                    self.assertEqual(installed.read_text(), content)
+            shared.unlink()
+            for source in sources:
+                installed = base / "installed" / source.parent.name / "tmux-worker.md"
+                self.assertEqual(installed.read_text(), "Updated worker instructions\n")
 
     def test_installed_skill_preserves_metadata_and_locates_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:
