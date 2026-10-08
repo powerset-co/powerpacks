@@ -616,7 +616,7 @@ class DryRunTests(unittest.TestCase):
             manifest = json.loads(Path(payload["manifest"]).read_text())
 
         self.assertEqual(namespace.writes, [])
-        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SET"] + ["SELECT"] * 6)
+        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SET"] + ["SELECT"] * 8)
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["plan"]["previously_uploaded"], 0)
         self.assertEqual(manifest["person_hashes"], {NEW_PERSON: "previously-uploaded"})

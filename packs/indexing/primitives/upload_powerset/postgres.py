@@ -38,6 +38,18 @@ from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS
 
 # operator_person_sources.operator_id is VARCHAR; contact_tags.operator_id is uuid.
 
+def fetch_entity_aliases(cur: Any, ids_by_type: dict[str, list[str]]) -> dict[str, dict[str, str]]:
+    aliases = {}
+    for logical, entity_type in (("companies", "company"), ("schools", "school")):
+        cur.execute(
+            "SELECT alias_id, canonical_id::text FROM entity_id_aliases "
+            "WHERE entity_type = %s AND alias_id = ANY(%s)",
+            (entity_type, ids_by_type[logical]),
+        )
+        aliases[logical] = dict(cur.fetchall())
+    return aliases
+
+
 # Rows per write statement: persons' 25 columns make 12,500 bind parameters, far
 # under Postgres' 65,535, and one round trip replaces 500.
 BATCH_ROWS = 500

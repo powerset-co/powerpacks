@@ -1539,8 +1539,7 @@ def _role_hashes_for_flattened(people: list[dict[str, Any]]) -> list[str]:
             title = str(exp.get("title") or exp.get("position_title") or exp.get("role") or "").strip()
             if not upstream_title_hash and title:
                 raise RuntimeError(f"missing upstream title_hash for role {title!r}; rebuild import/enrichment artifacts or restore an Aleph bootstrap with title_hash values")
-            if upstream_title_hash:
-                hashes.append(upstream_title_hash)
+            hashes.append(upstream_title_hash)
     return hashes
 
 
@@ -1583,7 +1582,7 @@ def _denormalize_company_onto_position(record: dict[str, Any], company: dict[str
     if not record.get("company_headcount") and company.get("headcount"):
         record["company_headcount"] = int(company["headcount"])
     if not record.get("company_funding_total") and company.get("funding_total"):
-        record["company_funding_total"] = float(company["funding_total"])
+        record["company_funding_total"] = int(company["funding_total"])
     if not record.get("company_stage"):
         stage = str(company.get("stage") or "").strip() or _funding_stage_label(company.get("funding_stage"))
         if stage:
@@ -1992,6 +1991,8 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
             records = build_people_records([person], default_operator_id=ledger.get("default_operator_id"))
             hashes = _role_hashes_for_flattened([person])
             for idx, record in enumerate(records):
+                if not str(record.get("position_title") or "").strip():
+                    continue
                 role_hash = hashes[idx] if idx < len(hashes) else ""
                 role = role_data.get(role_hash, {})
                 if role_hash:
@@ -2543,6 +2544,8 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
                 role_hashes.add(th)
             elif title:
                 missing_title_hashes += 1
+    if missing_title_hashes:
+        raise ValueError(f"{missing_title_hashes} titled positions lack upstream title_hash")
     companies = build_company_corpus(people, getattr(args, "default_operator_id", None))
     checkpoint_every = max(1, int(getattr(args, "checkpoint_every", 1000) or 1000))
     role_input = _arg_artifact(args, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
