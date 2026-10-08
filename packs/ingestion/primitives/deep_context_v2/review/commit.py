@@ -3,7 +3,10 @@
 `finish` calls this before realize. A queued Yes, Skip or pasted Retarget writes through decisions.py. A
 described Retarget waits for its guided research (started by the page when the words were typed; a few
 minutes at most) and then confirms the URL it found, or rejects the pending profile when it found none.
-Each family's row leaves the queue as its rows commit, so a finish that stops midway resumes where it was.
+
+A row whose family is no longer in the review (a rerun merged it away, or an earlier finish already applied
+it) is dropped; a decision that cannot be applied any more (its pending profile is gone) is logged and
+dropped. The queue is emptied at the end, whatever happened, so the next review starts over.
 
 Created: 2026-10-08
 """
@@ -19,7 +22,8 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_review import Queued
 from packs.ingestion.primitives.deep_context_v2.db.schema import ResearchStatus, ReviewDecision
 from packs.ingestion.primitives.deep_context_v2.enrich.research import research_url
 from packs.ingestion.primitives.deep_context_v2.review import decisions
-from packs.ingestion.primitives.deep_context_v2.review.queue import Card, load_card
+from packs.ingestion.primitives.deep_context_v2.review.decisions import DecisionError
+from packs.ingestion.primitives.deep_context_v2.review.queue import Card, load_card, review_list
 
 RESEARCH_WAIT_SECONDS = 600   # a guided research still running when finish starts
 RESEARCH_POLL_SECONDS = 5
@@ -57,17 +61,26 @@ def apply(conn: sqlite3.Connection, data_root: Path, card: Card, queued: Queued,
 
 
 def commit_review(conn: sqlite3.Connection, data_root: Path) -> int:
-    """Every queued decision, applied and removed from the queue. Returns how many."""
+    """Every queued decision applied, then the queue emptied. Returns how many were applied."""
     queue: dict[str, Queued] = queries_review.review_queue(conn)
+    listed: set[str] = set(review_list(conn))
     handles: list[str] = []
     for queued in queue.values():
-        if queued.decision == ReviewDecision.RESEARCH:
+        if queued.decision == ReviewDecision.RESEARCH and queued.parent_id in listed:
             handles.append(queued.key)
     research: dict[str, Research] = wait_for_research(conn, handles) if handles else {}
+    applied: int = 0
     for parent_id in sorted(queue):
+        if parent_id not in listed:
+            print(f"commit: {parent_id}: not in the review any more, dropped", flush=True)
+            continue
         card: Card = load_card(conn, data_root, parent_id)
-        outcome: str = apply(conn, data_root, card, queue[parent_id], research)
-        with conn:
-            queries_review.delete_queued(conn, parent_id)
+        try:
+            outcome: str = apply(conn, data_root, card, queue[parent_id], research)
+            applied += 1
+        except DecisionError as error:
+            outcome = f"not applied: {error}"
         print(f"commit: {parent_id}: {outcome}", flush=True)
-    return len(queue)
+    with conn:
+        queries_review.clear_queue(conn)
+    return applied

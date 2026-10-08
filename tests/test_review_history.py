@@ -62,7 +62,10 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertEqual(answer.pending, 0)
             self.assertIsNotNone(answer.finished)
             self.assertEqual(api.linkedin_card({"index": ["0"]}).card.person.slug, "p:c1")
-            # finish applies the queue: c1 onto its LinkedIn, c2 skipped; the queue is empty after.
+            # finish applies the queue: c1 onto its LinkedIn, c2 skipped; a row for a family no longer in the
+            # review is dropped; the queue is empty after.
+            conn.execute("INSERT INTO review_queue VALUES ('p:gone', 'detach', '', '', ?)", (NOW,))
+            conn.commit()
             with patch(PROFILES, return_value=Profiles({URL: profile}, 0, 0)):
                 self.assertEqual(commit_review(conn, root), 2)
             self.assertEqual(conn.execute("SELECT parent_id FROM current_parent WHERE candidate_id='c1'").fetchone()[0], "li:456")

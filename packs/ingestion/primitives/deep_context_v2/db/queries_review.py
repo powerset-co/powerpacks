@@ -260,8 +260,9 @@ def upsert_queued(conn: sqlite3.Connection, queued: Queued, now: str) -> None:
     )
 
 
-def delete_queued(conn: sqlite3.Connection, parent_id: str) -> None:
-    conn.execute("DELETE FROM review_queue WHERE parent_id = ?", (parent_id,))
+def clear_queue(conn: sqlite3.Connection) -> None:
+    """The queue after finish applied it: empty, so the next review starts over."""
+    conn.execute("DELETE FROM review_queue")
 
 
 def insert_worth(conn: sqlite3.Connection, candidate_id: str, worth: str, reason: str, now: str) -> None:
