@@ -79,8 +79,8 @@ def handle(facts: SynthesizedFacts) -> str:
 
 def guided_subject(parent_id: str, facts: SynthesizedFacts, guidance: str) -> ResearchSubject:
     """The review page's re-research: the same question with the reviewer's words beside the dossier. Its
-    handle covers the guidance too, so the family's own research card is untouched and the same words are
-    never paid for twice."""
+    handle covers the guidance too, so the family's own research card is untouched and the review page can
+    reuse a stored answer to the same words."""
     payload: str = json.dumps({"facts": facts.to_payload(), "guidance": guidance, "prompt": PROMPT_VERSION},
                               ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return ResearchSubject(parent_id, hashlib.sha256(payload.encode("utf-8")).hexdigest(),

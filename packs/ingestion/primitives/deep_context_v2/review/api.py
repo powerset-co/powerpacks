@@ -163,10 +163,17 @@ class ReviewApi:
         # Its own connection: the server's is serialized on the request thread.
         conn: sqlite3.Connection = open_store(store_path(self.data_root))
         try:
-            research.submit(conn, [subject])
+            # The same words were asked before: the stored answer is reused; only a failed run is paid again.
             found = queries_enrich.research_by_handle(conn).get(subject.handle)
+            if found is None or found.status == ResearchStatus.FAILED.value:
+                research.submit(conn, [subject])
+                found = queries_enrich.research_by_handle(conn).get(subject.handle)
             if found is None or found.status != ResearchStatus.COMPLETE.value:
                 print(f"[retarget] {card.parent_id}: research found no profile", file=sys.stderr, flush=True)
+                return
+            # The reviewer may have decided the family while research ran; their decision stands.
+            if card.parent_id not in review_list(conn):
+                print(f"[retarget] {card.parent_id}: decided meanwhile, research kept", file=sys.stderr, flush=True)
                 return
             url: str = decisions.retarget(conn, self.data_root, card, research.research_url(found))
             print(f"[retarget] {card.parent_id}: {url}", file=sys.stderr, flush=True)

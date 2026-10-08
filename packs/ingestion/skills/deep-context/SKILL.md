@@ -202,7 +202,8 @@ prints the family's facts (relationship, work, topics, events, identifiers, the 
 The spec every block follows is the Deep Context Spec page; `packs/ingestion/docs/deep-context-pipeline.md`
 points at it.
 
-## Not in v2
+## Re-research on the review page
 
-- Re-research from a description on the review page: one paid Parallel research (about $0.05) in the
-  background; a profile found is applied, nothing found leaves the person in the queue.
+- Re-research from a description on the review page: one paid Parallel research (about $0.05, plus one
+  profile fetch when a URL is found) in the background; a profile found is applied, nothing found leaves
+  the person in the queue.
