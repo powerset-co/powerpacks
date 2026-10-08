@@ -79,7 +79,12 @@ def build_owner(data_root: Path, linkedin_url: str, emails: list[str], chat_db: 
     out: Path = data_root / OWNER_JSON
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-    owner: OwnerProfile = load_owner(open_store(store_path(data_root)), out)
+    conn = open_store(store_path(data_root))
+    try:
+        owner: OwnerProfile = load_owner(conn, out)
+        conn.commit()
+    finally:
+        conn.close()
     return {"owner_json": str(out), "name": owner.name, "fetched": profiles.fetched, "emails": len(owner.emails),
             "phones": len(owner.phones), "work": len(owner.work), "education": len(owner.education)}
 

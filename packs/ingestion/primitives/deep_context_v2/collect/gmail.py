@@ -75,10 +75,10 @@ WHERE m.message_type = 'email'
   -- Each email once: msgvault also files the sender as a 'from' recipient, and one person can be
   -- both To and Cc.
   AND m.id IN (
-      SELECT id FROM messages WHERE sender_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?1)
+      SELECT id FROM messages WHERE sender_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?)
       UNION
       SELECT message_id FROM message_recipients
-      WHERE participant_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?1)
+      WHERE participant_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?)
   )
 -- Content survives store rebuilds; physical row ids do not.
 ORDER BY at DESC,
@@ -86,7 +86,7 @@ ORDER BY at DESC,
          COALESCE(m.subject, '') DESC,
          COALESCE(m.snippet, '') DESC,
          COALESCE(mb.body_text, '') DESC
-LIMIT ?2
+LIMIT ?
 """
 
 
@@ -130,7 +130,7 @@ def _participant_ids(con: sqlite3.Connection, email: str) -> list[int]:
 
 def fetch_recent_rows(con: sqlite3.Connection, email: str, fetch_limit: int) -> list[sqlite3.Row]:
     """The newest `fetch_limit` emails the candidate sent or received, each once."""
-    return con.execute(_RECENT_SQL, (email.lower(), fetch_limit)).fetchall()
+    return con.execute(_RECENT_SQL, (email.lower(), email.lower(), fetch_limit)).fetchall()
 
 
 def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) -> int:

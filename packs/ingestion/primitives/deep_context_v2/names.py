@@ -279,11 +279,11 @@ def names_can_match(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
     """Can one name be a form of the other? Decides which pairs are worth a judgment, not the judgment."""
     if not first or not second:
         return False
-    if first == second or _same_full_name(first, second):
-        return True
     # A one-word name is never paired by name: a first name alone could be anyone's (decided 2026-10-07).
     if len(first) < 2 or len(second) < 2:
         return False
+    if first == second or _same_full_name(first, second):
+        return True
     if _generations(first) != _generations(second):
         return False
     return _word_forms_match(first[0], second[0]) and _surnames_match(_surname(first), _surname(second))
