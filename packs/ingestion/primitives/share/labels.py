@@ -234,6 +234,9 @@ def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) ->
         share, reason = SHARE_NO, WORTH_NO
     elif row.worth != Worth.YES.value:
         share, reason = SHARE_NO, WORTH_MAYBE
+    elif row.flag in (FAMILY, ROMANTIC_PARTNER):
+        # Family and partners stay home unless the human tags them Share (decided 2026-10-08).
+        share, reason = SHARE_NO, row.flag
     elif row.flag:
         share, reason = SHARE_CONFIRM, row.flag
     else:
