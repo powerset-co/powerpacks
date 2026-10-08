@@ -11,9 +11,7 @@ const BADGE: Record<Decision, "ok" | "warn" | "muted"> = { yes: "ok", confirm: "
 
 function worthLine(row: Person): string {
   const worth = `Worth: ${label("worth", row.worth || "unjudged").toLowerCase()}`
-  if (!row.worth_source) return worth
-  const by = row.worth_source === "machine" ? "AI" : "you"
-  return `${worth} · Decided by ${by}`
+  return row.worth_source === "human" ? `${worth} · your call` : worth
 }
 
 // Why this person is where they are: the reason, the worth call, and any notes. The badge
