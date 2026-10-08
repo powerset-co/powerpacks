@@ -52,7 +52,8 @@ class RouteTests(unittest.TestCase):
 
     def test_feedback_replies_with_powersets_status(self) -> None:
         card = mock.Mock(pending=(), members=(mock.Mock(display_name="Evan Lin"),))
-        with mock.patch.object(api, "load_card", return_value=card), \
+        with mock.patch.object(api, "review_list", return_value=["p:1"]), \
+             mock.patch.object(api, "load_card", return_value=card), \
              mock.patch.object(api.SendFeedback, "run", return_value={"status": "needs_auth", "error": "no token"}):
             reply = self.api.feedback({"parent_slug": ["p:1"], "pub": ["x"], "comment": ["wrong company"],
                                        "action": ["general"]})
