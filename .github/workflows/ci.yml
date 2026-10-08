@@ -43,6 +43,20 @@ jobs:
           if echo "$files" | grep -vE "$python_only" | grep -q . || echo "$files" | grep -qE '^tests/test_(msgvault_consent|browser_picker)\.js'; then echo "web=true" >> "$GITHUB_OUTPUT"; else echo "web=false" >> "$GITHUB_OUTPUT"; fi
           echo "files: $(echo "$files" | wc -l | tr -d ' ')"; cat "$GITHUB_OUTPUT"
 
+  deep-context-v2:
+    name: Deep context v2 unit tests
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: bin/setup-python
+      - name: Fast offline v2 tests and coverage
+        run: scripts/test-deep-context-v2
+
   python:
     name: Python lint and offline tests
     needs: changes

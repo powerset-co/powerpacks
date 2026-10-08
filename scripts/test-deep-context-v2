@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+UV_BIN="${UV_BIN:-$("$ROOT/bin/ensure-uv" --no-install)}"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+export COVERAGE_FILE="$WORK/.coverage"
+
+# Include unimported modules in the denominator; do not borrow coverage from v1 or other suites.
+"$UV_BIN" run --project . --group dev coverage run --rcfile=/dev/null --branch \
+  --source=packs/ingestion/primitives/deep_context_v2 scripts/deep_context_v2_unit.py
+"$UV_BIN" run --project . --group dev coverage report --rcfile=/dev/null --show-missing
