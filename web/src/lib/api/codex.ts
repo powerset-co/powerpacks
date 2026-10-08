@@ -1,10 +1,24 @@
 // The Codex agent through the desktop app (desktop/src-tauri/src/codex.rs). Requests go to
 // `codex app-server`; its notifications and requests arrive as desktop events.
 
-import { decodeNotification, decodeRequest, decodeStatus } from "@/lib/agent/decode"
+import {
+  decodeHistory,
+  decodeNotification,
+  decodeRequest,
+  decodeStatus,
+  decodeThreadSummary,
+} from "@/lib/agent/decode"
 import { invoke, listen } from "@/lib/desktop"
 import { isRecord } from "@/lib/utils"
-import type { AgentEvent, Approval, ApprovalChoice, CodexStatus, RequestId } from "@/types/agent"
+import type {
+  AgentEvent,
+  Approval,
+  ApprovalChoice,
+  CodexStatus,
+  Entry,
+  RequestId,
+  ThreadSummary,
+} from "@/types/agent"
 
 const NOTIFICATION_EVENT = "codex://notification"
 const REQUEST_EVENT = "codex://request"
@@ -38,6 +52,26 @@ export async function startThread(): Promise<string> {
   const thread = isRecord(started) && isRecord(started.thread) ? started.thread : {}
   if (typeof thread.id !== "string") throw new Error("Codex did not start a conversation.")
   return thread.id
+}
+
+/** This app's past chats, newest first. */
+export async function fetchThreads(): Promise<ThreadSummary[]> {
+  const listed = await invoke("codex_threads")
+  const data: unknown[] = isRecord(listed) && Array.isArray(listed.data) ? listed.data : []
+  return data.flatMap((raw) => {
+    const summary = decodeThreadSummary(raw)
+    return summary ? [summary] : []
+  })
+}
+
+/** Resumes a past chat; returns its transcript so far. */
+export async function openThread(threadId: string): Promise<Entry[]> {
+  const opened = await invoke("codex_open_thread", { threadId })
+  return decodeHistory(isRecord(opened) ? opened.thread : null)
+}
+
+export async function archiveThread(threadId: string): Promise<void> {
+  await call("thread/archive", { threadId })
 }
 
 export async function startTurn(threadId: string, text: string): Promise<void> {

@@ -5,7 +5,7 @@ import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import type { CodexStatus } from "@/types/agent"
 
 function summary(status: CodexStatus | undefined): { name: string; plan: string; connected: boolean } {
-  if (!status?.installed) return { name: "Codex is not installed", plan: "—", connected: false }
+  if (!status?.installed) return { name: "Missing from this app", plan: "—", connected: false }
   const account = status.account
   if (account === null) return { name: "Not signed in", plan: "—", connected: false }
   if (account.kind === "chatgpt")
@@ -13,7 +13,7 @@ function summary(status: CodexStatus | undefined): { name: string; plan: string;
   return { name: account.kind === "apiKey" ? "API key" : "Signed in", plan: "—", connected: true }
 }
 
-/** The Codex account that runs the Agent tab, signed in with ChatGPT. Desktop app only. */
+/** The Codex account that runs Chat, signed in with ChatGPT. Desktop app only. */
 export function CodexCard() {
   const codex = useCodexAccount()
   const { name, plan, connected } = summary(codex.status)
@@ -38,9 +38,7 @@ export function CodexCard() {
       <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">
         <p aria-live="polite" className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
           {codex.signingIn && <Spinner />}
-          {codex.signingIn
-            ? "Finish signing in in your browser."
-            : "Runs the Agent tab on your ChatGPT plan."}
+          {codex.signingIn ? "Finish signing in in your browser." : "Runs Chat on your ChatGPT plan."}
         </p>
         <CodexAction codex={codex} connected={connected} />
       </div>

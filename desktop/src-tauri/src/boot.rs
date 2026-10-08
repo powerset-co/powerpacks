@@ -1,43 +1,36 @@
-//! Launch: show the splash, then load the local Powerpacks page into the window.
+//! Launch: the splash shows each step until the window can load the local Powerpacks page.
 //!
 //! Flow:
-//!   checkout with a project interpreter -> `python -m packs.shared.web.server start` (reuses a
-//!     running page) -> navigate the window to it.
-//!   otherwise -> run the bundled `bootstrap --harness codex --powerset`, which clones or reuses
-//!     the checkout and starts the page; the window moves to `/install` as soon as the page answers
-//!     and the install page shows the rest.
-//! The page server outlives the app by design (packs/shared/web/server.py `start`).
+//!   install or refresh the bundled code in ~/powerpacks (source.rs)
+//!   -> `uv sync` with the bundled uv (downloads Python and packages on first launch)
+//!   -> `python -m packs.shared.web.server start` (reuses a running page)
+//!   -> setup not finished: start `bin/onboard` and show /install; otherwise show the Agent.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::onboard::{self, Setup};
 use crate::paths;
+use crate::source::{self, Plan};
 
 pub const HOST: &str = "127.0.0.1";
 pub const PORT: u16 = 8765;
-/// The health identity every Powerpacks page answers with (server.py PRIMITIVE).
-const PAGE_PRIMITIVE: &str = "reconcile_review_web";
 const BOOT_EVENT: &str = "boot://state";
-const BOOTSTRAP_RESOURCE: &str = "bootstrap";
-const BOOTSTRAP_ARGS: [&str; 3] = ["--harness", "codex", "--powerset"];
-const HEALTH_POLL: Duration = Duration::from_millis(400);
-const HEALTH_TIMEOUT: Duration = Duration::from_secs(1);
 const KEPT_LINES: usize = 40;
+const HOME_PAGE: &str = "/agent";
+const SETUP_PAGE: &str = "/install";
 
 #[derive(Clone, Copy, Serialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Phase {
     Starting,
-    Installing,
     Ready,
     Failed,
 }
@@ -47,6 +40,7 @@ pub enum Phase {
 pub struct BootState {
     pub phase: Phase,
     pub message: String,
+    pub detail: String,
     pub lines: Vec<String>,
     pub root: Option<PathBuf>,
 }
@@ -56,6 +50,7 @@ impl Default for BootState {
         Self {
             phase: Phase::Starting,
             message: "Starting Powerpacks".into(),
+            detail: String::new(),
             lines: Vec::new(),
             root: None,
         }
@@ -85,6 +80,14 @@ impl Boot {
         let _ = app.emit(BOOT_EVENT, state);
     }
 
+    fn step(&self, app: &AppHandle, message: &str, detail: &str) {
+        self.update(app, |state| {
+            state.message = message.into();
+            state.detail = detail.into();
+            state.lines.clear();
+        });
+    }
+
     fn line(&self, app: &AppHandle, line: String) {
         self.update(app, |state| {
             state.lines.push(line);
@@ -98,21 +101,12 @@ pub fn page_url(path: &str) -> String {
     format!("http://{HOST}:{PORT}{path}")
 }
 
-/// Start (or restart after a failure) on a worker thread.
+/// Start (or retry after a failure) on a worker thread.
 pub fn launch(app: AppHandle) {
     thread::spawn(move || {
         let boot = app.state::<Arc<Boot>>().inner().clone();
         boot.update(&app, |state| *state = BootState::default());
-        let root = paths::checkout();
-        boot.update(&app, |state| state.root = root.clone());
-        let ready = root
-            .as_deref()
-            .and_then(|root| paths::project_python(root).map(|python| (root, python)));
-        let outcome = match ready {
-            Some((root, python)) => start_page(&app, &boot, root, &python),
-            None => install(&app, &boot),
-        };
-        if let Err(message) = outcome {
+        if let Err(message) = run(&app, &boot) {
             boot.update(&app, |state| {
                 state.phase = Phase::Failed;
                 state.message = message;
@@ -121,9 +115,34 @@ pub fn launch(app: AppHandle) {
     });
 }
 
-fn start_page(app: &AppHandle, boot: &Boot, root: &Path, python: &Path) -> Result<(), String> {
-    boot.update(app, |state| state.message = "Opening your workspace".into());
-    let output = Command::new(python)
+fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
+    let root = paths::root()?;
+    boot.update(app, |state| state.root = Some(root.clone()));
+    let version = app.package_info().version.to_string();
+    if let Plan::Install = source::plan(&root, &version)? {
+        boot.step(app, "Installing Powerpacks", "");
+        let archive = app
+            .path()
+            .resolve(source::ARCHIVE_RESOURCE, BaseDirectory::Resource)
+            .map_err(|error| format!("The app is missing Powerpacks: {error}"))?;
+        source::install(&archive, &root, &version)?;
+    }
+    source::ensure_env(&root)?;
+
+    boot.step(
+        app,
+        "Setting up Python",
+        "The first launch downloads about 200 MB. Later launches skip this.",
+    );
+    let uv = paths::which("uv").ok_or("The app is missing uv.")?;
+    let mut sync = Command::new(uv);
+    sync.args(["sync", "--frozen", "--no-dev", "--project"])
+        .arg(&root)
+        .current_dir(&root);
+    stream(app, boot, sync, "Python setup")?;
+
+    boot.step(app, "Opening Powerpacks", "");
+    let output = Command::new(paths::project_python(&root))
         .args([
             "-m",
             "packs.shared.web.server",
@@ -131,42 +150,43 @@ fn start_page(app: &AppHandle, boot: &Boot, root: &Path, python: &Path) -> Resul
             "--port",
             &PORT.to_string(),
         ])
-        .current_dir(root)
+        .current_dir(&root)
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("Could not run Python in {}: {error}", root.display()))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let reason = stderr
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("no error output");
-        return Err(format!("The Powerpacks page did not start: {reason}"));
+        return Err(format!(
+            "The Powerpacks page did not start: {}",
+            last_line(&output.stderr)
+        ));
     }
-    show_page(app, boot, "/")
+
+    let setup = onboard::setup(&root);
+    if setup == Setup::New {
+        onboard::record_install(&root, &paths::project_python(&root))?;
+    }
+    if matches!(setup, Setup::New | Setup::Interrupted) {
+        onboard::start(&root, onboard::Answer::default())?;
+    }
+    show_page(
+        app,
+        boot,
+        if setup == Setup::Done {
+            HOME_PAGE
+        } else {
+            SETUP_PAGE
+        },
+    )
 }
 
-fn install(app: &AppHandle, boot: &Boot) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("Installing Powerpacks needs macOS. Point POWERPACKS_REPO_ROOT at an installed checkout to use it here.".into());
-    }
-    let bootstrap = app
-        .path()
-        .resolve(BOOTSTRAP_RESOURCE, BaseDirectory::Resource)
-        .map_err(|error| format!("The app is missing its installer: {error}"))?;
-    boot.update(app, |state| {
-        state.phase = Phase::Installing;
-        state.message = "Installing Powerpacks".into();
-    });
-    let mut child = Command::new("bash")
-        .arg(&bootstrap)
-        .args(BOOTSTRAP_ARGS)
+/// Run `command`, showing its output on the splash; fail with its last line.
+fn stream(app: &AppHandle, boot: &Boot, mut command: Command, what: &str) -> Result<(), String> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("Could not start the installer: {error}"))?;
+        .map_err(|error| format!("{what} could not start: {error}"))?;
     let readers = [
         child
             .stdout
@@ -177,31 +197,36 @@ fn install(app: &AppHandle, boot: &Boot) -> Result<(), String> {
             .take()
             .map(|err| Box::new(err) as Box<dyn Read + Send>),
     ];
-    for reader in readers.into_iter().flatten() {
-        let (app, boot) = (app.clone(), app.state::<Arc<Boot>>().inner().clone());
-        thread::spawn(move || {
-            for line in BufReader::new(reader).lines().map_while(Result::ok) {
-                boot.line(&app, line);
-            }
-        });
+    let threads: Vec<_> = readers
+        .into_iter()
+        .flatten()
+        .map(|reader| {
+            let (app, boot) = (app.clone(), app.state::<Arc<Boot>>().inner().clone());
+            thread::spawn(move || {
+                for line in BufReader::new(reader).lines().map_while(Result::ok) {
+                    boot.line(&app, line);
+                }
+            })
+        })
+        .collect();
+    let status = child.wait().map_err(|error| error.to_string())?;
+    for reader in threads {
+        let _ = reader.join();
     }
-    // The page comes up partway through bootstrap; show it as soon as it answers.
-    loop {
-        if page_health().is_some() {
-            boot.update(app, |state| state.root = paths::checkout());
-            return show_page(app, boot, "/install");
-        }
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            thread::sleep(HEALTH_POLL); // let the readers flush the outcome line
-            let last = boot.snapshot().lines.last().cloned().unwrap_or_default();
-            return Err(if last.is_empty() {
-                format!("The installer stopped ({status}).")
-            } else {
-                last
-            });
-        }
-        thread::sleep(HEALTH_POLL);
+    if status.success() {
+        return Ok(());
     }
+    let last = boot.snapshot().lines.last().cloned().unwrap_or_default();
+    Err(format!("{what} failed: {last}"))
+}
+
+fn last_line(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    text.lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("no error output")
+        .to_owned()
 }
 
 fn show_page(app: &AppHandle, boot: &Boot, path: &str) -> Result<(), String> {
@@ -219,26 +244,9 @@ fn show_page(app: &AppHandle, boot: &Boot, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The page's /healthz identity when a Powerpacks page holds the port.
-fn page_health() -> Option<serde_json::Value> {
-    let deadline = Instant::now() + HEALTH_TIMEOUT;
-    let mut stream =
-        TcpStream::connect_timeout(&format!("{HOST}:{PORT}").parse().ok()?, HEALTH_TIMEOUT).ok()?;
-    stream
-        .set_read_timeout(Some(
-            deadline
-                .saturating_duration_since(Instant::now())
-                .max(HEALTH_POLL),
-        ))
-        .ok()?;
-    write!(
-        stream,
-        "GET /healthz HTTP/1.0\r\nHost: {HOST}:{PORT}\r\n\r\n"
-    )
-    .ok()?;
-    let mut response = String::new();
-    stream.read_to_string(&mut response).ok()?;
-    let body = response.split_once("\r\n\r\n")?.1;
-    let identity: serde_json::Value = serde_json::from_str(body).ok()?;
-    (identity.get("primitive")?.as_str()? == PAGE_PRIMITIVE).then_some(identity)
+/// The root the app runs Powerpacks from, once launch has resolved it.
+pub fn require_root(boot: &Boot) -> Result<PathBuf, String> {
+    boot.root()
+        .filter(|root| Path::new(root).join("bin/onboard").is_file())
+        .ok_or_else(|| "Powerpacks is not installed yet.".into())
 }

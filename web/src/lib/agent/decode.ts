@@ -10,6 +10,7 @@ import type {
   Entry,
   ItemStatus,
   RequestId,
+  ThreadSummary,
 } from "@/types/agent"
 
 type Json = Record<string, unknown>
@@ -111,6 +112,46 @@ export function decodeItem(raw: unknown): Entry | null {
     default:
       return null
   }
+}
+
+/** Codex stamps threads in seconds since the epoch. */
+const MS_PER_SECOND = 1000
+const TITLE_CHARS = 80
+
+export function decodeThreadSummary(raw: unknown): ThreadSummary | null {
+  if (!isRecord(raw)) return null
+  const id = text(raw, "id")
+  if (id === null) return null
+  const title = (text(raw, "name") ?? text(raw, "preview") ?? "").trim().split("\n")[0] ?? ""
+  const updated = number(raw, "updatedAt") ?? number(raw, "createdAt") ?? 0
+  return {
+    id,
+    title: title.slice(0, TITLE_CHARS) || "New chat",
+    updatedAt: new Date(updated * MS_PER_SECOND),
+  }
+}
+
+/** A user message from a past turn; live ones are shown as sent, so `decodeItem` skips them. */
+function decodeUserMessage(raw: Json, id: string): Entry {
+  const parts = list(raw, "content").flatMap((part) =>
+    isRecord(part) && text(part, "type") === "text" ? [text(part, "text") ?? ""] : [],
+  )
+  return { kind: "user", id, text: parts.join("\n") }
+}
+
+/** A resumed thread's turns as the transcript. */
+export function decodeHistory(thread: unknown): Entry[] {
+  if (!isRecord(thread)) return []
+  return list(thread, "turns").flatMap((turn) =>
+    (isRecord(turn) ? list(turn, "items") : []).flatMap((item) => {
+      if (isRecord(item) && text(item, "type") === "userMessage") {
+        const id = text(item, "id")
+        return id === null ? [] : [decodeUserMessage(item, id)]
+      }
+      const entry = decodeItem(item)
+      return entry === null ? [] : [entry]
+    }),
+  )
 }
 
 const DELTAS: Readonly<Record<string, "text" | "output">> = {

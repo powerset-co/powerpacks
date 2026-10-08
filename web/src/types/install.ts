@@ -16,6 +16,9 @@ export interface InstallAction {
     | "details"
   text?: string
   command?: string
+  // approval: the spend step and its estimate (packs/powerset/primitives/install/pipeline.py)
+  step?: string
+  estimate?: unknown
   qr_url?: string
   details?: unknown
 }

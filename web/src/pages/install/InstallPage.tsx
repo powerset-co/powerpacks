@@ -6,11 +6,14 @@ import { useEffect, useState } from "react"
 
 import { fetchInstall, installAction } from "@/lib/api/install"
 import { fetchLinkedinCard } from "@/lib/api/review"
+import { isDesktop } from "@/lib/desktop"
 import { errorText } from "@/lib/api/http"
 import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
+
+import { DesktopSetup } from "./DesktopSetup"
 
 // Every other word comes with the status (status_prose.py); these show while the page cannot reach setup.
 const OFFLINE = {
@@ -125,6 +128,11 @@ export function InstallPage() {
     document.title = `${title} · Powerpacks`
   }, [title])
   async function open(action: string) {
+    // The app shows the review in its own window; the server would open a browser tab.
+    if (action === "review" && isDesktop()) {
+      window.location.assign("/?stage=linkedin")
+      return
+    }
     try {
       await installAction(action)
     } catch (caught) {
@@ -205,6 +213,7 @@ export function InstallPage() {
             {actionError ? <p role="alert">{actionError}</p> : null}
           </section>
         ) : null}
+        {data && !error && isDesktop() ? <DesktopSetup data={data} /> : null}
         {data ? (
           <div className="install-account">
             {data.account_email ? <p>{data.account_email}</p> : null}

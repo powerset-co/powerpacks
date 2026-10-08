@@ -21,6 +21,9 @@
     "allow-codex-login",
     "allow-codex-start-thread",
     "allow-codex-call",
-    "allow-codex-respond"
+    "allow-codex-respond",
+    "allow-codex-open-thread",
+    "allow-codex-threads",
+    "allow-onboard-continue"
   ]
 }

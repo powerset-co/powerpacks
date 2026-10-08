@@ -6,8 +6,11 @@ const COMMANDS: &[&str] = &[
     "codex_status",
     "codex_login",
     "codex_start_thread",
+    "codex_open_thread",
+    "codex_threads",
     "codex_call",
     "codex_respond",
+    "onboard_continue",
 ];
 
 fn main() {

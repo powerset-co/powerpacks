@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-codex-threads"
+description = "Enables the codex_threads command without any pre-configured scope."
+commands.allow = ["codex_threads"]
+
+[[permission]]
+identifier = "deny-codex-threads"
+description = "Denies the codex_threads command without any pre-configured scope."
+commands.deny = ["codex_threads"]

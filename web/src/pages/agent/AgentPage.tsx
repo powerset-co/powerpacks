@@ -1,36 +1,39 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { EmptyState, Spinner } from "@/components/shared"
-import { answer, newConversation, send, stop, useAgent } from "@/lib/agent/store"
+import { answer, newChat, send, stop, useAgent } from "@/lib/agent/store"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
+import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
 
 import { ApprovalCard } from "./ApprovalCard"
+import { ChatSidebar } from "./ChatSidebar"
 import { CodexGate } from "./CodexGate"
 import { Composer } from "./Composer"
+import { ComposeIcon, SidebarIcon } from "./icons"
 import { Transcript } from "./Transcript"
 
 // Within this distance of the bottom, new output keeps the transcript pinned to the end.
 const STICK_PX = 120
 
 const STARTERS = [
-  { title: "Search my network", prompt: "Find people in my network who founded developer tools companies." },
-  { title: "Import Gmail contacts", prompt: "Import my Gmail contacts." },
-  { title: "Build dossiers", prompt: "Process my contacts with Deep Context and build dossiers." },
-  { title: "Build the search index", prompt: "Build the local search index." },
+  { title: "Find people", prompt: "Who in my network has founded a developer tools company?" },
+  { title: "Catch up", prompt: "Who are the most interesting people I talked to this month?" },
+  { title: "Find a company's people", prompt: "Who do I know at Stripe?" },
+  { title: "Find an intro", prompt: "Who can introduce me to a partner at a seed fund?" },
 ] as const
 
 function Welcome() {
   return (
-    <div className="rise-in flex flex-col items-center gap-6 pt-[12vh] text-center">
+    <div className="rise-in flex flex-col items-center gap-7 pt-[14vh] text-center max-[680px]:pt-[6vh]">
       <span
         aria-hidden
         className="size-3.5 rounded-[4px] bg-primary shadow-[0_0_0_5px_var(--primary-soft)]"
       />
       <div className="flex flex-col gap-1.5">
-        <h1 className="m-0 text-xl font-semibold">What should we work on?</h1>
+        <h1 className="m-0 text-[22px] font-semibold tracking-[-.01em]">Who are you looking for?</h1>
         <p className="m-0 text-muted-foreground">
-          Codex runs Powerpacks on this computer: searches, imports, Deep Context and the search index.
+          Ask about people, companies and intros across your network.
         </p>
       </div>
       <ul
@@ -42,7 +45,7 @@ function Welcome() {
             <button
               type="button"
               onClick={() => void send(prompt)}
-              className="flex w-full cursor-pointer flex-col gap-1 rounded-[var(--radius-m)] border border-line bg-card px-3.5 py-3 text-left transition-[border-color,background-color] duration-fast ease-out hover:border-line-strong hover:bg-surface-2"
+              className="flex h-full w-full cursor-pointer flex-col gap-1 rounded-[var(--radius-m)] border border-line bg-card px-3.5 py-3 text-left transition-[border-color,background-color] duration-fast ease-out hover:border-line-strong hover:bg-surface-2"
             >
               <span className="text-[13px] font-semibold">{title}</span>
               <span className="text-xs text-muted-foreground">{prompt}</span>
@@ -54,7 +57,34 @@ function Welcome() {
   )
 }
 
-function Conversation() {
+function ChatHeader({ onToggle }: { onToggle: () => void }) {
+  const agent = useAgent()
+  const threads = useThreads()
+  const title = threads.data?.find(({ id }) => id === agent.threadId)?.title ?? "New chat"
+  return (
+    <header className="flex h-12 items-center gap-2 px-4">
+      <button
+        type="button"
+        aria-label="Chats"
+        onClick={onToggle}
+        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden"
+      >
+        <SidebarIcon className="size-4" />
+      </button>
+      <h2 className="m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-muted-foreground">{title}</h2>
+      <button
+        type="button"
+        aria-label="New chat"
+        onClick={newChat}
+        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden"
+      >
+        <ComposeIcon className="size-4" />
+      </button>
+    </header>
+  )
+}
+
+function Conversation({ onToggle }: { onToggle: () => void }) {
   const agent = useAgent()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -66,7 +96,8 @@ function Conversation() {
   }, [agent.entries, agent.approvals, waiting])
 
   return (
-    <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+    <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+      <ChatHeader onToggle={onToggle} />
       <div
         ref={scroller}
         className="overflow-y-auto"
@@ -75,8 +106,17 @@ function Conversation() {
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_PX
         }}
       >
-        <div className="mx-auto flex max-w-[760px] flex-col gap-4 px-5 pb-8 pt-6" aria-live="polite">
-          {agent.entries.length === 0 ? <Welcome /> : <Transcript entries={agent.entries} />}
+        <div
+          className="mx-auto flex max-w-[760px] flex-col gap-5 px-5 pb-10 pt-2 max-[680px]:px-3"
+          aria-live="polite"
+        >
+          {agent.loading ? (
+            <EmptyState>Loading chat…</EmptyState>
+          ) : agent.entries.length === 0 ? (
+            <Welcome />
+          ) : (
+            <Transcript entries={agent.entries} />
+          )}
           {agent.approvals.map((approval) => (
             <ApprovalCard
               key={String(approval.requestId)}
@@ -92,31 +132,41 @@ function Conversation() {
           )}
         </div>
       </div>
-      <Composer
-        running={agent.running}
-        canReset={agent.entries.length > 0}
-        onSend={(text) => void send(text)}
-        onStop={() => void stop()}
-        onReset={newConversation}
-      />
-    </main>
+      <Composer running={agent.running} onSend={(text) => void send(text)} onStop={() => void stop()} />
+    </section>
   )
 }
 
-/** Codex, signed in with ChatGPT, running Powerpacks skills in the checkout. Desktop app only. */
+/** Chats with Codex, signed in with ChatGPT, searching with Powerpacks. Desktop app only. */
 export function AgentPage() {
   if (!isDesktop()) {
-    return <EmptyState>The agent runs in the Powerpacks desktop app.</EmptyState>
+    return <EmptyState>Chat runs in the Powerpacks desktop app.</EmptyState>
   }
   return <SignedInAgent />
 }
 
 function SignedInAgent() {
   const codex = useCodexAccount()
-  if (codex.status?.installed && codex.status.account) return <Conversation />
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  if (!codex.status?.installed || !codex.status.account) {
+    return (
+      <main className="overflow-y-auto px-5">
+        <CodexGate codex={codex} />
+      </main>
+    )
+  }
   return (
-    <main className="overflow-y-auto px-5">
-      <CodexGate codex={codex} />
+    <main className="grid min-h-0 grid-cols-[260px_minmax(0,1fr)] max-[860px]:grid-cols-1">
+      <ChatSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close chats"
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 top-topbar z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden"
+        />
+      )}
+      <Conversation onToggle={() => setSidebarOpen((open) => !open)} />
     </main>
   )
 }

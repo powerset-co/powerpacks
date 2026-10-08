@@ -15,7 +15,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "dmg",
+      "deb"
+    ],
     "category": "Productivity",
     "shortDescription": "Search your network and build context about people",
     "icon": [
@@ -26,10 +30,16 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../bin/bootstrap": "bootstrap"
+      "resources/powerpacks.tar.gz": "powerpacks.tar.gz"
     },
     "macOS": {
-      "minimumSystemVersion": "12.0"
-    }
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
+    },
+    "externalBin": [
+      "binaries/uv",
+      "binaries/codex",
+      "binaries/rg"
+    ]
   }
 }

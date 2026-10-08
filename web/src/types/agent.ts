@@ -26,6 +26,13 @@ export type Entry =
   | { kind: "tool"; id: string; label: string; status: ItemStatus }
   | { kind: "error"; id: string; text: string }
 
+/** A past chat in the sidebar. */
+export interface ThreadSummary {
+  id: string
+  title: string
+  updatedAt: Date
+}
+
 export type RequestId = string | number
 
 /** Something Codex is waiting on the user for; answered through lib/agent/store `answer`. */

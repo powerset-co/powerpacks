@@ -1,13 +1,16 @@
-//! The Powerpacks desktop app: a native window around the local Powerpacks page, with Codex as
-//! the in-app agent.
+//! The Powerpacks desktop app: the local Powerpacks page in a native window, with Codex as the
+//! in-app agent. Everything it needs ships inside it (uv, Codex, the Powerpacks source).
 //!
-//! The window opens on the bundled splash (`desktop/splash`), `boot` brings up the page server
-//! and navigates the window to it, and `codex` runs the agent. Links that leave the local page
-//! open in the system browser, where Google, ChatGPT and LinkedIn sign-ins are allowed.
+//! The window opens on the bundled splash (`desktop/splash`); `boot` installs and starts
+//! Powerpacks and navigates the window to it; `onboard` runs setup; `codex` runs the agent.
+//! Links that leave the local page open in the system browser, where Google, ChatGPT and
+//! LinkedIn allow sign-in.
 
 mod boot;
 mod codex;
+mod onboard;
 mod paths;
+mod source;
 
 use std::sync::Arc;
 
@@ -67,8 +70,34 @@ async fn codex_start_thread(
     boot: State<'_, Arc<Boot>>,
     codex: State<'_, Codex>,
 ) -> Result<Value, String> {
-    let root = boot.root().ok_or("Powerpacks is not installed yet.")?;
-    codex.start_thread(&app, &root).await
+    codex.start_thread(&app, &boot::require_root(&boot)?).await
+}
+
+#[tauri::command]
+async fn codex_open_thread(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+    thread_id: String,
+) -> Result<Value, String> {
+    codex
+        .open_thread(&app, &boot::require_root(&boot)?, &thread_id)
+        .await
+}
+
+#[tauri::command]
+async fn codex_threads(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+) -> Result<Value, String> {
+    codex.threads(&app, &boot::require_root(&boot)?).await
+}
+
+/// Resumes setup from the install page with what the user answered there.
+#[tauri::command]
+fn onboard_continue(boot: State<'_, Arc<Boot>>, answer: onboard::Answer) -> Result<(), String> {
+    onboard::start(&boot::require_root(&boot)?, answer)
 }
 
 #[tauri::command]
@@ -144,7 +173,7 @@ fn main_window(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
-    paths::adopt_login_path();
+    paths::adopt_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -161,8 +190,11 @@ pub fn run() {
             codex_status,
             codex_login,
             codex_start_thread,
+            codex_open_thread,
+            codex_threads,
             codex_call,
             codex_respond,
+            onboard_continue,
         ])
         .setup(|app| {
             main_window(app.handle())?;

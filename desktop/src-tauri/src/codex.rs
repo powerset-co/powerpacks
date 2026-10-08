@@ -26,20 +26,26 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const NOTIFICATION_EVENT: &str = "codex://notification";
 const REQUEST_EVENT: &str = "codex://request";
 const EXIT_EVENT: &str = "codex://exit";
-/// The app-server methods the page may call directly; thread/start goes through `start_thread`.
+/// The app-server methods the page may call directly; threads start and open through
+/// `start_thread` and `open_thread`, which set the folder, sandbox and instructions.
 pub const PAGE_METHODS: &[&str] = &[
     "account/read",
     "account/login/cancel",
     "account/logout",
-    "account/rateLimits/read",
     "turn/start",
     "turn/interrupt",
+    "thread/archive",
 ];
-/// Every thread runs in the checkout so Codex loads its AGENTS.md and Powerpacks skills.
+/// The only skills the in-app agent gets: people, company, contact and SQL search, which also
+/// answer dossier lookups. Setup, imports, Deep Context and the index run from the app's pages.
+const SKILL_ROOTS: [&str; 2] = ["packs/search/skills", "packs/contacts/skills"];
 const DEVELOPER_INSTRUCTIONS: &str = "You are the assistant inside the Powerpacks desktop app. \
-The app window already shows the Powerpacks pages (People, Searches, Accounts, Scheduled tasks), \
-so never ask the user to open a URL in a browser; say which page to look at instead. \
-Follow AGENTS.md and the matching Powerpacks skill for every request.";
+You search the user's network and answer questions about people, companies and dossiers with \
+the Powerpacks search skills. Setup, sign-in, contact imports, Deep Context processing and the \
+search index are run by the user from the app's own pages (Accounts, People, Searches); do not \
+run those workflows yourself. If one is needed, say which page to open. Never ask the user to \
+open a URL in a browser: the app already shows every Powerpacks page.";
+const THREAD_LIST_LIMIT: u32 = 50;
 
 type Reply = Result<Value, String>;
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Reply>>>>;
@@ -183,7 +189,7 @@ impl Codex {
         {
             return Ok(live.clone());
         }
-        let binary = paths::codex().ok_or(NOT_INSTALLED)?;
+        let binary = paths::which("codex").ok_or(NOT_INSTALLED)?;
         let connection = Arc::new(Connection::spawn(app, &binary, cwd)?);
         let client = json!({ "name": CLIENT_NAME, "title": CLIENT_TITLE, "version": app.package_info().version.to_string() });
         connection
@@ -193,6 +199,12 @@ impl Codex {
             )
             .await?;
         connection.write(&json!({ "method": "initialized" }))?;
+        if let Some(cwd) = cwd {
+            let roots: Vec<_> = SKILL_ROOTS.iter().map(|root| cwd.join(root)).collect();
+            connection
+                .request("skills/extraRoots/set", json!({ "extraRoots": roots }))
+                .await?;
+        }
         *slot = Some(connection.clone());
         Ok(connection)
     }
@@ -215,7 +227,7 @@ impl Codex {
 
     /// The signed-in account, or `installed: false` when no Codex CLI is on this machine.
     pub async fn status(&self, app: &AppHandle, cwd: Option<&Path>) -> Reply {
-        let Some(binary) = paths::codex() else {
+        let Some(binary) = paths::which("codex") else {
             return Ok(json!({ "installed": false }));
         };
         let account = self.call(app, cwd, "account/read", json!({})).await?;
@@ -236,15 +248,35 @@ impl Codex {
         .await
     }
 
-    pub async fn start_thread(&self, app: &AppHandle, cwd: &Path) -> Reply {
-        let params = json!({
+    /// Writes stay in the Powerpacks folder; network is on, since every search calls Powerset.
+    fn thread_settings(cwd: &Path) -> Value {
+        json!({
             "cwd": cwd,
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
+            "config": { "sandbox_workspace_write": { "network_access": true } },
             "developerInstructions": DEVELOPER_INSTRUCTIONS,
-        });
-        self.call(app, Some(cwd), "thread/start", params).await
+        })
+    }
+
+    pub async fn start_thread(&self, app: &AppHandle, cwd: &Path) -> Reply {
+        self.call(app, Some(cwd), "thread/start", Self::thread_settings(cwd))
+            .await
+    }
+
+    /// Resume a past chat with its turns, so the page can show its history and continue it.
+    pub async fn open_thread(&self, app: &AppHandle, cwd: &Path, thread_id: &str) -> Reply {
+        let mut params = Self::thread_settings(cwd);
+        params["threadId"] = json!(thread_id);
+        self.call(app, Some(cwd), "thread/resume", params).await
+    }
+
+    /// This app's chats, newest first.
+    pub async fn threads(&self, app: &AppHandle, cwd: &Path) -> Reply {
+        let params = json!({ "cwd": cwd, "sourceKinds": ["appServer"], "limit": THREAD_LIST_LIMIT,
+                             "sortKey": "updated_at", "archived": false });
+        self.call(app, Some(cwd), "thread/list", params).await
     }
 }
 
-pub const NOT_INSTALLED: &str = "Codex is not installed. Install it with `npm install -g @openai/codex` or `brew install codex`, then try again.";
+pub const NOT_INSTALLED: &str = "The app is missing Codex. Reinstall Powerpacks.";

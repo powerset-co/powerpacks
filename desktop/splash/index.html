@@ -33,6 +33,7 @@
              border-top-color: transparent; animation: spin 800ms linear infinite; }
   [data-phase="failed"] .spinner { display: none; }
   [data-phase="failed"] .status { color: var(--bad); text-align: center; user-select: text; }
+  .detail { margin: -12px 0 0; color: var(--faint); font-size: 12px; text-align: center; min-height: 18px; }
   .log { width: 100%; max-height: 180px; overflow: hidden; margin: 0; padding: 12px 14px; list-style: none;
          background: var(--card); border: 1px solid var(--border); border-radius: 10px;
          font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint);
@@ -59,19 +60,22 @@
     <div class="stack">
       <div class="brand"><span class="mark" aria-hidden="true"></span>POWERPACKS</div>
       <p class="status" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span id="message">Starting Powerpacks</span></p>
-      <ol class="log" id="log" aria-label="Installer output"></ol>
+      <p class="detail" id="detail"></p>
+      <ol class="log" id="log" aria-label="Setup output"></ol>
       <button id="retry" type="button" hidden>Try again</button>
     </div>
   </main>
 <script>
   const tauri = window.__TAURI__
   const message = document.getElementById("message")
+  const detail = document.getElementById("detail")
   const log = document.getElementById("log")
   const retry = document.getElementById("retry")
 
   function render(state) {
     document.body.dataset.phase = state.phase
     message.textContent = state.message
+    detail.textContent = state.detail
     log.replaceChildren(...state.lines.slice(-8).map((line) => {
       const item = document.createElement("li")
       item.textContent = line

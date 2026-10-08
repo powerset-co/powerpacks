@@ -1,6 +1,5 @@
-// The Agent page's conversation: one Codex thread, kept at module level so it survives
-// switching pages. `reduce` folds Codex events into the transcript; the actions below are the
-// only writers.
+// The Agent page's open chat: one Codex thread, kept at module level so it survives switching
+// pages. `reduce` folds Codex events into the transcript; the actions below are the only writers.
 
 import { useEffect, useSyncExternalStore } from "react"
 
@@ -10,6 +9,7 @@ import {
   onAgentEvent,
   onApproval,
   onCodexExit,
+  openThread,
   startThread,
   startTurn,
 } from "@/lib/api/codex"
@@ -20,6 +20,8 @@ export interface AgentState {
   threadId: string | null
   turnId: string | null
   running: boolean
+  /** True while a past chat's history loads. */
+  loading: boolean
   entries: Entry[]
   approvals: Approval[]
 }
@@ -28,6 +30,7 @@ export const EMPTY_AGENT: AgentState = {
   threadId: null,
   turnId: null,
   running: false,
+  loading: false,
   entries: [],
   approvals: [],
 }
@@ -55,6 +58,7 @@ function failed(state: AgentState, text: string): AgentState {
   return {
     ...state,
     running: false,
+    loading: false,
     turnId: null,
     entries: [...state.entries, { kind: "error", id: localId("error"), text }],
   }
@@ -104,10 +108,7 @@ function wire(): void {
   onCodexExit(() => {
     if (state.threadId !== null)
       set(
-        failed(
-          { ...state, threadId: null, approvals: [] },
-          "Codex stopped. Send again to start a new conversation.",
-        ),
+        failed({ ...state, threadId: null, approvals: [] }, "Codex stopped. Send again to start a new chat."),
       )
   })
 }
@@ -117,7 +118,7 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
-/** The conversation; listening to Codex starts with the first reader. */
+/** The open chat; listening to Codex starts with the first reader. */
 export function useAgent(): AgentState {
   useEffect(wire, [])
   return useSyncExternalStore(subscribe, () => state)
@@ -149,7 +150,20 @@ export async function answer(approval: Approval, choice: ApprovalChoice): Promis
   }
 }
 
-/** Clears the transcript; the next message starts a new thread. */
-export function newConversation(): void {
-  if (!state.running) set(EMPTY_AGENT)
+/** Clears the screen; the next message starts a new thread. A running turn carries on in Codex. */
+export function newChat(): void {
+  set(EMPTY_AGENT)
+}
+
+/** Opens a past chat with its history; later messages continue it. */
+export async function openChat(threadId: string): Promise<void> {
+  if (threadId === state.threadId) return
+  wire()
+  set({ ...EMPTY_AGENT, threadId, loading: true })
+  try {
+    const entries = await openThread(threadId)
+    if (state.threadId === threadId) set({ ...state, entries, loading: false })
+  } catch (error: unknown) {
+    if (state.threadId === threadId) set(failed(state, errorText(error)))
+  }
 }

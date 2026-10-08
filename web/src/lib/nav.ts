@@ -20,8 +20,8 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "accounts", label: "Accounts", href: "/accounts" },
 ]
 
-/** The Codex agent; only the desktop app can run it, so only the desktop app shows it. */
-export const AGENT: Page = { key: "agent", label: "Agent", href: "/agent" }
+/** Chat with the Codex agent; only the desktop app can run it, so only the desktop app shows it. */
+export const AGENT: Page = { key: "agent", label: "Chat", href: "/agent" }
 
 export const PAGES: readonly Page[] = isDesktop() ? [AGENT, ...BROWSER_PAGES] : BROWSER_PAGES
 
