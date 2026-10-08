@@ -45,7 +45,6 @@ from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLo
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
-from packs.ingestion.primitives.deep_context_v2.review.api import REVIEW_MANIFEST
 from packs.ingestion.primitives.share.share_list import Share
 from packs.shared.web.server import DEFAULT_PORT, start_server as start_page, stop_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
@@ -122,10 +121,9 @@ def archive_v1(data_root: Path) -> Path | None:
 
 def start_review(data_root: Path, port: int) -> str:
     """The one local page server on `port`, started fresh so it runs this checkout's code (a page left up
-    across an update would keep serving the old review); returns the review URL. This review's completion
-    is new: the manifest from the last one goes. The server is the install's too: packs/shared/web/server.py."""
+    across an update would keep serving the old review); returns the review URL. The server is the
+    install's too: packs/shared/web/server.py."""
     stop_page("127.0.0.1", port)
-    (data_root / REVIEW_MANIFEST).unlink(missing_ok=True)
     started: dict[str, object] = start_page(data_root.parent, port=port)
     (data_root / REVIEW_PID_FILE).write_text(str(started["pid"]))
     return str(started["url"])

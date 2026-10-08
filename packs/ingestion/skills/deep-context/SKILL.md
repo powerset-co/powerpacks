@@ -149,12 +149,19 @@ worker reports it; the advisor decides and the worker reruns. Use common sense:
   issue: the next install hits it too.
 
 **4. Review.** The user answers each card on the Check LinkedIn page: Use this profile, Skip, or
-paste the right LinkedIn URL under "Wrong person?". Nothing comes back through chat: when the
-queue is empty the server writes `.powerpacks/deep-context/v2-manifests/review.json` (status
-`completed`) and the page says "Review complete — updating your index". Watch for that file on
-the same 30-second cadence as the pane.
+paste the right LinkedIn URL under "Wrong person?". Nothing comes back through chat: the server
+computes the queue from the store on every request, so ask it, on the same 30-second cadence as
+the pane:
 
-**5. Finish.** The moment `review.json` says completed, send `bin/deep-context-v2 finish` into
+```bash
+curl -s http://127.0.0.1:8765/api/review/page | python3 -c 'import json,sys; print(json.load(sys.stdin)["progress"]["linkedin_pending"])'
+```
+
+(the port is the one in the URL `run` printed). When it prints 0 the review is complete and the
+page says "Review Complete — updating your index". If the request fails, the page is down: run
+`bin/deep-context-v2 review` and keep asking.
+
+**5. Finish.** The moment the count is 0, send `bin/deep-context-v2 finish` into
 the tmux session: people.csv again with the reviewed LinkedIns, the share list, and the index
 again on Modal (its shared caches make the second build nearly free). Then
 `bin/deep-context-v2 stop` takes the page down; kill the tmux session; say the index is updated.

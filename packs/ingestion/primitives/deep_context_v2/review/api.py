@@ -24,8 +24,6 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context_v2.review import decisions, payloads
 from packs.ingestion.primitives.deep_context_v2.review.decisions import DecisionError
-from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
-from packs.ingestion.primitives.deep_context_v2.node import MANIFEST_RELATIVE_DIR
 from packs.ingestion.primitives.deep_context_v2.review.payloads import DecideResult, LinkedinCard, LinkedinCardPayload, LinkedinFinished, QueuePosition
 from packs.ingestion.primitives.deep_context_v2.review.queue import Card, load_card, review_list
 
@@ -60,21 +58,6 @@ def _send_json(handler: BaseHTTPRequestHandler, payload: dict[str, object], stat
     _send(handler, json.dumps(payload).encode(), "application/json; charset=utf-8", status)
 
 
-REVIEW_MANIFEST = MANIFEST_RELATIVE_DIR / "review.json"
-
-
-def record_review_complete(data_root: Path) -> None:
-    """The review's manifest, written the moment the queue is empty: what the advisor watches to run
-    `finish`. `run` removes it before a new review starts."""
-    path: Path = data_root / REVIEW_MANIFEST
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    manifest = {"stage": "review", "status": "completed", "started_at": "", "finished_at": now_iso(),
-                "counts": {"pending": 0}, "error": None}
-    path.write_text(json.dumps(manifest, indent=2) + "\n")
-
-
 class ReviewApi:
     def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
         self.conn = conn
@@ -87,8 +70,6 @@ class ReviewApi:
             if slug.strip():
                 excluded.add(slug.strip())
         order: list[str] = review_list(self.conn)
-        if not order:
-            record_review_complete(self.data_root)
         shown: list[str] = []
         for parent_id in order:
             if parent_id not in excluded:
@@ -135,10 +116,7 @@ class ReviewApi:
             card: Card = load_card(self.conn, self.data_root, _value(params, "slug"))
             _send(handler, payloads.dossier(card).encode(), "text/html; charset=utf-8", HTTPStatus.OK)
         elif parsed.path == "/api/review/page":
-            pending: int = len(review_list(self.conn))
-            if not pending:
-                record_review_complete(self.data_root)  # a queue empty before the first card is a complete review
-            _send_json(handler, asdict(payloads.page(pending)))
+            _send_json(handler, asdict(payloads.page(len(review_list(self.conn)))))
         elif parsed.path == "/api/review/linkedin-card":
             _send_json(handler, asdict(self.linkedin_card(params)))
         else:
