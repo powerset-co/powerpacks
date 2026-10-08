@@ -156,9 +156,10 @@ class ProcessingOnboarding:
         self.left_to_fix.append(reason)
         self._write(event, details=reason)
 
-    def _enrich(self, node: Node) -> None:
+    def _enrich(self, build: Callable[[], Node]) -> None:
         """Run enrichment; LinkedIn matches the judges left wait for the user on the review page."""
         self.step = InstallStep.ENRICH
+        node = build()
         try:
             self._stage("enrich", node)
         except _Stopped:
@@ -199,8 +200,8 @@ class ProcessingOnboarding:
                 with closing(open_store(store_path(self.data_root))) as conn:
                     self._owner()
                     *discover, (_, enrich) = stages(conn, self.data_root)
-                    for name, node in discover:
-                        self._stage(name, node)
+                    for name, build in discover:
+                        self._stage(name, build())
                     self._write("discover.done")
                     self._enrich(enrich)
                 self._index()

@@ -5,6 +5,9 @@ Created: 2026-10-07
 ## Change log
 
 - 2026-10-07: created.
+- 2026-10-07: `stages` returns builders, not built nodes: a dry run on a fresh store showed
+  synthesize reads the owner that load writes. `linkedin.login.current`, also never written,
+  goes too.
 
 ## What runs today
 
@@ -24,8 +27,7 @@ Created: 2026-10-07
    - `_index` (`pipeline.py:233`): `realize`, then a Modal dispatch state machine
      (`pipeline.py:237-266`, `287-303`), validation, `search.ready`.
 
-`bin/deep-context-v2 run` (`deep_context_v2/run.py:222`) walks the same seven stages again,
-hard-coded a second time.
+`bin/deep-context-v2 run` (`deep_context_v2/run.py:222`) hard-codes the same stages again.
 
 ## Dead or duplicated
 
@@ -34,11 +36,9 @@ hard-coded a second time.
    install never runs `share` after `realize` (`run.py:159` does).
 2. **The spend approval.** Arthur's rule for v2 is "nothing to approve; the install budget
    always says yes", and `run.py:3-4` already runs every estimate. The install still carries
-   `SpendStep`, `_paid`, `_approval`, `_AUTO_SPEND_USD`, `spend.approval` and
-   `--approve-spend` (`onboard.py:286`, `bin/bootstrap:50`). It is broken as well as
-   unwanted: `onboard.py:286` accepts `cluster` (a v1 name), and
-   `SpendStep("cluster")` raises `ValueError`; the continuation it writes for `dedupe` or
-   `worth` is refused by argparse.
+   `SpendStep`, `_paid`, `_approval`, `spend.approval` and `--approve-spend`
+   (`onboard.py:286`, `bin/bootstrap:50`). It is also broken: `onboard.py:286` accepts
+   `cluster` (v1), which `SpendStep` rejects; its `dedupe`/`worth` continuations fail argparse.
 3. **The index dispatch state machine.** sha256/mtime bookkeeping, `dispatch_path`, `_capped`,
    `index.recovery`, `index.resuming`, the `download --wait` command and a local
    `estimate_run` pass exist to ask before a large index and to avoid re-dispatching. With
@@ -58,7 +58,7 @@ hard-coded a second time.
 ## Target shape
 
 - `run.py` owns the order. A single `stages(conn, data_root, ...)` function returns the
-  `(name, node)` pairs. `run` walks them, and so does the install, wrapping each one in its
+  `(name, builder)` pairs. `run` walks them, and so does the install, wrapping each one in its
   page event. `realize` (with `share`), `index_command`, `index_env` and
   `resolve_operator_id` come from `run.py` as well.
 - `pipeline.py` keeps only what belongs to the install: the LinkedIn Modal import, the owner
@@ -81,8 +81,7 @@ same review offer and page at `/`. Two things change, both on purpose:
 ## Untouched
 
 - Account, sources, the logins, the default browser for sign-in, and `workflow.py`.
-- Row labels, including Arthur's "Importing your data" wording, which is a separate taste
-  change.
+- Row labels ("Importing your data" is a separate taste change).
 - `validate_search_index` and the validate step. `run`/`finish` do not validate, so this is
   not a duplicate.
 - `enrich.deferred` and `left_to_fix`, which the Finish section of the skill reads.
@@ -90,17 +89,14 @@ same review offer and page at `/`. Two things change, both on purpose:
   reads it during the index step.
 - `archive_v1`, which upgraders from 3.17 and earlier still need.
 - The LinkedIn Modal import, which only the install does.
-- `run.py`'s background index and review server.
 
 ## Verification (free only)
 
 - `bin/onboard --help` and `bin/deep-context-v2 --help`. Import every touched module.
 - `bin/status-prose` lists no removed event. `bin/status-prose play --every --no-open` plays
   to the end on a scratch folder.
-- `bin/deep-context-v2 load|collect|realize` on a scratch data root under the scratchpad,
-  never the real `.powerpacks`.
-- `ProcessingOnboarding` on a scratch root with the paid nodes and the Modal subprocess
-  stubbed, in the existing test module.
+- `ProcessingOnboarding` and `run` on a fresh scratch root (never the real `.powerpacks`):
+  real load, collect, estimates, realize and share; paid runs and Modal stubbed.
 - `scripts/lint-powerpacks`, `scripts/test-powerpacks`, and `pnpm check` in `web/`.
 
 Not verifiable offline: the claim that a re-dispatched index costs about nothing. It rests on
