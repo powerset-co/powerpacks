@@ -94,6 +94,39 @@ async fn codex_threads(
     codex.threads(&app, &boot::require_root(&boot)?).await
 }
 
+/// Test builds show a debug menu (CI sets POWERPACKS_DEBUG_MENU; debug builds always do).
+const DEBUG_MENU: bool = cfg!(debug_assertions) || option_env!("POWERPACKS_DEBUG_MENU").is_some();
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugState {
+    enabled: bool,
+    setup_skipped: bool,
+}
+
+#[tauri::command]
+fn debug_state(boot: State<'_, Arc<Boot>>) -> DebugState {
+    let setup_skipped = boot.root().is_some_and(|root| onboard::is_skipped(&root));
+    DebugState {
+        enabled: DEBUG_MENU,
+        setup_skipped,
+    }
+}
+
+/// Debug menu: skip setup (launch opens Chat), or stop skipping and resume it now.
+#[tauri::command]
+fn debug_skip_setup(boot: State<'_, Arc<Boot>>, skip: bool) -> Result<(), String> {
+    if !DEBUG_MENU {
+        return Err("The debug menu is off in this build.".into());
+    }
+    let root = boot::require_root(&boot)?;
+    onboard::set_skipped(&root, skip)?;
+    if skip {
+        return Ok(());
+    }
+    onboard::start(&root, onboard::Answer::default())
+}
+
 /// Resumes setup from the install page with what the user answered there.
 #[tauri::command]
 fn onboard_continue(boot: State<'_, Arc<Boot>>, answer: onboard::Answer) -> Result<(), String> {
@@ -195,6 +228,8 @@ pub fn run() {
             codex_call,
             codex_respond,
             onboard_continue,
+            debug_state,
+            debug_skip_setup,
         ])
         .setup(|app| {
             main_window(app.handle())?;

@@ -11,6 +11,8 @@ const COMMANDS: &[&str] = &[
     "codex_call",
     "codex_respond",
     "onboard_continue",
+    "debug_state",
+    "debug_skip_setup",
 ];
 
 fn main() {

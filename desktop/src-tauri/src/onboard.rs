@@ -8,6 +8,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 const MANIFEST: &str = ".powerpacks/install/manifest.json";
+/// Set from the debug menu: launch treats setup as done, so the other pages can be tried first.
+const SKIP_MARKER: &str = ".powerpacks/desktop/skip-setup";
 const LOG: &str = ".powerpacks/install/desktop-onboard.log";
 const SPEND_STEPS: [&str; 4] = ["synthesize", "cluster", "enrich", "index"];
 /// What bootstrap records after installing; the app did the same work before setup starts.
@@ -25,6 +27,9 @@ pub enum Setup {
 }
 
 pub fn setup(root: &Path) -> Setup {
+    if root.join(SKIP_MARKER).exists() {
+        return Setup::Done;
+    }
     let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
         return Setup::New;
     };
@@ -41,6 +46,24 @@ pub fn setup(root: &Path) -> Setup {
         ("running" | "completed", _) => Setup::Interrupted,
         _ => Setup::Paused,
     }
+}
+
+/// Skip setup on later launches, or stop skipping it.
+pub fn set_skipped(root: &Path, skip: bool) -> Result<(), String> {
+    let marker = root.join(SKIP_MARKER);
+    let result = if skip {
+        fs::create_dir_all(marker.parent().expect("marker has a parent"))
+            .and_then(|()| fs::write(&marker, ""))
+    } else if marker.exists() {
+        fs::remove_file(&marker)
+    } else {
+        Ok(())
+    };
+    result.map_err(|error| error.to_string())
+}
+
+pub fn is_skipped(root: &Path) -> bool {
+    root.join(SKIP_MARKER).exists()
 }
 
 /// Record the app's install on the setup page, as bootstrap does, before the first setup run.

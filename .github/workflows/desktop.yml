@@ -35,6 +35,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: scripts/bundle-runtime.sh aarch64-apple-darwin
       - run: pnpm tauri build --bundles app,dmg
+        env:
+          # Test builds carry the debug menu (page jumps, skip setup).
+          POWERPACKS_DEBUG_MENU: "1"
       - uses: actions/upload-artifact@v4
         with:
           name: Powerpacks-macos-arm64

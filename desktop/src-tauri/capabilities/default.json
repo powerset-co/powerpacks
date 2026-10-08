@@ -24,6 +24,8 @@
     "allow-codex-respond",
     "allow-codex-open-thread",
     "allow-codex-threads",
-    "allow-onboard-continue"
+    "allow-onboard-continue",
+    "allow-debug-state",
+    "allow-debug-skip-setup"
   ]
 }
