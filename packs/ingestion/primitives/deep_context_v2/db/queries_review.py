@@ -232,10 +232,10 @@ def insert_parent(conn: sqlite3.Connection, candidate_id: str, parent_id: str, r
     )
 
 
-def insert_worth_no(conn: sqlite3.Connection, candidate_id: str, reason: str, now: str) -> None:
-    """One human worth-no row for a Skip."""
+def insert_worth(conn: sqlite3.Connection, candidate_id: str, worth: str, reason: str, now: str) -> None:
+    """One human worth decision, including undoing a Skip."""
     conn.execute(
         "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
         "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
-        (candidate_id, Worth.NO.value, DecidedBy.HUMAN.value, reason, now),
+        (candidate_id, worth, DecidedBy.HUMAN.value, reason, now),
     )

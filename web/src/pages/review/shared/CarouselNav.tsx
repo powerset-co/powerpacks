@@ -9,7 +9,7 @@ interface CarouselNavProps {
   onIndex: (index: number) => void
 }
 
-// The debug carousel (`?debug=1`): Previous and Next around the card, wrapping at both ends.
+// Previous and Next around the card, wrapping through the review history.
 export function CarouselNav({ queue, onIndex }: CarouselNavProps) {
   const go = (direction: CarouselDirection) => onIndex(carouselIndex(queue, direction))
   return (

@@ -114,6 +114,7 @@ class LinkedinFinished:
 class QueuePosition:
     index: int
     total: int
+    status: str = ""
 
 
 @dataclass(frozen=True)
