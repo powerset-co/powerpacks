@@ -246,6 +246,9 @@ def finish(data_root: Path, operator_id: str) -> int:
     command: list[str] = index_command(data_root, people_csv)
     print("index: " + " ".join(command), flush=True)
     code: int = subprocess.run(command, cwd=ROOT, env=index_env(operator_id)).returncode
+    if code != 0:
+        print("index: the Modal build did not complete; the review server stays up, run finish again", flush=True)
+        return code
     if stop_review(data_root):
         print("review server stopped", flush=True)
     return code

@@ -162,9 +162,9 @@ class Realize(Node):
 
 
 def index_command(people_csv: Path, data_root: Path) -> str:
-    """The index build over this people.csv, on Modal (what `bin/deep-context-v2 run` and `finish` run)."""
-    return ("uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people "
-            f"--people-csv {people_csv} --dest {data_root / 'search-index'}")
+    """How to build the index over this people.csv: `finish` runs it on Modal under the checked operator id
+    and the automatic spend rule; the raw Modal command is not for hand use."""
+    return f"bin/deep-context-v2 finish --data-root {data_root}"
 
 
 def main(argv: list[str] | None = None) -> int:
