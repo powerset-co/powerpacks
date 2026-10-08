@@ -2,6 +2,11 @@
 
 Only Deep Context and logbook use this body-access surface. Discovery metadata
 stays in ``store_db`` and history-depth selection stays in ``depth_db``.
+
+Changelog:
+  2026-09-30: the direct-chat count, existing direct chats and group membership take
+  the person's member jids (phone jids plus mapped ``@lid`` ids) instead of phones,
+  and membership also reads ``group_participants``. Logbook and collection call them.
 """
 
 from __future__ import annotations
@@ -106,11 +111,11 @@ def query_whatsapp_messages(
     return rows[:limit] if limit is not None else rows
 
 
-def count_whatsapp_direct_messages(conn: sqlite3.Connection, phones: Iterable[str]) -> int:
-    """Count direct-message rows for the supplied phones."""
+def count_whatsapp_direct_messages(conn: sqlite3.Connection, member_jids: Iterable[str]) -> int:
+    """Count direct-message rows in the chats of the supplied member jids."""
     if "chat_jid" not in store_db.table_columns(conn, "messages"):
         return 0
-    jids = store_db.whatsapp_dm_jids(tuple(phones))
+    jids = tuple(member_jids)
     if not jids:
         return 0
     placeholders = ",".join("?" for _ in jids)
@@ -124,9 +129,10 @@ def count_whatsapp_direct_messages(conn: sqlite3.Connection, phones: Iterable[st
 def resolve_whatsapp_groups(
     conn: sqlite3.Connection,
     names: Iterable[str],
-    phones: list[str] | tuple[str, ...] = (),
+    member_jids: Iterable[str] = (),
 ) -> list[dict[str, str]]:
-    """Resolve named groups plus groups where one supplied phone has spoken."""
+    """Resolve named groups plus groups where a supplied member jid has spoken or is a
+    listed participant (silent members appear only in ``group_participants``)."""
     wanted = {re.sub(r"\s+", " ", name.strip().casefold()) for name in names if name.strip()}
     titles: dict[str, str] = {}
     for row in [*store_db.chat_rows(conn), *store_db.group_rows(conn)]:
@@ -135,7 +141,7 @@ def resolve_whatsapp_groups(
             titles[jid] = title
     found = {jid: title for jid, title in titles.items() if re.sub(r"\s+", " ", title.strip().casefold()) in wanted}
     message_columns = store_db.table_columns(conn, "messages")
-    sender_jids = store_db.whatsapp_dm_jids(phones)
+    members = frozenset(member_jids)
     if "chat_jid" in message_columns:
         chat_name = "chat_name" if "chat_name" in message_columns else "NULL AS chat_name"
         sender = "sender_jid" if "sender_jid" in message_columns else "NULL AS sender_jid"
@@ -146,16 +152,20 @@ def resolve_whatsapp_groups(
             jid = str(row["chat_jid"] or "")
             title = titles.get(jid) or str(row["chat_name"] or jid)
             named = re.sub(r"\s+", " ", title.strip().casefold()) in wanted
-            if jid and (named or row["sender_jid"] in sender_jids):
+            if jid and (named or row["sender_jid"] in members):
                 found.setdefault(jid, title)
+    for row in store_db.group_participant_rows(conn):
+        jid = str(row["group_jid"] or "")
+        if jid and row["user_jid"] in members:
+            found.setdefault(jid, titles.get(jid) or jid)
     return [{"jid": jid, "title": title} for jid, title in found.items()]
 
 
-def existing_whatsapp_direct_jids(conn: sqlite3.Connection, phones: Iterable[str]) -> list[str]:
-    """Return candidate direct JIDs that actually exist in the message store."""
+def existing_whatsapp_direct_jids(conn: sqlite3.Connection, member_jids: Iterable[str]) -> list[str]:
+    """Return the member jids that have a direct chat in the message store."""
     if "chat_jid" not in store_db.table_columns(conn, "messages"):
         return []
-    jids = store_db.whatsapp_dm_jids(tuple(phones))
+    jids = tuple(member_jids)
     if not jids:
         return []
     placeholders = ",".join("?" for _ in jids)

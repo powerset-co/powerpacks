@@ -1,0 +1,560 @@
+/* The Logbook reader: the rail (the People rail's width, so it lines up under the brand)
+   lists saved people and groups with their conversations; the main pane reads the picked one,
+   its timeline beside it. It covers the People list in the same page cell (page.css). */
+
+.logbook {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 0;
+  background: var(--background);
+}
+
+/* ---- The rail ---------------------------------------------------------------------------- */
+
+.logbook-rail {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  min-height: 0;
+  border-right: 1px solid var(--line);
+}
+.logbook-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 10px 0;
+}
+/* A corner pointing left, index.css .chevron turned the other way. */
+.logbook-back::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin-right: 2px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.logbook-all {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease-out);
+}
+.logbook-all:hover {
+  color: var(--foreground);
+}
+.logbook-title {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 10px 18px 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.logbook-title:focus {
+  outline: none;
+}
+.logbook-scope {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.logbook-filter {
+  display: grid;
+  gap: 8px;
+  padding: 12px 10px 8px;
+}
+.logbook-search {
+  width: 100%;
+}
+.logbook-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* A channel toggle is its source pill; picked, it carries the focus ring's orange. */
+.logbook-channel {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  transition: box-shadow var(--t-fast) var(--ease-out);
+}
+.logbook-channel[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+
+.logbook-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 8px 40px;
+  scrollbar-width: thin;
+}
+.logbook-entry h2 {
+  margin: 0;
+}
+.logbook-entry + .logbook-entry {
+  margin-top: 4px;
+}
+.logbook-entry-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out);
+}
+.logbook-entry-toggle:hover {
+  background: var(--secondary);
+}
+.logbook-entry-toggle::after {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  color: var(--muted);
+}
+.logbook-entry-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.logbook-entry-meta {
+  grid-column: 1 / span 2;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.logbook-entry-pills {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.logbook-convs {
+  margin: 2px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.logbook-conv {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px 7px 12px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out);
+}
+.logbook-conv:hover {
+  background: var(--secondary);
+}
+.logbook-conv[aria-current="true"] {
+  background: var(--surface-2);
+}
+.logbook-conv-pill {
+  display: inline-flex;
+}
+.logbook-conv-title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.logbook-conv[aria-current="true"] .logbook-conv-title {
+  font-weight: 600;
+}
+.logbook-conv-count,
+.logbook-conv-when {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.logbook-conv-when {
+  grid-column: 2 / span 2;
+  color: var(--faint);
+}
+.logbook-note {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---- The main pane --------------------------------------------------------------------- */
+
+.logbook-main {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+.logbook-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+/* Whose logbook, then which conversation on which channel, then its size and people. */
+.logbook-pane-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.logbook-pane-head > :not(.logbook-refresh) {
+  grid-column: 1;
+}
+.logbook-refresh {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
+}
+.logbook-eyebrow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.logbook-eyebrow-name {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.logbook-pane-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 6px;
+}
+.logbook-pane-title h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.logbook-pane-meta {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.logbook-people {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.logbook-people > div {
+  display: flex;
+  gap: 8px;
+}
+.logbook-people dt {
+  flex: none;
+  min-width: 52px;
+  color: var(--muted);
+}
+.logbook-people dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.logbook-people-more {
+  color: var(--muted);
+}
+.logbook-people-all {
+  justify-self: start;
+  margin-left: 60px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.logbook-people-all:hover {
+  color: var(--foreground);
+}
+
+/* The messages and, beside them, the timeline. */
+.logbook-read {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px;
+  min-width: 0;
+  min-height: 0;
+}
+.logbook-read > :only-child {
+  grid-column: 1 / -1;
+}
+.logbook-viewport {
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 48px;
+  scrollbar-width: thin;
+}
+.logbook-row {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.logbook-loading {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding-top: 24px;
+}
+.logbook-day {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 20px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.logbook-day::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+/* The time gutter fits "12:59 PM" at 11px with room before the sender. */
+.logbook-msg {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  column-gap: 16px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.logbook-msg[data-first="true"] {
+  padding-top: 10px;
+}
+.logbook-msg-time {
+  padding-top: 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.logbook-msg-sender {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.logbook-msg-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.logbook-msg-none {
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* The timeline: Oldest, the years and their months (a bar as long as the month is busy),
+   Newest. The month in view is marked. */
+.logbook-timeline {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 4px;
+  min-height: 0;
+  padding: 8px 8px 12px;
+  border-left: 1px solid var(--line);
+}
+.logbook-jump {
+  display: none;
+}
+.logbook-years {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.logbook-year h3 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 8px 8px 2px;
+  background: var(--background);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.logbook-year ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.logbook-month,
+.logbook-edge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
+}
+.logbook-month {
+  position: relative;
+  isolation: isolate;
+  font-variant-numeric: tabular-nums;
+}
+.logbook-month::before {
+  content: "";
+  position: absolute;
+  inset: 3px auto 3px 0;
+  z-index: -1;
+  width: calc(var(--share, 0) * 100%);
+  border-radius: 3px;
+  background: var(--secondary);
+}
+.logbook-month:hover,
+.logbook-edge:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.logbook-month[aria-current="true"] {
+  color: var(--foreground);
+  font-weight: 600;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.logbook-month[aria-current="true"]::before {
+  display: none;
+}
+.logbook-month[aria-current="true"] .logbook-month-count {
+  color: inherit;
+}
+.logbook-month-count {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+.logbook-edge {
+  font-weight: 600;
+}
+.logbook-years + .logbook-edge {
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+
+@media (pointer: coarse) {
+  .logbook-conv,
+  .logbook-entry-toggle,
+  .logbook-month,
+  .logbook-edge,
+  .logbook-jump {
+    min-height: 44px;
+  }
+}
+
+/* Mid widths: the timeline becomes a bar above the messages, its months one select. */
+@media (max-width: 1100px) {
+  .logbook-read {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .logbook-timeline {
+    order: -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 20px;
+    border-left: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .logbook-timeline .logbook-edge {
+    width: auto;
+  }
+  .logbook-years {
+    display: none;
+  }
+  .logbook-jump {
+    display: block;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--input);
+    border-radius: var(--radius-s);
+    background: var(--card);
+    color: var(--foreground);
+    font-size: 12px;
+  }
+}
+
+/* Narrow: the rail above the conversation, then tighter gutters. */
+@media (max-width: 960px) {
+  .logbook {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .logbook-rail {
+    max-height: 42vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+@media (max-width: 680px) {
+  .logbook-pane-head {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .logbook-row {
+    padding: 0 16px;
+  }
+  .logbook-timeline {
+    padding: 6px 16px;
+  }
+  .logbook-msg {
+    grid-template-columns: 60px minmax(0, 1fr);
+    column-gap: 12px;
+  }
+}

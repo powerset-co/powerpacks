@@ -5,6 +5,7 @@ import { TopBar } from "@/components/shared"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { InstallPage } from "@/pages/install/InstallPage"
+import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
@@ -35,7 +36,10 @@ export function App() {
         <Route path="/" element={<ReviewPage />} />
         <Route path="/install" element={<InstallPage />} />
         <Route element={<Shell />}>
-          <Route path="/people" element={<PeoplePage />} />
+          <Route path="/people" element={<PeoplePage />}>
+            <Route index element={null} />
+            <Route path="logbook" element={<LogbookReader />} />
+          </Route>
           <Route path="/searches" element={<SearchesPage />}>
             <Route index element={null} />
             <Route path="run" element={null} />

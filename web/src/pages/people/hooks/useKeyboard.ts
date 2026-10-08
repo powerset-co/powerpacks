@@ -18,9 +18,10 @@ export interface KeyboardActions {
 const NO_REPEAT = new Set(["s", "p", "z", "x", " ", "Enter"])
 const TABS: Record<string, 0 | 1 | 2> = { "1": 0, "2": 1, "3": 2 }
 
-/** The page's shortcuts. Typing in a field only honours Escape (it leaves the field). */
-export function useKeyboard(run: KeyboardActions) {
+/** The page's shortcuts while `active`. Typing in a field only honours Escape (it leaves the field). */
+export function useKeyboard(active: boolean, run: KeyboardActions) {
   useKeys((event, target) => {
+    if (!active) return
     if (isTyping(target) || event.metaKey || event.ctrlKey || event.altKey) {
       if (event.key === "Escape" && target instanceof HTMLElement) target.blur()
       return

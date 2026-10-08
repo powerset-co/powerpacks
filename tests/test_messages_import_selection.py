@@ -44,6 +44,13 @@ class MessageContactBoundaryTests(unittest.TestCase):
 
 
 class ContactFloorTests(unittest.TestCase):
+    def test_saved_surname_initial_is_imported(self):
+        contact = MessageContact.from_csv_row({
+            "phone": "+15550100123", "name": "Jo K", "source": "imessage",
+            "message_count": "4", "imessage_message_count": "4",
+        })
+        self.assertEqual(util.contact_floor_reason(contact), "")
+
     def test_fresh_import_keeps_only_contacts_clearing_the_floor(self):
         rows = [
             {"phone": "+15550100123", "name": "Jordan Bravo", "source": "imessage",

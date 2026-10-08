@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button"
 import { DialogTrigger } from "@/components/ui/dialog"
 import type { UploadStatus } from "@/lib/api/upload"
-import { lastUploadLine, UPLOAD } from "@/lib/people/copy"
+import { UPLOAD } from "@/lib/people/copy"
 
 interface ShareTriggerProps {
   status: UploadStatus | undefined
@@ -14,11 +14,10 @@ function label(status: UploadStatus | undefined, busy: boolean): string {
   return status?.last_upload ? UPLOAD.shareChanges : UPLOAD.share
 }
 
-/** The last upload in a muted line, then the button that opens the dialog. */
+/** The share button opens the upload dialog. */
 export function ShareTrigger({ status, busy, onOpen }: ShareTriggerProps) {
   return (
     <div className="head-share">
-      {status && <span className="head-note">{lastUploadLine(status.last_upload)}</span>}
       <DialogTrigger asChild>
         <Button onClick={onOpen}>
           {busy && <Spinner />}

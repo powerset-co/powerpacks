@@ -236,7 +236,7 @@ class ContextSources:
         def count() -> int:
             con = wacli_store.open_readonly_db(self.wacli_db)
             try:
-                return wacli_messages.count_whatsapp_direct_messages(con, person.phones)
+                return wacli_messages.count_whatsapp_direct_messages(con, wacli_store.whatsapp_dm_jids(person.phones))
             finally:
                 con.close()
 

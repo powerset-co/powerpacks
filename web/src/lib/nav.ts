@@ -14,8 +14,8 @@ export const HOME: Page = { key: "people", label: "People", href: "/people" }
 export const PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
-  { key: "accounts", label: "Accounts", href: "/accounts" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
+  { key: "accounts", label: "Accounts", href: "/accounts" },
 ]
 
 /** The page a routed path belongs to: its href or a path under it; any other path is HOME,
