@@ -12,7 +12,7 @@
 #   bin/deep-context-v2 run      # the whole pipeline, then the review page's URL
 #   bin/deep-context-v2 finish   # after the review: people.csv and the index again
 #   bin/deep-context-v2 review   # the review server and its URL
-#   bin/deep-context-v2 stop     # stop the review server
+#   bin/deep-context-v2 stop     # stop the page server, once the user is done with it
 #   bin/deep-context-v2 share    # the share list from worth and the labels; then the People page at /people
 #   bin/deep-context-v2 lookup --name "Jordan Bravo" [--json]   # a person's facts by name, --email or --phone
 #   bin/deep-context-v2 <stage> [flags]   # one stage alone: load collect synthesize dedupe worth enrich realize

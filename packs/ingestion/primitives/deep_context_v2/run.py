@@ -7,7 +7,7 @@ background (the install's build; people.csv goes to the operator's folder on the
 user can search what was found without reviewing first;
 the review server starts and its URL is printed: the review page is the one thing the user sees.
 `finish` is for after the review: realize and the index again (the index caches, so the second
-build costs about nothing) and the review server stopped. `review` and `stop` manage the server.
+build costs about nothing). The page stays up until `stop`; `review` starts it again.
 
 Every stage keys its work, so a rerun after a failure or a code fix continues from what is
 stored and spends nothing on what is done. A stage that fails ends the run with its error on
@@ -239,7 +239,8 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
 
 
 def finish(data_root: Path, operator_id: str) -> int:
-    """After the review: people.csv and the index again (cached, so about free), the review server stopped."""
+    """After the review: people.csv and the index again (cached, so about free). The review server stays up;
+    the agent runs `stop` once the user is done with the page."""
     operator_id = resolve_operator_id(operator_id)
     people_csv: Path = realize(data_root)
     wait_for_index(data_root)
@@ -247,10 +248,7 @@ def finish(data_root: Path, operator_id: str) -> int:
     print("index: " + " ".join(command), flush=True)
     code: int = subprocess.run(command, cwd=ROOT, env=index_env(operator_id)).returncode
     if code != 0:
-        print("index: the Modal build did not complete; the review server stays up, run finish again", flush=True)
-        return code
-    if stop_review(data_root):
-        print("review server stopped", flush=True)
+        print("index: the Modal build did not complete; run finish again", flush=True)
     return code
 
 

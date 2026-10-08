@@ -44,7 +44,7 @@ bin/deep-context-v2 owner --linkedin-url <the user's LinkedIn> --email <their em
 bin/deep-context-v2 run       # the whole pipeline; ends with the Check LinkedIn URL
 bin/deep-context-v2 finish    # after the review: people.csv and the index again
 bin/deep-context-v2 review    # the Check LinkedIn server and its URL (if it was stopped)
-bin/deep-context-v2 stop      # stop the page server
+bin/deep-context-v2 stop      # stop the page server, once the user is done with it
 bin/deep-context-v2 share     # the share list; then the People page at http://127.0.0.1:8765/people
 bin/deep-context-v2 lookup --name "Jordan Bravo" [--json]   # a person's facts; --email / --phone work too
 bin/deep-context-v2 <stage>   # one stage alone: load collect synthesize dedupe worth enrich realize
@@ -152,10 +152,10 @@ worker reports it; the advisor decides and the worker reruns. Use common sense:
 paste the right LinkedIn URL under "Wrong person?". The page says "Review complete — go back to
 Codex" when the queue is empty.
 
-**5. Finish.** Run `bin/deep-context-v2 finish`: people.csv again with the reviewed LinkedIns,
-the index again on Modal (its shared caches make the second build nearly free), and the review
-server stopped.
-Say the index is updated.
+**5. Finish.** When the user comes back from the page (they paste "Review complete, continue"),
+run `bin/deep-context-v2 finish`: people.csv again with the reviewed LinkedIns and the index again
+on Modal (its shared caches make the second build nearly free). The page stays up through the
+build. Then run `bin/deep-context-v2 stop` to take the page down, and say the index is updated.
 
 The reports are for the developers; the user is not told about them.
 
