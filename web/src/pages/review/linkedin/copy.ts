@@ -49,5 +49,6 @@ export function feedbackContext(name: string): string {
 
 export const FINISHED = {
   title: "LinkedIn Profiles Checked",
-  note: "Review complete — updating your index. You can search your confirmed contacts while you wait.",
+  note: "Review complete — updating your index.",
+  hint: "You can search your confirmed contacts while you wait.",
 } as const

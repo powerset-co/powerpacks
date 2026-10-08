@@ -47,7 +47,7 @@ from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review.api import REVIEW_MANIFEST
 from packs.ingestion.primitives.share.share_list import Share
-from packs.shared.web.server import DEFAULT_PORT, start_server as start_page
+from packs.shared.web.server import DEFAULT_PORT, start_server as start_page, stop_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Synthesize
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT as WORTH_LIMIT
@@ -121,8 +121,11 @@ def archive_v1(data_root: Path) -> Path | None:
 
 
 def start_review(data_root: Path, port: int) -> str:
-    """The one local page server on `port` (reused when this checkout's already answers there); returns
-    the review URL. The server is the install's too: packs/shared/web/server.py."""
+    """The one local page server on `port`, started fresh so it runs this checkout's code (a page left up
+    across an update would keep serving the old review); returns the review URL. This review's completion
+    is new: the manifest from the last one goes. The server is the install's too: packs/shared/web/server.py."""
+    stop_page("127.0.0.1", port)
+    (data_root / REVIEW_MANIFEST).unlink(missing_ok=True)
     started: dict[str, object] = start_page(data_root.parent, port=port)
     (data_root / REVIEW_PID_FILE).write_text(str(started["pid"]))
     return str(started["url"])
@@ -232,7 +235,6 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
     people_csv: Path = realize(data_root)
     log: Path = index_in_background(data_root, people_csv, operator_id)
     print(f"index: building in the background from what was decided so far (log {log})", flush=True)
-    (data_root / REVIEW_MANIFEST).unlink(missing_ok=True)  # this review's completion is new
     url: str = start_review(data_root, port)
     pending: int = pending_reviews(port)
     if pending:
@@ -246,8 +248,8 @@ def finish(data_root: Path, operator_id: str) -> int:
     """After the review: people.csv and the index again (cached, so about free). The review server stays up;
     the agent runs `stop` once the user is done with the page."""
     operator_id = resolve_operator_id(operator_id)
+    wait_for_index(data_root)  # a first build still reading people.csv finishes before realize rewrites it
     people_csv: Path = realize(data_root)
-    wait_for_index(data_root)
     command: list[str] = index_command(data_root, people_csv)
     print("index: " + " ".join(command), flush=True)
     code: int = subprocess.run(command, cwd=ROOT, env=index_env(operator_id)).returncode

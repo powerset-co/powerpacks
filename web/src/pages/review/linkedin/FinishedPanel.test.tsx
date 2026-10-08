@@ -44,7 +44,8 @@ describe("FinishedPanel", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("LinkedIn Profiles Checked")
     expect(container.querySelector(".empty-mark")).toBeNull()
     expect(lines(container)).toEqual([
-      "Review complete — updating your index. You can search your confirmed contacts while you wait.",
+      "Review complete — updating your index.",
+      "You can search your confirmed contacts while you wait.",
     ])
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull()
     await act(() => Promise.resolve())

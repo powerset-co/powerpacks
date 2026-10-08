@@ -7,6 +7,7 @@ export function FinishedPanel() {
   return (
     <EmptyPanel title={FINISHED.title}>
       <p className="handoff-note">{FINISHED.note}</p>
+      <p className="handoff-note">{FINISHED.hint}</p>
     </EmptyPanel>
   )
 }

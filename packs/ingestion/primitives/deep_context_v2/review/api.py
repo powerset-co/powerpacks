@@ -135,7 +135,10 @@ class ReviewApi:
             card: Card = load_card(self.conn, self.data_root, _value(params, "slug"))
             _send(handler, payloads.dossier(card).encode(), "text/html; charset=utf-8", HTTPStatus.OK)
         elif parsed.path == "/api/review/page":
-            _send_json(handler, asdict(payloads.page(len(review_list(self.conn)))))
+            pending: int = len(review_list(self.conn))
+            if not pending:
+                record_review_complete(self.data_root)  # a queue empty before the first card is a complete review
+            _send_json(handler, asdict(payloads.page(pending)))
         elif parsed.path == "/api/review/linkedin-card":
             _send_json(handler, asdict(self.linkedin_card(params)))
         else:
