@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
 from packs.ingestion.primitives.deep_context_v2.db.schema import SourceChannel
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import ProfileRecord, profile_from_record
+from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchSubject, row_from_output
 from packs.ingestion.primitives.deep_context_v2.import_load.import_row import ImportRow
 
 
@@ -83,6 +84,32 @@ class OwnerProfileTests(unittest.TestCase):
         with self.assertRaises(ValidationError) as caught:
             OwnerProfile.model_validate({**payload, "work": [{"company": "Powerset", "start": 2025, "end": 0}]})
         self.assertIn("work.0.title", str(caught.exception))
+
+
+
+def _output(**content: object) -> dict[str, object]:
+    """A Parallel answer as submit() stores it (model_dump with nulls left out)."""
+    answer: dict[str, object] = {
+        "real_name": "Jordan Bravo", "summary": "Engineer in Oakland.", "location_city": "Oakland",
+        "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+        "work_experience": [{"title": "Engineer", "company_name": "Acme", "start_date": "2016", "is_current": True}],
+        "education": [{"school_name": "UCLA", "degree": "BS"}],
+    }
+    answer.update(content)
+    return {"type": "json", "content": answer, "basis": [
+        {"field": "real_name", "reasoning": "Named on the team page.", "confidence": "high",
+         "citations": [{"url": "https://acme.example/team", "excerpts": ["Jordan Bravo, Engineer"]}]}]}
+
+
+class ResearchResultTests(unittest.TestCase):
+    def test_parses_a_parallel_answer_and_rejects_a_malformed_one(self) -> None:
+        subject = ResearchSubject("p:1", "h1", "")
+        self.assertEqual(row_from_output(subject, _output(), "now")[2], "complete")
+        self.assertEqual(row_from_output(subject, _output(linkedin_url=None), "now")[2], "no_match")
+
+        with self.assertRaises(ValidationError) as caught:
+            row_from_output(subject, _output(work_experience=[{"title": "Engineer", "company_name": "Acme"}]), "now")
+        self.assertIn("content.work_experience.0.is_current", str(caught.exception))
 
 
 if __name__ == "__main__":

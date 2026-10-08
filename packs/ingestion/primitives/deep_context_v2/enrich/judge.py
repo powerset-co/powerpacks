@@ -81,12 +81,14 @@ def _citations(row: Research | None) -> tuple[dict[str, Any], ...]:
     found: list[dict[str, Any]] = []
     if row is None or row.result_json is None:
         return tuple(found)
-    for basis in json.loads(row.result_json).get("basis", []):
-        for citation in basis.get("citations") or []:
-            kept: dict[str, Any] = {}
-            for key in ("url", "title", "excerpts"):
-                if key in citation:
-                    kept[key] = citation[key]
+    for basis in research.ResearchResult.model_validate_json(row.result_json).basis:
+        for citation in basis.citations or []:
+            # The stored answer leaves out a null, so a key is kept only when it has a value.
+            kept: dict[str, Any] = {"url": citation.url}
+            if citation.title is not None:
+                kept["title"] = citation.title
+            if citation.excerpts is not None:
+                kept["excerpts"] = citation.excerpts
             if kept not in found:
                 found.append(kept)
     return tuple(found)

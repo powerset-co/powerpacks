@@ -12,11 +12,9 @@ Created: 2026-10-07
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_review
 from packs.ingestion.primitives.deep_context_v2.db.queries_review import (
@@ -25,6 +23,7 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_review import (
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.schema import SYNTHETIC_PROFILE_PREFIX, Origin, Verdict
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
+from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchResult
 from packs.ingestion.primitives.deep_context_v2.enrich.research import handle as research_handle
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
@@ -40,7 +39,7 @@ class Pending:
     origin: str           # kept on the human row: where the URL came from
     fingerprint: str      # the judgment the human answers
     profile: Profile | None           # the cached LinkedIn profile; None when not cached, or a synthetic card
-    research: dict[str, Any] | None   # the synthetic card's research result (content and basis); None for a LinkedIn
+    research: ResearchResult | None   # the synthetic card's research result (content and basis); None for a LinkedIn
     confidence: float | None          # Sol's confidence in needs_review; None for a synthetic card
     reason: str                       # Sol's reason; '' for a synthetic card
 
@@ -65,7 +64,7 @@ def _synthetic(conn: sqlite3.Connection, facts: SynthesizedFacts) -> list[Pendin
     card: ResearchCard | None = queries_review.research_card(conn, handle)
     if card is not None:
         key: str = SYNTHETIC_PROFILE_PREFIX + handle
-        found.append(Pending(key, key, key, Origin.SYNTHETIC.value, handle, None, json.loads(card.result_json), None, ""))
+        found.append(Pending(key, key, key, Origin.SYNTHETIC.value, handle, None, ResearchResult.model_validate_json(card.result_json), None, ""))
     return found
 
 
