@@ -57,8 +57,10 @@ Message bodies go to OpenAI for synthesis. Facts (never messages) go to JEV for 
 identity, to Parallel for research, and to OpenAI for the LinkedIn judge. LinkedIn public
 identifiers go to RapidAPI for profiles. Nothing is uploaded anywhere else by this pipeline.
 
-## Re-research on the review page
+## The review queue
 
-Re-research from a description on the review page runs one Parallel research with the words beside the family's
-facts (about $0.05, plus one profile fetch when a URL is found); the pending profile is rejected at once so the
-queue advances; a profile found is applied as the Retarget, nothing found leaves the family worth yes without a LinkedIn.
+The review page writes no ledger row. Each decision (Yes, Skip, pasted Retarget, described Retarget) is one row in
+`review_queue`, edited in place when the reviewer browses back; `finish` applies the queue once through the Yes,
+Skip and Retarget writers and empties it. A described Retarget starts one Parallel research when typed, with the
+words beside the family's facts (about $0.05, plus one profile fetch when a URL is found); `finish` waits for it,
+applies a URL found, and otherwise rejects the pending profile and leaves the family worth yes without a LinkedIn.

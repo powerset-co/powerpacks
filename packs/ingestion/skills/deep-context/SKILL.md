@@ -202,8 +202,10 @@ prints the family's facts (relationship, work, topics, events, identifiers, the 
 The spec every block follows is the Deep Context Spec page; `packs/ingestion/docs/deep-context-pipeline.md`
 points at it.
 
-## Re-research on the review page
+## The review queue
 
-- Re-research from a description on the review page: one paid Parallel research (about $0.05, plus one
-  profile fetch when a URL is found) in the background; the queue advances at once; a profile found is applied, nothing found leaves the person
-  worth yes without a LinkedIn.
+- Every decision on the review page (Yes, Skip, a pasted URL, a description) goes into the review queue
+  and can be changed by browsing back; nothing reaches the store's ledgers until `finish` applies the
+  queue. A description starts one paid Parallel research at once (about $0.05, plus one profile fetch
+  when a URL is found); `finish` waits for it, applies a URL found, and otherwise leaves the person worth
+  yes without a LinkedIn.

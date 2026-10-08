@@ -3,11 +3,13 @@
 GET  /api/review/page                              the one screen and its count
 GET  /api/review/linkedin-card?exclude=&index=      the next family's card, or the finished state
 GET  /api/dossier?slug=                            the family's dossier as an HTML fragment
-POST /api/review/decide   form pub, decision, parent_slug, new_url:
-                          keep = Yes, detach = Skip, fix = Retarget to new_url; answers with the next card
-POST /retarget            form pub, parent_slug, guidance: the pending profile is wrong (rejected now, the queue
-                          advances); a PAID re-research from the reviewer's words runs in the background and a
-                          URL it finds is applied as the Retarget
+POST /api/review/decide   form pub, decision, parent_slug, new_url: keep = Yes, detach = Skip, fix = Retarget
+                          to new_url, into the review queue (a later decision on the family replaces it);
+                          answers with the next card
+POST /retarget            form pub, parent_slug, guidance: Retarget from the reviewer's words into the queue;
+                          the PAID research starts now in the background
+
+Nothing here writes a ledger: the queue holds every decision until `finish` applies it (review/commit.py).
 POST /feedback            form pub, parent_slug, comment, action: files the comment with Powerset
 POST /auth/login          runs the Powerset sign-in on this machine
 
@@ -23,13 +25,14 @@ import sqlite3
 import sys
 import threading
 import urllib.parse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_enrich, queries_review
-from packs.ingestion.primitives.deep_context_v2.db.schema import ResearchStatus
+from packs.ingestion.primitives.deep_context_v2.db import queries_review
+from packs.ingestion.primitives.deep_context_v2.db.queries_review import Queued
+from packs.ingestion.primitives.deep_context_v2.db.schema import ReviewDecision
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.enrich import research
 from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchSubject
@@ -73,110 +76,88 @@ def _send_json(handler: BaseHTTPRequestHandler, payload: dict[str, object], stat
     _send(handler, json.dumps(payload).encode(), "application/json; charset=utf-8", status)
 
 
-@dataclass
-class ReviewEntry:
-    card: Card | None = None
-    status: str = ""
-
-
 class ReviewApi:
-    """An ordered, editable review history for this server session; SQLite keeps the decisions."""
+    """The review over the store: the families with something to decide, in parent-id order, and the queue
+    of decisions the reviewer has made so far (review_queue, edited in place; `finish` applies it)."""
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
         self.conn = conn
         self.data_root = data_root
-        self.queue = {slug: ReviewEntry() for slug in review_list(conn)}
-
-    def _pending(self) -> int:
-        for slug in review_list(self.conn):
-            self.queue.setdefault(slug, ReviewEntry())
-        return sum(not entry.status for entry in self.queue.values())
-
-    def _card(self, slug: str) -> Card:
-        entry = self.queue[slug]
-        if entry.card is None:
-            entry.card = load_card(self.conn, self.data_root, slug)
-        return entry.card
 
     def linkedin_card(self, params: Params) -> LinkedinCardPayload:
-        """Browse the fixed order, or advance to the next pending family. History stays editable."""
-        pending = self._pending()
-        order = list(self.queue)
-        asked = _value(params, "index")
+        """Browse the fixed order (`index`), or the next family without a decision after `after`."""
+        order: list[str] = review_list(self.conn)
+        queued: dict[str, Queued] = queries_review.review_queue(self.conn)
+        pending: int = len([slug for slug in order if slug not in queued])
+        asked: str = _value(params, "index")
+        slug: str = ""
         if asked.isdigit() and int(asked) < len(order):
             slug = order[int(asked)]
         else:
-            after = _value(params, "after")
-            start = order.index(after) + 1 if after in self.queue else 0
-            excluded = _value(params, "exclude").split(",")
-            slug = next((key for key in order[start:] + order[:start]
-                         if not self.queue[key].status and key not in excluded), "")
-        total = len(order) + (pending == 0)
+            after: str = _value(params, "after")
+            start: int = order.index(after) + 1 if after in order else 0
+            excluded: list[str] = _value(params, "exclude").split(",")
+            for key in order[start:] + order[:start]:
+                if key not in queued and key not in excluded:
+                    slug = key
+                    break
+        total: int = len(order) + (pending == 0)
         if not slug:
             position = QueuePosition(len(order), total) if order else None
             return LinkedinCardPayload(None, LinkedinFinished(False), pending, position)
-        card = self._card(slug)
-        position = QueuePosition(order.index(slug), total, self.queue[slug].status)
+        card: Card = load_card(self.conn, self.data_root, slug)
+        status: str = queued[slug].decision if slug in queued else ""
+        position = QueuePosition(order.index(slug), total, status)
         return LinkedinCardPayload(LinkedinCard(payloads.person(card), payloads.candidates(card)), None,
                                    pending, position)
 
     def decide(self, form: Params) -> DecideResult:
-        """One human decision on one family: Yes (keep), Skip (detach) or Retarget (fix); answers with the next card."""
+        """One decision on one family into the queue: Yes (keep), Skip (detach) or Retarget (fix); a later
+        one replaces it. Answers with the next card."""
         pub: str = _value(form, "pub")
         decision: str = _value(form, "decision")
         slug: str = _value(form, "parent_slug")
-        if slug not in self.queue:
+        if slug not in review_list(self.conn):
             raise Refusal(HTTPStatus.CONFLICT, "This family is not in this review. Reload the page.")
-        card = self._card(slug)
+        card: Card = load_card(self.conn, self.data_root, slug)
+        key: str = ""
         try:
-            if decision == "keep":
-                decisions.yes(self.conn, card, pub)
-            elif decision == "detach":
-                decisions.skip(self.conn, card)
-            elif decision == "fix":
-                decisions.retarget(self.conn, self.data_root, card, _value(form, "new_url"))
-            else:
+            if decision == ReviewDecision.KEEP:
+                key = decisions.chosen(card, pub).key
+            elif decision == ReviewDecision.FIX:
+                key = decisions.fetch_profile(self.data_root, _value(form, "new_url"))[0]
+            elif decision != ReviewDecision.DETACH:
                 raise Refusal(HTTPStatus.BAD_REQUEST, f"unknown decision: {decision}")
         except DecisionError as error:
             raise Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
-        if self.queue[slug].status == "detach" and decision != "detach":
-            with self.conn:
-                for member in card.members:
-                    queries_review.insert_worth(self.conn, member.candidate_id, "yes", "review: undo skip", now_iso())
-        self.queue[slug].status = decision
+        with self.conn:
+            queries_review.upsert_queued(self.conn, Queued(slug, decision, key, ""), now_iso())
         return DecideResult(True, self.linkedin_card({"after": [slug]}))
 
     def retarget(self, form: Params) -> None:
-        """The pending profile is wrong: rejected now, so the family leaves the queue. Then, in the background,
-        Parallel reads the family's facts with the reviewer's words beside them; a URL it finds is applied
-        exactly as a pasted one (profile fetched, confirmed as the human's call). Found nothing: the family
-        stays worth yes without a LinkedIn."""
+        """Retarget from the reviewer's words: the decision goes into the queue and the research starts now,
+        in the background, so its answer is ready when `finish` applies the queue. The queue advances."""
         slug: str = _value(form, "parent_slug")
         guidance: str = _value(form, "guidance").strip()
         if not guidance or len(guidance) > MAX_TEXT_CHARS:
             raise Refusal(HTTPStatus.BAD_REQUEST, f"describe the person in 1-{MAX_TEXT_CHARS} characters")
-        self._pending()
-        if slug not in self.queue:
-            raise Refusal(HTTPStatus.NOT_FOUND, "This family is not in the review.")
-        card: Card = self._card(slug)
-        decisions.reject(self.conn, card)
-        self.queue[slug].status = "fix"
+        if slug not in review_list(self.conn):
+            raise Refusal(HTTPStatus.CONFLICT, "This family is not in this review. Reload the page.")
+        card: Card = load_card(self.conn, self.data_root, slug)
         subject: ResearchSubject = research.guided_subject(card.parent_id, card.facts, guidance)
-        threading.Thread(target=self._research, args=(card, subject), daemon=True).start()
+        with self.conn:
+            queries_review.upsert_queued(self.conn, Queued(slug, ReviewDecision.RESEARCH.value, subject.handle, guidance),
+                                         now_iso())
+        threading.Thread(target=self._research, args=(subject,), daemon=True).start()
 
-    def _research(self, card: Card, subject: ResearchSubject) -> None:
-        # Its own connection: the server's is serialized on the request thread.
+    def _research(self, subject: ResearchSubject) -> None:
+        # Its own connection: the server's is serialized on the request thread. The answer is a research row.
         conn: sqlite3.Connection = open_store(store_path(self.data_root))
         try:
-            research.submit(conn, [subject])
-            found = queries_enrich.research_by_handle(conn).get(subject.handle)
-            if found is None or found.status != ResearchStatus.COMPLETE.value:
-                print(f"[retarget] {card.parent_id}: research found no profile", file=sys.stderr, flush=True)
-                return
-            url: str = decisions.retarget(conn, self.data_root, card, research.research_url(found))
-            print(f"[retarget] {card.parent_id}: {url}", file=sys.stderr, flush=True)
+            counts: dict[str, int] = research.submit(conn, [subject])
+            print(f"[retarget] {subject.parent_id}: {counts}", file=sys.stderr, flush=True)
         except Exception as error:
-            print(f"[retarget] {card.parent_id} failed: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+            print(f"[retarget] {subject.parent_id} failed: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
         finally:
             conn.close()
 
@@ -186,10 +167,9 @@ class ReviewApi:
         slug: str = _value(form, "parent_slug")
         if not comment or len(comment) > MAX_TEXT_CHARS:
             raise Refusal(HTTPStatus.BAD_REQUEST, f"comment must be 1-{MAX_TEXT_CHARS} characters")
-        self._pending()
-        if slug not in self.queue:
+        if slug not in review_list(self.conn):
             raise Refusal(HTTPStatus.NOT_FOUND, "This family is not in the review.")
-        card: Card = self._card(slug)
+        card: Card = load_card(self.conn, self.data_root, slug)
         pending: list[str] = []
         for item in card.pending:
             pending.append(item.linkedin_url)
@@ -204,10 +184,10 @@ class ReviewApi:
         """Route a GET: the dossier fragment, the page, or the next card."""
         params: Params = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/api/dossier":
-            card = self._card(_value(params, "slug"))
+            card: Card = load_card(self.conn, self.data_root, _value(params, "slug"))
             _send(handler, payloads.dossier(card).encode(), "text/html; charset=utf-8", HTTPStatus.OK)
         elif parsed.path == "/api/review/page":
-            _send_json(handler, asdict(payloads.page(self._pending())))
+            _send_json(handler, asdict(payloads.page(self.linkedin_card({}).pending)))
         elif parsed.path == "/api/review/linkedin-card":
             _send_json(handler, asdict(self.linkedin_card(params)))
         else:
