@@ -49,16 +49,14 @@ class RouteTests(unittest.TestCase):
             self.api.retarget({"parent_slug": ["p:gone"], "guidance": ["the one at Stripe"]})
         self.assertEqual(refused.exception.status, HTTPStatus.CONFLICT)
 
-    def test_retarget_queues_the_research_and_starts_it(self) -> None:
+    def test_retarget_from_words_is_queued_as_a_fix(self) -> None:
         card = mock.Mock(parent_id="p:1", facts=FACTS, members=(mock.Mock(candidate_id="c1"),), pending=())
         with mock.patch.object(api, "review_list", return_value=["p:1"]), \
-             mock.patch.object(api, "load_card", return_value=card), \
-             mock.patch.object(api.threading, "Thread") as thread:
+             mock.patch.object(api, "load_card", return_value=card):
             self.api.retarget({"parent_slug": ["p:1"], "guidance": ["the one at Stripe"]})
             self.assertEqual(self.api.linkedin_card({}).pending, 0)
-        thread.return_value.start.assert_called_once()
-        row = self.conn.execute("SELECT decision, guidance FROM review_queue WHERE parent_id='p:1'").fetchone()
-        self.assertEqual(tuple(row), ("research", "the one at Stripe"))
+        row = self.conn.execute("SELECT decision, key, guidance FROM review_queue WHERE parent_id='p:1'").fetchone()
+        self.assertEqual(tuple(row), ("fix", "", "the one at Stripe"))
         self.assertEqual(self.conn.execute("SELECT count(*) FROM candidate_linkedins").fetchone()[0], 0)
 
     def test_feedback_needs_a_comment(self) -> None:

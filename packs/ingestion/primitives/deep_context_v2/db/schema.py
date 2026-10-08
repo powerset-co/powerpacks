@@ -113,10 +113,9 @@ class ResearchStatus(StrEnum):
 
 class ReviewDecision(StrEnum):
     """What the reviewer said about a family, held in the review queue until finish applies it."""
-    KEEP = "keep"          # Yes to the pending profile named by key
-    DETACH = "detach"      # Skip
-    FIX = "fix"            # Retarget to the pasted URL in key
-    RESEARCH = "research"  # Retarget from a description: key is the guided research handle
+    KEEP = "keep"      # Yes to the pending profile named by key
+    DETACH = "detach"  # Skip
+    FIX = "fix"        # Retarget: to the pasted URL in key, or from the reviewer's words in guidance
 
 
 def _in(enum: type[StrEnum]) -> str:
@@ -130,8 +129,8 @@ REVIEW_QUEUE_DDL = f"""
 CREATE TABLE review_queue (
   parent_id TEXT NOT NULL PRIMARY KEY,
   decision TEXT NOT NULL CHECK (decision IN {_in(ReviewDecision)}),
-  key TEXT NOT NULL,       -- keep: the pending key; fix: the URL; research: the guided handle; detach: ''
-  guidance TEXT NOT NULL,  -- research: the reviewer's words; else ''
+  key TEXT NOT NULL,       -- keep: the pending key; fix: the pasted URL, or '' with guidance; detach: ''
+  guidance TEXT NOT NULL,  -- fix from a description: the reviewer's words; else ''
   updated_at TEXT NOT NULL
 );
 """

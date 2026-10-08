@@ -7,7 +7,7 @@ POST /api/review/decide   form pub, decision, parent_slug, new_url: keep = Yes, 
                           to new_url, into the review queue (a later decision on the family replaces it);
                           answers with the next card
 POST /retarget            form pub, parent_slug, guidance: Retarget from the reviewer's words into the queue;
-                          the PAID research starts now in the background
+                          `finish` runs the PAID research
 
 Nothing here writes a ledger: the queue holds every decision until `finish` applies it (review/commit.py).
 POST /feedback            form pub, parent_slug, comment, action: files the comment with Powerset
@@ -22,8 +22,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
-import threading
 import urllib.parse
 from dataclasses import asdict
 from http import HTTPStatus
@@ -33,9 +31,7 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context_v2.db import queries_review
 from packs.ingestion.primitives.deep_context_v2.db.queries_review import Queued
 from packs.ingestion.primitives.deep_context_v2.db.schema import ReviewDecision
-from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
-from packs.ingestion.primitives.deep_context_v2.enrich import research
-from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchSubject
+from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.review import decisions, payloads
 from packs.ingestion.primitives.deep_context_v2.review.decisions import DecisionError
@@ -135,31 +131,15 @@ class ReviewApi:
         return DecideResult(True, self.linkedin_card({"after": [slug]}))
 
     def retarget(self, form: Params) -> None:
-        """Retarget from the reviewer's words: the decision goes into the queue and the research starts now,
-        in the background, so its answer is ready when `finish` applies the queue. The queue advances."""
+        """Retarget from the reviewer's words, into the queue; `finish` runs the research. The queue advances."""
         slug: str = _value(form, "parent_slug")
         guidance: str = _value(form, "guidance").strip()
         if not guidance or len(guidance) > MAX_TEXT_CHARS:
             raise Refusal(HTTPStatus.BAD_REQUEST, f"describe the person in 1-{MAX_TEXT_CHARS} characters")
         if slug not in review_list(self.conn):
             raise Refusal(HTTPStatus.CONFLICT, "This family is not in this review. Reload the page.")
-        card: Card = load_card(self.conn, self.data_root, slug)
-        subject: ResearchSubject = research.guided_subject(card.parent_id, card.facts, guidance)
         with self.conn:
-            queries_review.upsert_queued(self.conn, Queued(slug, ReviewDecision.RESEARCH.value, subject.handle, guidance),
-                                         now_iso())
-        threading.Thread(target=self._research, args=(subject,), daemon=True).start()
-
-    def _research(self, subject: ResearchSubject) -> None:
-        # Its own connection: the server's is serialized on the request thread. The answer is a research row.
-        conn: sqlite3.Connection = open_store(store_path(self.data_root))
-        try:
-            counts: dict[str, int] = research.submit(conn, [subject])
-            print(f"[retarget] {subject.parent_id}: {counts}", file=sys.stderr, flush=True)
-        except Exception as error:
-            print(f"[retarget] {subject.parent_id} failed: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
-        finally:
-            conn.close()
+            queries_review.upsert_queued(self.conn, Queued(slug, ReviewDecision.FIX.value, "", guidance), now_iso())
 
     def feedback(self, form: Params) -> dict[str, object]:
         """Files the reviewer's comment on a family with Powerset; the reply is Powerset's status."""
@@ -195,7 +175,7 @@ class ReviewApi:
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> None:
         # A page on another site must not be able to decide for the user.
-        """Route a POST: a decision, a re-research, feedback, or the sign-in."""
+        """Route a POST: a decision, a retarget from words, feedback, or the sign-in."""
         origin: str = handler.headers.get("Origin") or ""
         if origin and urllib.parse.urlparse(origin).hostname not in LOCAL_HOSTS:
             _send_json(handler, {"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
