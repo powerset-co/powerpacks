@@ -23,6 +23,8 @@ from packs.powerset.primitives.mcp_install import mcp_install
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
 
 NEEDS_YOU = 10
+# Set by the desktop app (desktop/src-tauri): sign-ins show inside the app, never in a browser.
+DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
 REQUIRED_KEYS = ("OPENAI_API_KEY", "TURBOPUFFER_API_KEY", "DATABASE_URL")
 # Local processing needs only this one; the others serve hosted search.
 _PROCESSING_KEY = "OPENAI_API_KEY"
@@ -100,14 +102,18 @@ class Onboarding:
             client_id=self.config.get("POWERPACKS_AUTH0_CLIENT_ID"),
             audience=self.config.get("POWERPACKS_AUTH0_AUDIENCE"),
             scopes=auth.DEFAULT_AUTH0_SCOPES, callback_host=auth.DEFAULT_CALLBACK_HOST,
-            callback_port=auth.DEFAULT_CALLBACK_PORT, force_account=False, no_browser=False,
+            callback_port=auth.DEFAULT_CALLBACK_PORT, force_account=False, no_browser=DESKTOP,
             timeout=auth.DEFAULT_LOGIN_TIMEOUT, credentials_path=self.credentials_path)
-        # The existing login opens its own browser and prints the fallback URL to stderr.
+        # The login opens its own browser and prints the fallback URL to stderr. Under the
+        # desktop app it opens nothing: the page shows the sign-in URL inside the app instead.
         # Its JSON output is unnecessary here and may include remote error details.
+        def show(url: str) -> None:
+            self.progress("account.signing_in", action={"url": url})
+
         while True:
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                code = auth.cmd_login(args)
+                code = auth.cmd_login(args, on_authorize_url=show)
             result = json.loads(output.getvalue()) if output.getvalue().strip() else {}
             if not code or result.get("error") != "login timed out":
                 break

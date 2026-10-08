@@ -30,13 +30,12 @@ export function CodexGate({ codex }: { codex: CodexAccountState }) {
   return (
     <Panel title="Connect your ChatGPT account">
       <p className="m-0 text-muted-foreground">
-        Chat runs on Codex with your ChatGPT plan. Sign-in opens in your browser, and chat starts as soon as
-        it finishes.
+        Chat runs on Codex with your ChatGPT plan. Sign in right here, and chat starts as soon as you finish.
       </p>
       {codex.signingIn ? (
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <Spinner />
-          Finish signing in in your browser
+          Finish signing in above
           <Button size="sm" variant="ghost" onClick={codex.cancel}>
             Cancel
           </Button>

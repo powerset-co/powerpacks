@@ -19,14 +19,18 @@ flowchart LR
 | `src-tauri/src/boot.rs` | Launch: source, `uv sync`, page server, setup, then the page | — |
 | `src-tauri/src/source.rs` | Installs or refreshes the bundled code in `~/powerpacks`; leaves a git checkout alone | `.powerpacks/desktop/source-version` |
 | `src-tauri/src/onboard.rs` | Runs `bin/onboard` and resumes it with what the user answered on the install page | `.powerpacks/install/manifest.json` |
+| `src-tauri/src/signin.rs` | The in-window sign-in pane: open, close, follow the window | `signin://finished` |
 | `src-tauri/src/codex.rs` | One `codex app-server`: ChatGPT sign-in, chats, approvals; only the search skills | `codex://notification`, `codex://request` |
 | `src-tauri/src/paths.rs` | The Powerpacks folder, and a PATH that puts the bundled binaries first | `$POWERPACKS_REPO_ROOT` |
 | `src-tauri/src/lib.rs` | Window, commands, and the link policy | — |
 
 Setup is clicked through on the install page (`web/src/pages/install/DesktopSetup.tsx`); no agent
-runs it. Chat (`web/src/pages/agent/`) searches people, companies and dossiers. Sign-ins for
-Powerset, ChatGPT and Google open in the system browser, because Google refuses OAuth inside
-embedded web views.
+runs it. Chat (`web/src/pages/agent/`) searches people, companies and dossiers.
+
+Sign-ins stay in the window: `src-tauri/src/signin.rs` docks a second web view under the page's
+"Signing in to …" strip (`web/src/components/shared/SignInBar.tsx`) showing the provider's own
+page, and closes it when the sign-in reaches its callback. Powerset and ChatGPT use it today;
+Google refuses OAuth inside embedded web views, so Gmail still needs its own route.
 
 ## Build
 

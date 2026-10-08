@@ -10,6 +10,8 @@ const COMMANDS: &[&str] = &[
     "codex_threads",
     "codex_call",
     "codex_respond",
+    "signin_open",
+    "signin_close",
     "onboard_continue",
     "debug_state",
     "debug_skip_setup",

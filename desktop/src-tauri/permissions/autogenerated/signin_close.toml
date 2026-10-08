@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-signin-close"
+description = "Enables the signin_close command without any pre-configured scope."
+commands.allow = ["signin_close"]
+
+[[permission]]
+identifier = "deny-signin-close"
+description = "Denies the signin_close command without any pre-configured scope."
+commands.deny = ["signin_close"]

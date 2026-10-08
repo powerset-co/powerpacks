@@ -38,7 +38,7 @@ export function CodexCard() {
       <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">
         <p aria-live="polite" className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
           {codex.signingIn && <Spinner />}
-          {codex.signingIn ? "Finish signing in in your browser." : "Runs Chat on your ChatGPT plan."}
+          {codex.signingIn ? "Finish signing in above." : "Runs Chat on your ChatGPT plan."}
         </p>
         <CodexAction codex={codex} connected={connected} />
       </div>

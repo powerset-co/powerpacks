@@ -119,8 +119,8 @@ PROSE: dict[str, Prose] = {
     "install.unreadable": Prose(InstallStep.RUNTIME, F, "Installation status could not be read. I'm checking the installation log."),
 
     # Installing Powerpacks: the Powerset account (onboard.py)
-    "account.signing_in": Prose(InstallStep.ACCOUNT, W, "Waiting for account login. Sign in in the browser; setup will continue automatically."),
-    "account.link_expired": Prose(InstallStep.ACCOUNT, W, "The sign-in link expired. Opening a fresh one."),
+    "account.signing_in": Prose(InstallStep.ACCOUNT, W, "Waiting for you to sign in to Powerset. Setup continues as soon as you finish.", action="signin"),
+    "account.link_expired": Prose(InstallStep.ACCOUNT, W, "The sign-in link expired. Opening a fresh one.", action="signin"),
     "account.checking": Prose(InstallStep.ACCOUNT, R, "Checking your account"),
     "account.connected": Prose(InstallStep.ACCOUNT, C, "Connected as {email}"),
     "account.reused": Prose(InstallStep.ACCOUNT, S, "Already signed in as {email}. Tell me if that's the wrong account."),

@@ -32,10 +32,18 @@ export async function fetchCodexStatus(): Promise<CodexStatus> {
   return decodeStatus(await invoke("codex_status"))
 }
 
-/** Opens ChatGPT sign-in in the system browser; returns the login id to cancel it by. */
-export async function startCodexLogin(): Promise<string> {
+export interface CodexLogin {
+  loginId: string
+  /** ChatGPT's sign-in page, for the app's sign-in pane. */
+  authUrl: string
+}
+
+/** Starts ChatGPT sign-in; Codex's own callback server finishes it. */
+export async function startCodexLogin(): Promise<CodexLogin> {
   const login = await invoke("codex_login")
-  return isRecord(login) && typeof login.loginId === "string" ? login.loginId : ""
+  if (!isRecord(login) || typeof login.authUrl !== "string")
+    throw new Error("Codex returned no sign-in page.")
+  return { loginId: typeof login.loginId === "string" ? login.loginId : "", authUrl: login.authUrl }
 }
 
 export async function cancelCodexLogin(loginId: string): Promise<void> {

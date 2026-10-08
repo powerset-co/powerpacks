@@ -10,6 +10,7 @@ mod boot;
 mod codex;
 mod onboard;
 mod paths;
+mod signin;
 mod source;
 
 use std::sync::Arc;
@@ -46,22 +47,25 @@ async fn codex_status(
     codex.status(&app, boot.root().as_deref()).await
 }
 
-/// Starts ChatGPT sign-in and opens its page in the system browser.
+/// Starts ChatGPT sign-in; the page shows the returned `authUrl` in the sign-in pane.
 #[tauri::command]
 async fn codex_login(
     app: AppHandle,
     boot: State<'_, Arc<Boot>>,
     codex: State<'_, Codex>,
 ) -> Result<Value, String> {
-    let login = codex.login(&app, boot.root().as_deref()).await?;
-    let auth_url = login
-        .get("authUrl")
-        .and_then(Value::as_str)
-        .ok_or("Codex returned no sign-in page.")?;
-    app.opener()
-        .open_url(auth_url, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    Ok(login)
+    codex.login(&app, boot.root().as_deref()).await
+}
+
+/// Shows a provider's sign-in page inside the app; `finish` is the callback URL it ends on.
+#[tauri::command]
+fn signin_open(app: AppHandle, url: String, finish: String) -> Result<(), String> {
+    signin::open(&app, &url, &finish)
+}
+
+#[tauri::command]
+fn signin_close(app: AppHandle) {
+    signin::close(&app)
 }
 
 #[tauri::command]
@@ -201,7 +205,8 @@ fn main_window(app: &AppHandle) -> tauri::Result<()> {
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
-    builder.build()?;
+    let window = builder.build()?;
+    signin::follow_window(&window.as_ref().window());
     Ok(())
 }
 
@@ -227,6 +232,8 @@ pub fn run() {
             codex_threads,
             codex_call,
             codex_respond,
+            signin_open,
+            signin_close,
             onboard_continue,
             debug_state,
             debug_skip_setup,

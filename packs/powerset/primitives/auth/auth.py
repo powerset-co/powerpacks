@@ -31,7 +31,7 @@ import urllib.request
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +357,9 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 # Subcommands
 # ---------------------------------------------------------------------------
 
-def cmd_login(args: argparse.Namespace) -> int:
+def cmd_login(args: argparse.Namespace, on_authorize_url: "Callable[[str], None] | None" = None) -> int:
+    """Sign in through Auth0. `on_authorize_url` gets the sign-in URL once the callback server
+    listens, for a caller that shows the page itself (the desktop app) instead of a browser."""
     try:
         config = require_config_values([
             ("POWERPACKS_AUTH0_DOMAIN", args.auth0_domain),
@@ -414,6 +416,8 @@ def cmd_login(args: argparse.Namespace) -> int:
         })
         return 1
 
+    if on_authorize_url is not None:
+        on_authorize_url(authorize_url)
     if not args.no_browser:
         try:
             webbrowser.open(authorize_url)

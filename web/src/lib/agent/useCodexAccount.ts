@@ -12,14 +12,17 @@ import {
   startCodexLogin,
 } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
+import { closeSignIn, openSignIn } from "@/lib/signin"
 import type { CodexStatus } from "@/types/agent"
 
 const CODEX_KEY = ["codex"] as const
+// Where Codex's own callback server receives the sign-in (codex app-server account/login/start).
+const CODEX_CALLBACK = "http://127.0.0.1:1455/auth/callback"
 
 export interface CodexAccountState {
   status: CodexStatus | undefined
   loading: boolean
-  /** True while the browser sign-in is open. */
+  /** True while the sign-in pane is open. */
   signingIn: boolean
   error: string | null
   connect: () => void
@@ -39,6 +42,7 @@ export function useCodexAccount(): CodexAccountState {
     () =>
       onAgentEvent((event) => {
         if (event.type === "loginCompleted") {
+          void closeSignIn()
           setLoginId(null)
           setActionError(event.success ? null : (event.error ?? "Sign-in did not finish."))
           refresh()
@@ -61,10 +65,14 @@ export function useCodexAccount(): CodexAccountState {
     connect: () => {
       setActionError(null)
       startCodexLogin()
-        .then(setLoginId)
+        .then(async ({ loginId: id, authUrl }) => {
+          await openSignIn({ title: "ChatGPT", url: authUrl, finish: CODEX_CALLBACK })
+          setLoginId(id)
+        })
         .catch((error: unknown) => setActionError(errorText(error)))
     },
     cancel: () => {
+      void closeSignIn()
       if (loginId !== null) run(cancelCodexLogin(loginId))
       setLoginId(null)
     },

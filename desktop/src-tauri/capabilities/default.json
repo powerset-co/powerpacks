@@ -26,6 +26,8 @@
     "allow-codex-threads",
     "allow-onboard-continue",
     "allow-debug-state",
-    "allow-debug-skip-setup"
+    "allow-debug-skip-setup",
+    "allow-signin-open",
+    "allow-signin-close"
   ]
 }

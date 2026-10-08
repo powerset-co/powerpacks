@@ -14,7 +14,10 @@ export interface InstallAction {
     | "resume"
     | "recovery"
     | "details"
+    | "signin"
   text?: string
+  // signin: the provider's sign-in page, shown inside the desktop app
+  url?: string
   command?: string
   // approval: the spend step and its estimate (packs/powerset/primitives/install/pipeline.py)
   step?: string

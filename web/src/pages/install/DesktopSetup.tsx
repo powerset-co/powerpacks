@@ -1,10 +1,16 @@
-import { useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { continueSetup, type SetupAnswer } from "@/lib/api/install"
+import { openSignIn } from "@/lib/signin"
 import { isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
+
+// Where the Powerset login's own callback server listens (packs/powerset/primitives/auth/auth.py).
+const POWERSET_CALLBACK = "http://localhost:9876/callback"
+// The waits setup stops at until the user resumes it; the others finish on their own.
+const STOPPED = new Set(["error", "resume", "recovery", "details"])
 
 const INPUT =
   "min-h-9 w-full rounded-[var(--radius-s)] border border-line-strong bg-card px-3 text-[13px] text-foreground outline-none placeholder:text-faint focus-visible:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
@@ -57,11 +63,21 @@ function Ask({
   )
 }
 
-/** In the desktop app nobody runs setup's commands in chat: its waits get buttons here. */
+/** In the desktop app nobody runs setup's commands in chat: its waits get buttons here, and
+ *  the Powerset sign-in shows in the app's sign-in pane. */
 export function DesktopSetup({ data }: { data: InstallStatus }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const action = data.action
+  const signInUrl = action?.kind === "signin" ? (action.url ?? null) : null
+
+  // The sign-in page opens by itself; the button below reopens it after a cancel.
+  useEffect(() => {
+    if (signInUrl === null) return
+    openSignIn({ title: "Powerset", url: signInUrl, finish: POWERSET_CALLBACK }).catch((caught: unknown) =>
+      setError(errorText(caught)),
+    )
+  }, [signInUrl])
 
   const answer = (value: SetupAnswer) => {
     setBusy(true)
@@ -72,7 +88,17 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   }
 
   let control
-  if (action?.kind === "approval" && action.step) {
+  if (signInUrl !== null) {
+    const url = signInUrl
+    control = (
+      <Button
+        variant="primary"
+        onClick={() => void openSignIn({ title: "Powerset", url, finish: POWERSET_CALLBACK })}
+      >
+        Sign in
+      </Button>
+    )
+  } else if (action?.kind === "approval" && action.step) {
     const step = action.step
     const price = cost(action.estimate)
     control = (
@@ -105,10 +131,7 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
         onAnswer={(url) => answer({ linkedinUrl: url })}
       />
     )
-  } else if (
-    data.status === "failed" ||
-    (data.status === "waiting" && !["qr", "permission", "review"].includes(action?.kind ?? ""))
-  ) {
+  } else if (data.status === "failed" || (data.status === "waiting" && STOPPED.has(action?.kind ?? ""))) {
     control = (
       <Button variant="primary" disabled={busy} onClick={() => answer({})}>
         {data.status === "failed" ? "Try again" : "Continue setup"}
