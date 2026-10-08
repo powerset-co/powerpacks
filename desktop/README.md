@@ -1,7 +1,8 @@
 # desktop
 
-The Powerpacks Mac app (Tauri 2). One `.dmg`: drag it to Applications, open it, sign in. The app
-carries everything it runs: uv, Codex, and a snapshot of this repo.
+The Powerpacks desktop app (Tauri 2). One installer: open it, sign in. The app carries everything
+it runs: uv, Codex, and a snapshot of this repo. macOS is the product; the Windows build is for
+trying the UI, Chat and sign-in there, since setup's imports run on macOS only.
 
 ```mermaid
 flowchart LR
@@ -40,7 +41,9 @@ the app comes forward again when it lands.
 ## Build
 
 Needs Rust, Node 22 and pnpm. CI (`.github/workflows/desktop.yml`) builds the Apple Silicon
-`.dmg` on every change and keeps it as a run artifact.
+`.dmg` and the Windows installer on every change and keeps them as run artifacts. Gmail needs
+Powerpacks' Google OAuth client baked in: CI reads `POWERPACKS_GOOGLE_CLIENT_ID` and
+`POWERPACKS_GOOGLE_CLIENT_SECRET` from its secrets.
 
 ```bash
 cd desktop

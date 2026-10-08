@@ -1,4 +1,4 @@
-//! The setup workflow (`bin/onboard`: account, imports, Deep Context, index), run by the app
+//! The setup workflow (what `bin/onboard` wraps: account, imports, Deep Context, index), run by the app
 //! instead of an agent. The install page shows its progress from
 //! `.powerpacks/install/manifest.json`; re-running `bin/onboard` resumes from its saved choices,
 //! and `--approve-spend <step>` approves the spend it stopped for. Its own lock keeps one run.
@@ -7,10 +7,16 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::paths;
+
 const MANIFEST: &str = ".powerpacks/install/manifest.json";
 /// Set from the debug menu: launch treats setup as done, so the other pages can be tried first.
 const SKIP_MARKER: &str = ".powerpacks/desktop/skip-setup";
 const LOG: &str = ".powerpacks/install/desktop-onboard.log";
+/// The setup workflow and the owner-profile step, run with the project's Python (what
+/// `bin/onboard` and `bin/deep-context-v2 owner` wrap) so no shell is needed.
+const ONBOARD_MODULE: &str = "packs.powerset.primitives.install.onboard";
+const OWNER_MODULE: &str = "packs.ingestion.primitives.deep_context_v2.owner";
 const SPEND_STEPS: [&str; 4] = ["synthesize", "cluster", "enrich", "index"];
 /// What bootstrap records after installing; the app did the same work before setup starts.
 const INSTALLED_EVENTS: [&str; 2] = ["install.dependencies_ready", "install.skills_ready"];
@@ -115,14 +121,15 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
         if !url.contains("linkedin.com/in/") {
             return Err("Paste your LinkedIn profile URL, like linkedin.com/in/your-name.".into());
         }
-        let mut owner = Command::new(root.join("bin/deep-context-v2"));
-        owner.args(["owner", "--linkedin-url", &url]);
+        let mut owner = Command::new(paths::project_python(root));
+        owner.args(["-m", OWNER_MODULE, "--linkedin-url", &url]);
         if let Some(email) = account_email(root) {
             owner.args(["--email", &email]);
         }
         steps.push(owner);
     }
-    let mut onboard = Command::new(root.join("bin/onboard"));
+    let mut onboard = Command::new(paths::project_python(root));
+    onboard.args(["-m", ONBOARD_MODULE, "--root"]).arg(root);
     if let Some(step) = answer.approve {
         if !SPEND_STEPS.contains(&step.as_str()) {
             return Err(format!("{step} is not a step that needs approval."));

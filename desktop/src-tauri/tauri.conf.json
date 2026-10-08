@@ -18,6 +18,7 @@
     "targets": [
       "app",
       "dmg",
+      "nsis",
       "deb"
     ],
     "category": "Productivity",
@@ -40,6 +41,11 @@
       "binaries/uv",
       "binaries/codex",
       "binaries/rg"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

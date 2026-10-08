@@ -1,6 +1,7 @@
 name: desktop
 
-# Builds the macOS app and its .dmg (desktop/) with the bundled runtime, and keeps the .dmg.
+# Builds the desktop app (desktop/) with the bundled runtime: the macOS .dmg, and a Windows
+# installer for trying the UI there (setup itself runs on macOS only).
 on:
   push:
     paths: ["desktop/**", "web/dist/**", ".github/workflows/desktop.yml"]
@@ -12,9 +13,25 @@ permissions:
   contents: read
 
 jobs:
-  macos:
-    name: Build macOS dmg
-    runs-on: macos-latest
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS dmg
+            os: macos-latest
+            triple: aarch64-apple-darwin
+            bundles: app,dmg
+            artifact: Powerpacks-macos-arm64
+            path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          - name: Windows installer
+            os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bundles: nsis
+            artifact: Powerpacks-windows-x64
+            path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: desktop
@@ -33,13 +50,18 @@ jobs:
         with:
           workspaces: desktop/src-tauri
       - run: pnpm install --frozen-lockfile
-      - run: scripts/bundle-runtime.sh aarch64-apple-darwin
-      - run: pnpm tauri build --bundles app,dmg
+      - run: scripts/bundle-runtime.sh ${{ matrix.triple }}
+        shell: bash
+      - run: pnpm tauri build --bundles ${{ matrix.bundles }}
         env:
           # Test builds carry the debug menu (page jumps, skip setup).
           POWERPACKS_DEBUG_MENU: "1"
+          # Powerpacks' Google OAuth client for Gmail (a Desktop-app client in the same Google
+          # Cloud project as search.powerset.dev), baked into the app; unset builds skip Gmail.
+          POWERPACKS_GOOGLE_CLIENT_ID: ${{ secrets.POWERPACKS_GOOGLE_CLIENT_ID }}
+          POWERPACKS_GOOGLE_CLIENT_SECRET: ${{ secrets.POWERPACKS_GOOGLE_CLIENT_SECRET }}
       - uses: actions/upload-artifact@v4
         with:
-          name: Powerpacks-macos-arm64
-          path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
           if-no-files-found: error
