@@ -303,7 +303,7 @@ class RunTests(StoreCase):
             self.assertEqual(run.main(["stop", "--data-root", str(self.root)]), 0)
         self.assertIn("no review server running", out.getvalue())
 
-    def test_finish_cli_real_empty_realize_propagates_index_exit(self):
+    def test_finish_cli_keeps_review_until_index_succeeds(self):
         self.write_owner()
         pid = self.root / run.REVIEW_PID_FILE
         pid.write_text("43210")
@@ -311,10 +311,16 @@ class RunTests(StoreCase):
             self.assertEqual(run.main(["finish", "--data-root", str(self.root), "--operator-id", "synthetic"]), 7)
         people = self.root / "network-import/merged/people.csv"
         self.assertTrue(people.exists())
-        self.assertIn("review server stopped", out.getvalue())
+        self.assertIn("review server stays up", out.getvalue())
         self.assertEqual(index.call_args.args[0], run.index_command(self.root, people))
         self.assertEqual(index.call_args.kwargs["env"]["POWERPACKS_OPERATOR_ID"], "synthetic")
+        kill.assert_not_called()
+        self.assertEqual(pid.read_text(), "43210")
+        with patch("subprocess.run", return_value=SimpleNamespace(returncode=0)), patch("os.kill") as kill, redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(run.main(["finish", "--data-root", str(self.root), "--operator-id", "synthetic"]), 0)
+        self.assertIn("review server stopped", out.getvalue())
         kill.assert_called_once_with(43210, signal.SIGTERM)
+        self.assertFalse(pid.exists())
 
 
 if __name__ == "__main__":

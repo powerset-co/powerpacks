@@ -162,7 +162,7 @@ class RealizeTests(unittest.TestCase):
         self.assertFalse(self.node.people_csv().exists())
         self.assertFalse((self.root / "deep-context" / "v2-manifests").exists())
         command = index_command(self.node.people_csv(), self.root)
-        self.assertIn("linkedin_modal_pipeline.py index-people", command)
+        self.assertEqual(command, f"bin/deep-context-v2 finish --data-root {self.root}")
         self.assertNotIn("--dry-run", command)
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(main(["--data-root", str(self.root)]), 0)
