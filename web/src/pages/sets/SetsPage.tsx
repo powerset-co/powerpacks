@@ -24,8 +24,9 @@ export function SetsPage() {
   return (
     <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
       <div className="mx-auto flex max-w-[960px] flex-col gap-5">
-        <header className="flex flex-wrap items-end justify-between gap-4">
-          <div className="min-w-0 flex-[1_1_320px]">
+        {/* Two columns at every width but a phone's: the text takes what is left, the controls their own width. */}
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 max-[680px]:grid-cols-1">
+          <div className="min-w-0">
             <h1 className="m-0 text-xl font-semibold">{SETS.title}</h1>
             <p className="m-0 mt-1 text-[13px] text-muted-foreground">{SETS.lead}</p>
           </div>
