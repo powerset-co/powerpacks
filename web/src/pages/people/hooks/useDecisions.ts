@@ -53,7 +53,7 @@ export function useDecisions(byId: ReadonlyMap<string, Person>, onWritten: (ids:
       try {
         const results = await writeTags(changes)
         queryClient.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (rows) => patchRows(rows, results))
-        // The share list changed: the upload status says so (Update network) and drops a stale check.
+        // The share list changed: the upload status says so (the warning mark) and drops a stale check.
         void queryClient.invalidateQueries({ queryKey: UPLOAD_KEY })
         lastUndo.current = undo
         onWritten(ids)

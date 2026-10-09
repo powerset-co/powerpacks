@@ -110,9 +110,9 @@ export function eventDate(value: string | null | undefined): string {
 // The share dialog and its trigger.
 export const UPLOAD = {
   share: "Share network",
-  update: "Update network",
-  shared: "Shared network",
-  view: "View upload",
+  upToDateNote: "Shared, nothing to update",
+  pendingNote: "People marked Share since the last upload: share to update",
+  runningNote: "Upload running",
   checkAgain: "Check again",
   confirm: "Confirm sharing",
   resume: "Resume sharing",
