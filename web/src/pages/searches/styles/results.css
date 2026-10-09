@@ -491,6 +491,9 @@ section.review-sections {
 }
 
 /* A narrow pane stacks the reasoning under the person, as rendering.py's rows do. */
+/* Narrow (beside a chat): one block per person. Who they are on top with a smaller avatar,
+   the score and reasoning right under the name, indented to it, clamped to three lines (the
+   drawer has the rest); Score sits at the end of the reasoning, not on a line of its own. */
 @container run (max-width: 880px) {
   .results {
     --result-cols: minmax(0, 1fr);
@@ -498,14 +501,44 @@ section.review-sections {
   .result-head > :nth-child(2) {
     display: none;
   }
+  .result-line {
+    gap: 6px;
+    padding: 10px 12px;
+  }
+  .result-tags {
+    top: 0;
+  }
+  .result-person {
+    gap: 10px;
+    padding-top: 0;
+    padding-right: 96px;
+  }
+  .result-person > :first-child {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+    font-size: 11px;
+  }
+  .result-network {
+    margin-top: 4px;
+  }
   .result-indicators {
-    padding-top: 10px;
-    padding-right: 0;
-    border-top: 1px solid var(--line);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 0 0 0 42px;
+  }
+  .result-indicators .result-overall {
+    flex: 1;
   }
   .result-actions {
     position: static;
-    justify-content: flex-end;
-    margin-bottom: 6px;
+    order: 1;
+  }
+  .result-reason p {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
   }
 }
