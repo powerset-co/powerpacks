@@ -362,6 +362,7 @@
   padding: 10px 6px;
 }
 .set-invite .set-icon {
+  grid-area: auto;
   color: var(--primary);
 }
 .set-invite-text {

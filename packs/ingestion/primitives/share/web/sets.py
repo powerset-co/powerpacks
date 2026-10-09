@@ -193,6 +193,8 @@ def payload(sets: list[SetView], shared: int, default_set_id: str, *, received: 
     seen = seen or {}
     items: list[dict[str, Any]] = []
     for view in sets:
+        if view.is_personal and view.role != "owner":
+            continue  # an app admin's list carries everyone's personal set; only the owner's own is local
         joined = [Member(invite["name"] or invite["email"], invite["email"], "member", invite["operator_id"])
                   for invite in sent if invite["set_id"] == view.set_id and invite["status"] == ACCEPTED]
         items.append({"set_id": view.set_id, "name": view.name, "role": view.role, "is_personal": view.is_personal,

@@ -18,7 +18,12 @@ const POLL_MS = 10_000
 /** The sets the owner belongs to, and the ways they change: refresh, create, delete, invite, answer. */
 export function useSets() {
   const client = useQueryClient()
-  const sets = useQuery({ queryKey: SETS_KEY, queryFn: () => fetchSets(false), refetchInterval: POLL_MS })
+  const sets = useQuery({
+    queryKey: SETS_KEY,
+    queryFn: () => fetchSets(false),
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: true,
+  })
   const [error, setError] = useState<SetsError | null>(null)
   const settle = (payload: SetsPayload) => {
     client.setQueryData(SETS_KEY, payload)

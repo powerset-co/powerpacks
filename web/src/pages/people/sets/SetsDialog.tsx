@@ -143,7 +143,9 @@ function SetRow({ set, shared, open, onToggle, onDelete, onInvite, busy }: RowPr
           <Members set={set} />
           {onInvite ? <InviteForm onInvite={onInvite} busy={busy} /> : null}
           <div className="set-foot">
-            <span>{set.is_personal ? SETS.personalNote : SETS.people(set.person_count)}</span>
+            <span>
+              {set.is_personal ? SETS.personalNote : set.person_count ? SETS.people(set.person_count) : null}
+            </span>
             {onDelete ? (
               <button type="button" className="set-delete" onClick={onDelete}>
                 {SETS.delete}
