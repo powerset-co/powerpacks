@@ -141,14 +141,9 @@ export function InstallPage() {
   }
   return (
     <div
-      className="review-page install-page"
+      className="review-page install-page overflow-y-auto"
       data-status={error ? "disconnected" : failed ? "failed" : data?.status}
     >
-      <header className="topbar" data-tauri-drag-region>
-        <span className="brand">POWERPACKS</span>
-        <h1 className="topbar-title">Getting started</h1>
-        <span />
-      </header>
       <main className="install-main">
         <section aria-live="polite">
           <EmptyPanel

@@ -2,7 +2,7 @@
 
 import { isDesktop } from "@/lib/desktop"
 
-export type PageKey = "agent" | "searches" | "people" | "accounts" | "tasks"
+export type PageKey = "agent" | "searches" | "people" | "accounts" | "tasks" | "setup"
 
 export interface Page {
   key: PageKey
@@ -18,6 +18,8 @@ const BROWSER_PAGES: readonly Page[] = [
   HOME,
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   { key: "accounts", label: "Accounts", href: "/accounts" },
+  // Setup runs for a while; it sits in the nav so the rest of the app is a click away.
+  { key: "setup", label: "Setup", href: "/install" },
 ]
 
 /** Chat with the Codex agent; only the desktop app can run it, so only the desktop app shows it. */

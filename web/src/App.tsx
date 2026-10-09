@@ -27,16 +27,17 @@ function Shell() {
 }
 
 // The paths the server answers with this app (packs/shared/web/app.py PAGE_PATHS). /searches
-// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted. The
+// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted. Setup
+// (/install) sits in the shell too, so the other pages are a click away while it runs. The
 // review flow at / stands outside the shell: it is the user's entry point, with its own top
-// bar and no page tabs. Any other client-side path lands on HOME.
+// bar. Any other client-side path lands on HOME.
 export function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<ReviewPage />} />
-        <Route path="/install" element={<InstallPage />} />
         <Route element={<Shell />}>
+          <Route path="/install" element={<InstallPage />} />
           <Route path="/agent" element={<AgentPage />} />
           <Route path="/people" element={<PeoplePage />}>
             <Route index element={null} />

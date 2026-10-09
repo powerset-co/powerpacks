@@ -5,7 +5,15 @@ import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 
-import { AccountsIcon, ChatIcon, CollapseIcon, PeopleIcon, SearchesIcon, TasksIcon } from "./icons/nav"
+import {
+  AccountsIcon,
+  ChatIcon,
+  CollapseIcon,
+  PeopleIcon,
+  SearchesIcon,
+  SetupIcon,
+  TasksIcon,
+} from "./icons/nav"
 import { PowersetMark } from "./PowersetMark"
 
 const COLLAPSED_KEY = "sidebar.collapsed"
@@ -18,6 +26,7 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   people: PeopleIcon,
   tasks: TasksIcon,
   accounts: AccountsIcon,
+  setup: SetupIcon,
 }
 
 function useMedia(query: string): boolean {

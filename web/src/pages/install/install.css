@@ -1,3 +1,7 @@
+/* Inside the app shell the side nav frames the page: no top bar, no full-height lock. */
+.install-page {
+  min-height: 0;
+}
 .install-page .install-main {
   width: min(100% - 40px, 480px);
   margin: 0 auto;
