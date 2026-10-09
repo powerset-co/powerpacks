@@ -642,53 +642,6 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["namespaces"]["companies"]["upsert"], 1)
         self.assertEqual(manifest["plan"]["persons_upsert"], 1)
 
-    def test_real_run_rechecks_share_plan_and_target_before_any_write(self):
-        plan = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
-                        [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
-        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_share_v1"))
-                                              for ns in plan.namespaces))
-        first = (share_row(NEW_PERSON, "jordan-bravo"),)
-        changed_label = (share_row(NEW_PERSON, "jordan-bravo", labels="new-label"),)
-        changed_plan = replace(plan, sources_delete=(SourceRow(STALE_PERSON, "linkedin", "riley-echo"),))
-        changed_target = replace(plan, namespaces=(replace(plan.namespaces[0], namespace="aleph_people_other_v3"),
-                                                     *plan.namespaces[1:]))
-        for rows, plans in ((changed_label, (plan, plan)),
-                            (first, (plan, changed_plan)),
-                            (first, (plan, changed_target))):
-            with self.subTest(rows=rows, plan=plans[1]):
-                with tempfile.TemporaryDirectory() as tmp:
-                    paths = self._fixture(Path(tmp))
-                    connection = mock.MagicMock()
-                    connection.__enter__.return_value = connection
-                    connection.cursor.return_value.__enter__.return_value = FakeCursor()
-                    fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
-                    with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
-                         mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                         mock.patch.object(postgres, "use_share_schema"), \
-                         mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
-                         mock.patch.object(upload_powerset.tp_backend, "namespace_name",
-                                           side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_share_v1")), \
-                         mock.patch.object(upload_powerset, "read_share_rows", side_effect=[first, rows]), \
-                         mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=plans), \
-                         mock.patch.object(upload_powerset.UploadPowerset, "_apply") as apply, \
-                         mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
-                        last = {"finished_at": "2026-09-27T12:00:00Z", "status": "completed", "uploaded": 4, "skipped": 0}
-                        replace(UploadManifest(), last_upload=last).write(paths["out_dir"] / "manifest.json")
-                        upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
-                        checked = json.loads((paths["out_dir"] / "manifest.json").read_text())["plan"]
-                        # A new person is new, not changed.
-                        self.assertEqual((checked["new_to_cloud"], checked["changed"]), (1, 0))
-                        with self.assertRaisesRegex(RuntimeError, "network changed since the check"):
-                            upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False,
-                                                           require_checked=True, **paths).run()
-                    apply.assert_not_called()
-                    saved = json.loads((paths["out_dir"] / "manifest.json").read_text())
-                    self.assertEqual((saved["status"], saved["error"]),
-                                     ("failed", "Your network changed since the check. Check again."))
-                    # Refused before any write: the last upload stands and nothing is logged.
-                    self.assertEqual(saved["last_upload"], last)
-                    self.assertFalse((paths["out_dir"] / "errors.log").exists())
-
     def test_a_failed_first_upload_leaves_new_people_new_on_the_next_check(self):
         # The failed run recorded Jordan as owned before its writes rolled back; the cloud
         # still lacks Jordan, so the next check counts one new person, not a changed one.
@@ -713,7 +666,10 @@ class DryRunTests(unittest.TestCase):
                 upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
                 manifest = paths["out_dir"] / "manifest.json"
                 checked = UploadManifest.read(manifest)
-                replace(checked, status="failed", dry_run=False, target=checked.checked_target,
+                target = {"postgres_host": "host", "postgres_database": "/db",
+                          "postgres_schema": "powerset_share_v1", "operator_id": OPERATOR,
+                          "namespaces": {ns.logical: ns.namespace for ns in plan.namespaces}}
+                replace(checked, status="failed", dry_run=False, target=target,
                         owned_people=(NEW_PERSON,)).write(manifest)
                 upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
             again = json.loads(manifest.read_text())["plan"]

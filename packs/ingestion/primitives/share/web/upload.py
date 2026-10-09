@@ -1,6 +1,7 @@
 """Run one People upload and project its typed manifest to the status route.
 
 Changelog:
+  2026-10-09: the last upload always shows; the confirm is bound by the share list hash alone.
   2026-10-08: share_changed: the share list differs from the last completed upload's.
   2026-10-08: a check of a share list edited since reads idle, so opening checks again.
   2026-09-27: the job reads the server's environment; no second env file.
@@ -107,7 +108,7 @@ class ShareUpload:
         plan_counts = None if plan is None else {key: plan.get(key, 0) for key in (
             "marked_share", "with_linkedin", "without_linkedin", "new_to_cloud", "changed",
             "already_shared", "already_in_cloud", "losing_access", "companies_missing")}
-        last_upload = saved.last_upload if saved.checked_target in (None, saved.target) or saved.target is None else None
+        last_upload = saved.last_upload
         error = None
         if state == "interrupted":
             error = INTERRUPTED
@@ -162,7 +163,7 @@ class ShareUpload:
         try:
             upload_powerset.UploadPowerset(
                 db=self.index_db, share_db=self.share_db, people_csv=self.people_csv,
-                out_dir=self.out_dir, dry_run=dry_run, require_checked=not dry_run,
+                out_dir=self.out_dir, dry_run=dry_run,
             ).run()
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt):
