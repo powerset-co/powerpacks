@@ -97,8 +97,10 @@ and do not run any command until the user has answered.
 > Before I start:
 > - **One approval:** to research and enrich your contacts I'll send their names,
 >   emails, phone numbers and a short summary of how you know them to Parallel and
->   OpenAI. OpenAI calls are configured with no logging for privacy. Reply
->   **approve** to go ahead; otherwise I'll only process your LinkedIn connections.
+>   OpenAI, and run paid processing using your configured accounts. Costs depend
+>   on your data; setup logs estimates before each paid stage. Reply **approve**
+>   to authorize both data sharing and these processing charges, or **LinkedIn
+>   only** to authorize paid processing of just your LinkedIn connections.
 > - **Gmail:** I'll add the Google account you sign in to Powerset with. To add
 >   others, list them in your reply.
 > - **Fewer prompts:** setup runs many local commands; turn on full access so I
@@ -116,8 +118,14 @@ The agent cannot read or change the permission mode; only the user can. If they
 restart, they paste the same sentence again. If a command is later denied, or the
 user has had to approve more than one prompt, repeat the full-access steps.
 
-From the one reply: on **approve**, have the worker run the command below; otherwise add
-`--source linkedin`. Pass every extra Gmail address they listed as `--gmail-email`
+That approval covers both data sharing and paid processing for this setup. Pass
+both approvals to the worker; do not ask for a second cost approval or promise a
+separate gate. Honor any limit the user states. Reuse approval already given in
+this chat rather than asking again on a retry.
+
+From the one reply: on **approve**, have the worker run the command below; for
+**LinkedIn only**, add `--source linkedin`. If paid processing is declined, perform
+install-only setup without `--powerset`; do not start processing. Pass every extra Gmail address they listed as `--gmail-email`
 (the Powerset login is added on its own). Everything after that is logins the user
 does back to back near the start (Powerset, LinkedIn, Google, each Gmail approval,
 Full Disk Access, WhatsApp QR); then setup runs on its own.

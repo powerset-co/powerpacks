@@ -23,6 +23,18 @@ async function fixture(mode) {
       response.end(mode === "callback-error" ? "Login failed" : "You're in.");
       return;
     }
+    if (url.pathname === "/google") {
+      const step = Number(url.searchParams.get("step") || 0);
+      const next = step < 60 ? `/google?step=${step + 1}` : "/callback?state=synthetic-state&code=synthetic-code";
+      response.writeHead(200, { "Content-Type": "text/html" });
+      response.end(`<script>setTimeout(() => location.href = ${JSON.stringify(next)}, 1)</script>`);
+      return;
+    }
+    if (mode === "google-navigation") {
+      response.writeHead(200, { "Content-Type": "text/html" });
+      response.end('<button onclick="location.href=\'/google\'">Continue with Google</button>');
+      return;
+    }
     requests += 1;
     if (mode === "slow-redirect") await new Promise(resolve => setTimeout(resolve, 1500));
     if (mode === "navigation-error") {
@@ -61,6 +73,10 @@ async function fixture(mode) {
         // Opt in to an actual visible synthetic login; CI fixtures remain headless.
         const context = await launchChrome(directory, process.env.POWERSET_FIXTURE_HEADED ? headless : true);
         contexts.push(context);
+        if (mode === "google-navigation" && !headless) {
+          const page = context.pages()[0];
+          page.once("domcontentloaded", () => page.getByRole("button").click().catch(() => {}));
+        }
         if (mode === "browser-close") setTimeout(() => context.pages()[0].close(), 500);
         return context;
       },
@@ -122,4 +138,11 @@ test("closed login window releases its managed profile", async () => {
   const result = await fixture("browser-close");
   assert.equal(result.result.status, "error");
   assert.deepEqual(result.launches, [true]);
+});
+
+test("Google sign-in navigations keep the login open until callback", async () => {
+  const result = await fixture("google-navigation");
+  assert.equal(result.result.status, "ok");
+  assert.equal(result.callbackReceived, true);
+  assert.deepEqual(result.launches, [true, false]);
 });
