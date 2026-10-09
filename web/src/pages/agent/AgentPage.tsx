@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 
 import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
-import { answer, newChat, send, stop, useAgent } from "@/lib/agent/store"
+import { answer, newChat, send, setFullAccess, stop, useAgent } from "@/lib/agent/store"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
@@ -129,7 +129,13 @@ function Conversation({ onToggle }: { onToggle: () => void }) {
           )}
         </div>
       </div>
-      <Composer running={agent.running} onSend={(text) => void send(text)} onStop={() => void stop()} />
+      <Composer
+        running={agent.running}
+        fullAccess={agent.fullAccess}
+        onSend={(text) => void send(text)}
+        onStop={() => void stop()}
+        onFullAccess={(on) => void setFullAccess(on)}
+      />
     </section>
   )
 }

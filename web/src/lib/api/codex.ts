@@ -82,8 +82,19 @@ export async function archiveThread(threadId: string): Promise<void> {
   await call("thread/archive", { threadId })
 }
 
-export async function startTurn(threadId: string, text: string): Promise<void> {
-  await call("turn/start", { threadId, input: [{ type: "text", text, text_elements: [] }] })
+/** Full access: Codex runs every command without asking and outside the Powerpacks folder. */
+function accessSettings(fullAccess: boolean): Record<string, unknown> {
+  return fullAccess
+    ? { approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } }
+    : { approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite", networkAccess: true } }
+}
+
+export async function startTurn(threadId: string, text: string, fullAccess: boolean): Promise<void> {
+  await call("turn/start", {
+    threadId,
+    input: [{ type: "text", text, text_elements: [] }],
+    ...accessSettings(fullAccess),
+  })
 }
 
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
