@@ -38,3 +38,8 @@ export function focusApp(): Promise<void> {
 export function openExternal(url: string): Promise<void> {
   return invoke("open_external", { url }).then(() => undefined)
 }
+
+/** Whether macOS lets the app read Messages (Full Disk Access), checked afresh each call. */
+export async function messagesReadable(): Promise<boolean> {
+  return (await invoke("permission_messages")) === true
+}

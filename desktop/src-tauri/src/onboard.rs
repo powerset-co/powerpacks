@@ -216,3 +216,17 @@ fn account_email(root: &Path) -> Option<String> {
     let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
     manifest.get("account_email")?.as_str().map(str::to_owned)
 }
+
+/// Whether this app may read Messages (Full Disk Access). Each check runs in a fresh child
+/// process: macOS answers a process once, so only a new one sees a permission granted since.
+pub fn messages_readable(root: &Path) -> bool {
+    const PROBE: &str = "import sqlite3, sys\nfrom pathlib import Path\ntry:\n    db = Path.home() / 'Library' / 'Messages' / 'chat.db'\n    sys.exit(0 if db.is_file() and sqlite3.connect(f'file:{db}?mode=ro', uri=True).execute('select count(*) from sqlite_master').fetchone() else 1)\nexcept Exception:\n    sys.exit(1)\n";
+    Command::new(paths::project_python(root))
+        .args(["-c", PROBE])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}

@@ -416,6 +416,10 @@ class SourceOnboarding:
                     return self._write("gmail.which_accounts", handed_back=True)
                 self.gmail_emails = (account,)
                 self.retry_command = shlex.join([*shlex.split(self.retry_command), "--gmail-email", account])
+            # Under the desktop app, Messages access comes first: it is the one macOS permission
+            # setup needs, and nothing else should run until the user has granted it.
+            if DESKTOP and Source.IMESSAGE in active and not self._imessage_access():
+                return self.status.read()
             # Tools first (Homebrew can take minutes), then every login back to back while
             # the user is here, then the syncs and imports run without them.
             for source in active:
@@ -426,6 +430,8 @@ class SourceOnboarding:
             logins = {Source.LINKEDIN: self._linkedin_login, Source.GMAIL: self._gmail_connect,
                       Source.IMESSAGE: self._imessage_access, Source.WHATSAPP: self._whatsapp_link}
             for source in active:
+                if DESKTOP and source is Source.IMESSAGE:
+                    continue
                 if not logins[source]():
                     return self.status.read()
             for source in active:

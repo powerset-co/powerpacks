@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-permission-messages"
+description = "Enables the permission_messages command without any pre-configured scope."
+commands.allow = ["permission_messages"]
+
+[[permission]]
+identifier = "deny-permission-messages"
+description = "Denies the permission_messages command without any pre-configured scope."
+commands.deny = ["permission_messages"]

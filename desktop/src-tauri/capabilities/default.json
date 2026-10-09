@@ -32,6 +32,7 @@
     "allow-signin-close",
     "allow-linkedin-read",
     "allow-app-focus",
-    "allow-open-external"
+    "allow-open-external",
+    "allow-permission-messages"
   ]
 }

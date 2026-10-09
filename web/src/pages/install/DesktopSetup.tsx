@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react"
 
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
-import { continueSetup, focusApp, openExternal, type SetupAnswer } from "@/lib/api/install"
+import { continueSetup, focusApp, messagesReadable, openExternal, type SetupAnswer } from "@/lib/api/install"
 import { openSignIn } from "@/lib/signin"
 import { isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
@@ -13,6 +13,9 @@ const POWERSET_CALLBACK = "http://localhost:9876/callback"
 const LINKEDIN_CONNECTIONS = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
 // The waits setup stops at until the user resumes it; the others finish on their own.
 const STOPPED = new Set(["error", "resume", "recovery", "details"])
+
+// While setup waits for Full Disk Access, ask macOS again this often and continue by itself.
+const PERMISSION_POLL_MS = 3_000
 
 const INPUT =
   "min-h-9 w-full rounded-[var(--radius-s)] border border-line-strong bg-card px-3 text-[13px] text-foreground outline-none placeholder:text-faint focus-visible:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
@@ -91,6 +94,23 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
     // The sign-in opens once per URL setup hands over.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- W5
   }, [signInUrl])
+  // Full Disk Access: setup resumes on its own the moment macOS reports the grant.
+  const waitingForMessages = action?.kind === "permission"
+  useEffect(() => {
+    if (!waitingForMessages) return
+    let stopped = false
+    const check = async () => {
+      if (stopped || !(await messagesReadable())) return
+      stopped = true
+      resume()
+    }
+    const timer = setInterval(() => void check(), PERMISSION_POLL_MS)
+    void check()
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [waitingForMessages])
   const wasGoogle = useRef(false)
   useEffect(() => {
     if (provider === "google") wasGoogle.current = true

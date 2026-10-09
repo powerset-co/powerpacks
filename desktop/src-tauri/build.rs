@@ -17,6 +17,7 @@ const COMMANDS: &[&str] = &[
     "app_focus",
     "open_external",
     "onboard_continue",
+    "permission_messages",
     "debug_state",
     "debug_skip_setup",
 ];

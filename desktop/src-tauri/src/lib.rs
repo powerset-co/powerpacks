@@ -177,6 +177,17 @@ fn debug_skip_setup(boot: State<'_, Arc<Boot>>, skip: bool) -> Result<(), String
     onboard::start(&root, onboard::Answer::default())
 }
 
+/// Whether macOS lets this app read Messages (Full Disk Access), checked afresh each call.
+#[tauri::command]
+async fn permission_messages(boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
+    let root = boot::require_root(&boot)?;
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || onboard::messages_readable(&root))
+            .await
+            .unwrap_or(false),
+    )
+}
+
 /// Resumes setup from the install page with what the user answered there.
 #[tauri::command]
 fn onboard_continue(boot: State<'_, Arc<Boot>>, answer: onboard::Answer) -> Result<(), String> {
@@ -320,6 +331,7 @@ pub fn run() {
             app_focus,
             open_external,
             onboard_continue,
+            permission_messages,
             debug_state,
             debug_skip_setup,
         ])
