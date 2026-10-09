@@ -20,6 +20,8 @@ deletes its source rows; documents are never deleted.
 Changelog:
   2026-09-28: shared people the cloud has without positions are written again when the local index has them.
   2026-09-28: a person new to the cloud is never counted changed after a failed run.
+  2026-10-09: share namespaces are powerpacks_<name>_<POWERPACKS_SHARE_INDEX_VERSION> (default v1);
+    $search keeps the aleph_ namespaces ALEPH_INDEX_VERSION names.
   2026-10-08: write the isolated share_v1 family (namespaces and Postgres tables), not v3.
   2026-10-08: the last completed upload keeps the share digest it sent.
   2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
@@ -34,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -80,15 +83,22 @@ DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
 DEFAULT_SHARE_DB = REPO / ".powerpacks" / STORE_RELATIVE_PATH
 DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
-# The isolated shared network the upload writes, for now: its own TurboPuffer namespaces and its own
-# Postgres tables (share_v1.sql), so a share starts from an empty cloud rather than the migrated v3 ids.
-SHARE_FAMILY = "share_v1"
+
+
+def share_version() -> str:
+    """The shared network the upload writes and sets read: the powerpacks_ TurboPuffer namespaces and the
+    powerset_share_ Postgres schema (share_v1.sql) of POWERPACKS_SHARE_INDEX_VERSION. $search reads the
+    aleph_ namespaces ALEPH_INDEX_VERSION names (turbopuffer_search_backend), so a share never lands there."""
+    version = os.environ.get("POWERPACKS_SHARE_INDEX_VERSION", "v1").strip().lower()
+    if not re.fullmatch(r"v[1-9][0-9]*", version):
+        raise ValueError(f"Invalid POWERPACKS_SHARE_INDEX_VERSION: {version!r}")
+    return version
 
 
 def share_namespace(logical: str) -> str:
-    """The share_v1 TurboPuffer namespace for a logical name, e.g. aleph_summaries_share_v1."""
-    base: str = TURBOPUFFER_NAMESPACES[logical]
-    return base.removesuffix("_v1") + f"_{SHARE_FAMILY}"
+    """The share TurboPuffer namespace for a logical name, e.g. powerpacks_summaries_v1."""
+    name = TURBOPUFFER_NAMESPACES[logical].removeprefix("aleph_").removesuffix("_v1")
+    return f"powerpacks_{name}_{share_version()}"
 
 PREVIEW_IDS = 10
 
@@ -187,13 +197,13 @@ class UploadPowerset:
         try:
             with psycopg2.connect(self._database_url) as conn:
                 with conn.cursor() as cur:
-                    postgres.use_share_schema(cur)
+                    postgres.use_share_schema(cur, share_version())
                     operator_id = self.operator_id or postgres.resolve_operator_id(
                         cur, postgres_client.credentials_subject())
                     plan = self._plan(con, cur, operator_id, share_rows, people)
                     target = {"postgres_host": urlparse(self._database_url).hostname,
                               "postgres_database": urlparse(self._database_url).path,
-                              "postgres_schema": postgres.SHARE_SCHEMA, "operator_id": operator_id,
+                              "postgres_schema": postgres.share_schema(share_version()), "operator_id": operator_id,
                               "namespaces": {ns.logical: ns.namespace for ns in plan.namespaces}}
                     indexed = {profile.id for profile in local_index.person_profiles(con, plan.persons_upsert)}
                     if missing := set(plan.persons_upsert) - indexed:
