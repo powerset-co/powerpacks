@@ -135,6 +135,21 @@ CREATE TABLE review_queue (
 );
 """
 
+# Schema 4 also added the sets the owner belongs to: the cloud's answer, kept locally so the People page
+# shows them without a round trip and the next sync starts from what was last seen.
+SETS_DDL = """
+CREATE TABLE sets (
+  set_id TEXT NOT NULL PRIMARY KEY,   -- the cloud set id
+  name TEXT NOT NULL,
+  role TEXT NOT NULL,                 -- the owner's role in it: owner, admin, member, guest
+  is_personal INTEGER NOT NULL,
+  member_count INTEGER NOT NULL,
+  person_count INTEGER NOT NULL,
+  members_json TEXT NOT NULL CHECK (json_valid(members_json)),  -- [{name, email, role}]
+  refreshed_at TEXT NOT NULL
+);
+"""
+
 # Schema 3 added the share stage; a schema-2 store gains these in place (store.py).
 SHARE_TABLES_DDL = f"""
 -- The share stage. One row per member candidate, written together for a family; the human's tags
@@ -309,6 +324,7 @@ CREATE INDEX research_by_parent ON research(parent_id);
 
 {SHARE_TABLES_DDL}
 {REVIEW_QUEUE_DDL}
+{SETS_DDL}
 CREATE VIEW current_parent AS
   SELECT candidate_id, parent_id, reason, seq FROM (
     SELECT m.*, row_number() OVER (PARTITION BY candidate_id ORDER BY seq DESC) AS rn

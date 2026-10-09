@@ -120,3 +120,27 @@ def decide_share(conn: sqlite3.Connection, tags: list[TagRow], shares: list[Shar
             "share = excluded.share, reason = excluded.reason, labels = excluded.labels, source = excluded.source, "
             "updated_at = excluded.updated_at",
             shares)
+
+
+# ---- the sets the owner belongs to (the cloud's answer, kept locally)
+
+SetRow = tuple[str, str, str, int, int, int, str, str]  # set_id, name, role, is_personal, member_count, person_count, members_json, refreshed_at
+
+
+def sets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every set the owner belongs to, personal first, then by name."""
+    return conn.execute(
+        "SELECT set_id, name, role, is_personal, member_count, person_count, members_json, refreshed_at "
+        "FROM sets ORDER BY is_personal DESC, name COLLATE NOCASE"
+    ).fetchall()
+
+
+def replace_sets(conn: sqlite3.Connection, rows: list[SetRow]) -> None:
+    """The cloud's current answer replaces what was kept: a set left or deleted is gone."""
+    with conn:
+        conn.execute("DELETE FROM sets")
+        conn.executemany(
+            "INSERT INTO sets (set_id, name, role, is_personal, member_count, person_count, members_json, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )

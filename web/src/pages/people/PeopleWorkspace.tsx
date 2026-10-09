@@ -24,6 +24,7 @@ import { usePeopleShortcuts } from "./hooks/usePeopleShortcuts"
 import { PeopleShell } from "./PeopleShell"
 import { entriesQuery } from "./logbook/queries"
 import { FacetRail } from "./rail/FacetRail"
+import { SetsPanel } from "./sets/SetsPanel"
 import { EmptyText } from "./table/EmptyText"
 import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable"
 import { ShareUpload } from "./upload/ShareUpload"
@@ -191,7 +192,12 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
   return (
     <PeopleShell
-      rail={<FacetRail filters={view.filters} counts={counts} onValue={toggleFilter} />}
+      rail={
+        <>
+          <SetsPanel />
+          <FacetRail filters={view.filters} counts={counts} onValue={toggleFilter} />
+        </>
+      }
       main={
         <>
           <DecisionTabs

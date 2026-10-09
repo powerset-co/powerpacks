@@ -90,7 +90,29 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
   if (url.endsWith("/upload")) return Promise.resolve(uploadResponse(uploadStatus()))
   if (url.endsWith("/logbook")) return Promise.resolve(respond(logbookStatus()))
+  if (url.includes("/sets")) return Promise.resolve(respond(SETS))
   return Promise.resolve(respond(PAYLOAD))
+}
+
+/** The sets route: one personal set with two members; the share count is the page's yes rows. */
+const SETS = {
+  sets: [
+    {
+      set_id: "set-1",
+      name: "Personal Connections",
+      role: "owner",
+      is_personal: true,
+      member_count: 2,
+      person_count: 40,
+      members: [
+        { name: "Jordan Bravo", email: "jordan@example.com", role: "owner" },
+        { name: "Casey Delta", email: "casey@example.com", role: "member" },
+      ],
+      refreshed_at: "2026-10-08T00:00:00Z",
+    },
+  ],
+  shared: 2,
+  default_set_id: "set-1",
 }
 
 function respond(body: unknown, status = 200): Response {
@@ -202,7 +224,9 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(screen.getByText("Marked 3 people for sharing.")).toBeTruthy())
     expect(screen.getByText("No one needs confirmation.")).toBeTruthy()
     expect(
-      fetch.mock.calls.filter(([url]) => !url.endsWith("/upload") && !url.includes("/logbook")),
+      fetch.mock.calls.filter(
+        ([url]) => !url.endsWith("/upload") && !url.includes("/logbook") && !url.includes("/sets"),
+      ),
     ).toHaveLength(2)
   })
 
