@@ -213,3 +213,9 @@
   font-size: 13px;
   color: var(--muted);
 }
+
+/* The welcome holds only the title, one line and the choice. */
+.install-page[data-welcome] .empty-state {
+  min-height: 0;
+  padding-bottom: 20px;
+}

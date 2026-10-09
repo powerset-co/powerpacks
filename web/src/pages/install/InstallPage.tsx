@@ -94,6 +94,8 @@ export function InstallPage() {
   })
   const [expanded, setExpanded] = useState(false)
   const [actionError, setActionError] = useState("")
+  // Before the first click: only the welcome and the choice, none of the progress furniture.
+  const welcome = !error && data?.event === "setup.ready"
   const failed = data?.status === "failed" || data?.index_progress?.status === "failed"
   const word = (key: string) => data?.prose.page[key] ?? ""
   const title = error
@@ -169,6 +171,7 @@ export function InstallPage() {
     <div
       className="review-page install-page overflow-y-auto"
       data-status={error ? "disconnected" : failed ? "failed" : data?.status}
+      data-welcome={welcome || undefined}
     >
       <main className="install-main">
         <section aria-live="polite">
@@ -182,24 +185,32 @@ export function InstallPage() {
               />
             }
           >
-            <ReservedLines
-              className="install-message"
-              lines={MESSAGE_LINES.wide}
-              narrowLines={MESSAGE_LINES.narrow}
-            >
-              {error
-                ? OFFLINE.line
-                : data?.step === "index" && data.index_progress
-                  ? data.index_progress.message
-                  : (data?.message ?? OFFLINE.reading)}
-            </ReservedLines>
+            {welcome ? (
+              <p className="install-message">{data.message}</p>
+            ) : (
+              <ReservedLines
+                className="install-message"
+                lines={MESSAGE_LINES.wide}
+                narrowLines={MESSAGE_LINES.narrow}
+              >
+                {error
+                  ? OFFLINE.line
+                  : data?.step === "index" && data.index_progress
+                    ? data.index_progress.message
+                    : (data?.message ?? OFFLINE.reading)}
+              </ReservedLines>
+            )}
             {/* A clock ticks every second: kept out of the live region's announcements. */}
-            <p className="install-elapsed" aria-hidden="true">
-              {elapsed ? word("running.elapsed").replace("{elapsed}", elapsed) : ""}
-            </p>
-            <ReservedLines className="install-note" lines={NOTE_LINES.wide} narrowLines={NOTE_LINES.narrow}>
-              {note}
-            </ReservedLines>
+            {welcome ? null : (
+              <p className="install-elapsed" aria-hidden="true">
+                {elapsed ? word("running.elapsed").replace("{elapsed}", elapsed) : ""}
+              </p>
+            )}
+            {welcome ? null : (
+              <ReservedLines className="install-note" lines={NOTE_LINES.wide} narrowLines={NOTE_LINES.narrow}>
+                {note}
+              </ReservedLines>
+            )}
           </EmptyPanel>
           {data?.step === "index" && data.index_progress?.progress != null && !failed ? (
             <progress
@@ -239,7 +250,7 @@ export function InstallPage() {
           </section>
         ) : null}
         {data && !error && isDesktop() ? <DesktopSetup data={data} /> : null}
-        {data ? (
+        {data && !welcome ? (
           <div className="install-account">
             {data.account_email ? <p>{data.account_email}</p> : null}
             {data.network_name ? (
@@ -250,7 +261,7 @@ export function InstallPage() {
             ) : null}
           </div>
         ) : null}
-        {data ? (
+        {data && !welcome ? (
           <>
             {/* The button keeps its slot even with nothing folded, so the list never moves. */}
             <button
