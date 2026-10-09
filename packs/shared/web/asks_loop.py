@@ -3,6 +3,7 @@
 Changelog:
 - 2026-10-08: add the local NATS loop with durable task delivery.
 - 2026-10-08: re-fetch the connection and reconnect every REFRESH_SECONDS, before a 24 h credential expires.
+- 2026-10-08: ask for the default set's connection; the route refuses a bare call from a member of several sets.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import nats
+from dotenv import dotenv_values
 
 from packs.ingestion.primitives.ask_worker import ask_worker
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
@@ -40,10 +42,17 @@ def _device_id(repo_root: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def _set_id(env_file: Path) -> str:
+    """The default set from the env file, the same keys the search primitives read."""
+    values = dotenv_values(env_file) if env_file.exists() else {}
+    return values.get("POWERPACKS_DEFAULT_SET_ID") or values.get("POWERSET_DEFAULT_SET_ID") or ""
+
+
 def _connection(env_file: Path) -> dict:
     token = auth.bearer_token(env_file)
+    query = f"?set_id={_set_id(env_file)}" if _set_id(env_file) else ""
     request = urllib.request.Request(
-        auth.api_base(env_file) + "/v2/nats/connection",
+        auth.api_base(env_file) + "/v2/nats/connection" + query,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
     try:

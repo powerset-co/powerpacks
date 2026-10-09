@@ -37,6 +37,23 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(asks_loop._device_id(root), first)
             self.assertEqual(path.stat().st_mtime_ns, modified)
 
+    def test_connection_asks_for_the_default_set(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        env_file = Path(temporary.name) / ".env"
+        env_file.write_text("POWERPACKS_DEFAULT_SET_ID=c41bf0d2-d68e-4afb-a0cd-58d6ef14cfa0\n", encoding="utf-8")
+        seen = {}
+
+        def opened(request, timeout):
+            seen["url"] = request.full_url
+            return io.BytesIO(b'{"url": "nats://localhost:4222"}')
+
+        with patch.object(asks_loop.auth, "bearer_token", return_value="t"), \
+                patch.object(asks_loop.auth, "api_base", return_value="https://api.example"), \
+                patch.object(asks_loop.urllib.request, "urlopen", side_effect=opened):
+            asks_loop._connection(env_file)
+        self.assertEqual(seen["url"], "https://api.example/v2/nats/connection?set_id=c41bf0d2-d68e-4afb-a0cd-58d6ef14cfa0")
+
     def test_connection_uses_upload_auth_helpers(self):
         env_file = Path("/synthetic/.env")
         with patch.object(asks_loop.auth, "bearer_token", return_value="synthetic-token") as token, \
