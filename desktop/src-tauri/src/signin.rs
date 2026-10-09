@@ -63,15 +63,22 @@ pub fn open(app: &AppHandle, url: &str, finish: Vec<String>, bounds: Bounds) -> 
         .map_err(|error| error.to_string())?;
     let opened = OPENED.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
-    thread::spawn(move || loop {
-        thread::sleep(WATCH);
-        if OPENED.load(Ordering::SeqCst) != opened || app.get_webview(LABEL).is_none() {
-            return;
-        }
-        let Ok(at) = pane.url() else { return };
-        if finish.iter().any(|prefix| at.as_str().starts_with(prefix)) {
-            let _ = app.emit(FINISHED_EVENT, at.as_str());
-            return;
+    thread::spawn(move || {
+        let mut seen = String::new();
+        loop {
+            thread::sleep(WATCH);
+            if OPENED.load(Ordering::SeqCst) != opened || app.get_webview(LABEL).is_none() {
+                return;
+            }
+            let Ok(at) = pane.url() else { return };
+            if at.as_str() != seen {
+                seen = at.to_string();
+                eprintln!("signin: at {seen}");
+            }
+            if finish.iter().any(|prefix| at.as_str().starts_with(prefix)) {
+                let _ = app.emit(FINISHED_EVENT, at.as_str());
+                return;
+            }
         }
     });
     Ok(())

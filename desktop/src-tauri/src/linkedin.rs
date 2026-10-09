@@ -50,7 +50,8 @@ fn eval(app: &AppHandle, expression: &str) -> Result<Value, String> {
     let (sender, receiver) = mpsc::channel();
     let sender = Arc::new(Mutex::new(Some(sender)));
     view.eval_with_callback(
-        format!("JSON.stringify({expression} ?? null)"),
+        // Parenthesised: JavaScript rejects `a && b ?? null`.
+        format!("JSON.stringify(({expression}) ?? null)"),
         move |text| {
             if let Some(sender) = sender.lock().expect("eval sender").take() {
                 let _ = sender.send(text);
@@ -82,7 +83,9 @@ fn wait_for(
 ) -> Result<Value, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        let value = eval(app, expression)?;
+        // No answer is "not ready": before the view's first page commits, wry queues scripts
+        // and drops their callbacks, and a page mid-navigation answers late.
+        let value = eval(app, expression).unwrap_or(Value::Null);
         if !value.is_null() {
             return Ok(value);
         }
@@ -203,9 +206,12 @@ pub fn read(app: &AppHandle, root: &Path) -> Result<Progress, String> {
         let url: Url = CONNECTIONS_URL.parse().expect("connections url");
         view.navigate(url).map_err(|error| error.to_string())?;
     }
+    // The view may still show the page it was on; wait for the list itself.
     wait_for(
         app,
-        &format!("document.querySelector({CARD_LINK:?}) && true"),
+        &format!(
+            "location.href.startsWith({CONNECTIONS_URL:?}) && document.querySelector({CARD_LINK:?}) && true || null"
+        ),
         CARDS_TIMEOUT,
         |_| {},
     )?;

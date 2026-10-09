@@ -84,9 +84,14 @@ async fn linkedin_read(
     boot: State<'_, Arc<Boot>>,
 ) -> Result<linkedin::Progress, String> {
     let root = boot::require_root(&boot)?;
-    tauri::async_runtime::spawn_blocking(move || linkedin::read(&app, &root))
+    let read = tauri::async_runtime::spawn_blocking(move || linkedin::read(&app, &root))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    match &read {
+        Ok(progress) => eprintln!("linkedin: read {} of {}", progress.read, progress.total),
+        Err(error) => eprintln!("linkedin: read failed: {error}"),
+    }
+    read
 }
 
 /// Bring the window forward, after a sign-in that had to happen in the browser.
