@@ -1,35 +1,163 @@
-/* The sets panel at the top of the rail: who can see the shared network. */
-.sets {
-  margin: 0 0 14px;
-  padding: 10px 8px 12px;
-  border: 1px solid var(--line);
+/* The head's share control (ShareMenu): a split button, its set menu, and the sets dialog (SetsDialog). */
+.share-menu {
+  position: relative;
+}
+.share-split {
+  display: inline-flex;
+}
+.share-split .share-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 10px;
+}
+.share-split .share-caret {
+  width: 28px;
+  padding: 0;
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  justify-content: center;
+}
+.share-split .share-caret::after {
+  margin: 0;
+}
+.share-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  line-height: 1.15;
+}
+.share-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.share-target-icon {
+  width: 11px;
+  height: 11px;
+}
+.share-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 260px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-m);
   background: var(--card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  animation: feedback-pop-in 0.15s ease-out;
 }
-.sets-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 2px 6px;
-}
-.sets-head h2 {
-  margin: 0;
+.share-popover-title,
+.share-popover-note {
+  margin: 4px 8px 6px;
   color: var(--faint);
   font-size: 10.5px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.sets-refresh {
+.share-popover-note {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+.share-popover-rule {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--line);
+}
+.share-option {
   display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out);
+}
+.share-option:hover {
+  background: var(--surface-2);
+}
+.share-option.manage {
+  grid-template-columns: 1fr;
+  color: var(--muted);
+  font-weight: 600;
+}
+.share-option.manage:hover {
+  color: var(--foreground);
+}
+.share-option-icon {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+.share-option-icon.local,
+.set-icon.local {
+  color: var(--ok);
+}
+.share-option.picked .share-option-icon:not(.local) {
+  color: var(--primary);
+}
+.share-option-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.share-option-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-option-note {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+.share-check {
+  width: 14px;
+  height: 14px;
+  color: var(--primary);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+.share-check.on {
+  opacity: 1;
+}
+
+/* The sets dialog */
+.sets-dialog {
+  max-width: 460px;
+}
+.sets-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+.sets-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-s);
   background: transparent;
   color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
   transition:
     color var(--t-fast) var(--ease-out),
@@ -46,39 +174,28 @@
 .sets-refresh .turning {
   animation: turn var(--t-slow) linear infinite;
 }
-.sets-shared {
-  margin: 0 2px 10px;
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-.sets-shared strong {
-  color: var(--foreground);
-  font-variant-numeric: tabular-nums;
-}
-.sets-empty,
-.sets-error {
-  margin: 4px 2px 8px;
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.45;
+.sets-divider {
+  margin: 4px 4px 0;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .sets-error {
   display: flex;
   flex-direction: column;
   gap: 8px;
   color: var(--foreground);
+  font-size: 12px;
 }
 .set-list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.set-row {
+.set-row + .set-row {
   border-top: 1px solid var(--line);
-}
-.set-row:first-child {
-  border-top: 0;
 }
 .set-head {
   display: grid;
@@ -87,35 +204,29 @@
     "icon name"
     ". meta";
   align-items: center;
-  column-gap: 8px;
+  column-gap: 10px;
   row-gap: 3px;
   width: 100%;
-  padding: 8px 4px;
+  padding: 10px 6px;
   border: 0;
+  border-radius: var(--radius-s);
   background: transparent;
   color: var(--foreground);
-  font-size: 12.5px;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-s);
   transition: background-color var(--t-fast) var(--ease-out);
 }
 .set-head:hover {
   background: var(--surface-2);
 }
-.set-cloud {
+.set-icon {
   grid-area: icon;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   color: var(--muted);
 }
-.set-meta {
-  grid-area: meta;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.set-row[data-open="true"] .set-cloud {
+.set-row[data-open="true"] .set-icon:not(.local) {
   color: var(--primary);
 }
 .set-name {
@@ -125,11 +236,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.set-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .set-tag {
   padding: 1px 6px;
   border-radius: 999px;
-  background: var(--primary-soft);
-  color: var(--primary);
+  background: var(--ok-soft);
+  color: var(--ok);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -142,12 +259,12 @@
   white-space: nowrap;
 }
 .set-body {
-  padding: 2px 4px 10px 27px;
+  padding: 2px 6px 12px 32px;
 }
 .set-members {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -155,24 +272,20 @@
 .set-members li {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  font-size: 12px;
-}
-.set-members .set-role {
-  align-self: flex-start;
-  margin-top: 2px;
+  font-size: 12.5px;
 }
 .set-avatar {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   flex: none;
   border-radius: 50%;
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 9px;
+  font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -190,23 +303,21 @@
 }
 .set-member-email {
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 .set-role {
   margin-left: auto;
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 .set-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 10px;
+  gap: 12px;
+  margin-top: 12px;
   color: var(--faint);
-  font-size: 11px;
-}
-.set-delete {
-  white-space: nowrap;
+  font-size: 11.5px;
 }
 .set-delete,
 .sets-add {
@@ -214,35 +325,37 @@
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
   transition: color var(--t-fast) var(--ease-out);
 }
 .set-delete:hover {
   color: var(--bad, #f87171);
 }
 .sets-add {
-  margin: 10px 4px 0;
+  align-self: flex-start;
+  margin: 2px 6px 0;
 }
 .sets-add:hover {
   color: var(--foreground);
 }
 .sets-new {
   display: flex;
-  gap: 6px;
-  margin: 10px 2px 0;
+  gap: 8px;
+  margin: 2px 0 0;
 }
 .sets-new input {
   min-width: 0;
   flex: 1;
-  height: 28px;
-  padding: 0 8px;
+  height: 32px;
+  padding: 0 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-s);
   background: var(--background);
   color: var(--foreground);
-  font-size: 12px;
+  font-size: 13px;
 }
 .sets-new input:focus {
   outline: 2px solid var(--primary-soft);
@@ -252,14 +365,13 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin: 8px 2px 0;
-  padding: 8px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-s);
   background: var(--surface-2);
   color: var(--foreground);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .sets-confirm > span {
   flex: 1 1 100%;

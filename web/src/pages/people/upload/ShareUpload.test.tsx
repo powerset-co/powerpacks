@@ -18,9 +18,18 @@ interface Routes {
   upload?: () => Answer
 }
 
+function setsResponse(): Response {
+  return new Response(JSON.stringify({ sets: [], shared: 0, default_set_id: "" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
 /** fetch over the three upload routes; each call asks its route for the answer now. */
 function serve(routes: Routes) {
   const fetch = vi.fn((url: string, init?: RequestInit) => {
+    // The share menu beside the button reads the sets once; none here.
+    if (url.includes("/sets")) return Promise.resolve(setsResponse())
     const route = init?.method !== "POST" ? routes.get : url.endsWith("/check") ? routes.check : routes.upload
     const answer = route?.() ?? new Error(`unexpected ${url}`)
     if (answer instanceof Error) return Promise.reject(answer)
@@ -271,6 +280,6 @@ describe("ShareUpload dialog", () => {
     show()
     await screen.findByRole("button", { name: "Share network" })
     await new Promise((resolve) => setTimeout(resolve, 1300))
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch.mock.calls.filter(([url]) => !url.includes("/sets"))).toHaveLength(1)
   })
 })

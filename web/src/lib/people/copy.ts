@@ -181,12 +181,19 @@ export function sharedToast(count: number): string {
 }
 
 // The Build and View logbook actions on the bar and in the drawer, the reader, and the toasts.
-/** The sets panel (pages/people/sets/SetsPanel.tsx). */
+/** The share menu and the sets dialog (pages/people/sets). */
 export const SETS = {
   title: "Sets",
+  lead: "Your shared network is visible to the members of every set you belong to.",
+  choose: "Choose a set",
+  shareTo: "Share to",
+  manage: "Manage sets…",
+  personalNetwork: "Personal network",
+  personalNote: "Your shared network, on this machine.",
   refresh: "Refresh from Powerset",
-  personal: "Personal",
-  none: "You're not in any set yet.",
+  local: "Local",
+  sharedWith: "Shared with",
+  none: "Not shared with any set yet.",
   newSet: "New set",
   namePlaceholder: "Set name",
   create: "Create",
@@ -196,10 +203,7 @@ export const SETS = {
   signIn: "Sign in",
   members: (count: number) => plural(count, "member"),
   people: (count: number) => `${count.toLocaleString()} people across its members`,
-  sharedLine: (sets: number) =>
-    sets
-      ? `people in your shared network, visible to the members of ${sets === 1 ? "this set" : "these sets"}`
-      : "people in your shared network",
+  shared: (count: number) => `${plural(count, "person")} shared`,
   confirmDelete: (name: string) => `Delete “${name}” for everyone in it?`,
 } as const
 
