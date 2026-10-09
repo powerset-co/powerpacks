@@ -1,4 +1,8 @@
-"""Private hosted snapshots use the existing login and never modify local labels."""
+"""Verify snapshot uploads and pinned-candidate asks with synthetic data and stubbed HTTP.
+
+Changelog:
+- 2026-10-08: Cover ask payloads, LinkedIn forms, skipped rows, and saved asks.
+"""
 
 from __future__ import annotations
 
@@ -34,6 +38,73 @@ class UploadSearchResultsTests(unittest.TestCase):
             self.assertEqual(UploadSearchResults(self.run_dir).run(), {"status": "needs_auth"})
         export.assert_not_called()
         post.assert_not_called()
+
+    def test_signed_out_ask_does_not_export_resolve_set_or_upload(self):
+        with patch.object(auth, "bearer_token", side_effect=SystemExit("sign in")), \
+                patch.object(upload.pg, "fetch_default_set_id") as resolve, \
+                patch.object(upload, "post_gzip_json") as post:
+            result = UploadSearchResults(self.run_dir, ask="Who fits?").run()
+        self.assertEqual(result, {"status": "needs_auth"})
+        resolve.assert_not_called()
+        post.assert_not_called()
+        self.assertFalse((self.run_dir / "ask.json").exists())
+
+    def test_ask_cli_posts_pinned_candidates_and_saves_response(self):
+        urls = [
+            "https://www.linkedin.com/in/jordan-bravo-1a2b/",
+            "http://linkedin.com/in/JORDAN-BRAVO-2a3b?trk=search",
+            "linkedin.com/in/jordan-bravo-3a4b#about",
+            "www.linkedin.com/in/jordan-bravo-4a5b/",
+            "https://uk.linkedin.com/in/jordan%2Dbravo-5a6b/?trk=search#about",
+        ]
+        rows = [{"person_id": "p1", "name": "Casey Example", "linkedin_url": ""}]
+        rows.extend({"person_id": f"p{rank}", "name": "Jordan Bravo", "linkedin_url": url}
+                    for rank, url in enumerate(urls, start=2))
+        rows.append({"person_id": "p7", "name": "Casey Example", "linkedin_url": " "})
+        rows.append({"person_id": "p8", "name": "Not Pinned", "linkedin_url": "https://www.linkedin.com/in/not-pinned-9z9z/"})
+        assignments = {row["person_id"]: ["pinned"] for row in rows[:7]}
+        assignments["p3"] = ["5", "Pinned"]
+        assignments["p8"] = ["5"]
+        slugs = [f"jordan-bravo-{suffix}" for suffix in ("1a2b", "2a3b", "3a4b", "4a5b", "5a6b")]
+        ask = {"ask_id": "00000000-0000-4000-8000-000000000001", "candidates": [
+            {"public_identifier": slug, "owners": ["owner-one", "owner-two"] if index == 0 else []}
+            for index, slug in enumerate(slugs)
+        ]}
+        rendered = {"search": {"run_id": self.run_dir.name, "candidates": rows},
+                    "tags": {"tags": ["pinned", "5"], "assignments": assignments}}
+        set_id = "00000000-0000-4000-8000-000000000002"
+        with patch.object(auth, "bearer_token", return_value="synthetic-token"), \
+                patch.object(auth, "api_base", return_value="https://api.example.com"), \
+                patch.object(snapshot, "export_snapshot", return_value=rendered), \
+                patch.object(upload.pg, "fetch_default_set_id", return_value={"set_id": set_id}) as resolve, \
+                patch.object(upload, "post_gzip_json", return_value={**self.response, "ask": ask}) as post, \
+                patch("sys.stdout", new_callable=io.StringIO) as stdout, \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            code = main(["--run-dir", str(self.run_dir), "--env-file", str(self.env_file),
+                         "--ask", "Who fits?"])
+        self.assertEqual(code, 0)
+        resolve.assert_called_once_with(env_file=self.env_file)
+        post.assert_called_once_with("https://api.example.com", "/v2/local-searches", "synthetic-token", {
+            "source_run_id": self.run_dir.name, "snapshot": rendered,
+            "ask": {"question": "Who fits?", "set_id": set_id, "candidates": [
+                {"public_identifier": slug, "linkedin_url": url, "name": "Jordan Bravo", "local_rank": rank}
+                for rank, (slug, url) in enumerate(zip(slugs, urls), start=2)
+            ]},
+        }, timeout=120)
+        self.assertEqual(json.loads((self.run_dir / "ask.json").read_text()), {**ask, "question": "Who fits?"})
+        self.assertEqual(stderr.getvalue(), "asked 5 pinned candidates, 2 pinned without LinkedIn skipped, owners found for 1\n")
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "uploaded")
+
+    def test_ask_without_default_set_does_not_upload(self):
+        rendered = {"search": {"run_id": "example", "candidates": []}, "tags": {"tags": [], "assignments": {}}}
+        with patch.object(auth, "bearer_token", return_value="synthetic-token"), \
+                patch.object(snapshot, "export_snapshot", return_value=rendered), \
+                patch.object(upload.pg, "fetch_default_set_id", return_value={"set_id": None}), \
+                patch.object(upload, "post_gzip_json") as post:
+            result = UploadSearchResults(self.run_dir, ask="Who fits?").run()
+        self.assertEqual(result["status"], "failed")
+        post.assert_not_called()
+        self.assertFalse((self.run_dir / "ask.json").exists())
 
     def test_upload_uses_existing_auth_and_only_the_render_snapshot(self):
         rendered = {"search": {"run_id": self.run_dir.name}}

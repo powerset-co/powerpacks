@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-08: start the Ask the Set daemon when the store-backed routes mount.
 - 2026-10-07: created from v1's `deep_context/review/cli.py` and `server.py`: the same persistent
   handler, port ownership and health identity (`reconcile_review_web`, kept so an older release's
   page on the port is recognised and replaced), with the v1 review, its event stream and the
@@ -78,6 +79,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.ingestion.primitives.share.web.server import share_routes
     from packs.search.primitives.deep_search.results_web.api import search_api
     from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
+    from packs.shared.web import asks_loop
 
     load_env()
     data_root: Path = root / ".powerpacks"
@@ -92,6 +94,8 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     searches_json = search_api(searches)
     accounts = AccountsApi()
     tasks = TasksApi()
+    threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
+                     name="asks", daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -106,7 +110,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches.post(self, parsed):
+            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches_json.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:
                 if not share.post(self, parsed):
