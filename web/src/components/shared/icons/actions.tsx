@@ -44,6 +44,25 @@ export function FlagIcon(props: IconProps) {
   )
 }
 
+/** Copy to the clipboard: two sheets. */
+export function CopyIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
+    </svg>
+  )
+}
+
+/** A done mark, for a copy that landed. */
+export function CheckIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  )
+}
+
 /** Setup's fresh start: a spark. */
 export function SparkIcon(props: IconProps) {
   return (

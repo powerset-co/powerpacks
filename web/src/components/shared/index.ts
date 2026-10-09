@@ -10,7 +10,17 @@ export { EmptyState } from "./EmptyState"
 export { FacetShell } from "./FacetShell"
 export { Fold } from "./Fold"
 export { FacetValue } from "./FacetValue"
-export { CLOSE_MARK, FlagIcon, HiveIcon, ImportIcon, PinIcon, PlusIcon, SparkIcon } from "./icons/actions"
+export {
+  CLOSE_MARK,
+  CheckIcon,
+  CopyIcon,
+  FlagIcon,
+  HiveIcon,
+  ImportIcon,
+  PinIcon,
+  PlusIcon,
+  SparkIcon,
+} from "./icons/actions"
 export { CHANNEL_ICON } from "./icons/channels"
 export { initials } from "./initials"
 export { Kbd } from "./Kbd"

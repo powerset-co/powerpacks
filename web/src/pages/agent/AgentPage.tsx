@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
+import { useFullAccessTip } from "@/lib/agent/fullAccessTip"
 import { answer, newChat, send, setFullAccess, stop, useAgent } from "@/lib/agent/store"
 import { chatRun } from "@/lib/agent/searchRun"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
@@ -15,6 +16,7 @@ import { ApprovalCard } from "./ApprovalCard"
 import { ChatSidebar } from "./ChatSidebar"
 import { CodexGate } from "./CodexGate"
 import { Composer } from "./Composer"
+import { FullAccessTip } from "./FullAccessTip"
 import { ComposeIcon, SidebarIcon } from "./icons"
 import { Transcript } from "./Transcript"
 
@@ -91,6 +93,12 @@ function Conversation({ onToggle, runTitle }: { onToggle: () => void; runTitle: 
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
   const waiting = agent.running && agent.approvals.length === 0 && agent.entries.at(-1)?.kind !== "agent"
+  const tip = useFullAccessTip()
+  // Full access on retires the tip for good; the switch and the tip's button both go through here.
+  const fullAccess = (on: boolean) => {
+    if (on) tip.dismiss()
+    void setFullAccess(on)
+  }
 
   useEffect(() => {
     const element = scroller.current
@@ -119,6 +127,9 @@ function Conversation({ onToggle, runTitle }: { onToggle: () => void; runTitle: 
           ) : (
             <Transcript entries={agent.entries} />
           )}
+          {tip.shown && agent.approvals.length > 0 && !agent.fullAccess && (
+            <FullAccessTip onEnable={() => fullAccess(true)} onDismiss={tip.dismiss} />
+          )}
           {agent.approvals.map((approval) => (
             <ApprovalCard
               key={String(approval.requestId)}
@@ -139,7 +150,7 @@ function Conversation({ onToggle, runTitle }: { onToggle: () => void; runTitle: 
         fullAccess={agent.fullAccess}
         onSend={(text) => void send(text)}
         onStop={() => void stop()}
-        onFullAccess={(on) => void setFullAccess(on)}
+        onFullAccess={fullAccess}
       />
     </section>
   )
