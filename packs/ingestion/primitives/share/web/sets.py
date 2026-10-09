@@ -179,19 +179,21 @@ class Sets:
         """Tell the inviter's agent; an accepted invite is a set stored here with the inviter and me."""
         envelope = next(envelope for envelope in self.received() if envelope.id == invite_id)
         invite = cast(SetInvite, envelope.payload)
-        self.message(envelope.from_operator_id, REPLY,
-                     {"invite_id": invite_id, "answer": ACCEPTED if accepted else DECLINED})
+        # The set is stored before the owner hears the accept, so the owner's member list finds it here.
         if accepted:
             inviter = Member(envelope.from_name, invite.from_email, OWNER, envelope.from_operator_id)
             me = replace(self.me(), role=MEMBER)
             queries_share.insert_set(self.conn, invite.set_id, invite.set_name, MEMBER,
                                      json.dumps([asdict(inviter), asdict(me)]), now_iso())
+        self.message(envelope.from_operator_id, REPLY,
+                     {"invite_id": invite_id, "answer": ACCEPTED if accepted else DECLINED})
         agent_inbox.remove(self.data_root, envelope)
 
     # ---- the relay's changes, applied by the asks loop only
 
     def apply_inbox(self) -> None:
-        """Apply each set message the relay delivered, oldest first, then delete it from the inbox."""
+        """Apply each set message the relay delivered, oldest first, then delete it from the inbox. Each
+        change sends its messages before it writes, so a failed send leaves the message to apply again."""
         for envelope in agent_inbox.read(self.data_root, REPLY, DELETED, LEFT, MEMBERS):
             message = envelope.payload
             if isinstance(message, SetInviteReply):
@@ -212,12 +214,14 @@ class Sets:
         if reply.answer == DECLINED:
             write_json(path, {**invite, "status": DECLINED})
             return
+        for view in self.kept():  # none when the set was deleted while the invite was open
+            if view.set_id == invite["set_id"]:
+                joined = Member(name or invite["email"], invite["email"], MEMBER, operator_id)
+                members = view.members
+                if operator_id not in {member.operator_id for member in members}:
+                    members = (*members, joined)
+                self._save_members(view, members)
         path.unlink()
-        if invite["set_id"] not in {view.set_id for view in self.kept()}:
-            return  # deleted while the invite was open
-        view = self._view(invite["set_id"])
-        joined = Member(name or invite["email"], invite["email"], MEMBER, operator_id)
-        self._save_members(view, (*view.members, joined))
 
     def _deleted(self, sender: str, set_id: str) -> None:
         """The owner deleted a set: drop it here, and drop any invite to it still unanswered."""
@@ -244,13 +248,13 @@ class Sets:
                 queries_share.update_set_members(self.conn, view.set_id, json.dumps(listed))
 
     def _save_members(self, view: SetView, members: tuple[Member, ...]) -> None:
-        """Store an owned set's new member list and send it to every other member."""
+        """Send an owned set's new member list to every other member, then store it."""
         listed = [asdict(member) for member in members]
-        queries_share.update_set_members(self.conn, view.set_id, json.dumps(listed))
         me = self.me()
         for member in members:
             if member.operator_id != me.operator_id:
                 self.message(member.operator_id, MEMBERS, {"set_id": view.set_id, "members": listed})
+        queries_share.update_set_members(self.conn, view.set_id, json.dumps(listed))
 
     def _view(self, set_id: str) -> SetView:
         return next(view for view in self.kept() if view.set_id == set_id)

@@ -129,6 +129,28 @@ class SetsTests(unittest.TestCase):
         self.deliver("casey")
         self.assertEqual(len(self.emails("casey")), 3)
 
+    def test_a_failed_member_list_send_is_applied_on_the_next_pull(self) -> None:
+        self.joined("casey")
+        set_id = self.jordan.kept()[0].set_id
+        self.jordan.invite(set_id, "riley@example.com")
+        self.deliver("riley")
+        self.riley.answer(self.sent[-1]["id"], accepted=True)
+        reply = self.sent[-1]
+        with mock.patch.object(Sets, "message", side_effect=agent_inbox.CloudError("relay down")), \
+                self.assertRaises(agent_inbox.CloudError):
+            self.deliver_message(reply, "jordan")
+        self.assertEqual(len(self.emails("jordan")), 2)  # nothing half-written
+        self.jordan.apply_inbox()  # the next pull
+        self.assertEqual(self.emails("jordan"), ["jordan@example.com", "casey@example.com", "riley@example.com"])
+
+    def test_accepting_a_second_invite_adds_no_second_member(self) -> None:
+        set_id = self.joined("casey")
+        self.jordan.invite(set_id, "casey@example.com")
+        self.deliver("casey")
+        self.casey.answer(self.sent[-1]["id"], accepted=True)
+        self.deliver("jordan")
+        self.assertEqual(self.emails("jordan"), ["jordan@example.com", "casey@example.com"])
+
     def test_decline_is_shown_to_the_owner_and_keeps_the_set_off_the_invitee(self) -> None:
         self.jordan.create("Founders")
         self.jordan.invite(self.jordan.kept()[0].set_id, "casey@example.com")
