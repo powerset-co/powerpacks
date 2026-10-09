@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.22.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.0...powerpacks-v3.22.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* preserve Google login through navigation ([#785](https://github.com/powerset-co/powerpacks/issues/785)) ([2a5caf9](https://github.com/powerset-co/powerpacks/commit/2a5caf929bf7ca8d6b305bf7282e7d0f9a921555))
+
 ## [3.22.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.21.2...powerpacks-v3.22.0) (2026-10-09)
 
 
