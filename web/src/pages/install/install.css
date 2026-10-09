@@ -130,7 +130,8 @@
   gap: 12px;
   margin-top: 20px;
 }
-.install-page .install-action button {
+/* The page's own buttons; the desktop controls inside the section style themselves. */
+.install-page .install-action > button {
   min-height: 44px;
   padding: 8px 12px;
   border: 1px solid var(--border);
@@ -141,7 +142,7 @@
   color: white;
   border-color: var(--primary);
 }
-.install-page .install-action button:disabled {
+.install-page .install-action > button:disabled {
   opacity: 0.5;
 }
 .install-page .install-action p {
@@ -214,8 +215,16 @@
   color: var(--muted);
 }
 
-/* The welcome holds only the title, one line and the choice. */
+/* The welcome holds only the title, one line and the choice, centred in the window. */
+.install-page[data-welcome] {
+  display: grid;
+  align-content: center;
+}
+.install-page[data-welcome] .install-main {
+  width: min(100% - 40px, 560px);
+  padding: 32px 0;
+}
 .install-page[data-welcome] .empty-state {
   min-height: 0;
-  padding-bottom: 20px;
+  padding: 0 0 8px;
 }

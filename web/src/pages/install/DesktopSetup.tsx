@@ -148,8 +148,8 @@ function Permissions({ onDone }: { onDone: () => void }) {
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="text-[13.5px] font-bold">Allow Full Disk Access</span>
           <span className="text-xs leading-snug text-muted-foreground">
-            Powerpacks reads your iMessage history and Contacts on this Mac to find the people you talk to.
-            Turn Powerpacks on in the list; macOS will ask to quit and reopen it, and you land back here.
+            Powerpacks reads iMessage and Contacts on this Mac to find who you talk to. Turn it on in the
+            list; macOS reopens the app and you land back here.
           </span>
         </div>
         <Button

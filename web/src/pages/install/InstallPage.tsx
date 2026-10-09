@@ -186,7 +186,7 @@ export function InstallPage() {
             }
           >
             {welcome ? (
-              <p className="install-message">{data.message}</p>
+              <p className="install-message">Start fresh, or bring over what you already have on this Mac.</p>
             ) : (
               <ReservedLines
                 className="install-message"
