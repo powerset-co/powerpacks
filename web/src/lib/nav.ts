@@ -22,10 +22,13 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "setup", label: "Setup", href: "/install" },
 ]
 
-/** Chat with the Codex agent; only the desktop app can run it, so only the desktop app shows it. */
-export const AGENT: Page = { key: "agent", label: "Chat", href: "/agent" }
+/** The desktop app's one search page: chat with the Codex agent beside the saved searches and
+ *  the run it opened. It replaces the browser's Searches page there. */
+export const AGENT: Page = { key: "agent", label: "Searches", href: "/agent" }
 
-export const PAGES: readonly Page[] = isDesktop() ? [AGENT, ...BROWSER_PAGES] : BROWSER_PAGES
+export const PAGES: readonly Page[] = isDesktop()
+  ? [AGENT, ...BROWSER_PAGES.filter(({ key }) => key !== "searches")]
+  : BROWSER_PAGES
 
 /** The page a routed path belongs to: its href or a path under it; any other path is HOME,
  *  which the router's catch-all redirects to. */
