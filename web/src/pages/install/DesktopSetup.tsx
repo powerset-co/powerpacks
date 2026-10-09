@@ -149,6 +149,13 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
         onAnswer={(url) => answer({ linkedinUrl: url })}
       />
     )
+  } else if (action?.kind === "permission") {
+    // The page's own button opens System Settings; after the grant, setup restarts here.
+    control = (
+      <Button variant="primary" disabled={busy} onClick={() => answer({})}>
+        I turned it on
+      </Button>
+    )
   } else if (data.status === "failed" || (data.status === "waiting" && STOPPED.has(action?.kind ?? ""))) {
     control = (
       <Button variant="primary" disabled={busy} onClick={() => answer({})}>

@@ -171,7 +171,7 @@ class SourceOnboarding:
 
     def _tools(self, source: Source, step: InstallStep) -> bool:
         self._write("tools.preparing", step=step)
-        payload = ImportTools(sources=(source.value,)).run()
+        payload = ImportTools(sources=(source.value,), desktop=DESKTOP).run()
         return self._result(payload, "tools.ready", waiting="tools.needs_password", failed="tools.failed", step=step,
                             action={"command": payload["command"]} if "command" in payload else None)
 
@@ -310,7 +310,9 @@ class SourceOnboarding:
         app = Path(permission_app() or "").stem or "the app running this session"
         if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
             self._write("imessage.permission", app=app, details=access, action=settings)
-            while (access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
+            # macOS answers a process once: a grant made while this process waits never reaches
+            # it. Under the desktop app, hand back instead; the app resumes setup in a new process.
+            while (not DESKTOP and access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
                    and not access["chat_db"].get("missing_tables")):
                 time.sleep(_PERMISSION_POLL_SECONDS)
                 access = extractor.check(strict=True)

@@ -115,7 +115,30 @@ pub struct Answer {
 
 /// Resume `bin/onboard` in the background with the user's answer; it outlives the app like the
 /// page server does.
+/// Stop a setup process still waiting from before (its lock would refuse a new run), so the
+/// new one starts fresh: a macOS permission granted meanwhile only reaches a new process.
+fn stop_waiting(root: &Path) {
+    let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
+        return;
+    };
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let pid = manifest
+        .get("installer_pid")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if pid == 0 || pid == std::process::id() as u64 {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+}
+
 pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
+    stop_waiting(root);
     let mut steps = Vec::new();
     if let Some(url) = answer.linkedin_url {
         if !url.contains("linkedin.com/in/") {
