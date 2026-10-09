@@ -208,6 +208,7 @@ export const SETS = {
   memberHead: "Member",
   roleHead: "Role",
   statusHead: "Status",
+  sharesHead: "Shares",
   neverSeen: "Not seen yet",
   newSet: "New set",
   namePlaceholder: "Set name",

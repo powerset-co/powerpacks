@@ -85,6 +85,7 @@ class RelayInviteTests(unittest.TestCase):
         founders = mine["sets"][1]
         self.assertEqual((founders["member_count"], founders["person_count"], founders["invited"]), (2, 10, []))
         self.assertEqual(founders["members"][-1]["name"], "Casey Delta")
+        self.assertEqual([m["person_count"] for m in founders["members"]], [5, 5])
         json.dumps(mine)
 
     def test_decline_keeps_the_set_off_the_invitee(self) -> None:

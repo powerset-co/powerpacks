@@ -12,6 +12,8 @@ export interface SetMember {
   operator_id: string
   /** The member's last relay heartbeat; "" when this machine has never seen one. */
   last_seen_at: string
+  /** People this member shares into the share_v1 network: what they bring to the set. */
+  person_count: number
 }
 
 /** An invite this owner sent that has no accepted answer yet. */

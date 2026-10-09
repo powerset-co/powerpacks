@@ -14,7 +14,7 @@ whose allowed_operator_ids hold any member's operator id.
 Created: 2026-10-08
 Changelog:
 - 2026-10-08: local sets; no /v2/sets. Invites over the relay, joined sets stored on accept, each member's
-  last heartbeat, and the set's people counted in the share_v1 namespace.
+  last heartbeat, and the set's people (and each member's) counted in the share_v1 namespace.
 """
 from __future__ import annotations
 
@@ -189,8 +189,9 @@ class Sets:
         return int(response.aggregations["people"])
 
 
-def _member(member: Member, seen: dict[str, str]) -> dict[str, Any]:
-    return {**asdict(member), "last_seen_at": seen.get(member.operator_id, "")}
+def _member(member: Member, seen: dict[str, str], shared: dict[str, int]) -> dict[str, Any]:
+    return {**asdict(member), "last_seen_at": seen.get(member.operator_id, ""),
+            "person_count": shared.get(member.operator_id, 0)}
 
 
 def payload(sets: Sets, shared: int) -> dict[str, Any]:
@@ -199,9 +200,16 @@ def payload(sets: Sets, shared: int) -> dict[str, Any]:
     seen = sets.presence()
     sent = sets.sent()
     me = sets.me()
+    contributed: dict[str, int] = {}  # people each member shares, one count per operator per answer
+
+    def counted(held: Member) -> dict[str, Any]:
+        if held.operator_id not in contributed:
+            contributed[held.operator_id] = sets.people([held.operator_id])
+        return _member(held, seen, contributed)
+
     items: list[dict[str, Any]] = [{"set_id": PERSONAL_ID, "name": "Personal network", "role": OWNER,
                                     "is_personal": True, "member_count": 1, "person_count": shared,
-                                    "members": [_member(me, seen)], "invited": []}]
+                                    "members": [_member(me, seen, {me.operator_id: shared})], "invited": []}]
     for view in sets.kept():
         joined = [Member(invite["name"] or invite["email"], invite["email"], MEMBER, invite["operator_id"])
                   for invite in sent if invite["set_id"] == view.set_id and invite["status"] == ACCEPTED]
@@ -210,7 +218,7 @@ def payload(sets: Sets, shared: int) -> dict[str, Any]:
         items.append({"set_id": view.set_id, "name": view.name, "role": view.role, "is_personal": False,
                       "member_count": len(members),
                       "person_count": sets.people([member.operator_id for member in members]),
-                      "members": [_member(member, seen) for member in members],
+                      "members": [counted(held) for held in members],
                       "invited": [{"id": invite["id"], "email": invite["email"], "status": invite["status"]}
                                   for invite in sent if invite["set_id"] == view.set_id and invite["status"] != ACCEPTED]})
     invites = [{"id": invite["id"], "set_name": invite["payload"]["set_name"], "from": invite["from"]["name"],

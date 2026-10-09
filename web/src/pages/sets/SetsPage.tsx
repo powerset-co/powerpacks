@@ -31,21 +31,37 @@ export function SetsPage() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {local.length ? (
-              <select
-                aria-label={SETS.choose}
-                value={chosen?.set_id ?? ""}
-                onChange={(event) => {
-                  choose(event.target.value)
-                  setConfirming(false)
-                }}
-                className="h-8 min-w-[220px] rounded-[var(--radius-s)] border border-line-strong bg-background px-2.5 text-[13px] text-foreground"
-              >
-                {local.map((set) => (
-                  <option key={set.set_id} value={set.set_id}>
-                    {set.name}
-                  </option>
-                ))}
-              </select>
+              <span className="relative inline-flex">
+                <select
+                  aria-label={SETS.choose}
+                  value={chosen?.set_id ?? ""}
+                  onChange={(event) => {
+                    choose(event.target.value)
+                    setConfirming(false)
+                  }}
+                  className="h-8 min-w-[220px] cursor-pointer appearance-none rounded-[var(--radius-s)] border border-line-strong bg-background pl-2.5 pr-8 text-[13px] text-foreground"
+                >
+                  {local.map((set) => (
+                    <option key={set.set_id} value={set.set_id}>
+                      {set.name}
+                    </option>
+                  ))}
+                </select>
+                <svg
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                  className="pointer-events-none absolute right-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
+                >
+                  <path
+                    d="M4 6l4 4 4-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
             ) : null}
             <Button size="sm" variant="primary" onClick={() => setNaming(true)}>
               + {SETS.newSet}
@@ -242,6 +258,7 @@ function SetCard({ set, busy, confirming, onConfirm, onInvite, onDelete }: SetCa
           <tr className="text-left text-[10.5px] uppercase tracking-[.08em] text-faint">
             <th className="px-5 py-2.5 font-bold">{SETS.memberHead}</th>
             <th className="px-3 py-2.5 font-bold">{SETS.roleHead}</th>
+            <th className="px-3 py-2.5 text-right font-bold">{SETS.sharesHead}</th>
             <th className="px-5 py-2.5 text-right font-bold">{SETS.statusHead}</th>
           </tr>
         </thead>
@@ -252,6 +269,9 @@ function SetCard({ set, busy, confirming, onConfirm, onInvite, onDelete }: SetCa
                 <Identity name={member.name} email={member.email} />
               </td>
               <td className="px-3 py-3 capitalize text-muted-foreground">{member.role}</td>
+              <td className="px-3 py-3 text-right tabular-nums text-muted-foreground">
+                {SETS.people(member.person_count)}
+              </td>
               <td className="px-5 py-3 text-right">
                 <Presence member={member} />
               </td>
@@ -263,6 +283,7 @@ function SetCard({ set, busy, confirming, onConfirm, onInvite, onDelete }: SetCa
                 <Identity name="" email={invite.email} />
               </td>
               <td className="px-3 py-3">—</td>
+              <td className="px-3 py-3 text-right">—</td>
               <td className="px-5 py-3 text-right">
                 <Badge variant={invite.status === "declined" ? "bad" : "warn"}>
                   {invite.status === "declined" ? SETS.declined : SETS.invited}
@@ -327,7 +348,7 @@ function InviteForm({ onInvite, busy }: { onInvite: (email: string) => Promise<u
     )
   }
   return (
-    <form onSubmit={submit} className="flex items-center gap-2">
+    <form onSubmit={submit} className="flex max-w-[420px] items-center gap-2">
       <input
         type="email"
         value={email}
