@@ -79,24 +79,26 @@ export function InstallPage() {
       : word(
           failed
             ? "title.failed"
-            : data.action?.kind === "resume"
-              ? "title.paused"
-              : data.step === "ready" &&
-                  data.status === "completed" &&
-                  data.network_name &&
-                  (data.person_count ?? 0) > 0
-                ? "title.ready"
-                : data.status === "waiting" && data.step === "account"
-                  ? "title.signing_in"
-                  : data.status === "waiting" && data.step === "review"
-                    ? "title.review"
-                    : data.status === "waiting" && data.action?.kind === "processing"
-                      ? "title.processing"
-                      : data.status === "completed" && data.step !== "ready"
-                        ? "title.running"
-                        : data.status === "skipped"
+            : data.event === "setup.ready"
+              ? "title.welcome"
+              : data.action?.kind === "resume"
+                ? "title.paused"
+                : data.step === "ready" &&
+                    data.status === "completed" &&
+                    data.network_name &&
+                    (data.person_count ?? 0) > 0
+                  ? "title.ready"
+                  : data.status === "waiting" && data.step === "account"
+                    ? "title.signing_in"
+                    : data.status === "waiting" && data.step === "review"
+                      ? "title.review"
+                      : data.status === "waiting" && data.action?.kind === "processing"
+                        ? "title.processing"
+                        : data.status === "completed" && data.step !== "ready"
                           ? "title.running"
-                          : `title.${data.status}`,
+                          : data.status === "skipped"
+                            ? "title.running"
+                            : `title.${data.status}`,
         )
   // The matches left to check, counted by the review queue the review page reads.
   const ready = data?.step === "ready" && data.status === "completed"
@@ -258,15 +260,17 @@ export function InstallPage() {
                       <span>{step.label}</span>
                       <span className="install-step-status">
                         {word(
-                          current && (error || data.action?.kind === "resume")
-                            ? "state.paused"
-                            : current && failed
-                              ? "state.failed"
-                              : progress
-                                ? `state.${progress}`
-                                : current
-                                  ? `state.${data.status}`
-                                  : "state.next",
+                          current && data.event === "setup.ready"
+                            ? "state.next"
+                            : current && (error || data.action?.kind === "resume")
+                              ? "state.paused"
+                              : current && failed
+                                ? "state.failed"
+                                : progress
+                                  ? `state.${progress}`
+                                  : current
+                                    ? `state.${data.status}`
+                                    : "state.next",
                         )}
                       </span>
                     </div>

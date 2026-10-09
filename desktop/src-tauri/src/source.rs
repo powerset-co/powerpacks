@@ -70,36 +70,78 @@ pub fn install(archive: &Path, root: &Path, version: &str) -> Result<(), String>
         "-C".into(),
         root.into(),
     ])?;
+    write_marker(root, version)
+}
+
+/// The command-line install's folder (`bin/bootstrap` puts Powerpacks at `~/powerpacks`).
+const CLI_INSTALL: &str = "powerpacks";
+const DATA_DIR: &str = ".powerpacks";
+/// Deep Context's store: the sign that a folder holds a built network.
+const NETWORK_STORE: &str = ".powerpacks/deep-context/deep-context-v2.sqlite";
+
+/// The command-line install with data on this machine, if any: the setup page offers to
+/// import it instead of starting over.
+pub fn cli_install(root: &Path) -> Option<PathBuf> {
+    let cli = dirs::home_dir()?.join(CLI_INSTALL);
+    (cli != root && cli.join(DATA_DIR).join("install").is_dir()).then_some(cli)
+}
+
+/// Share that install's data folder (a link, so both see the same files: the network, imports,
+/// searches and account) and take over its `.env`. The app's own data folder, holding only
+/// what this launch recorded, makes way; one with a network of its own is kept.
+pub fn import_cli_data(root: &Path, cli: &Path) -> Result<(), String> {
+    if root.join(NETWORK_STORE).is_file() {
+        return Err("This app already has a network. Delete its data first (debug menu).".into());
+    }
+    let data = root.join(DATA_DIR);
+    let version = fs::read_to_string(root.join(MARKER)).ok();
+    remove_data(&data)?;
+    link_dir(&cli.join(DATA_DIR), &data)
+        .map_err(|error| format!("Could not share {}: {error}", cli.join(DATA_DIR).display()))?;
+    if let Some(version) = version {
+        write_marker(root, version.trim())?;
+    }
+    if cli.join(".env").is_file() {
+        fs::copy(cli.join(".env"), root.join(".env"))
+            .map_err(|error| format!("Could not copy .env: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Forget everything the app holds (debug menu): its data folder, or the link to the
+/// command-line install's (that install keeps its data), and `.env`. The code stays.
+pub fn reset_data(root: &Path, version: &str) -> Result<(), String> {
+    remove_data(&root.join(DATA_DIR))?;
+    match fs::remove_file(root.join(".env")) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("Could not remove .env: {error}"))
+        }
+        _ => {}
+    }
+    write_marker(root, version)
+}
+
+fn remove_data(data: &Path) -> Result<(), String> {
+    let Ok(metadata) = fs::symlink_metadata(data) else {
+        return Ok(());
+    };
+    let removed = if metadata.is_symlink() {
+        if cfg!(windows) {
+            fs::remove_dir(data)
+        } else {
+            fs::remove_file(data)
+        }
+    } else {
+        fs::remove_dir_all(data)
+    };
+    removed.map_err(|error| format!("Could not remove {}: {error}", data.display()))
+}
+
+fn write_marker(root: &Path, version: &str) -> Result<(), String> {
     let marker = root.join(MARKER);
     fs::create_dir_all(marker.parent().expect("marker has a parent"))
         .map_err(|error| error.to_string())?;
     fs::write(&marker, version).map_err(|error| error.to_string())
-}
-
-/// `.env` from the Powerset template, as bootstrap writes it, readable only by the user.
-/// The command-line install's folder (`bin/bootstrap` puts Powerpacks at `~/powerpacks`).
-const CLI_INSTALL: &str = "powerpacks";
-const DATA_DIR: &str = ".powerpacks";
-
-/// A machine that already ran Powerpacks from the command line keeps its network, imports and
-/// account there. When the app's own folder has no data yet, it shares that data folder instead
-/// of starting over (a link, so both see the same files) and starts from that install's `.env`.
-pub fn adopt_cli_data(root: &Path) -> Result<Option<PathBuf>, String> {
-    let data = root.join(DATA_DIR);
-    let Some(cli) = dirs::home_dir().map(|home| home.join(CLI_INSTALL)) else {
-        return Ok(None);
-    };
-    if data.exists() || cli == root || !cli.join(DATA_DIR).join("install").is_dir() {
-        return Ok(None);
-    }
-    link_dir(&cli.join(DATA_DIR), &data)
-        .map_err(|error| format!("Could not share {}: {error}", cli.join(DATA_DIR).display()))?;
-    let env = root.join(".env");
-    if !env.exists() && cli.join(".env").is_file() {
-        fs::copy(cli.join(".env"), &env)
-            .map_err(|error| format!("Could not copy .env: {error}"))?;
-    }
-    Ok(Some(cli))
 }
 
 #[cfg(unix)]
@@ -122,6 +164,7 @@ fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     }
 }
 
+/// `.env` from the Powerset template, as bootstrap writes it, readable only by the user.
 pub fn ensure_env(root: &Path) -> Result<(), String> {
     let env = root.join(".env");
     if env.exists() {

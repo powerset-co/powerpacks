@@ -77,6 +77,7 @@ PAGE = {
     "title.completed": "Powerpacks is installed",
     "title.ready": "Powerpacks is ready",
     "title.paused": "Setup paused",
+    "title.welcome": "Welcome to Powerpacks",
     "title.signing_in": "Waiting for you to sign in",
     "title.review": "Waiting for your review",
     "title.processing": "Your contacts are saved",
@@ -278,7 +279,7 @@ PROSE: dict[str, Prose] = {
     "step.waiting": Prose(None, W, "This step needs you. I'll explain in chat.", action="error"),
     "step.failed": Prose(None, F, "This step stopped. I'm checking what happened.", action="error"),
     "setup.paused": Prose(None, W, "Setup paused. I can resume it from here.", action="resume"),
-    "setup.ready": Prose(None, W, "Ready to set up: sign in, import your contacts and build your network.", action="resume"),
+    "setup.ready": Prose(None, C, "Ready to set up: sign in, import your contacts and build your network.", action="resume"),
 }
 
 

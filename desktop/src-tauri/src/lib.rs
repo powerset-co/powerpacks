@@ -177,6 +177,38 @@ fn debug_skip_setup(boot: State<'_, Arc<Boot>>, skip: bool) -> Result<(), String
     onboard::start(&root, onboard::Answer::default())
 }
 
+/// Debug menu: forget the app's data and run setup again from the start.
+#[tauri::command]
+fn debug_reset_data(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+) -> Result<(), String> {
+    if !DEBUG_MENU {
+        return Err("The debug menu is off in this build.".into());
+    }
+    let root = boot::require_root(&boot)?;
+    onboard::stop_running(&root);
+    codex.shutdown();
+    boot::reset(&app, &boot)
+}
+
+/// The command-line install the setup page can import, as a path to show.
+#[tauri::command]
+fn setup_import_source(boot: State<'_, Arc<Boot>>) -> Option<String> {
+    let root = boot.root()?;
+    source::cli_install(&root).map(|path| path.display().to_string())
+}
+
+/// Import the command-line install's data; true when setup is already done with it.
+#[tauri::command]
+fn setup_import(boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
+    let root = boot::require_root(&boot)?;
+    let cli = source::cli_install(&root).ok_or("No Powerpacks install to import.")?;
+    source::import_cli_data(&root, &cli)?;
+    Ok(onboard::setup(&root) == onboard::Setup::Done)
+}
+
 /// Whether macOS lets this app read Messages (Full Disk Access), checked afresh each call.
 #[tauri::command]
 async fn permission_messages(boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
@@ -334,6 +366,9 @@ pub fn run() {
             permission_messages,
             debug_state,
             debug_skip_setup,
+            debug_reset_data,
+            setup_import_source,
+            setup_import,
         ])
         .setup(|app| {
             quit_on_signal(app.handle().clone());

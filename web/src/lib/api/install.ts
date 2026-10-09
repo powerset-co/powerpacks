@@ -43,3 +43,14 @@ export function openExternal(url: string): Promise<void> {
 export async function messagesReadable(): Promise<boolean> {
   return (await invoke("permission_messages")) === true
 }
+
+/** The command-line install on this machine whose data the app can import, as a path to show. */
+export async function importSource(): Promise<string | null> {
+  const path = await invoke("setup_import_source")
+  return typeof path === "string" ? path : null
+}
+
+/** Import that install's data; true when setup is already done with it (the app can open). */
+export async function importData(): Promise<boolean> {
+  return (await invoke("setup_import")) === true
+}

@@ -3,7 +3,7 @@ import { useCallback, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 
 import { useDismiss } from "@/hooks/useDismiss"
-import { fetchDebugState, skipSetup } from "@/lib/api/debug"
+import { fetchDebugState, resetData, skipSetup } from "@/lib/api/debug"
 import { errorText } from "@/lib/api/http"
 import { isDesktop } from "@/lib/desktop"
 
@@ -42,6 +42,21 @@ function DesktopDebugMenu() {
 
   if (!state.data?.enabled) return null
   const skipped = state.data.setupSkipped
+
+  const reset = () => {
+    if (
+      !window.confirm("Delete this app's data and start setup over? Your command-line install keeps its own.")
+    )
+      return
+    close()
+    setError(null)
+    resetData()
+      .then(() => {
+        void client.invalidateQueries()
+        void navigate("/install")
+      })
+      .catch((caught: unknown) => setError(errorText(caught)))
+  }
 
   const toggleSkip = () => {
     setError(null)
@@ -86,6 +101,14 @@ function DesktopDebugMenu() {
               className="accent-[var(--primary)]"
             />
           </label>
+          <button
+            type="button"
+            role="menuitem"
+            className={ITEM.replace("text-foreground", "text-bad")}
+            onClick={reset}
+          >
+            Delete app data…
+          </button>
           {error && <p className="m-0 px-2.5 py-1 text-xs text-bad">{error}</p>}
         </div>
       )}

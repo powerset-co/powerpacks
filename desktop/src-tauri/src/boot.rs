@@ -53,6 +53,8 @@ pub struct BootState {
     pub detail: String,
     pub lines: Vec<String>,
     pub root: Option<PathBuf>,
+    /// The bundled Powerpacks commit the installed code comes from.
+    pub version: Option<String>,
 }
 
 impl Default for BootState {
@@ -63,6 +65,7 @@ impl Default for BootState {
             detail: String::new(),
             lines: Vec::new(),
             root: None,
+            version: None,
         }
     }
 }
@@ -79,6 +82,10 @@ impl Boot {
 
     pub fn root(&self) -> Option<PathBuf> {
         self.snapshot().root
+    }
+
+    pub fn version(&self) -> Option<String> {
+        self.snapshot().version
     }
 
     fn update(&self, app: &AppHandle, change: impl FnOnce(&mut BootState)) {
@@ -136,6 +143,7 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         .map(|text| text.trim().to_owned())
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| app.package_info().version.to_string());
+    boot.update(app, |state| state.version = Some(version.clone()));
     if let Plan::Install = source::plan(&root, &version)? {
         boot.step(app, "Installing Powerpacks", "");
         let archive = app
@@ -143,12 +151,6 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
             .resolve(source::ARCHIVE_RESOURCE, BaseDirectory::Resource)
             .map_err(|error| format!("The app is missing Powerpacks: {error}"))?;
         source::install(&archive, &root, &version)?;
-    }
-    if let Some(cli) = source::adopt_cli_data(&root)? {
-        boot.line(
-            app,
-            format!("Using your Powerpacks data from {}", cli.display()),
-        );
     }
     source::ensure_env(&root)?;
 
@@ -185,6 +187,17 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     )
 }
 
+/// Start over as a fresh install (debug menu): forget the data, write a new `.env`, restart the
+/// page server on the empty folder, and mark setup ready for the user's click.
+pub fn reset(app: &AppHandle, boot: &Boot) -> Result<(), String> {
+    let root = require_root(boot)?;
+    let version = boot.version().ok_or("Powerpacks has not started.")?;
+    source::reset_data(&root, &version)?;
+    source::ensure_env(&root)?;
+    serve(app, &root)?;
+    onboard::record_install(&root, &paths::project_python(&root))
+}
+
 /// The page's /healthz identity when a Powerpacks page holds the port.
 fn page_health() -> Option<serde_json::Value> {
     let address = format!("{HOST}:{PORT}").parse().ok()?;
@@ -204,7 +217,7 @@ fn page_health() -> Option<serde_json::Value> {
 
 /// Run the page server as this app's own child, replacing any page an earlier run left on the
 /// port, so the window always talks to the code this app installed and nothing outlives it.
-fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
+pub fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
     if let Some(stale) = page_health() {
         children::stop_pid(
             stale

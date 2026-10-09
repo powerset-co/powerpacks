@@ -50,6 +50,9 @@ pub fn setup(root: &Path) -> Setup {
             .unwrap_or_default()
     };
     // A step can complete mid-setup (the install itself does); setup is done only at `ready`.
+    if field("event") == READY_EVENT {
+        return Setup::Paused;
+    }
     match (field("status"), field("step")) {
         ("completed", "ready") => Setup::Done,
         ("running" | "completed", _) => Setup::Interrupted,

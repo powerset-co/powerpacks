@@ -20,6 +20,9 @@ const COMMANDS: &[&str] = &[
     "permission_messages",
     "debug_state",
     "debug_skip_setup",
+    "debug_reset_data",
+    "setup_import_source",
+    "setup_import",
 ];
 
 fn main() {

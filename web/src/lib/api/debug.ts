@@ -20,3 +20,8 @@ export async function fetchDebugState(): Promise<DebugState> {
 export async function skipSetup(skip: boolean): Promise<void> {
   await invoke("debug_skip_setup", { skip })
 }
+
+/** Forget the app's data and start setup over: the page server restarts on the empty folder. */
+export async function resetData(): Promise<void> {
+  await invoke("debug_reset_data")
+}

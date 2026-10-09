@@ -43,3 +43,22 @@ export function FlagIcon(props: IconProps) {
     </svg>
   )
 }
+
+/** Setup's fresh start: a spark. */
+export function SparkIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6" />
+    </svg>
+  )
+}
+
+/** Setup's import: a tray taking a file in. */
+export function ImportIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M12 3v11M8 10l4 4 4-4" />
+      <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    </svg>
+  )
+}
