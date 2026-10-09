@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Auth0 PKCE login for Powerset / search-api access. Stdlib-only.
+"""Auth0 PKCE login for Powerset / search-api access.
 
 Subcommands:
-    login    Open browser, capture Auth0 callback, save JWT to disk.
+    login    Reuse managed Chrome, capture Auth0 callback, save JWT to disk.
     whoami   Print stored credential info (no refresh).
     token    Print a fresh access token, refreshing if needed.
     logout   Remove stored credentials.
@@ -23,15 +23,19 @@ import json
 import os
 import secrets
 import string
+import subprocess
 import sys
 import threading
 import time
 import urllib.parse
 import urllib.request
-import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +361,39 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 # Subcommands
 # ---------------------------------------------------------------------------
 
+def _login_in_browser(authorize_url: str, timeout: int) -> None:
+    from packs.ingestion.primitives.setup.automations.oauth_browser import (
+        DEFAULT_BROWSER_PROFILE,
+        ensure_playwright_core,
+    )
+
+    deps = ensure_playwright_core()
+    if deps["status"] != "ok":
+        raise RuntimeError(deps["message"])
+    request = {"url": authorize_url, "profileDir": str(DEFAULT_BROWSER_PROFILE.expanduser()),
+               "timeoutSeconds": timeout}
+    proc = subprocess.Popen(
+        ["node", str(Path(__file__).with_name("login_browser.js"))],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "NODE_PATH": deps["node_path"]},
+    )
+    try:
+        stdout, _ = proc.communicate(json.dumps(request), timeout=timeout + 10)
+        payload = json.loads(stdout)
+        if proc.returncode or payload["status"] != "ok":
+            raise RuntimeError(payload["message"])
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("login timed out") from None
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+
+
 def cmd_login(args: argparse.Namespace) -> int:
     try:
         config = require_config_values([
@@ -414,28 +451,29 @@ def cmd_login(args: argparse.Namespace) -> int:
         })
         return 1
 
-    if not args.no_browser:
-        try:
-            webbrowser.open(authorize_url)
-        except Exception:
-            pass
-
-    print(f"open this URL if your browser did not launch: {authorize_url}", file=sys.stderr)
-
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    thread.join(timeout=args.timeout)
-    if thread.is_alive():
-        server.shutdown()
-        server.server_close()
+    try:
+        if args.no_browser:
+            print(f"open this URL if your browser did not launch: {authorize_url}", file=sys.stderr)
+        else:
+            _login_in_browser(authorize_url, args.timeout)
+        thread.join(timeout=args.timeout)
+        if thread.is_alive():
+            raise RuntimeError("login timed out")
+    except (OSError, RuntimeError, ValueError) as exc:
         emit({
             "primitive": "powerset_auth",
             "command": "login",
             "status": "failed",
-            "error": "login timed out",
+            "error": _CallbackHandler.error or str(exc),
         })
         return 1
-    server.server_close()
+    finally:
+        if thread.is_alive():
+            server.shutdown()
+            thread.join()
+        server.server_close()
 
     if _CallbackHandler.error:
         emit({
@@ -647,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
                             "Must match the Auth0 application's allowed callback URL exactly.")
     login.add_argument("--timeout", type=int, default=DEFAULT_LOGIN_TIMEOUT)
     login.add_argument("--no-browser", action="store_true",
-                       help="Do not auto-open the system browser; print the URL only.")
+                       help="Do not launch managed Chrome; print the URL only.")
     login.add_argument("--force-account", action="store_true",
                        help="Force Auth0 to show the login screen even if an SSO "
                             "cookie exists (use when switching accounts).")

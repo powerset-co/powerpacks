@@ -201,7 +201,7 @@ first; process creation alone does not mean the Codex composer is ready.
 terminal output. This is the shared channel—no new queue or pipeline state file.
 Read the existing manifest as well as the worker output: it owns the exact action,
 progress and retry command. Open each printed `STATUS PAGE:` URL beside chat;
-keep login and review in the default browser. A `NEEDS USER:` or `BLOCKED:` reply
+let the login commands manage their Chrome windows; open review separately. A `NEEDS USER:` or `BLOCKED:` reply
 needs advisor attention; relay the user's answer through `send`. Verify changes
 from the manifest before claiming a source was skipped or search is ready.
 
@@ -214,8 +214,9 @@ Open the exact printed `STATUS PAGE:` URL immediately. Use the host's browser-pa
 tool when available; reuse the tab on retries. On Codex, use `open_in_codex` when
 available. Other hosts may use their supported pane or system browser.
 
-Keep this tab on `/install`. Login and review open in the system's default browser,
-never by navigating the status tab. The page reads saved progress and the real
+Keep this tab on `/install`. Login commands reuse Powerpacks-managed Chrome
+sessions and close their windows when finished. Open review separately; never
+navigate the status tab to login or callback URLs. The page reads saved progress and the real
 Modal status files; it does not own the pipeline process. Closing or restarting
 its server must not stop the coordinator.
 
@@ -239,7 +240,7 @@ the Powerset login's address. Only without a Powerset account does the coordinat
 ask which Gmail accounts to add: ask the user in chat (a plain message, then wait
 for the reply), append one `--gmail-email` per address to the saved
 `retry_command`, first address first, and run it. Every address gets
-its own browser approval; the coordinator allows them all beforehand. LinkedIn and the Google Console run in
+its own browser approval; the coordinator allows them all beforehand. Powerset, LinkedIn and Google login flows reuse
 headless Chrome (or Brave); a window opens only when a login is needed, closes
 once the user is signed in, and the sessions are kept for later runs. LinkedIn
 reads up to ~3,000 connections per run, then processing starts; the rest sync on
@@ -295,31 +296,13 @@ build failed, rerun that continuation against Modal's cache.
 
 ## Finish
 
-The user does their part once, at the start; everything else runs on its own. When
-the ready step completes, say it in this order, in plain words:
+After index validation succeeds, say: **Indexed <N> people.** Use the
+verified index's people count, including on reruns that reuse an existing index.
+Then add: Try `$search software engineers in New York in my network`.
+Do not append cloud network counts, source recaps, or optional review prompts.
+Keep those details on the status page or explain them when asked.
 
-1. **Search is ready.** Then show only what this setup turned on:
-   - Local network (local search validated): `$search find people who … in my network`
-   - Powerset network (hosted search connected: the credentials step completed, not
-     the "Hosted search isn't enabled" warning): `$search find people who would be a
-     good fit for <job post URL> in my Powerset network`
-2. **What is left to fix**, if the ready step's note lists any: its
-   `action.details.left_to_fix` holds each one's reason (research skipped for a missing
-   key or no provider credit), and the LinkedIn step's line says when its read stalled.
-   One line each with what fixes it, and that the next setup run picks it up. When LinkedIn stopped
-   sending connections, say how many were read of how many, that it stopped to keep
-   their account safe, and that setup asked LinkedIn for their data export (it can
-   take a day); the next setup run imports it. Never ask the user to download or
-   upload the export.
-3. **Optional review.** Read the matches left to check from the review queue, the
-   count the review page shows: `pending` in `curl -fsS http://127.0.0.1:<port>/api/review/linkedin-card`
-   (the status page's port). When it is above 0, say: "If you have time, <pending>
-   LinkedIn matches need a quick look. Want me to open them?" Only on a yes, open
-   `http://127.0.0.1:<port>/` beside chat (the host's browser pane, else the default
-   browser). When they are done, say you are rebuilding search with their decisions and
-   run `bin/deep-context-v2 finish`. They can come back to it later by saying "review my
-   pending contacts" (`bin/deep-context-v2 review`).
-
-A network's people count does not prove search readiness; only index validation
-does. Keep internal IDs and provider details in troubleshooting. If the user also
-asked for a search, run the installed search skill once its backend is ready.
+If the requested workflow could not finish, briefly state what remains blocked
+and any action only the user can take. For install-only requests, say Powerpacks
+is installed; do not claim an index was built. If the user also asked for a
+search, run the installed search skill once its backend is ready.
