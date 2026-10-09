@@ -41,6 +41,7 @@
     "externalBin": [
       "binaries/uv",
       "binaries/codex",
+      "binaries/codex-code-mode-host",
       "binaries/rg"
     ],
     "windows": {

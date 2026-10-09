@@ -4,7 +4,7 @@
 #
 #   scripts/bundle-runtime.sh [target-triple]     default: this machine's Rust host
 #
-# Writes src-tauri/binaries/{uv,codex,rg}-<triple> and src-tauri/resources/powerpacks.tar.gz.
+# Writes src-tauri/binaries/{uv,codex,codex-code-mode-host,rg}-<triple> and src-tauri/resources/powerpacks.tar.gz.
 set -euo pipefail
 
 UV_VERSION="0.11.32"
@@ -44,6 +44,8 @@ echo "bundle-runtime: codex $CODEX_VERSION for $codex_platform"
 curl -fsSL "https://registry.npmjs.org/@openai/codex/-/codex-$CODEX_VERSION-$codex_platform.tgz" | tar -xz -C "$work"
 vendor="$(find "$work/package/vendor" -mindepth 1 -maxdepth 1 -type d | head -1)"
 install -m 755 "$vendor/bin/codex$exe" "$bin/codex-$triple$exe"
+# Codex runs every command through this host, found next to its own binary.
+install -m 755 "$vendor/bin/codex-code-mode-host$exe" "$bin/codex-code-mode-host-$triple$exe"
 install -m 755 "$vendor/codex-path/rg$exe" "$bin/rg-$triple$exe"
 
 echo "bundle-runtime: Powerpacks source at $(git -C "$repo" rev-parse --short HEAD)"
