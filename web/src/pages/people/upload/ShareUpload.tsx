@@ -1,6 +1,6 @@
 import { Dialog } from "@/components/ui/dialog"
 
-import { ShareMenu } from "../sets/ShareMenu"
+import { ShareButton } from "./ShareButton"
 import { UploadDialog } from "./UploadDialog"
 import { useUpload } from "./useUpload"
 
@@ -9,7 +9,7 @@ export function ShareUpload({ onToast }: { onToast: (message: string) => void })
   const upload = useUpload(onToast)
   return (
     <Dialog open={upload.open} onOpenChange={upload.setOpen}>
-      <ShareMenu status={upload.status} busy={upload.busy} />
+      <ShareButton status={upload.status} busy={upload.busy} />
       <UploadDialog upload={upload} />
     </Dialog>
   )

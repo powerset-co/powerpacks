@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { signIn } from "@/lib/api/feedback"
 import type { ReceivedInvite, SetMember, SetView } from "@/lib/api/sets"
 import { SETS } from "@/lib/people/copy"
-import { useSets } from "@/pages/people/sets/useSets"
+import { useSets } from "./useSets"
 
 // The local sets page, laid out like the Powerset app's Sets page: a set picker and New set in the
 // head, invites waiting for an answer, then the chosen set's card with its people, invite box and

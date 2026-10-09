@@ -57,22 +57,3 @@ export function useSets() {
     answer: (id: string, accepted: boolean) => reply.mutate({ id, accepted }),
   }
 }
-
-const TARGET_KEY = "people.shareTarget"
-
-/** The set the owner shares to, remembered in this browser; "" is the personal (local) network. */
-export function readTarget(): string {
-  try {
-    return localStorage.getItem(TARGET_KEY) ?? ""
-  } catch {
-    return ""
-  }
-}
-
-export function writeTarget(set_id: string): void {
-  try {
-    localStorage.setItem(TARGET_KEY, set_id)
-  } catch {
-    // A private window: the choice lasts the page.
-  }
-}
