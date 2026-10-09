@@ -7,6 +7,7 @@
 //! LinkedIn allow sign-in.
 
 mod boot;
+mod children;
 mod codex;
 mod linkedin;
 mod onboard;
@@ -254,6 +255,29 @@ fn main_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// A termination signal (Terminal, `kill`, the system shutting down) quits the app the normal
+/// way, so the exit handler below still stops the server, Codex and setup.
+fn quit_on_signal(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let (Ok(mut term), Ok(mut int)) = (
+                signal(SignalKind::terminate()),
+                signal(SignalKind::interrupt()),
+            ) else {
+                return;
+            };
+            tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        app.exit(0);
+    });
+}
+
 pub fn run() {
     paths::adopt_path();
     tauri::Builder::default()
@@ -266,6 +290,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(Boot::default()))
         .manage(Codex::default())
+        .manage(children::Children::default())
         .invoke_handler(tauri::generate_handler![
             boot_state,
             boot_retry,
@@ -287,10 +312,21 @@ pub fn run() {
             debug_skip_setup,
         ])
         .setup(|app| {
+            quit_on_signal(app.handle().clone());
             main_window(app.handle())?;
             boot::launch(app.handle().clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("Powerpacks failed to start");
+        .build(tauri::generate_context!())
+        .expect("Powerpacks failed to start")
+        .run(|app, event| {
+            // Nothing of Powerpacks outlives the window: the page server, Codex, and setup.
+            if let tauri::RunEvent::Exit = event {
+                app.state::<Codex>().shutdown();
+                if let Some(root) = app.state::<Arc<Boot>>().root() {
+                    onboard::stop_running(&root);
+                }
+                app.state::<children::Children>().stop_all();
+            }
+        });
 }

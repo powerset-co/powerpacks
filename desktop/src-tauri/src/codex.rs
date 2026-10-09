@@ -209,6 +209,13 @@ impl Codex {
         Ok(connection)
     }
 
+    /// Stop the Codex process, if one runs (its drop kills it).
+    pub fn shutdown(&self) {
+        if let Ok(mut slot) = self.connection.try_lock() {
+            slot.take();
+        }
+    }
+
     pub async fn call(
         &self,
         app: &AppHandle,

@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const ARCHIVE_RESOURCE: &str = "powerpacks.tar.gz";
+/// The commit the archive was made from (scripts/bundle-runtime.sh); the folder refreshes when
+/// it changes, so every build counts, not only a new app version.
+pub const VERSION_RESOURCE: &str = "powerpacks.version";
 const MARKER: &str = ".powerpacks/desktop/source-version";
 const ENV_TEMPLATE: &str = "packs/powerset/templates/env.powerset.example";
 

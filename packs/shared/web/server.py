@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-09: `serve --exit-with PID` stops with the desktop app that runs it.
 - 2026-10-07: created from v1's `deep_context/review/cli.py` and `server.py`: the same persistent
   handler, port ownership and health identity (`reconcile_review_web`, kept so an older release's
   page on the port is recognised and replaced), with the v1 review, its event stream and the
@@ -302,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage", choices=STAGES, default="", help="the page the printed URL opens")
     parser.add_argument("--run", default="", help="with --stage searches: open this saved search")
     parser.add_argument("--open", action="store_true", help="open the URL in the browser")
+    parser.add_argument("--exit-with", type=int, default=0, metavar="PID",
+                        help="with serve: stop when this process (the desktop app) is gone")
     args = parser.parse_args(argv)
     root = Path.cwd().resolve()
     if args.command == "start":
@@ -319,11 +322,26 @@ def main(argv: list[str] | None = None) -> int:
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
         if args.open:
             webbrowser.open(url)
+        if args.exit_with:
+            threading.Thread(target=_follow, args=(args.exit_with, server), daemon=True).start()
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\nshutting down", file=sys.stderr)
     return 0
+
+
+def _follow(pid: int, server: ThreadingHTTPServer) -> None:
+    """Stop the server once `pid` (the desktop app) is gone, however it went."""
+    while True:
+        time.sleep(2)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            server.shutdown()
+            return
+        except PermissionError:
+            continue
 
 
 if __name__ == "__main__":

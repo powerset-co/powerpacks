@@ -31,7 +31,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/powerpacks.tar.gz": "powerpacks.tar.gz"
+      "resources/powerpacks.tar.gz": "powerpacks.tar.gz",
+      "resources/powerpacks.version": "powerpacks.version"
     },
     "macOS": {
       "minimumSystemVersion": "12.0",

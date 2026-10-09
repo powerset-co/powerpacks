@@ -48,6 +48,7 @@ install -m 755 "$vendor/codex-path/rg$exe" "$bin/rg-$triple$exe"
 
 echo "bundle-runtime: Powerpacks source at $(git -C "$repo" rev-parse --short HEAD)"
 # The committed tree minus what only development uses; the app installs it as ~/powerpacks.
+git -C "$repo" rev-parse HEAD > "$resources/powerpacks.version"
 git -C "$repo" archive --format=tar HEAD \
   ':(exclude)tests' ':(exclude)desktop' ':(exclude).github' ':(exclude)web/src' \
   ':(exclude)web/node_modules' | gzip -9 > "$resources/powerpacks.tar.gz"

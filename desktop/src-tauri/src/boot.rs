@@ -3,19 +3,23 @@
 //! Flow:
 //!   install or refresh the bundled code in ~/powerpacks (source.rs)
 //!   -> `uv sync` with the bundled uv (downloads Python and packages on first launch)
-//!   -> `python -m packs.shared.web.server start` (reuses a running page)
+//!   -> `python -m packs.shared.web.server serve`, as this app's child (an earlier page on the
+//!      port is stopped first)
 //!   -> setup not finished: start `bin/onboard` and show /install; otherwise show the Agent.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::children::{self, Children};
 use crate::onboard::{self, Setup};
 use crate::paths;
 use crate::source::{self, Plan};
@@ -23,6 +27,12 @@ use crate::source::{self, Plan};
 pub const HOST: &str = "127.0.0.1";
 pub const PORT: u16 = 8765;
 const BOOT_EVENT: &str = "boot://state";
+/// The health identity every Powerpacks page answers with (server.py PRIMITIVE).
+const PAGE_PRIMITIVE: &str = "reconcile_review_web";
+const SERVER_LOG: &str = ".powerpacks/install/server.log";
+const HEALTH_POLL: Duration = Duration::from_millis(200);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(1);
+const SERVER_TIMEOUT: Duration = Duration::from_secs(20);
 const KEPT_LINES: usize = 40;
 const HOME_PAGE: &str = "/agent";
 const SETUP_PAGE: &str = "/install";
@@ -118,7 +128,14 @@ pub fn launch(app: AppHandle) {
 fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     let root = paths::root()?;
     boot.update(app, |state| state.root = Some(root.clone()));
-    let version = app.package_info().version.to_string();
+    let version = app
+        .path()
+        .resolve(source::VERSION_RESOURCE, BaseDirectory::Resource)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| app.package_info().version.to_string());
     if let Plan::Install = source::plan(&root, &version)? {
         boot.step(app, "Installing Powerpacks", "");
         let archive = app
@@ -142,24 +159,7 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     stream(app, boot, sync, "Python setup")?;
 
     boot.step(app, "Opening Powerpacks", "");
-    let output = Command::new(paths::project_python(&root))
-        .args([
-            "-m",
-            "packs.shared.web.server",
-            "start",
-            "--port",
-            &PORT.to_string(),
-        ])
-        .current_dir(&root)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("Could not run Python in {}: {error}", root.display()))?;
-    if !output.status.success() {
-        return Err(format!(
-            "The Powerpacks page did not start: {}",
-            last_line(&output.stderr)
-        ));
-    }
+    serve(app, &root)?;
 
     let setup = onboard::setup(&root);
     if setup == Setup::New {
@@ -177,6 +177,82 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
             SETUP_PAGE
         },
     )
+}
+
+/// The page's /healthz identity when a Powerpacks page holds the port.
+fn page_health() -> Option<serde_json::Value> {
+    let address = format!("{HOST}:{PORT}").parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&address, HEALTH_TIMEOUT).ok()?;
+    stream.set_read_timeout(Some(HEALTH_TIMEOUT)).ok()?;
+    write!(
+        stream,
+        "GET /healthz HTTP/1.0\r\nHost: {HOST}:{PORT}\r\n\r\n"
+    )
+    .ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    let body = response.split_once("\r\n\r\n")?.1;
+    let identity: serde_json::Value = serde_json::from_str(body).ok()?;
+    (identity.get("primitive")?.as_str()? == PAGE_PRIMITIVE).then_some(identity)
+}
+
+/// Run the page server as this app's own child, replacing any page an earlier run left on the
+/// port, so the window always talks to the code this app installed and nothing outlives it.
+fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
+    if let Some(stale) = page_health() {
+        children::stop_pid(
+            stale
+                .get("pid")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as u32,
+        );
+        let gone = Instant::now() + SERVER_TIMEOUT;
+        while page_health().is_some() && Instant::now() < gone {
+            thread::sleep(HEALTH_POLL);
+        }
+    }
+    let log_path = root.join(SERVER_LOG);
+    std::fs::create_dir_all(log_path.parent().expect("log dir"))
+        .map_err(|error| error.to_string())?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|error| error.to_string())?;
+    let errors = log.try_clone().map_err(|error| error.to_string())?;
+    let child = Command::new(paths::project_python(root))
+        .args([
+            "-m",
+            "packs.shared.web.server",
+            "serve",
+            "--port",
+            &PORT.to_string(),
+        ])
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(errors)
+        .spawn()
+        .map_err(|error| format!("Could not run Python in {}: {error}", root.display()))?;
+    app.state::<Children>().adopt(child);
+    let deadline = Instant::now() + SERVER_TIMEOUT;
+    while Instant::now() < deadline {
+        if page_health()
+            .and_then(|identity| {
+                identity
+                    .get("repo_root")
+                    .map(|value| value == &serde_json::json!(root))
+            })
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        thread::sleep(HEALTH_POLL);
+    }
+    Err(format!(
+        "The Powerpacks page did not start. See {}.",
+        log_path.display()
+    ))
 }
 
 /// Run `command`, showing its output on the splash; fail with its last line.
@@ -218,15 +294,6 @@ fn stream(app: &AppHandle, boot: &Boot, mut command: Command, what: &str) -> Res
     }
     let last = boot.snapshot().lines.last().cloned().unwrap_or_default();
     Err(format!("{what} failed: {last}"))
-}
-
-fn last_line(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    text.lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("no error output")
-        .to_owned()
 }
 
 fn show_page(app: &AppHandle, boot: &Boot, path: &str) -> Result<(), String> {

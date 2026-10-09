@@ -115,9 +115,10 @@ pub struct Answer {
 
 /// Resume `bin/onboard` in the background with the user's answer; it outlives the app like the
 /// page server does.
-/// Stop a setup process still waiting from before (its lock would refuse a new run), so the
-/// new one starts fresh: a macOS permission granted meanwhile only reaches a new process.
-fn stop_waiting(root: &Path) {
+/// Stop the setup process recorded in the manifest, if any: before a new run (its lock would
+/// refuse one, and a macOS permission granted meanwhile only reaches a new process), and when
+/// the app exits. Setup resumes from its saved step on the next launch.
+pub fn stop_running(root: &Path) {
     let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
         return;
     };
@@ -138,7 +139,7 @@ fn stop_waiting(root: &Path) {
 }
 
 pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
-    stop_waiting(root);
+    stop_running(root);
     let mut steps = Vec::new();
     if let Some(url) = answer.linkedin_url {
         if !url.contains("linkedin.com/in/") {
