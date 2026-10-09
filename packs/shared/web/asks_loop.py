@@ -39,7 +39,7 @@ MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
 _LOG = logging.getLogger(__name__)
 # The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
-STATUS = {"state": "offline", "api_base": ""}
+STATUS = {"state": "offline"}
 WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects at once
 
 
@@ -161,7 +161,6 @@ async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
     backoff = 1
     while True:
         started = time.monotonic()
-        STATUS["api_base"] = auth.api_base(env_file)
         try:
             connection = await asyncio.to_thread(_connection, env_file)
             await _connected(connection, repo_root=repo_root, env_file=env_file, device_id=device_id)

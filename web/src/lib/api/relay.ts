@@ -5,7 +5,6 @@ import { body, failure } from "@/lib/api/http"
 
 export interface RelayStatus {
   state: "connected" | "signed_out" | "offline"
-  api_base: string
 }
 
 export async function fetchRelay(signal?: AbortSignal): Promise<RelayStatus> {
