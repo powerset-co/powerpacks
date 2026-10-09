@@ -20,6 +20,7 @@ deletes its source rows; documents are never deleted.
 Changelog:
   2026-09-28: shared people the cloud has without positions are written again when the local index has them.
   2026-09-28: a person new to the cloud is never counted changed after a failed run.
+  2026-10-08: write the isolated share_v1 family (namespaces and Postgres tables), not v3.
   2026-10-08: the last completed upload keeps the share digest it sent.
   2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
   2026-09-27: bind real runs to checked decisions and target; report typed stages.
@@ -51,6 +52,7 @@ for _path in [REPO, SEARCH_PRIMITIVES / "lib", SEARCH_PRIMITIVES / "shared",
 
 import postgres_client  # noqa: E402
 import turbopuffer_search_backend as tp_backend  # noqa: E402
+from powerpacks_contracts import TURBOPUFFER_NAMESPACES  # noqa: E402
 
 from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.deep_context_v2.db.store import STORE_RELATIVE_PATH  # noqa: E402
@@ -78,8 +80,9 @@ DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
 DEFAULT_SHARE_DB = REPO / ".powerpacks" / STORE_RELATIVE_PATH
 DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
-# The namespace family the shared cloud is served from; the upload never targets another.
-UPLOAD_INDEX_VERSION = "v3"
+# The isolated shared network the upload writes, for now: its own TurboPuffer namespaces and its own
+# Postgres tables (share_v1.sql), so a share starts from an empty cloud rather than the migrated v3 ids.
+SHARE_FAMILY = "share_v1"
 
 PREVIEW_IDS = 10
 
@@ -149,18 +152,10 @@ class UploadPowerset:
         # The server (cmd_serve) and the CLI (main) each load .env once, at start.
         config = dict(os.environ)
         self._database_url = postgres_client.database_url()
-        # The shared cloud the upload writes is the v3 family, whatever version the search
-        # side reads; a per-namespace override still points a rehearsal at _v3_share_test.
         self._namespace_names = {
-            ns.logical: tp_backend.namespace_name(
-                ns.logical, config={**config, "ALEPH_INDEX_VERSION": UPLOAD_INDEX_VERSION})
+            ns.logical: TURBOPUFFER_NAMESPACES[ns.logical].removesuffix("_v1") + f"_{SHARE_FAMILY}"
             for ns in NAMESPACES
         }
-        suffixes = {"_v3_share_test" if name.endswith("_v3_share_test") else
-                    "_v3" if name.endswith("_v3") else "invalid"
-                    for name in self._namespace_names.values()}
-        if len(suffixes) != 1 or "invalid" in suffixes:
-            raise RuntimeError(SAFE_ERRORS["namespace"])
         if not config.get("TURBOPUFFER_API_KEY"):
             raise RuntimeError(SAFE_ERRORS["api_key"])
         self._tp_client = turbopuffer.Turbopuffer(
@@ -189,13 +184,13 @@ class UploadPowerset:
         try:
             with psycopg2.connect(self._database_url) as conn:
                 with conn.cursor() as cur:
-                    postgres.use_v3_schema(cur)
+                    postgres.use_share_schema(cur)
                     operator_id = self.operator_id or postgres.resolve_operator_id(
                         cur, postgres_client.credentials_subject())
                     plan = self._plan(con, cur, operator_id, share_rows, people)
                     target = {"postgres_host": urlparse(self._database_url).hostname,
                               "postgres_database": urlparse(self._database_url).path,
-                              "postgres_schema": "powerset_v2", "operator_id": operator_id,
+                              "postgres_schema": postgres.SHARE_SCHEMA, "operator_id": operator_id,
                               "namespaces": {ns.logical: ns.namespace for ns in plan.namespaces}}
                     indexed = {profile.id for profile in local_index.person_profiles(con, plan.persons_upsert)}
                     if missing := set(plan.persons_upsert) - indexed:

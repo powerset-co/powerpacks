@@ -3,6 +3,7 @@
 Created: 2026-09-24
 
 Change log:
+- 2026-10-08: the upload writes the isolated share_v1 family, not v3.
 - 2026-09-24: read the share list from the store's `share` table, not share.csv.
 - 2026-09-24: `share.share` is three-way; only `yes` uploads and only a
   human's `private` becomes a cloud tag.
@@ -96,8 +97,8 @@ uv run --project . python \
 ```
 
 Without `--apply` it plans only. The CLI loads `.env` once at start and writes
-the v3 family (`_v3`, or `_v3_share_test` for a rehearsal); any other suffix
-is refused before a write.
+the isolated share_v1 family: the `_share_v1` TurboPuffer namespaces and the
+`powerset_share_v1` Postgres tables (`share_v1.sql`), not the migrated v3 cloud.
 
 The upload runs from the laptop only: the build may run on Modal, but
 `download` already brings `local-search.duckdb` home, and the upload is a few MB

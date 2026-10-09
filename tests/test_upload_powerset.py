@@ -592,7 +592,7 @@ class DryRunTests(unittest.TestCase):
         namespace = FakeNamespace()
         # persons-by-slug answers for the private person only; the other three reads are empty.
         # The SET search_path answers nothing; the schema check reads the next row.
-        cursor = FakeCursor([[], [('powerset_v2', 'powerset_v2, pg_catalog')], [("casey-lane", CLOUD_PERSON)], [], [], []])
+        cursor = FakeCursor([[], [('powerset_share_v1', 'powerset_share_v1, powerset_v2, pg_catalog')], [("casey-lane", CLOUD_PERSON)], [], [], []])
         connection = mock.MagicMock()
         connection.__enter__.return_value = connection
         connection.cursor.return_value.__enter__.return_value = cursor
@@ -609,7 +609,7 @@ class DryRunTests(unittest.TestCase):
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://x"), \
                  mock.patch.object(upload_powerset.postgres_client, "load_env_file"), \
                  mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(return_value=namespace))), \
-                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_share_v1')), \
                  mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
                 payload = upload_powerset.UploadPowerset(
                     operator_id=OPERATOR, dry_run=True, **paths).run()
@@ -630,7 +630,7 @@ class DryRunTests(unittest.TestCase):
     def test_real_run_rechecks_share_plan_and_target_before_any_write(self):
         plan = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
                         [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
-        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_share_v1"))
                                               for ns in plan.namespaces))
         first = (share_row(NEW_PERSON, "jordan-bravo"),)
         changed_label = (share_row(NEW_PERSON, "jordan-bravo", labels="new-label"),)
@@ -649,10 +649,10 @@ class DryRunTests(unittest.TestCase):
                     fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
                     with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                          mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                         mock.patch.object(postgres, "use_v3_schema"), \
+                         mock.patch.object(postgres, "use_share_schema"), \
                          mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
                          mock.patch.object(upload_powerset.tp_backend, "namespace_name",
-                                           side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
+                                           side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_share_v1")), \
                          mock.patch.object(upload_powerset, "read_share_rows", side_effect=[first, rows]), \
                          mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=plans), \
                          mock.patch.object(upload_powerset.UploadPowerset, "_apply") as apply, \
@@ -679,7 +679,7 @@ class DryRunTests(unittest.TestCase):
         # still lacks Jordan, so the next check counts one new person, not a changed one.
         plan = plan_for([share_row(NEW_PERSON, "jordan-bravo")],
                         [local_person(NEW_PERSON, "jordan-bravo")], cloud_state())
-        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_share_v1"))
                                               for ns in plan.namespaces))
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._fixture(Path(tmp))
@@ -689,10 +689,10 @@ class DryRunTests(unittest.TestCase):
             fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                 mock.patch.object(postgres, "use_v3_schema"), \
+                 mock.patch.object(postgres, "use_share_schema"), \
                  mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
                  mock.patch.object(upload_powerset.tp_backend, "namespace_name",
-                                   side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
+                                   side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_share_v1")), \
                  mock.patch.object(upload_powerset.UploadPowerset, "_plan", return_value=plan), \
                  mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
                 upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
@@ -709,7 +709,7 @@ class DryRunTests(unittest.TestCase):
         # profile fix) and has positions locally: the check counts Jordan as changed.
         plan = plan_for([share_row(NEW_PERSON, "jordan-bravo")], [local_person(NEW_PERSON, "jordan-bravo")],
                         cloud_state(cloud_id_by_person={NEW_PERSON: NEW_PERSON}))
-        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+        plan = replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_share_v1"))
                                               for ns in plan.namespaces))
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._fixture(Path(tmp))
@@ -722,11 +722,11 @@ class DryRunTests(unittest.TestCase):
             fake_psycopg2 = mock.Mock(connect=mock.Mock(return_value=connection))
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                 mock.patch.object(postgres, "use_v3_schema"), \
+                 mock.patch.object(postgres, "use_share_schema"), \
                  mock.patch.object(postgres, "fetch_ids_without_positions", return_value=frozenset({NEW_PERSON})), \
                  mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer"), \
                  mock.patch.object(upload_powerset.tp_backend, "namespace_name",
-                                   side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_v3")), \
+                                   side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace("_v1", "_share_v1")), \
                  mock.patch.object(upload_powerset.UploadPowerset, "_plan", return_value=plan), \
                  mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}):
                 upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=True, **paths).run()
@@ -746,9 +746,9 @@ class DryRunTests(unittest.TestCase):
                           [local_person(NEW_PERSON, "jordan-bravo")],
                           cloud_state(cloud_id_by_person={NEW_PERSON: NEW_PERSON},
                                       operator_sources=(source,)))
-        first = replace(first, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+        first = replace(first, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_share_v1"))
                                                 for ns in first.namespaces))
-        second = replace(second, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+        second = replace(second, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_share_v1"))
                                                   for ns in second.namespaces))
         namespaces = {logical: StatefulNamespace() for logical in NAMESPACE_NAMES}
         connection = mock.MagicMock()
@@ -759,9 +759,9 @@ class DryRunTests(unittest.TestCase):
             paths = self._fixture(Path(tmp))
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                 mock.patch.object(postgres, "use_v3_schema"), \
-                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_v3') == name)]))), \
-                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
+                 mock.patch.object(postgres, "use_share_schema"), \
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_share_v1') == name)]))), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_share_v1')), \
                  mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}), \
                  mock.patch.object(postgres, "upsert_persons", side_effect=lambda cur, rows: writes.append(("persons", len(rows))) or len(rows)), \
                  mock.patch.object(postgres, "upsert_sources", side_effect=lambda cur, op, rows: writes.append(("sources", len(rows))) or len(rows)), \
@@ -793,7 +793,7 @@ class DryRunTests(unittest.TestCase):
                            cloud_state(cloud_id_by_person={NEW_PERSON: NEW_PERSON},
                                        operator_sources=(source,)))
         def v3(plan):
-            return replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_v3"))
+            return replace(plan, namespaces=tuple(replace(ns, namespace=ns.namespace.replace("_v1", "_share_v1"))
                                                    for ns in plan.namespaces))
 
         namespaces = {logical: StatefulNamespace() for logical in NAMESPACE_NAMES}
@@ -820,9 +820,9 @@ class DryRunTests(unittest.TestCase):
             local.close()
             with mock.patch.object(upload_powerset.postgres_client, "ensure_psycopg2", return_value=fake_psycopg2), \
                  mock.patch.object(upload_powerset.postgres_client, "database_url", return_value="postgresql://user@host/db"), \
-                 mock.patch.object(postgres, "use_v3_schema"), \
-                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_v3') == name)]))), \
-                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_v3')), \
+                 mock.patch.object(postgres, "use_share_schema"), \
+                 mock.patch.object(upload_powerset.turbopuffer, "Turbopuffer", return_value=mock.Mock(namespace=mock.Mock(side_effect=lambda name: namespaces[next(k for k,v in NAMESPACE_NAMES.items() if v.replace('_v1','_share_v1') == name)]))), \
+                 mock.patch.object(upload_powerset.tp_backend, "namespace_name", side_effect=lambda logical, **kwargs: NAMESPACE_NAMES[logical].replace('_v1', '_share_v1')), \
                  mock.patch.dict(os.environ, {"TURBOPUFFER_API_KEY": "test-key"}), \
                  mock.patch.object(postgres, "upsert_persons", side_effect=lambda cur, rows: len(rows)), \
                  mock.patch.object(postgres, "upsert_sources", side_effect=lambda cur, op, rows: len(rows)), \

@@ -15,10 +15,9 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.indexing.primitives.upload_powerset.manifest import CHANGED_CHECK
 
 SAFE_ERRORS = {
-    "postgres_login": "Upload requires access to the powerset_v2 PostgreSQL schema",
+    "postgres_login": "Upload requires access to the powerset_share_v1 PostgreSQL schema",
     "local_index": "Upload requires a local search index; build the index first",
     "api_key": "Upload requires a TurboPuffer API key",
-    "namespace": "Upload requires the shared TurboPuffer v3 namespaces",
     "operator": "no users row for the current Powerset credentials; run `$powerset login`",
 }
 

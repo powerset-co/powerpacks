@@ -18,6 +18,7 @@ cloud lacks is created from the local profile. The INSERT column list stays
 pinned to that cloud pipeline's list, including five locally NULL columns.
 
 Changelog:
+  2026-10-08: the session reads and writes the powerset_share_v1 tables.
   2026-09-28: a persons row whose context has no positions takes the uploaded one.
   2026-09-28: writes go in multi-row statements of 500 rows, not one per row.
   2026-09-24: created; count affected rows and omit locally NULL update clauses.
@@ -141,12 +142,17 @@ def resolve_operator_id(cur: Any, subject: str) -> str:
     return str(row[0])
 
 
-def use_v3_schema(cur: Any) -> None:
-    """Point this session at the shared schema and prove it took: the standard login works."""
-    cur.execute("SET search_path TO powerset_v2, pg_catalog")
+SHARE_SCHEMA = "powerset_share_v1"
+SEARCH_PATH = f"{SHARE_SCHEMA}, powerset_v2, pg_catalog"
+
+
+def use_share_schema(cur: Any) -> None:
+    """Point this session at the isolated share tables (share_v1.sql), falling through to powerset_v2 for
+    users, and prove it took: the standard login works and the tables exist."""
+    cur.execute(f"SET search_path TO {SEARCH_PATH}")
     cur.execute("SELECT current_schema(), current_setting('search_path')")
     schema, search_path = cur.fetchone()
-    if schema != "powerset_v2" or search_path != "powerset_v2, pg_catalog":
+    if schema != SHARE_SCHEMA or search_path != SEARCH_PATH:
         raise RuntimeError(SAFE_ERRORS["postgres_login"])
 
 
