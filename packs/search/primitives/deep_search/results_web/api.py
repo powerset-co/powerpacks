@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Callable
 
 from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets
+from packs.powerset.primitives.agent_inbox.messages import Rejected
 from packs.search.primitives.ask_set import ask_set
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 
@@ -88,6 +89,9 @@ class SearchApi:
             return
         except CloudError as error:
             _send_json(handler, {"error": str(error)}, status=HTTPStatus.BAD_GATEWAY)
+            return
+        except Rejected as error:
+            _send_json(handler, {"error": f"The ask is too big to send: {error}"}, status=HTTPStatus.BAD_REQUEST)
             return
         _send_json(handler, answer)
 

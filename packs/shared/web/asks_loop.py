@@ -53,7 +53,9 @@ WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects 
 def _set_members(repo_root: Path, env_file: Path) -> set[str]:
     """The operators in this owner's sets, read from the store the People page keeps."""
     with closing(open_store(store_path(repo_root / ".powerpacks"))) as conn:
-        return Sets(conn, env_file).known_operators()
+        sets = Sets(conn, env_file)
+        sets.settle()  # a delete or a leave the relay just delivered counts before anyone is answered
+        return sets.known_operators()
 
 
 def _device_id(repo_root: Path) -> str:

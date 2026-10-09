@@ -39,7 +39,7 @@ class ParseTests(unittest.TestCase):
         for kind, payload in [
             ("set_invite_reply", {"invite_id": str(uuid4()), "answer": "declined"}),
             ("set_deleted", {"set_id": set_id}), ("set_left", {"set_id": set_id}),
-            ("ask_answer", {"ask_id": str(uuid4()), "answers": [{"public_identifier": "alex", "answer": {"declined": True}}]}),
+            ("ask_answer", {"ask_id": str(uuid4()), "answers": [{"public_identifier": "alex", "answer": {"declined": True, "reason": "not_in_store"}}]}),
             ("debug_result", {"request_id": str(uuid4()), "results": {"git": {"ok": True, "output": "main"}}}),
         ]:
             with self.subTest(kind=kind):
@@ -57,6 +57,11 @@ class ParseTests(unittest.TestCase):
             "candidate missing a field": message("ask", {"ask_id": str(uuid4()), "question": "q",
                                                          "candidates": [{"public_identifier": "a"}]}),
             "payload not an object": message("set_left", ["x"]),
+            "answer with a bad verdict": message("ask_answer", {"ask_id": str(uuid4()), "answers": [
+                {"public_identifier": "alex", "answer": {"verdict": [], "reason": "", "can_intro": True,
+                                                         "relationship": "", "last_contact": None, "confidence": 1}}]}),
+            "member list with a stranger role": message("set_members", {"set_id": str(uuid4()), "members": [
+                {"name": "x", "email": "x", "role": "admin", "operator_id": str(uuid4())}]}),
         }
         for name, raw in cases.items():
             with self.subTest(name), self.assertRaises(Rejected):

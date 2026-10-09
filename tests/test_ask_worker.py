@@ -130,6 +130,15 @@ class AskWorkerTests(unittest.TestCase):
         self.assertNotIn("Former colleagues", json.dumps(audit))
         self.assertIn(f"{SLUG} recommend", self.stderr.getvalue())
 
+    def test_a_failed_reply_is_resent_without_a_second_model_call(self) -> None:
+        self.http.side_effect = OSError("relay down")
+        with self.assertRaises(OSError):
+            self._run()
+        self.http.side_effect = self._http
+        self._run()
+        self.model.assert_awaited_once()
+        self.assertEqual(self._reply()["answers"][0]["answer"], ANSWER)
+
     def test_not_found_declines_without_model_or_audit(self) -> None:
         self.message = self._message("casey-delta-3c4d")
         self._run()

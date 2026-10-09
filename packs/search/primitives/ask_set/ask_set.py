@@ -24,6 +24,7 @@ from packs.indexing.lib.identity import stable_person_id
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.share.web.sets import Member, Sets
 from packs.ingestion.schemas.people_schema import extract_public_identifier
+from packs.powerset.primitives.agent_inbox.messages import Ask
 from packs.search.primitives.deep_search.results_web import snapshot
 
 ASK = "ask"
@@ -92,8 +93,12 @@ def send(run_dir: Path, question: str, sets: Sets) -> dict[str, Any]:
             by_owner.setdefault(member.operator_id, []).append(
                 {"public_identifier": candidate["public_identifier"], "linkedin_url": candidate["linkedin_url"],
                  "name": candidate["name"]})
-    for operator_id, theirs in by_owner.items():
-        sets.message(operator_id, ASK, {"ask_id": ask_id, "question": question, "candidates": theirs})
+    payloads = {operator_id: {"ask_id": ask_id, "question": question, "candidates": theirs}
+                for operator_id, theirs in by_owner.items()}
+    for payload in payloads.values():
+        Ask.parse(payload)  # the recipient's limits (question length, candidates per ask): refuse before sending
+    for operator_id, payload in payloads.items():
+        sets.message(operator_id, ASK, payload)
     ask = {"ask_id": ask_id, "question": question, "sent_at": now_iso(),
            "candidates": [{**candidate, "owners": [{"operator_id": m.operator_id, "name": m.name}
                                                    for m in owners[candidate["public_identifier"]]]}

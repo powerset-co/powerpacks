@@ -12,9 +12,10 @@ from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.share.web.sets import NeedsSignIn, Sets, payload
 
 ACCOUNTS = {"jordan": {"email": "jordan@example.com", "operator_id": "op-jordan"},
-            "casey": {"email": "casey@example.com", "operator_id": "op-casey"}}
+            "casey": {"email": "casey@example.com", "operator_id": "op-casey"},
+            "riley": {"email": "riley@example.com", "operator_id": "op-riley"}}
 # People each operator shared into share_v1; a set's people are its members' union.
-SHARED = {"op-jordan": 5, "op-casey": 5}
+SHARED = {"op-jordan": 5, "op-casey": 5, "op-riley": 5}
 
 
 class RelayInviteTests(unittest.TestCase):
@@ -26,6 +27,7 @@ class RelayInviteTests(unittest.TestCase):
         self.sent: list[dict] = []
         self.jordan = self.side("jordan")
         self.casey = self.side("casey")
+        self.riley = self.side("riley")
         people = mock.patch.object(Sets, "people", lambda sets, ids: sum(SHARED.get(i, 0) for i in ids))
         people.start()
         self.addCleanup(people.stop)
@@ -87,6 +89,44 @@ class RelayInviteTests(unittest.TestCase):
         self.assertEqual(founders["members"][-1]["name"], "Casey Delta")
         self.assertEqual([m["person_count"] for m in founders["members"]], [5, 5])
         json.dumps(mine)
+
+    def deliver_to(self, to: Sets, sender: tuple[str, str], index: int) -> None:
+        """One relay message, by its place in the sent list, as the asks loop's pull writes it."""
+        body = self.sent[index]
+        write_json(to.data_root / "inbox" / f"m{index + 1}.json",
+                   {"id": f"m{index + 1}", "kind": body["kind"], "payload": body["payload"],
+                    "from": {"operator_id": sender[0], "name": sender[1]},
+                    "created_at": f"2026-10-08T00:00:{index:02d}Z"})  # the relay stamps them in send order
+
+    def test_a_third_member_learns_everyone_from_the_owner(self) -> None:
+        with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):
+            set_id = self.accepted()  # Jordan owns it, Casey joined
+            payload(self.jordan, 0)   # the owner's read sends the list: Jordan + Casey
+            self.jordan.invite(set_id, "riley@example.com")
+            self.deliver_to(self.riley, ("op-jordan", "Jordan Bravo"), len(self.sent) - 1)
+            invite_id = f"m{len(self.sent)}"
+            self.riley.answer(invite_id, accepted=True)
+            self.deliver_to(self.jordan, ("op-riley", "Riley Echo"), len(self.sent) - 1)
+            payload(self.jordan, 0)   # Riley's accept changed the list: sent to Casey and Riley
+            lists = [(index, body["to"]) for index, body in enumerate(self.sent) if body["kind"] == "set_members"]
+            for index, to in lists:
+                self.deliver_to({"op-casey": self.casey, "op-riley": self.riley}[to], ("op-jordan", "Jordan Bravo"), index)
+            casey_view = payload(self.casey, 0)["sets"][1]
+            riley_view = payload(self.riley, 0)["sets"][1]
+        everyone = ["jordan@example.com", "casey@example.com", "riley@example.com"]
+        self.assertEqual(sorted(m["email"] for m in casey_view["members"]), sorted(everyone))
+        self.assertEqual(sorted(m["email"] for m in riley_view["members"]), sorted(everyone))
+        self.assertEqual(casey_view["person_count"], 15)
+
+    def test_a_member_list_from_someone_else_changes_nothing(self) -> None:
+        with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):
+            set_id = self.accepted()
+            write_json(self.casey.data_root / "inbox" / "x1.json", {
+                "id": "x1", "kind": "set_members", "created_at": "2026-10-08T00:00:00Z",
+                "from": {"operator_id": "op-riley", "name": "Riley Echo"},
+                "payload": {"set_id": set_id, "members": []}})
+            members = payload(self.casey, 0)["sets"][1]["members"]
+        self.assertEqual([m["email"] for m in members], ["jordan@example.com", "casey@example.com"])
 
     def test_decline_keeps_the_set_off_the_invitee(self) -> None:
         with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):

@@ -6,6 +6,7 @@ field over its size limit, or an id that is not a uuid (the id names the inbox f
 every message and keeps only what parses, so anything else is discarded.
 
 Changelog:
+- 2026-10-08: set_members carries the owner's full member list; typed answers and debug results.
 - 2026-10-08: created: set invites, replies, deletes and leaves; asks and their answers; debug checks.
 """
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any, Literal, Union
 
 MAX_TEXT = 500           # a question, a set name, an email
 MAX_CANDIDATES = 50      # pinned candidates in one ask
+MAX_MEMBERS = 50         # people in one set
 MAX_RESULT = 25_000      # one debug check's output (agent_debug caps at 20,000)
 
 
@@ -95,6 +97,36 @@ class SetLeft:
 
 
 @dataclass(frozen=True)
+class SetMember:
+    name: str
+    email: str
+    role: Literal["owner", "member"]
+    operator_id: str
+
+    @classmethod
+    def parse(cls, value: object) -> SetMember:
+        row = _dict(value, "member")
+        role = row.get("role")
+        if role not in ("owner", "member"):
+            raise Rejected("role must be owner or member")
+        return cls(_text(row.get("name") or "", "name", empty=True), _text(row.get("email") or "", "email", empty=True),
+                   role, _uuid(row.get("operator_id"), "operator_id"))
+
+
+@dataclass(frozen=True)
+class SetMembers:
+    """The owner's full member list, sent to every member when someone joins or leaves; honoured only from
+    the set's owner (sets.py)."""
+    set_id: str
+    members: tuple[SetMember, ...]
+
+    @classmethod
+    def parse(cls, payload: dict[str, Any]) -> SetMembers:
+        return cls(_uuid(payload.get("set_id"), "set_id"),
+                   tuple(SetMember.parse(row) for row in _list(payload.get("members"), "members", MAX_MEMBERS)))
+
+
+@dataclass(frozen=True)
 class AskCandidate:
     public_identifier: str
     linkedin_url: str
@@ -122,17 +154,64 @@ class Ask:
 
 
 @dataclass(frozen=True)
+class Verdict:
+    """One owner's answer about one candidate (ask_worker's model answer)."""
+    verdict: Literal["recommend", "not_fit", "unsure"]
+    reason: str
+    can_intro: bool
+    relationship: str
+    last_contact: str | None
+    confidence: float
+
+    @classmethod
+    def parse(cls, value: object) -> Verdict:
+        row = _dict(value, "answer")
+        verdict, can_intro, confidence = row.get("verdict"), row.get("can_intro"), row.get("confidence")
+        if verdict not in ("recommend", "not_fit", "unsure"):
+            raise Rejected("verdict must be recommend, not_fit or unsure")
+        if not isinstance(can_intro, bool):
+            raise Rejected("can_intro must be true or false")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+            raise Rejected("confidence must be a number from 0 to 1")
+        last = row.get("last_contact")
+        return cls(verdict, _text(row.get("reason"), "reason", limit=240, empty=True), can_intro,
+                   _text(row.get("relationship"), "relationship", limit=120, empty=True),
+                   None if last is None else _text(last, "last_contact", limit=7), float(confidence))
+
+
+@dataclass(frozen=True)
+class Declined:
+    """The owner could not answer: the person is not in their store, or their model call failed."""
+    declined: Literal[True]
+    reason: Literal["not_in_store", "failed"]
+
+
+def _answer_body(value: object) -> Verdict | Declined:
+    row = _dict(value, "answer")
+    if row.get("declined") is True:
+        if row.get("reason") not in ("not_in_store", "failed"):
+            raise Rejected("a declined answer's reason must be not_in_store or failed")
+        return Declined(True, row["reason"])
+    return Verdict.parse(row)
+
+
+@dataclass(frozen=True)
+class CandidateAnswer:
+    public_identifier: str
+    answer: Verdict | Declined
+
+
+@dataclass(frozen=True)
 class AskAnswer:
     ask_id: str
-    answers: tuple[dict[str, Any], ...]  # {public_identifier, answer}; read only against the asker's own ask.json
+    answers: tuple[CandidateAnswer, ...]
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> AskAnswer:
-        answers = tuple(_dict(row, "answer") for row in _list(payload.get("answers"), "answers", MAX_CANDIDATES))
-        for row in answers:
-            _text(row.get("public_identifier"), "public_identifier")
-            _dict(row.get("answer"), "answer")
-        return cls(_uuid(payload.get("ask_id"), "ask_id"), answers)
+        return cls(_uuid(payload.get("ask_id"), "ask_id"), tuple(
+            CandidateAnswer(_text(_dict(row, "answer").get("public_identifier"), "public_identifier"),
+                            _answer_body(row.get("answer")))
+            for row in _list(payload.get("answers"), "answers", MAX_CANDIDATES)))
 
 
 @dataclass(frozen=True)
@@ -146,22 +225,36 @@ class DebugRequest:
 
 
 @dataclass(frozen=True)
+class CheckResult:
+    ok: bool
+    output: str
+
+
+@dataclass(frozen=True)
 class DebugResult:
     request_id: str
-    results: dict[str, Any]  # {check: {ok, output}}
+    results: dict[str, CheckResult]
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> DebugResult:
         results = _dict(payload.get("results"), "results")
+        if len(results) > 20:
+            raise Rejected("results must hold at most 20 checks")
+        typed = {}
         for name, result in results.items():
-            _text(name, "check", limit=40)
-            _text(_dict(result, "result").get("output"), "output", limit=MAX_RESULT, empty=True)
-        return cls(_uuid(payload.get("request_id"), "request_id"), results)
+            row = _dict(result, "result")
+            if not isinstance(row.get("ok"), bool):
+                raise Rejected("ok must be true or false")
+            typed[_text(name, "check", limit=40)] = CheckResult(
+                row["ok"], _text(row.get("output"), "output", limit=MAX_RESULT, empty=True))
+        return cls(_uuid(payload.get("request_id"), "request_id"), typed)
 
 
-Payload = Union[SetInvite, SetInviteReply, SetDeleted, SetLeft, Ask, AskAnswer, DebugRequest, DebugResult]
+Payload = Union[SetInvite, SetInviteReply, SetDeleted, SetLeft, SetMembers, Ask, AskAnswer, DebugRequest,
+                DebugResult]
 KINDS: dict[str, type[Payload]] = {
     "set_invite": SetInvite, "set_invite_reply": SetInviteReply, "set_deleted": SetDeleted, "set_left": SetLeft,
+    "set_members": SetMembers,
     "ask": Ask, "ask_answer": AskAnswer, "debug_request": DebugRequest, "debug_result": DebugResult,
 }
 

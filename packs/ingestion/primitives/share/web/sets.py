@@ -14,6 +14,8 @@ whose allowed_operator_ids hold any member's operator id.
 
 Created: 2026-10-08
 Changelog:
+- 2026-10-08: the owner sends the full member list to every member when it changes (set_members), so a
+  third member's laptop learns the others.
 - 2026-10-08: deleting a set tells its members' agents, leaving tells the owner's; each side applies it on read.
 - 2026-10-08: local sets; no /v2/sets. Invites over the relay, joined sets stored on accept, each member's
   last heartbeat, and the set's people (and each member's) counted in the share_v1 namespace, cached an hour.
@@ -21,6 +23,7 @@ Changelog:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -45,6 +48,7 @@ INVITE = "set_invite"
 REPLY = "set_invite_reply"
 DELETED = "set_deleted"  # the owner deleted the set: each member's machine drops it
 LEFT = "set_left"        # a member left: the owner's machine drops them from the set
+MEMBERS = "set_members"  # the owner's full member list, sent to every member when it changes
 ACCEPTED = "accepted"
 DECLINED = "declined"
 PENDING = "pending"
@@ -54,6 +58,7 @@ PERSONAL_ID = "personal"
 TIMEOUT_SECONDS = 30
 # A count moves only when someone shares; the page asks every 10 s, so it reads this cache.
 COUNT_SECONDS = 3600
+_LOG = logging.getLogger(__name__)
 
 
 class NeedsSignIn(Exception):
@@ -155,17 +160,21 @@ class Sets:
         return [*view.members, *(member for member in joined if member.operator_id not in held)]
 
     def settle(self) -> None:
-        """Apply the deletes and leaves the relay delivered since the last read, once each."""
-        for message in self._inbox(DELETED) + self._inbox(LEFT):
+        """Apply the deletes, leaves and member lists the relay delivered since the last read, once each;
+        then, for each set this owner owns, send the full member list to every member if it changed."""
+        for message in self._inbox(DELETED) + self._inbox(LEFT) + self._inbox(MEMBERS):
             if "applied_at" in message:
                 continue
             set_id = message["payload"]["set_id"]
+            # Only the set's owner deletes it or names its members; from anyone else these change nothing.
+            owners = {member.operator_id for view in self.kept() if view.set_id == set_id
+                      for member in view.members if member.role == OWNER}
             if message["kind"] == DELETED:
-                # Only the set's owner deletes it for everyone; a delete from anyone else changes nothing.
-                owners = {member.operator_id for view in self.kept() if view.set_id == set_id
-                          for member in view.members if member.role == OWNER}
                 if message["from"]["operator_id"] in owners:
                     queries_share.delete_set(self.conn, set_id)
+            elif message["kind"] == MEMBERS:
+                if message["from"]["operator_id"] in owners:
+                    queries_share.update_set_members(self.conn, set_id, json.dumps(message["payload"]["members"]))
             else:
                 replies = {reply["payload"]["invite_id"]: reply for reply in self._inbox(REPLY)}
                 for path in (self.data_root / "invites").glob("*.json"):
@@ -174,6 +183,31 @@ class Sets:
                     if invite["set_id"] == set_id and reply and reply["from"]["operator_id"] == message["from"]["operator_id"]:
                         write_json(path, {**invite, "left_at": message["created_at"]})
             write_json(self.data_root / "inbox" / f"{message['id']}.json", {**message, "applied_at": now_iso()})
+        self._announce()
+
+    def _announce(self) -> None:
+        """Send each owned set's member list to its members when it differs from the last one sent. A send
+        that fails is tried again on the next read."""
+        path = self.data_root / "set-members-sent.json"
+        announced: dict[str, list[str]] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        me = self.me()
+        for view in self.kept():
+            if view.role != OWNER:
+                continue
+            members = self.members(view)
+            ids = sorted(member.operator_id for member in members)
+            if announced.get(view.set_id, [me.operator_id]) == ids:
+                continue
+            try:
+                for member in members:
+                    if member.operator_id != me.operator_id:
+                        self.message(member.operator_id, MEMBERS,
+                                     {"set_id": view.set_id, "members": [asdict(held) for held in members]})
+            except (CloudError, NeedsSignIn) as error:
+                _LOG.warning("Set members not sent for %s: %s", view.set_id, error)
+                continue
+            announced[view.set_id] = ids
+            write_json(path, announced)
 
     def kept(self) -> list[SetView]:
         return [SetView(row["set_id"], row["name"], row["role"],

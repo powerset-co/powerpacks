@@ -124,8 +124,12 @@ def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
         slug = candidate["public_identifier"]
         with closing(open_store(store_path(data_root))) as conn:
             found = _evidence(conn, data_root, slug)
+        audit = data_root / "asks" / f"{message['id']}-{slug}.json"
         if found is None:
             answer: dict = {"declined": True, "reason": "not_in_store"}
+        elif audit.is_file():
+            # Answered before, but the reply did not reach the relay: send the same answer, no second model call.
+            answer = json.loads(audit.read_text(encoding="utf-8"))["answer"]
         else:
             evidence, used = found
             try:
@@ -135,7 +139,7 @@ def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
                 print(f"ask-worker: {slug} failed ({type(exc).__name__})", file=sys.stderr)
                 answers.append({"public_identifier": slug, "answer": {"declined": True, "reason": "failed"}})
                 continue
-            write_json(data_root / "asks" / f"{message['id']}-{slug}.json",
+            write_json(audit,
                        {"message": message, "candidate": candidate, "evidence_used": used, "answer": answer,
                         "answered_at": now_iso()})
         answers.append({"public_identifier": slug, "answer": answer})
