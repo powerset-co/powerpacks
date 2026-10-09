@@ -14,7 +14,7 @@ whose allowed_operator_ids hold any member's operator id.
 Created: 2026-10-08
 Changelog:
 - 2026-10-08: local sets; no /v2/sets. Invites over the relay, joined sets stored on accept, each member's
-  last heartbeat, and the set's people (and each member's) counted in the share_v1 namespace, cached a minute.
+  last heartbeat, and the set's people (and each member's) counted in the share_v1 namespace, cached an hour.
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ MEMBER = "member"
 PERSONAL_ID = "personal"
 TIMEOUT_SECONDS = 30
 # A count moves only when someone shares; the page asks every 10 s, so it reads this cache.
-COUNT_SECONDS = 60
+COUNT_SECONDS = 3600
 
 
 class NeedsSignIn(Exception):
