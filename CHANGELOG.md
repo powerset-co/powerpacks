@@ -1,5 +1,53 @@
 # Changelog
 
+## [3.22.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.1...powerpacks-v3.22.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **sets:** deleting a set withdraws its pending invites; long answer text is cut, not lost ([#784](https://github.com/powerset-co/powerpacks/issues/784)) ([8e52e39](https://github.com/powerset-co/powerpacks/commit/8e52e390bbda6a16cb42700e92612b24fb652026))
+
+## [3.22.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.0...powerpacks-v3.22.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* preserve Google login through navigation ([#785](https://github.com/powerset-co/powerpacks/issues/785)) ([2a5caf9](https://github.com/powerset-co/powerpacks/commit/2a5caf929bf7ca8d6b305bf7282e7d0f9a921555))
+
+## [3.22.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.21.2...powerpacks-v3.22.0) (2026-10-09)
+
+
+### Features
+
+* **asks:** ask the set about pinned candidates ([#776](https://github.com/powerset-co/powerpacks/issues/776)) ([3688333](https://github.com/powerset-co/powerpacks/commit/36883334048973a150c9872fbfca3e74a9004ff1))
+* **people:** the share button checks on its own after a share edit ([#782](https://github.com/powerset-co/powerpacks/issues/782)) ([0987d95](https://github.com/powerset-co/powerpacks/commit/0987d9548ea1c240805eebc64979ca53dd4c10cc))
+* **share:** powerpacks_ namespaces for the shared network, apart from search ([#780](https://github.com/powerset-co/powerpacks/issues/780)) ([6268f5d](https://github.com/powerset-co/powerpacks/commit/6268f5d000bd3f3e482488b930d4b337625b1c1a))
+* **share:** upload to an isolated share_v1 network ([#779](https://github.com/powerset-co/powerpacks/issues/779)) ([9999f5e](https://github.com/powerset-co/powerpacks/commit/9999f5e3eebbdb79f07560c79559afd69473133d))
+
+
+### Bug Fixes
+
+* **index:** the hash table is written in one bulk insert, not a row at a time ([#774](https://github.com/powerset-co/powerpacks/issues/774)) ([154aa1e](https://github.com/powerset-co/powerpacks/commit/154aa1e6d97a4e63b587d74c3fff32659c05b494))
+* **install:** streamline onboarding and managed sign-in ([#764](https://github.com/powerset-co/powerpacks/issues/764)) ([d88ac16](https://github.com/powerset-co/powerpacks/commit/d88ac1641add586b36ac1c43379f6af8cde4ce74))
+* **people:** preserve the view on refresh ([#783](https://github.com/powerset-co/powerpacks/issues/783)) ([1b3de85](https://github.com/powerset-co/powerpacks/commit/1b3de85464bfd48c4d11b4bef0cc96374bb48030))
+* **people:** share edits refresh the share button; the dialog checks on open ([#781](https://github.com/powerset-co/powerpacks/issues/781)) ([5bef8ec](https://github.com/powerset-co/powerpacks/commit/5bef8eccb92552be6da151c8cf5b9a27e2d10761))
+* **review:** keep previous decisions editable ([#772](https://github.com/powerset-co/powerpacks/issues/772)) ([78de367](https://github.com/powerset-co/powerpacks/commit/78de367f10ec85f2f112f953a55778fa5849ab71))
+* **review:** re-research from a description, feedback and sign-in are back ([#771](https://github.com/powerset-co/powerpacks/issues/771)) ([293aa93](https://github.com/powerset-co/powerpacks/commit/293aa931fb386025eaffecd6662694b1a695e4d9))
+
+## [3.21.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.21.1...powerpacks-v3.21.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* end timeline line at the final event dot ([#768](https://github.com/powerset-co/powerpacks/issues/768)) ([f85a9a2](https://github.com/powerset-co/powerpacks/commit/f85a9a231b11c0b95460d774942a958d0c3cc61d))
+
+## [3.21.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.21.0...powerpacks-v3.21.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* proxy and batch LinkedIn avatar images ([#766](https://github.com/powerset-co/powerpacks/issues/766)) ([b922029](https://github.com/powerset-co/powerpacks/commit/b922029755dde556fdd2f69f77ed78f96c8592e2))
+
 ## [3.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.20.0...powerpacks-v3.21.0) (2026-10-08)
 
 

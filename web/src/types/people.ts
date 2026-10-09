@@ -24,7 +24,7 @@ export interface Person {
   public_identifier: string
   in_progress: boolean
   name: string
-  has_avatar: boolean
+  avatar_url: string
   title: string
   company: string
   location: string
@@ -76,7 +76,7 @@ export const PERSON_COLUMNS = [
   "public_identifier",
   "in_progress",
   "name",
-  "has_avatar",
+  "avatar_url",
   "title",
   "company",
   "location",

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { UploadStatus } from "@/lib/api/upload"
@@ -18,9 +19,18 @@ interface Routes {
   upload?: () => Answer
 }
 
+function setsResponse(): Response {
+  return new Response(JSON.stringify({ sets: [], invites: [], shared: 0 }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
 /** fetch over the three upload routes; each call asks its route for the answer now. */
 function serve(routes: Routes) {
   const fetch = vi.fn((url: string, init?: RequestInit) => {
+    // The share menu beside the button reads the sets once; none here.
+    if (url.includes("/sets")) return Promise.resolve(setsResponse())
     const route = init?.method !== "POST" ? routes.get : url.endsWith("/check") ? routes.check : routes.upload
     const answer = route?.() ?? new Error(`unexpected ${url}`)
     if (answer instanceof Error) return Promise.reject(answer)
@@ -39,9 +49,11 @@ let client: QueryClient
 function show(onToast = vi.fn()) {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
-    <QueryClientProvider client={client}>
-      <ShareUpload onToast={onToast} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <ShareUpload onToast={onToast} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
   return onToast
 }
@@ -65,22 +77,55 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+// A check that found nothing to upload.
+const NOTHING = { ...PLAN, new_to_cloud: 0, changed: 0, already_in_cloud: 0, losing_access: 0 }
+
 describe("ShareUpload trigger", () => {
   it.each([
-    [uploadStatus(), "Share network", "Never shared"],
-    [uploadStatus({ status: "completed", last_upload: SHARED }), "Share changes", "Shared 128 · Sep 27"],
+    [uploadStatus({ status: "ready", plan: PLAN }), "pending", "Never shared"],
+    [uploadStatus({ status: "ready", plan: NOTHING }), "never", "Never shared"],
+    [uploadStatus({ status: "ready", plan: NOTHING, last_upload: SHARED }), "current", "Shared 128 · Sep 27"],
+    [uploadStatus({ status: "ready", plan: PLAN, last_upload: SHARED }), "pending", "Shared 128 · Sep 27"],
+    [uploadStatus({ status: "completed", last_upload: SHARED }), "current", "Shared 128 · Sep 27"],
     [
-      uploadStatus({ status: "interrupted", last_upload: { ...SHARED, status: "interrupted" } }),
-      "Share changes",
+      uploadStatus({
+        status: "interrupted",
+        last_upload: { ...SHARED, status: "interrupted" },
+        share_changed: true,
+      }),
+      "pending",
       "Upload interrupted · Sep 27",
     ],
-    [uploadStatus({ status: "uploading", last_upload: SHARED }), "View upload", "Shared 128 · Sep 27"],
-    [uploadStatus({ status: "checking" }), "View upload", "Never shared"],
-  ])("shows the button without the last-upload caption (%#)", async (status, label, line) => {
+    [uploadStatus({ status: "uploading", last_upload: SHARED }), "running", "Shared 128 · Sep 27"],
+    [uploadStatus({ status: "checking" }), "running", "Never shared"],
+  ])("always says Share network and marks where the check stands (%#)", async (status, state, line) => {
     serve({ get: () => status })
     show()
-    expect(await screen.findByRole("button", { name: label })).toBeTruthy()
+    await waitFor(async () =>
+      expect((await screen.findByRole("button", { name: "Share network" })).dataset.state).toBe(state),
+    )
     expect(screen.queryByText(line)).toBeNull()
+  })
+
+  it.each([
+    ["never checked", uploadStatus()],
+    [
+      "edited since the upload",
+      uploadStatus({ status: "completed", last_upload: SHARED, share_changed: true }),
+    ],
+  ])("checks on its own when %s, with a spinner until the plan lands", async (_, first) => {
+    let state = first
+    const fetch = serve({
+      get: () => state,
+      check: () => (state = uploadStatus({ status: "checking", last_upload: first.last_upload })),
+    })
+    show()
+    const button = await screen.findByRole("button", { name: "Share network" })
+    expect(button.dataset.state).toBe("running")
+    await waitFor(() => expect(posts(fetch)).toEqual(["/api/people/upload/check"]), POLLED)
+    state = uploadStatus({ status: "ready", plan: PLAN, last_upload: first.last_upload })
+    await waitFor(() => expect(button.dataset.state).toBe("pending"), POLLED)
+    expect(posts(fetch)).toEqual(["/api/people/upload/check"])
   })
 })
 
@@ -90,23 +135,20 @@ describe("ShareUpload dialog", () => {
     show()
     const dialog = await openDialog("Share network")
     expect(within(dialog).getByRole("heading", { name: "Ready to share" })).toBeTruthy()
-    expect(buttons(dialog)).toEqual(["Close", "Check again", "Confirm sharing"])
+    expect(buttons(dialog)).toEqual(["Close", "Confirm sharing"])
     expect(posts(fetch)).toEqual([])
   })
 
-  it("checks again when Share changes opens after a finished upload", async () => {
-    let state = uploadStatus({ status: "completed", plan: PLAN, last_upload: SHARED })
-    const fetch = serve({
-      get: () => state,
-      check: () => (state = uploadStatus({ status: "checking", plan: PLAN, last_upload: SHARED })),
-    })
+  it("opens a finished upload with nothing changed on its result, without a check", async () => {
+    const fetch = serve({ get: () => uploadStatus({ status: "completed", plan: PLAN, last_upload: SHARED }) })
     show()
-    const dialog = await openDialog("Share changes")
-    await within(dialog).findByRole("heading", { name: "Checking your network" })
-    expect(posts(fetch)).toEqual(["/api/people/upload/check"])
+    const dialog = await openDialog("Share network")
+    expect(within(dialog).getByRole("heading", { name: "Your network is shared" })).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    expect(posts(fetch)).toEqual([])
   })
 
-  it("checks a never-checked network on the first open, then lists the plan", async () => {
+  it("shows the check a never-checked network starts on its own, then lists the plan", async () => {
     let state = uploadStatus()
     const fetch = serve({
       get: () => state,
@@ -168,7 +210,7 @@ describe("ShareUpload dialog", () => {
     let state = uploadStatus({ status: "uploading", plan: PLAN, last_upload: SHARED })
     serve({ get: () => state })
     show()
-    const dialog = await openDialog("View upload")
+    const dialog = await openDialog("Share network")
     state = uploadStatus({ status: "completed", plan: PLAN, last_upload: { ...SHARED, uploaded: 0 } })
     await within(dialog).findByRole("heading", { name: "Your network is up to date" }, POLLED)
     // Nothing follows a finished upload: Close alone, and it takes the colour.
@@ -192,16 +234,21 @@ describe("ShareUpload dialog", () => {
 
   it("resumes a failed upload once the new check is ready", async () => {
     const last = { ...SHARED, status: "interrupted" } as const
-    let state = uploadStatus({ status: "interrupted", failed_action: "upload", last_upload: last })
+    let state = uploadStatus({
+      status: "interrupted",
+      failed_action: "upload",
+      last_upload: last,
+      share_changed: true,
+    })
     serve({
       get: () => state,
       check: () => (state = uploadStatus({ status: "ready", plan: PLAN, last_upload: last })),
     })
     show()
-    const dialog = await openDialog("Share changes")
+    const dialog = await openDialog("Share network")
     fireEvent.click(within(dialog).getByRole("button", { name: "Check again" }))
     await within(dialog).findByRole("heading", { name: "Ready to share" })
-    expect(buttons(dialog)).toEqual(["Close", "Check again", "Resume sharing"])
+    expect(buttons(dialog)).toEqual(["Close", "Resume sharing"])
   })
 
   it("shows a refused confirm's sentence and offers only a new check", async () => {
@@ -223,7 +270,7 @@ describe("ShareUpload dialog", () => {
   })
 
   it("keeps polling after a failed start and follows the run it started", async () => {
-    let state = uploadStatus({ status: "ready", plan: PLAN })
+    let state = uploadStatus({ status: "failed", failed_action: "check", error: "The cloud said no." })
     serve({
       get: () => state,
       check: () => {
@@ -243,7 +290,7 @@ describe("ShareUpload dialog", () => {
     let answer: Answer = uploadStatus({ status: "uploading", plan: PLAN, message: "Uploading people." })
     serve({ get: () => answer })
     show()
-    const dialog = await openDialog("View upload")
+    const dialog = await openDialog("Share network")
     answer = new TypeError("Failed to fetch")
     await within(dialog).findByText("Reconnecting…", undefined, POLLED)
     expect(within(dialog).getByRole("heading", { name: "Uploading your network" })).toBeTruthy()
@@ -255,7 +302,9 @@ describe("ShareUpload dialog", () => {
     let state = uploadStatus({ status: "uploading", plan: PLAN })
     serve({ get: () => state })
     const onToast = show()
-    await screen.findByRole("button", { name: "View upload" })
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("running"),
+    )
     state = uploadStatus({
       status: "completed",
       plan: PLAN,
@@ -263,7 +312,7 @@ describe("ShareUpload dialog", () => {
       progress: { total: 128, uploaded: 3, skipped: 125, namespaces: {} },
     })
     await waitFor(() => expect(onToast).toHaveBeenCalledWith("Shared 128 people."), POLLED)
-    expect(screen.getByRole("button", { name: "Share changes" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("current")
   })
 
   it("polls only while a check or upload runs", async () => {
@@ -271,6 +320,6 @@ describe("ShareUpload dialog", () => {
     show()
     await screen.findByRole("button", { name: "Share network" })
     await new Promise((resolve) => setTimeout(resolve, 1300))
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch.mock.calls.filter(([url]) => !url.includes("/sets"))).toHaveLength(1)
   })
 })

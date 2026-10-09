@@ -2,7 +2,7 @@
 
 import { isDesktop } from "@/lib/desktop"
 
-export type PageKey = "agent" | "searches" | "people" | "accounts" | "tasks" | "setup"
+export type PageKey = "agent" | "searches" | "people" | "sets" | "accounts" | "tasks" | "setup"
 
 export interface Page {
   key: PageKey
@@ -16,6 +16,7 @@ export const HOME: Page = { key: "people", label: "People", href: "/people" }
 const BROWSER_PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
+  { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   { key: "accounts", label: "Accounts", href: "/accounts" },
   // Setup runs for a while; it sits in the nav so the rest of the app is a click away.

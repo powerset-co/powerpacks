@@ -1,6 +1,11 @@
 """Run one People upload and project its typed manifest to the status route.
 
 Changelog:
+  2026-10-09: reading the status writes nothing; a run the last server left running is marked interrupted
+    once, when the server starts.
+  2026-10-09: the last upload always shows; the confirm is bound by the share list hash alone.
+  2026-10-08: share_changed: the share list differs from the last completed upload's.
+  2026-10-08: a check of a share list edited since reads idle, so opening checks again.
   2026-09-27: the job reads the server's environment; no second env file.
   2026-09-27: bind confirm to checked decisions, expose the upload status contract.
 """
@@ -48,6 +53,20 @@ class ShareUpload:
         self.manifest_path = out_dir / "manifest.json"
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._mark_interrupted()
+
+    def _mark_interrupted(self) -> None:
+        """A manifest still running when this server starts belongs to a run the last server never
+        finished."""
+        saved = self._saved()
+        if saved.status != "running":
+            return
+        interrupted = replace(saved, status="interrupted", error=INTERRUPTED, finished_at=upload_powerset.now_iso())
+        if not saved.dry_run:
+            interrupted = replace(interrupted, last_upload={
+                "finished_at": interrupted.finished_at, "status": "interrupted",
+                "uploaded": saved.progress["uploaded"], "skipped": saved.progress["skipped"]})
+        interrupted.write(self.manifest_path)
 
     def _saved(self) -> UploadManifest:
         return UploadManifest.read(self.manifest_path)
@@ -56,42 +75,15 @@ class ShareUpload:
         return share_digest(share_rows(self.share_db))
 
     def status(self) -> dict[str, Any]:
-        try:
-            return self._status()
-        except BaseException as exc:
-            if isinstance(exc, KeyboardInterrupt):
-                raise
-            try:
-                saved = self._saved()
-            except BaseException:
-                # An unreadable manifest is set aside, never overwritten.
-                saved = UploadManifest()
-                if self.manifest_path.exists():
-                    self.manifest_path.replace(self.manifest_path.with_name("manifest.json.bkup"))
-            failed = replace(saved, status="failed", error=CHECK_FAILED if saved.dry_run else UPLOAD_FAILED)
-            failed.write(self.manifest_path)
-            log_error(self.out_dir, saved.stage or Stage.PLANNING, exc)
-            return self._status()
-
-    def _status(self) -> dict[str, Any]:
+        """The saved manifest as the page reads it; reading writes nothing."""
         saved = self._saved()
-        with self._lock:
-            active = self._thread is not None and self._thread.is_alive()
-        if saved.status == "running" and not active:
-            saved = self._saved()
-        if saved.status == "running" and not active:
-            saved = replace(saved, status="interrupted", error=INTERRUPTED,
-                            finished_at=upload_powerset.now_iso())
-            if not saved.dry_run:
-                saved = replace(saved, last_upload={"finished_at": saved.finished_at,
-                    "status": "interrupted", "uploaded": saved.progress["uploaded"],
-                    "skipped": saved.progress["skipped"]})
-            saved.write(self.manifest_path)
+        current_digest = self._current_share_digest()
         if saved.status == "running":
             state = "checking" if saved.dry_run else "uploading"
         elif saved.status == "completed" and saved.dry_run:
-            # A check from before the binding carries no digest: check again.
-            state = "ready" if saved.share_digest else "idle"
+            # A check of a share list edited since (or from before the binding, with no digest) is no
+            # check: opening checks again rather than showing the old plan.
+            state = "ready" if saved.share_digest == current_digest else "idle"
         else:
             state = saved.status
         stage = saved.stage if state in {"checking", "uploading"} else None
@@ -103,6 +95,7 @@ class ShareUpload:
         plan_counts = None if plan is None else {key: plan.get(key, 0) for key in (
             "marked_share", "with_linkedin", "without_linkedin", "new_to_cloud", "changed",
             "already_shared", "already_in_cloud", "losing_access", "companies_missing")}
+        last_upload = saved.last_upload
         error = None
         if state == "interrupted":
             error = INTERRUPTED
@@ -116,7 +109,9 @@ class ShareUpload:
                          "skipped": progress["skipped"], "namespaces": namespaces},
             "plan": plan_counts,
             "checked": saved.share_digest if state == "ready" else None,
-            "last_upload": saved.last_upload if saved.checked_target in (None, saved.target) or saved.target is None else None,
+            "last_upload": last_upload,
+            # The share list differs from what the last completed upload sent: the page offers an update.
+            "share_changed": last_upload is not None and last_upload.get("share_digest") != current_digest,
             "failed_action": ("check" if saved.dry_run else "upload") if state in {"failed", "interrupted"} else None,
             "error": error,
         }
@@ -155,7 +150,7 @@ class ShareUpload:
         try:
             upload_powerset.UploadPowerset(
                 db=self.index_db, share_db=self.share_db, people_csv=self.people_csv,
-                out_dir=self.out_dir, dry_run=dry_run, require_checked=not dry_run,
+                out_dir=self.out_dir, dry_run=dry_run,
             ).run()
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt):

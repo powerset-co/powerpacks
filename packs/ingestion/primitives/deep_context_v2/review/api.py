@@ -1,11 +1,17 @@
 """The routes the Check LinkedIn page calls, over the v2 store.
 
 GET  /api/review/page                              the one screen and its count
-GET  /api/review/linkedin-card?exclude=&index=&debug=  the next family's card, or the finished state
+GET  /api/review/linkedin-card?exclude=&index=      the next family's card, or the finished state
 GET  /api/dossier?slug=                            the family's dossier as an HTML fragment
-POST /api/review/decide   form pub, decision, parent_slug, new_url:
-                          keep = Yes, detach = Skip, fix = Retarget to new_url; answers with the next card
-POST /retarget            describe-the-person re-research: refused, a pasted URL is the Retarget
+POST /api/review/decide   form pub, decision, parent_slug, new_url: keep = Yes, detach = Skip, fix = Retarget
+                          to new_url, into the review queue (a later decision on the family replaces it);
+                          answers with the next card
+POST /retarget            form pub, parent_slug, guidance: Retarget from the reviewer's words into the queue;
+                          `finish` runs the PAID research
+
+Nothing here writes a ledger: the queue holds every decision until `finish` applies it (review/commit.py).
+POST /feedback            form pub, parent_slug, comment, action: files the comment with Powerset
+POST /auth/login          runs the Powerset sign-in on this machine
 
 Bodies are form-encoded, a POST from another origin is refused, and an error is `{"error": text}`
 (the page shows the text). Any other path is a JSON 404.
@@ -22,12 +28,20 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
+from packs.ingestion.primitives.deep_context_v2.db import queries_review
+from packs.ingestion.primitives.deep_context_v2.db.queries_review import Queued
+from packs.ingestion.primitives.deep_context_v2.db.schema import ReviewDecision
+from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
+from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.review import decisions, payloads
 from packs.ingestion.primitives.deep_context_v2.review.decisions import DecisionError
 from packs.ingestion.primitives.deep_context_v2.review.payloads import DecideResult, LinkedinCard, LinkedinCardPayload, LinkedinFinished, QueuePosition
 from packs.ingestion.primitives.deep_context_v2.review.queue import Card, load_card, review_list
+from packs.powerset.primitives.auth.auth import main as powerset_auth
+from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest, SendFeedback, default_set_id
 
 MAX_FORM_BYTES = 32_768
+MAX_TEXT_CHARS = 4_000   # a comment or a description
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 Params = dict[str, list[str]]
 
@@ -59,55 +73,92 @@ def _send_json(handler: BaseHTTPRequestHandler, payload: dict[str, object], stat
 
 
 class ReviewApi:
+    """The review over the store: the families with something to decide, in parent-id order, and the queue
+    of decisions the reviewer has made so far (review_queue, edited in place; `finish` applies it)."""
+
     def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
         self.conn = conn
         self.data_root = data_root
 
     def linkedin_card(self, params: Params) -> LinkedinCardPayload:
-        """The family at `index` among the list minus `exclude` (the card on screen, a save in flight)."""
-        excluded: set[str] = set()
-        for slug in _value(params, "exclude").split(","):
-            if slug.strip():
-                excluded.add(slug.strip())
+        """Browse the fixed order (`index`), or the next family without a decision after `after`."""
         order: list[str] = review_list(self.conn)
-        shown: list[str] = []
-        for parent_id in order:
-            if parent_id not in excluded:
-                shown.append(parent_id)
-        if not shown:
-            return LinkedinCardPayload(None, LinkedinFinished(False), len(order), None)
-        index: int = 0
-        if _value(params, "index").isdigit():
-            index = int(_value(params, "index")) % len(shown)
-        card: Card = load_card(self.conn, self.data_root, shown[index])
-        position: QueuePosition | None = None
-        if _value(params, "debug") == "1":
-            position = QueuePosition(index, len(shown))
+        queued: dict[str, Queued] = queries_review.review_queue(self.conn)
+        pending: int = len([slug for slug in order if slug not in queued])
+        asked: str = _value(params, "index")
+        slug: str = ""
+        if asked.isdigit() and int(asked) < len(order):
+            slug = order[int(asked)]
+        else:
+            after: str = _value(params, "after")
+            start: int = order.index(after) + 1 if after in order else 0
+            excluded: list[str] = _value(params, "exclude").split(",")
+            for key in order[start:] + order[:start]:
+                if key not in queued and key not in excluded:
+                    slug = key
+                    break
+        total: int = len(order) + (pending == 0)
+        if not slug:
+            position = QueuePosition(len(order), total) if order else None
+            return LinkedinCardPayload(None, LinkedinFinished(False), pending, position)
+        card: Card = load_card(self.conn, self.data_root, slug)
+        status: str = queued[slug].decision if slug in queued else ""
+        position = QueuePosition(order.index(slug), total, status)
         return LinkedinCardPayload(LinkedinCard(payloads.person(card), payloads.candidates(card)), None,
-                                   len(order), position)
+                                   pending, position)
 
     def decide(self, form: Params) -> DecideResult:
-        """One human decision on one family: Yes (keep), Skip (detach) or Retarget (fix); answers with the next card."""
+        """One decision on one family into the queue: Yes (keep), Skip (detach) or Retarget (fix); a later
+        one replaces it. Answers with the next card."""
         pub: str = _value(form, "pub")
         decision: str = _value(form, "decision")
         slug: str = _value(form, "parent_slug")
-        # A stale tab can post for a family already decided or moved onto li:; it is no longer in the list.
         if slug not in review_list(self.conn):
-            raise Refusal(HTTPStatus.CONFLICT, "This family was already decided. Reload the page.")
+            raise Refusal(HTTPStatus.CONFLICT, "This family is not in this review. Reload the page.")
         card: Card = load_card(self.conn, self.data_root, slug)
+        key: str = ""
         try:
-            if decision == "keep":
-                decisions.yes(self.conn, card, pub)
-            elif decision == "detach":
-                decisions.skip(self.conn, card)
-            elif decision == "fix":
-                decisions.retarget(self.conn, self.data_root, card, _value(form, "new_url"))
-            else:
+            if decision == ReviewDecision.KEEP:
+                key = decisions.chosen(card, pub).key
+            elif decision == ReviewDecision.FIX:
+                key = decisions.pasted_url(_value(form, "new_url"))
+            elif decision != ReviewDecision.DETACH:
                 raise Refusal(HTTPStatus.BAD_REQUEST, f"unknown decision: {decision}")
         except DecisionError as error:
             raise Refusal(HTTPStatus.BAD_REQUEST, str(error)) from error
-        # The next card is read after the write committed, so the decided family is never served back.
-        return DecideResult(True, self.linkedin_card({"exclude": [slug]}))
+        with self.conn:
+            queries_review.upsert_queued(self.conn, Queued(slug, decision, key, ""), now_iso())
+        return DecideResult(True, self.linkedin_card({"after": [slug]}))
+
+    def retarget(self, form: Params) -> None:
+        """Retarget from the reviewer's words, into the queue; `finish` runs the research. The queue advances."""
+        slug: str = _value(form, "parent_slug")
+        guidance: str = _value(form, "guidance").strip()
+        if not guidance or len(guidance) > MAX_TEXT_CHARS:
+            raise Refusal(HTTPStatus.BAD_REQUEST, f"describe the person in 1-{MAX_TEXT_CHARS} characters")
+        if slug not in review_list(self.conn):
+            raise Refusal(HTTPStatus.CONFLICT, "This family is not in this review. Reload the page.")
+        with self.conn:
+            queries_review.upsert_queued(self.conn, Queued(slug, ReviewDecision.FIX.value, "", guidance), now_iso())
+
+    def feedback(self, form: Params) -> dict[str, object]:
+        """Files the reviewer's comment on a family with Powerset; the reply is Powerset's status."""
+        comment: str = _value(form, "comment").strip()
+        slug: str = _value(form, "parent_slug")
+        if not comment or len(comment) > MAX_TEXT_CHARS:
+            raise Refusal(HTTPStatus.BAD_REQUEST, f"comment must be 1-{MAX_TEXT_CHARS} characters")
+        if slug not in review_list(self.conn):
+            raise Refusal(HTTPStatus.NOT_FOUND, "This family is not in the review.")
+        card: Card = load_card(self.conn, self.data_root, slug)
+        pending: list[str] = []
+        for item in card.pending:
+            pending.append(item.linkedin_url)
+        metadata: dict[str, object] = {"source": "powerpacks-directory", "action": _value(form, "action"),
+                                       "person_name": card.members[0].display_name, "parent_slug": slug,
+                                       "candidate_key": _value(form, "pub"), "pending_linkedin_urls": pending}
+        load_env()
+        request = FeedbackRequest(comment=comment, category="linkedin", metadata=metadata, set_id=default_set_id())
+        return SendFeedback(request, env_file=self.data_root.parent / ".env").run()
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> None:
         """Route a GET: the dossier fragment, the page, or the next card."""
@@ -116,7 +167,7 @@ class ReviewApi:
             card: Card = load_card(self.conn, self.data_root, _value(params, "slug"))
             _send(handler, payloads.dossier(card).encode(), "text/html; charset=utf-8", HTTPStatus.OK)
         elif parsed.path == "/api/review/page":
-            _send_json(handler, asdict(payloads.page(len(review_list(self.conn)))))
+            _send_json(handler, asdict(payloads.page(self.linkedin_card({}).pending)))
         elif parsed.path == "/api/review/linkedin-card":
             _send_json(handler, asdict(self.linkedin_card(params)))
         else:
@@ -124,7 +175,7 @@ class ReviewApi:
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> None:
         # A page on another site must not be able to decide for the user.
-        """Route a POST: a decision, or the refused describe-the-person retarget."""
+        """Route a POST: a decision, a retarget from words, feedback, or the sign-in."""
         origin: str = handler.headers.get("Origin") or ""
         if origin and urllib.parse.urlparse(origin).hostname not in LOCAL_HOSTS:
             _send_json(handler, {"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
@@ -135,8 +186,19 @@ class ReviewApi:
             if parsed.path == "/api/review/decide":
                 _send_json(handler, asdict(self.decide(form)))
             elif parsed.path == "/retarget":
-                raise Refusal(HTTPStatus.NOT_IMPLEMENTED,
-                              "Re-research from a description is not available. Paste the LinkedIn URL instead.")
+                self.retarget(form)
+                _send_json(handler, {"ok": True}, HTTPStatus.ACCEPTED)
+            elif parsed.path == "/feedback":
+                reply: dict[str, object] = self.feedback(form)
+                submitted: bool = reply["status"] == "submitted"
+                _send_json(handler, {"ok": submitted, **reply}, HTTPStatus.OK if submitted else HTTPStatus.BAD_GATEWAY)
+            elif parsed.path == "/auth/login":
+                load_env()
+                if powerset_auth(["login"]) == 0:
+                    _send_json(handler, {"ok": True, "status": "authenticated"})
+                else:
+                    _send_json(handler, {"status": "needs_auth", "error": "Sign-in did not complete. Try again."},
+                               HTTPStatus.UNAUTHORIZED)
             else:
                 raise Refusal(HTTPStatus.NOT_FOUND, "not found")
         except Refusal as refusal:

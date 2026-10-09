@@ -3,7 +3,6 @@
     {
       "label": "Installing Powerpacks",
       "steps": ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
-      "done_label": "",
       "needs": ""
     },
     {
@@ -16,55 +15,41 @@
         "whatsapp_tools",
         "whatsapp_login"
       ],
-      "done_label": "",
       "needs": ""
     },
     {
       "label": "Syncing LinkedIn",
       "steps": ["linkedin"],
-      "done_label": "",
       "needs": ""
     },
     {
       "label": "Syncing Gmail",
       "steps": ["gmail_sync", "gmail_import"],
-      "done_label": "",
       "needs": ""
     },
     {
       "label": "Syncing iMessage",
       "steps": ["imessage_import"],
-      "done_label": "",
       "needs": ""
     },
     {
       "label": "Syncing WhatsApp",
       "steps": ["whatsapp_sync", "whatsapp_import"],
-      "done_label": "",
       "needs": ""
     },
     {
       "label": "Discovering your contacts",
       "steps": ["deep_context"],
-      "done_label": "",
       "needs": ""
     },
     {
       "label": "Enriching your contacts",
       "steps": ["enrich"],
-      "done_label": "",
-      "needs": ""
-    },
-    {
-      "label": "Waiting for your review",
-      "steps": ["review"],
-      "done_label": "Review completed",
       "needs": ""
     },
     {
       "label": "Building your search index",
       "steps": ["index", "validate", "ready"],
-      "done_label": "",
       "needs": "index"
     }
   ],
@@ -77,7 +62,6 @@
     "title.paused": "Setup paused",
     "title.welcome": "Welcome to Powerpacks",
     "title.signing_in": "Waiting for you to sign in",
-    "title.review": "Waiting for your review",
     "title.processing": "Your contacts are saved",
     "state.running": "Working",
     "state.waiting": "Waiting",

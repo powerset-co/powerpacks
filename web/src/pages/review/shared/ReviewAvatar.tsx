@@ -1,4 +1,4 @@
-import { Avatar } from "@/components/shared"
+import { ProxiedLinkedinAvatar } from "@/components/shared"
 import { avatarName } from "@/lib/review/person"
 import type { ReviewCandidate, ReviewPerson } from "@/types/review"
 
@@ -15,7 +15,11 @@ export function ReviewAvatar({ person, candidate }: ReviewAvatarProps) {
   const picture = candidate?.avatar_url ?? ""
   return (
     <span className="avatar">
-      <Avatar name={avatarName(person, candidate)} src={picture === "" ? undefined : picture} size={40} />
+      <ProxiedLinkedinAvatar
+        name={avatarName(person, candidate)}
+        src={picture === "" ? undefined : picture}
+        size={40}
+      />
     </span>
   )
 }

@@ -17,10 +17,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packs.powerset.primitives.auth import auth
+from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
+from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
 from packs.powerset.primitives.mcp_install import mcp_install
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
+from packs.shared.web.server import start_server
 
 NEEDS_YOU = 10
 # Set by the desktop app (desktop/src-tauri): sign-ins show inside the app, never in a browser.
@@ -281,16 +284,10 @@ class Onboarding:
 
 
 def main() -> None:
-    from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
-    from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
-    from packs.shared.web.server import start_server
-
     parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--harness", choices=("codex", "claude-code", "pi"), action="append")
     parser.add_argument("--port", type=int)
-    parser.add_argument("--approve-spend", choices=("synthesize", "cluster", "enrich", "index"),
-                        action="append", default=[])
     args = parser.parse_args()
     root = args.root.resolve()
     status = InstallStatus(root)
@@ -334,7 +331,7 @@ def main() -> None:
             print("Powerset search is ready; local setup will continue.", flush=True)
         payload = flow.run()
         if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
-            payload = ProcessingOnboarding(root, approved_spend=tuple(args.approve_spend)).run()
+            payload = ProcessingOnboarding(root).run()
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
     print(f"{prefix[payload['status']]}: {payload['message']}", flush=True)
     raise SystemExit({"completed": 0, "waiting": NEEDS_YOU, "running": NEEDS_YOU, "failed": 1}[payload["status"]])

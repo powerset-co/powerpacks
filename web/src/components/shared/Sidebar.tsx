@@ -14,6 +14,7 @@ import {
   SetupIcon,
   TasksIcon,
 } from "./icons/nav"
+import { HiveIcon } from "./icons/actions"
 import { PowersetMark } from "./PowersetMark"
 
 const COLLAPSED_KEY = "sidebar.collapsed"
@@ -24,6 +25,7 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   agent: ChatIcon,
   searches: SearchesIcon,
   people: PeopleIcon,
+  sets: HiveIcon,
   tasks: TasksIcon,
   accounts: AccountsIcon,
   setup: SetupIcon,

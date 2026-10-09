@@ -38,6 +38,14 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_install_pipeline \
   tests.test_deep_context_v2_enrich_confirm \
   tests.test_deep_context_v2_fixes \
+  tests.test_deep_context_v2_review_routes \
+  tests.test_people_sets \
+  tests.test_share_upload_status \
+  tests.test_agent_messages \
+  tests.test_agent_debug \
+  tests.test_asks_loop \
+  tests.test_ask_set \
+  tests.test_ask_worker \
   tests.test_install_coordinator \
   tests.test_candidate_judge_evidence \
   tests.test_candidate_judges \
@@ -103,6 +111,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_message_name_conflicts \
   tests.test_share_in_progress \
   tests.test_share_v2 \
+  tests.test_review_history \
   tests.test_logbook_people \
   tests.test_logbook_archive \
   tests.test_logbook_build \

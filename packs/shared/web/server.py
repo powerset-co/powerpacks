@@ -13,6 +13,9 @@ Changelog:
 - 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
   and the review wait for it.
 - 2026-10-09: `serve --exit-with PID` stops with the desktop app that runs it.
+- 2026-10-08: start the Ask the Set daemon when the store-backed routes mount.
+- 2026-10-08: GET /api/relay answers the daemon's relay state for the top bar's dot; POST
+  /api/relay/connect wakes a signed-out daemon after the page's sign-in.
 - 2026-10-07: created from v1's `deep_context/review/cli.py` and `server.py`: the same persistent
   handler, port ownership and health identity (`reconcile_review_web`, kept so an older release's
   page on the port is recognised and replaced), with the v1 review, its event stream and the
@@ -84,8 +87,10 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.ingestion.primitives.deep_context_v2.review.api import ReviewApi
     from packs.ingestion.primitives.refresh.api import TasksApi
     from packs.ingestion.primitives.share.web.server import share_routes
+    from packs.ingestion.primitives.share.web.sets import CloudError
     from packs.search.primitives.deep_search.results_web.api import search_api
     from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, _send_json, search_routes
+    from packs.shared.web import asks_loop
 
     load_env()
     data_root: Path = root / ".powerpacks"
@@ -96,18 +101,44 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     network: dict[str, tuple[ReviewApi, Any]] = {}
 
     def network_routes() -> tuple[ReviewApi, Any] | None:
+        """Called under the store lock. The Ask the Set daemon starts with the store too."""
         if "routes" not in network and (root / STORE).is_file():
             conn = open_store(root / STORE, shared=True)
             network["routes"] = (ReviewApi(conn, data_root), share_routes(conn, data_root))
+            threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
+                             name="asks", daemon=True).start()
         return network.get("routes")
+
+    class LazySets:
+        """The sets once the store exists; before that an ask says there is no network yet."""
+        def __getattr__(self, name: str) -> Any:
+            routes = network_routes()  # the ask routes hold the store lock already
+            if routes is None:
+                raise CloudError(NO_NETWORK["error"])
+            return getattr(routes[1].sets, name)
+
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
-    searches_json = search_api(searches)
+    searches_json = search_api(searches, LazySets(), store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
 
     class Handler(BaseHTTPRequestHandler):
+        def _relay(self) -> None:
+            body = json.dumps(asks_loop.STATUS).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/relay":
+                with store_lock:
+                    network_routes()  # the daemon the dot reports on starts with the store
+                self._relay()
+                return
             if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
                 return
             if searches_json.get(self, parsed) or searches.get(self, parsed):
@@ -121,7 +152,11 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if accounts.post(self, parsed) or tasks.post(self, parsed) or searches.post(self, parsed):
+            if parsed.path == "/api/relay/connect":
+                asks_loop.WAKE.set()
+                self._relay()
+                return
+            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches_json.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:
                 routes = network_routes()
@@ -217,8 +252,11 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             self._dispatch("do_GET")
 
         def do_POST(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            if app.post(self, parsed):
+                return
             _load_project_packages(root)
-            if install.post(self, urllib.parse.urlparse(self.path).path):
+            if install.post(self, parsed.path):
                 return
             self._dispatch("do_POST")
 

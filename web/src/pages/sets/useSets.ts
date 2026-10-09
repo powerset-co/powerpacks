@@ -1,0 +1,59 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useState } from "react"
+import { errorText } from "@/lib/api/http"
+import {
+  answerInvite,
+  createSet,
+  deleteSet,
+  fetchSets,
+  inviteToSet,
+  SetsError,
+  type SetsPayload,
+} from "@/lib/api/sets"
+
+export const SETS_KEY = ["people", "sets"] as const
+// Invites and heartbeats arrive through the relay loop into local files; the kept read is local and cheap.
+const POLL_MS = 10_000
+
+/** The sets on this machine, and the ways they change: create, delete, invite, answer. */
+export function useSets() {
+  const client = useQueryClient()
+  const sets = useQuery({
+    queryKey: SETS_KEY,
+    queryFn: fetchSets,
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: true,
+  })
+  const [error, setError] = useState<SetsError | null>(null)
+  const settle = (payload: SetsPayload) => {
+    client.setQueryData(SETS_KEY, payload)
+    setError(null)
+  }
+  const fail = (caught: unknown) =>
+    setError(caught instanceof SetsError ? caught : new SetsError(errorText(caught), false))
+  const create = useMutation({ mutationFn: createSet, onSuccess: settle, onError: fail })
+  const remove = useMutation({ mutationFn: deleteSet, onSuccess: settle, onError: fail })
+  const invite = useMutation({
+    mutationFn: ({ set_id, email }: { set_id: string; email: string }) => inviteToSet(set_id, email),
+    onSuccess: settle,
+    onError: fail,
+  })
+  const reply = useMutation({
+    mutationFn: ({ id, accepted }: { id: string; accepted: boolean }) => answerInvite(id, accepted),
+    onSuccess: settle,
+    onError: fail,
+  })
+  const failure = error ?? (sets.error instanceof SetsError ? sets.error : null)
+  return {
+    data: sets.data,
+    isPending: sets.isPending,
+    failure,
+    fail,
+    busy: create.isPending || remove.isPending || invite.isPending || reply.isPending,
+    reload: () => void client.invalidateQueries({ queryKey: SETS_KEY }),
+    create: (name: string) => create.mutateAsync(name),
+    remove: (set_id: string) => remove.mutateAsync(set_id),
+    invite: (set_id: string, email: string) => invite.mutateAsync({ set_id, email }),
+    answer: (id: string, accepted: boolean) => reply.mutate({ id, accepted }),
+  }
+}

@@ -16,6 +16,8 @@ Not worded here:
   - the live index line ("Building search records"), sent by the Modal run.
 
 Changelog:
+  2026-10-07: the events of v1's processing, the spend approval, the index recovery and the
+      review row are gone with them.
   2026-10-05: created; the copy moved here from status.py, workflow.py,
       pipeline.py, onboard.py, bin/bootstrap, the LinkedIn reader and the page.
 """
@@ -45,7 +47,6 @@ class Row:
     """One row of the page's step list and the steps it covers."""
     label: str
     steps: tuple[InstallStep, ...]
-    done_label: str = ""
     needs: InstallStep | None = None  # shown only when this step is planned
 
 
@@ -63,7 +64,6 @@ ROWS = (
     Row("Syncing WhatsApp", (InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT)),
     Row("Discovering your contacts", (InstallStep.DEEP_CONTEXT,)),
     Row("Enriching your contacts", (InstallStep.ENRICH,)),
-    Row("Waiting for your review", (InstallStep.REVIEW,), done_label="Review completed"),
     # A run whose every source is skipped ends ready without building an index.
     Row("Building your search index", (InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY),
         needs=InstallStep.INDEX),
@@ -79,7 +79,6 @@ PAGE = {
     "title.paused": "Setup paused",
     "title.welcome": "Welcome to Powerpacks",
     "title.signing_in": "Waiting for you to sign in",
-    "title.review": "Waiting for your review",
     "title.processing": "Your contacts are saved",
     "state.running": "Working",
     "state.waiting": "Waiting",
@@ -157,7 +156,6 @@ PROSE: dict[str, Prose] = {
     "tools.ready": Prose(None, C, "Contact import tools are ready"),
     "tools.needs_password": Prose(None, W, "Your Mac password is needed to prepare import tools. I'll ask in chat."),
     "tools.failed": Prose(None, F, "Import tools could not be prepared. I'm checking what happened."),
-    "linkedin.login.current": Prose(InstallStep.LINKEDIN_LOGIN, C, "LinkedIn connections ready"),
     "linkedin.login.checking": Prose(InstallStep.LINKEDIN_LOGIN, R, "Checking LinkedIn. Log in to LinkedIn in the window that opens if it asks."),
     "linkedin.login.waiting": Prose(InstallStep.LINKEDIN_LOGIN, W, "Log in to LinkedIn in the Chrome window Powerpacks opened."),
     "linkedin.login.done": Prose(InstallStep.LINKEDIN_LOGIN, C, "Signed in to LinkedIn"),
@@ -238,19 +236,14 @@ PROSE: dict[str, Prose] = {
     "whatsapp.import.failed": Prose(InstallStep.WHATSAPP_IMPORT, F, "WhatsApp contacts could not be added. I'm checking what happened."),
     "sources.ready": Prose(InstallStep.DEEP_CONTEXT, W, "{counts}", action="processing"),  # see source_counts
 
-    # Discovering your contacts (pipeline.py)
+    # Discovering your contacts (pipeline.py, the stages of deep_context_v2/run.py)
     "discover.linkedin": Prose(InstallStep.DEEP_CONTEXT, R, "Adding your LinkedIn connections"),
-    "discover.merging": Prose(InstallStep.DEEP_CONTEXT, R, "Preparing your contacts"),
     "discover.people": Prose(InstallStep.DEEP_CONTEXT, R, "Discovering your contacts"),
-    "discover.checking": Prose(InstallStep.DEEP_CONTEXT, R, "Checking your contacts"),
-    "discover.reusing": Prose(InstallStep.DEEP_CONTEXT, R, "Reusing your previous context"),
     "discover.owner_needed": Prose(InstallStep.DEEP_CONTEXT, W, "Add your LinkedIn profile to continue. I'll ask in chat.", action="owner"),
     "discover.owner": Prose(InstallStep.DEEP_CONTEXT, R, "Preparing your profile"),
     "discover.reading": Prose(InstallStep.DEEP_CONTEXT, R, "Reading your messages"),
     "discover.estimating": Prose(InstallStep.DEEP_CONTEXT, R, "Estimating context processing"),
     "discover.learning": Prose(InstallStep.DEEP_CONTEXT, R, "Learning about your contacts"),
-    "discover.composing": Prose(InstallStep.DEEP_CONTEXT, R, "Writing what you know about each contact"),
-    "discover.validating": Prose(InstallStep.DEEP_CONTEXT, R, "Checking your contact context"),
     "discover.duplicates": Prose(InstallStep.DEEP_CONTEXT, R, "Checking duplicate contacts"),
     "discover.combining": Prose(InstallStep.DEEP_CONTEXT, R, "Combining duplicate contacts"),
     "discover.grouping": Prose(InstallStep.DEEP_CONTEXT, R, "Grouping each person's contacts"),
@@ -260,22 +253,16 @@ PROSE: dict[str, Prose] = {
     "enrich.running": Prose(InstallStep.ENRICH, R, "Enriching your contacts"),
     "enrich.done": Prose(InstallStep.ENRICH, C, "Your contacts are enriched"),
     "enrich.deferred": Prose(InstallStep.ENRICH, S, "Research and LinkedIn matching didn't finish. Search is built without it; the next setup run tries again."),
-    "profiles.deferred": Prose(InstallStep.ENRICH, S, "LinkedIn profile lookups didn't finish. Search is built without them; the next setup run tries again."),
 
     # Building your search index
     "index.preparing": Prose(InstallStep.INDEX, R, "Preparing your search index"),
-    "index.profiles": Prose(InstallStep.INDEX, R, "Looking up LinkedIn profiles"),
-    "index.estimating": Prose(InstallStep.INDEX, R, "Estimating search indexing"),
     "index.building": Prose(InstallStep.INDEX, R, "Building your search index"),
-    "index.resuming": Prose(InstallStep.INDEX, R, "Resuming your search index"),
-    "index.recovery": Prose(InstallStep.INDEX, W, "An earlier index needs checking before another upload. I'm checking it.", action="recovery"),
     "index.done": Prose(InstallStep.INDEX, C, "Your search index is built"),
     "validate.checking": Prose(InstallStep.VALIDATE, R, "Checking your search"),
     "validate.done": Prose(InstallStep.VALIDATE, C, "Search is ready: {people:,} people searchable."),
     "search.ready": Prose(InstallStep.READY, C, "Search is ready: {people:,} people searchable.", note="{follow_ups}"),
 
     # Any step
-    "spend.approval": Prose(None, W, "Approve the estimated processing cost to continue. I'll ask in chat.", action="approval"),
     "step.waiting": Prose(None, W, "This step needs you. I'll explain in chat.", action="error"),
     "step.failed": Prose(None, F, "This step stopped. I'm checking what happened.", action="error"),
     "setup.paused": Prose(None, W, "Setup paused. I can resume it from here.", action="resume"),
@@ -302,5 +289,5 @@ def render(event: str, values: dict) -> tuple[Prose, str, str]:
 def page_prose() -> dict:
     """The page's rows and fixed words, sent with every status read."""
     return {"rows": [{"label": row.label, "steps": [step.value for step in row.steps],
-                      "done_label": row.done_label, "needs": row.needs.value if row.needs else ""} for row in ROWS],
+                      "needs": row.needs.value if row.needs else ""} for row in ROWS],
             "page": PAGE}

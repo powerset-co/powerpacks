@@ -754,11 +754,20 @@ def save_table_hashes(con: Any, table: str, hashes: dict[str, str]) -> None:
     ensure_local_hash_table(con)
     con.execute(f"DELETE FROM {qident(LOCAL_HASH_TABLE)} WHERE table_name = ?", [table])
     if hashes:
-        updated_at = now_iso()
-        con.executemany(
-            f"INSERT INTO {qident(LOCAL_HASH_TABLE)} (table_name, row_id, record_hash, updated_at) VALUES (?, ?, ?, ?)",
-            [(table, row_id, record_hash, updated_at) for row_id, record_hash in sorted(hashes.items())],
-        )
+        _insert_hashes(con, "INSERT", table, hashes)
+
+
+def _insert_hashes(con: Any, verb: str, table: str, hashes: dict[str, str]) -> None:
+    """One bulk insert over the whole hash map. A per-row executemany ran DuckDB out of memory at
+    9,000 people (Jake, 2026-10-08); two unnested lists is one statement and one allocation."""
+    row_ids = sorted(hashes)
+    con.execute(
+        f"""
+        {verb} INTO {qident(LOCAL_HASH_TABLE)} (table_name, row_id, record_hash, updated_at)
+        SELECT ?, unnest(?), unnest(?), ?
+        """,
+        [table, row_ids, [hashes[row_id] for row_id in row_ids], now_iso()],
+    )
 
 
 def delete_hash_ids(con: Any, table: str, row_ids: set[str]) -> None:
@@ -773,14 +782,7 @@ def delete_hash_ids(con: Any, table: str, row_ids: set[str]) -> None:
 def upsert_hash_ids(con: Any, table: str, hashes: dict[str, str]) -> None:
     if not hashes:
         return
-    updated_at = now_iso()
-    con.executemany(
-        f"""
-        INSERT OR REPLACE INTO {qident(LOCAL_HASH_TABLE)} (table_name, row_id, record_hash, updated_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        [(table, row_id, record_hash, updated_at) for row_id, record_hash in sorted(hashes.items())],
-    )
+    _insert_hashes(con, "INSERT OR REPLACE", table, hashes)
 
 
 def _json_value(value: Any, default: Any) -> Any:

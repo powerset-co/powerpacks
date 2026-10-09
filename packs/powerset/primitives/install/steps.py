@@ -35,12 +35,11 @@ class InstallStep(str, Enum):
     LINKEDIN = "linkedin"
     DEEP_CONTEXT = "deep_context"
     ENRICH = "enrich"
-    REVIEW = "review"
     INDEX = "index"
     VALIDATE = "validate"
     READY = "ready"
 
 
 DEFAULT_PLAN = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
-PROCESSING_STEPS = (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.REVIEW,
-                    InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY)
+PROCESSING_STEPS = (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.INDEX, InstallStep.VALIDATE,
+                    InstallStep.READY)

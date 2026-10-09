@@ -265,7 +265,6 @@ describe("installation progress", () => {
       ...SOURCE_PLAN,
       "deep_context",
       "enrich",
-      "review",
       "index",
       "validate",
       "ready",
@@ -273,10 +272,10 @@ describe("installation progress", () => {
     const status = {
       ...INSTALL,
       plan,
-      step: "review",
-      status: "waiting",
+      step: "enrich",
+      status: "running",
       steps: Object.fromEntries(
-        plan.slice(0, plan.indexOf("review")).map((step) => [step, { status: "completed", message: "Done" }]),
+        plan.slice(0, plan.indexOf("enrich")).map((step) => [step, { status: "completed", message: "Done" }]),
       ),
     }
     vi.stubGlobal(
@@ -284,7 +283,7 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { container } = mount()
-    const history = await screen.findByRole("button", { name: "3 tasks completed" })
+    const history = await screen.findByRole("button", { name: "2 tasks completed" })
     expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(7)
     expect(
       screen
@@ -292,11 +291,11 @@ describe("installation progress", () => {
         .filter((node) => node.closest("li")?.getAttribute("aria-hidden") === "false").length,
     ).toBe(1)
     fireEvent.click(history)
-    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(10)
+    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(9)
     expect(history.getAttribute("aria-expanded")).toBe("true")
   })
 
-  it("shows review only when needed and completes the index row after validation", async () => {
+  it("completes the index row after validation", async () => {
     let status: InstallStatus = {
       ...INSTALL,
       plan: ["deep_context", "enrich", "index", "validate", "ready"],
@@ -314,38 +313,21 @@ describe("installation progress", () => {
     )
     const { client } = mount()
     await screen.findByText("Enriching your contacts")
-    expect(screen.queryByText("Waiting for your review")).toBeNull()
-    status = {
-      ...status,
-      plan: ["deep_context", "enrich", "review", "index", "validate", "ready"],
-      step: "review",
-      status: "waiting",
-      action: { kind: "review" },
-      steps: {
-        deep_context: { status: "completed", message: "Done" },
-        enrich: { status: "completed", message: "Done" },
-      },
-    }
-    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByRole("button", { name: "Review contacts" })
-    expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-      "Waiting for your reviewWaiting",
-    )
     status = {
       ...status,
       step: "validate",
       status: "running",
-      action: null,
       steps: {
-        ...status.steps,
-        review: { status: "completed", message: "Done" },
+        deep_context: { status: "completed", message: "Done" },
+        enrich: { status: "completed", message: "Done" },
         index: { status: "completed", message: "Done" },
       },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByText("Review completed")
-    expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-      "Building your search indexWorking",
+    await waitFor(() =>
+      expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
+        "Building your search indexWorking",
+      ),
     )
     status = {
       ...status,

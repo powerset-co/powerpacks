@@ -20,6 +20,12 @@ deletes its source rows; documents are never deleted.
 Changelog:
   2026-09-28: shared people the cloud has without positions are written again when the local index has them.
   2026-09-28: a person new to the cloud is never counted changed after a failed run.
+  2026-10-09: no re-check of the plan before an upload: the page refuses a confirm whose share list
+    hash differs from the check (share/web/upload.py).
+  2026-10-09: share namespaces are powerpacks_<name>_<POWERPACKS_SHARE_INDEX_VERSION> (default v1);
+    $search keeps the aleph_ namespaces ALEPH_INDEX_VERSION names.
+  2026-10-08: write the isolated share_v1 family (namespaces and Postgres tables), not v3.
+  2026-10-08: the last completed upload keeps the share digest it sent.
   2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
   2026-09-27: bind real runs to checked decisions and target; report typed stages.
   2026-09-24: read the share list from SQLite, not share.csv.
@@ -32,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -50,6 +57,7 @@ for _path in [REPO, SEARCH_PRIMITIVES / "lib", SEARCH_PRIMITIVES / "shared",
 
 import postgres_client  # noqa: E402
 import turbopuffer_search_backend as tp_backend  # noqa: E402
+from powerpacks_contracts import TURBOPUFFER_NAMESPACES  # noqa: E402
 
 from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.deep_context_v2.db.store import STORE_RELATIVE_PATH  # noqa: E402
@@ -68,7 +76,7 @@ from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
 from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
 from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS, log_error, safe_error  # noqa: E402
 from packs.indexing.primitives.upload_powerset.manifest import (  # noqa: E402
-    CHANGED_CHECK, CHECK_FAILED, UPLOAD_FAILED, CheckChanged, Stage, UploadManifest, share_digest,
+    CHECK_FAILED, UPLOAD_FAILED, Stage, UploadManifest, share_digest,
 )
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES, NAMESPACE_BY_LOGICAL  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -77,8 +85,22 @@ DEFAULT_DB = REPO / ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_PEOPLE_CSV = REPO / ".powerpacks/network-import/merged/people.csv"
 DEFAULT_SHARE_DB = REPO / ".powerpacks" / STORE_RELATIVE_PATH
 DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
-# The namespace family the shared cloud is served from; the upload never targets another.
-UPLOAD_INDEX_VERSION = "v3"
+
+
+def share_version() -> str:
+    """The shared network the upload writes and sets read: the powerpacks_ TurboPuffer namespaces and the
+    powerset_share_ Postgres schema (share_v1.sql) of POWERPACKS_SHARE_INDEX_VERSION. $search reads the
+    aleph_ namespaces ALEPH_INDEX_VERSION names (turbopuffer_search_backend), so a share never lands there."""
+    version = os.environ.get("POWERPACKS_SHARE_INDEX_VERSION", "v1").strip().lower()
+    if not re.fullmatch(r"v[1-9][0-9]*", version):
+        raise ValueError(f"Invalid POWERPACKS_SHARE_INDEX_VERSION: {version!r}")
+    return version
+
+
+def share_namespace(logical: str) -> str:
+    """The share TurboPuffer namespace for a logical name, e.g. powerpacks_summaries_v1."""
+    name = TURBOPUFFER_NAMESPACES[logical].removeprefix("aleph_").removesuffix("_v1")
+    return f"powerpacks_{name}_{share_version()}"
 
 PREVIEW_IDS = 10
 
@@ -95,7 +117,6 @@ class UploadPowerset:
         out_dir: Path = DEFAULT_OUT_DIR,
         operator_id: str | None = None,
         dry_run: bool = True,
-        require_checked: bool = False,
     ) -> None:
         self.db = db
         self.share_db = share_db
@@ -103,7 +124,6 @@ class UploadPowerset:
         self.out_dir = out_dir
         self.operator_id = operator_id
         self.dry_run = dry_run
-        self.require_checked = require_checked
         self.manifest_path = out_dir / "manifest.json"
         self._database_url = ""
         self._namespace_names: dict[str, str] = {}
@@ -126,11 +146,6 @@ class UploadPowerset:
             if isinstance(exc, KeyboardInterrupt):
                 raise
             current = UploadManifest.read(self.manifest_path)
-            if isinstance(exc, CheckChanged):
-                # Refused before any write: the last upload stands and there is nothing to log.
-                replace(current, status="failed", error=CHANGED_CHECK, error_type=type(exc).__name__,
-                        finished_at=now_iso()).write(self.manifest_path)
-                raise
             message = safe_error(exc, CHECK_FAILED if self.dry_run else UPLOAD_FAILED)
             current = replace(current, status="failed", error=message,
                               error_type=type(exc).__name__, finished_at=now_iso())
@@ -148,18 +163,7 @@ class UploadPowerset:
         # The server (cmd_serve) and the CLI (main) each load .env once, at start.
         config = dict(os.environ)
         self._database_url = postgres_client.database_url()
-        # The shared cloud the upload writes is the v3 family, whatever version the search
-        # side reads; a per-namespace override still points a rehearsal at _v3_share_test.
-        self._namespace_names = {
-            ns.logical: tp_backend.namespace_name(
-                ns.logical, config={**config, "ALEPH_INDEX_VERSION": UPLOAD_INDEX_VERSION})
-            for ns in NAMESPACES
-        }
-        suffixes = {"_v3_share_test" if name.endswith("_v3_share_test") else
-                    "_v3" if name.endswith("_v3") else "invalid"
-                    for name in self._namespace_names.values()}
-        if len(suffixes) != 1 or "invalid" in suffixes:
-            raise RuntimeError(SAFE_ERRORS["namespace"])
+        self._namespace_names = {ns.logical: share_namespace(ns.logical) for ns in NAMESPACES}
         if not config.get("TURBOPUFFER_API_KEY"):
             raise RuntimeError(SAFE_ERRORS["api_key"])
         self._tp_client = turbopuffer.Turbopuffer(
@@ -188,13 +192,13 @@ class UploadPowerset:
         try:
             with psycopg2.connect(self._database_url) as conn:
                 with conn.cursor() as cur:
-                    postgres.use_v3_schema(cur)
+                    postgres.use_share_schema(cur, share_version())
                     operator_id = self.operator_id or postgres.resolve_operator_id(
                         cur, postgres_client.credentials_subject())
                     plan = self._plan(con, cur, operator_id, share_rows, people)
                     target = {"postgres_host": urlparse(self._database_url).hostname,
                               "postgres_database": urlparse(self._database_url).path,
-                              "postgres_schema": "powerset_v2", "operator_id": operator_id,
+                              "postgres_schema": postgres.share_schema(share_version()), "operator_id": operator_id,
                               "namespaces": {ns.logical: ns.namespace for ns in plan.namespaces}}
                     indexed = {profile.id for profile in local_index.person_profiles(con, plan.persons_upsert)}
                     if missing := set(plan.persons_upsert) - indexed:
@@ -248,11 +252,7 @@ class UploadPowerset:
                     # In the cloud through another operator: this upload adds you as a source.
                     preview["already_in_cloud"] = (len(shared_ids) - len(newly_owned) - len(rewritten)
                                                    - preview["already_shared"])
-                    if self.require_checked and not self.dry_run and (previous.plan is None or previous.checked_target != target
-                                             or previous.plan != preview or previous.share_digest != digest):
-                        raise CheckChanged(CHANGED_CHECK)
-                    current = replace(current, operator_id=operator_id, plan=preview,
-                                      checked_target=target if self.dry_run else previous.checked_target)
+                    current = replace(current, operator_id=operator_id, plan=preview)
                     if not self.dry_run:
                         current = replace(current, target=target, person_hashes=old_hashes,
                             owned_people=tuple(sorted(owned_people | newly_owned)),
@@ -277,7 +277,8 @@ class UploadPowerset:
                         "skipped": max(0, current.progress["total"] - result.people_uploaded)}
             current = replace(current, person_hashes=hashes, pending_upserts={}, progress=progress,
                 last_upload={"finished_at": current.finished_at, "status": "completed",
-                             "uploaded": progress["uploaded"], "skipped": progress["skipped"]})
+                             "uploaded": progress["uploaded"], "skipped": progress["skipped"],
+                             "share_digest": current.share_digest})
         current.write(self.manifest_path)
         return asdict(current) | {"manifest": str(self.manifest_path)}
 

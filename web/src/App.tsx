@@ -10,6 +10,7 @@ import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
+import { SetsPage } from "@/pages/sets/SetsPage"
 import { TasksPage } from "@/pages/tasks/TasksPage"
 
 // The side nav, then the page: the page owns its own scrolling and any panel of its own.
@@ -47,6 +48,7 @@ export function App() {
             <Route index element={null} />
             <Route path="run" element={null} />
           </Route>
+          <Route path="/sets" element={<SetsPage />} />
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="*" element={<Navigate to={HOME.href} replace />} />

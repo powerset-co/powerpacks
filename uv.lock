@@ -585,6 +585,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nats-py"
+version = "2.16.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/c8/739b72c9201081e48000884d476231873ac82f7247c43b33823eaf3c0bfb/nats_py-2.16.0.tar.gz", hash = "sha256:1d137ed7afc9b59033b3199324c6237df2016a5091935871344a787eba6b72fc", size = 79731 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/a3/16cec37172144d3362d7551bb823a098b2b2903281fc095dfe4480b8c2fd/nats_py-2.16.0-py3-none-any.whl", hash = "sha256:aeb1ff123966c05833d26c7df7e1d54c1c6d32b612428b21677a2e921f1fecae", size = 93578 },
+]
+
+[[package]]
 name = "openai"
 version = "2.33.0"
 source = { registry = "https://pypi.org/simple" }
@@ -654,7 +663,7 @@ wheels = [
 
 [[package]]
 name = "powerpacks"
-version = "3.21.0"
+version = "3.22.2"
 source = { virtual = "." }
 dependencies = [
     { name = "duckdb" },
@@ -664,6 +673,7 @@ dependencies = [
     { name = "markdown-it-py" },
     { name = "modal" },
     { name = "nameparser" },
+    { name = "nats-py" },
     { name = "openai" },
     { name = "parallel-web" },
     { name = "psycopg2-binary" },
@@ -692,6 +702,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=4.0" },
     { name = "modal", specifier = ">=1.5.0" },
     { name = "nameparser", specifier = "==2.3.0" },
+    { name = "nats-py", specifier = ">=2.16.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "parallel-web", specifier = "==1.1.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },

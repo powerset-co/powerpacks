@@ -82,7 +82,8 @@ The doctor skill owns diagnosis and repair. Missing Python dependencies are a
 setup problem, not a reason to change product code.
 
 During installation, open the printed progress URL beside chat and keep that
-pane on the status page. Sign-in opens in the system's default browser. The
-user completes login or OS permission dialogs; the agent resumes the workflow.
+pane on the status page. Sign-in uses Powerpacks-managed Chrome and closes when
+finished. The user completes login or OS permission dialogs; the agent resumes
+the workflow.
 If a targeted repair leaves the same failure, explain the remaining problem
 and the specific action needed instead of retrying indefinitely.

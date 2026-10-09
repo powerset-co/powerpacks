@@ -9,6 +9,7 @@ import { EMPTY } from "@/lib/sets"
 import type { Person, TagChange, TagResult } from "@/types/people"
 import { errorText } from "@/lib/api/http"
 
+import { UPLOAD_KEY } from "../upload/useUpload"
 import { PEOPLE_QUERY_KEY } from "./usePeopleQuery"
 
 const DONE: Record<TagAction, (count: number) => string> = {
@@ -52,6 +53,8 @@ export function useDecisions(byId: ReadonlyMap<string, Person>, onWritten: (ids:
       try {
         const results = await writeTags(changes)
         queryClient.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (rows) => patchRows(rows, results))
+        // The share list changed: the upload status says so (the warning mark) and drops a stale check.
+        void queryClient.invalidateQueries({ queryKey: UPLOAD_KEY })
         lastUndo.current = undo
         onWritten(ids)
         return results.length

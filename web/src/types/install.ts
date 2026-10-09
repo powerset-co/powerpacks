@@ -29,7 +29,7 @@ export interface InstallAction {
 }
 /** The page's rows and fixed words, from packs/powerset/primitives/install/status_prose.py. */
 export interface InstallProse {
-  rows: { label: string; steps: InstallStep[]; done_label: string; needs: InstallStep }[]
+  rows: { label: string; steps: InstallStep[]; needs: InstallStep }[]
   page: Record<string, string>
 }
 export interface InstallStatus {

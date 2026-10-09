@@ -53,7 +53,7 @@ function installSteps(data?: InstallStatus) {
     return [
       {
         key: row.label,
-        label: status === "completed" && row.done_label ? row.done_label : row.label,
+        label: row.label,
         current,
         status,
       },
@@ -90,15 +90,13 @@ export function InstallPage() {
                   ? "title.ready"
                   : data.status === "waiting" && data.step === "account"
                     ? "title.signing_in"
-                    : data.status === "waiting" && data.step === "review"
-                      ? "title.review"
-                      : data.status === "waiting" && data.action?.kind === "processing"
-                        ? "title.processing"
-                        : data.status === "completed" && data.step !== "ready"
+                    : data.status === "waiting" && data.action?.kind === "processing"
+                      ? "title.processing"
+                      : data.status === "completed" && data.step !== "ready"
+                        ? "title.running"
+                        : data.status === "skipped"
                           ? "title.running"
-                          : data.status === "skipped"
-                            ? "title.running"
-                            : `title.${data.status}`,
+                          : `title.${data.status}`,
         )
   // The matches left to check, counted by the review queue the review page reads.
   const ready = data?.step === "ready" && data.status === "completed"

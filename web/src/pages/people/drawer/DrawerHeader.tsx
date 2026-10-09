@@ -1,5 +1,4 @@
-import { Avatar, DrawerClose, LinkedinLink, SourcePills } from "@/components/shared"
-import { avatarUrl } from "@/lib/api/people"
+import { ProxiedLinkedinAvatar, DrawerClose, LinkedinLink, SourcePills } from "@/components/shared"
 import { toChannels, type Channel } from "@/lib/channels"
 import type { Person, PersonDetail } from "@/types/people"
 
@@ -22,11 +21,11 @@ function sourceTitles(detail: PersonDetail | null): Partial<Record<Channel, stri
 
 // Who this is: the row draws it at once; the detail adds the headline, picture and LinkedIn link.
 export function DrawerHeader({ row, detail, onClose }: DrawerHeaderProps) {
-  const avatar = orNone(detail?.avatar_url) ?? (row.has_avatar ? avatarUrl(row.parent_id) : undefined)
+  const avatar = orNone(detail?.avatar_url) ?? (row.avatar_url || undefined)
   const headline = orNone(detail?.headline) ?? [row.title, row.company].filter(Boolean).join(" · ")
   return (
     <div className="drawer-top">
-      <Avatar name={row.name} size={40} src={avatar} />
+      <ProxiedLinkedinAvatar name={row.name} size={40} src={avatar} />
       <div className="who">
         <div className="name-row">
           <h2>{row.name}</h2>
