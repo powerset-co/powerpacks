@@ -36,24 +36,25 @@ const POLL_MS = 2_000
 const CHOICE =
   "group flex w-full cursor-pointer flex-col items-start gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left text-foreground transition-[border-color,background-color,transform,opacity] duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))] hover:bg-surface-2 active:translate-y-px disabled:cursor-default disabled:hover:border-line-strong disabled:hover:bg-card disabled:active:translate-y-0"
 
-/** One thing this Mac needs: what it is, why, and either a check or the button that gets it. */
+/** One thing this Mac needs: what it is, why, and its status icon on the right. A needed item's
+ *  warning is the button that gets it (its label shows on hover). */
 function Check({
   icon,
   title,
   why,
   state,
-  children,
+  fix,
   note,
 }: {
   icon: ReactNode
   title: string
   why: string
-  /** Ready (a check), skipped (a dash), or needed (a warning beside the action). */
-  state: "ready" | "skipped" | "needed"
-  /** The action while it is not ready. */
-  children?: ReactNode
+  state: "checking" | "working" | "ready" | "skipped" | "needed"
+  /** What clicking the warning does. */
+  fix?: { label: string; onClick: () => void }
   note?: ReactNode
 }) {
+  const mark = "rise-in grid size-7 shrink-0 place-items-center self-center rounded-full"
   return (
     <li className="flex items-start gap-3 px-4 py-3.5">
       <span className="grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground">
@@ -64,30 +65,30 @@ function Check({
         <span className="text-xs leading-snug text-muted-foreground">{why}</span>
         {note}
       </div>
-      <div className="flex shrink-0 items-center gap-2 self-center">
-        {state === "needed" && children}
+      {state === "needed" && fix ? (
+        <button
+          key={state}
+          type="button"
+          title={fix.label}
+          aria-label={fix.label}
+          onClick={fix.onClick}
+          className={cn(
+            mark,
+            "cursor-pointer border-0 bg-warn-soft text-warn transition-[transform,box-shadow] duration-fast ease-out hover:scale-110 hover:shadow-[0_0_0_3px_var(--warn-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-warn",
+          )}
+        >
+          <WarningIcon className="size-3.5" />
+        </button>
+      ) : (
         <span
           key={state}
           role="img"
-          aria-label={state === "ready" ? "Ready" : state === "skipped" ? "Skipped" : "Needed"}
-          className={cn(
-            "rise-in grid size-6 place-items-center rounded-full",
-            state === "ready"
-              ? "bg-ok-soft text-ok"
-              : state === "skipped"
-                ? "text-faint"
-                : "bg-warn-soft text-warn",
-          )}
+          aria-label={state === "ready" ? "Ready" : state === "skipped" ? "Skipped" : "Working"}
+          className={cn(mark, state === "ready" ? "bg-ok-soft text-ok" : "text-faint")}
         >
-          {state === "ready" ? (
-            <CheckIcon className="size-3.5" />
-          ) : state === "skipped" ? (
-            "–"
-          ) : (
-            <WarningIcon className="size-3.5" />
-          )}
+          {state === "ready" ? <CheckIcon className="size-3.5" /> : state === "skipped" ? "–" : <Spinner />}
         </span>
-      </div>
+      )}
     </li>
   )
 }
@@ -101,24 +102,6 @@ function InstallLine({ install }: { install: PreflightInstall | null }) {
     return <span className="truncate text-[11.5px] text-faint">{install.line}</span>
   }
   return null
-}
-
-function InstallButton({
-  install,
-  label,
-  onClick,
-}: {
-  install: PreflightInstall | null
-  label: string
-  onClick: () => void
-}) {
-  const running = install?.status === "running"
-  return (
-    <Button variant="primary" disabled={running} onClick={onClick}>
-      {running && <Spinner />}
-      {running ? "Installing…" : install?.status === "failed" ? "Try again" : label}
-    </Button>
-  )
 }
 
 /** Whether macOS lets Powerpacks read Messages, asked again while not yet; null until the first answer. */
@@ -140,6 +123,13 @@ function useMessagesReadable(): boolean | null {
     }
   }, [])
   return readable
+}
+
+/** A preflight item's icon: checking until the first answer, then ready, installing, or needed. */
+function status(item: { ok: boolean; install: PreflightInstall | null } | undefined) {
+  if (!item) return "checking" as const
+  if (item.ok) return "ready" as const
+  return item.install?.status === "running" ? ("working" as const) : ("needed" as const)
 }
 
 /** The first screen: everything setup needs from this Mac, asked for before it starts. Turning on
@@ -168,7 +158,12 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
           icon={<MessagesIcon className="size-[18px]" />}
           title="Full Disk Access"
           why="Reads iMessage and Contacts to find who you talk to. Nothing leaves your computer."
-          state={readable ? "ready" : skipMessages ? "skipped" : "needed"}
+          state={readable === null ? "checking" : readable ? "ready" : skipMessages ? "skipped" : "needed"}
+          fix={{
+            label: "Open Settings",
+            onClick: () =>
+              void installAction("permissions").catch((caught: unknown) => setError(errorText(caught))),
+          }}
           note={
             !readable && !skipMessages ? (
               <button
@@ -180,48 +175,23 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
               </button>
             ) : null
           }
-        >
-          <Button
-            variant="primary"
-            disabled={readable === null}
-            onClick={() =>
-              void installAction("permissions").catch((caught: unknown) => setError(errorText(caught)))
-            }
-          >
-            {readable === null && <Spinner />}
-            Open Settings
-          </Button>
-        </Check>
+        />
         <Check
           icon={<BrowserIcon className="size-[18px]" />}
           title="A browser for sign-ins"
           why="Signs in to LinkedIn and Google in a browser window. Nothing leaves your computer."
-          state={data?.browser.ok ? "ready" : "needed"}
+          state={status(data?.browser)}
+          fix={{ label: "Install Chromium (about 150 MB)", onClick: () => install("chromium") }}
           note={data && !data.browser.ok ? <InstallLine install={data.browser.install} /> : null}
-        >
-          {data ? (
-            <InstallButton
-              install={data.browser.install}
-              label="Install Chromium"
-              onClick={() => install("chromium")}
-            />
-          ) : (
-            <Spinner />
-          )}
-        </Check>
+        />
         <Check
           icon={<CloudIcon className="size-[18px]" />}
           title="Google Cloud CLI"
           why="Connects Gmail through a private app in your own Google Cloud. Nothing leaves your computer."
-          state={data?.gcloud.ok ? "ready" : "needed"}
+          state={status(data?.gcloud)}
+          fix={{ label: "Install the Google Cloud CLI", onClick: () => install("gcloud") }}
           note={data && !data.gcloud.ok ? <InstallLine install={data.gcloud.install} /> : null}
-        >
-          {data ? (
-            <InstallButton install={data.gcloud.install} label="Install" onClick={() => install("gcloud")} />
-          ) : (
-            <Spinner />
-          )}
-        </Check>
+        />
       </ul>
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs text-faint">
