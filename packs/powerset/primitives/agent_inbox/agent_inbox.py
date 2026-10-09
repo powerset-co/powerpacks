@@ -5,6 +5,7 @@ The relay carries any kind; this laptop keeps only the kinds in messages.py whos
 Every message is acked, so anything else (an unknown kind, a bad field) is discarded, logged by kind.
 
 Changelog:
+- 2026-10-09: share relay message sending through send.
 - 2026-10-08: keep only messages that parse (messages.py); ack and discard the rest.
 - 2026-10-08: created for the Ask the Set comms pipeline.
 """
@@ -37,6 +38,12 @@ def _request(base: str, path: str, token: str, body: dict[str, Any] | None = Non
     with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
         answer: dict[str, Any] = json.load(response)
     return answer
+
+
+def send(env_file: Path, to: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """POST one agent message to the relay; returns its {"id", "status"}."""
+    return _request(auth.api_base(env_file), "/v2/agent-messages", auth.bearer_token(env_file),
+                    {"to": to, "kind": kind, "payload": payload})
 
 
 def pull(*, repo_root: Path, env_file: Path) -> list[dict[str, Any]]:

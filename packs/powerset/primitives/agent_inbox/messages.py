@@ -6,6 +6,7 @@ field over its size limit, or an id that is not a uuid (the id names the inbox f
 every message and keeps only what parses, so anything else is discarded.
 
 Changelog:
+- 2026-10-09: parse ask answers step by step.
 - 2026-10-09: an ask carries the search's role (title, company, job description).
 - 2026-10-09: an answer's reason and relationship take up to MAX_TEXT (500) characters.
 - 2026-10-08: set_members carries the owner's full member list; typed answers and debug results.
@@ -228,10 +229,14 @@ class AskAnswer:
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> AskAnswer:
-        return cls(_uuid(payload.get("ask_id"), "ask_id"), tuple(
-            CandidateAnswer(_text(_dict(row, "answer").get("public_identifier"), "public_identifier"),
-                            _answer_body(row.get("answer")))
-            for row in _list(payload.get("answers"), "answers", MAX_CANDIDATES)))
+        ask_id = _uuid(payload.get("ask_id"), "ask_id")
+        answers = []
+        for value in _list(payload.get("answers"), "answers", MAX_CANDIDATES):
+            row = _dict(value, "answer")
+            public_identifier = _text(row.get("public_identifier"), "public_identifier")
+            answer = _answer_body(row.get("answer"))
+            answers.append(CandidateAnswer(public_identifier, answer))
+        return cls(ask_id, tuple(answers))
 
 
 @dataclass(frozen=True)

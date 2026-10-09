@@ -1,6 +1,7 @@
 """Exercise the owner's ask worker with a synthetic store and stubbed HTTP/model calls.
 
 Changelog:
+  2026-10-09: patch auth at the shared relay sender.
   2026-10-08: an ask arrives as an agent message and the answer goes back as one; leases are gone.
   2026-10-08: cover family evidence, privacy, validation, leases, and task isolation.
 """
@@ -17,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from packs.ingestion.primitives.ask_worker import ask_worker
+from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.agent_inbox.messages import Verdict
 from packs.ingestion.primitives.deep_context_v2.db import queries, queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
@@ -73,8 +75,8 @@ class AskWorkerTests(unittest.TestCase):
         self.message = self._message(SLUG)
         self.posts = []
         self.http = self.enterContext(patch("urllib.request.urlopen", side_effect=self._http))
-        self.enterContext(patch.object(ask_worker.auth, "bearer_token", return_value="synthetic-token"))
-        self.enterContext(patch.object(ask_worker.auth, "api_base", return_value="http://localhost:8769"))
+        self.enterContext(patch.object(agent_inbox.auth, "bearer_token", return_value="synthetic-token"))
+        self.enterContext(patch.object(agent_inbox.auth, "api_base", return_value="http://localhost:8769"))
         self.enterContext(patch.object(OpenAIResponsesConfig, "resolve", return_value=OpenAIResponsesConfig(
             model="synthetic-model", effort="low", concurrency=1, timeout=120, max_retries=0)))
         self.enterContext(patch("packs.ingestion.primitives.deep_context_v2.openai.AsyncOpenAI", return_value=AsyncMock()))
