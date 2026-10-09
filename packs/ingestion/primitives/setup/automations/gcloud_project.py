@@ -43,7 +43,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
@@ -134,11 +134,14 @@ def validate_project_id(project_id: str) -> str:
     return project_id
 
 
-def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[str, Any]:
+def ensure_gcloud_auth(open_browser: bool, expected_account: str = "",
+                       login: Callable[[list[str]], CommandResult] | None = None) -> dict[str, Any]:
     """Ensure a working gcloud login, re-running `gcloud auth login` when stale.
 
     When expected_account is set, a login under any other account is an
-    error — msgvault setup must run against the mailbox owner's project."""
+    error — msgvault setup must run against the mailbox owner's project.
+    With a browser, `login` runs the `gcloud auth login` command (the browser
+    setup approves it in its Chrome profile)."""
     if not shutil.which("gcloud"):
         return {"status": "error", "message": "gcloud not installed"}
     progress("Checking Google Cloud login...")
@@ -172,7 +175,7 @@ def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[s
     if not open_browser:
         cmd.append("--no-launch-browser")
     progress("Refreshing Google Cloud login...")
-    result = run_visible_command(cmd, timeout=900)
+    result = login(cmd) if login and open_browser else run_visible_command(cmd, timeout=900)
     account = gcloud_value(["config", "get-value", "account", "--quiet"])
     if result.ok and expected and account.lower() != expected.lower():
         return {
