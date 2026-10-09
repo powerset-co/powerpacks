@@ -123,7 +123,7 @@ class ShareUpload:
             "checked": saved.share_digest if state == "ready" else None,
             "last_upload": last_upload,
             # The share list differs from what the last completed upload sent: the page offers an update.
-            "share_changed": bool(last_upload) and last_upload.get("share_digest") != current_digest,
+            "share_changed": last_upload is not None and last_upload.get("share_digest") != current_digest,
             "failed_action": ("check" if saved.dry_run else "upload") if state in {"failed", "interrupted"} else None,
             "error": error,
         }

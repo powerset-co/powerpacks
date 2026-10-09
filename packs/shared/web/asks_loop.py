@@ -7,8 +7,8 @@ Changelog:
 - 2026-10-08: subscribe to the operator's inbox subject and pull agent messages on each nudge.
 - 2026-10-08: keep the last heartbeat per operator in .powerpacks/presence.json for the sets page.
 - 2026-10-08: keep the relay state for the top bar's status dot; a sign-in wakes a signed-out wait.
-- 2026-10-08: asks are agent messages: the inbox pull answers each unanswered `ask` (and `debug_request`);
-  no ask tasks or ask subjects.
+- 2026-10-08: asks are agent messages: the inbox pull answers each unanswered `ask` (and `debug_request`)
+  from someone in one of this owner's sets, and marks the rest refused; no ask tasks or ask subjects.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import closing
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
@@ -29,6 +30,8 @@ from dotenv import dotenv_values
 
 from packs.ingestion.primitives.ask_worker import ask_worker
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
+from packs.ingestion.primitives.share.web.sets import Sets
 from packs.powerset.primitives.agent_debug import agent_debug
 from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
@@ -39,11 +42,18 @@ SIGNED_OUT_SECONDS = 300
 MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
 _LOG = logging.getLogger(__name__)
-# Message kinds this machine answers without a person: an ask from a set member, a teammate's debug checks.
+# Message kinds this machine answers without a person, and only for someone in one of its sets: an ask,
+# a teammate's debug checks.
 ANSWERED_HERE = {"ask": ask_worker.answer_message, "debug_request": agent_debug.answer}
 # The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
 STATUS = {"state": "offline"}
 WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects at once
+
+
+def _set_members(repo_root: Path, env_file: Path) -> set[str]:
+    """The operators in this owner's sets, read from the store the People page keeps."""
+    with closing(open_store(store_path(repo_root / ".powerpacks"))) as conn:
+        return Sets(conn, env_file).known_operators()
 
 
 def _device_id(repo_root: Path) -> str:
@@ -91,10 +101,15 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
         at a time. A failed answer stays unanswered and is tried again on the next pull."""
         async with worker_lock:
             await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
+            known = await asyncio.to_thread(_set_members, repo_root, env_file)
             for path in sorted((repo_root / ".powerpacks" / "inbox").glob("*.json")):
                 message = json.loads(path.read_text(encoding="utf-8"))
                 handler = ANSWERED_HERE.get(message["kind"])
                 if handler is None or "answered_at" in message:
+                    continue
+                if message["from"]["operator_id"] not in known:
+                    # Not someone in a set with this owner: no answer, no model call, no checks.
+                    write_json(path, {**message, "answered_at": now_iso(), "refused": "not in a set"})
                     continue
                 try:
                     await asyncio.to_thread(handler, message, repo_root=repo_root, env_file=env_file)

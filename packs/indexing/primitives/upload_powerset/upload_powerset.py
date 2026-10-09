@@ -87,7 +87,8 @@ SHARE_FAMILY = "share_v1"
 
 def share_namespace(logical: str) -> str:
     """The share_v1 TurboPuffer namespace for a logical name, e.g. aleph_summaries_share_v1."""
-    return TURBOPUFFER_NAMESPACES[logical].removesuffix("_v1") + f"_{SHARE_FAMILY}"
+    base: str = TURBOPUFFER_NAMESPACES[logical]
+    return base.removesuffix("_v1") + f"_{SHARE_FAMILY}"
 
 PREVIEW_IDS = 10
 

@@ -114,7 +114,12 @@ class Sets:
 
     def message(self, to: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         """One agent message over the relay; the relay holds it until the recipient's laptop pulls it."""
-        return self._call("POST", MESSAGES_PATH, {"to": to, "kind": kind, "payload": payload})
+        sent: dict[str, Any] = self._call("POST", MESSAGES_PATH, {"to": to, "kind": kind, "payload": payload})
+        return sent
+
+    def known_operators(self) -> set[str]:
+        """Everyone in a set on this machine: the only senders whose asks and debug requests are answered."""
+        return {member.operator_id for view in self.kept() for member in self.members(view)}
 
     def me(self) -> Member:
         """This machine's signed-in operator, asked once per server."""
@@ -156,7 +161,11 @@ class Sets:
                 continue
             set_id = message["payload"]["set_id"]
             if message["kind"] == DELETED:
-                queries_share.delete_set(self.conn, set_id)
+                # Only the set's owner deletes it for everyone; a delete from anyone else changes nothing.
+                owners = {member.operator_id for view in self.kept() if view.set_id == set_id
+                          for member in view.members if member.role == OWNER}
+                if message["from"]["operator_id"] in owners:
+                    queries_share.delete_set(self.conn, set_id)
             else:
                 replies = {reply["payload"]["invite_id"]: reply for reply in self._inbox(REPLY)}
                 for path in (self.data_root / "invites").glob("*.json"):
@@ -252,7 +261,8 @@ class Sets:
         try:
             response = self._client().namespace(share_namespace("summaries")).query(
                 filters=("allowed_operator_ids", "ContainsAny", operator_ids), aggregate_by={"people": ("Count",)})
-            count = int(response.aggregations["people"])
+            aggregations: dict[str, Any] = response.aggregations or {}
+            count = int(aggregations["people"])
         except turbopuffer.NotFoundError:
             count = 0  # nobody has shared into share_v1 yet
         self._counts[key] = (time.monotonic(), count)
