@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import { EmptyState, initials } from "@/components/shared"
+import { initials } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { signIn } from "@/lib/api/feedback"
 import type { ReceivedInvite, SetMember, SetView } from "@/lib/api/sets"
 import { SETS } from "@/lib/people/copy"
@@ -29,39 +30,42 @@ export function SetsPage() {
         <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 max-[680px]:grid-cols-1">
           <h1 className="m-0 text-xl font-semibold leading-8">{SETS.title}</h1>
           <div className="flex items-center gap-2 max-[680px]:order-last">
-            {local.length ? (
-              <span className="relative inline-flex">
-                <select
-                  aria-label={SETS.choose}
-                  value={chosen?.set_id ?? ""}
-                  onChange={(event) => {
-                    choose(event.target.value)
-                    setConfirming(false)
-                  }}
-                  className="h-8 min-w-[220px] cursor-pointer appearance-none rounded-[var(--radius-s)] border border-line-strong bg-background pl-2.5 pr-8 text-[13px] text-foreground"
-                >
-                  {local.map((set) => (
-                    <option key={set.set_id} value={set.set_id}>
-                      {set.name}
-                    </option>
-                  ))}
-                </select>
-                <svg
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
-                >
-                  <path
-                    d="M4 6l4 4 4-4"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </span>
-            ) : null}
+            {/* Always on screen: "Loading sets…" until the first answer, "No sets yet" with none. */}
+            <span className="relative inline-flex">
+              <select
+                aria-label={SETS.choose}
+                value={chosen?.set_id ?? ""}
+                onChange={(event) => {
+                  choose(event.target.value)
+                  setConfirming(false)
+                }}
+                disabled={!local.length}
+                className="h-8 min-w-[220px] cursor-pointer appearance-none rounded-[var(--radius-s)] border border-line-strong bg-background pl-2.5 pr-8 text-[13px] text-foreground disabled:cursor-default disabled:text-muted-foreground"
+              >
+                {local.length ? null : (
+                  <option value="">{sets.isPending ? SETS.loading : SETS.noneTitle}</option>
+                )}
+                {local.map((set) => (
+                  <option key={set.set_id} value={set.set_id}>
+                    {set.name}
+                  </option>
+                ))}
+              </select>
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                className="pointer-events-none absolute right-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
+              >
+                <path
+                  d="M4 6l4 4 4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
             <Button variant="primary" className="h-8" onClick={() => setNaming(true)}>
               + {SETS.newSet}
             </Button>
@@ -112,7 +116,7 @@ export function SetsPage() {
           </section>
         ) : null}
 
-        {sets.isPending ? <EmptyState>{SETS.loading}</EmptyState> : null}
+        {sets.isPending ? <SetCardSkeleton /> : null}
         {sets.data && !local.length && !naming ? (
           <div className="rounded-[var(--radius-l)] border border-dashed border-line px-6 py-14 text-center">
             <p className="m-0 text-[15px] font-semibold">{SETS.noneTitle}</p>
@@ -363,5 +367,35 @@ function InviteForm({ onInvite, busy }: { onInvite: (email: string) => Promise<u
         {SETS.invite}
       </Button>
     </form>
+  )
+}
+
+/** The set card's shape while the first answer loads, so nothing shifts when it lands. */
+function SetCardSkeleton() {
+  return (
+    <section
+      aria-label={SETS.loading}
+      className="rounded-[var(--radius-l)] border border-line bg-card shadow-[var(--shadow-1)]"
+    >
+      <div className="border-b border-line px-5 py-4">
+        <Skeleton className="h-7 w-48 bg-surface-2" />
+        <div className="mt-2 flex gap-2">
+          <Skeleton className="h-5 w-20 rounded-full bg-surface-2" />
+          <Skeleton className="h-5 w-24 rounded-full bg-surface-2" />
+        </div>
+      </div>
+      <div className="border-b border-line px-5 py-3">
+        <Skeleton className="h-8 w-[420px] max-w-full rounded-[var(--radius-s)] bg-surface-2" />
+      </div>
+      <div className="px-5 py-2.5">
+        <Skeleton className="h-3 w-full bg-surface-2" />
+      </div>
+      {[0, 1].map((row) => (
+        <div key={row} className="flex items-center gap-2.5 border-t border-line px-5 py-3">
+          <Skeleton className="size-7 shrink-0 rounded-full bg-surface-2" />
+          <Skeleton className="h-4 w-56 bg-surface-2" />
+        </div>
+      ))}
+    </section>
   )
 }
