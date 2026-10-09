@@ -371,10 +371,10 @@ class SourceOnboarding:
                     return self._write("gmail.which_accounts", handed_back=True)
                 self.gmail_emails = (account,)
                 self.retry_command = shlex.join([*shlex.split(self.retry_command), "--gmail-email", account])
-            # Under the desktop app, Messages access comes first: it is the one macOS permission
-            # setup needs, and nothing else should run until the user has granted it.
-            if DESKTOP and Source.IMESSAGE in active and not self._imessage_access():
-                return self.status.read()
+            # Under the desktop app, Full Disk Access is asked for on the preflight screen and is
+            # optional: without it, setup leaves iMessage out.
+            if DESKTOP and Source.IMESSAGE in active and IMessageExtractor().check(strict=True)["status"] != "ok":
+                active.remove(Source.IMESSAGE)
             # Tools first (Homebrew can take minutes), then every login back to back while
             # the user is here, then the syncs and imports run without them.
             for source in active:

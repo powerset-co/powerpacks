@@ -49,7 +49,7 @@ function Check({
   icon: ReactNode
   title: string
   why: string
-  state: "checking" | "working" | "ready" | "skipped" | "needed"
+  state: "checking" | "working" | "ready" | "needed"
   /** What clicking the warning does. */
   fix?: { label: string; onClick: () => void }
   note?: ReactNode
@@ -83,10 +83,10 @@ function Check({
         <span
           key={state}
           role="img"
-          aria-label={state === "ready" ? "Ready" : state === "skipped" ? "Skipped" : "Working"}
+          aria-label={state === "ready" ? "Ready" : "Working"}
           className={cn(mark, state === "ready" ? "bg-ok-soft text-ok" : "text-faint")}
         >
-          {state === "ready" ? <CheckIcon className="size-3.5" /> : state === "skipped" ? "–" : <Spinner />}
+          {state === "ready" ? <CheckIcon className="size-3.5" /> : <Spinner />}
         </span>
       )}
     </li>
@@ -136,7 +136,6 @@ function status(item: { ok: boolean; install: PreflightInstall | null } | undefi
  *  Full Disk Access makes macOS quit and reopen the app, harmless here and a hang mid-setup. */
 function PreflightCheck({ onDone }: { onDone: () => void }) {
   const readable = useMessagesReadable()
-  const [skipMessages, setSkipMessages] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { data } = useQuery({
     queryKey: ["install", "preflight"],
@@ -149,32 +148,21 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
   })
   const install = (item: "chromium" | "gcloud") =>
     void installPreflight(item).catch((caught: unknown) => setError(errorText(caught)))
-  const messagesOk = readable === true || skipMessages
-  const ready = messagesOk && data?.browser.ok === true && data.gcloud.ok
+  // Full Disk Access is optional: without it setup leaves iMessage out.
+  const ready = data?.browser.ok === true && data.gcloud.ok
   return (
     <div className="flex w-full flex-col gap-4">
       <ul className="m-0 flex list-none flex-col divide-y divide-line rounded-[var(--radius-m)] border border-line-strong bg-card p-0 text-left">
         <Check
           icon={<MessagesIcon className="size-[18px]" />}
           title="Full Disk Access"
-          why="Reads iMessage and Contacts to find who you talk to. Nothing leaves your computer."
-          state={readable === null ? "checking" : readable ? "ready" : skipMessages ? "skipped" : "needed"}
+          why="Enable if you want us to read iMessage and Contacts to find who you talk to. Nothing leaves your computer."
+          state={readable === null ? "checking" : readable ? "ready" : "needed"}
           fix={{
             label: "Open Settings",
             onClick: () =>
               void installAction("permissions").catch((caught: unknown) => setError(errorText(caught))),
           }}
-          note={
-            !readable && !skipMessages ? (
-              <button
-                type="button"
-                onClick={() => setSkipMessages(true)}
-                className="w-fit cursor-pointer border-0 bg-transparent p-0 text-[11.5px] text-faint underline-offset-2 hover:text-foreground hover:underline"
-              >
-                Skip, no iMessage
-              </button>
-            ) : null
-          }
         />
         <Check
           icon={<BrowserIcon className="size-[18px]" />}
@@ -187,16 +175,14 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
         <Check
           icon={<CloudIcon className="size-[18px]" />}
           title="Google Cloud CLI"
-          why="Connects Gmail through a private app in your own Google Cloud. Nothing leaves your computer."
+          why="Connects Gmail through msgvault.io. Nothing leaves your computer."
           state={status(data?.gcloud)}
           fix={{ label: "Install the Google Cloud CLI", onClick: () => install("gcloud") }}
           note={data && !data.gcloud.ok ? <InstallLine install={data.gcloud.install} /> : null}
         />
       </ul>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-faint">
-          {ready ? "This Mac is ready." : "Everything here runs on this Mac."}
-        </span>
+        <span className="text-xs text-faint">Everything runs and stays here on your computer.</span>
         <Button variant="primary" disabled={!ready} onClick={onDone}>
           Continue
         </Button>
@@ -293,7 +279,7 @@ function Choice({ onBack }: { onBack: () => void }) {
         disabled={chosen !== null}
         className="w-fit cursor-pointer border-0 bg-transparent p-0 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40"
       >
-        ← Preflight check
+        ← Back
       </button>
       {error && (
         <p role="alert" className="m-0 text-xs text-bad">
@@ -312,7 +298,7 @@ export function DesktopWelcome() {
     <div className="flex w-full flex-col items-center gap-6">
       <div key={stage} className="rise-in flex w-full flex-col items-center gap-5">
         <header className="flex flex-col items-center gap-1.5 text-center">
-          <h2 className="m-0 text-xl font-bold">{stage === 0 ? "Preflight check" : "Set up Powerpacks"}</h2>
+          <h2 className="m-0 text-xl font-bold">Setup</h2>
           <p className="m-0 text-sm text-muted-foreground">
             {stage === 0
               ? "A few things Powerpacks needs on this Mac before it starts."
