@@ -28,6 +28,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "coverage>=7.6,<8",
     "flake8>=7.1.0",
     "mypy>=2.4.0",
     "ruff>=0.9.7",
