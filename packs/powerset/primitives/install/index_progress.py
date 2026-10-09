@@ -48,6 +48,6 @@ def read_index_progress(root: Path, started_at: str) -> dict | None:
                         "progress": progress, "payload": payload}
             newest = candidate_started
         except (OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration) as error:
-            return {"status": "failed", "message": "Search progress could not be read. Ask the agent to check the indexing status file.",
+            return {"status": "failed", "message": "Search progress could not be read from the indexing status file.",
                     "payload": {"error": str(error), "status_path": str(path)}}
     return selected

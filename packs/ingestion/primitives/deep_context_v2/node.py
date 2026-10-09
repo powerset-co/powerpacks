@@ -13,7 +13,7 @@ import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 from packs.ingestion.primitives.deep_context_v2.db.schema import VIEW_TABLES
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
@@ -47,6 +47,13 @@ class Node(ABC):
     def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
         self.conn = conn
         self.data_root = data_root
+        # Set by a caller that shows progress (the install page): called with a phase of the
+        # block's work and how far it is, as each paid call comes back.
+        self.on_progress: Callable[[str, int, int], None] | None = None
+
+    def progress(self, phase: str, done: int, total: int) -> None:
+        if self.on_progress is not None:
+            self.on_progress(phase, done, total)
 
     def required_files(self) -> tuple[Path, ...]:
         """Files that must exist before `execute()`; the import block declares its inputs here."""

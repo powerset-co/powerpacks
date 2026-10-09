@@ -8,6 +8,8 @@ is built on Modal unless realize left people.csv as it was and an index is alrea
 validation marks search ready.
 
 Changelog:
+  2026-10-09: synthesize and enrich report their counts to the page as their paid calls come back
+      (Node.on_progress), so a long stage is never a static line.
   2026-10-07: the stage order, realize (with the share list) and the index command come from
       deep_context_v2/run.py. Gone: the $500 spend approval and --approve-spend (the install
       budget always says yes), the Modal dispatch recovery and cap retry (a rerun builds again
@@ -32,6 +34,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 import traceback
 from contextlib import chdir, closing, redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -66,6 +69,14 @@ _EVENTS = {
     "worth": ("discover.grouping", "discover.grouping"),
     "enrich": ("enrich.running", "enrich.running"),
 }
+# The live line of a stage's phase as its paid calls come back (Node.progress), at most every
+# _COUNT_SECONDS so the manifest is not rewritten per call.
+_COUNT_EVENTS = {
+    ("synthesize", "facts"): "discover.learning.count",
+    ("enrich", "research"): "enrich.researching.count",
+    ("enrich", "judge"): "enrich.judging.count",
+}
+_COUNT_SECONDS = 2.0
 
 
 class _Stopped(Exception):
@@ -115,11 +126,31 @@ class ProcessingOnboarding:
         return payload
 
     def _stage(self, name: str, node: Node) -> None:
-        """One v2 stage under its page events: its estimate (when it prices its work), then its run."""
+        """One v2 stage under its page events: its estimate (when it prices its work), then its run
+        with its counts on the page as they come in."""
         estimating, running = _EVENTS[name]
         if estimating:
             self._run(f"{name} estimate", node.estimate, estimating)
+        node.on_progress = self._counter(name)
         self._run(name, lambda: _manifest_payload(node.run()), running)
+
+    def _counter(self, name: str) -> Callable[[str, int, int], None]:
+        """The stage's progress callback: its phase's count event, written at most every _COUNT_SECONDS
+        and when the phase is done."""
+        written_at = 0.0
+
+        def count(phase: str, done: int, total: int) -> None:
+            nonlocal written_at
+            event = _COUNT_EVENTS.get((name, phase))
+            if event is None or not total:
+                return
+            now = time.monotonic()
+            if done < total and now - written_at < _COUNT_SECONDS:
+                return
+            written_at = now
+            self._write(event, done=done, total=total)
+
+        return count
 
     def _modal(self, command: list[str], env: dict[str, str] | None = None) -> dict:
         """A Modal command, its output into the install log."""

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 
@@ -38,6 +40,17 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["retry_command"], "bin/bootstrap")
         self.assertEqual(record["log_path"], str(self.root / ".powerpacks/install/install.log"))
         self.assertFalse((self.root / ".powerpacks/install/manifest.tmp").exists())
+
+    def test_a_step_keeps_when_it_started_across_its_events(self) -> None:
+        first = self.status.write("discover.learning", pid=os.getpid())
+        self.assertTrue(first["step_started_at"])
+        with patch("packs.powerset.primitives.install.status.now_iso", return_value="2099-01-01T00:00:00Z"):
+            later = self.status.write("discover.learning.count", pid=os.getpid(), done=3, total=9)
+            self.assertEqual(later["step_started_at"], first["step_started_at"])
+            self.assertEqual(later["message"], "Learning about your contacts: 3 of 9")
+            moved = self.status.write("enrich.running", pid=os.getpid())
+        self.assertEqual(moved["step_started_at"], "2099-01-01T00:00:00Z")
+        self.assertEqual(self.status.read()["step_started_at"], "2099-01-01T00:00:00Z")
 
     def test_dead_installer_is_paused_with_resume_guidance(self) -> None:
         self.status.write('tools.preparing', step=InstallStep.DEPENDENCIES, pid=99999999)
@@ -150,6 +163,45 @@ class InstallStatusTests(unittest.TestCase):
     def test_an_event_without_its_own_step_lands_on_the_current_one(self) -> None:
         self.status.write("gmail.syncing", pid=os.getpid())
         self.assertEqual(self.status.write("step.failed", pid=os.getpid())["step"], "gmail_sync")
+
+
+class SkipSourceTests(unittest.TestCase):
+    """The page skips WhatsApp at its QR: the waiting run stops and the saved command remembers it."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.status = InstallStatus(self.root)
+        self.controller = InstallController(self.root)
+
+    def test_skipping_whatsapp_at_the_qr_stops_the_run_and_pauses_setup_with_the_skip_saved(self) -> None:
+        # A sleeper that is not this test's child, as the setup run is not the page server's.
+        pid = int(subprocess.check_output(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]).strip())
+        self.addCleanup(lambda: subprocess.run(["kill", str(pid)], stderr=subprocess.DEVNULL))
+        self.status.write("whatsapp.qr", pid=pid, retry_command="bin/onboard --source whatsapp --source gmail")
+        self.assertEqual(self.controller.skip("whatsapp"), {"status": "skipped", "source": "whatsapp"})
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        record = self.status.read()
+        self.assertEqual((record["event"], record["status"], record["step"]), ("setup.paused", "waiting", "whatsapp_login"))
+        self.assertEqual(record["installer_pid"], 0)
+        self.assertEqual(record["retry_command"], "bin/onboard --source whatsapp --source gmail --skip-source whatsapp")
+        self.assertEqual(record["action"]["kind"], "resume")
+        # A second skip at the same wait saves it once.
+        self.status.write("whatsapp.blocked", pid=0, retry_command=record["retry_command"])
+        self.controller.skip("whatsapp")
+        self.assertEqual(self.status.read()["retry_command"].count("--skip-source"), 1)
+
+    def test_only_a_stopped_whatsapp_step_can_be_skipped(self) -> None:
+        self.status.write("whatsapp.downloading", pid=0, retry_command="bin/onboard")
+        with self.assertRaises(ValueError):
+            self.controller.skip("whatsapp")
+        self.status.write("imessage.permission", pid=0, app="Powerpacks", retry_command="bin/onboard")
+        with self.assertRaises(ValueError):
+            self.controller.skip("whatsapp")
+        with self.assertRaises(ValueError):
+            self.controller.skip("imessage")
 
 
 if __name__ == "__main__":

@@ -77,6 +77,8 @@
     "qr.loading": "Getting your QR code…",
     "qr.where": "WhatsApp → Settings → Linked devices → Link a device",
     "qr.alt": "Scan this QR code to link WhatsApp",
+    "qr.skip": "Skip WhatsApp for now",
+    "running.elapsed": "{elapsed} so far",
     "review.offer.one": "1 LinkedIn match needs a quick look when you have time.",
     "review.offer.many": "{count} LinkedIn matches need a quick look when you have time.",
     "review.button": "Review contacts"

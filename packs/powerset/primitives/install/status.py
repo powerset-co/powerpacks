@@ -5,6 +5,8 @@ step come from there. The manifest is the one record the page, the agent and the
 CLI read; a primitive's own text goes into the action's details, not the line.
 
 Changelog:
+  2026-10-09: `step_started_at` records when the run entered the current step, so the page can
+      show how long a long step has run.
   2026-10-05: `write` takes an event instead of a message; the step enums moved
       to steps.py and the page's words to status_prose.py.
 """
@@ -16,7 +18,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import emit
+from packs.ingestion.primitives.common.jsonio import emit, now_iso
 from packs.ingestion.primitives.common.manifests import write_stage_manifest
 from packs.powerset.primitives.install.status_prose import page_prose, render
 from packs.powerset.primitives.install.steps import DEFAULT_PLAN, PROCESSING_STEPS, InstallState, InstallStep
@@ -35,6 +37,8 @@ class _InstallManifest:
     plan: list[str] = field(default_factory=lambda: list(DEFAULT_PLAN))
     action: dict | None = None
     note: str = ""
+    # When the run entered the current step; the page counts the time a long step has taken.
+    step_started_at: str = ""
     account_email: str | None = None
     network_name: str | None = None
     person_count: int | None = None
@@ -51,6 +55,7 @@ class _InstallManifest:
                    log_path=record["log_path"], retry_command=record["retry_command"],
                    steps=record.get("steps", {}), plan=record.get("plan", list(DEFAULT_PLAN)),
                    action=record.get("action"), note=record.get("note", ""),
+                   step_started_at=record.get("step_started_at", ""),
                    account_email=record.get("account_email"),
                    network_name=record.get("network_name"), person_count=record.get("person_count"))
 
@@ -94,6 +99,8 @@ class InstallStatus:
                                     retry_command=retry_command, steps=steps,
                                     plan=plan if plan is not None else previous.get("plan", list(DEFAULT_PLAN)),
                                     action=action, note=note,
+                                    step_started_at=(previous.get("step_started_at") or now_iso())
+                                    if previous_step == step.value else now_iso(),
                                     account_email=account_email if account_email is not None else previous.get("account_email"),
                                     network_name=network_name if network_name is not None else previous.get("network_name"),
                                     person_count=person_count if person_count is not None else previous.get("person_count"))

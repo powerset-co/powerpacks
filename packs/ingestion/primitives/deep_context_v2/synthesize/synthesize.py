@@ -148,15 +148,18 @@ class Synthesize(Node):
                 tasks.append(asyncio.create_task(self._guarded(caller, item)))
             written: int = 0
             failed: int = 0
+            self.progress("facts", 0, len(todo))
             for task in asyncio.as_completed(tasks):
                 item, facts = await task
                 if facts is None:
                     failed += 1
-                    continue
-                queries.upsert_facts(self.conn, item.candidate_id, json.dumps(facts.to_payload(), ensure_ascii=False),
-                                     item.fingerprint, self.config.model, self.config.effort, now_iso())
-                self.conn.commit()
-                written += 1
+                else:
+                    payload = json.dumps(facts.to_payload(), ensure_ascii=False)
+                    queries.upsert_facts(self.conn, item.candidate_id, payload, item.fingerprint, self.config.model,
+                                         self.config.effort, now_iso())
+                    self.conn.commit()
+                    written += 1
+                self.progress("facts", written + failed, len(todo))
             return written, failed
 
     async def _guarded(self, caller: OpenAIResponsesCaller, item: Work) -> tuple[Work, SynthesizedFacts | None]:
