@@ -1,6 +1,7 @@
 """Check the read-only remote diagnostics against a synthetic install; the relay POST is mocked.
 
 Changelog:
+- 2026-10-09: patch the shared relay sender.
 - 2026-10-08: cover a full request, a subset, an unknown check, output capping and `show`.
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ from unittest.mock import patch
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.powerset.primitives.agent_debug import agent_debug
+from packs.powerset.primitives.agent_inbox import agent_inbox
 
 ARTHUR = "6f1b3c0e-0d53-4a8e-9c1e-2b7f6a1d9e10"
 
@@ -44,7 +46,7 @@ class AgentDebugTests(unittest.TestCase):
         write_json(data / "inbox" / "req-1.json", _request())
         open_store(data / "deep-context" / "deep-context-v2.sqlite").close()
         self.sent = []
-        sender = patch.object(agent_debug, "_send",
+        sender = patch.object(agent_inbox, "send",
                               side_effect=lambda env_file, to, kind, payload: self.sent.append((to, kind, payload))
                               or {"id": "res-1", "status": "queued"})
         sender.start()

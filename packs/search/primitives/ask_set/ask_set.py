@@ -9,6 +9,7 @@ this machine's `.powerpacks/inbox`. The run keeps what went out in `ask.json`.
 The relay only carries the messages; it holds them for a member who is offline.
 
 Changelog:
+- 2026-10-09: spell out candidate owners and answer status.
 - 2026-10-09: each ask carries the search's role (title, company, job description).
 - 2026-10-08: created; replaces the relay's ask tasks (ask_status and upload `--ask`).
 """
@@ -62,8 +63,14 @@ def _owners(sets: Sets, candidates: list[dict[str, Any]]) -> dict[str, list[Memb
     ids = {stable_person_id(public_identifier=candidate["public_identifier"]): candidate["public_identifier"]
            for candidate in candidates}
     shared_by = sets.shared_by(list(ids)) if members and ids else {}
-    return {slug: [members[op] for op in shared_by.get(person_id, ()) if op in members]
-            for person_id, slug in ids.items()}
+    owners: dict[str, list[Member]] = {}
+    for person_id, slug in ids.items():
+        candidate_owners = []
+        for operator_id in shared_by.get(person_id, ()):
+            if operator_id in members:
+                candidate_owners.append(members[operator_id])
+        owners[slug] = candidate_owners
+    return owners
 
 
 def preview(run_dir: Path, sets: Sets) -> dict[str, Any]:
@@ -131,8 +138,14 @@ def status(run_dir: Path, sets: Sets) -> dict[str, Any]:
         for owner in candidate["owners"]:
             answer = answers.get((candidate["public_identifier"], owner["operator_id"]))
             pending += answer is None
+            if answer is None:
+                answer_status = "pending"
+            elif answer.get("declined"):
+                answer_status = "declined"
+            else:
+                answer_status = "answered"
             owners.append({**owner, "awake": _awake(seen.get(owner["operator_id"], "")),
-                           "status": "pending" if answer is None else "declined" if answer.get("declined") else "answered",
+                           "status": answer_status,
                            "answer": None if answer is None or answer.get("declined") else answer})
         candidates.append({"public_identifier": candidate["public_identifier"], "name": candidate["name"],
                            "owners": owners})

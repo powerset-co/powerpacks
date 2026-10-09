@@ -14,6 +14,7 @@ whose allowed_operator_ids hold any member's operator id.
 
 Created: 2026-10-08
 Changelog:
+- 2026-10-09: spell out owner collection in settle.
 - 2026-10-09: deleting a set also tells those with a pending invite; their machine drops the invite.
 - 2026-10-08: the owner sends the full member list to every member when it changes (set_members), so a
   third member's laptop learns the others.
@@ -170,8 +171,13 @@ class Sets:
                 continue
             set_id = message["payload"]["set_id"]
             # Only the set's owner deletes it or names its members; from anyone else these change nothing.
-            owners = {member.operator_id for view in self.kept() if view.set_id == set_id
-                      for member in view.members if member.role == OWNER}
+            owners = set()
+            for view in self.kept():
+                if view.set_id != set_id:
+                    continue
+                for member in view.members:
+                    if member.role == OWNER:
+                        owners.add(member.operator_id)
             if message["kind"] == DELETED:
                 if message["from"]["operator_id"] in owners:
                     queries_share.delete_set(self.conn, set_id)

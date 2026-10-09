@@ -1,6 +1,7 @@
 """Answer an Ask the Set message from local family evidence, send the answer back, and audit.
 
 Changelog:
+  2026-10-09: use the shared relay message sender.
   2026-10-09: reason and relationship are cut to the asker's limit (MAX_TEXT) instead of failing.
   2026-10-09: the model sees the ask's role (title, company, job description).
   2026-10-08: answer `ask` agent messages; the relay's leased ask tasks are gone.
@@ -13,7 +14,6 @@ import json
 import re
 import sqlite3
 import sys
-import urllib.request
 from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Literal
@@ -35,13 +35,11 @@ from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCal
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier
+from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.agent_inbox.messages import MAX_TEXT
-from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
 
 _EMAIL = re.compile(r"[^\s@\"<>]+@[^\s@\"<>]+\.[^\s@\"<>]+")
 _PROMPT = Path(__file__).with_name("prompts") / "answer.txt"
-_HTTP_TIMEOUT = 30
-MESSAGES_PATH = "/v2/agent-messages"
 ANSWER = "ask_answer"
 
 
@@ -148,12 +146,6 @@ def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
                         "answered_at": now_iso()})
         answers.append({"public_identifier": slug, "answer": answer})
         print(f"ask-worker: {slug} {answer.get('verdict', 'declined')}", file=sys.stderr)
-    reply = {"to": message["from"]["operator_id"], "kind": ANSWER,
-             "payload": {"ask_id": payload["ask_id"], "answers": answers}}
-    request = urllib.request.Request(
-        auth.api_base(env_file) + MESSAGES_PATH, data=json.dumps(reply).encode("utf-8"), method="POST",
-        headers={"Authorization": f"Bearer {auth.bearer_token(env_file)}", "Content-Type": "application/json",
-                 "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
-        json.load(response)
+    agent_inbox.send(env_file, message["from"]["operator_id"], ANSWER,
+                     {"ask_id": payload["ask_id"], "answers": answers})
     return {"ask_id": payload["ask_id"], "answers": answers}
