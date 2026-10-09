@@ -18,6 +18,7 @@ cloud lacks is created from the local profile. The INSERT column list stays
 pinned to that cloud pipeline's list, including five locally NULL columns.
 
 Changelog:
+  2026-10-09: the share schema follows the share version (upload_powerset.share_version).
   2026-10-08: the session reads and writes the powerset_share_v1 tables.
   2026-09-28: a persons row whose context has no positions takes the uploaded one.
   2026-09-28: writes go in multi-row statements of 500 rows, not one per row.
@@ -142,17 +143,19 @@ def resolve_operator_id(cur: Any, subject: str) -> str:
     return str(row[0])
 
 
-SHARE_SCHEMA = "powerset_share_v1"
-SEARCH_PATH = f"{SHARE_SCHEMA}, powerset_v2, pg_catalog"
+def share_schema(version: str) -> str:
+    """The Postgres schema of a share version, e.g. powerset_share_v1."""
+    return f"powerset_share_{version}"
 
 
-def use_share_schema(cur: Any) -> None:
-    """Point this session at the isolated share tables (share_v1.sql), falling through to powerset_v2 for
-    users, and prove it took: the standard login works and the tables exist."""
-    cur.execute(f"SET search_path TO {SEARCH_PATH}")
+def use_share_schema(cur: Any, version: str) -> None:
+    """Point this session at the family's isolated share tables (share_v1.sql), falling through to
+    powerset_v2 for users, and prove it took: the standard login works and the tables exist."""
+    expected = f"{share_schema(version)}, powerset_v2, pg_catalog"
+    cur.execute(f"SET search_path TO {expected}")
     cur.execute("SELECT current_schema(), current_setting('search_path')")
     schema, search_path = cur.fetchone()
-    if schema != SHARE_SCHEMA or search_path != SEARCH_PATH:
+    if schema != share_schema(version) or search_path != expected:
         raise RuntimeError(SAFE_ERRORS["postgres_login"])
 
 
