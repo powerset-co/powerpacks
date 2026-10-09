@@ -1,9 +1,10 @@
-"""Listen for Ask the Set tasks and answers, and announce this laptop's presence.
+"""Listen for Ask the Set tasks, answers and agent messages, and announce this laptop's presence.
 
 Changelog:
 - 2026-10-08: add the local NATS loop with durable task delivery.
 - 2026-10-08: re-fetch the connection and reconnect every REFRESH_SECONDS, before a 24 h credential expires.
 - 2026-10-08: ask for the default set's connection; the route refuses a bare call from a member of several sets.
+- 2026-10-08: subscribe to the operator's inbox subject and pull agent messages on each nudge.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import nats
 from dotenv import dotenv_values
 
 from packs.ingestion.primitives.ask_worker import ask_worker
+from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
 from packs.search.primitives.ask_status import ask_status
 
@@ -84,6 +86,11 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
             await work()
         await message.ack()
 
+    async def inbox(message) -> None:
+        if json.loads(message.data)["kind"] == "message":
+            await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
+        await message.ack()
+
     async def answer(run_dir: Path, message) -> None:
         if json.loads(message.data)["kind"] == "answer":
             await asyncio.to_thread(ask_status.run, run_dir, env_file=env_file)
@@ -119,8 +126,11 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
     try:
         await nc.jetstream().subscribe(subjects["tasks"], stream="asks", durable=device_id,
                                        cb=tasks, manual_ack=True)
+        await nc.jetstream().subscribe(subjects["inbox"], stream="asks", durable=device_id + "-inbox",
+                                       cb=inbox, manual_ack=True)
         watcher = asyncio.create_task(watch())
         await work()
+        await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
         await watcher
     finally:
         if watcher is not None:

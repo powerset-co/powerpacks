@@ -150,9 +150,11 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.nc.close)
         self.js = self.nc.jetstream()
         try:
-            await self.js.stream_info("asks")
+            info = await self.js.stream_info("asks")
+            if set(info.config.subjects or []) != {"set.>", "op.>"}:
+                await self.js.update_stream(name="asks", subjects=["set.>", "op.>"])
         except NotFoundError:
-            await self.js.add_stream(name="asks", subjects=["set.>"])
+            await self.js.add_stream(name="asks", subjects=["set.>", "op.>"])
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -161,10 +163,12 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         self.operator_id = str(uuid4())
         prefix = f"set.{uuid4()}"
         self.subjects = {"tasks": f"{prefix}.op.{self.operator_id}",
-                         "asks": f"{prefix}.ask.", "presence": f"{prefix}.presence"}
+                         "asks": f"{prefix}.ask.", "presence": f"{prefix}.presence",
+                         "inbox": f"op.{self.operator_id}"}
         self.connection = {"url": "nats://localhost:4222", "token": "", "subjects": self.subjects}
         self.worker = self.enterContext(patch.object(asks_loop.ask_worker, "run", return_value=[]))
         self.status = self.enterContext(patch.object(asks_loop.ask_status, "run", return_value={}))
+        self.inbox = self.enterContext(patch.object(asks_loop.agent_inbox, "pull", return_value=[]))
         self.enterContext(patch.object(asks_loop, "HEARTBEAT_SECONDS", 0.05))
         self.loop = None
         self.addAsyncCleanup(self.cleanup_loop)
@@ -242,6 +246,16 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         # Startup sweep plus replay of the offline task message.
         await self.until(lambda: self.worker.call_count == 2)
         self.worker.assert_called_with(repo_root=self.root, env_file=self.env_file, device_id=self.device_id)
+
+    async def test_inbox_nudge_pulls_agent_messages(self):
+        with patch.object(asks_loop, "_connection", return_value=self.connection):
+            self.loop = asyncio.create_task(asks_loop._run(
+                repo_root=self.root, env_file=self.env_file, device_id=self.device_id))
+            await self.until(lambda: self.inbox.call_count == 1)  # once on connect
+            await self.js.publish(self.subjects["inbox"], json.dumps({"kind": "message", "message_id": "m1"}).encode())
+            await self.until(lambda: self.inbox.call_count == 2)
+            self.inbox.assert_called_with(repo_root=self.root, env_file=self.env_file)
+            await self.stop_loop()
 
     async def test_closed_connection_reconnects_and_runs_worker(self):
         clients = []

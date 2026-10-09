@@ -54,6 +54,24 @@ def post_gzip_json(base: str, path: str, token: str, body: dict[str, Any], *,
     return json.loads(raw) if raw else {}
 
 
+def pinned_candidates(rendered: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
+    """The snapshot's pinned candidates as ask candidates, and how many pins had no LinkedIn URL."""
+    pinned = {person for person, labels in rendered["tags"]["assignments"].items()
+              if any(label.casefold() == "pinned" for label in labels)}
+    candidates = []
+    skipped = 0
+    for rank, row in enumerate(rendered["search"]["candidates"], start=1):
+        if row["person_id"] not in pinned:
+            continue
+        public_identifier = extract_public_identifier(row["linkedin_url"])
+        if not public_identifier:
+            skipped += 1
+            continue
+        candidates.append({"public_identifier": public_identifier, "linkedin_url": row["linkedin_url"],
+                           "name": row["name"], "local_rank": rank})
+    return candidates, skipped
+
+
 class UploadSearchResults:
     def __init__(self, run_dir: Path, *, env_file: Path | None = None,
                  ask: str | None = None) -> None:
@@ -73,20 +91,7 @@ class UploadSearchResults:
             return {"status": "failed", "error": f"Cannot export search: {exc}"}
         body = {"source_run_id": rendered["search"]["run_id"], "snapshot": rendered}
         if self.ask is not None:
-            pinned = {person for person, labels in rendered["tags"]["assignments"].items()
-                      if any(label.casefold() == "pinned" for label in labels)}
-            candidates = []
-            skipped = 0
-            for rank, row in enumerate(rendered["search"]["candidates"], start=1):
-                if row["person_id"] not in pinned:
-                    continue
-                public_identifier = extract_public_identifier(row["linkedin_url"])
-                if not public_identifier:
-                    skipped += 1
-                    continue
-                candidates.append({"public_identifier": public_identifier,
-                                   "linkedin_url": row["linkedin_url"], "name": row["name"],
-                                   "local_rank": rank})
+            candidates, skipped = pinned_candidates(rendered)
             set_id = pg.fetch_default_set_id(env_file=self.env_file)["set_id"]
             if not set_id:
                 return {"status": "failed", "error": "No default set could be resolved"}
