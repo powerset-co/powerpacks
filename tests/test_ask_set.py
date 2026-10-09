@@ -22,7 +22,7 @@ CASEY = Member("Casey Delta", "casey@example.com", "member", "op-casey")
 RILEY = Member("Riley Echo", "riley@example.com", "member", "op-riley")
 SNAPSHOT = {
     "tags": {"assignments": {"p1": ["Pinned"], "p2": ["pinned"], "p3": [], "p4": ["pinned"]}},
-    "search": {"candidates": [
+    "search": {"title": "Founding engineer", "company": "Acme", "jd_text": "Build the platform. " * 500, "candidates": [
         {"person_id": "p1", "name": "Alex Foxtrot", "linkedin_url": "https://www.linkedin.com/in/alex-foxtrot"},
         {"person_id": "p2", "name": "Sam Golf", "linkedin_url": "https://www.linkedin.com/in/sam-golf"},
         {"person_id": "p3", "name": "Not Pinned", "linkedin_url": "https://www.linkedin.com/in/not-pinned"},
@@ -69,6 +69,9 @@ class AskSetTests(unittest.TestCase):
                      for to, kind, payload in self.sent}
         self.assertEqual(by_member, {"op-casey": ("ask", ["alex-foxtrot", "sam-golf"], "Would you intro?"),
                                      "op-riley": ("ask", ["sam-golf"], "Would you intro?")})
+        role = self.sent[0][2]["role"]
+        self.assertEqual((role["title"], role["company"]), ("Founding engineer", "Acme"))
+        self.assertEqual(len(role["job_description"]), ask_set.MAX_JD)
         saved = json.loads((self.run_dir / "ask.json").read_text())
         self.assertEqual(saved["ask_id"], self.sent[0][2]["ask_id"])
 

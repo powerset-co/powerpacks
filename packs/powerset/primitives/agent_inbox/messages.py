@@ -6,6 +6,7 @@ field over its size limit, or an id that is not a uuid (the id names the inbox f
 every message and keeps only what parses, so anything else is discarded.
 
 Changelog:
+- 2026-10-09: an ask carries the search's role (title, company, job description).
 - 2026-10-08: set_members carries the owner's full member list; typed answers and debug results.
 - 2026-10-08: created: set invites, replies, deletes and leaves; asks and their answers; debug checks.
 """
@@ -18,6 +19,7 @@ from typing import Any, Literal, Union
 MAX_TEXT = 500           # a question, a set name, an email
 MAX_CANDIDATES = 50      # pinned candidates in one ask
 MAX_MEMBERS = 50         # people in one set
+MAX_JD = 8_000          # the role's job description in an ask (ask_set trims to it)
 MAX_RESULT = 25_000      # one debug check's output (agent_debug caps at 20,000)
 
 
@@ -140,15 +142,32 @@ class AskCandidate:
 
 
 @dataclass(frozen=True)
+class Role:
+    """The search the candidates came from: what they are being considered for."""
+    title: str
+    company: str
+    job_description: str
+
+    @classmethod
+    def parse(cls, value: object) -> Role:
+        row = _dict(value, "role")
+        return cls(_text(row.get("title"), "title"), _text(row.get("company"), "company", empty=True),
+                   _text(row.get("job_description"), "job_description", limit=MAX_JD, empty=True))
+
+
+@dataclass(frozen=True)
 class Ask:
-    """Would you recommend these people? Answered from local evidence, only for a set member (asks_loop)."""
+    """Would you recommend these people for this role? Answered from local evidence, only for a set member
+    (asks_loop)."""
     ask_id: str
     question: str
+    role: Role
     candidates: tuple[AskCandidate, ...]
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> Ask:
         return cls(_uuid(payload.get("ask_id"), "ask_id"), _text(payload.get("question"), "question"),
+                   Role.parse(payload.get("role")),
                    tuple(AskCandidate.parse(row) for row in
                          _list(payload.get("candidates"), "candidates", MAX_CANDIDATES)))
 

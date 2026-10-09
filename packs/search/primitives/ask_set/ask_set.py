@@ -9,6 +9,7 @@ this machine's `.powerpacks/inbox`. The run keeps what went out in `ask.json`.
 The relay only carries the messages; it holds them for a member who is offline.
 
 Changelog:
+- 2026-10-09: each ask carries the search's role (title, company, job description).
 - 2026-10-08: created; replaces the relay's ask tasks (ask_status and upload `--ask`).
 """
 from __future__ import annotations
@@ -24,7 +25,7 @@ from packs.indexing.lib.identity import stable_person_id
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.share.web.sets import Member, Sets
 from packs.ingestion.schemas.people_schema import extract_public_identifier
-from packs.powerset.primitives.agent_inbox.messages import Ask
+from packs.powerset.primitives.agent_inbox.messages import MAX_JD, Ask
 from packs.search.primitives.deep_search.results_web import snapshot
 
 ASK = "ask"
@@ -84,7 +85,10 @@ def preview(run_dir: Path, sets: Sets) -> dict[str, Any]:
 
 def send(run_dir: Path, question: str, sets: Sets) -> dict[str, Any]:
     """One `ask` message per member who knows a pinned candidate; the run keeps ask.json."""
-    candidates, _ = pinned_candidates(snapshot.export_snapshot(run_dir))
+    rendered = snapshot.export_snapshot(run_dir)
+    candidates, _ = pinned_candidates(rendered)
+    search = rendered["search"]
+    role = {"title": search["title"], "company": search["company"], "job_description": search["jd_text"][:MAX_JD]}
     owners = _owners(sets, candidates)
     ask_id = str(uuid.uuid4())
     by_owner: dict[str, list[dict[str, Any]]] = {}
@@ -93,7 +97,7 @@ def send(run_dir: Path, question: str, sets: Sets) -> dict[str, Any]:
             by_owner.setdefault(member.operator_id, []).append(
                 {"public_identifier": candidate["public_identifier"], "linkedin_url": candidate["linkedin_url"],
                  "name": candidate["name"]})
-    payloads = {operator_id: {"ask_id": ask_id, "question": question, "candidates": theirs}
+    payloads = {operator_id: {"ask_id": ask_id, "question": question, "role": role, "candidates": theirs}
                 for operator_id, theirs in by_owner.items()}
     for payload in payloads.values():
         Ask.parse(payload)  # the recipient's limits (question length, candidates per ask): refuse before sending

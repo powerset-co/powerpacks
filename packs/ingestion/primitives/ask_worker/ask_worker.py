@@ -1,6 +1,7 @@
 """Answer an Ask the Set message from local family evidence, send the answer back, and audit.
 
 Changelog:
+  2026-10-09: the model sees the ask's role (title, company, job description).
   2026-10-08: answer `ask` agent messages; the relay's leased ask tasks are gone.
   2026-10-08: add the owner's answer worker and run CLI.
 """
@@ -104,8 +105,7 @@ async def _answer(task: dict, evidence: dict) -> dict:
     async with OpenAIResponsesCaller(config) as caller:
         result = await caller.call(
             system_prompt=_PROMPT.read_text(encoding="utf-8"),
-            user_prompt=json.dumps({"question": task["question"], "candidate": task["candidate"],
-                                    "evidence": evidence}, ensure_ascii=False),
+            user_prompt=json.dumps({**task, "evidence": evidence}, ensure_ascii=False),
             schema=_Answer.model_json_schema(), schema_name="ask_answer", context="ask answer",
         )
     answer = _Answer.model_validate(result).model_dump()
@@ -133,7 +133,7 @@ def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
         else:
             evidence, used = found
             try:
-                answer = asyncio.run(_answer({"question": payload["question"], "candidate": candidate}, evidence))
+                answer = asyncio.run(_answer({"question": payload["question"], "role": payload["role"], "candidate": candidate}, evidence))
             except Exception as exc:
                 # Exception text can carry model output; log only its type. The asker sees "couldn't answer".
                 print(f"ask-worker: {slug} failed ({type(exc).__name__})", file=sys.stderr)

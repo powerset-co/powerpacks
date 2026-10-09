@@ -16,8 +16,9 @@ from unittest import mock
 from uuid import uuid4
 
 from packs.powerset.primitives.agent_inbox import agent_inbox
-from packs.powerset.primitives.agent_inbox.messages import Ask, DebugRequest, Rejected, SetInvite, parse
+from packs.powerset.primitives.agent_inbox.messages import Ask, DebugRequest, Rejected, Role, SetInvite, parse
 
+ROLE = {"title": "Founding engineer", "company": "Acme", "job_description": "Build the platform."}
 SENDER = {"operator_id": str(uuid4()), "name": "Casey Delta"}
 
 
@@ -31,10 +32,11 @@ class ParseTests(unittest.TestCase):
         set_id = str(uuid4())
         invite = parse(message("set_invite", {"set_id": set_id, "set_name": "Founders", "from_email": "c@example.com"}))
         self.assertEqual(invite.payload, SetInvite(set_id, "Founders", "c@example.com"))
-        ask = parse(message("ask", {"ask_id": str(uuid4()), "question": "Intro?", "candidates": [
+        ask = parse(message("ask", {"ask_id": str(uuid4()), "question": "Intro?", "role": ROLE, "candidates": [
             {"public_identifier": "alex", "linkedin_url": "https://www.linkedin.com/in/alex", "name": "Alex"}]}))
         self.assertIsInstance(ask.payload, Ask)
         self.assertEqual(ask.payload.candidates[0].name, "Alex")
+        self.assertEqual(ask.payload.role, Role("Founding engineer", "Acme", "Build the platform."))
         self.assertEqual(parse(message("debug_request", {})).payload, DebugRequest(()))
         for kind, payload in [
             ("set_invite_reply", {"invite_id": str(uuid4()), "answer": "declined"}),
@@ -51,10 +53,12 @@ class ParseTests(unittest.TestCase):
             "id not a uuid (it names the inbox file)": message("set_left", {"set_id": str(uuid4())}, id="../../x"),
             "set id not a uuid": message("set_deleted", {"set_id": "../../etc"}),
             "answer outside the two": message("set_invite_reply", {"invite_id": str(uuid4()), "answer": "maybe"}),
-            "question too long": message("ask", {"ask_id": str(uuid4()), "question": "x" * 501, "candidates": []}),
-            "too many candidates": message("ask", {"ask_id": str(uuid4()), "question": "q", "candidates": [
+            "question too long": message("ask", {"ask_id": str(uuid4()), "question": "x" * 501, "role": ROLE,
+                                                     "candidates": []}),
+            "ask without a role": message("ask", {"ask_id": str(uuid4()), "question": "q", "candidates": []}),
+            "too many candidates": message("ask", {"ask_id": str(uuid4()), "question": "q", "role": ROLE, "candidates": [
                 {"public_identifier": "a", "linkedin_url": "u", "name": "n"}] * 51}),
-            "candidate missing a field": message("ask", {"ask_id": str(uuid4()), "question": "q",
+            "candidate missing a field": message("ask", {"ask_id": str(uuid4()), "question": "q", "role": ROLE,
                                                          "candidates": [{"public_identifier": "a"}]}),
             "payload not an object": message("set_left", ["x"]),
             "answer with a bad verdict": message("ask_answer", {"ask_id": str(uuid4()), "answers": [

@@ -86,6 +86,7 @@ class AskWorkerTests(unittest.TestCase):
         return {"id": str(uuid4()), "kind": "ask", "created_at": NOW,
                 "from": {"operator_id": "op-asker", "name": "Casey Delta"},
                 "payload": {"ask_id": "ask-1", "question": "Who can advise on engineering?",
+                            "role": {"title": "Founding engineer", "company": "Acme", "job_description": "Build it."},
                             "candidates": [{"public_identifier": slug, "linkedin_url": f"https://www.linkedin.com/in/{slug}",
                                             "name": "Jordan Bravo"} for slug in slugs]}}
 
@@ -113,7 +114,9 @@ class AskWorkerTests(unittest.TestCase):
         self.assertEqual(self._reply(), {"ask_id": "ask-1", "answers": [{"public_identifier": SLUG, "answer": ANSWER}]})
         self.model.assert_awaited_once()
         request = self.model.call_args.kwargs
-        evidence = json.loads(request["user_prompt"])["evidence"]
+        prompt = json.loads(request["user_prompt"])
+        self.assertEqual(prompt["role"]["title"], "Founding engineer")
+        evidence = prompt["evidence"]
         self.assertEqual(evidence["facts"]["title"], "Engineer")
         self.assertEqual(evidence["profile"]["headline"], "Engineer")
         self.assertEqual(evidence["channels"], {
