@@ -39,7 +39,7 @@
          background: var(--card); border: 1px solid var(--border); border-radius: 10px;
          font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint);
          display: flex; flex-direction: column; justify-content: flex-end; user-select: text; }
-  .log:empty { display: none; }
+  .log:empty, body:not([data-phase="failed"]) .log { display: none; }
   .log li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .log li:last-child { color: var(--muted); }
   button { font: inherit; font-weight: 600; color: var(--foreground); background: var(--card);

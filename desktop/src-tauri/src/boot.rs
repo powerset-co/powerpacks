@@ -144,7 +144,9 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| app.package_info().version.to_string());
     boot.update(app, |state| state.version = Some(version.clone()));
-    if let Plan::Install = source::plan(&root, &version)? {
+    // A warm launch keeps the splash still: one line, no steps, until the page shows.
+    let first = matches!(source::plan(&root, &version)?, Plan::Install);
+    if first {
         boot.step(app, "Installing Powerpacks", "");
         let archive = app
             .path()
@@ -154,11 +156,13 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     }
     source::ensure_env(&root)?;
 
-    boot.step(
-        app,
-        "Setting up Python",
-        "The first launch downloads about 200 MB. Later launches skip this.",
-    );
+    if first {
+        boot.step(
+            app,
+            "Setting up Python",
+            "The first launch downloads about 200 MB.",
+        );
+    }
     let uv = paths::bundled("uv")?;
     let mut sync = Command::new(uv);
     sync.args(["sync", "--frozen", "--no-dev", "--project"])
@@ -166,7 +170,6 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         .current_dir(&root);
     stream(app, boot, sync, "Python setup")?;
 
-    boot.step(app, "Opening Powerpacks", "");
     serve(app, &root)?;
 
     // Setup runs on the user's click, never by itself.
