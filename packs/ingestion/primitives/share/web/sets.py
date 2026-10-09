@@ -14,6 +14,7 @@ whose allowed_operator_ids hold any member's operator id.
 
 Created: 2026-10-08
 Changelog:
+- 2026-10-09: deleting a set also tells those with a pending invite; their machine drops the invite.
 - 2026-10-08: the owner sends the full member list to every member when it changes (set_members), so a
   third member's laptop learns the others.
 - 2026-10-08: deleting a set tells its members' agents, leaving tells the owner's; each side applies it on read.
@@ -145,11 +146,13 @@ class Sets:
         view = next(view for view in self.kept() if view.set_id == set_id)
         me = self.me()
         if view.role == OWNER:
-            kind, told = DELETED, [member for member in self.members(view) if member.operator_id != me.operator_id]
+            kind = DELETED
+            told = [member.operator_id for member in self.members(view) if member.operator_id != me.operator_id]
+            told += [invite["email"] for invite in self.sent() if invite["set_id"] == set_id and invite["status"] == PENDING]
         else:
-            kind, told = LEFT, [member for member in view.members if member.role == OWNER]
-        for member in told:
-            self._call("POST", MESSAGES_PATH, {"to": member.operator_id, "kind": kind, "payload": {"set_id": set_id}})
+            kind, told = LEFT, [member.operator_id for member in view.members if member.role == OWNER]
+        for to in told:
+            self.message(to, kind, {"set_id": set_id})
         queries_share.delete_set(self.conn, set_id)
 
     def members(self, view: SetView) -> list[Member]:
@@ -245,8 +248,10 @@ class Sets:
         return sorted((message for message in found if message["kind"] == kind), key=lambda message: message["created_at"])
 
     def received(self) -> list[dict[str, Any]]:
-        """Invites to this owner not yet answered."""
-        return [message for message in self._inbox(INVITE) if "answer" not in message]
+        """Invites to this owner not yet answered, minus those whose set the inviter has since deleted."""
+        deleted = {(message["from"]["operator_id"], message["payload"]["set_id"]) for message in self._inbox(DELETED)}
+        return [message for message in self._inbox(INVITE) if "answer" not in message
+                and (message["from"]["operator_id"], message["payload"]["set_id"]) not in deleted]
 
     def sent(self) -> list[dict[str, Any]]:
         """This owner's invites, each with the answer its reply carried (pending until one arrives)."""

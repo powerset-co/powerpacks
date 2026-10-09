@@ -158,6 +158,19 @@ class RelayInviteTests(unittest.TestCase):
             self.deliver(self.casey, ("op-jordan", "Jordan Bravo"))
             self.assertEqual([s["name"] for s in payload(self.casey, 0)["sets"]], ["Personal network"])
 
+    def test_owner_delete_withdraws_a_pending_invite(self) -> None:
+        with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):
+            self.jordan.create("Founders")
+            set_id = self.jordan.kept()[0].set_id
+            self.jordan.invite(set_id, "casey@example.com")
+            self.deliver(self.casey, ("op-jordan", "Jordan Bravo"))
+            self.assertEqual(len(payload(self.casey, 0)["invites"]), 1)
+            self.jordan.delete(set_id)
+            self.assertEqual((self.sent[-1]["to"], self.sent[-1]["kind"], self.sent[-1]["payload"]),
+                             ("casey@example.com", "set_deleted", {"set_id": set_id}))
+            self.deliver(self.casey, ("op-jordan", "Jordan Bravo"))
+            self.assertEqual(payload(self.casey, 0)["invites"], [])
+
     def test_member_leave_reaches_the_owner(self) -> None:
         with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):
             set_id = self.accepted()

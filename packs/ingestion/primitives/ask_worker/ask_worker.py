@@ -1,6 +1,7 @@
 """Answer an Ask the Set message from local family evidence, send the answer back, and audit.
 
 Changelog:
+  2026-10-09: reason and relationship are cut to the asker's limits (240, 120) instead of failing.
   2026-10-09: the model sees the ask's role (title, company, job description).
   2026-10-08: answer `ask` agent messages; the relay's leased ask tasks are gone.
   2026-10-08: add the owner's answer worker and run CLI.
@@ -47,7 +48,7 @@ class _Answer(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
 
     verdict: Literal["recommend", "not_fit", "unsure"]
-    reason: str = Field(max_length=240)
+    reason: str
     can_intro: bool
     relationship: str
     last_contact: Annotated[str, Field(pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$")] | None
@@ -109,6 +110,8 @@ async def _answer(task: dict, evidence: dict) -> dict:
             schema=_Answer.model_json_schema(), schema_name="ask_answer", context="ask answer",
         )
     answer = _Answer.model_validate(result).model_dump()
+    # The asker's inbox rejects longer text (messages.Verdict): cut it rather than lose the whole answer.
+    answer["reason"], answer["relationship"] = answer["reason"][:240], answer["relationship"][:120]
     if _EMAIL.search(json.dumps(answer, ensure_ascii=False)):
         raise ValueError("answer contains an email address")
     return answer
