@@ -675,7 +675,8 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--client-id", default=DEFAULT_AUTH0_CLIENT_ID)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, on_authorize_url: Callable[[str], None] | None = None) -> int:
+    """`on_authorize_url` is for a `login` whose page the caller shows itself (see `cmd_login`)."""
     parser = argparse.ArgumentParser(description="Powerset Auth0 PKCE login")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -721,6 +722,8 @@ def main(argv: list[str] | None = None) -> int:
     logout.set_defaults(func=cmd_logout)
 
     args = parser.parse_args(argv)
+    if on_authorize_url is not None:
+        return cmd_login(args, on_authorize_url=on_authorize_url)
     return args.func(args)
 
 

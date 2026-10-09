@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type SVGProps } from "react"
 
-import { fetchAccount, POWERSET_CALLBACK, startSignIn } from "@/lib/api/account"
+import { fetchAccount, startSignIn } from "@/lib/api/account"
 import { signIn as signInInBrowser } from "@/lib/api/feedback"
 import { errorText } from "@/lib/api/http"
 import { openExternal } from "@/lib/api/install"
@@ -14,7 +14,7 @@ import {
   type Update,
 } from "@/lib/api/update"
 import { isDesktop } from "@/lib/desktop"
-import { openSignIn, useSignIn } from "@/lib/signin"
+import { POWERSET_CALLBACK, openSignIn, useSignIn } from "@/lib/signin"
 import { cn } from "@/lib/utils"
 
 import { Button } from "../ui/button"

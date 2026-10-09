@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 
 import { HiveIcon, type ToastMessage } from "@/components/shared"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -9,7 +10,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { signIn } from "@/lib/api/feedback"
+import { errorText } from "@/lib/api/http"
 import { fetchAskPreview, fetchAskStatus, sendAsk, type AskPreview, type AskStatus } from "@/lib/api/searches"
+import { SetsError } from "@/lib/api/sets"
 
 const DEFAULT_QUESTION = "Would you recommend them, and would you intro?"
 const STATUS_POLL_MS = 10_000
@@ -23,14 +27,21 @@ export interface BroadcastDialogProps {
 }
 
 /** The hive button beside the flag: which pinned candidates go out to the set, which
- *  operators receive them and how many each, then the answers as they land. */
+ *  operators receive them and how many each, then the answers as they land. The ask rides the
+ *  relay, so a missing Powerset sign-in is offered here. */
 export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDialogProps) {
   const [open, setOpen] = useState(false)
   const [preview, setPreview] = useState<AskPreview | null>(null)
   const [status, setStatus] = useState<AskStatus | null>(null)
   const [question, setQuestion] = useState(DEFAULT_QUESTION)
   const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<SetsError | null>(null)
+  // Counts the sign-ins; the preview loads again after each.
+  const [signedIn, setSignedIn] = useState(0)
+  const [signingIn, setSigningIn] = useState(false)
+
+  const fail = (failure: unknown) =>
+    setError(failure instanceof SetsError ? failure : new SetsError(errorText(failure), false))
 
   useEffect(() => {
     if (!open) return
@@ -47,7 +58,7 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
         if (live) setPreview(loaded)
       })
       .catch((failure: unknown) => {
-        if (live) setError(failure instanceof Error ? failure.message : String(failure))
+        if (live) fail(failure)
       })
     poll()
     const timer = window.setInterval(poll, STATUS_POLL_MS)
@@ -55,7 +66,7 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
       live = false
       window.clearInterval(timer)
     }
-  }, [open, runId])
+  }, [open, runId, signedIn])
 
   async function send() {
     setSending(true)
@@ -64,9 +75,22 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
       onToast({ message: `Asked about ${result.ask.candidates.length} candidates.` })
       setStatus(await fetchAskStatus(runId))
     } catch (failure: unknown) {
-      setError(failure instanceof Error ? failure.message : String(failure))
+      fail(failure)
     } finally {
       setSending(false)
+    }
+  }
+
+  async function signInThenLoad() {
+    setSigningIn(true)
+    try {
+      await signIn()
+      setError(null)
+      setSignedIn((count) => count + 1)
+    } catch (failure: unknown) {
+      fail(failure)
+    } finally {
+      setSigningIn(false)
     }
   }
 
@@ -95,7 +119,18 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
               : `${pinned} pinned. Teammates who know them answer from their own laptops.`}
           </DialogDescription>
         </DialogHeader>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {error ? (
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <p className="m-0 text-destructive">
+              {error.needsAuth ? "Sign in to Powerset to ask the set." : error.message}
+            </p>
+            {error.needsAuth ? (
+              <Button size="sm" disabled={signingIn} onClick={() => void signInThenLoad()}>
+                {signingIn ? "Waiting for sign-in…" : "Sign in to Powerset"}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         {preview ? (
           <div className="grid gap-4 text-sm">
             <section>

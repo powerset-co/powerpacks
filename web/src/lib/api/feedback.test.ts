@@ -32,3 +32,61 @@ describe("postFeedback", () => {
     await expect(postFeedback(buildSearchFeedback("jordan-role", "x"))).rejects.toThrow("candidate not found")
   })
 })
+
+describe("signIn in the desktop app", () => {
+  afterEach(() => {
+    vi.doUnmock("@/lib/desktop")
+    vi.doUnmock("@/lib/signin")
+  })
+
+  it("shows the login's page in the sign-in pane and waits for the server's outcome", async () => {
+    vi.resetModules()
+    const openSignIn = vi.fn()
+    vi.doMock("@/lib/desktop", () => ({ isDesktop: () => true }))
+    vi.doMock("@/lib/signin", () => ({
+      POWERSET_CALLBACK: "http://localhost:9876/callback",
+      openSignIn,
+      signInFinished: () => Promise.resolve(true),
+    }))
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url.endsWith("/start")
+              ? { status: "sign_in", url: "https://auth.example/authorize" }
+              : { ok: true, status: "authenticated" },
+          ),
+        ),
+      ),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const { signIn } = await import("./feedback")
+    await signIn()
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/searches/auth/login/start",
+      "/searches/auth/login/finish",
+    ])
+    expect(openSignIn).toHaveBeenCalledWith({
+      title: "Powerset",
+      url: "https://auth.example/authorize",
+      finish: "http://localhost:9876/callback",
+    })
+  })
+
+  it("fails at once when the pane is closed before the callback", async () => {
+    vi.resetModules()
+    vi.doMock("@/lib/desktop", () => ({ isDesktop: () => true }))
+    vi.doMock("@/lib/signin", () => ({
+      POWERSET_CALLBACK: "http://localhost:9876/callback",
+      openSignIn: vi.fn(),
+      signInFinished: () => Promise.resolve(false),
+    }))
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ status: "sign_in", url: "https://auth.example/a" }))),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const { signIn } = await import("./feedback")
+    await expect(signIn()).rejects.toThrow("closed before it finished")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})

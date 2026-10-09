@@ -13,7 +13,6 @@ export interface Account {
 
 /** Where the Powerset login's own callback server listens (packs/powerset/primitives/auth/auth.py):
  *  the desktop app's sign-in pane closes when it gets there. */
-export const POWERSET_CALLBACK = "http://localhost:9876/callback"
 
 export async function fetchAccount(signal?: AbortSignal): Promise<Account> {
   const response = await fetch("/api/account", { signal, cache: "no-store" })
