@@ -95,16 +95,26 @@ export function reduce(state: AgentState, event: AgentEvent): AgentState {
 }
 
 const FULL_ACCESS_KEY = "powerpacks.agent.fullAccess"
+// The open chat, so leaving the page or relaunching the app reopens it.
+const OPEN_CHAT_KEY = "powerpacks.agent.openChat"
 
-function rememberedFullAccess(): boolean {
+function remember(key: string, value: string): void {
   try {
-    return localStorage.getItem(FULL_ACCESS_KEY) === "1"
+    localStorage.setItem(key, value)
   } catch {
-    return false
+    // Storage can be unavailable; the value still holds for this session.
   }
 }
 
-let state: AgentState = { ...EMPTY_AGENT, fullAccess: rememberedFullAccess() }
+function recalled(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? ""
+  } catch {
+    return ""
+  }
+}
+
+let state: AgentState = { ...EMPTY_AGENT, fullAccess: recalled(FULL_ACCESS_KEY) === "1" }
 const listeners = new Set<() => void>()
 
 function set(next: AgentState): void {
@@ -116,6 +126,8 @@ let wired = false
 function wire(): void {
   if (wired) return
   wired = true
+  const reopen = recalled(OPEN_CHAT_KEY)
+  if (reopen && state.threadId === null) void openChat(reopen)
   onAgentEvent((event) => set(reduce(state, event)))
   onApproval((approval) => {
     // A turn started before Full access was switched on still asks; approve it for the chat.
@@ -147,6 +159,7 @@ export async function send(text: string): Promise<void> {
   try {
     const threadId = state.threadId ?? (await startThread())
     set({ ...state, threadId })
+    remember(OPEN_CHAT_KEY, threadId)
     await startTurn(threadId, text, state.fullAccess)
   } catch (error: unknown) {
     set(failed(state, errorText(error)))
@@ -171,17 +184,14 @@ export async function answer(approval: Approval, choice: ApprovalChoice): Promis
 export async function setFullAccess(on: boolean): Promise<void> {
   const waiting = on ? state.approvals : []
   set({ ...state, fullAccess: on })
-  try {
-    localStorage.setItem(FULL_ACCESS_KEY, on ? "1" : "")
-  } catch {
-    // Storage can be unavailable; the switch still holds for this session.
-  }
+  remember(FULL_ACCESS_KEY, on ? "1" : "")
   for (const approval of waiting) await answer(approval, "session")
 }
 
 /** Clears the screen; the next message starts a new thread. A running turn carries on in Codex. */
 export function newChat(): void {
   set({ ...EMPTY_AGENT, fullAccess: state.fullAccess })
+  remember(OPEN_CHAT_KEY, "")
 }
 
 /** Opens a past chat with its history; later messages continue it. */
@@ -189,6 +199,7 @@ export async function openChat(threadId: string): Promise<void> {
   if (threadId === state.threadId) return
   wire()
   set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, threadId, loading: true })
+  remember(OPEN_CHAT_KEY, threadId)
   try {
     const entries = await openThread(threadId)
     if (state.threadId === threadId) set({ ...state, entries, loading: false })

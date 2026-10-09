@@ -289,7 +289,8 @@ impl Codex {
 
     /// This app's chats, newest first.
     pub async fn threads(&self, app: &AppHandle, cwd: &Path) -> Reply {
-        let params = json!({ "cwd": cwd, "sourceKinds": ["appServer"], "limit": THREAD_LIST_LIMIT,
+        // No source filter: Codex records app-server chats as `vscode`; the folder already scopes them.
+        let params = json!({ "cwd": cwd, "limit": THREAD_LIST_LIMIT,
                              "sortKey": "updated_at", "archived": false });
         self.call(app, Some(cwd), "thread/list", params).await
     }
