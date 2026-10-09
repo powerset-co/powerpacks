@@ -1,6 +1,8 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-10-09: preflight: `GET /api/install/preflight` reports what the desktop app's first screen
+      checks (a browser for sign-ins, the Google Cloud CLI); `POST` installs one in the background.
   2026-10-09: `/api/install/skip` skips a stopped source (WhatsApp at its QR) for the rest of the
       setup: the waiting run is stopped, the saved command gets `--skip-source`, and the page
       resumes setup.
@@ -12,12 +14,14 @@ import os
 import shlex
 import signal
 import subprocess
+import threading
 import time
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
+from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 
@@ -68,6 +72,26 @@ def permission_app() -> str | None:
 class InstallController:
     def __init__(self, root: Path) -> None:
         self.root = root
+        # What the preflight screen installs, by item: running (with its last line), ok, or failed.
+        self.installs: dict[str, dict] = {}
+
+    def preflight(self) -> dict:
+        checks = preflight.checks()
+        return {"browser": {**checks["browser"], "install": self.installs.get("chromium")},
+                "gcloud": {**checks["gcloud"], "install": self.installs.get("gcloud")}}
+
+    def install(self, item: object) -> dict:
+        if item not in ("chromium", "gcloud"):
+            raise ValueError("Unknown preflight item")
+        if (self.installs.get(item) or {}).get("status") == "running":
+            return {"status": "running"}
+        state = self.installs[item] = {"status": "running", "line": ""}
+
+        def run() -> None:
+            state.update(preflight.install(item, lambda line: state.update(line=line)))
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"status": "running"}
 
     def qr(self, record: dict) -> Path | None:
         path = self.root / ".powerpacks/messages/wacli-login-qr.png"
@@ -124,6 +148,8 @@ class InstallController:
                 response["app_path"] = app
             elif path == "/api/install/review":
                 subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
+            elif path == "/api/install/preflight":
+                response = self.install(self._body(handler).get("item"))
             elif path == "/api/install/skip":
                 response = self.skip(self._body(handler).get("source"))
             else:

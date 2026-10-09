@@ -34,8 +34,6 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
-import subprocess
-import sys
 import time
 import traceback
 from datetime import date, timedelta
@@ -91,10 +89,7 @@ _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
-# The logins that happen in Chrome (Playwright); the desktop app comes forward after each.
-_BROWSER_LOGINS = {Source.LINKEDIN, Source.GMAIL}
 DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
-DESKTOP_BUNDLE_ID = "co.powerset.powerpacks"
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
 
@@ -338,11 +333,6 @@ class SourceOnboarding:
         record = read_json(self.root / SCRAPE_RECORD, {}) or {}
         return bool(record.get("complete")) and (self.root / CONNECTIONS_CSV).is_file() and not self.refresh
 
-    def _back_to_app(self) -> None:
-        """After a sign-in in Chrome, bring the desktop app forward so setup stays in view."""
-        if DESKTOP and sys.platform == "darwin" and not self.refresh:
-            subprocess.run(["open", "-b", DESKTOP_BUNDLE_ID], check=False)
-
     def _linkedin_login(self) -> bool:
         self._write("linkedin.login.checking")
         payload = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login()
@@ -399,8 +389,6 @@ class SourceOnboarding:
                     continue
                 if not logins[source]():
                     return self.status.read()
-                if source in _BROWSER_LOGINS:
-                    self._back_to_app()
             for source in active:
                 synced = (self._linkedin_sync() if source is Source.LINKEDIN else self._gmail_sync()
                           if source is Source.GMAIL else self._messages_sync(source))

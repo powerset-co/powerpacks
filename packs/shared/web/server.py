@@ -232,6 +232,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     record["action"]["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"
                 self._json(record)
                 return
+            if parsed.path == "/api/install/preflight":
+                self._json(install.preflight())
+                return
             if parsed.path == "/api/install/qr":
                 body = install.qr_image()
                 if body is None:

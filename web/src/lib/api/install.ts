@@ -59,3 +59,27 @@ export async function importSource(): Promise<string | null> {
 export async function importData(): Promise<boolean> {
   return (await invoke("setup_import")) === true
 }
+
+/** One preflight item: whether it is ready, and its background install once one was asked for. */
+export interface PreflightInstall {
+  status: "running" | "ok" | "failed"
+  line?: string
+  message?: string
+}
+
+/** What the desktop app's first screen checks (packs/powerset/primitives/install/preflight.py). */
+export interface Preflight {
+  browser: { ok: boolean; name: string | null; install: PreflightInstall | null }
+  gcloud: { ok: boolean; install: PreflightInstall | null }
+}
+
+export async function fetchPreflight(signal: AbortSignal): Promise<Preflight> {
+  const response = await fetch("/api/install/preflight", { signal, cache: "no-store" })
+  if (!response.ok) throw await failure(response, "Couldn't check this Mac")
+  return body<Preflight>(response)
+}
+
+/** Install a preflight item in the background; fetchPreflight follows it. */
+export function installPreflight(item: "chromium" | "gcloud"): Promise<void> {
+  return installAction("preflight", { item })
+}

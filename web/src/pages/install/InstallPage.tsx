@@ -14,6 +14,7 @@ import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
 import { DesktopSetup } from "./DesktopSetup"
+import { DesktopWelcome } from "./DesktopWelcome"
 
 // Every other word comes with the status (status_prose.py); these show while the page cannot reach setup.
 const OFFLINE = {
@@ -171,6 +172,16 @@ export function InstallPage() {
     } catch (caught) {
       setActionError(errorText(caught))
     }
+  }
+  // The desktop app's own first two screens; setup's progress below is the third.
+  if (welcome && isDesktop()) {
+    return (
+      <div className="review-page install-page overflow-y-auto" data-welcome>
+        <main className="install-main rise-in">
+          <DesktopWelcome />
+        </main>
+      </div>
+    )
   }
   return (
     <div

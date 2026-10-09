@@ -1,10 +1,11 @@
 """Prepare optional import tools through their existing binary installers.
 
 No account login, mailbox sync, WhatsApp pairing, or source-data changes.
-Gmail and LinkedIn drive a browser with playwright-core: they need node/npm and
-Google Chrome or Brave (`common/browser.js` picks between them).
+Gmail and LinkedIn use the desktop runtime or command-line node/npm and a
+Chromium browser (`common/browser.js` picks it).
 
 Changelog:
+  2026-10-09: Desktop preflight owns Node, browser, and user-local gcloud setup.
   2026-10-03: LinkedIn is a source here; Brave counts as the browser.
 """
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sys
 from enum import Enum
 from pathlib import Path
 
@@ -27,7 +29,8 @@ class ImportSource(str, Enum):
     WHATSAPP = "whatsapp"
 
 
-BROWSER_APPS = (Path("/Applications/Google Chrome.app"), Path("/Applications/Brave Browser.app"))
+BROWSER_APPS = tuple(Path(f"/Applications/{name}.app") for name in
+                     ("Google Chrome", "Brave Browser", "Microsoft Edge", "Arc"))
 
 
 HOMEBREW_INSTALL_COMMAND = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
@@ -41,24 +44,31 @@ class ImportTools:
         # msgvault's installer and Homebrew put binaries here; a non-login
         # agent shell need not have loaded their profile PATH entries.
         paths = [Path.home() / ".local/bin", Path.home() / ".powerpacks/bin",
+                 Path.home() / ".powerpacks/google-cloud-sdk/bin",
                  Path("/opt/homebrew/bin"), Path("/usr/local/bin")]
         os.environ["PATH"] = os.pathsep.join(dict.fromkeys([
             *os.environ.get("PATH", "").split(os.pathsep),
             *(str(path) for path in paths if path.is_dir()),
         ]))
+        desktop = os.environ.get("POWERPACKS_DESKTOP") == "1"
+        if desktop:
+            os.environ["CLOUDSDK_PYTHON"] = sys.executable
         packages = []
         installed = {}
-        # deep-context runs its pipeline in a tmux session under a second agent, on every Mac.
-        if not shutil.which("tmux"):
+        # deep-context runs its pipeline in a tmux session under a second agent; the desktop app
+        # runs it directly.
+        if not desktop and not shutil.which("tmux"):
             packages.append(("tmux", ["tmux"]))
-        if ImportSource.GMAIL in self.sources and not shutil.which("gcloud"):
+        if not desktop and ImportSource.GMAIL in self.sources and not shutil.which("gcloud"):
             packages.append(("gcloud", ["--cask", "gcloud-cli"]))
-        if {ImportSource.GMAIL, ImportSource.LINKEDIN} & set(self.sources):
+        if not desktop and {ImportSource.GMAIL, ImportSource.LINKEDIN} & set(self.sources):
             if not shutil.which("node") or not shutil.which("npm"):
                 packages.append(("node", ["node"]))
             if not any(app.is_dir() for app in BROWSER_APPS):
                 packages.append(("chrome", ["--cask", "google-chrome"]))
-        if ImportSource.WHATSAPP in self.sources and not shutil.which("qrencode"):
+        # The QR page needs qrencode; the desktop app takes it only from a Homebrew already there.
+        if ImportSource.WHATSAPP in self.sources and not shutil.which("qrencode") and (
+                not desktop or shutil.which("brew")):
             packages.append(("qrencode", ["qrencode"]))
         if packages:
             brew = shutil.which("brew")

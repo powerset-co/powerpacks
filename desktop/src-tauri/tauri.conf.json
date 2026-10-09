@@ -40,6 +40,7 @@
     },
     "externalBin": [
       "binaries/uv",
+      "binaries/node",
       "binaries/codex",
       "binaries/codex-code-mode-host",
       "binaries/rg"

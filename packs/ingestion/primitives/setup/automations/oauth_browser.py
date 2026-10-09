@@ -6,6 +6,7 @@ downloads the client secret JSON, the add-test-users flow, and msgvault account
 consent. Sign-in and challenges use a visible window in the same profile.
 
 Changelog:
+  2026-10-09: Use the bundled playwright-core before command-line npm dependencies.
   2026-09-23 (typed rows): `browser_status` / `browser_client_secret_path` are the
     named boundary for the browser script's JSON fields, so `browser_flows` reads
     typed values instead of `.get`-ing the payload; the subprocess result reads
@@ -61,6 +62,7 @@ from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
 DEFAULT_BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/google-oauth")
 DEFAULT_DOWNLOAD_DIR = Path("~/.msgvault/oauth-downloads")
 DEFAULT_NODE_DEPS = Path("~/.powerpacks/browser-node")
+VENDORED_NODE_MODULES = _REPO_ROOT / "vendor/browser-node/node_modules"
 DEFAULT_OAUTH_CLIENT_NAME = "local-msg-vault"
 BROWSER_SCRIPT = Path(__file__).with_name("google_oauth_browser.js")
 
@@ -163,7 +165,9 @@ def authorize_account(
 
 
 def ensure_playwright_core(node_deps: Path = DEFAULT_NODE_DEPS.expanduser()) -> dict[str, Any]:
-    """Ensure playwright-core is npm-installed under the node deps prefix."""
+    """Use bundled playwright-core, or install command-line dependencies with npm."""
+    if (VENDORED_NODE_MODULES / "playwright-core").is_dir():
+        return {"status": "ok", "installed": False, "node_path": str(VENDORED_NODE_MODULES)}
     if not shutil.which("node"):
         return {"status": "error", "message": "node is not installed"}
     if not shutil.which("npm"):
