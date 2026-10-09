@@ -23,6 +23,7 @@ export function uploadStatus(overrides: Partial<UploadStatus> = {}): UploadStatu
     plan: null,
     checked: null,
     last_upload: null,
+    share_changed: false,
     failed_action: null,
     error: null,
     ...overrides,

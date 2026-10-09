@@ -15,9 +15,11 @@ interface ShareMenuProps {
   onOpen: () => void
 }
 
+/** Never shared: Share network; shared and unchanged since: Shared network; edited since: Update network. */
 function label(status: UploadStatus | undefined, busy: boolean): string {
   if (busy) return UPLOAD.view
-  return status?.last_upload ? UPLOAD.shareChanges : UPLOAD.share
+  if (!status?.last_upload) return UPLOAD.share
+  return status.share_changed ? UPLOAD.update : UPLOAD.shared
 }
 
 // The head's share control: the button opens the upload (the trigger of the dialog around it); the caret
@@ -59,20 +61,7 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
         <DialogTrigger asChild>
           <Button className="share-main" aria-label={label(status, busy)} onClick={onOpen}>
             {busy && <Spinner />}
-            <span className="share-label">
-              {label(status, busy)}
-              <span className="share-target">
-                {chosen ? (
-                  <CloudIcon className="share-target-icon" />
-                ) : (
-                  <HomeIcon className="share-target-icon" />
-                )}
-                {chosen ? chosen.name : SETS.personalNetwork}
-                {sets.data ? (
-                  <span className="share-target-count">· {SETS.shared(sets.data.shared)}</span>
-                ) : null}
-              </span>
-            </span>
+            {label(status, busy)}
           </Button>
         </DialogTrigger>
         <Button

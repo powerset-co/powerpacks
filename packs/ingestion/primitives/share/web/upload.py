@@ -1,6 +1,7 @@
 """Run one People upload and project its typed manifest to the status route.
 
 Changelog:
+  2026-10-08: share_changed: the share list differs from the last completed upload's.
   2026-09-27: the job reads the server's environment; no second env file.
   2026-09-27: bind confirm to checked decisions, expose the upload status contract.
 """
@@ -103,6 +104,7 @@ class ShareUpload:
         plan_counts = None if plan is None else {key: plan.get(key, 0) for key in (
             "marked_share", "with_linkedin", "without_linkedin", "new_to_cloud", "changed",
             "already_shared", "already_in_cloud", "losing_access", "companies_missing")}
+        last_upload = saved.last_upload if saved.checked_target in (None, saved.target) or saved.target is None else None
         error = None
         if state == "interrupted":
             error = INTERRUPTED
@@ -116,7 +118,9 @@ class ShareUpload:
                          "skipped": progress["skipped"], "namespaces": namespaces},
             "plan": plan_counts,
             "checked": saved.share_digest if state == "ready" else None,
-            "last_upload": saved.last_upload if saved.checked_target in (None, saved.target) or saved.target is None else None,
+            "last_upload": last_upload,
+            # The share list differs from what the last completed upload sent: the page offers an update.
+            "share_changed": bool(last_upload) and last_upload.get("share_digest") != self._current_share_digest(),
             "failed_action": ("check" if saved.dry_run else "upload") if state in {"failed", "interrupted"} else None,
             "error": error,
         }

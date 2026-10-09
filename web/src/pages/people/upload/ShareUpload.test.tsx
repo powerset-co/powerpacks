@@ -77,10 +77,19 @@ afterEach(() => {
 describe("ShareUpload trigger", () => {
   it.each([
     [uploadStatus(), "Share network", "Never shared"],
-    [uploadStatus({ status: "completed", last_upload: SHARED }), "Share changes", "Shared 128 · Sep 27"],
+    [uploadStatus({ status: "completed", last_upload: SHARED }), "Shared network", "Shared 128 · Sep 27"],
     [
-      uploadStatus({ status: "interrupted", last_upload: { ...SHARED, status: "interrupted" } }),
-      "Share changes",
+      uploadStatus({ status: "completed", last_upload: SHARED, share_changed: true }),
+      "Update network",
+      "Shared 128 · Sep 27",
+    ],
+    [
+      uploadStatus({
+        status: "interrupted",
+        last_upload: { ...SHARED, status: "interrupted" },
+        share_changed: true,
+      }),
+      "Update network",
       "Upload interrupted · Sep 27",
     ],
     [uploadStatus({ status: "uploading", last_upload: SHARED }), "View upload", "Shared 128 · Sep 27"],
@@ -103,14 +112,14 @@ describe("ShareUpload dialog", () => {
     expect(posts(fetch)).toEqual([])
   })
 
-  it("checks again when Share changes opens after a finished upload", async () => {
+  it("checks again when the button opens after a finished upload", async () => {
     let state = uploadStatus({ status: "completed", plan: PLAN, last_upload: SHARED })
     const fetch = serve({
       get: () => state,
       check: () => (state = uploadStatus({ status: "checking", plan: PLAN, last_upload: SHARED })),
     })
     show()
-    const dialog = await openDialog("Share changes")
+    const dialog = await openDialog("Shared network")
     await within(dialog).findByRole("heading", { name: "Checking your network" })
     expect(posts(fetch)).toEqual(["/api/people/upload/check"])
   })
@@ -201,13 +210,18 @@ describe("ShareUpload dialog", () => {
 
   it("resumes a failed upload once the new check is ready", async () => {
     const last = { ...SHARED, status: "interrupted" } as const
-    let state = uploadStatus({ status: "interrupted", failed_action: "upload", last_upload: last })
+    let state = uploadStatus({
+      status: "interrupted",
+      failed_action: "upload",
+      last_upload: last,
+      share_changed: true,
+    })
     serve({
       get: () => state,
       check: () => (state = uploadStatus({ status: "ready", plan: PLAN, last_upload: last })),
     })
     show()
-    const dialog = await openDialog("Share changes")
+    const dialog = await openDialog("Update network")
     fireEvent.click(within(dialog).getByRole("button", { name: "Check again" }))
     await within(dialog).findByRole("heading", { name: "Ready to share" })
     expect(buttons(dialog)).toEqual(["Close", "Check again", "Resume sharing"])
@@ -272,7 +286,7 @@ describe("ShareUpload dialog", () => {
       progress: { total: 128, uploaded: 3, skipped: 125, namespaces: {} },
     })
     await waitFor(() => expect(onToast).toHaveBeenCalledWith("Shared 128 people."), POLLED)
-    expect(screen.getByRole("button", { name: "Share changes" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Shared network" })).toBeTruthy()
   })
 
   it("polls only while a check or upload runs", async () => {

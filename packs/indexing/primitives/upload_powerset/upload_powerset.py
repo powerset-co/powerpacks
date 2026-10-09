@@ -20,6 +20,7 @@ deletes its source rows; documents are never deleted.
 Changelog:
   2026-09-28: shared people the cloud has without positions are written again when the local index has them.
   2026-09-28: a person new to the cloud is never counted changed after a failed run.
+  2026-10-08: the last completed upload keeps the share digest it sent.
   2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
   2026-09-27: bind real runs to checked decisions and target; report typed stages.
   2026-09-24: read the share list from SQLite, not share.csv.
@@ -277,7 +278,8 @@ class UploadPowerset:
                         "skipped": max(0, current.progress["total"] - result.people_uploaded)}
             current = replace(current, person_hashes=hashes, pending_upserts={}, progress=progress,
                 last_upload={"finished_at": current.finished_at, "status": "completed",
-                             "uploaded": progress["uploaded"], "skipped": progress["skipped"]})
+                             "uploaded": progress["uploaded"], "skipped": progress["skipped"],
+                             "share_digest": current.share_digest})
         current.write(self.manifest_path)
         return asdict(current) | {"manifest": str(self.manifest_path)}
 
