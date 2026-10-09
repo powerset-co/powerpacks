@@ -145,9 +145,36 @@ Read [tmux-worker.md](tmux-worker.md) before starting; include it in the worker'
 brief. If you downloaded only this SKILL.md, first save
 `https://raw.githubusercontent.com/powerset-co/powerpacks/stable/packs/shared/skills/tmux-worker.md`
 as `tmux-worker.md` beside it. A PR test uses that checkout's copy. It owns supervision, recovery, stopping and feedback (`category: install`).
-The advisor's tasks are install/connect → sync sources → discover → enrich →
-build index → verify, checked against the install manifest and worker output.
 Only the worker starts/resumes the coordinator; the advisor relays chat choices.
+
+Before starting, the advisor creates this chat's visible checklist with the host's
+native task/plan tool (Codex's plan tool or Claude's task tools):
+
+1. Install Powerpacks
+2. Connect Powerset
+3. Sync LinkedIn
+4. Sync Gmail
+5. Sync iMessage
+6. Sync WhatsApp
+7. Discover contacts
+8. Enrich contacts
+9. Build search index
+10. Verify search
+
+Keep it current yourself from the worker's output and
+`.powerpacks/install/manifest.json`, even when the browser page is open. The
+worker reports stage results to the advisor; it never creates or updates a
+second task list. Group each source's preparation, login and import under its
+sync task. Follow the coordinator's actual order; logins can happen before sync.
+For install-only requests, show only the requested setup tasks.
+
+Mark verified cached/no-op work complete. Label user-skipped sources as skipped
+(use the host's skipped state when available, otherwise complete with “Skipped”
+in the task label). Leave failed or waiting tasks unfinished and name the wait,
+such as “Sync Gmail — waiting for sign-in”. Add a review task only when review is
+needed. Starting a background index build does not complete it; complete Verify
+search only when index validation succeeds. Reuse this checklist after a retry.
+If the host has no task tool, keep a compact checklist in chat instead.
 
 On Codex with a local CLI and tmux, use `bin/onboard-worker`. It is standalone and
 needs only Python 3, tmux and Codex, so a fresh install can download it before a
