@@ -203,7 +203,7 @@ export const SETS = {
   signIn: "Sign in",
   members: (count: number) => plural(count, "member"),
   people: (count: number) => `${count.toLocaleString()} people across its members`,
-  shared: (count: number) => `${plural(count, "person")} shared`,
+  shared: (count: number) => `${count.toLocaleString()} shared`,
   confirmDelete: (name: string) => `Delete “${name}” for everyone in it?`,
 } as const
 

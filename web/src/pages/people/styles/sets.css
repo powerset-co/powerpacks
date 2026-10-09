@@ -18,8 +18,14 @@
   border-bottom-left-radius: 0;
   justify-content: center;
 }
+/* A menu caret: down at rest, up while the menu is open (the shared chevron points right at rest). */
 .share-split .share-caret::after {
-  margin: 0;
+  margin: 0 0 2px;
+  transform: rotate(45deg);
+}
+.share-split .share-caret[aria-expanded="true"]::after {
+  margin: 2px 0 0;
+  transform: rotate(-135deg);
 }
 .share-label {
   display: flex;
@@ -39,6 +45,9 @@
 .share-target-icon {
   width: 11px;
   height: 11px;
+}
+.share-target-count {
+  color: var(--faint);
 }
 .share-popover {
   position: absolute;
@@ -335,7 +344,7 @@
   color: var(--bad, #f87171);
 }
 .sets-add {
-  align-self: flex-start;
+  justify-self: start;
   margin: 2px 6px 0;
 }
 .sets-add:hover {

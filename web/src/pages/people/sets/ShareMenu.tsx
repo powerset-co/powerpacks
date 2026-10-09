@@ -51,7 +51,6 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
     setOpen(false)
   }
   const shown = sets.data?.sets ?? []
-  const personal = shown.find((set) => set.is_personal)
   const cloud = shown.filter((set) => !set.is_personal)
   const chosen = cloud.find((set) => set.set_id === target)
   return (
@@ -69,6 +68,9 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
                   <HomeIcon className="share-target-icon" />
                 )}
                 {chosen ? chosen.name : SETS.personalNetwork}
+                {sets.data ? (
+                  <span className="share-target-count">· {SETS.shared(sets.data.shared)}</span>
+                ) : null}
               </span>
             </span>
           </Button>
@@ -95,8 +97,8 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
             <span className="share-option-text">
               <span className="share-option-name">{SETS.personalNetwork}</span>
               <span className="share-option-note">
-                {sets.data ? SETS.shared(sets.data.shared) : ""}
-                {personal ? ` · ${SETS.local}` : ""}
+                {SETS.local}
+                {sets.data ? ` · ${SETS.shared(sets.data.shared)}` : ""}
               </span>
             </span>
             <Check on={!chosen} />
