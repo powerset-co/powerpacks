@@ -12,30 +12,33 @@ import "../styles/sets.css"
 interface ShareMenuProps {
   status: UploadStatus | undefined
   busy: boolean
-  onOpen: () => void
 }
 
-/** Always "Share network"; the mark says where it stands: running, shared and current (check), or marked
- * changes not uploaded yet (warning). Never shared: no mark. */
+/** Always "Share network"; the mark says where it stands, from the check of the current share list:
+ * a spinner while it (or an upload) runs, a warning when it found something to upload, a check when the
+ * network is shared and current. Nothing to upload and never shared: no mark. */
 type ShareState = "running" | "never" | "current" | "pending"
 
 function shareState(status: UploadStatus | undefined, busy: boolean): ShareState {
-  if (busy) return "running"
-  if (!status?.last_upload) return "never"
-  return status.share_changed ? "pending" : "current"
+  if (busy || !status || status.status === "idle") return "running"
+  if (status.status === "completed") return status.share_changed ? "running" : "current"
+  if (status.status !== "ready" || !status.plan) return "pending"
+  const plan = status.plan
+  if (plan.new_to_cloud + plan.changed + plan.already_in_cloud + plan.losing_access > 0) return "pending"
+  return status.last_upload ? "current" : "never"
 }
 
-const NOTE: Record<ShareState, string | undefined> = {
-  running: UPLOAD.runningNote,
-  never: undefined,
-  current: UPLOAD.upToDateNote,
-  pending: UPLOAD.pendingNote,
+function note(state: ShareState, status: UploadStatus | undefined): string | undefined {
+  if (state === "running") return status?.status === "uploading" ? UPLOAD.runningNote : UPLOAD.checkingNote
+  if (state === "current") return UPLOAD.upToDateNote
+  if (state === "pending") return status?.error ?? UPLOAD.pendingNote
+  return undefined
 }
 
 // The head's share control: the button opens the upload (the trigger of the dialog around it); the caret
 // opens the set menu: the personal (local) network and the cloud sets, the one shared to checked, and
 // "Manage sets…", which opens the Sets page.
-export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
+export function ShareMenu({ status, busy }: ShareMenuProps) {
   const sets = useSets()
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
@@ -73,13 +76,12 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
           <Button
             className="share-main"
             aria-label={UPLOAD.share}
-            aria-description={NOTE[state]}
-            title={NOTE[state]}
+            aria-description={note(state, status)}
+            title={note(state, status)}
             data-state={state}
-            onClick={onOpen}
           >
-            {state === "running" && <Spinner />}
             {UPLOAD.share}
+            {state === "running" && <Spinner />}
             {state === "current" && <Check on className="shared" />}
             {state === "pending" && <Warning />}
           </Button>

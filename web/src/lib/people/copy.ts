@@ -111,8 +111,9 @@ export function eventDate(value: string | null | undefined): string {
 export const UPLOAD = {
   share: "Share network",
   upToDateNote: "Shared, nothing to update",
-  pendingNote: "People marked Share since the last upload: share to update",
+  pendingNote: "Changes to share: open to upload them",
   runningNote: "Upload running",
+  checkingNote: "Checking your network",
   checkAgain: "Check again",
   confirm: "Confirm sharing",
   resume: "Resume sharing",

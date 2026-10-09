@@ -17,7 +17,7 @@ import {
   savedEntry,
 } from "@/testing/logbook-fixture"
 import { DETAIL, PAYLOAD } from "@/testing/people-fixture"
-import { uploadResponse, uploadStatus } from "@/testing/upload-fixture"
+import { PLAN, uploadResponse, uploadStatus } from "@/testing/upload-fixture"
 
 import { LogbookReader } from "./logbook/LogbookReader"
 import { PeoplePage } from "./PeoplePage"
@@ -242,7 +242,7 @@ describe("PeoplePage", () => {
     ).toHaveLength(2)
   })
 
-  it("marks the share button pending once a share edit changes a shared network", async () => {
+  it("checks on its own after a share edit and marks what the check found", async () => {
     const shared = {
       finished_at: "2026-10-09T04:55:22Z",
       status: "completed",
@@ -250,14 +250,21 @@ describe("PeoplePage", () => {
       skipped: 0,
     } as const
     let changed = false
+    let checked = false
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string, init?: RequestInit) => {
         if (url.endsWith("/tags")) changed = true
+        if (url.endsWith("/upload/check")) {
+          checked = true
+          return Promise.resolve(uploadResponse(uploadStatus({ status: "checking", last_upload: shared })))
+        }
         if (url.endsWith("/upload"))
           return Promise.resolve(
             uploadResponse(
-              uploadStatus({ status: "completed", last_upload: shared, share_changed: changed }),
+              checked
+                ? uploadStatus({ status: "ready", plan: PLAN, last_upload: shared, share_changed: true })
+                : uploadStatus({ status: "completed", last_upload: shared, share_changed: changed }),
             ),
           )
         return serve(url, init)
@@ -274,8 +281,13 @@ describe("PeoplePage", () => {
       }),
     )
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("pending"),
+      expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("running"),
     )
+    await waitFor(
+      () => expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("pending"),
+      { timeout: 3000 },
+    )
+    expect(checked).toBe(true)
   })
 
   it("marks an updating person and disables drawer, bulk and keyboard tag edits", async () => {
