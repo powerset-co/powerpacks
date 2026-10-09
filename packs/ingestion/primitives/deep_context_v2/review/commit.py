@@ -2,7 +2,8 @@
 
 `finish` calls this before realize. A queued Yes, Skip or pasted Retarget writes through decisions.py. A
 Retarget from the reviewer's words is researched here, one Parallel batch for all of them (a stored answer
-to the same facts and words is reused); a URL found is confirmed, nothing found rejects the pending profile.
+to the same facts and words is reused); what it found is the profile, URL or card, no judge; nothing found
+rejects the pending profile.
 
 A row whose family is no longer in the review (an earlier finish already applied it) is dropped. A row
 that cannot be applied, which is a pasted URL whose profile RapidAPI did not return, stays in the queue
@@ -53,11 +54,14 @@ def apply(conn: sqlite3.Connection, data_root: Path, card: Card, queued: Queued,
         return "skip"
     if not queued.guidance:
         return "retarget " + decisions.retarget(conn, data_root, card, queued.key)
+    # Whatever the guided research found is the profile, no judge (Arthur, 2026-10-08): the reviewer corrects it.
     found: Research | None = queries_enrich.research_by_handle(conn).get(handle)
-    if found is None or found.status != ResearchStatus.COMPLETE.value:
-        decisions.reject(conn, card)
-        return "research found no profile; the pending one rejected"
-    return "research " + decisions.retarget(conn, data_root, card, research.research_url(found))
+    if found is not None and found.status == ResearchStatus.COMPLETE.value:
+        return "research " + decisions.retarget(conn, data_root, card, research.research_url(found))
+    if found is not None and found.result_json is not None:
+        return "research card " + decisions.confirm_card(conn, card, handle)
+    decisions.reject(conn, card)
+    return "research found nothing; the pending profile rejected"
 
 
 def commit_review(conn: sqlite3.Connection, data_root: Path) -> int:

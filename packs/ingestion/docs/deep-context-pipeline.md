@@ -64,4 +64,5 @@ The review page writes no ledger row. Each decision (Yes, Skip, pasted Retarget,
 Skip and Retarget writers and removes each applied row. A pasted URL is taken as typed; finish fetches its profile
 for the member id, and a URL RapidAPI cannot return stays queued for the next finish. For a Retarget from a description, `finish` runs one Parallel
 research with the words beside the family's facts (about $0.05, plus one profile fetch when a URL is found), applies
-a URL found, and otherwise rejects the pending profile and leaves the family worth yes without a LinkedIn.
+what it found, a URL or a card, with no judge; nothing found rejects the pending profile and leaves the family worth
+yes without a LinkedIn.

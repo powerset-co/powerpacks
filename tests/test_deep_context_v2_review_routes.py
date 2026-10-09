@@ -8,7 +8,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context_v2.db import queries
+import json
+
+from packs.ingestion.primitives.deep_context_v2.db import queries, queries_enrich
+from packs.ingestion.primitives.deep_context_v2.db.queries_review import Queued
+from packs.ingestion.primitives.deep_context_v2.review import commit
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.deep_context_v2.enrich import research
 from packs.ingestion.primitives.deep_context_v2.review import api
@@ -58,6 +62,17 @@ class RouteTests(unittest.TestCase):
         row = self.conn.execute("SELECT decision, key, guidance FROM review_queue WHERE parent_id='p:1'").fetchone()
         self.assertEqual(tuple(row), ("fix", "", "the one at Stripe"))
         self.assertEqual(self.conn.execute("SELECT count(*) FROM candidate_linkedins").fetchone()[0], 0)
+
+    def test_finish_confirms_the_card_a_word_retarget_found(self) -> None:
+        card = mock.Mock(parent_id="p:1", facts=FACTS, members=(mock.Mock(candidate_id="c1"),), pending=())
+        subject = research.guided_subject("p:1", FACTS, "the one at Stripe")
+        queries_enrich.upsert_research(self.conn, (subject.handle, "p:1", "no_match",
+                                                   json.dumps({"content": {"real_name": "Evan Lin", "location_city": "LA"}, "basis": []}), "2026-10-08T00:00:00Z"))
+        self.conn.commit()
+        outcome = commit.apply(self.conn, self.root, card, Queued("p:1", "fix", "", "the one at Stripe"), subject.handle)
+        self.assertTrue(outcome.startswith("research card synthetic:"))
+        row = self.conn.execute("SELECT linkedin_url, origin, verdict FROM candidate_linkedins WHERE candidate_id='c1'").fetchone()
+        self.assertEqual(tuple(row), ("synthetic:" + subject.handle, "synthetic", "confirmed"))
 
     def test_feedback_needs_a_comment(self) -> None:
         with self.assertRaises(api.Refusal):

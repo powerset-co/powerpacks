@@ -8,8 +8,9 @@ these: it edits the review queue, and `finish` applies the queue through them on
                       No parent change: the family keeps its p: id.
   Retarget            the pasted URL's profile (cache first, one RapidAPI call on a miss), then the same
                       rows as Yes with origin human_override. No judge. A failed fetch writes nothing.
-  Retarget by words   the pending URL or card is wrong (rejected), and a URL the guided research found is
-                      the Retarget above. Nothing found: the family stays worth yes without a LinkedIn.
+  Retarget by words   what the guided research found is the family's profile, no judge: a URL is the
+                      Retarget above; a card is confirmed as the family's card. Nothing found: the pending
+                      profile is rejected and the family stays worth yes without a LinkedIn.
   Skip                every member: a wrong_person human verdict on each pending URL or card, so it is
                       never proposed again, and a human worth no.
 
@@ -21,7 +22,7 @@ import sqlite3
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_review
-from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, MergeReason, Origin, Verdict, Worth
+from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, SYNTHETIC_PROFILE_PREFIX, MergeReason, Origin, Verdict, Worth
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
 from packs.ingestion.primitives.deep_context_v2.review.queue import Card, Pending
@@ -93,6 +94,17 @@ def retarget(conn: sqlite3.Connection, data_root: Path, card: Card, pasted: str)
     with conn:
         _confirm(conn, card, url, profile.member_id, Origin.HUMAN_OVERRIDE.value, profile.fetched_at, now_iso())
     return url
+
+
+def confirm_card(conn: sqlite3.Connection, card: Card, handle: str) -> str:
+    """The research card at this handle is the family's profile: the rows Yes on a card writes. Returns the key."""
+    key: str = SYNTHETIC_PROFILE_PREFIX + handle
+    now: str = now_iso()
+    with conn:
+        for member in card.members:
+            queries_review.insert_linkedin(conn, member.candidate_id, key, key, Origin.SYNTHETIC.value,
+                                           Verdict.CONFIRMED.value, handle, now)
+    return key
 
 
 def reject(conn: sqlite3.Connection, card: Card) -> None:

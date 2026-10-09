@@ -207,4 +207,5 @@ points at it.
 - Every decision on the review page (Yes, Skip, a pasted URL, a description) goes into the review queue
   and can be changed by browsing back; nothing reaches the store's ledgers until `finish` applies the
   queue. For a description, `finish` runs one paid Parallel research (about $0.05, plus one profile fetch
-  when a URL is found), applies a URL found, and otherwise leaves the person worth yes without a LinkedIn.
+  when a URL is found), applies what it found, a URL or a card, with no judge; nothing found leaves the person worth yes without
+  a LinkedIn.
