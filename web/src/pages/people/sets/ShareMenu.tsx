@@ -15,11 +15,21 @@ interface ShareMenuProps {
   onOpen: () => void
 }
 
-/** Never shared: Share network; shared and unchanged since: Shared network; edited since: Update network. */
-function label(status: UploadStatus | undefined, busy: boolean): string {
-  if (busy) return UPLOAD.view
-  if (!status?.last_upload) return UPLOAD.share
-  return status.share_changed ? UPLOAD.update : UPLOAD.shared
+/** Always "Share network"; the mark says where it stands: running, shared and current (check), or marked
+ * changes not uploaded yet (warning). Never shared: no mark. */
+type ShareState = "running" | "never" | "current" | "pending"
+
+function shareState(status: UploadStatus | undefined, busy: boolean): ShareState {
+  if (busy) return "running"
+  if (!status?.last_upload) return "never"
+  return status.share_changed ? "pending" : "current"
+}
+
+const NOTE: Record<ShareState, string | undefined> = {
+  running: UPLOAD.runningNote,
+  never: undefined,
+  current: UPLOAD.upToDateNote,
+  pending: UPLOAD.pendingNote,
 }
 
 // The head's share control: the button opens the upload (the trigger of the dialog around it); the caret
@@ -52,6 +62,7 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
     writeTarget(set_id)
     setOpen(false)
   }
+  const state = shareState(status, busy)
   const shown = sets.data?.sets ?? []
   const cloud = shown.filter((set) => !set.is_personal)
   const chosen = cloud.find((set) => set.set_id === target)
@@ -59,9 +70,18 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
     <div className="head-share share-menu" ref={box}>
       <div className="share-split">
         <DialogTrigger asChild>
-          <Button className="share-main" aria-label={label(status, busy)} onClick={onOpen}>
-            {busy && <Spinner />}
-            {label(status, busy)}
+          <Button
+            className="share-main"
+            aria-label={UPLOAD.share}
+            aria-description={NOTE[state]}
+            title={NOTE[state]}
+            data-state={state}
+            onClick={onOpen}
+          >
+            {state === "running" && <Spinner />}
+            {UPLOAD.share}
+            {state === "current" && <Check on className="shared" />}
+            {state === "pending" && <Warning />}
           </Button>
         </DialogTrigger>
         <Button
@@ -132,9 +152,9 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
   )
 }
 
-function Check({ on }: { on: boolean }) {
+function Check({ on, className }: { on: boolean; className?: string }) {
   return (
-    <svg className={cn("share-check", on && "on")} viewBox="0 0 16 16" aria-hidden="true">
+    <svg className={cn("share-check", on && "on", className)} viewBox="0 0 16 16" aria-hidden="true">
       <path
         d="M3.5 8.5 6.5 11.5 12.5 5"
         fill="none"
@@ -143,6 +163,22 @@ function Check({ on }: { on: boolean }) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+
+function Warning() {
+  return (
+    <svg className="size-3.5 shrink-0 text-warn" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8 2.2 14.6 13.8H1.4z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="M8 6.4v3.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="8" cy="11.6" r="0.9" fill="currentColor" />
     </svg>
   )
 }

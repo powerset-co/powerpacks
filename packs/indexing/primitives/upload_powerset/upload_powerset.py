@@ -20,6 +20,8 @@ deletes its source rows; documents are never deleted.
 Changelog:
   2026-09-28: shared people the cloud has without positions are written again when the local index has them.
   2026-09-28: a person new to the cloud is never counted changed after a failed run.
+  2026-10-09: no re-check of the plan before an upload: the page refuses a confirm whose share list
+    hash differs from the check (share/web/upload.py).
   2026-10-09: share namespaces are powerpacks_<name>_<POWERPACKS_SHARE_INDEX_VERSION> (default v1);
     $search keeps the aleph_ namespaces ALEPH_INDEX_VERSION names.
   2026-10-08: write the isolated share_v1 family (namespaces and Postgres tables), not v3.
@@ -74,7 +76,7 @@ from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
 from packs.indexing.primitives.upload_powerset.plan import build_plan  # noqa: E402
 from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS, log_error, safe_error  # noqa: E402
 from packs.indexing.primitives.upload_powerset.manifest import (  # noqa: E402
-    CHANGED_CHECK, CHECK_FAILED, UPLOAD_FAILED, CheckChanged, Stage, UploadManifest, share_digest,
+    CHECK_FAILED, UPLOAD_FAILED, Stage, UploadManifest, share_digest,
 )
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES, NAMESPACE_BY_LOGICAL  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -115,7 +117,6 @@ class UploadPowerset:
         out_dir: Path = DEFAULT_OUT_DIR,
         operator_id: str | None = None,
         dry_run: bool = True,
-        require_checked: bool = False,
     ) -> None:
         self.db = db
         self.share_db = share_db
@@ -123,7 +124,6 @@ class UploadPowerset:
         self.out_dir = out_dir
         self.operator_id = operator_id
         self.dry_run = dry_run
-        self.require_checked = require_checked
         self.manifest_path = out_dir / "manifest.json"
         self._database_url = ""
         self._namespace_names: dict[str, str] = {}
@@ -146,11 +146,6 @@ class UploadPowerset:
             if isinstance(exc, KeyboardInterrupt):
                 raise
             current = UploadManifest.read(self.manifest_path)
-            if isinstance(exc, CheckChanged):
-                # Refused before any write: the last upload stands and there is nothing to log.
-                replace(current, status="failed", error=CHANGED_CHECK, error_type=type(exc).__name__,
-                        finished_at=now_iso()).write(self.manifest_path)
-                raise
             message = safe_error(exc, CHECK_FAILED if self.dry_run else UPLOAD_FAILED)
             current = replace(current, status="failed", error=message,
                               error_type=type(exc).__name__, finished_at=now_iso())
@@ -257,11 +252,7 @@ class UploadPowerset:
                     # In the cloud through another operator: this upload adds you as a source.
                     preview["already_in_cloud"] = (len(shared_ids) - len(newly_owned) - len(rewritten)
                                                    - preview["already_shared"])
-                    if self.require_checked and not self.dry_run and (previous.plan is None or previous.checked_target != target
-                                             or previous.plan != preview or previous.share_digest != digest):
-                        raise CheckChanged(CHANGED_CHECK)
-                    current = replace(current, operator_id=operator_id, plan=preview,
-                                      checked_target=target if self.dry_run else previous.checked_target)
+                    current = replace(current, operator_id=operator_id, plan=preview)
                     if not self.dry_run:
                         current = replace(current, target=target, person_hashes=old_hashes,
                             owned_people=tuple(sorted(owned_people | newly_owned)),

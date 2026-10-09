@@ -124,3 +124,6 @@
 .share-check.on {
   opacity: 1;
 }
+.share-check.shared {
+  color: var(--ok);
+}
