@@ -128,7 +128,7 @@
 
 /* The sets dialog */
 .sets-dialog {
-  max-width: 460px;
+  max-width: 575px;
 }
 .sets-divider {
   margin: 4px 4px 0;
@@ -307,7 +307,7 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  column-gap: 12px;
   padding: 10px 6px;
 }
 .set-invite .set-icon {
@@ -319,10 +319,17 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  padding-right: 8px;
   font-size: 13px;
+}
+/* Who invited: a long name and email wrap rather than run under the buttons. */
+.set-invite-text .set-count {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .set-invite-actions {
   display: flex;
+  flex: none;
   gap: 6px;
 }
 .set-foot {
