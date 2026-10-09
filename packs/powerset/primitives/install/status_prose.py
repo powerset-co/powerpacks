@@ -278,6 +278,7 @@ PROSE: dict[str, Prose] = {
     "step.waiting": Prose(None, W, "This step needs you. I'll explain in chat.", action="error"),
     "step.failed": Prose(None, F, "This step stopped. I'm checking what happened.", action="error"),
     "setup.paused": Prose(None, W, "Setup paused. I can resume it from here.", action="resume"),
+    "setup.ready": Prose(None, W, "Ready to set up: sign in, import your contacts and build your network.", action="resume"),
 }
 
 

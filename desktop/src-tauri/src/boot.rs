@@ -144,6 +144,12 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
             .map_err(|error| format!("The app is missing Powerpacks: {error}"))?;
         source::install(&archive, &root, &version)?;
     }
+    if let Some(cli) = source::adopt_cli_data(&root)? {
+        boot.line(
+            app,
+            format!("Using your Powerpacks data from {}", cli.display()),
+        );
+    }
     source::ensure_env(&root)?;
 
     boot.step(
@@ -161,12 +167,12 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     boot.step(app, "Opening Powerpacks", "");
     serve(app, &root)?;
 
+    // Setup runs on the user's click, never by itself.
     let setup = onboard::setup(&root);
-    if setup == Setup::New {
-        onboard::record_install(&root, &paths::project_python(&root))?;
-    }
-    if matches!(setup, Setup::New | Setup::Interrupted) {
-        onboard::start(&root, onboard::Answer::default())?;
+    match setup {
+        Setup::New => onboard::record_install(&root, &paths::project_python(&root))?,
+        Setup::Interrupted => onboard::record_paused(&root, &paths::project_python(&root))?,
+        Setup::Paused | Setup::Done => {}
     }
     show_page(
         app,

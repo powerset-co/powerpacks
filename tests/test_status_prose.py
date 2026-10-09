@@ -20,6 +20,8 @@ INSTALL = ROOT / "packs/powerset/primitives/install"
 # The Python files that write status, and the shell scripts that do.
 WRITERS = [path for path in INSTALL.glob("*.py") if path.name not in {"status_prose.py", "prose_cli.py"}]
 SCRIPTS = [ROOT / "bin/bootstrap", ROOT / "bin/setup-python"]
+# The desktop app records the install and setup's readiness itself: its quoted event names count.
+DESKTOP_WRITER = ROOT / "desktop/src-tauri/src/onboard.rs"
 GMAIL_SCRIPT = ROOT / "packs/ingestion/primitives/setup/automations/google_oauth_browser.js"
 LINKEDIN_READER = ROOT / "packs/ingestion/primitives/discover/linkedin/connections.py"
 AREAS = {event.split(".")[0] for event in PROSE}
@@ -56,6 +58,8 @@ def _written() -> tuple[set[str], set[str]]:
     for path in SCRIPTS:
         literals |= {token for token in re.findall(r"[a-z_]+(?:\.[a-z_]+)+", path.read_text())
                      if _looks_like_event(token)}
+    literals |= {token for token in re.findall(r'"([a-z_]+(?:\.[a-z_]+)+)"', DESKTOP_WRITER.read_text())
+                 if _looks_like_event(token)}
     return literals, prefixes
 
 

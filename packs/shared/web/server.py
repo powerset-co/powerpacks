@@ -10,6 +10,8 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
+  and the review wait for it.
 - 2026-10-09: `serve --exit-with PID` stops with the desktop app that runs it.
 - 2026-10-07: created from v1's `deep_context/review/cli.py` and `server.py`: the same persistent
   handler, port ownership and health identity (`reconcile_review_web`, kept so an older release's
@@ -35,6 +37,7 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
@@ -69,8 +72,12 @@ def _load_project_packages(root: Path) -> None:
         site.addsitedir(str(packages))
 
 
+NO_NETWORK = {"error": "No network yet. Finish setup to build it.", "retry_command": "bin/deep-context-v2 run"}
+
+
 def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
-    """The full server once the v2 store exists: the app, Accounts, Tasks, Searches, People and the review."""
+    """The full server once the project packages import: the app, Accounts, Tasks and Searches, and
+    People and the review once the v2 store exists (they answer "no network yet" before that)."""
     from packs.ingestion.primitives.accounts.api import AccountsApi
     from packs.ingestion.primitives.deep_context_v2.db.store import open_store
     from packs.ingestion.primitives.deep_context_v2.openai import load_env
@@ -78,17 +85,21 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.ingestion.primitives.refresh.api import TasksApi
     from packs.ingestion.primitives.share.web.server import share_routes
     from packs.search.primitives.deep_search.results_web.api import search_api
-    from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
+    from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, _send_json, search_routes
 
     load_env()
     data_root: Path = root / ".powerpacks"
     app = AppRoutes()
     # One connection for the review and the People page, one store request at a time: both were
-    # written for one request at a time.
-    conn = open_store(root / STORE, shared=True)
-    review = ReviewApi(conn, data_root)
-    share = share_routes(conn, data_root)
+    # written for one request at a time. It opens on the first request after the store appears.
     store_lock = threading.Lock()
+    network: dict[str, tuple[ReviewApi, Any]] = {}
+
+    def network_routes() -> tuple[ReviewApi, Any] | None:
+        if "routes" not in network and (root / STORE).is_file():
+            conn = open_store(root / STORE, shared=True)
+            network["routes"] = (ReviewApi(conn, data_root), share_routes(conn, data_root))
+        return network.get("routes")
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
     searches_json = search_api(searches)
     accounts = AccountsApi()
@@ -102,16 +113,22 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if searches_json.get(self, parsed) or searches.get(self, parsed):
                 return
             with store_lock:
-                if not share.get(self, parsed):
-                    review.get(self, parsed)  # answers its own 404
+                routes = network_routes()
+                if routes is None:
+                    _send_json(self, NO_NETWORK, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                elif not routes[1].get(self, parsed):
+                    routes[0].get(self, parsed)  # answers its own 404
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if accounts.post(self, parsed) or tasks.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:
-                if not share.post(self, parsed):
-                    review.post(self, parsed)
+                routes = network_routes()
+                if routes is None:
+                    _send_json(self, NO_NETWORK, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                elif not routes[1].post(self, parsed):
+                    routes[0].post(self, parsed)
 
         def log_message(self, fmt: str, *args: object) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
@@ -127,13 +144,13 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     mounted: dict[str, type[BaseHTTPRequestHandler]] = {}
     lock = threading.Lock()
 
-    def mount() -> type[BaseHTTPRequestHandler] | None:
-        """The full handler, built on the first request after the store appears; None before that."""
+    def mount() -> type[BaseHTTPRequestHandler]:
+        """The full handler, built on the first request once the project packages import."""
         with lock:
-            if "handler" not in mounted and (root / STORE).is_file():
+            if "handler" not in mounted:
                 _load_project_packages(root)
                 mounted["handler"] = mounted_handler(root)
-            return mounted.get("handler")
+            return mounted["handler"]
 
     class Handler(BaseHTTPRequestHandler):
         def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -156,10 +173,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             except ModuleNotFoundError:
                 self._json({"error": "Powerpacks is still being installed. Run bin/setup-python if installation stopped.",
                             "retry_command": "bin/setup-python"}, HTTPStatus.SERVICE_UNAVAILABLE)
-                return
-            if handler is None:
-                self._json({"error": "No network yet. Run bin/deep-context-v2 run first.",
-                            "retry_command": "bin/deep-context-v2 run"}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             # The mounted handler owns dispatch; it shares this request's socket state.
             request = handler.__new__(handler)

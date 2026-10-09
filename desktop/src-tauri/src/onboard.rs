@@ -20,6 +20,9 @@ const OWNER_MODULE: &str = "packs.ingestion.primitives.deep_context_v2.owner";
 const SPEND_STEPS: [&str; 4] = ["synthesize", "cluster", "enrich", "index"];
 /// What bootstrap records after installing; the app did the same work before setup starts.
 const INSTALLED_EVENTS: [&str; 2] = ["install.dependencies_ready", "install.skills_ready"];
+/// The page shows a Start/Continue button for these (status_prose.py: action `resume`).
+const READY_EVENT: &str = "setup.ready";
+const PAUSED_EVENT: &str = "setup.paused";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Setup {
@@ -72,33 +75,44 @@ pub fn is_skipped(root: &Path) -> bool {
     root.join(SKIP_MARKER).exists()
 }
 
-/// Record the app's install on the setup page, as bootstrap does, before the first setup run.
+/// Record the app's install on the setup page, as bootstrap does, then that setup waits for the
+/// user's click.
 pub fn record_install(root: &Path, python: &Path) -> Result<(), String> {
-    let retry = root.join("bin/onboard");
     for event in INSTALLED_EVENTS {
-        let status = Command::new(python)
-            .args([
-                "-m",
-                "packs.powerset.primitives.install.status",
-                "write",
-                "--pid",
-                "0",
-                "--event",
-                event,
-            ])
-            .arg("--root")
-            .arg(root)
-            .arg("--retry-command")
-            .arg(&retry)
-            .current_dir(root)
-            .stdout(Stdio::null())
-            .status()
-            .map_err(|error| error.to_string())?;
-        if !status.success() {
-            return Err(format!("Could not record setup progress ({event})."));
-        }
+        write_event(root, python, event)?;
     }
-    Ok(())
+    write_event(root, python, READY_EVENT)
+}
+
+/// A run that died with the last app run waits for the user's click too.
+pub fn record_paused(root: &Path, python: &Path) -> Result<(), String> {
+    write_event(root, python, PAUSED_EVENT)
+}
+
+fn write_event(root: &Path, python: &Path, event: &str) -> Result<(), String> {
+    let status = Command::new(python)
+        .args([
+            "-m",
+            "packs.powerset.primitives.install.status",
+            "write",
+            "--pid",
+            "0",
+            "--event",
+            event,
+        ])
+        .arg("--root")
+        .arg(root)
+        .arg("--retry-command")
+        .arg(root.join("bin/onboard"))
+        .current_dir(root)
+        .stdout(Stdio::null())
+        .status()
+        .map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Could not record setup progress ({event})."))
+    }
 }
 
 /// What the user gave on the install page to get setup past a wait.

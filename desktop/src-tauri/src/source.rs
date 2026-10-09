@@ -77,6 +77,51 @@ pub fn install(archive: &Path, root: &Path, version: &str) -> Result<(), String>
 }
 
 /// `.env` from the Powerset template, as bootstrap writes it, readable only by the user.
+/// The command-line install's folder (`bin/bootstrap` puts Powerpacks at `~/powerpacks`).
+const CLI_INSTALL: &str = "powerpacks";
+const DATA_DIR: &str = ".powerpacks";
+
+/// A machine that already ran Powerpacks from the command line keeps its network, imports and
+/// account there. When the app's own folder has no data yet, it shares that data folder instead
+/// of starting over (a link, so both see the same files) and starts from that install's `.env`.
+pub fn adopt_cli_data(root: &Path) -> Result<Option<PathBuf>, String> {
+    let data = root.join(DATA_DIR);
+    let Some(cli) = dirs::home_dir().map(|home| home.join(CLI_INSTALL)) else {
+        return Ok(None);
+    };
+    if data.exists() || cli == root || !cli.join(DATA_DIR).join("install").is_dir() {
+        return Ok(None);
+    }
+    link_dir(&cli.join(DATA_DIR), &data)
+        .map_err(|error| format!("Could not share {}: {error}", cli.join(DATA_DIR).display()))?;
+    let env = root.join(".env");
+    if !env.exists() && cli.join(".env").is_file() {
+        fs::copy(cli.join(".env"), &env)
+            .map_err(|error| format!("Could not copy .env: {error}"))?;
+    }
+    Ok(Some(cli))
+}
+
+#[cfg(unix)]
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    // A junction needs no privilege, unlike a symbolic link.
+    let status = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("mklink failed"))
+    }
+}
+
 pub fn ensure_env(root: &Path) -> Result<(), String> {
     let env = root.join(".env");
     if env.exists() {

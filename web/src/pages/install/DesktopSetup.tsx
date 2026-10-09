@@ -179,7 +179,11 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   } else if (data.status === "failed" || (data.status === "waiting" && STOPPED.has(action?.kind ?? ""))) {
     control = (
       <Button variant="primary" disabled={busy} onClick={() => answer({})}>
-        {data.status === "failed" ? "Try again" : "Continue setup"}
+        {data.status === "failed"
+          ? "Try again"
+          : data.event === "setup.ready"
+            ? "Start setup"
+            : "Continue setup"}
       </Button>
     )
   } else {

@@ -20,6 +20,9 @@ use tokio::sync::oneshot;
 
 use crate::paths;
 
+/// Where this app keeps Codex's sign-in, config and chat history, under the data folder.
+const CODEX_HOME: &str = ".powerpacks/desktop/codex";
+const CREDENTIALS_IN_FILE: &str = "cli_auth_credentials_store=file";
 const CLIENT_NAME: &str = "powerpacks_desktop";
 const CLIENT_TITLE: &str = "Powerpacks";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -62,12 +65,16 @@ impl Connection {
     fn spawn(app: &AppHandle, binary: &Path, cwd: Option<&Path>) -> Result<Self, String> {
         let mut command = Command::new(binary);
         command
-            .arg("app-server")
+            .args(["-c", CREDENTIALS_IN_FILE, "app-server"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         if let Some(cwd) = cwd {
-            command.current_dir(cwd);
+            // The app's own Codex home: its sign-in and chats, apart from any `codex` on the
+            // machine (whose keychain entry would prompt for every build of this app).
+            command
+                .current_dir(cwd)
+                .env("CODEX_HOME", cwd.join(CODEX_HOME));
         }
         let mut child = command
             .spawn()

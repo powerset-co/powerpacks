@@ -39,14 +39,18 @@ export function Toast({ toast, onDismiss, className }: ToastProps) {
   }, [toast, onDismiss])
 
   return (
-    <div role="status" aria-live="polite">
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed bottom-5 right-5 z-[100] max-w-[min(380px,calc(100vw-40px))]"
+    >
       {mounted && shown ? (
         <div
           data-open={open}
           aria-hidden={open ? undefined : true}
           onTransitionEnd={onTransitionEnd}
           className={cn(
-            "rise fixed bottom-5 right-5 z-[100] flex max-w-[min(380px,calc(100%-40px))] items-center gap-3 rounded-md border border-border px-3.5 py-2.5 text-xs font-bold",
+            "rise flex items-center gap-3 rounded-md border border-border px-3.5 py-2.5 text-xs font-bold",
             shown.error ? "bg-[#7f1d1d] text-white" : "bg-foreground text-background",
             className,
           )}

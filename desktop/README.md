@@ -18,7 +18,7 @@ flowchart LR
 | `scripts/bundle-runtime.sh` | Fetches the uv and Codex binaries and archives the repo for the bundle | `src-tauri/binaries/`, `src-tauri/resources/` |
 | `splash/index.html` | First page while launch steps run | `boot_state`, `boot://state` |
 | `src-tauri/src/boot.rs` | Launch: source, `uv sync`, page server, setup, then the page | — |
-| `src-tauri/src/source.rs` | Installs or refreshes the bundled code in the app's folder, `~/.powerpacks/app`; a command-line checkout at `~/powerpacks` is never touched | `.powerpacks/desktop/source-version` |
+| `src-tauri/src/source.rs` | Installs or refreshes the bundled code in the app's folder, `~/.powerpacks/app`; a command-line checkout at `~/powerpacks` is never touched, but its data folder (`.powerpacks/`) and `.env` are shared on first launch so nothing is re-imported | `.powerpacks/desktop/source-version` |
 | `src-tauri/src/onboard.rs` | Runs `bin/onboard` and resumes it with what the user answered on the install page | `.powerpacks/install/manifest.json` |
 | `src-tauri/src/signin.rs` | The sign-in view: open at the modal's bounds, move, close | `signin://finished` |
 | `src-tauri/src/linkedin.rs` | Reads the LinkedIn connections list in the sign-in view | `app-read-request.json`, `app-read.json` |
