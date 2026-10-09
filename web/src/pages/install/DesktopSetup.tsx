@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 
 import { useNavigate } from "react-router-dom"
 
-import { ImportIcon, SparkIcon } from "@/components/shared"
+import { CHANNEL_ICON, ImportIcon, SparkIcon } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import {
@@ -10,6 +10,7 @@ import {
   focusApp,
   importData,
   importSource,
+  installAction,
   messagesReadable,
   openExternal,
   type SetupAnswer,
@@ -26,6 +27,8 @@ const POWERSET_CALLBACK = "http://localhost:9876/callback"
 const LINKEDIN_CONNECTIONS = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
 // The waits setup stops at until the user resumes it; the others finish on their own.
 const STOPPED = new Set(["error", "resume", "recovery", "details"])
+
+const MessagesIcon = CHANNEL_ICON.imessage
 
 // While setup waits for Full Disk Access, ask macOS again this often and continue by itself.
 const PERMISSION_POLL_MS = 3_000
@@ -110,6 +113,80 @@ function Choice({
               : `Use the network, imports and account already in ${tilde(source)}.`}
         </span>
       </button>
+    </div>
+  )
+}
+
+/** Whether macOS lets Powerpacks read Messages, asked again every few seconds while shown;
+ *  null until the first answer. */
+function useMessagesReadable(): boolean | null {
+  const [readable, setReadable] = useState<boolean | null>(null)
+  useEffect(() => {
+    let stopped = false
+    const check = async () => {
+      const allowed = await messagesReadable()
+      if (stopped) return
+      setReadable(allowed)
+      if (allowed) stopped = true
+    }
+    const timer = setInterval(() => void check(), PERMISSION_POLL_MS)
+    void check()
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [])
+  return readable
+}
+
+/** The first screen: the one macOS permission setup needs, asked for before setup starts. Turning
+ *  it on makes macOS quit and reopen the app, which is harmless now and hangs a running setup. */
+function Permissions({ onDone }: { onDone: () => void }) {
+  const readable = useMessagesReadable()
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (readable) onDone()
+  }, [readable, onDone])
+  return (
+    <div className="flex w-full max-w-[560px] flex-col gap-3">
+      <div className="flex items-start gap-3 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left">
+        <span className="grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2">
+          <MessagesIcon className="size-[18px]" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="text-[13.5px] font-bold">Allow Full Disk Access</span>
+          <span className="text-xs leading-snug text-muted-foreground">
+            Powerpacks reads your iMessage history and Contacts on this Mac to find the people you talk to.
+            Turn Powerpacks on in the list; macOS will ask to quit and reopen it, and you land back here.
+          </span>
+        </div>
+        <Button
+          variant="primary"
+          disabled={readable === null}
+          onClick={() =>
+            void installAction("permissions").catch((caught: unknown) => setError(errorText(caught)))
+          }
+        >
+          Open Settings
+        </Button>
+      </div>
+      <div className="flex items-center justify-between gap-3 px-1">
+        <span className="text-xs text-faint">
+          {readable === null ? "Checking…" : "Waiting for Full Disk Access…"}
+        </span>
+        <button
+          type="button"
+          onClick={onDone}
+          className="cursor-pointer border-0 bg-transparent p-0 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Skip, no iMessage
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="m-0 text-xs text-bad">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
@@ -213,6 +290,8 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
       .finally(() => setBusy(false))
   }, [])
   const answer = (value: SetupAnswer) => run(() => continueSetup(value))
+  const [permissionsDone, setPermissionsDone] = useState(false)
+  const finishPermissions = useCallback(() => setPermissionsDone(true), [])
 
   let control
   if (signInUrl !== null) {
@@ -262,6 +341,8 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
         I turned it on
       </Button>
     )
+  } else if (data.event === "setup.ready" && !permissionsDone) {
+    control = <Permissions onDone={finishPermissions} />
   } else if (data.event === "setup.ready") {
     control = <Choice disabled={busy} onStart={run} onError={setError} />
   } else if (data.status === "failed" || (data.status === "waiting" && STOPPED.has(action?.kind ?? ""))) {
