@@ -5,13 +5,15 @@ Changelog:
 - 2026-10-08: re-fetch the connection and reconnect every REFRESH_SECONDS, before a 24 h credential expires.
 - 2026-10-08: ask for the default set's connection; the route refuses a bare call from a member of several sets.
 - 2026-10-08: subscribe to the operator's inbox subject and pull agent messages on each nudge.
-- 2026-10-08: keep the last heartbeat per operator in .powerpacks/presence.json for the sets dialog.
+- 2026-10-08: keep the last heartbeat per operator in .powerpacks/presence.json for the sets page.
+- 2026-10-08: keep the relay state for the top bar's status dot; a sign-in wakes a signed-out wait.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +38,9 @@ SIGNED_OUT_SECONDS = 300
 MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
 _LOG = logging.getLogger(__name__)
+# The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
+STATUS = {"state": "offline", "api_base": ""}
+WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects at once
 
 
 def _device_id(repo_root: Path) -> str:
@@ -140,6 +145,7 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
                                        cb=inbox, manual_ack=True)
         await nc.subscribe(subjects["presence"], cb=heartbeat)
         watcher = asyncio.create_task(watch())
+        STATUS["state"] = "connected"
         await work()
         await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
         await watcher
@@ -147,6 +153,7 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
         if watcher is not None:
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
+        STATUS["state"] = "offline"
         await nc.close()
 
 
@@ -154,12 +161,16 @@ async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
     backoff = 1
     while True:
         started = time.monotonic()
+        STATUS["api_base"] = auth.api_base(env_file)
         try:
             connection = await asyncio.to_thread(_connection, env_file)
             await _connected(connection, repo_root=repo_root, env_file=env_file, device_id=device_id)
             backoff = 1  # a refresh: the watcher returned, reconnect at once with fresh credentials
         except SystemExit:
-            await asyncio.sleep(SIGNED_OUT_SECONDS)
+            STATUS["state"] = "signed_out"
+            WAKE.clear()
+            await asyncio.to_thread(WAKE.wait, SIGNED_OUT_SECONDS)
+            STATUS["state"] = "offline"
             backoff = 1
         except Exception as exc:
             if time.monotonic() - started > MAX_BACKOFF_SECONDS:

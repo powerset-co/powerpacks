@@ -70,15 +70,16 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(SystemExit):
                 asks_loop._connection(env_file)
 
-    async def test_signed_out_only_sleeps_five_minutes(self):
+    async def test_signed_out_waits_five_minutes_or_a_sign_in(self):
         with patch.object(asks_loop.auth, "bearer_token", side_effect=SystemExit("signed out")), \
                 patch.object(asks_loop.urllib.request, "urlopen") as get, \
                 patch.object(asks_loop, "_connected", new_callable=AsyncMock) as connect, \
-                patch.object(asks_loop.asyncio, "sleep", side_effect=asyncio.CancelledError) as sleep:
+                patch.object(asks_loop.WAKE, "wait", side_effect=asyncio.CancelledError) as wait:
             with self.assertRaises(asyncio.CancelledError):
                 await asks_loop._run(repo_root=Path("/synthetic"), env_file=Path("/synthetic/.env"),
                                      device_id=str(uuid4()))
-            sleep.assert_awaited_once_with(300)
+            wait.assert_called_once_with(300)
+            self.assertEqual(asks_loop.STATUS["state"], "signed_out")
             get.assert_not_called()
             connect.assert_not_called()
 
@@ -215,6 +216,7 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(heartbeat["operator_id"], self.operator_id)
         self.assertEqual(heartbeat["device_id"], self.device_id)
         self.assertIsNotNone(datetime.fromisoformat(heartbeat["at"]).tzinfo)
+        self.assertEqual(asks_loop.STATUS["state"], "connected")
         await self.until(lambda: self.worker.call_count == 1)
         await self.js.publish(self.subjects["tasks"], json.dumps({
             "kind": "tasks", "ask_id": ask_id, "task_ids": [str(uuid4())],
