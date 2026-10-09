@@ -32,9 +32,8 @@ async function login(request, { launch = launchChrome, focus = returnFocus, prog
     let page = await open(true);
     while (Date.now() < deadline && !stopped && !page.isClosed()) {
       if (result) return result;
-      const interactive = await page.locator('input:not([type="hidden"]), button, select, a, [role="button"]')
-        .evaluateAll(elements => elements.some(element => element.getClientRects().length > 0));
-      if (interactive && !human) {
+      if (!human && await page.locator('input:not([type="hidden"]):visible, button:visible, select:visible, a:visible, [role="button"]:visible')
+        .first().isVisible()) {
         progress("[powerset/login] Complete sign-in in the Chrome window.");
         await context.close();
         human = true;
