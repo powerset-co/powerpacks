@@ -24,12 +24,12 @@ export function SetsPage() {
   return (
     <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
       <div className="mx-auto flex max-w-[960px] flex-col gap-5">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0 flex-[1_1_320px]">
             <h1 className="m-0 text-xl font-semibold">{SETS.title}</h1>
             <p className="m-0 mt-1 text-[13px] text-muted-foreground">{SETS.lead}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {local.length ? (
               <select
                 aria-label={SETS.choose}
