@@ -1,6 +1,8 @@
 """Run one People upload and project its typed manifest to the status route.
 
 Changelog:
+  2026-10-09: reading the status writes nothing; a run the last server left running is marked interrupted
+    once, when the server starts.
   2026-10-09: the last upload always shows; the confirm is bound by the share list hash alone.
   2026-10-08: share_changed: the share list differs from the last completed upload's.
   2026-10-08: a check of a share list edited since reads idle, so opening checks again.
@@ -51,6 +53,20 @@ class ShareUpload:
         self.manifest_path = out_dir / "manifest.json"
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._mark_interrupted()
+
+    def _mark_interrupted(self) -> None:
+        """A manifest still running when this server starts belongs to a run the last server never
+        finished."""
+        saved = self._saved()
+        if saved.status != "running":
+            return
+        interrupted = replace(saved, status="interrupted", error=INTERRUPTED, finished_at=upload_powerset.now_iso())
+        if not saved.dry_run:
+            interrupted = replace(interrupted, last_upload={
+                "finished_at": interrupted.finished_at, "status": "interrupted",
+                "uploaded": saved.progress["uploaded"], "skipped": saved.progress["skipped"]})
+        interrupted.write(self.manifest_path)
 
     def _saved(self) -> UploadManifest:
         return UploadManifest.read(self.manifest_path)
@@ -59,37 +75,8 @@ class ShareUpload:
         return share_digest(share_rows(self.share_db))
 
     def status(self) -> dict[str, Any]:
-        try:
-            return self._status()
-        except BaseException as exc:
-            if isinstance(exc, KeyboardInterrupt):
-                raise
-            try:
-                saved = self._saved()
-            except BaseException:
-                # An unreadable manifest is set aside, never overwritten.
-                saved = UploadManifest()
-                if self.manifest_path.exists():
-                    self.manifest_path.replace(self.manifest_path.with_name("manifest.json.bkup"))
-            failed = replace(saved, status="failed", error=CHECK_FAILED if saved.dry_run else UPLOAD_FAILED)
-            failed.write(self.manifest_path)
-            log_error(self.out_dir, saved.stage or Stage.PLANNING, exc)
-            return self._status()
-
-    def _status(self) -> dict[str, Any]:
+        """The saved manifest as the page reads it; reading writes nothing."""
         saved = self._saved()
-        with self._lock:
-            active = self._thread is not None and self._thread.is_alive()
-        if saved.status == "running" and not active:
-            saved = self._saved()
-        if saved.status == "running" and not active:
-            saved = replace(saved, status="interrupted", error=INTERRUPTED,
-                            finished_at=upload_powerset.now_iso())
-            if not saved.dry_run:
-                saved = replace(saved, last_upload={"finished_at": saved.finished_at,
-                    "status": "interrupted", "uploaded": saved.progress["uploaded"],
-                    "skipped": saved.progress["skipped"]})
-            saved.write(self.manifest_path)
         current_digest = self._current_share_digest()
         if saved.status == "running":
             state = "checking" if saved.dry_run else "uploading"

@@ -181,8 +181,7 @@ export function sharedToast(count: number): string {
   return `Shared ${plural(count, "person")}.`
 }
 
-// The Build and View logbook actions on the bar and in the drawer, the reader, and the toasts.
-/** The share menu and the sets dialog (pages/people/sets). */
+/** The Sets page (pages/sets). */
 /** Heartbeats come every 30 s; three missed and the member reads as last seen. */
 const CONNECTED_SECONDS = 90
 const SETS_CONNECTED = "Connected"
@@ -191,11 +190,7 @@ export const SETS = {
   title: "Sets",
   lead: "Sets live on this computer. Members see each other's shared networks; invites go through the Powerset relay.",
   choose: "Choose a set",
-  shareTo: "Share to",
-  manage: "Manage sets…",
-  personalNetwork: "Personal network",
   personalNote: "Your shared network, on this machine.",
-  local: "Local",
   sharedWith: "Your sets",
   none: "Create one, or accept an invite from a teammate.",
   noneTitle: "No sets yet",
@@ -219,7 +214,6 @@ export const SETS = {
   signIn: "Sign in",
   members: (count: number) => plural(count, "member"),
   people: (count: number) => plural(count, "person"),
-  shared: (count: number) => `${count.toLocaleString()} shared`,
   confirmDelete: (name: string) => `Delete “${name}” for everyone in it?`,
   invites: "Invites",
   invitedYou: (from: string, email: string) =>
@@ -240,6 +234,7 @@ export const SETS = {
   },
 } as const
 
+// The Build and View logbook actions on the bar and in the drawer, the reader, and the toasts.
 export const LOGBOOK = {
   build: "Build logbook",
   building: "Building logbook…",
