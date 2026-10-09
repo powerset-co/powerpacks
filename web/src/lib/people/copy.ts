@@ -113,7 +113,6 @@ export const UPLOAD = {
   update: "Update network",
   shared: "Shared network",
   view: "View upload",
-  check: "Check network",
   checkAgain: "Check again",
   confirm: "Confirm sharing",
   resume: "Resume sharing",

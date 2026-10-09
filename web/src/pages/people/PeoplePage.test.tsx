@@ -242,6 +242,38 @@ describe("PeoplePage", () => {
     ).toHaveLength(2)
   })
 
+  it("says Update network once a share edit changes a shared network", async () => {
+    const shared = {
+      finished_at: "2026-10-09T04:55:22Z",
+      status: "completed",
+      uploaded: 5,
+      skipped: 0,
+    } as const
+    let changed = false
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith("/tags")) changed = true
+        if (url.endsWith("/upload"))
+          return Promise.resolve(
+            uploadResponse(
+              uploadStatus({ status: "completed", last_upload: shared, share_changed: changed }),
+            ),
+          )
+        return serve(url, init)
+      }),
+    )
+    const { container } = renderPage()
+    expect(await screen.findByRole("button", { name: "Shared network" })).toBeTruthy()
+    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    fireEvent.click(
+      within(must(container.querySelector<HTMLElement>("[data-action-bar]"))).getByRole("button", {
+        name: "Share S",
+      }),
+    )
+    expect(await screen.findByRole("button", { name: "Update network" })).toBeTruthy()
+  })
+
   it("marks an updating person and disables drawer, bulk and keyboard tag edits", async () => {
     const payload = structuredClone(PAYLOAD)
     const row = must(payload.rows[0])

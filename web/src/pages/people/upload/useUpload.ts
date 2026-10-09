@@ -6,7 +6,7 @@ import { readUpload, startUpload, type UploadAction, type UploadStatus } from "@
 import { sharedToast } from "@/lib/people/copy"
 import { isActive, uploadView, type Refusal } from "@/lib/people/upload"
 
-const UPLOAD_KEY = ["people-upload"]
+export const UPLOAD_KEY = ["people-upload"]
 const POLL_MS = 1000
 
 /**
@@ -53,8 +53,8 @@ export function useUpload(onToast: (message: string) => void) {
 
   const busy = Boolean(starting) || (status !== undefined && isActive(status.status))
 
-  /** Opening checks a network never checked, or or shared before (Shared / Update network);
-   * any other state opens on the saved status. */
+  /** Opening checks a network never checked, or shared before (Shared / Update network); a check
+   * still current opens on its plan, and a failure on its sentence. */
   function onOpen() {
     if (!busy && (!status || status.status === "idle" || status.status === "completed")) void start("check")
   }
@@ -67,7 +67,7 @@ export function useUpload(onToast: (message: string) => void) {
     open,
     setOpen,
     onOpen,
-    check: () => void start("check"),
+    retry: () => void start("check"),
     // The confirm names the check it displayed, so a check from another tab cannot be confirmed here.
     confirm: () => void start("upload", status?.checked ?? null),
   }

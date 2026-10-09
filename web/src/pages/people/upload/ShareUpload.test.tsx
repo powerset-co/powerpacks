@@ -111,7 +111,7 @@ describe("ShareUpload dialog", () => {
     show()
     const dialog = await openDialog("Share network")
     expect(within(dialog).getByRole("heading", { name: "Ready to share" })).toBeTruthy()
-    expect(buttons(dialog)).toEqual(["Close", "Check again", "Confirm sharing"])
+    expect(buttons(dialog)).toEqual(["Close", "Confirm sharing"])
     expect(posts(fetch)).toEqual([])
   })
 
@@ -227,7 +227,7 @@ describe("ShareUpload dialog", () => {
     const dialog = await openDialog("Update network")
     fireEvent.click(within(dialog).getByRole("button", { name: "Check again" }))
     await within(dialog).findByRole("heading", { name: "Ready to share" })
-    expect(buttons(dialog)).toEqual(["Close", "Check again", "Resume sharing"])
+    expect(buttons(dialog)).toEqual(["Close", "Resume sharing"])
   })
 
   it("shows a refused confirm's sentence and offers only a new check", async () => {
@@ -249,7 +249,7 @@ describe("ShareUpload dialog", () => {
   })
 
   it("keeps polling after a failed start and follows the run it started", async () => {
-    let state = uploadStatus({ status: "ready", plan: PLAN })
+    let state = uploadStatus({ status: "failed", failed_action: "check", error: "The cloud said no." })
     serve({
       get: () => state,
       check: () => {
