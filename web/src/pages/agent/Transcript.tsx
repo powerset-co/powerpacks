@@ -2,6 +2,7 @@ import { Spinner } from "@/components/shared"
 import { cn } from "@/lib/utils"
 import type { Entry, ItemStatus } from "@/types/agent"
 
+import { CopyButton } from "./CopyButton"
 import { CheckIcon, CrossIcon, FileIcon, SparkIcon, TerminalIcon } from "./icons"
 import { Markdown } from "./Markdown"
 
@@ -105,18 +106,26 @@ function WorkRow({ entry }: { entry: WorkEntry }) {
   }
 }
 
+// The copy button sits under the message at the edge it is aligned to, and shows on hover or focus.
+// Its row borrows from the gap below so messages keep their spacing.
+const COPY = "mt-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+
 function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   switch (entry.kind) {
     case "user":
       return (
-        <div className="rise-in ml-auto max-w-[82%] whitespace-pre-wrap rounded-[var(--radius-l)] rounded-br-[var(--radius-s)] border border-line bg-surface-2 px-3.5 py-2.5">
-          {entry.text}
+        <div className="rise-in group -mb-4 flex flex-col">
+          <div className="max-w-[82%] self-end whitespace-pre-wrap rounded-[var(--radius-l)] rounded-br-[var(--radius-s)] border border-line bg-surface-2 px-3.5 py-2.5">
+            {entry.text}
+          </div>
+          <CopyButton text={entry.text} className={cn(COPY, "self-end")} />
         </div>
       )
     case "agent":
       return (
-        <div className="rise-in text-[13.5px]">
+        <div className="rise-in group -mb-4 flex flex-col text-[13.5px]">
           <Markdown text={entry.text} />
+          <CopyButton text={entry.text} className={cn(COPY, "-ml-1.5 self-start")} />
         </div>
       )
     case "error":
