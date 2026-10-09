@@ -16,12 +16,10 @@ import {
 } from "@/lib/api/install"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
-import { openSignIn } from "@/lib/signin"
+import { openSignIn, POWERSET_CALLBACK } from "@/lib/signin"
 import { isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
 
-// Where the Powerset login's own callback server listens (packs/powerset/primitives/auth/auth.py).
-const POWERSET_CALLBACK = "http://localhost:9876/callback"
 // LinkedIn's sign-in lands here; the app then reads the list (desktop/src-tauri/src/linkedin.rs).
 const LINKEDIN_CONNECTIONS = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
 // The waits setup stops at until the user resumes it; the others finish on their own.

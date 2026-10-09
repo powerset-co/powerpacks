@@ -65,8 +65,8 @@ export class SetsError extends Error {
   }
 }
 
-async function answer(response: Response): Promise<SetsPayload> {
-  if (response.ok) return body<SetsPayload>(response)
+/** The refusal a sets route (or an ask route, which asks the sets) answered with. */
+export async function refusal(response: Response, fallback: string): Promise<SetsError> {
   let needsAuth = false
   try {
     const payload: unknown = await response.clone().json()
@@ -74,8 +74,13 @@ async function answer(response: Response): Promise<SetsPayload> {
   } catch {
     // Not JSON: the text is the message.
   }
-  const { message } = await failure(response, "Couldn't read your sets.")
-  throw new SetsError(message, needsAuth)
+  const { message } = await failure(response, fallback)
+  return new SetsError(message, needsAuth)
+}
+
+async function answer(response: Response): Promise<SetsPayload> {
+  if (response.ok) return body<SetsPayload>(response)
+  throw await refusal(response, "Couldn't read your sets.")
 }
 
 export async function fetchSets(): Promise<SetsPayload> {

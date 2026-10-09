@@ -9,6 +9,10 @@ import { isRecord } from "@/lib/utils"
 
 const FINISHED_EVENT = "signin://finished"
 
+/** Where the Powerset login's own callback server listens (packs/powerset/primitives/auth/auth.py):
+ *  a Powerset sign-in finishes there. */
+export const POWERSET_CALLBACK = "http://localhost:9876/callback"
+
 export interface SignIn {
   /** Who the user is signing in to, for the header. */
   title: string
@@ -39,10 +43,17 @@ export interface Bounds {
 
 let current: SignIn | null = null
 const listeners = new Set<() => void>()
+// Who waits on the open sign-in's outcome (signInFinished).
+const waiters = new Set<(reached: boolean) => void>()
 
 function set(next: SignIn | null): void {
   current = next
   for (const listener of listeners) listener()
+}
+
+function settle(reached: boolean): void {
+  for (const waiter of waiters) waiter(reached)
+  waiters.clear()
 }
 
 let wired = false
@@ -62,6 +73,7 @@ function wire(): void {
 async function finished(): Promise<void> {
   const signIn = current
   if (signIn === null) return
+  settle(true)
   if (signIn.then !== "linkedin" || reading !== null) {
     await closeSignIn()
     return
@@ -100,6 +112,13 @@ export function openSignIn(signIn: SignIn): void {
   set(signIn)
 }
 
+/** Resolves when the open sign-in ends: true as it reaches its callback, false when it is
+ *  closed first. False at once with no sign-in open. */
+export function signInFinished(): Promise<boolean> {
+  if (current === null) return Promise.resolve(false)
+  return new Promise((resolve) => waiters.add(resolve))
+}
+
 /** The modal's body is laid out: show the page there. */
 export function showSignIn(signIn: SignIn, bounds: Bounds): Promise<void> {
   return invoke("signin_open", { url: signIn.url, finish: signIn.finish, bounds }).then(() => undefined)
@@ -113,6 +132,7 @@ export async function closeSignIn(): Promise<void> {
   if (current === null) return
   reading = null
   set(null)
+  settle(false)
   await invoke("signin_close")
 }
 

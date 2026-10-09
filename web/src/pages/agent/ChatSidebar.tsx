@@ -42,7 +42,12 @@ export function ChatSidebar({ open, onClose }: ChatSidebarProps) {
     <aside
       aria-label="Chats"
       data-open={open}
-      className="z-40 flex min-h-0 w-[260px] flex-col border-r border-line bg-[color-mix(in_srgb,var(--card)_55%,var(--background))] max-[860px]:fixed max-[860px]:bottom-0 max-[860px]:left-0 max-[860px]:top-0 max-[860px]:-translate-x-full max-[860px]:shadow-[var(--shadow-2)] max-[860px]:transition-transform max-[860px]:duration-med max-[860px]:ease-out max-[860px]:data-[open=true]:translate-x-0"
+      // An overlay below 860px, and below 1100px when the page (`group/agent`) shows a run.
+      className={cn(
+        "z-40 flex min-h-0 w-[260px] flex-col border-r border-line bg-[color-mix(in_srgb,var(--card)_55%,var(--background))]",
+        "max-[860px]:fixed max-[860px]:bottom-0 max-[860px]:left-0 max-[860px]:top-0 max-[860px]:-translate-x-full max-[860px]:shadow-[var(--shadow-2)] max-[860px]:transition-transform max-[860px]:duration-med max-[860px]:ease-out max-[860px]:data-[open=true]:translate-x-0",
+        "group-data-[run]/agent:max-[1100px]:fixed group-data-[run]/agent:max-[1100px]:bottom-0 group-data-[run]/agent:max-[1100px]:left-0 group-data-[run]/agent:max-[1100px]:top-0 group-data-[run]/agent:max-[1100px]:-translate-x-full group-data-[run]/agent:max-[1100px]:shadow-[var(--shadow-2)] group-data-[run]/agent:max-[1100px]:transition-transform group-data-[run]/agent:max-[1100px]:duration-med group-data-[run]/agent:max-[1100px]:ease-out group-data-[run]/agent:max-[1100px]:data-[open=true]:translate-x-0",
+      )}
     >
       <div className="p-3">
         <button

@@ -69,7 +69,7 @@ function ChatHeader({ onToggle, runTitle }: { onToggle: () => void; runTitle: st
         type="button"
         aria-label="Chats"
         onClick={onToggle}
-        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden"
+        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden group-data-[run]/agent:max-[1100px]:grid"
       >
         <SidebarIcon className="size-4" />
       </button>
@@ -78,7 +78,7 @@ function ChatHeader({ onToggle, runTitle }: { onToggle: () => void; runTitle: st
         type="button"
         aria-label="New chat"
         onClick={newChat}
-        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden"
+        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden group-data-[run]/agent:max-[1100px]:grid"
       >
         <ComposeIcon className="size-4" />
       </button>
@@ -180,11 +180,15 @@ function Workspace() {
     if (!agent.running) void client.invalidateQueries({ queryKey: ["searches", "catalog"] })
   }, [agent.running, client])
 
+  // The chats list is an overlay below 860px, and below 1100px once a run takes the third
+  // column (the window goes down to 960px); the list and the header's buttons read `data-run`.
   return (
     <main
+      data-run={runId ? "" : undefined}
       className={cn(
-        "grid min-h-0 grid-cols-[260px_minmax(0,1fr)] max-[860px]:grid-cols-1",
-        runId && "grid-cols-[260px_minmax(340px,420px)_minmax(0,1fr)]",
+        "group/agent grid min-h-0 grid-cols-[260px_minmax(0,1fr)] max-[860px]:grid-cols-1",
+        runId &&
+          "grid-cols-[260px_minmax(340px,420px)_minmax(0,1fr)] max-[1100px]:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]",
       )}
     >
       <ChatSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
@@ -193,7 +197,7 @@ function Workspace() {
           type="button"
           aria-label="Close chats"
           onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden"
+          className="fixed inset-0 z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden group-data-[run]/agent:max-[1100px]:block"
         />
       )}
       <Conversation onToggle={() => setSidebarOpen((open) => !open)} runTitle={runTitle} />
