@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from packs.ingestion.primitives.ask_worker import ask_worker
+from packs.powerset.primitives.agent_inbox.messages import Verdict
 from packs.ingestion.primitives.deep_context_v2.db import queries, queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesConfig
@@ -158,7 +159,7 @@ class AskWorkerTests(unittest.TestCase):
         self.model.assert_not_called()
 
     def test_invalid_model_answers_never_leave_the_laptop(self) -> None:
-        for field, value in [("verdict", "yes"), ("reason", "x" * 241), ("reason", "Email casey@example.com"),
+        for field, value in [("verdict", "yes"), ("reason", "Email casey@example.com"),
                              ("relationship", "casey@example.com"), ("confidence", -0.1), ("confidence", 1.1),
                              ("confidence", float("nan")), ("confidence", True), ("can_intro", "true"),
                              ("last_contact", "2026-13"), ("last_contact", "2026-10-08"), ("extra", "text")]:
@@ -169,6 +170,13 @@ class AskWorkerTests(unittest.TestCase):
                 self.assertEqual(self._reply()["answers"][0]["answer"], {"declined": True, "reason": "failed"})
                 self.assertEqual(self._audits(), [])
         self.assertNotIn("casey@example.com", self.stderr.getvalue())
+
+    def test_long_text_is_cut_to_what_the_asker_accepts(self) -> None:
+        self.model.return_value = ANSWER | {"reason": "r" * 900, "relationship": "w" * 600}
+        self._run()
+        answer = self._reply()["answers"][0]["answer"]
+        self.assertEqual((answer["reason"], answer["relationship"]), ("r" * 500, "w" * 500))
+        Verdict.parse(answer)
 
     def test_one_model_failure_does_not_stop_the_next_candidate(self) -> None:
         queries_enrich.insert_linkedin(self.conn, ("c3", "https://www.linkedin.com/in/casey-delta-3c4d", "43",
