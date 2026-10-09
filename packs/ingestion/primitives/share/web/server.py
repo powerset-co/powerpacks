@@ -12,6 +12,8 @@ GET `/api/people/upload` reads progress; POST `/api/people/upload/check` preview
 POST `/api/people/upload` confirms and starts one shared upload.
 GET `/api/people/sets` reads the sets the owner belongs to (kept locally; `?refresh=1` asks the cloud);
 POST `/api/people/sets` {name} creates one; POST `/api/people/sets/delete` {set_id} deletes one the owner owns.
+POST `/api/people/sets/invite` {set_id, email} sends an invite over the relay; POST `/api/people/sets/answer`
+{invite_id, accepted} answers one (sets.py).
 GET `/api/people/logbook` reads build status; POST builds the selected parents' local raw archive.
 GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
 
@@ -163,7 +165,8 @@ class ShareRoutes:
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
-                               f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete"}:
+                               f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
+                               f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         host = (handler.headers.get("Host") or "").strip()
@@ -176,10 +179,16 @@ class ShareRoutes:
         if parsed.path == f"{API_PREFIX}logbook":
             self._start_logbook(handler)
             return True
-        if parsed.path in {f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete"}:
+        if parsed.path.startswith(f"{API_PREFIX}sets"):
             length = min(int(handler.headers.get("Content-Length", "0")), MAX_TAGS_REQUEST_BYTES)
             form = json.loads(handler.rfile.read(length).decode("utf-8") or "{}")
-            if parsed.path.endswith("/delete"):
+            if parsed.path.endswith("/invite"):
+                set_id, email = str(form.get("set_id") or ""), str(form.get("email") or "").strip()
+                self._answer_sets(handler, lambda: (self.sets.invite(set_id, email), self.sets.kept())[1])
+            elif parsed.path.endswith("/answer"):
+                invite_id, accepted = str(form.get("invite_id") or ""), bool(form.get("accepted"))
+                self._answer_sets(handler, lambda: (self.sets.answer(invite_id, accepted), self.sets.kept())[1])
+            elif parsed.path.endswith("/delete"):
                 self._answer_sets(handler, lambda: self.sets.delete(str(form.get("set_id") or "")))
             else:
                 name = str(form.get("name") or "").strip()
@@ -277,7 +286,8 @@ class ShareRoutes:
                        status=HTTPStatus.BAD_GATEWAY)
             return
         shared = sum(1 for row in self.load() if row.share == SHARE_YES)
-        answer = sets_payload(sets, shared, os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
+        answer = sets_payload(sets, shared, os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""),
+                              received=self.sets.received(), sent=self.sets.sent(), seen=self.sets.presence())
         self._send(handler, json.dumps(answer, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
     @staticmethod

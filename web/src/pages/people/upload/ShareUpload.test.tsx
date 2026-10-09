@@ -19,7 +19,7 @@ interface Routes {
 }
 
 function setsResponse(): Response {
-  return new Response(JSON.stringify({ sets: [], shared: 0, default_set_id: "" }), {
+  return new Response(JSON.stringify({ sets: [], invites: [], shared: 0, default_set_id: "" }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   })

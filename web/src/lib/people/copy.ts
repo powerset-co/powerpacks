@@ -182,6 +182,10 @@ export function sharedToast(count: number): string {
 
 // The Build and View logbook actions on the bar and in the drawer, the reader, and the toasts.
 /** The share menu and the sets dialog (pages/people/sets). */
+/** Heartbeats come every 30 s; three missed and the member reads as last seen. */
+const CONNECTED_SECONDS = 90
+const SETS_CONNECTED = "Connected"
+
 export const SETS = {
   title: "Sets",
   lead: "Your shared network is visible to the members of every set you belong to.",
@@ -205,6 +209,22 @@ export const SETS = {
   people: (count: number) => `${count.toLocaleString()} people across its members`,
   shared: (count: number) => `${count.toLocaleString()} shared`,
   confirmDelete: (name: string) => `Delete “${name}” for everyone in it?`,
+  invites: "Invites",
+  invitedYou: (from: string) => `${from} invited you`,
+  accept: "Accept",
+  decline: "Decline",
+  invite: "Invite",
+  invitePlaceholder: "Invite by email",
+  invited: "Invited",
+  connected: SETS_CONNECTED,
+  declined: "Declined",
+  seen: (value: string, now: number = Date.now()) => {
+    const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000))
+    if (seconds < CONNECTED_SECONDS) return SETS_CONNECTED
+    if (seconds < 3600) return `Seen ${Math.max(1, Math.floor(seconds / 60))}m ago`
+    if (seconds < 86_400) return `Seen ${Math.floor(seconds / 3600)}h ago`
+    return `Seen ${Math.floor(seconds / 86_400)}d ago`
+  },
 } as const
 
 export const LOGBOOK = {

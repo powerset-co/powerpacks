@@ -105,12 +105,26 @@ const SETS = {
       member_count: 2,
       person_count: 40,
       members: [
-        { name: "Jordan Bravo", email: "jordan@example.com", role: "owner" },
-        { name: "Casey Delta", email: "casey@example.com", role: "member" },
+        {
+          name: "Jordan Bravo",
+          email: "jordan@example.com",
+          role: "owner",
+          operator_id: "op-1",
+          last_seen_at: "",
+        },
+        {
+          name: "Casey Delta",
+          email: "casey@example.com",
+          role: "member",
+          operator_id: "op-2",
+          last_seen_at: "",
+        },
       ],
+      invited: [],
       refreshed_at: "2026-10-08T00:00:00Z",
     },
   ],
+  invites: [],
   shared: 2,
   default_set_id: "set-1",
 }

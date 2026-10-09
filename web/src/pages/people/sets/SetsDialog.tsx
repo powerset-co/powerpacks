@@ -3,7 +3,7 @@ import { Fold, initials } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { signIn } from "@/lib/api/feedback"
-import type { SetView } from "@/lib/api/sets"
+import type { ReceivedInvite, SetMember, SetView } from "@/lib/api/sets"
 import { SETS } from "@/lib/people/copy"
 import { cn } from "@/lib/utils"
 import { CloudIcon, HomeIcon } from "./icons"
@@ -13,6 +13,17 @@ interface SetsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   sets: ReturnType<typeof useSets>
+}
+
+function Presence({ member }: { member: SetMember }) {
+  if (!member.last_seen_at) return null
+  const label = SETS.seen(member.last_seen_at)
+  return (
+    <span className="set-presence" data-live={label === SETS.connected}>
+      <span className="set-presence-dot" aria-hidden="true" />
+      {label}
+    </span>
+  )
 }
 
 function Members({ set }: { set: SetView }) {
@@ -27,10 +38,80 @@ function Members({ set }: { set: SetView }) {
             <span className="set-member-name">{member.name || member.email}</span>
             {member.name && member.email ? <span className="set-member-email">{member.email}</span> : null}
           </span>
-          {member.role !== "member" ? <span className="set-role">{member.role}</span> : null}
+          <span className="set-member-side">
+            {member.role !== "member" ? <span className="set-role">{member.role}</span> : null}
+            <Presence member={member} />
+          </span>
+        </li>
+      ))}
+      {set.invited.map((invite) => (
+        <li key={invite.id} className="set-pending">
+          <span className="set-avatar" aria-hidden="true">
+            {initials(invite.email)}
+          </span>
+          <span className="set-member">
+            <span className="set-member-name">{invite.email}</span>
+          </span>
+          <span className="set-member-side">
+            <span className="set-role">{invite.status === "declined" ? SETS.declined : SETS.invited}</span>
+          </span>
         </li>
       ))}
     </ul>
+  )
+}
+
+function InviteForm({ onInvite, busy }: { onInvite: (email: string) => Promise<unknown>; busy: boolean }) {
+  const [email, setEmail] = useState("")
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!email.includes("@")) return
+    void onInvite(email.trim()).then(
+      () => setEmail(""),
+      () => undefined,
+    )
+  }
+  return (
+    <form className="sets-new set-invite-form" onSubmit={submit}>
+      <input
+        type="email"
+        value={email}
+        placeholder={SETS.invitePlaceholder}
+        aria-label={SETS.invitePlaceholder}
+        onChange={(event) => setEmail(event.target.value)}
+      />
+      <Button size="sm" variant="primary" type="submit" disabled={busy || !email.includes("@")}>
+        {SETS.invite}
+      </Button>
+    </form>
+  )
+}
+
+function InviteRow({
+  invite,
+  busy,
+  onAnswer,
+}: {
+  invite: ReceivedInvite
+  busy: boolean
+  onAnswer: (accepted: boolean) => void
+}) {
+  return (
+    <li className="set-row set-invite">
+      <CloudIcon className="set-icon" />
+      <span className="set-invite-text">
+        <span className="set-name">{invite.set_name}</span>
+        <span className="set-count">{SETS.invitedYou(invite.from)}</span>
+      </span>
+      <span className="set-invite-actions">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => onAnswer(false)}>
+          {SETS.decline}
+        </Button>
+        <Button size="sm" variant="primary" disabled={busy} onClick={() => onAnswer(true)}>
+          {SETS.accept}
+        </Button>
+      </span>
+    </li>
   )
 }
 
@@ -40,9 +121,11 @@ interface RowProps {
   open: boolean
   onToggle: () => void
   onDelete: (() => void) | null
+  onInvite: ((email: string) => Promise<unknown>) | null
+  busy: boolean
 }
 
-function SetRow({ set, shared, open, onToggle, onDelete }: RowProps) {
+function SetRow({ set, shared, open, onToggle, onDelete, onInvite, busy }: RowProps) {
   return (
     <li className="set-row" data-open={open} data-personal={set.is_personal}>
       <button type="button" className="set-head" aria-expanded={open} onClick={onToggle}>
@@ -58,6 +141,7 @@ function SetRow({ set, shared, open, onToggle, onDelete }: RowProps) {
       <Fold open={open}>
         <div className="set-body">
           <Members set={set} />
+          {onInvite ? <InviteForm onInvite={onInvite} busy={busy} /> : null}
           <div className="set-foot">
             <span>{set.is_personal ? SETS.personalNote : SETS.people(set.person_count)}</span>
             {onDelete ? (
@@ -73,7 +157,8 @@ function SetRow({ set, shared, open, onToggle, onDelete }: RowProps) {
 }
 
 // The sets dialog: the personal (local) network, then the cloud sets the owner belongs to, each unfolding
-// to its members; New set creates one in the cloud; the owner of a set can delete it.
+// to its members and their relay presence; New set creates one in the cloud; the owner of a set can delete
+// it and invite by email over the relay. Invites to this owner sit on top with Accept and Decline.
 export function SetsDialog({ open, onOpenChange, sets }: SetsDialogProps) {
   const [unfolded, setUnfolded] = useState("")
   const [naming, setNaming] = useState(false)
@@ -107,6 +192,12 @@ export function SetsDialog({ open, onOpenChange, sets }: SetsDialogProps) {
       open={unfolded === set.set_id}
       onToggle={() => setUnfolded(unfolded === set.set_id ? "" : set.set_id)}
       onDelete={set.role === "owner" && !set.is_personal ? () => setConfirming(set.set_id) : null}
+      onInvite={
+        (set.role === "owner" || set.role === "admin") && !set.is_personal
+          ? (email: string) => sets.invite(set.set_id, email)
+          : null
+      }
+      busy={sets.busy}
     />
   )
   return (
@@ -140,6 +231,21 @@ export function SetsDialog({ open, onOpenChange, sets }: SetsDialogProps) {
               </Button>
             ) : null}
           </div>
+        ) : null}
+        {sets.data?.invites.length ? (
+          <>
+            <p className="sets-divider">{SETS.invites}</p>
+            <ul className="set-list">
+              {sets.data.invites.map((invite) => (
+                <InviteRow
+                  key={invite.id}
+                  invite={invite}
+                  busy={sets.busy}
+                  onAnswer={(accepted) => sets.answer(invite.id, accepted)}
+                />
+              ))}
+            </ul>
+          </>
         ) : null}
         <ul className="set-list">{personal.map(row)}</ul>
         {sets.data && !sets.failure ? (

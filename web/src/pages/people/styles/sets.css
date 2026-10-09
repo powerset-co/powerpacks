@@ -314,10 +314,66 @@
   color: var(--faint);
   font-size: 11px;
 }
-.set-role {
+.set-member-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
+  flex: none;
+}
+.set-role {
   color: var(--faint);
   font-size: 11px;
+}
+.set-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.set-presence-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  opacity: 0.7;
+}
+.set-presence[data-live="true"] {
+  color: var(--ok);
+}
+.set-presence[data-live="true"] .set-presence-dot {
+  background: var(--ok);
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+.set-pending .set-member-name {
+  color: var(--muted);
+}
+.set-invite-form {
+  margin-top: 12px;
+}
+.set-invite {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 6px;
+}
+.set-invite .set-icon {
+  color: var(--primary);
+}
+.set-invite-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+}
+.set-invite-actions {
+  display: flex;
+  gap: 6px;
 }
 .set-foot {
   display: flex;
