@@ -1,4 +1,4 @@
-/** A local network (the personal set) and a cloud set. */
+/** The personal network, on this computer. */
 export function HomeIcon({ className = "" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
@@ -13,16 +13,15 @@ export function HomeIcon({ className = "" }: { className?: string }) {
   )
 }
 
-export function CloudIcon({ className = "" }: { className?: string }) {
+/** A set: people who see each other's shared networks. */
+export function SetIcon({ className = "" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
-      <path
-        d="M4.5 12.5h7a3 3 0 0 0 .4-5.97A4 4 0 0 0 4.2 7.6 2.5 2.5 0 0 0 4.5 12.5z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
+      <g fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="6" cy="5.5" r="2.25" />
+        <path d="M2 13c.4-2.2 2-3.5 4-3.5s3.6 1.3 4 3.5" />
+        <path d="M10.5 3.6a2.25 2.25 0 0 1 0 4.1M12 9.8c1.1.5 1.8 1.6 2 3.2" />
+      </g>
     </svg>
   )
 }

@@ -5,7 +5,7 @@ import { DialogTrigger } from "@/components/ui/dialog"
 import type { UploadStatus } from "@/lib/api/upload"
 import { SETS, UPLOAD } from "@/lib/people/copy"
 import { cn } from "@/lib/utils"
-import { CloudIcon, HomeIcon } from "./icons"
+import { SetIcon, HomeIcon } from "./icons"
 import { readTarget, useSets, writeTarget } from "./useSets"
 import "../styles/sets.css"
 
@@ -101,7 +101,7 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
               className={cn("share-option", chosen?.set_id === set.set_id && "picked")}
               onClick={() => pick(set.set_id)}
             >
-              <CloudIcon className="share-option-icon" />
+              <SetIcon className="share-option-icon" />
               <span className="share-option-text">
                 <span className="share-option-name">{set.name}</span>
                 <span className="share-option-note">{SETS.members(set.member_count)}</span>
