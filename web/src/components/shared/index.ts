@@ -24,6 +24,7 @@ export {
   PinIcon,
   PlusIcon,
   SparkIcon,
+  WarningIcon,
 } from "./icons/actions"
 export { CHANNEL_ICON } from "./icons/channels"
 export { initials } from "./initials"

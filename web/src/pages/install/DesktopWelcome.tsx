@@ -11,6 +11,7 @@ import {
   ImportIcon,
   SparkIcon,
   Spinner,
+  WarningIcon,
 } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
@@ -40,15 +41,15 @@ function Check({
   icon,
   title,
   why,
-  ready,
+  state,
   children,
   note,
 }: {
   icon: ReactNode
   title: string
   why: string
-  /** The words beside the check once it is ready; null while it is not. */
-  ready: string | null
+  /** Ready (a check), skipped (a dash), or needed (a warning beside the action). */
+  state: "ready" | "skipped" | "needed"
   /** The action while it is not ready. */
   children?: ReactNode
   note?: ReactNode
@@ -64,14 +65,28 @@ function Check({
         {note}
       </div>
       <div className="flex shrink-0 items-center gap-2 self-center">
-        {ready !== null ? (
-          <span className="rise-in flex items-center gap-1.5 text-xs font-semibold text-ok">
+        {state === "needed" && children}
+        <span
+          key={state}
+          role="img"
+          aria-label={state === "ready" ? "Ready" : state === "skipped" ? "Skipped" : "Needed"}
+          className={cn(
+            "rise-in grid size-6 place-items-center rounded-full",
+            state === "ready"
+              ? "bg-ok-soft text-ok"
+              : state === "skipped"
+                ? "text-faint"
+                : "bg-warn-soft text-warn",
+          )}
+        >
+          {state === "ready" ? (
             <CheckIcon className="size-3.5" />
-            {ready}
-          </span>
-        ) : (
-          children
-        )}
+          ) : state === "skipped" ? (
+            "–"
+          ) : (
+            <WarningIcon className="size-3.5" />
+          )}
+        </span>
       </div>
     </li>
   )
@@ -153,7 +168,7 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
           icon={<MessagesIcon className="size-[18px]" />}
           title="Full Disk Access"
           why="Reads iMessage and Contacts to find who you talk to. Nothing leaves your computer."
-          ready={readable ? "Allowed" : skipMessages ? "Skipped" : null}
+          state={readable ? "ready" : skipMessages ? "skipped" : "needed"}
           note={
             !readable && !skipMessages ? (
               <button
@@ -181,7 +196,7 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
           icon={<BrowserIcon className="size-[18px]" />}
           title="A browser for sign-ins"
           why="Signs in to LinkedIn and Google in a browser window. Nothing leaves your computer."
-          ready={data?.browser.ok ? `Using ${data.browser.name}` : null}
+          state={data?.browser.ok ? "ready" : "needed"}
           note={data && !data.browser.ok ? <InstallLine install={data.browser.install} /> : null}
         >
           {data ? (
@@ -198,7 +213,7 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
           icon={<CloudIcon className="size-[18px]" />}
           title="Google Cloud CLI"
           why="Connects Gmail through a private app in your own Google Cloud. Nothing leaves your computer."
-          ready={data?.gcloud.ok ? "Installed" : null}
+          state={data?.gcloud.ok ? "ready" : "needed"}
           note={data && !data.gcloud.ok ? <InstallLine install={data.gcloud.install} /> : null}
         >
           {data ? (
