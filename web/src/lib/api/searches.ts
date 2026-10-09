@@ -57,7 +57,7 @@ export interface AskAnswer {
 export interface SentAsk {
   ask_id: string
   question: string
-  candidates: { public_identifier: string; owners: string[] }[]
+  candidates: { public_identifier: string; name: string; owners: AskOwner[] }[]
 }
 
 export interface AskStatus {
@@ -90,10 +90,7 @@ export async function fetchAskStatus(runId: string): Promise<AskStatus> {
   return body<AskStatus>(response)
 }
 
-export async function sendAsk(
-  runId: string,
-  question: string,
-): Promise<{ status: string; ask: SentAsk | null }> {
+export async function sendAsk(runId: string, question: string): Promise<{ status: "sent"; ask: SentAsk }> {
   const response = await fetch(`${API}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

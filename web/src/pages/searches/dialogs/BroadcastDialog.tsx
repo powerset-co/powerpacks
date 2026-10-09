@@ -61,8 +61,7 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
     setSending(true)
     try {
       const result = await sendAsk(runId, question)
-      if (result.status !== "uploaded") throw new Error(`Send failed: ${result.status}`)
-      onToast({ message: `Asked ${result.ask?.candidates.length ?? 0} candidates.` })
+      onToast({ message: `Asked about ${result.ask.candidates.length} candidates.` })
       setStatus(await fetchAskStatus(runId))
     } catch (failure: unknown) {
       setError(failure instanceof Error ? failure.message : String(failure))

@@ -1,6 +1,8 @@
 """Run one People upload and project its typed manifest to the status route.
 
 Changelog:
+  2026-10-08: share_changed: the share list differs from the last completed upload's.
+  2026-10-08: a check of a share list edited since reads idle, so opening checks again.
   2026-09-27: the job reads the server's environment; no second env file.
   2026-09-27: bind confirm to checked decisions, expose the upload status contract.
 """
@@ -87,11 +89,13 @@ class ShareUpload:
                     "status": "interrupted", "uploaded": saved.progress["uploaded"],
                     "skipped": saved.progress["skipped"]})
             saved.write(self.manifest_path)
+        current_digest = self._current_share_digest()
         if saved.status == "running":
             state = "checking" if saved.dry_run else "uploading"
         elif saved.status == "completed" and saved.dry_run:
-            # A check from before the binding carries no digest: check again.
-            state = "ready" if saved.share_digest else "idle"
+            # A check of a share list edited since (or from before the binding, with no digest) is no
+            # check: opening checks again rather than showing the old plan.
+            state = "ready" if saved.share_digest == current_digest else "idle"
         else:
             state = saved.status
         stage = saved.stage if state in {"checking", "uploading"} else None
@@ -103,6 +107,7 @@ class ShareUpload:
         plan_counts = None if plan is None else {key: plan.get(key, 0) for key in (
             "marked_share", "with_linkedin", "without_linkedin", "new_to_cloud", "changed",
             "already_shared", "already_in_cloud", "losing_access", "companies_missing")}
+        last_upload = saved.last_upload if saved.checked_target in (None, saved.target) or saved.target is None else None
         error = None
         if state == "interrupted":
             error = INTERRUPTED
@@ -116,7 +121,9 @@ class ShareUpload:
                          "skipped": progress["skipped"], "namespaces": namespaces},
             "plan": plan_counts,
             "checked": saved.share_digest if state == "ready" else None,
-            "last_upload": saved.last_upload if saved.checked_target in (None, saved.target) or saved.target is None else None,
+            "last_upload": last_upload,
+            # The share list differs from what the last completed upload sent: the page offers an update.
+            "share_changed": last_upload is not None and last_upload.get("share_digest") != current_digest,
             "failed_action": ("check" if saved.dry_run else "upload") if state in {"failed", "interrupted"} else None,
             "error": error,
         }

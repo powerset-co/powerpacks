@@ -39,6 +39,8 @@ export interface UploadStatus {
   // The completed check's digest while ready; the confirm sends it back.
   checked: string | null
   last_upload: LastUpload | null
+  /** The share list differs from what the last upload sent. */
+  share_changed: boolean
   failed_action: UploadAction | null
   error: string | null
 }

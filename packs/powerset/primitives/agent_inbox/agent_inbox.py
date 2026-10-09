@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Pull this operator's agent messages from the relay into .powerpacks/inbox and ack them.
 
-Any kind rides here: an invite, a note from a teammate's agent, whatever the relay carries.
-The local agent reads the files; nothing here interprets them.
+The relay carries any kind; this laptop keeps only the kinds in messages.py whose fields check out.
+Every message is acked, so anything else (an unknown kind, a bad field) is discarded, logged by kind.
 
 Changelog:
+- 2026-10-08: keep only messages that parse (messages.py); ack and discard the rest.
 - 2026-10-08: created for the Ask the Set comms pipeline.
 """
 from __future__ import annotations
@@ -14,38 +15,48 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import write_json
+from packs.powerset.primitives.agent_inbox.messages import Rejected, parse
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
 
 HTTP_TIMEOUT_SECONDS = 30
 
 
-def _request(base: str, path: str, token: str, body: dict | None = None) -> dict:
+def _request(base: str, path: str, token: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     request = urllib.request.Request(
         base + path, headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
                               "Content-Type": "application/json"},
         data=json.dumps(body).encode("utf-8") if body is not None else None,
         method="POST" if body is not None else "GET")
     with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        return json.load(response)
+        answer: dict[str, Any] = json.load(response)
+    return answer
 
 
-def pull(*, repo_root: Path, env_file: Path) -> list[dict]:
-    """Fetch unacked messages, write each to .powerpacks/inbox/<id>.json, ack it; return them."""
+def pull(*, repo_root: Path, env_file: Path) -> list[dict[str, Any]]:
+    """Fetch unacked messages, keep each one that parses as .powerpacks/inbox/<id>.json, ack every one;
+    return the kept ones."""
     token = auth.bearer_token(env_file)
     base = auth.api_base(env_file)
     inbox = repo_root / ".powerpacks" / "inbox"
-    messages = _request(base, "/v2/agent-messages", token)["messages"]
-    for message in messages:
-        write_json(inbox / f"{message['id']}.json", message)
+    kept = []
+    for message in _request(base, "/v2/agent-messages", token)["messages"]:
+        try:
+            envelope = parse(message)
+        except Rejected as reason:
+            print(f"agent-inbox: discarded {str(message.get('kind'))[:40]!r}: {reason}", file=sys.stderr)
+        else:
+            write_json(inbox / f"{envelope.id}.json", message)
+            kept.append(message)
+            print(f"agent-inbox: {envelope.kind} from {envelope.from_name}", file=sys.stderr)
         _request(base, f"/v2/agent-messages/{message['id']}/ack", token, {})
-        print(f"agent-inbox: {message['kind']} from {message['from']['name']}", file=sys.stderr)
-    return messages
+    return kept
 
 
 def main(argv: list[str] | None = None) -> int:

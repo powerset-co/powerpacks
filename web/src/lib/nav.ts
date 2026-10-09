@@ -1,6 +1,6 @@
 // The local UI's pages, in top-bar order. The review server serves each at its href.
 
-export type PageKey = "searches" | "people" | "accounts" | "tasks"
+export type PageKey = "searches" | "people" | "sets" | "accounts" | "tasks"
 
 export interface Page {
   key: PageKey
@@ -14,6 +14,7 @@ export const HOME: Page = { key: "people", label: "People", href: "/people" }
 export const PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
+  { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   { key: "accounts", label: "Accounts", href: "/accounts" },
 ]

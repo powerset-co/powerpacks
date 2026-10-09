@@ -11,6 +11,8 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 
 Changelog:
 - 2026-10-08: start the Ask the Set daemon when the store-backed routes mount.
+- 2026-10-08: GET /api/relay answers the daemon's relay state for the top bar's dot; POST
+  /api/relay/connect wakes a signed-out daemon after the page's sign-in.
 - 2026-10-07: created from v1's `deep_context/review/cli.py` and `server.py`: the same persistent
   handler, port ownership and health identity (`reconcile_review_web`, kept so an older release's
   page on the port is recognised and replaced), with the v1 review, its event stream and the
@@ -91,15 +93,27 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     share = share_routes(conn, data_root)
     store_lock = threading.Lock()
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
-    searches_json = search_api(searches)
+    searches_json = search_api(searches, share.sets, store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
     threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
                      name="asks", daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
+        def _relay(self) -> None:
+            body = json.dumps(asks_loop.STATUS).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/relay":
+                self._relay()
+                return
             if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
                 return
             if searches_json.get(self, parsed) or searches.get(self, parsed):
@@ -110,6 +124,10 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/relay/connect":
+                asks_loop.WAKE.set()
+                self._relay()
+                return
             if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches_json.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:

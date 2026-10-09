@@ -18,6 +18,7 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -112,7 +113,7 @@ def _handler(root: Path, feedback: list[dict[str, list[str]]]) -> type[BaseHTTPR
     """
     app = AppRoutes()
     searches = search_routes(root, base="/searches")
-    searches_json = search_api(searches)
+    searches_json = search_api(searches, mock.Mock(), threading.Lock())
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802

@@ -120,3 +120,27 @@ def decide_share(conn: sqlite3.Connection, tags: list[TagRow], shares: list[Shar
             "share = excluded.share, reason = excluded.reason, labels = excluded.labels, source = excluded.source, "
             "updated_at = excluded.updated_at",
             shares)
+
+
+# ---- the sets on this machine (sets.py): made here, or joined by accepting an invite
+
+def sets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """The sets on this machine, by name."""
+    return conn.execute("SELECT set_id, name, role, members_json FROM sets ORDER BY name COLLATE NOCASE").fetchall()
+
+
+def insert_set(conn: sqlite3.Connection, set_id: str, name: str, role: str, members_json: str, created_at: str) -> None:
+    with conn:
+        # A second invite to a set already joined is accepted again: the newer answer stands.
+        conn.execute("INSERT OR REPLACE INTO sets (set_id, name, role, members_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                     (set_id, name, role, members_json, created_at))
+
+
+def update_set_members(conn: sqlite3.Connection, set_id: str, members_json: str) -> None:
+    with conn:
+        conn.execute("UPDATE sets SET members_json = ? WHERE set_id = ?", (members_json, set_id))
+
+
+def delete_set(conn: sqlite3.Connection, set_id: str) -> None:
+    with conn:
+        conn.execute("DELETE FROM sets WHERE set_id = ?", (set_id,))

@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SHARE_TABLES_DDL, SHARE_VIEWS_DDL
+from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, SHARE_TABLES_DDL, SHARE_VIEWS_DDL
 
 STORE_RELATIVE_PATH = Path("deep-context") / "deep-context-v2.sqlite"
 
@@ -66,7 +66,7 @@ def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
-    """Schema 4 is schema 3 plus the review queue; no row changes."""
+    """Schema 4 is schema 3 plus the review queue and the sets table; no row changes."""
     with conn:
-        conn.executescript(REVIEW_QUEUE_DDL)
+        conn.executescript(REVIEW_QUEUE_DDL + SETS_DDL)
         conn.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")

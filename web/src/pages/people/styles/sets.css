@@ -1,0 +1,126 @@
+/* The head's share control (ShareMenu): a split button and its set menu. */
+.share-menu {
+  position: relative;
+}
+.share-split {
+  display: inline-flex;
+}
+.share-split .share-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 10px;
+}
+.share-split .share-caret {
+  width: 28px;
+  padding: 0;
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  justify-content: center;
+}
+/* A menu caret: down at rest, up while the menu is open (the shared chevron points right at rest). */
+.share-split .share-caret::after {
+  margin: 0 0 2px;
+  transform: rotate(45deg);
+}
+.share-split .share-caret[aria-expanded="true"]::after {
+  margin: 2px 0 0;
+  transform: rotate(-135deg);
+}
+.share-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 260px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  animation: feedback-pop-in 0.15s ease-out;
+}
+.share-popover-title,
+.share-popover-note {
+  margin: 4px 8px 6px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.share-popover-note {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+.share-popover-rule {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--line);
+}
+.share-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out);
+}
+.share-option:hover {
+  background: var(--surface-2);
+}
+.share-option.manage {
+  grid-template-columns: 1fr;
+  color: var(--muted);
+  font-weight: 600;
+}
+.share-option.manage:hover {
+  color: var(--foreground);
+}
+.share-option-icon {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+.share-option-icon.local {
+  color: var(--ok);
+}
+.share-option.picked .share-option-icon:not(.local) {
+  color: var(--primary);
+}
+.share-option-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.share-option-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-option-note {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+.share-check {
+  width: 14px;
+  height: 14px;
+  color: var(--primary);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+.share-check.on {
+  opacity: 1;
+}

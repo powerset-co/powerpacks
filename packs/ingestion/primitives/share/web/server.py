@@ -10,6 +10,10 @@ of those families and re-decides their share rows through
 `labels.share_decision` from `person_labels`, in one transaction.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
+GET `/api/people/sets` reads the sets on this machine (sets.py; no cloud set information);
+POST `/api/people/sets` {name} creates one; POST `/api/people/sets/delete` {set_id} deletes one.
+POST `/api/people/sets/invite` {set_id, email} sends an invite over the relay; POST `/api/people/sets/answer`
+{invite_id, accepted} answers one (sets.py).
 GET `/api/people/logbook` reads build status; POST builds the selected parents' local raw archive.
 GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
 
@@ -47,6 +51,8 @@ from packs.ingestion.primitives.share.web.logbook_archive import (
     LogbookArchive, conversation_payload, entries_payload, entry_payload,
 )
 from packs.ingestion.primitives.share.web.model import SharePeople, SharePerson, people_payload
+from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets, payload as sets_payload
+from packs.ingestion.schemas.share_schema import SHARE_YES
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 from packs.shared.web.app import AppRoutes
@@ -122,17 +128,21 @@ class ShareRoutes:
 
     def __init__(self, conn: sqlite3.Connection, people: SharePeople,
                  load: Callable[[], tuple[SharePerson, ...]], upload: ShareUpload, *,
-                 logbook_root: Path = LOGBOOK_ROOT, logbook_stores: dict[str, Path] | None = None) -> None:
+                 logbook_root: Path = LOGBOOK_ROOT, logbook_stores: dict[str, Path] | None = None,
+                 env_file: Path = Path(".env")) -> None:
         self.conn = conn
         self.people = people
         self.load = load
         self.upload = upload
         self.logbook = PeopleLogbook(conn, root=logbook_root, stores=logbook_stores)
+        self.sets = Sets(conn, env_file)
         self.archive = LogbookArchive(conn, logbook_root, gmail_store=self.logbook.stores["gmail"])
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == f"{API_PREFIX}rows":
+        if parsed.path == f"{API_PREFIX}sets":
+            self._answer_sets(handler, lambda: None)  # a read: nothing to change
+        elif parsed.path == f"{API_PREFIX}rows":
             self._send_json(handler, people_payload(self.load()))
         elif parsed.path == f"{API_PREFIX}upload":
             self._send_json(handler, self.upload.status())
@@ -154,7 +164,8 @@ class ShareRoutes:
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
-                               f"{API_PREFIX}logbook"}:
+                               f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
+                               f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         host = (handler.headers.get("Host") or "").strip()
@@ -166,6 +177,25 @@ class ShareRoutes:
             return True
         if parsed.path == f"{API_PREFIX}logbook":
             self._start_logbook(handler)
+            return True
+        if parsed.path.startswith(f"{API_PREFIX}sets"):
+            length = min(int(handler.headers.get("Content-Length", "0")), MAX_TAGS_REQUEST_BYTES)
+            form = json.loads(handler.rfile.read(length).decode("utf-8") or "{}")
+            if parsed.path.endswith("/invite"):
+                set_id, email = str(form.get("set_id") or ""), str(form.get("email") or "").strip()
+                self._answer_sets(handler, lambda: self.sets.invite(set_id, email))
+            elif parsed.path.endswith("/answer"):
+                invite_id, accepted = str(form.get("invite_id") or ""), bool(form.get("accepted"))
+                self._answer_sets(handler, lambda: self.sets.answer(invite_id, accepted))
+            elif parsed.path.endswith("/delete"):
+                self._answer_sets(handler, lambda: self.sets.delete(str(form.get("set_id") or "")))
+            else:
+                name = str(form.get("name") or "").strip()
+                if not name:
+                    self._send(handler, json.dumps({"error": "give the set a name"}).encode(), "application/json; charset=utf-8",
+                               status=HTTPStatus.BAD_REQUEST)
+                    return True
+                self._answer_sets(handler, lambda: self.sets.create(name))
             return True
         if parsed.path in {f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
             length = int(handler.headers.get("Content-Length") or 0)
@@ -242,6 +272,22 @@ class ShareRoutes:
         else:
             self._send_json(handler, payload)
 
+    def _answer_sets(self, handler: BaseHTTPRequestHandler, change: Callable[[], None]) -> None:
+        """Make the change, then answer the sets payload; a missing sign-in is 401 with status needs_auth
+        (the page offers the sign-in)."""
+        try:
+            change()
+            answer = sets_payload(self.sets, sum(1 for row in self.load() if row.share == SHARE_YES))
+        except NeedsSignIn as error:
+            self._send(handler, json.dumps({"status": "needs_auth", "error": str(error)}).encode(),
+                       "application/json; charset=utf-8", status=HTTPStatus.UNAUTHORIZED)
+            return
+        except CloudError as error:
+            self._send(handler, json.dumps({"error": str(error)}).encode(), "application/json; charset=utf-8",
+                       status=HTTPStatus.BAD_GATEWAY)
+            return
+        self._send(handler, json.dumps(answer, ensure_ascii=False).encode(), "application/json; charset=utf-8")
+
     @staticmethod
     def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str = "text/html; charset=utf-8",
               status: int = HTTPStatus.OK, *, cache: str = "no-store") -> None:
@@ -275,7 +321,7 @@ def share_routes(conn: sqlite3.Connection, data_root: Path, *, upload_db: Path |
     upload = ShareUpload(store_path(data_root), data_root / PEOPLE_CSV_RELATIVE_PATH, index_db=upload_db or DEFAULT_DB,
                          out_dir=upload_dir or DEFAULT_OUT_DIR)
     return ShareRoutes(conn, people, load, upload, logbook_root=logbook_root or data_root / "logbook",
-                       logbook_stores=logbook_stores)
+                       logbook_stores=logbook_stores, env_file=data_root.parent / ".env")
 
 
 def make_handler(routes: ShareRoutes) -> type[BaseHTTPRequestHandler]:

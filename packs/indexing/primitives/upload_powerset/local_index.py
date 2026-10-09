@@ -4,6 +4,7 @@ Flow: read person profiles and linked entity ids -> select contract columns
 present in the local and live schemas -> build documents for namespace writes.
 
 Changelog:
+  2026-10-08: whole DOUBLE values of integer attributes are sent as integers.
   2026-09-28: hashes and documents are read PEOPLE_PER_READ people at a time.
   2026-09-24: created.
 """
@@ -127,13 +128,16 @@ def namespace_rows(con: Any, logical: str, ids: tuple[str, ...],
         [list(ids)],
     )
     names = [column[0] for column in rows.description]
+    integers = {name for name, spec in namespace.write_schema.items() if spec.get("type") in ("int", "uint")}
     docs = []
     for row in rows.fetchall():
         doc = dict(zip(names, row))
         if namespace.person_grain:
             person_id = str(doc.pop("_person_key"))
-        # TurboPuffer writes only present values; NULL would erase a live attribute.
-        doc = {name: value for name, value in doc.items() if value is not None}
+        # TurboPuffer writes only present values; NULL would erase a live attribute. An integer
+        # attribute held as a whole DOUBLE locally (0.0) goes up as the integer it is.
+        doc = {name: int(value) if name in integers and isinstance(value, float) and value.is_integer() else value
+               for name, value in doc.items() if value is not None}
         if namespace.person_grain:
             if logical == "summaries":
                 doc["id"] = person_id

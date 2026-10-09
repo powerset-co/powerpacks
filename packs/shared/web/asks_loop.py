@@ -1,21 +1,26 @@
-"""Listen for Ask the Set tasks, answers and agent messages, and announce this laptop's presence.
+"""Pull this laptop's agent messages as they arrive, answer asks among them, and announce its presence.
 
 Changelog:
 - 2026-10-08: add the local NATS loop with durable task delivery.
 - 2026-10-08: re-fetch the connection and reconnect every REFRESH_SECONDS, before a 24 h credential expires.
 - 2026-10-08: ask for the default set's connection; the route refuses a bare call from a member of several sets.
 - 2026-10-08: subscribe to the operator's inbox subject and pull agent messages on each nudge.
+- 2026-10-08: keep the last heartbeat per operator in .powerpacks/presence.json for the sets page.
+- 2026-10-08: keep the relay state for the top bar's status dot; a sign-in wakes a signed-out wait.
+- 2026-10-08: asks are agent messages: the inbox pull answers each unanswered `ask` (and `debug_request`)
+  from someone in one of this owner's sets, and marks the rest refused; no ask tasks or ask subjects.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import closing
 from datetime import datetime, timezone
-from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from uuid import uuid4
@@ -24,9 +29,12 @@ import nats
 from dotenv import dotenv_values
 
 from packs.ingestion.primitives.ask_worker import ask_worker
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
+from packs.ingestion.primitives.share.web.sets import Sets
+from packs.powerset.primitives.agent_debug import agent_debug
 from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
-from packs.search.primitives.ask_status import ask_status
 
 HEARTBEAT_SECONDS = 30
 REFRESH_SECONDS = 20 * 3600
@@ -34,6 +42,20 @@ SIGNED_OUT_SECONDS = 300
 MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
 _LOG = logging.getLogger(__name__)
+# Message kinds this machine answers without a person, and only for someone in one of its sets: an ask,
+# a teammate's debug checks.
+ANSWERED_HERE = {"ask": ask_worker.answer_message, "debug_request": agent_debug.answer}
+# The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
+STATUS = {"state": "offline"}
+WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects at once
+
+
+def _set_members(repo_root: Path, env_file: Path) -> set[str]:
+    """The operators in this owner's sets, read from the store the People page keeps."""
+    with closing(open_store(store_path(repo_root / ".powerpacks"))) as conn:
+        sets = Sets(conn, env_file)
+        sets.settle()  # a delete or a leave the relay just delivered counts before anyone is answered
+        return sets.known_operators()
 
 
 def _device_id(repo_root: Path) -> str:
@@ -76,42 +98,50 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
     async def on_error(exc: Exception) -> None:
         _LOG.warning("Ask NATS: %s", type(exc).__name__)
 
-    async def work() -> None:
+    async def pull() -> None:
+        """Pull the inbox, then answer what this machine answers by itself (asks, debug requests), one
+        at a time. A failed answer stays unanswered and is tried again on the next pull."""
         async with worker_lock:
-            await asyncio.to_thread(ask_worker.run, repo_root=repo_root,
-                                    env_file=env_file, device_id=device_id)
-
-    async def tasks(message) -> None:
-        if json.loads(message.data)["kind"] == "tasks":
-            await work()
-        await message.ack()
+            await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
+            known = await asyncio.to_thread(_set_members, repo_root, env_file)
+            for path in sorted((repo_root / ".powerpacks" / "inbox").glob("*.json")):
+                message = json.loads(path.read_text(encoding="utf-8"))
+                handler = ANSWERED_HERE.get(message["kind"])
+                if handler is None or "answered_at" in message:
+                    continue
+                if message["from"]["operator_id"] not in known:
+                    # Not someone in a set with this owner: no answer, no model call, no checks.
+                    write_json(path, {**message, "answered_at": now_iso(), "refused": "not in a set"})
+                    continue
+                try:
+                    await asyncio.to_thread(handler, message, repo_root=repo_root, env_file=env_file)
+                except Exception as exc:
+                    _LOG.warning("Answering %s: %s", message["kind"], type(exc).__name__)
+                    continue
+                write_json(path, {**json.loads(path.read_text(encoding="utf-8")), "answered_at": now_iso()})
 
     async def inbox(message) -> None:
         if json.loads(message.data)["kind"] == "message":
-            await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
+            await pull()
         await message.ack()
 
-    async def answer(run_dir: Path, message) -> None:
-        if json.loads(message.data)["kind"] == "answer":
-            await asyncio.to_thread(ask_status.run, run_dir, env_file=env_file)
+    presence_file = repo_root / ".powerpacks" / "presence.json"
+    seen = json.loads(presence_file.read_text(encoding="utf-8")) if presence_file.exists() else {}
+
+    async def heartbeat(message) -> None:
+        beat = json.loads(message.data)
+        seen[beat["operator_id"]] = beat["at"]
+        write_json(presence_file, seen)
 
     subjects = connection["subjects"]
     nc = await nats.connect(connection["url"], token=connection["token"],
                             allow_reconnect=False, closed_cb=on_close, error_cb=on_error)
 
     async def watch() -> None:
-        subscribed = set()
         connected_at = time.monotonic()
         while not closed.is_set():
             if time.monotonic() - connected_at >= REFRESH_SECONDS:
                 return
-            for directory in ("deep-search", "search"):
-                for path in (repo_root / ".powerpacks" / directory).glob("*/ask.json"):
-                    ask_id = json.loads(path.read_text(encoding="utf-8"))["ask_id"]
-                    subject = subjects["asks"] + ask_id
-                    if subject not in subscribed:
-                        await nc.subscribe(subject, cb=partial(answer, path.parent))
-                        subscribed.add(subject)
             await nc.publish(subjects["presence"], json.dumps({
                 "kind": "heartbeat", "operator_id": subjects["tasks"].split(".")[-1],
                 "device_id": device_id, "at": datetime.now(timezone.utc).isoformat(),
@@ -124,18 +154,18 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
 
     watcher = None
     try:
-        await nc.jetstream().subscribe(subjects["tasks"], stream="asks", durable=device_id,
-                                       cb=tasks, manual_ack=True)
         await nc.jetstream().subscribe(subjects["inbox"], stream="asks", durable=device_id + "-inbox",
                                        cb=inbox, manual_ack=True)
+        await nc.subscribe(subjects["presence"], cb=heartbeat)
         watcher = asyncio.create_task(watch())
-        await work()
-        await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
+        STATUS["state"] = "connected"
+        await pull()
         await watcher
     finally:
         if watcher is not None:
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
+        STATUS["state"] = "offline"
         await nc.close()
 
 
@@ -148,7 +178,10 @@ async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
             await _connected(connection, repo_root=repo_root, env_file=env_file, device_id=device_id)
             backoff = 1  # a refresh: the watcher returned, reconnect at once with fresh credentials
         except SystemExit:
-            await asyncio.sleep(SIGNED_OUT_SECONDS)
+            STATUS["state"] = "signed_out"
+            WAKE.clear()
+            await asyncio.to_thread(WAKE.wait, SIGNED_OUT_SECONDS)
+            STATUS["state"] = "offline"
             backoff = 1
         except Exception as exc:
             if time.monotonic() - started > MAX_BACKOFF_SECONDS:

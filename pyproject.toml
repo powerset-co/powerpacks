@@ -39,6 +39,7 @@ files = [
     "packs/ingestion/primitives/deep_context_v2",
     "packs/ingestion/primitives/share",
     "packs/indexing/primitives/upload_powerset",
+    "packs/powerset/primitives/agent_inbox",
 ]
 explicit_package_bases = true
 namespace_packages = true
