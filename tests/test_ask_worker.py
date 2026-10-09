@@ -1,6 +1,7 @@
 """Exercise the owner's ask worker with a synthetic store and stubbed HTTP/model calls.
 
 Changelog:
+  2026-10-09: the worker takes the typed Ask; the reply goes through agent_inbox.send.
   2026-10-08: an ask arrives as an agent message and the answer goes back as one; leases are gone.
   2026-10-08: cover family evidence, privacy, validation, leases, and task isolation.
 """
@@ -17,13 +18,16 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from packs.ingestion.primitives.ask_worker import ask_worker
-from packs.powerset.primitives.agent_inbox.messages import Verdict
+from packs.powerset.primitives.agent_inbox import agent_inbox
+from packs.powerset.primitives.agent_inbox.messages import Verdict, parse
 from packs.ingestion.primitives.deep_context_v2.db import queries, queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SharedContextFact, SynthesizedFacts
 
 NOW = "2026-10-08T12:00:00Z"
+ASKER = str(uuid4())
+ASK_ID = str(uuid4())
 SLUG = "jordan-bravo-1a2b"
 URL = f"https://www.linkedin.com/in/{SLUG}"
 ANSWER = {"verdict": "recommend", "reason": "Relevant engineering experience.", "can_intro": True,
@@ -73,8 +77,8 @@ class AskWorkerTests(unittest.TestCase):
         self.message = self._message(SLUG)
         self.posts = []
         self.http = self.enterContext(patch("urllib.request.urlopen", side_effect=self._http))
-        self.enterContext(patch.object(ask_worker.auth, "bearer_token", return_value="synthetic-token"))
-        self.enterContext(patch.object(ask_worker.auth, "api_base", return_value="http://localhost:8769"))
+        self.enterContext(patch.object(agent_inbox.auth, "bearer_token", return_value="synthetic-token"))
+        self.enterContext(patch.object(agent_inbox.auth, "api_base", return_value="http://localhost:8769"))
         self.enterContext(patch.object(OpenAIResponsesConfig, "resolve", return_value=OpenAIResponsesConfig(
             model="synthetic-model", effort="low", concurrency=1, timeout=120, max_retries=0)))
         self.enterContext(patch("packs.ingestion.primitives.deep_context_v2.openai.AsyncOpenAI", return_value=AsyncMock()))
@@ -85,8 +89,8 @@ class AskWorkerTests(unittest.TestCase):
 
     def _message(self, *slugs: str) -> dict:
         return {"id": str(uuid4()), "kind": "ask", "created_at": NOW,
-                "from": {"operator_id": "op-asker", "name": "Casey Delta"},
-                "payload": {"ask_id": "ask-1", "question": "Who can advise on engineering?",
+                "from": {"operator_id": ASKER, "name": "Casey Delta"},
+                "payload": {"ask_id": ASK_ID, "question": "Who can advise on engineering?",
                             "role": {"title": "Founding engineer", "company": "Acme", "job_description": "Build it."},
                             "candidates": [{"public_identifier": slug, "linkedin_url": f"https://www.linkedin.com/in/{slug}",
                                             "name": "Jordan Bravo"} for slug in slugs]}}
@@ -99,12 +103,14 @@ class AskWorkerTests(unittest.TestCase):
     def _run(self):
         (self.data / "inbox").mkdir(parents=True, exist_ok=True)
         (self.data / "inbox" / f"{self.message['id']}.json").write_text(json.dumps(self.message))
-        return ask_worker.answer_message(self.message, repo_root=self.root, env_file=self.root / ".env")
+        envelope = parse(self.message)
+        return ask_worker.answer(envelope.id, envelope.from_operator_id, envelope.payload,
+                                 repo_root=self.root, env_file=self.root / ".env")
 
     def _reply(self) -> dict:
         self.assertEqual(len(self.posts), 1)
         url, body = self.posts[0]
-        self.assertEqual((url, body["to"], body["kind"]), ("http://localhost:8769/v2/agent-messages", "op-asker", "ask_answer"))
+        self.assertEqual((url, body["to"], body["kind"]), ("http://localhost:8769/v2/agent-messages", ASKER, "ask_answer"))
         return body["payload"]
 
     def _audits(self):
@@ -112,7 +118,7 @@ class AskWorkerTests(unittest.TestCase):
 
     def test_found_answers_the_asker_and_audits_only_evidence_identifiers(self) -> None:
         self._run()
-        self.assertEqual(self._reply(), {"ask_id": "ask-1", "answers": [{"public_identifier": SLUG, "answer": ANSWER}]})
+        self.assertEqual(self._reply(), {"ask_id": ASK_ID, "answers": [{"public_identifier": SLUG, "answer": ANSWER}]})
         self.model.assert_awaited_once()
         request = self.model.call_args.kwargs
         prompt = json.loads(request["user_prompt"])

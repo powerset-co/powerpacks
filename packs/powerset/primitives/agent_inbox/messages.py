@@ -7,6 +7,7 @@ every message and keeps only what parses, so anything else is discarded.
 
 Changelog:
 - 2026-10-09: an ask carries the search's role (title, company, job description).
+- 2026-10-09: parsers read top to bottom: one step per line, no nested comprehensions.
 - 2026-10-09: an answer's reason and relationship take up to MAX_TEXT (500) characters.
 - 2026-10-08: set_members carries the owner's full member list; typed answers and debug results.
 - 2026-10-08: created: set invites, replies, deletes and leaves; asks and their answers; debug checks.
@@ -125,8 +126,8 @@ class SetMembers:
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> SetMembers:
-        return cls(_uuid(payload.get("set_id"), "set_id"),
-                   tuple(SetMember.parse(row) for row in _list(payload.get("members"), "members", MAX_MEMBERS)))
+        members = _list(payload.get("members"), "members", MAX_MEMBERS)
+        return cls(_uuid(payload.get("set_id"), "set_id"), tuple(SetMember.parse(row) for row in members))
 
 
 @dataclass(frozen=True)
@@ -167,10 +168,9 @@ class Ask:
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> Ask:
+        candidates = _list(payload.get("candidates"), "candidates", MAX_CANDIDATES)
         return cls(_uuid(payload.get("ask_id"), "ask_id"), _text(payload.get("question"), "question"),
-                   Role.parse(payload.get("role")),
-                   tuple(AskCandidate.parse(row) for row in
-                         _list(payload.get("candidates"), "candidates", MAX_CANDIDATES)))
+                   Role.parse(payload.get("role")), tuple(AskCandidate.parse(row) for row in candidates))
 
 
 @dataclass(frozen=True)
@@ -228,10 +228,12 @@ class AskAnswer:
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> AskAnswer:
-        return cls(_uuid(payload.get("ask_id"), "ask_id"), tuple(
-            CandidateAnswer(_text(_dict(row, "answer").get("public_identifier"), "public_identifier"),
-                            _answer_body(row.get("answer")))
-            for row in _list(payload.get("answers"), "answers", MAX_CANDIDATES)))
+        answers = []
+        for value in _list(payload.get("answers"), "answers", MAX_CANDIDATES):
+            row = _dict(value, "answer")
+            slug = _text(row.get("public_identifier"), "public_identifier")
+            answers.append(CandidateAnswer(slug, _answer_body(row.get("answer"))))
+        return cls(_uuid(payload.get("ask_id"), "ask_id"), tuple(answers))
 
 
 @dataclass(frozen=True)

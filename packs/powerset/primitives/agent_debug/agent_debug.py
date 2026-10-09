@@ -6,6 +6,7 @@ Every check only reads (files, a read-only SQLite connection, `git rev-parse`/`d
 writes, deletes or spends. The answer is one debug_result agent message back to the sender.
 
 Changelog:
+- 2026-10-09: answer() takes the typed DebugRequest; sending and reading go through agent_inbox.
 - 2026-10-08: created for remote diagnostics over the Ask the Set relay.
 """
 from __future__ import annotations
@@ -15,22 +16,23 @@ import json
 import sqlite3
 import subprocess
 import sys
-import urllib.request
 from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.deep_context_v2.db.schema import SCHEMA_VERSION
-from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
+from packs.powerset.primitives.agent_inbox import agent_inbox
+from packs.powerset.primitives.agent_inbox.messages import DebugRequest, DebugResult
 
 REQUEST = "debug_request"
 RESULT = "debug_result"
 OUTPUT_CAP = 20_000  # characters per check; the tail is kept
 LOG_LINES = 200
-HTTP_TIMEOUT_SECONDS = 30
 INSTALL_FIELDS = ("status", "step", "event", "message", "note", "retry_command", "steps", "updated_at",
                   "person_count", "network_name", "log_path")
 UPLOAD_FIELDS = ("status", "stage", "dry_run", "started_at", "finished_at", "progress", "error", "error_type",
@@ -124,30 +126,19 @@ def run_checks(names: list[str], repo_root: Path) -> dict[str, dict]:
     return results
 
 
-def _send(env_file: Path, to: str, kind: str, payload: dict) -> dict:
-    """POST one agent message to the relay; returns its {"id", "status"}."""
-    request = urllib.request.Request(
-        auth.api_base(env_file) + "/v2/agent-messages", method="POST",
-        data=json.dumps({"to": to, "kind": kind, "payload": payload}).encode("utf-8"),
-        headers={"Authorization": f"Bearer {auth.bearer_token(env_file)}", "Accept": "application/json",
-                 "Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        return json.load(response)
-
-
-def answer(message: dict, *, repo_root: Path, env_file: Path) -> dict:
+def answer(message_id: str, sender: str, request: DebugRequest, *, repo_root: Path, env_file: Path) -> dict:
     """Run the requested checks (all when none are named) and send one debug_result to the sender."""
-    names = message["payload"].get("checks") or list(CHECKS)
-    payload = {"request_id": message["id"], "results": run_checks(names, repo_root)}
-    return _send(env_file, message["from"]["operator_id"], RESULT, payload)
+    names = list(request.checks) or list(CHECKS)
+    payload = {"request_id": message_id, "results": run_checks(names, repo_root)}
+    return agent_inbox.send(env_file, sender, RESULT, payload)
 
 
-def find_result(inbox: Path, request_id: str) -> dict | None:
+def find_result(data_root: Path, request_id: str) -> DebugResult | None:
     """The debug_result in the inbox that answers request_id."""
-    for path in inbox.glob("*.json"):
-        message = json.loads(path.read_text(encoding="utf-8"))
-        if message["kind"] == RESULT and message["payload"]["request_id"] == request_id:
-            return message
+    for envelope in agent_inbox.read(data_root, RESULT):
+        result = cast(DebugResult, envelope.payload)
+        if result.request_id == request_id:
+            return result
     return None
 
 
@@ -162,11 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     show.add_argument("request_id")
     args = parser.parse_args(argv)
     if args.command == "request":
-        sent = _send(args.env_file, args.to, REQUEST, {"checks": args.check} if args.check else {})
+        sent = agent_inbox.send(args.env_file, args.to, REQUEST, {"checks": args.check} if args.check else {})
         print(json.dumps(sent, indent=2))
         return 0
-    result = find_result(_REPO_ROOT / ".powerpacks" / "inbox", args.request_id)
-    print(json.dumps(result if result else {"request_id": args.request_id, "status": "not arrived"}, indent=2))
+    result = find_result(_REPO_ROOT / ".powerpacks", args.request_id)
+    if result is None:
+        print(json.dumps({"request_id": args.request_id, "status": "not arrived"}, indent=2))
+    else:
+        print(json.dumps(asdict(result), indent=2))
     return 0
 
 

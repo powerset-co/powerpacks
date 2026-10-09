@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -17,9 +18,10 @@ from packs.indexing.lib.identity import stable_person_id
 from packs.ingestion.primitives.share.web.sets import Member, SetView
 from packs.search.primitives.ask_set import ask_set
 
-ME = Member("Jordan Bravo", "jordan@example.com", "owner", "op-jordan")
-CASEY = Member("Casey Delta", "casey@example.com", "member", "op-casey")
-RILEY = Member("Riley Echo", "riley@example.com", "member", "op-riley")
+JORDAN_ID, CASEY_ID, RILEY_ID, STRANGER_ID = (str(uuid.uuid4()) for _ in range(4))
+ME = Member("Jordan Bravo", "jordan@example.com", "owner", JORDAN_ID)
+CASEY = Member("Casey Delta", "casey@example.com", "member", CASEY_ID)
+RILEY = Member("Riley Echo", "riley@example.com", "member", RILEY_ID)
 SNAPSHOT = {
     "tags": {"assignments": {"p1": ["Pinned"], "p2": ["pinned"], "p3": [], "p4": ["pinned"]}},
     "search": {"title": "Founding engineer", "company": "Acme", "jd_text": "Build the platform. " * 500, "candidates": [
@@ -42,16 +44,14 @@ class AskSetTests(unittest.TestCase):
         self.sets = mock.Mock()
         self.sets.data_root = self.root / ".powerpacks"
         self.sets.me.return_value = ME
-        view = SetView("set-1", "Founders", "owner", (ME,))
-        self.sets.kept.return_value = [view]
-        self.sets.members.return_value = [ME, CASEY, RILEY]
+        self.sets.kept.return_value = [SetView("set-1", "Founders", "owner", (ME, CASEY, RILEY))]
         # Casey shared Alex and Sam; Riley shared only Sam; nobody outside the set counts.
         self.sets.shared_by.return_value = {
-            stable_person_id(public_identifier="alex-foxtrot"): ("op-casey", "op-stranger"),
-            stable_person_id(public_identifier="sam-golf"): ("op-casey", "op-riley", "op-jordan"),
+            stable_person_id(public_identifier="alex-foxtrot"): (CASEY_ID, STRANGER_ID),
+            stable_person_id(public_identifier="sam-golf"): (CASEY_ID, RILEY_ID, JORDAN_ID),
         }
         self.sets.message.side_effect = lambda to, kind, payload: self.sent.append((to, kind, payload))
-        self.sets.presence.return_value = {"op-casey": datetime.now(timezone.utc).isoformat()}
+        self.sets.presence.return_value = {CASEY_ID: datetime.now(timezone.utc).isoformat()}
         self.enterContext(mock.patch.object(ask_set.snapshot, "export_snapshot", return_value=SNAPSHOT))
 
     def test_preview_names_the_members_who_know_each_pinned_candidate(self) -> None:
@@ -67,8 +67,8 @@ class AskSetTests(unittest.TestCase):
         self.assertEqual(result["status"], "sent")
         by_member = {to: (kind, [c["public_identifier"] for c in payload["candidates"]], payload["question"])
                      for to, kind, payload in self.sent}
-        self.assertEqual(by_member, {"op-casey": ("ask", ["alex-foxtrot", "sam-golf"], "Would you intro?"),
-                                     "op-riley": ("ask", ["sam-golf"], "Would you intro?")})
+        self.assertEqual(by_member, {CASEY_ID: ("ask", ["alex-foxtrot", "sam-golf"], "Would you intro?"),
+                                     RILEY_ID: ("ask", ["sam-golf"], "Would you intro?")})
         role = self.sent[0][2]["role"]
         self.assertEqual((role["title"], role["company"]), ("Founding engineer", "Acme"))
         self.assertEqual(len(role["job_description"]), ask_set.MAX_JD)
@@ -81,8 +81,9 @@ class AskSetTests(unittest.TestCase):
         inbox.mkdir(parents=True)
         answer = {"verdict": "recommend", "reason": "Worked together.", "can_intro": True,
                   "relationship": "colleague", "last_contact": None, "confidence": 0.9}
-        (inbox / "m1.json").write_text(json.dumps({
-            "id": "m1", "kind": "ask_answer", "from": {"operator_id": "op-casey", "name": "Casey Delta"},
+        message_id = str(uuid.uuid4())
+        (inbox / f"{message_id}.json").write_text(json.dumps({
+            "id": message_id, "kind": "ask_answer", "from": {"operator_id": CASEY_ID, "name": "Casey Delta"},
             "created_at": "2026-10-08T00:00:00Z",
             "payload": {"ask_id": ask_id, "answers": [
                 {"public_identifier": "alex-foxtrot", "answer": answer},

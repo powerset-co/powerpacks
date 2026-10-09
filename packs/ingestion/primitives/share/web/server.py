@@ -51,7 +51,8 @@ from packs.ingestion.primitives.share.web.logbook_archive import (
     LogbookArchive, conversation_payload, entries_payload, entry_payload,
 )
 from packs.ingestion.primitives.share.web.model import SharePeople, SharePerson, people_payload
-from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets, payload as sets_payload
+from packs.ingestion.primitives.share.web.sets import Sets, payload as sets_payload
+from packs.powerset.primitives.agent_inbox.agent_inbox import CloudError, NeedsSignIn
 from packs.ingestion.schemas.share_schema import SHARE_YES
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR

@@ -1,6 +1,7 @@
 """Answer an Ask the Set message from local family evidence, send the answer back, and audit.
 
 Changelog:
+  2026-10-09: answer() takes the typed Ask and sends through agent_inbox.send.
   2026-10-09: reason and relationship are cut to the asker's limit (MAX_TEXT) instead of failing.
   2026-10-09: the model sees the ask's role (title, company, job description).
   2026-10-08: answer `ask` agent messages; the relay's leased ask tasks are gone.
@@ -13,8 +14,8 @@ import json
 import re
 import sqlite3
 import sys
-import urllib.request
 from contextlib import closing
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -35,13 +36,11 @@ from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCal
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier
-from packs.powerset.primitives.agent_inbox.messages import MAX_TEXT
-from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
+from packs.powerset.primitives.agent_inbox import agent_inbox
+from packs.powerset.primitives.agent_inbox.messages import MAX_TEXT, Ask
 
 _EMAIL = re.compile(r"[^\s@\"<>]+@[^\s@\"<>]+\.[^\s@\"<>]+")
 _PROMPT = Path(__file__).with_name("prompts") / "answer.txt"
-_HTTP_TIMEOUT = 30
-MESSAGES_PATH = "/v2/agent-messages"
 ANSWER = "ask_answer"
 
 
@@ -118,17 +117,16 @@ async def _answer(task: dict, evidence: dict) -> dict:
     return answer
 
 
-def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
+def answer(message_id: str, asker: str, ask: Ask, *, repo_root: Path, env_file: Path) -> dict:
     """Answer one `ask` message from local family evidence and send one `ask_answer` back to the asker."""
     load_dotenv(env_file, override=False)
     data_root = repo_root / ".powerpacks"
-    payload = message["payload"]
     answers = []
-    for candidate in payload["candidates"]:
-        slug = candidate["public_identifier"]
+    for candidate in ask.candidates:
+        slug = candidate.public_identifier
         with closing(open_store(store_path(data_root))) as conn:
             found = _evidence(conn, data_root, slug)
-        audit = data_root / "asks" / f"{message['id']}-{slug}.json"
+        audit = data_root / "asks" / f"{message_id}-{slug}.json"
         if found is None:
             answer: dict = {"declined": True, "reason": "not_in_store"}
         elif audit.is_file():
@@ -137,23 +135,18 @@ def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
         else:
             evidence, used = found
             try:
-                answer = asyncio.run(_answer({"question": payload["question"], "role": payload["role"], "candidate": candidate}, evidence))
+                task = {"question": ask.question, "role": asdict(ask.role), "candidate": asdict(candidate)}
+                answer = asyncio.run(_answer(task, evidence))
             except Exception as exc:
                 # Exception text can carry model output; log only its type. The asker sees "couldn't answer".
                 print(f"ask-worker: {slug} failed ({type(exc).__name__})", file=sys.stderr)
                 answers.append({"public_identifier": slug, "answer": {"declined": True, "reason": "failed"}})
                 continue
             write_json(audit,
-                       {"message": message, "candidate": candidate, "evidence_used": used, "answer": answer,
-                        "answered_at": now_iso()})
+                       {"message_id": message_id, "ask": asdict(ask), "candidate": asdict(candidate),
+                        "evidence_used": used, "answer": answer, "answered_at": now_iso()})
         answers.append({"public_identifier": slug, "answer": answer})
         print(f"ask-worker: {slug} {answer.get('verdict', 'declined')}", file=sys.stderr)
-    reply = {"to": message["from"]["operator_id"], "kind": ANSWER,
-             "payload": {"ask_id": payload["ask_id"], "answers": answers}}
-    request = urllib.request.Request(
-        auth.api_base(env_file) + MESSAGES_PATH, data=json.dumps(reply).encode("utf-8"), method="POST",
-        headers={"Authorization": f"Bearer {auth.bearer_token(env_file)}", "Content-Type": "application/json",
-                 "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
-        json.load(response)
-    return {"ask_id": payload["ask_id"], "answers": answers}
+    reply = {"ask_id": ask.ask_id, "answers": answers}
+    agent_inbox.send(env_file, asker, ANSWER, reply)
+    return reply

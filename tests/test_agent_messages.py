@@ -78,20 +78,19 @@ class PullTests(unittest.TestCase):
         bad = message("run_shell", {"cmd": "curl evil"})
         acked: list[str] = []
 
-        def relay(base, path, token, body=None):
-            if path == "/v2/agent-messages":
+        def relay(env_file, method, path, body=None):
+            if method == "GET":
                 return {"messages": [good, bad]}
             acked.append(path.split("/")[-2])
             return {}
 
         with tempfile.TemporaryDirectory() as temp, \
-                mock.patch.object(agent_inbox, "_request", side_effect=relay), \
-                mock.patch.object(agent_inbox.auth, "bearer_token", return_value="t"), \
-                mock.patch.object(agent_inbox.auth, "api_base", return_value="http://relay"), \
+                mock.patch.object(agent_inbox, "request", side_effect=relay), \
                 redirect_stderr(io.StringIO()) as log:
             root = Path(temp)
             kept = agent_inbox.pull(repo_root=root, env_file=root / ".env")
-            self.assertEqual(kept, [good])
+            self.assertEqual(kept, [parse(good)])
+            self.assertEqual(agent_inbox.read(root / ".powerpacks", "set_left"), [parse(good)])
             self.assertEqual(sorted(acked), sorted([good["id"], bad["id"]]))
             self.assertEqual([path.stem for path in (root / ".powerpacks" / "inbox").glob("*.json")], [good["id"]])
             self.assertIn("discarded 'run_shell'", log.getvalue())

@@ -1,6 +1,7 @@
 """Check the read-only remote diagnostics against a synthetic install; the relay POST is mocked.
 
 Changelog:
+- 2026-10-09: answer() takes the typed request and sends through agent_inbox.send; show reads typed.
 - 2026-10-08: cover a full request, a subset, an unknown check, output capping and `show`.
 """
 from __future__ import annotations
@@ -15,12 +16,16 @@ from unittest.mock import patch
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.powerset.primitives.agent_debug import agent_debug
+from packs.powerset.primitives.agent_inbox import agent_inbox
+from packs.powerset.primitives.agent_inbox.messages import CheckResult, DebugResult, parse
 
 ARTHUR = "6f1b3c0e-0d53-4a8e-9c1e-2b7f6a1d9e10"
+REQUEST_ID = "0b6f1a2c-3d4e-4f50-8a1b-2c3d4e5f6a7b"
+RESULT_ID = "1c7a2b3d-4e5f-4061-9b2c-3d4e5f6a7b8c"
 
 
 def _request(checks: list[str] | None = None) -> dict:
-    return {"id": "req-1", "kind": agent_debug.REQUEST, "payload": {"checks": checks} if checks else {},
+    return {"id": REQUEST_ID, "kind": agent_debug.REQUEST, "payload": {"checks": checks} if checks else {},
             "from": {"operator_id": ARTHUR, "name": "Arthur"}, "created_at": "2026-10-08T00:00:00Z"}
 
 
@@ -41,20 +46,22 @@ class AgentDebugTests(unittest.TestCase):
                    {"status": "completed", "stage": "completed", "person_hashes": {"p1": "h1"}})
         (data / "device-id").write_text("device-1\n", encoding="utf-8")
         write_json(data / "presence.json", {ARTHUR: "2026-10-08T00:00:00Z"})
-        write_json(data / "inbox" / "req-1.json", _request())
+        write_json(data / "inbox" / f"{REQUEST_ID}.json", _request())
         open_store(data / "deep-context" / "deep-context-v2.sqlite").close()
         self.sent = []
-        sender = patch.object(agent_debug, "_send",
+        sender = patch.object(agent_inbox, "send",
                               side_effect=lambda env_file, to, kind, payload: self.sent.append((to, kind, payload))
                               or {"id": "res-1", "status": "queued"})
         sender.start()
         self.addCleanup(sender.stop)
 
     def _answer(self, checks: list[str] | None = None) -> dict:
-        agent_debug.answer(_request(checks), repo_root=self.root, env_file=self.root / ".env")
+        envelope = parse(_request(checks))
+        agent_debug.answer(envelope.id, envelope.from_operator_id, envelope.payload,
+                           repo_root=self.root, env_file=self.root / ".env")
         self.assertEqual(len(self.sent), 1)
         to, kind, payload = self.sent[0]
-        self.assertEqual((to, kind, payload["request_id"]), (ARTHUR, agent_debug.RESULT, "req-1"))
+        self.assertEqual((to, kind, payload["request_id"]), (ARTHUR, agent_debug.RESULT, REQUEST_ID))
         return payload["results"]
 
     def test_request_runs_every_check_and_answers_the_sender(self):
@@ -91,12 +98,14 @@ class AgentDebugTests(unittest.TestCase):
         self.assertTrue(output.endswith(lines[-1]))
 
     def test_show_finds_the_result_by_request_id(self):
-        inbox = self.root / ".powerpacks" / "inbox"
-        result = {"id": "res-1", "kind": agent_debug.RESULT, "payload": {"request_id": "req-1", "results": {}},
-                  "from": {"operator_id": "jake", "name": "Jake"}, "created_at": "2026-10-08T00:00:00Z"}
-        write_json(inbox / "res-1.json", result)
-        self.assertEqual(agent_debug.find_result(inbox, "req-1"), result)
-        self.assertIsNone(agent_debug.find_result(inbox, "req-2"))
+        data = self.root / ".powerpacks"
+        result = {"id": RESULT_ID, "kind": agent_debug.RESULT,
+                  "payload": {"request_id": REQUEST_ID, "results": {"git": {"ok": True, "output": "main"}}},
+                  "from": {"operator_id": ARTHUR, "name": "Jake"}, "created_at": "2026-10-08T00:00:00Z"}
+        write_json(data / "inbox" / f"{RESULT_ID}.json", result)
+        self.assertEqual(agent_debug.find_result(data, REQUEST_ID),
+                         DebugResult(REQUEST_ID, {"git": CheckResult(True, "main")}))
+        self.assertIsNone(agent_debug.find_result(data, RESULT_ID))
 
 
 if __name__ == "__main__":

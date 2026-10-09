@@ -19,7 +19,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from typing import Callable
 
-from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets
+from packs.ingestion.primitives.share.web.sets import Sets
+from packs.powerset.primitives.agent_inbox.agent_inbox import CloudError, NeedsSignIn
 from packs.powerset.primitives.agent_inbox.messages import Rejected
 from packs.search.primitives.ask_set import ask_set
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC

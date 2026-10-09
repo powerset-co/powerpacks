@@ -167,9 +167,10 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
                          "asks": f"{prefix}.ask.", "presence": f"{prefix}.presence",
                          "inbox": f"op.{self.operator_id}"}
         self.connection = {"url": "nats://localhost:4222", "token": "", "subjects": self.subjects}
-        self.worker = Mock(return_value={})
-        self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"ask": self.worker}))
-        self.enterContext(patch.object(asks_loop, "_set_members", return_value={"op-asker"}))
+        self.asker = str(uuid4())
+        self.worker = Mock(return_value=None)
+        self.enterContext(patch.object(asks_loop, "_answer", self.worker))
+        self.enterContext(patch.object(asks_loop, "_apply_set_messages", return_value={self.asker}))
         self.inbox = self.enterContext(patch.object(asks_loop.agent_inbox, "pull", return_value=[]))
         self.enterContext(patch.object(asks_loop, "HEARTBEAT_SECONDS", 0.05))
         self.loop = None
@@ -199,14 +200,20 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
                     self.loop.result()
                 await asyncio.sleep(0.01)
 
-    def write_message(self, kind: str, **fields) -> dict:
+    def write_message(self, kind: str, sender: str | None = None) -> Path:
+        """One pulled message in the inbox: an ask, or an invite (which the loop leaves alone)."""
+        if kind == "ask":
+            payload = {"ask_id": str(uuid4()), "question": "Can Jordan Bravo help?", "candidates": [],
+                       "role": {"title": "Founding engineer", "company": "", "job_description": ""}}
+        else:
+            payload = {"set_id": str(uuid4()), "set_name": "Founders", "from_email": "casey@example.com"}
         message = {"id": str(uuid4()), "kind": kind, "created_at": "2026-10-08T00:00:00Z",
-                   "from": {"operator_id": "op-asker", "name": "Casey Delta"},
-                   "payload": {"ask_id": "ask-1", "question": "Can Jordan Bravo help?", "candidates": []}, **fields}
+                   "from": {"operator_id": sender or self.asker, "name": "Casey Delta"}, "payload": payload}
         inbox = self.root / ".powerpacks" / "inbox"
         inbox.mkdir(parents=True, exist_ok=True)
-        (inbox / f"{message['id']}.json").write_text(json.dumps(message))
-        return message
+        path = inbox / f"{message['id']}.json"
+        path.write_text(json.dumps(message))
+        return path
 
     async def test_presence_and_connected_state(self):
         presence = await self.nc.subscribe(self.subjects["presence"])
@@ -221,32 +228,32 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         info = await self.js.consumer_info("asks", self.device_id + "-inbox")
         self.assertEqual(info.config.filter_subject, self.subjects["inbox"])
 
-    async def test_ask_in_the_inbox_is_answered_once(self):
+    async def test_ask_in_the_inbox_is_answered_once_and_removed(self):
         ask = self.write_message("ask")
-        self.write_message("set_invite")
+        invite = self.write_message("set_invite")
         self.start_loop()
         await self.until(lambda: self.worker.call_count == 1)
-        self.assertEqual(self.worker.call_args.args[0]["id"], ask["id"])
+        self.assertEqual(self.worker.call_args.args[0].id, ask.stem)
+        await self.until(lambda: not ask.exists())
         await self.js.publish(self.subjects["inbox"], json.dumps({"kind": "message", "message_id": "m2"}).encode())
         await self.until(lambda: self.inbox.call_count == 2)
         self.assertEqual(self.worker.call_count, 1)
-        saved = json.loads((self.root / ".powerpacks" / "inbox" / f"{ask['id']}.json").read_text())
-        self.assertIn("answered_at", saved)
+        self.assertTrue(invite.exists())  # an invite waits for its person
 
-    async def test_an_ask_from_outside_the_sets_is_refused_without_an_answer(self):
-        stranger = self.write_message("ask", **{"from": {"operator_id": "op-stranger", "name": "Someone"}})
-        self.start_loop()
-        await self.until(lambda: self.inbox.call_count == 1)
-        saved_path = self.root / ".powerpacks" / "inbox" / f"{stranger['id']}.json"
-        await self.until(lambda: "refused" in json.loads(saved_path.read_text()))
+    async def test_an_ask_from_outside_the_sets_is_dropped_without_an_answer(self):
+        stranger = self.write_message("ask", sender=str(uuid4()))
+        with self.assertLogs(asks_loop.__name__, level="WARNING"):
+            self.start_loop()
+            await self.until(lambda: not stranger.exists())
         self.worker.assert_not_called()
 
     async def test_a_failed_answer_is_logged_and_tried_on_the_next_pull(self):
-        self.write_message("ask")
-        self.worker.side_effect = [RuntimeError("relay down"), {}]
+        ask = self.write_message("ask")
+        self.worker.side_effect = [RuntimeError("relay down"), None]
         with self.assertLogs(asks_loop.__name__, level="WARNING"):
             self.start_loop()
             await self.until(lambda: self.worker.call_count == 1)
+        self.assertTrue(ask.exists())
         await self.js.publish(self.subjects["inbox"], json.dumps({"kind": "message", "message_id": "m2"}).encode())
         await self.until(lambda: self.worker.call_count == 2)
 

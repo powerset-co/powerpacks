@@ -7,6 +7,8 @@ Changelog:
 - 2026-10-08: subscribe to the operator's inbox subject and pull agent messages on each nudge.
 - 2026-10-08: keep the last heartbeat per operator in .powerpacks/presence.json for the sets page.
 - 2026-10-08: keep the relay state for the top bar's status dot; a sign-in wakes a signed-out wait.
+- 2026-10-09: after each pull the loop alone applies set messages (Sets.apply_inbox), then answers asks
+  and debug requests from set members; every consumed message is deleted, so no answered/applied marks.
 - 2026-10-08: asks are agent messages: the inbox pull answers each unanswered `ask` (and `debug_request`)
   from someone in one of this owner's sets, and marks the rest refused; no ask tasks or ask subjects.
 """
@@ -29,11 +31,12 @@ import nats
 from dotenv import dotenv_values
 
 from packs.ingestion.primitives.ask_worker import ask_worker
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.share.web.sets import Sets
 from packs.powerset.primitives.agent_debug import agent_debug
 from packs.powerset.primitives.agent_inbox import agent_inbox
+from packs.powerset.primitives.agent_inbox.messages import Ask, DebugRequest, Envelope
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
 
 HEARTBEAT_SECONDS = 30
@@ -44,18 +47,28 @@ HTTP_TIMEOUT_SECONDS = 30
 _LOG = logging.getLogger(__name__)
 # Message kinds this machine answers without a person, and only for someone in one of its sets: an ask,
 # a teammate's debug checks.
-ANSWERED_HERE = {"ask": ask_worker.answer_message, "debug_request": agent_debug.answer}
+ANSWERED_HERE = ("ask", "debug_request")
 # The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
 STATUS = {"state": "offline"}
 WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects at once
 
 
-def _set_members(repo_root: Path, env_file: Path) -> set[str]:
-    """The operators in this owner's sets, read from the store the People page keeps."""
+def _apply_set_messages(repo_root: Path, env_file: Path) -> set[str]:
+    """Apply the set messages just pulled (this loop is their only writer), then return everyone in this
+    owner's sets: a delete or a leave counts before anyone is answered."""
     with closing(open_store(store_path(repo_root / ".powerpacks"))) as conn:
         sets = Sets(conn, env_file)
-        sets.settle()  # a delete or a leave the relay just delivered counts before anyone is answered
+        sets.apply_inbox()
         return sets.known_operators()
+
+
+def _answer(envelope: Envelope, *, repo_root: Path, env_file: Path) -> None:
+    """Answer one ask or debug request."""
+    message = envelope.payload
+    if isinstance(message, Ask):
+        ask_worker.answer(envelope.id, envelope.from_operator_id, message, repo_root=repo_root, env_file=env_file)
+    elif isinstance(message, DebugRequest):
+        agent_debug.answer(envelope.id, envelope.from_operator_id, message, repo_root=repo_root, env_file=env_file)
 
 
 def _device_id(repo_root: Path) -> str:
@@ -99,26 +112,24 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
         _LOG.warning("Ask NATS: %s", type(exc).__name__)
 
     async def pull() -> None:
-        """Pull the inbox, then answer what this machine answers by itself (asks, debug requests), one
-        at a time. A failed answer stays unanswered and is tried again on the next pull."""
+        """Pull the inbox, apply set messages, then answer what this machine answers by itself (asks,
+        debug requests), one at a time. A failed answer stays in the inbox and is tried on the next pull."""
+        data_root = repo_root / ".powerpacks"
         async with worker_lock:
             await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
-            known = await asyncio.to_thread(_set_members, repo_root, env_file)
-            for path in sorted((repo_root / ".powerpacks" / "inbox").glob("*.json")):
-                message = json.loads(path.read_text(encoding="utf-8"))
-                handler = ANSWERED_HERE.get(message["kind"])
-                if handler is None or "answered_at" in message:
-                    continue
-                if message["from"]["operator_id"] not in known:
+            known = await asyncio.to_thread(_apply_set_messages, repo_root, env_file)
+            for envelope in agent_inbox.read(data_root, *ANSWERED_HERE):
+                if envelope.from_operator_id not in known:
                     # Not someone in a set with this owner: no answer, no model call, no checks.
-                    write_json(path, {**message, "answered_at": now_iso(), "refused": "not in a set"})
+                    _LOG.warning("Ignored %s from %s: not in a set", envelope.kind, envelope.from_name)
+                    agent_inbox.remove(data_root, envelope)
                     continue
                 try:
-                    await asyncio.to_thread(handler, message, repo_root=repo_root, env_file=env_file)
+                    await asyncio.to_thread(_answer, envelope, repo_root=repo_root, env_file=env_file)
                 except Exception as exc:
-                    _LOG.warning("Answering %s: %s", message["kind"], type(exc).__name__)
+                    _LOG.warning("Answering %s: %s", envelope.kind, type(exc).__name__)
                     continue
-                write_json(path, {**json.loads(path.read_text(encoding="utf-8")), "answered_at": now_iso()})
+                agent_inbox.remove(data_root, envelope)
 
     async def inbox(message) -> None:
         if json.loads(message.data)["kind"] == "message":
