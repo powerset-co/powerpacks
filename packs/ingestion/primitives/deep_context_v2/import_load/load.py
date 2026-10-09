@@ -28,6 +28,7 @@ from pathlib import Path
 from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.db.import_row import ImportRow
 from packs.ingestion.primitives.deep_context_v2.db.queries import ConnectionRow
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, load_owner
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
@@ -64,28 +65,24 @@ class GmailImport:
     shared_mailboxes_dropped: int
 
 
-def _candidate(row: dict[str, str], kind: IdentifierKind, normalized: str, display: str, owner: OwnerProfile,
-               header_name: str = "") -> Candidate:
-    """What both passes share: the name, channels, the owner flag, and the row kept whole as evidence."""
+def _candidate(cells: dict[str, str], row: ImportRow, kind: IdentifierKind, normalized: str, display: str,
+               owner: OwnerProfile, header_name: str = "") -> Candidate:
+    """What both passes share: the name, channels, the owner flag, and the cells kept whole as evidence."""
     # One written name. A Gmail candidate's is the one its headers wrote most often; a phone
     # candidate's is the CSV name. The CSV's first/last columns are not used: the importer splits
     # "Last, First" names wrongly and a second, broken name would block every pair.
-    full_name: str = header_name or row["full_name"].strip()
-    # "imessage,whatsapp" when one phone was seen in both apps.
-    sources: list[SourceChannel] = []
-    for part in row["source_channels"].split(","):
-        sources.append(SourceChannel(part.strip()))
+    full_name: str = header_name or row.full_name.strip()
     return Candidate(
         # Minted here from the identifier, never taken from the CSV: an older importer wrote other ids.
         candidate_id="candidate:" + kind.value + ":" + normalized,
         display_name=full_name,
         # The operator's own addresses and numbers; those candidates are never collected or synthesized.
         is_owner=normalized in owner.emails or normalized in owner.phones,
-        import_json=json.dumps(row, ensure_ascii=False),
+        import_json=json.dumps(cells, ensure_ascii=False),
         kind=kind,
         normalized=normalized,
         display=display,
-        sources=tuple(sources),
+        sources=row.source_channels,
     )
 
 
@@ -95,22 +92,25 @@ def gmail_candidates(path: Path, owner: OwnerProfile, msgvault_db: Path) -> Gmai
     names: dict[str, str] = header_names(msgvault_db)
     candidates: list[Candidate] = []
     dropped: int = 0
-    for row in CsvIO.read_dict_rows(path):
-        email: str = row["primary_email"]
+    for cells in CsvIO.read_dict_rows(path):
+        row = ImportRow.model_validate(cells)
+        email: str = row.primary_email
         if is_role_address(email):  # office@, billing@, support@: a mailbox, not a person
             dropped += 1
             continue
         normalized: str = normalize_email(email)
-        candidates.append(_candidate(row, IdentifierKind.EMAIL, normalized, email, owner, names.get(normalized, "")))
+        candidates.append(_candidate(cells, row, IdentifierKind.EMAIL, normalized, email, owner,
+                                     names.get(normalized, "")))
     return GmailImport(candidates, dropped)
 
 
 def phone_candidates(path: Path, owner: OwnerProfile) -> list[Candidate]:
     """Phone candidates from the iMessage and WhatsApp import. Nothing is dropped here."""
     candidates: list[Candidate] = []
-    for row in CsvIO.read_dict_rows(path):
-        phone: str = row["primary_phone"]
-        candidates.append(_candidate(row, IdentifierKind.PHONE, normalize_phone(phone), phone, owner))
+    for cells in CsvIO.read_dict_rows(path):
+        row = ImportRow.model_validate(cells)
+        phone: str = row.primary_phone
+        candidates.append(_candidate(cells, row, IdentifierKind.PHONE, normalize_phone(phone), phone, owner))
     return candidates
 
 

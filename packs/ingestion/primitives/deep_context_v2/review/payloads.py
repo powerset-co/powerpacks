@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
+from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchContent, ResearchResult
 from packs.ingestion.primitives.deep_context_v2.review.queue import Card, Pending
 
 TITLE = "Check LinkedIn"
@@ -191,31 +192,31 @@ def person(card: Card) -> ReviewPerson:
 RESEARCH_CONFIDENCE: dict[str, float] = {"low": 0.3, "medium": 0.6, "high": 0.9}
 
 
-def _research_candidate(pending: Pending, result: dict[str, Any]) -> ReviewCandidate:
+def _research_candidate(pending: Pending, result: ResearchResult) -> ReviewCandidate:
     """A synthetic card: the research's person, with no LinkedIn and no picture. Its confidence and reason
     are Parallel's own grade and reasoning for the person's name."""
-    research: dict[str, Any] = result["content"]
+    research: ResearchContent = result.content
     confidence: float | None = None
     reason: str = ""
-    for basis in result.get("basis") or []:
-        if basis.get("field") == "real_name":
-            confidence = RESEARCH_CONFIDENCE.get(basis.get("confidence") or "", None)
-            reason = basis.get("reasoning") or ""
+    for basis in result.basis:
+        if basis.field == "real_name":
+            confidence = RESEARCH_CONFIDENCE.get(basis.confidence or "", None)
+            reason = basis.reasoning
     experiences: list[str] = []
-    for row in research.get("work_experience") or []:
-        experiences.append(f"{row.get('title') or '?'} @ {row.get('company_name') or '?'}")
+    for job in research.work_experience:
+        experiences.append(f"{job.title or '?'} @ {job.company_name or '?'}")
     education: list[str] = []
-    for row in research.get("education") or []:
+    for school in research.education:
         parts: list[str] = []
-        for value in (row.get("degree"), row.get("field_of_study"), row.get("school_name")):
+        for value in (school.degree, school.field_of_study, school.school_name):
             if value:
                 parts.append(value)
         education.append(", ".join(parts))
     places: list[str] = []
-    for value in (research.get("location_city"), research.get("location_country")):
+    for value in (research.location_city, research.location_country):
         if value:
             places.append(value)
-    return ReviewCandidate(pending.key, research.get("real_name") or "", "", research.get("summary") or "",
+    return ReviewCandidate(pending.key, research.real_name or "", "", research.summary,
                            ", ".join(places), tuple(experiences), tuple(education), True, "", confidence, "synthetic", reason)
 
 

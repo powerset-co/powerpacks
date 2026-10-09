@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from parallel import Parallel
-from parallel.types import RunInputParam, TaskGroupStatusEvent, TaskRunEvent, TaskSpecParam
+from parallel.types import FieldBasis, RunInputParam, TaskGroupStatusEvent, TaskRunEvent, TaskSpecParam
+from pydantic import BaseModel
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import Research, ResearchRow
@@ -52,6 +53,46 @@ _OUTPUT_SCHEMA: dict[str, Any] = dict(_SCHEMAS["output"])
 _OUTPUT_SCHEMA["description"] = RESEARCH_INSTRUCTIONS
 PARALLEL_TASK_SPEC: TaskSpecParam = {"input_schema": {"json_schema": _SCHEMAS["input"]},
                              "output_schema": {"json_schema": _OUTPUT_SCHEMA}}
+
+
+class ResearchJob(BaseModel):
+    """One position, as contact_research_schema.txt asks for it: title, company and is_current required."""
+
+    title: str | None
+    company_name: str | None
+    company_domain: str | None = None
+    description: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    is_current: bool
+
+
+class ResearchSchool(BaseModel):
+    school_name: str | None
+    degree: str | None = None
+    field_of_study: str | None = None
+    start_year: str | None = None
+    end_year: str | None = None
+
+
+class ResearchContent(BaseModel):
+    """Parallel's answer, in contact_research_schema.txt's output shape."""
+
+    real_name: str | None = None
+    work_experience: list[ResearchJob]
+    education: list[ResearchSchool]
+    location_city: str | None = None
+    location_country: str | None = None
+    linkedin_url: str | None = None
+    github_url: str | None = None
+    summary: str
+
+
+class ResearchResult(BaseModel):
+    """A research row's result_json: the answer and Parallel's basis for each field."""
+
+    content: ResearchContent
+    basis: list[FieldBasis]
 
 
 @dataclass(frozen=True)
@@ -106,18 +147,19 @@ def subjects(families: list[Family], matches: PreMatch, done: dict[str, Research
 def research_url(result: Research) -> str:
     """The LinkedIn URL a complete research row proposes."""
     assert result.result_json is not None
-    content: dict[str, Any] = json.loads(result.result_json)["content"]
-    return normalize_linkedin_url(content["linkedin_url"])
+    url: str | None = ResearchResult.model_validate_json(result.result_json).content.linkedin_url
+    assert url is not None
+    return normalize_linkedin_url(url)
 
 
 def row_from_output(subject: ResearchSubject, output: dict[str, Any], now: str) -> ResearchRow:
     """complete with the URL found; else no_match, keeping the result only when it is a usable card."""
-    content: dict[str, Any] = output["content"]
+    content: ResearchContent = ResearchResult.model_validate(output).content
     result_json: str = json.dumps(output, ensure_ascii=False, sort_keys=True)
-    if content.get("linkedin_url"):
+    if content.linkedin_url:
         return (subject.handle, subject.parent_id, ResearchStatus.COMPLETE.value, result_json, now)
-    usable: bool = bool(content.get("real_name") and (content.get("work_experience") or content.get("location_city")
-                                                      or content.get("location_country")))
+    usable: bool = bool(content.real_name and (content.work_experience or content.location_city
+                                               or content.location_country))
     if usable:
         return (subject.handle, subject.parent_id, ResearchStatus.NO_MATCH.value, result_json, now)
     return (subject.handle, subject.parent_id, ResearchStatus.NO_MATCH.value, None, now)

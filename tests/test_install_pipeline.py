@@ -91,7 +91,9 @@ class InstallPipelineTests(unittest.TestCase):
     def open_store(self, path):
         """A real, empty v2 store with an owner row: the stage classes read it when they are built."""
         conn = store.open_store(path)
-        queries.upsert_owner(conn, json.dumps({"name": "Casey Owner", "emails": ["casey@example.com"]}), "synthetic", store.now_iso())
+        owner = {"name": "Casey Owner", "emails": ["casey@example.com"], "phones": [], "linkedin_url": "",
+                 "education": [], "work": [], "locations": [], "notes": ""}
+        queries.upsert_owner(conn, json.dumps(owner), "synthetic", store.now_iso())
         conn.commit()
         return conn
 
