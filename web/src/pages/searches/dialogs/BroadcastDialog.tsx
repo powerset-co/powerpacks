@@ -141,8 +141,13 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
             </section>
             {sent ? (
               <section>
+                <h3 className="mb-1 font-medium">Question</h3>
+                <p className="text-muted-foreground">“{sent.question}”</p>
+              </section>
+            ) : null}
+            {sent ? (
+              <section>
                 <h3 className="mb-1 font-medium">Answers</h3>
-                <p className="mb-1 text-muted-foreground">“{sent.question}”</p>
                 <ul className="grid gap-0.5">
                   {status?.answers?.candidates.map((candidate) => (
                     <li key={candidate.public_identifier}>
