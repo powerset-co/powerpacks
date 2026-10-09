@@ -31,12 +31,14 @@ runs it. Chat (`web/src/pages/agent/`) searches people, companies and dossiers.
 
 Sign-ins stay in the window: the sign-in modal (`web/src/components/shared/SignInModal.tsx`)
 dims the app and places a second web view (`src-tauri/src/signin.rs`) in its card, showing the
-provider's own page, and closes when the sign-in reaches its callback. Powerset, ChatGPT and
-LinkedIn use it; for LinkedIn, `src-tauri/src/linkedin.rs` then scrolls the connections list in
+provider's own page, and closes when the sign-in reaches its callback. Powerset and LinkedIn
+use it; for LinkedIn, `src-tauri/src/linkedin.rs` then scrolls the connections list in
 that view and hands the rows to the importer. Google refuses sign-in inside embedded web views,
 so Gmail consent opens in the browser through msgvault's own flow, using Powerpacks' Google
 OAuth client (`POWERPACKS_GOOGLE_CLIENT_ID` / `POWERPACKS_GOOGLE_CLIENT_SECRET` in `.env`), and
-the app comes forward again when it lands.
+the app comes forward again when it lands. ChatGPT (Codex) uses its device-code flow: the app
+shows a short code and opens `auth.openai.com/codex/device` in the browser; Codex polls for the
+approval and the app comes forward when `account/login/completed` arrives.
 
 ## Build
 

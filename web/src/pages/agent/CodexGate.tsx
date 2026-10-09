@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
+import { DeviceCode, EmptyState, PowersetMark } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import type { CodexAccountState } from "@/lib/agent/useCodexAccount"
 
@@ -45,21 +45,18 @@ export function CodexGate({ codex }: { codex: CodexAccountState }) {
   }
   return (
     <Panel title="Connect your ChatGPT account">
-      <p className="m-0 text-muted-foreground">
-        Chat runs on Codex with your ChatGPT plan. Sign in right here, and chat starts as soon as you finish.
-      </p>
-      {codex.signingIn ? (
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <Spinner />
-          Finish signing in above
-          <Button size="sm" variant="ghost" onClick={codex.cancel}>
-            Cancel
-          </Button>
-        </div>
+      {codex.login ? (
+        <DeviceCode codex={codex} />
       ) : (
-        <Button variant="primary" onClick={codex.connect}>
-          Connect ChatGPT
-        </Button>
+        <>
+          <p className="m-0 text-muted-foreground">
+            Chat runs on Codex with your ChatGPT plan. Sign in with a short code in your browser, and chat
+            starts as soon as you finish.
+          </p>
+          <Button variant="primary" onClick={codex.connect}>
+            Connect ChatGPT
+          </Button>
+        </>
       )}
       {codex.error && <p className="m-0 text-xs text-bad">{codex.error}</p>}
     </Panel>

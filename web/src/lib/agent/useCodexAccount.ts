@@ -1,31 +1,33 @@
-// The Codex account: who is signed in, and ChatGPT sign-in through the system browser.
-// Shared by the Agent page's gate and the Accounts page's Codex card.
+// The Codex account: who is signed in, and ChatGPT device-code sign-in: the app shows a code,
+// the user enters it on ChatGPT's device page in the system browser, and Codex reports the
+// sign-in done. Shared by the Agent page's gate and the Accounts page's Codex card.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useState } from "react"
 
 import {
   cancelCodexLogin,
+  type CodexLogin,
   fetchCodexStatus,
   logoutCodex,
   onAgentEvent,
   startCodexLogin,
 } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
-import { closeSignIn, openSignIn } from "@/lib/signin"
+import { focusApp, openExternal } from "@/lib/api/install"
 import type { CodexStatus } from "@/types/agent"
 
 const CODEX_KEY = ["codex"] as const
-// Where Codex's own callback server receives the sign-in (codex app-server account/login/start).
-const CODEX_CALLBACK = "http://127.0.0.1:1455/auth/callback"
 
 export interface CodexAccountState {
   status: CodexStatus | undefined
   loading: boolean
-  /** True while the sign-in pane is open. */
-  signingIn: boolean
+  /** The sign-in in progress: its code and device page; null when none. */
+  login: CodexLogin | null
   error: string | null
   connect: () => void
+  /** Open the device page in the system browser (again). */
+  openBrowser: () => void
   cancel: () => void
   signOut: () => void
   /** Ask Codex again after it failed to answer. */
@@ -35,7 +37,7 @@ export interface CodexAccountState {
 export function useCodexAccount(): CodexAccountState {
   const client = useQueryClient()
   const query = useQuery({ queryKey: CODEX_KEY, queryFn: fetchCodexStatus })
-  const [loginId, setLoginId] = useState<string | null>(null)
+  const [login, setLogin] = useState<CodexLogin | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
   const refresh = useCallback(() => void client.invalidateQueries({ queryKey: CODEX_KEY }), [client])
@@ -44,8 +46,8 @@ export function useCodexAccount(): CodexAccountState {
     () =>
       onAgentEvent((event) => {
         if (event.type === "loginCompleted") {
-          void closeSignIn()
-          setLoginId(null)
+          void focusApp()
+          setLogin(null)
           setActionError(event.success ? null : (event.error ?? "Sign-in did not finish."))
           refresh()
         }
@@ -59,24 +61,28 @@ export function useCodexAccount(): CodexAccountState {
     action.catch((error: unknown) => setActionError(errorText(error))).finally(refresh)
   }
 
+  const failed = (error: unknown) => setActionError(errorText(error))
+
   return {
     status: query.data,
     loading: query.isPending,
-    signingIn: loginId !== null,
+    login,
     error: actionError ?? (query.error ? errorText(query.error) : null),
     connect: () => {
       setActionError(null)
       startCodexLogin()
-        .then(({ loginId: id, authUrl }) => {
-          openSignIn({ title: "ChatGPT", url: authUrl, finish: CODEX_CALLBACK })
-          setLoginId(id)
+        .then((started) => {
+          setLogin(started)
+          return openExternal(started.verificationUrl)
         })
-        .catch((error: unknown) => setActionError(errorText(error)))
+        .catch(failed)
+    },
+    openBrowser: () => {
+      if (login) openExternal(login.verificationUrl).catch(failed)
     },
     cancel: () => {
-      void closeSignIn()
-      if (loginId !== null) run(cancelCodexLogin(loginId))
-      setLoginId(null)
+      if (login) run(cancelCodexLogin(login.loginId))
+      setLogin(null)
     },
     signOut: () => run(logoutCodex()),
     retry: () => {

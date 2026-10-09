@@ -1,4 +1,4 @@
-import { Spinner } from "@/components/shared"
+import { DeviceCode } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
@@ -35,13 +35,16 @@ export function CodexCard() {
           {connected ? "Connected" : "Not connected"}
         </Badge>
       </div>
-      <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">
-        <p aria-live="polite" className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
-          {codex.signingIn && <Spinner />}
-          {codex.signingIn ? "Finish signing in above." : "Runs Chat on your ChatGPT plan."}
-        </p>
-        <CodexAction codex={codex} connected={connected} />
-      </div>
+      {codex.login ? (
+        <div className="mb-3 mt-3">
+          <DeviceCode codex={codex} compact />
+        </div>
+      ) : (
+        <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">
+          <p className="m-0 text-xs text-muted-foreground">Runs Chat on your ChatGPT plan.</p>
+          <CodexAction codex={codex} connected={connected} />
+        </div>
+      )}
       {codex.error && <p className="m-0 mb-3 text-xs text-bad">{codex.error}</p>}
       <dl className="m-0 grid grid-cols-4 gap-3 max-[680px]:grid-cols-2">
         <div className="flex flex-col gap-0.5">
@@ -61,13 +64,6 @@ function CodexAction({
   connected: boolean
 }) {
   if (codex.loading || !codex.status?.installed) return null
-  if (codex.signingIn) {
-    return (
-      <Button size="sm" variant="ghost" onClick={codex.cancel}>
-        Cancel
-      </Button>
-    )
-  }
   return connected ? (
     <Button size="sm" variant="ghost" onClick={codex.signOut}>
       Sign out
