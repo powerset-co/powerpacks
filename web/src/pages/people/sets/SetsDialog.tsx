@@ -5,7 +5,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { signIn } from "@/lib/api/feedback"
 import type { ReceivedInvite, SetMember, SetView } from "@/lib/api/sets"
 import { SETS } from "@/lib/people/copy"
-import { cn } from "@/lib/utils"
 import { CloudIcon, HomeIcon } from "./icons"
 import type { useSets } from "./useSets"
 
@@ -134,7 +133,9 @@ function SetRow({ set, shared, open, onToggle, onDelete, onInvite, busy }: RowPr
         <span className="set-meta">
           {set.is_personal ? <span className="set-tag">{SETS.local}</span> : null}
           <span className="set-count">
-            {set.is_personal ? SETS.shared(shared) : SETS.members(set.member_count)}
+            {set.is_personal
+              ? SETS.shared(shared)
+              : `${SETS.members(set.member_count)} · ${SETS.people(set.person_count)}`}
           </span>
         </span>
       </button>
@@ -209,26 +210,11 @@ export function SetsDialog({ open, onOpenChange, sets }: SetsDialogProps) {
           <DialogTitle className="text-lg font-semibold">{SETS.title}</DialogTitle>
           <DialogDescription className="text-[13px]">{SETS.lead}</DialogDescription>
         </DialogHeader>
-        <div className="sets-toolbar">
-          <button type="button" className="sets-refresh" disabled={sets.busy} onClick={sets.refresh}>
-            <svg viewBox="0 0 16 16" aria-hidden="true" className={cn(sets.refreshing && "turning")}>
-              <path
-                d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            {SETS.refresh}
-          </button>
-        </div>
         {sets.failure ? (
           <div className="sets-error">
             <span>{sets.failure.needsAuth ? SETS.signInNeeded : sets.failure.message}</span>
             {sets.failure.needsAuth ? (
-              <Button size="sm" onClick={() => void signIn().then(sets.refresh).catch(sets.fail)}>
+              <Button size="sm" onClick={() => void signIn().then(sets.reload).catch(sets.fail)}>
                 {SETS.signIn}
               </Button>
             ) : null}

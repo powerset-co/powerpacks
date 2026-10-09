@@ -10,8 +10,8 @@ of those families and re-decides their share rows through
 `labels.share_decision` from `person_labels`, in one transaction.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
-GET `/api/people/sets` reads the sets the owner belongs to (kept locally; `?refresh=1` asks the cloud);
-POST `/api/people/sets` {name} creates one; POST `/api/people/sets/delete` {set_id} deletes one the owner owns.
+GET `/api/people/sets` reads the sets on this machine (sets.py; no cloud set information);
+POST `/api/people/sets` {name} creates one; POST `/api/people/sets/delete` {set_id} deletes one.
 POST `/api/people/sets/invite` {set_id, email} sends an invite over the relay; POST `/api/people/sets/answer`
 {invite_id, accepted} answers one (sets.py).
 GET `/api/people/logbook` reads build status; POST builds the selected parents' local raw archive.
@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import gzip
 import json
-import os
 import sqlite3
 import sys
 import urllib.parse
@@ -52,7 +51,7 @@ from packs.ingestion.primitives.share.web.logbook_archive import (
     LogbookArchive, conversation_payload, entries_payload, entry_payload,
 )
 from packs.ingestion.primitives.share.web.model import SharePeople, SharePerson, people_payload
-from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets, SetView, payload as sets_payload
+from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets, payload as sets_payload
 from packs.ingestion.schemas.share_schema import SHARE_YES
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
@@ -142,7 +141,7 @@ class ShareRoutes:
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
         if parsed.path == f"{API_PREFIX}sets":
-            self._answer_sets(handler, lambda: self.sets.refresh() if query.get("refresh") else self.sets.kept())
+            self._answer_sets(handler, lambda: None)  # a read: nothing to change
         elif parsed.path == f"{API_PREFIX}rows":
             self._send_json(handler, people_payload(self.load()))
         elif parsed.path == f"{API_PREFIX}upload":
@@ -184,10 +183,10 @@ class ShareRoutes:
             form = json.loads(handler.rfile.read(length).decode("utf-8") or "{}")
             if parsed.path.endswith("/invite"):
                 set_id, email = str(form.get("set_id") or ""), str(form.get("email") or "").strip()
-                self._answer_sets(handler, lambda: (self.sets.invite(set_id, email), self.sets.kept())[1])
+                self._answer_sets(handler, lambda: self.sets.invite(set_id, email))
             elif parsed.path.endswith("/answer"):
                 invite_id, accepted = str(form.get("invite_id") or ""), bool(form.get("accepted"))
-                self._answer_sets(handler, lambda: (self.sets.answer(invite_id, accepted), self.sets.kept())[1])
+                self._answer_sets(handler, lambda: self.sets.answer(invite_id, accepted))
             elif parsed.path.endswith("/delete"):
                 self._answer_sets(handler, lambda: self.sets.delete(str(form.get("set_id") or "")))
             else:
@@ -273,10 +272,12 @@ class ShareRoutes:
         else:
             self._send_json(handler, payload)
 
-    def _answer_sets(self, handler: BaseHTTPRequestHandler, read: Callable[[], list[SetView]]) -> None:
-        """The sets payload; a missing sign-in is 401 with status needs_auth (the page offers the sign-in)."""
+    def _answer_sets(self, handler: BaseHTTPRequestHandler, change: Callable[[], None]) -> None:
+        """Make the change, then answer the sets payload; a missing sign-in is 401 with status needs_auth
+        (the page offers the sign-in)."""
         try:
-            sets = read()
+            change()
+            answer = sets_payload(self.sets, sum(1 for row in self.load() if row.share == SHARE_YES))
         except NeedsSignIn as error:
             self._send(handler, json.dumps({"status": "needs_auth", "error": str(error)}).encode(),
                        "application/json; charset=utf-8", status=HTTPStatus.UNAUTHORIZED)
@@ -285,9 +286,6 @@ class ShareRoutes:
             self._send(handler, json.dumps({"error": str(error)}).encode(), "application/json; charset=utf-8",
                        status=HTTPStatus.BAD_GATEWAY)
             return
-        shared = sum(1 for row in self.load() if row.share == SHARE_YES)
-        answer = sets_payload(sets, shared, os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""),
-                              received=self.sets.received(), sent=self.sets.sent(), seen=self.sets.presence())
         self._send(handler, json.dumps(answer, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
     @staticmethod

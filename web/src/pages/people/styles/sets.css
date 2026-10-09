@@ -130,37 +130,6 @@
 .sets-dialog {
   max-width: 460px;
 }
-.sets-toolbar {
-  display: flex;
-  justify-content: flex-end;
-}
-.sets-refresh {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: var(--radius-s);
-  background: transparent;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    color var(--t-fast) var(--ease-out),
-    background-color var(--t-fast) var(--ease-out);
-}
-.sets-refresh:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--foreground);
-}
-.sets-refresh svg {
-  width: 13px;
-  height: 13px;
-}
-.sets-refresh .turning {
-  animation: turn var(--t-slow) linear infinite;
-}
 .sets-divider {
   margin: 4px 4px 0;
   color: var(--faint);

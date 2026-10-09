@@ -121,12 +121,10 @@ const SETS = {
         },
       ],
       invited: [],
-      refreshed_at: "2026-10-08T00:00:00Z",
     },
   ],
   invites: [],
   shared: 2,
-  default_set_id: "set-1",
 }
 
 function respond(body: unknown, status = 200): Response {

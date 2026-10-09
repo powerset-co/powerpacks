@@ -139,14 +139,11 @@ CREATE TABLE review_queue (
 # shows them without a round trip and the next sync starts from what was last seen.
 SETS_DDL = """
 CREATE TABLE sets (
-  set_id TEXT NOT NULL PRIMARY KEY,   -- the cloud set id
+  set_id TEXT NOT NULL PRIMARY KEY,   -- made here by its owner; an invite carries it to members
   name TEXT NOT NULL,
-  role TEXT NOT NULL,                 -- the owner's role in it: owner, admin, member, guest
-  is_personal INTEGER NOT NULL,
-  member_count INTEGER NOT NULL,
-  person_count INTEGER NOT NULL,
-  members_json TEXT NOT NULL CHECK (json_valid(members_json)),  -- [{name, email, role}]
-  refreshed_at TEXT NOT NULL
+  role TEXT NOT NULL,                 -- this machine's role in it: owner or member
+  members_json TEXT NOT NULL CHECK (json_valid(members_json)),  -- [{name, email, role, operator_id}]
+  created_at TEXT NOT NULL
 );
 """
 

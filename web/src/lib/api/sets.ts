@@ -1,6 +1,6 @@
-// The People page's sets routes (share/web/sets.py): the sets the owner belongs to, kept locally,
-// refreshed from the cloud on request; create and delete go through the cloud. Invites ride the relay:
-// sent to an email, answered with Accept or Decline; an accepted invite is a set joined on this machine.
+// The People page's sets routes (share/web/sets.py): sets live on this machine, never in the cloud.
+// Invites ride the relay: sent to an email, answered with Accept or Decline; an accepted invite is a set
+// joined on this machine. A set's people are its members' shared people in the share_v1 network.
 
 import { body, failure } from "@/lib/api/http"
 import { isRecord } from "@/lib/utils"
@@ -40,7 +40,6 @@ export interface SetView {
   person_count: number
   members: SetMember[]
   invited: SentInvite[]
-  refreshed_at: string
 }
 
 export interface SetsPayload {
@@ -48,7 +47,6 @@ export interface SetsPayload {
   invites: ReceivedInvite[]
   /** How many people the owner shares: the share list's yes rows. */
   shared: number
-  default_set_id: string
 }
 
 const URL = "/api/people/sets"
@@ -78,8 +76,8 @@ async function answer(response: Response): Promise<SetsPayload> {
   throw new SetsError(message, needsAuth)
 }
 
-export async function fetchSets(refresh: boolean): Promise<SetsPayload> {
-  return answer(await fetch(refresh ? `${URL}?refresh=1` : URL, { cache: "no-store" }))
+export async function fetchSets(): Promise<SetsPayload> {
+  return answer(await fetch(URL, { cache: "no-store" }))
 }
 
 export async function createSet(name: string): Promise<SetsPayload> {

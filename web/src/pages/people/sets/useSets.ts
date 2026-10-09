@@ -15,12 +15,12 @@ export const SETS_KEY = ["people", "sets"] as const
 // Invites and heartbeats arrive through the relay loop into local files; the kept read is local and cheap.
 const POLL_MS = 10_000
 
-/** The sets the owner belongs to, and the ways they change: refresh, create, delete, invite, answer. */
+/** The sets on this machine, and the ways they change: create, delete, invite, answer. */
 export function useSets() {
   const client = useQueryClient()
   const sets = useQuery({
     queryKey: SETS_KEY,
-    queryFn: () => fetchSets(false),
+    queryFn: fetchSets,
     refetchInterval: POLL_MS,
     refetchIntervalInBackground: true,
   })
@@ -31,7 +31,6 @@ export function useSets() {
   }
   const fail = (caught: unknown) =>
     setError(caught instanceof SetsError ? caught : new SetsError(errorText(caught), false))
-  const refresh = useMutation({ mutationFn: () => fetchSets(true), onSuccess: settle, onError: fail })
   const create = useMutation({ mutationFn: createSet, onSuccess: settle, onError: fail })
   const remove = useMutation({ mutationFn: deleteSet, onSuccess: settle, onError: fail })
   const invite = useMutation({
@@ -49,9 +48,8 @@ export function useSets() {
     data: sets.data,
     failure,
     fail,
-    busy: refresh.isPending || create.isPending || remove.isPending || invite.isPending || reply.isPending,
-    refreshing: refresh.isPending,
-    refresh: () => refresh.mutate(),
+    busy: create.isPending || remove.isPending || invite.isPending || reply.isPending,
+    reload: () => void client.invalidateQueries({ queryKey: SETS_KEY }),
     create: (name: string) => create.mutateAsync(name),
     remove: (set_id: string) => remove.mutateAsync(set_id),
     invite: (set_id: string, email: string) => invite.mutateAsync({ set_id, email }),

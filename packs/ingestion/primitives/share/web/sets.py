@@ -1,44 +1,51 @@
-"""The sets the owner belongs to, for the People page: read from the cloud, kept in the store, created
-and deleted through the cloud's `/v2/sets`.
+"""The owner's sets, for the People page: local only, kept in the store; invites and answers ride the relay.
 
-A set is who can see the owner's shared network: every member of every set the owner is in. The owner
-shares one network (the share list); sets are joined, created or deleted here and in the cloud app.
+A set is a named group of people who see each other's shared networks. Sets live on this machine; the
+cloud keeps no set information. Creating a set stores it here with the owner as its one member. An invite
+is an agent message to an email (the relay delivers it when that email has an account); accepting stores
+the set on the invitee's machine and sends an agent message back, and the owner's set lists the new member.
+The asks loop pulls both kinds into `.powerpacks/inbox/<id>.json`; the owner's sent invites are
+`.powerpacks/invites/<id>.json`, keyed by the invite message's id. Presence is `.powerpacks/presence.json`,
+the last relay heartbeat per operator, written by the asks loop.
 
-Invites ride the relay only: an invite is an agent message to an email (the relay delivers it when that
-email has an account), the answer is an agent message back. The asks loop pulls both into
-`.powerpacks/inbox/<id>.json`; the owner's sent invites are `.powerpacks/invites/<id>.json`, keyed by the
-invite message's id. Nothing in the cloud's sets changes: an accepted invite is a set joined here.
-Presence is `.powerpacks/presence.json`, the last relay heartbeat per operator, written by the asks loop.
+A set's people are the shared people of its members: the share_v1 summaries documents (one per person)
+whose allowed_operator_ids hold any member's operator id.
 
 Created: 2026-10-08
 Changelog:
-- 2026-10-08: invites over the relay, joined sets, and each member's last heartbeat.
+- 2026-10-08: local sets; no /v2/sets. Invites over the relay, joined sets stored on accept, each member's
+  last heartbeat, and the set's people counted in the share_v1 namespace.
 """
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import urllib.error
-import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+import uuid
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import turbopuffer
+
+from packs.indexing.primitives.upload_powerset.upload_powerset import share_namespace
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db import queries_share
-from packs.ingestion.primitives.deep_context_v2.db.queries_share import SetRow
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
-from packs.powerset.primitives.auth.auth import _decode_jwt_email
 from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token
 
-SETS_PATH = "/v2/sets"
+ME_PATH = "/v2/team/me"
 MESSAGES_PATH = "/v2/agent-messages"
 INVITE = "set_invite"
 REPLY = "set_invite_reply"
 ACCEPTED = "accepted"
 DECLINED = "declined"
 PENDING = "pending"
+OWNER = "owner"
+MEMBER = "member"
+PERSONAL_ID = "personal"
 TIMEOUT_SECONDS = 30
 
 
@@ -47,7 +54,7 @@ class NeedsSignIn(Exception):
 
 
 class CloudError(Exception):
-    """The cloud refused or could not be reached; the words are what the page shows."""
+    """The relay refused or could not be reached; the words are what the page shows."""
 
 
 @dataclass(frozen=True)
@@ -55,7 +62,7 @@ class Member:
     name: str
     email: str
     role: str
-    operator_id: str = ""
+    operator_id: str
 
 
 @dataclass(frozen=True)
@@ -63,19 +70,7 @@ class SetView:
     set_id: str
     name: str
     role: str
-    is_personal: bool
-    member_count: int
-    person_count: int
     members: tuple[Member, ...]
-    refreshed_at: str
-
-
-def _members(payload: list[dict[str, Any]]) -> list[Member]:
-    found: list[Member] = []
-    for row in payload:
-        found.append(Member(str(row.get("name") or ""), str(row.get("email") or ""), str(row.get("role") or ""),
-                            str(row.get("operator_id") or row.get("user_uuid") or "")))
-    return found
 
 
 class Sets:
@@ -83,8 +78,9 @@ class Sets:
         self.conn = conn
         self.env_file = env_file
         self.data_root = env_file.parent / ".powerpacks"
+        self._me: Member | None = None
 
-    # ---- the cloud
+    # ---- the relay
 
     def _call(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
         try:
@@ -107,46 +103,51 @@ class Sets:
         except urllib.error.URLError as error:
             raise CloudError(f"Couldn't reach Powerset: {error.reason}") from error
 
-    def refresh(self) -> list[SetView]:
-        """The cloud's sets, with members, written over the kept ones."""
-        now: str = now_iso()
-        rows: list[SetRow] = []
-        for item in self._call("GET", SETS_PATH):
-            detail: dict[str, Any] = self._call("GET", f"{SETS_PATH}/{urllib.parse.quote(str(item['id']), safe='')}")
-            members: list[Member] = _members(detail.get("members") or [])
-            rows.append((str(item["id"]), str(item["name"]), str(item.get("role") or ""), int(bool(item.get("is_personal"))),
-                         int(item.get("member_count") or len(members)), int(item.get("person_count") or 0),
-                         json.dumps([member.__dict__ for member in members], ensure_ascii=False), now))
-        queries_share.replace_sets(self.conn, rows)
-        return self.kept()
+    def me(self) -> Member:
+        """This machine's signed-in operator, asked once per server."""
+        if self._me is None:
+            account: dict[str, Any] = self._call("GET", ME_PATH)
+            self._me = Member(account["email"], account["email"], OWNER, account["operator_id"])
+        return self._me
 
-    def create(self, name: str) -> list[SetView]:
-        self._call("POST", SETS_PATH, {"name": name, "description": None})
-        return self.refresh()
+    # ---- sets, on this machine
 
-    def delete(self, set_id: str) -> list[SetView]:
-        self._call("DELETE", f"{SETS_PATH}/{urllib.parse.quote(set_id, safe='')}")
-        return self.refresh()
+    def create(self, name: str) -> None:
+        me = self.me()
+        queries_share.insert_set(self.conn, str(uuid.uuid4()), name, OWNER, json.dumps([asdict(me)]), now_iso())
+
+    def delete(self, set_id: str) -> None:
+        queries_share.delete_set(self.conn, set_id)
+
+    def kept(self) -> list[SetView]:
+        return [SetView(row["set_id"], row["name"], row["role"],
+                        tuple(Member(**member) for member in json.loads(row["members_json"])))
+                for row in queries_share.sets(self.conn)]
 
     # ---- invites, over the relay
 
     def invite(self, set_id: str, email: str) -> None:
         """Send the invite to an email; the relay holds it until that email has an account."""
-        name = next((view.name for view in self.kept() if view.set_id == set_id), "")
-        # The relay names the sender but not their email; the invite carries it so the invitee sees who.
-        sender = _decode_jwt_email(bearer_token(self.env_file)) or ""
+        name = next(view.name for view in self.kept() if view.set_id == set_id)
+        me = self.me()
         sent = self._call("POST", MESSAGES_PATH, {"to": email, "kind": INVITE,
-                                                  "payload": {"set_id": set_id, "set_name": name, "from_email": sender}})
+                                                  "payload": {"set_id": set_id, "set_name": name, "from_email": me.email}})
         write_json(self.data_root / "invites" / f"{sent['id']}.json",
                    {"id": sent["id"], "set_id": set_id, "set_name": name, "email": email, "sent_at": now_iso()})
 
     def answer(self, invite_id: str, accepted: bool) -> None:
-        """Tell the inviter's agent, then keep the answer on the invite."""
+        """Tell the inviter's agent; an accepted invite is a set stored here with the inviter and me."""
         path = self.data_root / "inbox" / f"{invite_id}.json"
         message: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         answer = ACCEPTED if accepted else DECLINED
         self._call("POST", MESSAGES_PATH, {"to": message["from"]["operator_id"], "kind": REPLY,
                                            "payload": {"invite_id": invite_id, "answer": answer}})
+        if accepted:
+            inviter = Member(message["from"]["name"], message["payload"].get("from_email", ""), OWNER,
+                             message["from"]["operator_id"])
+            me = replace(self.me(), role=MEMBER)
+            queries_share.insert_set(self.conn, message["payload"]["set_id"], message["payload"]["set_name"], MEMBER,
+                                     json.dumps([asdict(inviter), asdict(me)]), now_iso())
         write_json(path, {**message, "answer": answer, "answered_at": now_iso()})
 
     def _inbox(self, kind: str) -> list[dict[str, Any]]:
@@ -154,8 +155,8 @@ class Sets:
         return sorted((message for message in found if message["kind"] == kind), key=lambda message: message["created_at"])
 
     def received(self) -> list[dict[str, Any]]:
-        """Invites to this owner: pending ones to answer, accepted ones are sets joined here."""
-        return self._inbox(INVITE)
+        """Invites to this owner not yet answered."""
+        return [message for message in self._inbox(INVITE) if "answer" not in message]
 
     def sent(self) -> list[dict[str, Any]]:
         """This owner's invites, each with the answer its reply carried (pending until one arrives)."""
@@ -174,47 +175,45 @@ class Sets:
         path = self.data_root / "presence.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
-    # ---- the store
+    # ---- the shared network
 
-    def kept(self) -> list[SetView]:
-        found: list[SetView] = []
-        for row in queries_share.sets(self.conn):
-            members: list[Member] = _members(json.loads(row["members_json"]))
-            found.append(SetView(row["set_id"], row["name"], row["role"], bool(row["is_personal"]), row["member_count"],
-                                 row["person_count"], tuple(members), row["refreshed_at"]))
-        return found
+    def people(self, operator_ids: list[str]) -> int:
+        """People shared by any of these operators: share_v1 summaries documents, one per person."""
+        client = turbopuffer.Turbopuffer(api_key=os.environ["TURBOPUFFER_API_KEY"],
+                                         region=os.environ.get("TURBOPUFFER_REGION", "gcp-us-central1"))
+        try:
+            response = client.namespace(share_namespace("summaries")).query(
+                filters=("allowed_operator_ids", "ContainsAny", operator_ids), aggregate_by={"people": ("Count",)})
+        except turbopuffer.NotFoundError:
+            return 0  # nobody has shared into share_v1 yet
+        return int(response.aggregations["people"])
 
 
 def _member(member: Member, seen: dict[str, str]) -> dict[str, Any]:
-    return {**member.__dict__, "last_seen_at": seen.get(member.operator_id, "")}
+    return {**asdict(member), "last_seen_at": seen.get(member.operator_id, "")}
 
 
-def payload(sets: list[SetView], shared: int, default_set_id: str, *, received: list[dict[str, Any]] = (),
-            sent: list[dict[str, Any]] = (), seen: dict[str, str] | None = None) -> dict[str, Any]:
-    """The page's answer: the sets (cloud, then joined here), the invites waiting for an answer, how many
-    people the owner shares, and the set searches default to."""
-    seen = seen or {}
-    items: list[dict[str, Any]] = []
-    for view in sets:
-        if view.is_personal and view.role != "owner":
-            continue  # an app admin's list carries everyone's personal set; only the owner's own is local
-        joined = [Member(invite["name"] or invite["email"], invite["email"], "member", invite["operator_id"])
+def payload(sets: Sets, shared: int) -> dict[str, Any]:
+    """The page's answer: the personal network, the sets here (each with its members, their presence, the
+    invites still open and its people), the invites waiting for an answer, and how many people the owner shares."""
+    seen = sets.presence()
+    sent = sets.sent()
+    me = sets.me()
+    items: list[dict[str, Any]] = [{"set_id": PERSONAL_ID, "name": "Personal network", "role": OWNER,
+                                    "is_personal": True, "member_count": 1, "person_count": shared,
+                                    "members": [_member(me, seen)], "invited": []}]
+    for view in sets.kept():
+        joined = [Member(invite["name"] or invite["email"], invite["email"], MEMBER, invite["operator_id"])
                   for invite in sent if invite["set_id"] == view.set_id and invite["status"] == ACCEPTED]
-        items.append({"set_id": view.set_id, "name": view.name, "role": view.role, "is_personal": view.is_personal,
-                      "member_count": view.member_count + len(joined), "person_count": view.person_count,
-                      "members": [_member(member, seen) for member in (*view.members, *joined)],
+        members = [*view.members, *(member for member in joined
+                                    if member.operator_id not in {held.operator_id for held in view.members})]
+        items.append({"set_id": view.set_id, "name": view.name, "role": view.role, "is_personal": False,
+                      "member_count": len(members),
+                      "person_count": sets.people([member.operator_id for member in members]),
+                      "members": [_member(member, seen) for member in members],
                       "invited": [{"id": invite["id"], "email": invite["email"], "status": invite["status"]}
-                                  for invite in sent if invite["set_id"] == view.set_id and invite["status"] != ACCEPTED],
-                      "refreshed_at": view.refreshed_at})
-    for invite in received:
-        if invite.get("answer") != ACCEPTED or any(item["set_id"] == invite["payload"]["set_id"] for item in items):
-            continue
-        inviter = Member(invite["from"]["name"], invite["payload"].get("from_email", ""), "owner",
-                         invite["from"]["operator_id"])
-        items.append({"set_id": invite["payload"]["set_id"], "name": invite["payload"]["set_name"], "role": "member",
-                      "is_personal": False, "member_count": 1, "person_count": 0, "members": [_member(inviter, seen)],
-                      "invited": [], "refreshed_at": invite["answered_at"]})
+                                  for invite in sent if invite["set_id"] == view.set_id and invite["status"] != ACCEPTED]})
     invites = [{"id": invite["id"], "set_name": invite["payload"]["set_name"], "from": invite["from"]["name"],
-                "from_email": invite["payload"].get("from_email", ""),
-                "created_at": invite["created_at"]} for invite in received if "answer" not in invite]
-    return {"sets": items, "invites": invites, "shared": shared, "default_set_id": default_set_id}
+                "from_email": invite["payload"].get("from_email", ""), "created_at": invite["created_at"]}
+               for invite in sets.received()]
+    return {"sets": items, "invites": invites, "shared": shared}

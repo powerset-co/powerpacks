@@ -84,6 +84,11 @@ DEFAULT_OUT_DIR = REPO / ".powerpacks/upload-powerset"
 # Postgres tables (share_v1.sql), so a share starts from an empty cloud rather than the migrated v3 ids.
 SHARE_FAMILY = "share_v1"
 
+
+def share_namespace(logical: str) -> str:
+    """The share_v1 TurboPuffer namespace for a logical name, e.g. aleph_summaries_share_v1."""
+    return TURBOPUFFER_NAMESPACES[logical].removesuffix("_v1") + f"_{SHARE_FAMILY}"
+
 PREVIEW_IDS = 10
 
 
@@ -152,10 +157,7 @@ class UploadPowerset:
         # The server (cmd_serve) and the CLI (main) each load .env once, at start.
         config = dict(os.environ)
         self._database_url = postgres_client.database_url()
-        self._namespace_names = {
-            ns.logical: TURBOPUFFER_NAMESPACES[ns.logical].removesuffix("_v1") + f"_{SHARE_FAMILY}"
-            for ns in NAMESPACES
-        }
+        self._namespace_names = {ns.logical: share_namespace(ns.logical) for ns in NAMESPACES}
         if not config.get("TURBOPUFFER_API_KEY"):
             raise RuntimeError(SAFE_ERRORS["api_key"])
         self._tp_client = turbopuffer.Turbopuffer(

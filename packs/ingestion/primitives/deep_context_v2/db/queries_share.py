@@ -122,25 +122,20 @@ def decide_share(conn: sqlite3.Connection, tags: list[TagRow], shares: list[Shar
             shares)
 
 
-# ---- the sets the owner belongs to (the cloud's answer, kept locally)
-
-SetRow = tuple[str, str, str, int, int, int, str, str]  # set_id, name, role, is_personal, member_count, person_count, members_json, refreshed_at
-
+# ---- the sets on this machine (sets.py): made here, or joined by accepting an invite
 
 def sets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Every set the owner belongs to, personal first, then by name."""
-    return conn.execute(
-        "SELECT set_id, name, role, is_personal, member_count, person_count, members_json, refreshed_at "
-        "FROM sets ORDER BY is_personal DESC, name COLLATE NOCASE"
-    ).fetchall()
+    """The sets on this machine, by name."""
+    return conn.execute("SELECT set_id, name, role, members_json FROM sets ORDER BY name COLLATE NOCASE").fetchall()
 
 
-def replace_sets(conn: sqlite3.Connection, rows: list[SetRow]) -> None:
-    """The cloud's current answer replaces what was kept: a set left or deleted is gone."""
+def insert_set(conn: sqlite3.Connection, set_id: str, name: str, role: str, members_json: str, created_at: str) -> None:
     with conn:
-        conn.execute("DELETE FROM sets")
-        conn.executemany(
-            "INSERT INTO sets (set_id, name, role, is_personal, member_count, person_count, members_json, refreshed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            rows,
-        )
+        # A second invite to a set already joined is accepted again: the newer answer stands.
+        conn.execute("INSERT OR REPLACE INTO sets (set_id, name, role, members_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                     (set_id, name, role, members_json, created_at))
+
+
+def delete_set(conn: sqlite3.Connection, set_id: str) -> None:
+    with conn:
+        conn.execute("DELETE FROM sets WHERE set_id = ?", (set_id,))
