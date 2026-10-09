@@ -7,6 +7,7 @@ every message and keeps only what parses, so anything else is discarded.
 
 Changelog:
 - 2026-10-09: an ask carries the search's role (title, company, job description).
+- 2026-10-09: an answer's reason and relationship take up to MAX_TEXT (500) characters.
 - 2026-10-08: set_members carries the owner's full member list; typed answers and debug results.
 - 2026-10-08: created: set invites, replies, deletes and leaves; asks and their answers; debug checks.
 """
@@ -193,8 +194,8 @@ class Verdict:
         if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
             raise Rejected("confidence must be a number from 0 to 1")
         last = row.get("last_contact")
-        return cls(verdict, _text(row.get("reason"), "reason", limit=240, empty=True), can_intro,
-                   _text(row.get("relationship"), "relationship", limit=120, empty=True),
+        return cls(verdict, _text(row.get("reason"), "reason", empty=True), can_intro,
+                   _text(row.get("relationship"), "relationship", empty=True),
                    None if last is None else _text(last, "last_contact", limit=7), float(confidence))
 
 

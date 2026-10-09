@@ -1,7 +1,7 @@
 """Answer an Ask the Set message from local family evidence, send the answer back, and audit.
 
 Changelog:
-  2026-10-09: reason and relationship are cut to the asker's limits (240, 120) instead of failing.
+  2026-10-09: reason and relationship are cut to the asker's limit (MAX_TEXT) instead of failing.
   2026-10-09: the model sees the ask's role (title, company, job description).
   2026-10-08: answer `ask` agent messages; the relay's leased ask tasks are gone.
   2026-10-08: add the owner's answer worker and run CLI.
@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCal
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier
+from packs.powerset.primitives.agent_inbox.messages import MAX_TEXT
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
 
 _EMAIL = re.compile(r"[^\s@\"<>]+@[^\s@\"<>]+\.[^\s@\"<>]+")
@@ -111,7 +112,7 @@ async def _answer(task: dict, evidence: dict) -> dict:
         )
     answer = _Answer.model_validate(result).model_dump()
     # The asker's inbox rejects longer text (messages.Verdict): cut it rather than lose the whole answer.
-    answer["reason"], answer["relationship"] = answer["reason"][:240], answer["relationship"][:120]
+    answer["reason"], answer["relationship"] = answer["reason"][:MAX_TEXT], answer["relationship"][:MAX_TEXT]
     if _EMAIL.search(json.dumps(answer, ensure_ascii=False)):
         raise ValueError("answer contains an email address")
     return answer

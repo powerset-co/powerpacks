@@ -172,10 +172,10 @@ class AskWorkerTests(unittest.TestCase):
         self.assertNotIn("casey@example.com", self.stderr.getvalue())
 
     def test_long_text_is_cut_to_what_the_asker_accepts(self) -> None:
-        self.model.return_value = ANSWER | {"reason": "r" * 300, "relationship": "w" * 200}
+        self.model.return_value = ANSWER | {"reason": "r" * 900, "relationship": "w" * 600}
         self._run()
         answer = self._reply()["answers"][0]["answer"]
-        self.assertEqual((answer["reason"], answer["relationship"]), ("r" * 240, "w" * 120))
+        self.assertEqual((answer["reason"], answer["relationship"]), ("r" * 500, "w" * 500))
         Verdict.parse(answer)
 
     def test_one_model_failure_does_not_stop_the_next_candidate(self) -> None:
