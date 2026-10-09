@@ -35,7 +35,9 @@ function Members({ set }: { set: SetView }) {
           </span>
           <span className="set-member">
             <span className="set-member-name">{member.name || member.email}</span>
-            {member.name && member.email ? <span className="set-member-email">{member.email}</span> : null}
+            {member.name && member.email && member.name !== member.email ? (
+              <span className="set-member-email">{member.email}</span>
+            ) : null}
           </span>
           <span className="set-member-side">
             {member.role !== "member" ? <span className="set-role">{member.role}</span> : null}
