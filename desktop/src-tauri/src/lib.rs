@@ -60,16 +60,16 @@ async fn codex_login(
     codex.login(&app, boot.root().as_deref()).await
 }
 
-/// Shows a provider's sign-in page inside the app's sign-in modal; `finish` is the callback
-/// URL it ends on, `bounds` the modal body in CSS pixels.
+/// Shows a provider's sign-in page inside the app's sign-in modal; `finish` holds the URL
+/// prefixes it ends on, `bounds` the modal body in CSS pixels.
 #[tauri::command]
 fn signin_open(
     app: AppHandle,
     url: String,
-    finish: String,
+    finish: Vec<String>,
     bounds: signin::Bounds,
 ) -> Result<(), String> {
-    signin::open(&app, &url, &finish, bounds)
+    signin::open(&app, &url, finish, bounds)
 }
 
 #[tauri::command]

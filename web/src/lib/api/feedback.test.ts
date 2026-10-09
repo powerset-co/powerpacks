@@ -44,7 +44,7 @@ describe("signIn in the desktop app", () => {
     const openSignIn = vi.fn()
     vi.doMock("@/lib/desktop", () => ({ isDesktop: () => true }))
     vi.doMock("@/lib/signin", () => ({
-      POWERSET_CALLBACK: "http://localhost:9876/callback",
+      POWERSET_CALLBACK: ["http://localhost:9876/callback"],
       openSignIn,
       signInFinished: () => Promise.resolve(true),
     }))
@@ -69,7 +69,7 @@ describe("signIn in the desktop app", () => {
     expect(openSignIn).toHaveBeenCalledWith({
       title: "Powerset",
       url: "https://auth.example/authorize",
-      finish: "http://localhost:9876/callback",
+      finish: ["http://localhost:9876/callback"],
     })
   })
 
@@ -77,7 +77,7 @@ describe("signIn in the desktop app", () => {
     vi.resetModules()
     vi.doMock("@/lib/desktop", () => ({ isDesktop: () => true }))
     vi.doMock("@/lib/signin", () => ({
-      POWERSET_CALLBACK: "http://localhost:9876/callback",
+      POWERSET_CALLBACK: ["http://localhost:9876/callback"],
       openSignIn: vi.fn(),
       signInFinished: () => Promise.resolve(false),
     }))

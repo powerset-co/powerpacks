@@ -3,11 +3,15 @@
 //! it sends the card body's rectangle on open and whenever it moves, and the view fills it.
 //! The view's session (cookies, logins) persists in the app's data folder.
 //!
-//! The page opens it with a URL and the callback prefix the sign-in ends on; reaching that
-//! prefix emits `signin://finished` and the callback still loads, so the local server that
-//! owns it (the Powerset login, Codex) receives the code.
+//! The page opens it with a URL and the prefixes the sign-in ends on. The view's address is
+//! checked twice a second (a provider can land anywhere, by redirect or by its own routing);
+//! reaching a prefix emits `signin://finished` and the page still loads, so the local server
+//! that owns a callback (the Powerset login, Codex) receives the code.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use serde::Deserialize;
 use tauri::webview::WebviewBuilder;
@@ -16,6 +20,9 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webv
 pub const LABEL: &str = "signin";
 pub const FINISHED_EVENT: &str = "signin://finished";
 const DATA_DIR: &str = "signin";
+const WATCH: Duration = Duration::from_millis(500);
+/// Counts opens, so a watch stops once its view is replaced or closed.
+static OPENED: AtomicU64 = AtomicU64::new(0);
 
 /// Where the view goes, in the page's CSS pixels (the window's logical pixels).
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -41,26 +48,32 @@ fn data_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// Show `url` at `bounds`, replacing any sign-in already open.
-pub fn open(app: &AppHandle, url: &str, finish: &str, bounds: Bounds) -> Result<(), String> {
+pub fn open(app: &AppHandle, url: &str, finish: Vec<String>, bounds: Bounds) -> Result<(), String> {
     let url: Url = url
         .parse()
         .map_err(|error| format!("Bad sign-in URL: {error}"))?;
     close(app);
     let window = app.get_window("main").ok_or("The main window is gone.")?;
-    let (done, finish) = (app.clone(), finish.to_owned());
-    let mut builder =
-        WebviewBuilder::new(LABEL, WebviewUrl::External(url)).on_navigation(move |url| {
-            if url.as_str().starts_with(&finish) {
-                let _ = done.emit(FINISHED_EVENT, url.as_str());
-            }
-            true
-        });
+    let mut builder = WebviewBuilder::new(LABEL, WebviewUrl::External(url));
     if let Some(dir) = data_dir(app) {
         builder = builder.data_directory(dir);
     }
-    window
+    let pane = window
         .add_child(builder, bounds.position(), bounds.size())
         .map_err(|error| error.to_string())?;
+    let opened = OPENED.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    thread::spawn(move || loop {
+        thread::sleep(WATCH);
+        if OPENED.load(Ordering::SeqCst) != opened || app.get_webview(LABEL).is_none() {
+            return;
+        }
+        let Ok(at) = pane.url() else { return };
+        if finish.iter().any(|prefix| at.as_str().starts_with(prefix)) {
+            let _ = app.emit(FINISHED_EVENT, at.as_str());
+            return;
+        }
+    });
     Ok(())
 }
 

@@ -11,14 +11,14 @@ const FINISHED_EVENT = "signin://finished"
 
 /** Where the Powerset login's own callback server listens (packs/powerset/primitives/auth/auth.py):
  *  a Powerset sign-in finishes there. */
-export const POWERSET_CALLBACK = "http://localhost:9876/callback"
+export const POWERSET_CALLBACK = ["http://localhost:9876/callback"]
 
 export interface SignIn {
   /** Who the user is signing in to, for the header. */
   title: string
   url: string
-  /** The URL the sign-in ends on: the modal closes there, or reads LinkedIn first. */
-  finish: string
+  /** The URL prefixes the sign-in ends on: the modal closes there, or reads LinkedIn first. */
+  finish: string[]
   /** What happens at `finish`: close, or read the LinkedIn list in the view before closing. */
   then?: "close" | "linkedin"
   /** After a LinkedIn read: resume setup. */

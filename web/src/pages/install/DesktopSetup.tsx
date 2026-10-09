@@ -21,8 +21,9 @@ import { cn } from "@/lib/utils"
 import { openSignIn, POWERSET_CALLBACK } from "@/lib/signin"
 import type { InstallStatus } from "@/types/install"
 
-// LinkedIn's sign-in lands here; the app then reads the list (desktop/src-tauri/src/linkedin.rs).
-const LINKEDIN_CONNECTIONS = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
+// Where LinkedIn lands once signed in: the feed, or the connections list it was asked for. The
+// app then reads the list, going there first (desktop/src-tauri/src/linkedin.rs).
+const LINKEDIN_SIGNED_IN = ["https://www.linkedin.com/feed", "https://www.linkedin.com/mynetwork"]
 // The waits setup stops at until the user resumes it; the others finish on their own.
 const STOPPED = new Set(["error", "resume", "details", "gmail"])
 // The WhatsApp steps: stopped at any of them, setup can go on without WhatsApp
@@ -257,7 +258,7 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
     if (provider === "google") {
       openExternal(url).catch((caught: unknown) => setError(errorText(caught)))
     } else if (provider === "linkedin") {
-      openSignIn({ title: "LinkedIn", url, finish: LINKEDIN_CONNECTIONS, then: "linkedin", onDone: resume })
+      openSignIn({ title: "LinkedIn", url, finish: LINKEDIN_SIGNED_IN, then: "linkedin", onDone: resume })
     } else {
       openSignIn({ title: "Powerset", url, finish: POWERSET_CALLBACK })
     }
