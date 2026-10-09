@@ -1,23 +1,21 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useState } from "react"
 
 import { setEntries, type FacetKey, type FacetSet, type SortKey } from "@/lib/people/facets"
-import { DEFAULT_VIEW, readView, writeView, type PeopleView } from "@/lib/people/view"
+import { DEFAULT_VIEW, readView, type PeopleView } from "@/lib/people/view"
 import { EMPTY, toggled } from "@/lib/sets"
 import { ORDER, type Decision, type Person } from "@/types/people"
 
-// Start where the human is needed: the saved tab if it has people, else the first decision that does.
-function startView(rows: readonly Person[]): PeopleView {
-  const view = readView() ?? DEFAULT_VIEW
-  if (rows.some((row) => row.share === view.tab)) return view
+// Honor a linked tab; otherwise start at the first decision with people.
+function startView(rows: readonly Person[], params: URLSearchParams): PeopleView {
+  const view = readView(params)
+  if (params.has("tab") || rows.some((row) => row.share === view.tab)) return view
   const tab = ORDER.find((decision) => rows.some((row) => row.share === decision)) ?? DEFAULT_VIEW.tab
   return { ...view, tab }
 }
 
-/** Tab, facet selections, search text and sort; saved to sessionStorage on every change. */
-export function useFilters(rows: readonly Person[]) {
-  const [view, setView] = useState<PeopleView>(() => startView(rows))
-
-  useEffect(() => writeView(view), [view])
+/** Tab, facet selections, search text and sort, initialized from the URL. */
+export function useFilters(rows: readonly Person[], params: URLSearchParams) {
+  const [view, setView] = useState<PeopleView>(() => startView(rows, params))
 
   const setTab = useCallback((tab: Decision) => {
     setView((current) => (current.tab === tab ? current : { ...current, tab }))
