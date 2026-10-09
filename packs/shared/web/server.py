@@ -10,6 +10,8 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer;
+  POST /api/account/signin starts the sign-in and answers its page's URL for the desktop app.
 - 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
   and the review wait for it.
 - 2026-10-09: `serve --exit-with PID` stops with the desktop app that runs it.
@@ -45,6 +47,7 @@ from typing import Any
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
+from packs.shared.web import account
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
@@ -175,6 +178,7 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     """Serve the built app and setup progress at once; mount the rest once the store exists."""
     app = AppRoutes()
     install = InstallController(root)
+    sign_in = account.SignIn(root)
     identity = {"primitive": PRIMITIVE, "repo_root": str(root), "pid": os.getpid()}
     mounted: dict[str, type[BaseHTTPRequestHandler]] = {}
     lock = threading.Lock()
@@ -240,6 +244,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if parsed.path == "/api/account":
+                self._json(account.read(root))
+                return
             if parsed.path == "/api/status":
                 stage = "linkedin" if (root / STORE).is_file() else "install"
                 self._json({**identity, "stage": stage})
@@ -253,6 +260,12 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/account/signin":
+                try:
+                    self._json({"url": sign_in.start()})
+                except RuntimeError as error:
+                    self._json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             if app.post(self, parsed):
                 return
             _load_project_packages(root)

@@ -16,6 +16,7 @@ import {
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
 import { PowersetMark } from "./PowersetMark"
+import { SidebarFooter } from "./SidebarFooter"
 
 const COLLAPSED_KEY = "sidebar.collapsed"
 // Below this width the nav is always the icon rail; the pages' own panels need the room.
@@ -42,8 +43,9 @@ function useMedia(query: string): boolean {
   return matches
 }
 
-/** The app's side nav: the brand, one item per page, and a collapse toggle. Collapsed it is an
- *  icon rail with the labels as tooltips; the choice is remembered on this machine. */
+/** The app's side nav: the brand with the collapse toggle, one item per page, and at the bottom
+ *  the update pane and who is signed in. Collapsed it is an icon rail with the labels as
+ *  tooltips; the choice is remembered on this machine. */
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
@@ -59,21 +61,35 @@ export function Sidebar() {
       aria-label="Pages"
       data-collapsed={rail}
       className={cn(
-        "flex h-full flex-col border-r border-line bg-[color-mix(in_srgb,var(--card)_55%,var(--background))] transition-[width] duration-med ease-out",
+        "relative z-10 flex h-full flex-col border-r border-line bg-[var(--sidebar-bg)] transition-[width] duration-med ease-out",
         rail ? "w-14" : "w-[220px]",
       )}
     >
       <div
         data-tauri-drag-region
         data-sidebar-brand
-        className={cn("flex h-topbar shrink-0 items-center gap-2.5 px-4", rail && "justify-center px-0")}
+        className={cn(
+          "flex shrink-0 items-center",
+          rail ? "flex-col justify-center gap-1 px-0 pt-3 pb-1" : "h-topbar gap-2.5 pr-2 pl-4",
+        )}
       >
         <PowersetMark className="size-7 rounded-[7px] shadow-[var(--shadow-1)]" />
         {!rail && (
-          <span className="text-[12px] font-extrabold tracking-[.14em] text-foreground">
+          <span className="min-w-0 flex-1 truncate text-[12px] font-extrabold tracking-[.14em] text-foreground">
             POWER<span className="text-primary">PACKS</span>
           </span>
         )}
+        <button
+          type="button"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!rail}
+          title={collapsed ? "Expand" : "Collapse"}
+          onClick={toggle}
+          disabled={railOnly}
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        >
+          <CollapseIcon className={cn("size-4", collapsed && "-scale-x-100")} />
+        </button>
       </div>
       <ul className="m-0 flex list-none flex-col gap-0.5 p-2">
         {PAGES.map((page) => (
@@ -82,23 +98,7 @@ export function Sidebar() {
           </li>
         ))}
       </ul>
-      <div className="mt-auto p-2">
-        <button
-          type="button"
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-expanded={!rail}
-          title={collapsed ? "Expand" : "Collapse"}
-          onClick={toggle}
-          disabled={railOnly}
-          className={cn(
-            "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 text-xs text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground disabled:cursor-default disabled:opacity-40",
-            rail && "justify-center px-0",
-          )}
-        >
-          <CollapseIcon className={cn("size-[18px] shrink-0", collapsed && "-scale-x-100")} />
-          {!rail && "Collapse"}
-        </button>
-      </div>
+      <SidebarFooter rail={rail} />
     </nav>
   )
 }

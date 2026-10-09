@@ -36,6 +36,7 @@
     "allow-linkedin-read",
     "allow-app-focus",
     "allow-open-external",
+    "allow-update-check",
     "allow-permission-messages"
   ]
 }
