@@ -19,7 +19,7 @@ different schema is rejected. Sources:
   companies  company/upload_companies_to_turbopuffer.py
 
 Changelog:
-  2026-10-08: company_funding_total is declared float, for a fresh namespace.
+  2026-10-08: company_funding_total is declared int, as in v3, for a fresh namespace.
   2026-09-24: created; the namespace table lives here.
 """
 
@@ -59,8 +59,8 @@ WRITE_SCHEMA: dict[str, dict[str, Any]] = {
         "base_id": {"type": "string"},
         "role_track": {"type": "string"},
         "inferred_birth_year": {"type": "uint"},
-        # A number in the contract and a DOUBLE locally: a fresh namespace would infer int from 0.0.
-        "company_funding_total": {"type": "float"},
+        # int, as in the v3 namespace; local_index sends the local DOUBLE (0.0) as an integer.
+        "company_funding_total": {"type": "int"},
         "metro_areas": {"type": "[]string"},
         "allowed_operator_ids": {"type": "[]string"},
         "role_ids": {"type": "[]string"},
