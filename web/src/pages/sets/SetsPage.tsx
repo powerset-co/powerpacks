@@ -24,13 +24,11 @@ export function SetsPage() {
   return (
     <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
       <div className="mx-auto flex max-w-[960px] flex-col gap-5">
-        {/* Two columns at every width but a phone's: the text takes what is left, the controls their own width. */}
-        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 max-[680px]:grid-cols-1">
-          <div className="min-w-0">
-            <h1 className="m-0 text-xl font-semibold">{SETS.title}</h1>
-            <p className="m-0 mt-1 text-[13px] text-muted-foreground">{SETS.lead}</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
+        {/* The title and the controls share one row, centred on each other; the description runs under
+            both. The controls stack under the title only at a phone's width. */}
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 max-[680px]:grid-cols-1">
+          <h1 className="m-0 text-xl font-semibold leading-8">{SETS.title}</h1>
+          <div className="flex items-center gap-2 max-[680px]:order-last">
             {local.length ? (
               <span className="relative inline-flex">
                 <select
@@ -64,10 +62,11 @@ export function SetsPage() {
                 </svg>
               </span>
             ) : null}
-            <Button size="sm" variant="primary" onClick={() => setNaming(true)}>
+            <Button variant="primary" className="h-8" onClick={() => setNaming(true)}>
               + {SETS.newSet}
             </Button>
           </div>
+          <p className="col-span-full m-0 text-[13px] text-muted-foreground">{SETS.lead}</p>
         </header>
 
         {naming ? (
@@ -172,10 +171,10 @@ function NewSet({
         }}
         className="h-8 min-w-0 flex-1 rounded-[var(--radius-s)] border border-line-strong bg-background px-2.5 text-[13px] text-foreground"
       />
-      <Button size="sm" variant="ghost" type="button" onClick={onCancel}>
+      <Button variant="ghost" type="button" className="h-8" onClick={onCancel}>
         {SETS.cancel}
       </Button>
-      <Button size="sm" variant="primary" type="submit" disabled={busy || !name.trim()}>
+      <Button variant="primary" type="submit" className="h-8" disabled={busy || !name.trim()}>
         {SETS.create}
       </Button>
     </form>
@@ -358,7 +357,7 @@ function InviteForm({ onInvite, busy }: { onInvite: (email: string) => Promise<u
         onChange={(event) => setEmail(event.target.value)}
         className="h-8 min-w-0 flex-1 rounded-[var(--radius-s)] border border-line-strong bg-background px-2.5 text-[13px] text-foreground"
       />
-      <Button size="sm" variant="primary" type="submit" disabled={busy || !email.includes("@")}>
+      <Button variant="primary" type="submit" className="h-8" disabled={busy || !email.includes("@")}>
         {SETS.invite}
       </Button>
     </form>
