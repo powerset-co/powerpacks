@@ -20,13 +20,7 @@ LinkedIn export (or an earlier setup's copy of one); the next run tops it up fro
 the newest end. The CSV is rewritten only when there are new people, so the Modal
 import reruns only then.
 
-Under the desktop app (POWERPACKS_DESKTOP=1) no Chrome runs: `login()` leaves a read request
-(`app-read-request.json`: the known slugs and limits) and asks for the in-app LinkedIn sign-in;
-the app signs in, scrolls the list itself (desktop/src-tauri/src/linkedin.rs) and leaves the
-result as `app-read.json`, which `run()` consumes exactly like the browser script's output.
-
 Changelog:
-  2026-10-08: the desktop app reads the list in its own window; see above.
   2026-10-05: the read reports its count as it scrolls and returns an `outcome`
       instead of a message; the install page words it (install/status_prose.py).
   2026-10-05: a stalled read asks LinkedIn for its data export (the larger
@@ -60,12 +54,6 @@ CONNECTIONS_CSV = Path(".powerpacks/network-import/discover/linkedin/Connections
 SCRAPE_RECORD = CONNECTIONS_CSV.with_name("connections.json")
 BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/linkedin")
 BROWSER_SCRIPT = Path(__file__).with_name("connections_browser.js")
-# The desktop app's request and result for one read (see the module docstring).
-APP_READ_REQUEST = CONNECTIONS_CSV.with_name("app-read-request.json")
-APP_READ = CONNECTIONS_CSV.with_name("app-read.json")
-DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
-CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
-LOGIN_URL = "https://www.linkedin.com/login?session_redirect=%2Fmynetwork%2Finvite-connect%2Fconnections%2F"
 EXPORT_COLUMNS = ["First Name", "Last Name", "URL", "Email Address", "Company", "Position", "Connected On"]
 PROFILE_URL = "https://www.linkedin.com/in/{slug}"
 LOGIN_TIMEOUT_SECONDS = 900
@@ -134,42 +122,14 @@ class LinkedInConnections:
         return parse_json_fragment(result.stdout) if result.stdout.strip() else {
             "status": "error", "message": command_error(result)}
 
-    def _limits(self) -> dict[str, Any]:
-        """What one read needs: the known slugs, when to stop, and how far to scroll."""
-        existing = _read_export(self.csv_path)
-        known = {extract_public_identifier(row["URL"]) for row in existing} - {""}
-        previous = read_json(self.record_path, {}) or {}
-        backfill = previous.get("complete") is False
-        max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
-        return {"known": sorted(known), "stop_after_known": 0 if backfill else KNOWN_OVERLAP, "max_loads": max_loads}
-
-    def _app_request(self) -> dict[str, Any]:
-        """Ask the desktop app to sign in and read; it answers with APP_READ."""
-        write_json(self.csv_path.with_name(APP_READ_REQUEST.name), self._limits())
-        return {"status": "needs_user_action", "message": "Sign in to LinkedIn to read your connections.",
-                "action": {"url": LOGIN_URL, "provider": "linkedin"}}
-
-    def _app_read(self) -> dict[str, Any] | None:
-        """The desktop app's read, consumed once."""
-        path = self.csv_path.with_name(APP_READ.name)
-        payload = read_json(path, None)
-        if payload is None:
-            return None
-        path.unlink()
-        return payload
-
     def login(self) -> dict[str, Any]:
         """Make sure the saved profile is signed in; a window opens only if it is not."""
-        if DESKTOP:
-            return {"status": "completed"} if self.csv_path.with_name(APP_READ.name).is_file() else self._app_request()
         payload = self._browser("--login-only", "1", timeout=self.login_timeout_seconds + 60)
         if payload["status"] == "ok":
             return {"status": "completed"}
         return payload if payload["status"] == "needs_user_action" else {"status": "failed", "message": payload["message"]}
 
     def _export(self, mode: str) -> dict[str, Any]:
-        if DESKTOP:
-            return {"status": "ok", "export": "pending"}
         return self._browser("--export", mode, "--export-dir", str(self.csv_path.parent),
                              timeout=self.login_timeout_seconds + EXPORT_SECONDS)
 
@@ -202,20 +162,17 @@ class LinkedInConnections:
                 imported = self._import_archive(Path(exported["path"]), existing, known, previous)
                 if imported:
                     return imported
-        limits = self._limits()
-        if DESKTOP:
-            payload = self._app_read() or self._app_request()
-        else:
-            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
-                json.dump(limits["known"], handle)
-            try:
-                payload = self._browser(
-                    "--known-file", handle.name, "--stop-after-known", str(limits["stop_after_known"]),
-                    "--max-loads", str(limits["max_loads"]),
-                    timeout=self.login_timeout_seconds + limits["max_loads"] * SECONDS_PER_LOAD,
-                    on_progress=(lambda progress: on_count(progress["read"], progress["total"])) if on_count else None)
-            finally:
-                os.unlink(handle.name)
+        backfill = previous.get("complete") is False
+        max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(sorted(known), handle)
+        try:
+            payload = self._browser(
+                "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
+                "--max-loads", str(max_loads), timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
+                on_progress=(lambda progress: on_count(progress["read"], progress["total"])) if on_count else None)
+        finally:
+            os.unlink(handle.name)
         if payload["status"] == "needs_user_action":
             return payload
         if payload["status"] != "ok":

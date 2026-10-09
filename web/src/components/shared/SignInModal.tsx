@@ -6,7 +6,6 @@ import {
   placeSignIn,
   showSignIn,
   signInHost,
-  useReading,
   useSignIn,
   type Bounds,
   type SignIn,
@@ -74,13 +73,8 @@ function Card({ signIn }: { signIn: SignIn }) {
   }, [])
 
   const host = signInHost(signIn.url)
-  const reading = useReading()
-  const title = reading ? "Reading your connections" : `Sign in to ${signIn.title}`
-  const subtitle = reading
-    ? reading.total
-      ? `${reading.read.toLocaleString()} of ${reading.total.toLocaleString()} so far. Leave this open.`
-      : "Opening your connections list."
-    : "Powerpacks picks up as soon as you finish."
+  const title = `Sign in to ${signIn.title}`
+  const subtitle = "Powerpacks picks up as soon as you finish."
   return (
     <div
       role="dialog"

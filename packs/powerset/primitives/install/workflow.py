@@ -34,6 +34,8 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import subprocess
+import sys
 import time
 import traceback
 from datetime import date, timedelta
@@ -42,9 +44,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
-from packs.ingestion.primitives.discover.linkedin.connections import (
-    CONNECTIONS_CSV, DESKTOP, SCRAPE_RECORD, LinkedInConnections)
-from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
+from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD, LinkedInConnections
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import parse_msgvault_sync_date
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
 from packs.ingestion.primitives.discover.messages.extract_imessage import IMessageExtractor
@@ -91,6 +91,10 @@ _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
+# The logins that happen in Chrome (Playwright); the desktop app comes forward after each.
+_BROWSER_LOGINS = {Source.LINKEDIN, Source.GMAIL}
+DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
+DESKTOP_BUNDLE_ID = "co.powerset.powerpacks"
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
 
@@ -171,7 +175,7 @@ class SourceOnboarding:
 
     def _tools(self, source: Source, step: InstallStep) -> bool:
         self._write("tools.preparing", step=step)
-        payload = ImportTools(sources=(source.value,), desktop=DESKTOP).run()
+        payload = ImportTools(sources=(source.value,)).run()
         return self._result(payload, "tools.ready", waiting="tools.needs_password", failed="tools.failed", step=step,
                             action={"command": payload["command"]} if "command" in payload else None)
 
@@ -191,15 +195,7 @@ class SourceOnboarding:
             coverage[child["account_email"].lower()] = covers
         return bool(requested) and all(coverage.get(email.lower(), False) for email in self.gmail_emails)
 
-    def _google_client(self) -> tuple[str, str] | None:
-        """Powerpacks' own Google OAuth client, from the environment or .env."""
-        config = {**keys._read_env_file(self.root / ".env"), **os.environ}
-        client_id, secret = config.get(msgvault_home.ENV_CLIENT_ID, ""), config.get(msgvault_home.ENV_CLIENT_SECRET, "")
-        return (client_id, secret) if client_id and secret else None
-
     def _gmail_connect(self) -> bool:
-        if DESKTOP:
-            return self._gmail_connect_desktop()
         self._write("gmail.checking")
         home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
         local = accounts.status_payload(home)
@@ -246,40 +242,6 @@ class SourceOnboarding:
         return self._result(health, "gmail.connected", waiting="gmail.connect.waiting", failed="gmail.connect.failed",
                             action={"command": "; ".join(item["authorize_command"] for item in health.get("accounts", [])
                                                          if "authorize_command" in item)})
-
-    def _gmail_connect_desktop(self) -> bool:
-        """Under the desktop app: Powerpacks' own Google client, msgvault's own browser sign-in,
-        no Google Cloud automation. Google only allows the consent in the user's browser."""
-        self._write("gmail.checking")
-        home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
-        client = self._google_client()
-        if client is None:
-            self._write("gmail.client_missing")
-            return False
-        if not accounts.status_payload(home)["config"]["oauth_configured"]:
-            msgvault_home.write_env_client_secret(home, *client)
-        emails = accounts.normalize_email_list(list(self.gmail_emails))
-        local = accounts.status_payload(home)
-        if local["database"]["exists"]:
-            health = accounts.check_accounts_payload(home, emails)
-            if health["status"] == "error":
-                return self._result(health, "gmail.connected", failed="gmail.connect.failed")
-            checks = health.get("accounts", [])
-        else:
-            checks = [accounts.check_account(home, email, stored=False).record() for email in emails]
-            health = local
-        for check in checks:
-            if check["status"] not in {"missing_token", "reauthorization_required"}:
-                continue
-            self._write("gmail.connect", email=check["email"], details=check)
-            result = accounts.authorize_in_browser(
-                home, check["email"], force=check["status"] == "reauthorization_required",
-                on_url=lambda url, email=check["email"]: self._write(
-                    "gmail.connect.browser", email=email, action={"url": url, "provider": "google"}))
-            if not self._result(result, "gmail.connected", waiting="gmail.connect.waiting", failed="gmail.connect.failed"):
-                return False
-        health = accounts.check_accounts_payload(home, emails)
-        return self._result(health, "gmail.connected", waiting="gmail.connect.waiting", failed="gmail.connect.failed")
 
     def _gmail_stage(self, stage: str) -> None:
         """A stage the Google Cloud automation reached, as its page line."""
@@ -376,12 +338,16 @@ class SourceOnboarding:
         record = read_json(self.root / SCRAPE_RECORD, {}) or {}
         return bool(record.get("complete")) and (self.root / CONNECTIONS_CSV).is_file() and not self.refresh
 
+    def _back_to_app(self) -> None:
+        """After a sign-in in Chrome, bring the desktop app forward so setup stays in view."""
+        if DESKTOP and sys.platform == "darwin" and not self.refresh:
+            subprocess.run(["open", "-b", DESKTOP_BUNDLE_ID], check=False)
+
     def _linkedin_login(self) -> bool:
         self._write("linkedin.login.checking")
         payload = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login()
         return self._result(payload, "linkedin.login.done", failed="linkedin.login.failed",
-                            waiting="linkedin.login.app" if DESKTOP else "linkedin.login.waiting",
-                            action=payload.get("action"))
+                            waiting="linkedin.login.waiting")
 
     def _linkedin_sync(self) -> bool:
         if self._linkedin_current():
@@ -391,8 +357,7 @@ class SourceOnboarding:
         result = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run(
             on_count=lambda read, total: self._write("linkedin.reading.count", read=read, total=total))
         return self._result(result, f"linkedin.done.{result.get('outcome')}", failed="linkedin.failed",
-                            waiting="linkedin.login.app" if DESKTOP else "linkedin.waiting",
-                            action=result.get("action"),
+                            waiting="linkedin.waiting",
                             **{key: result[key] for key in ("connections", "added", "read", "total") if key in result})
 
     def run(self) -> dict:
@@ -434,6 +399,8 @@ class SourceOnboarding:
                     continue
                 if not logins[source]():
                     return self.status.read()
+                if source in _BROWSER_LOGINS:
+                    self._back_to_app()
             for source in active:
                 synced = (self._linkedin_sync() if source is Source.LINKEDIN else self._gmail_sync()
                           if source is Source.GMAIL else self._messages_sync(source))

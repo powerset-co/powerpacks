@@ -1,11 +1,11 @@
 // The desktop app's sign-in modal (SignInModal): a provider's own sign-in page in a native
 // view placed over the app (desktop/src-tauri/src/signin.rs). One sign-in at a time. The modal
-// opens the view once it has measured its body, and moves it as the window resizes.
+// opens the view once it has measured its body, and moves it as the window resizes. Only the
+// Powerset login runs here; LinkedIn and Google sign in through Chrome (Playwright).
 
 import { useEffect, useSyncExternalStore } from "react"
 
 import { invoke, isDesktop, listen } from "@/lib/desktop"
-import { isRecord } from "@/lib/utils"
 
 const FINISHED_EVENT = "signin://finished"
 
@@ -17,22 +17,9 @@ export interface SignIn {
   /** Who the user is signing in to, for the header. */
   title: string
   url: string
-  /** The URL prefixes the sign-in ends on: the modal closes there, or reads LinkedIn first. */
+  /** The URL prefixes the sign-in ends on: the modal closes there. */
   finish: string[]
-  /** What happens at `finish`: close, or read the LinkedIn list in the view before closing. */
-  then?: "close" | "linkedin"
-  /** After a LinkedIn read: resume setup. */
-  onDone?: () => void
 }
-
-/** A LinkedIn read in progress, shown in the modal header. */
-export interface Reading {
-  read: number
-  total: number
-}
-
-const LINKEDIN_PROGRESS = "linkedin://progress"
-let reading: Reading | null = null
 
 export interface Bounds {
   x: number
@@ -61,38 +48,13 @@ function wire(): void {
   if (wired || !isDesktop()) return
   wired = true
   listen(FINISHED_EVENT, () => void finished())
-  listen(LINKEDIN_PROGRESS, (payload) => {
-    if (isRecord(payload) && typeof payload.read === "number" && typeof payload.total === "number") {
-      reading = { read: payload.read, total: payload.total }
-      for (const listener of listeners) listener()
-    }
-  })
 }
 
-/** The sign-in reached its callback: close, or read LinkedIn's list first. */
+/** The sign-in reached its callback: close. */
 async function finished(): Promise<void> {
-  const signIn = current
-  if (signIn === null) return
+  if (current === null) return
   settle(true)
-  if (signIn.then !== "linkedin" || reading !== null) {
-    await closeSignIn()
-    return
-  }
-  reading = { read: 0, total: 0 }
-  for (const listener of listeners) listener()
-  try {
-    await invoke("linkedin_read")
-    await closeSignIn()
-    signIn.onDone?.()
-  } catch (error: unknown) {
-    reading = null
-    await closeSignIn()
-    throw error instanceof Error ? error : new Error(String(error))
-  }
-}
-
-export function useReading(): Reading | null {
-  return useSyncExternalStore(subscribe, () => reading)
+  await closeSignIn()
 }
 
 function subscribe(listener: () => void): () => void {
@@ -130,7 +92,6 @@ export function placeSignIn(bounds: Bounds): Promise<void> {
 
 export async function closeSignIn(): Promise<void> {
   if (current === null) return
-  reading = null
   set(null)
   settle(false)
   await invoke("signin_close")

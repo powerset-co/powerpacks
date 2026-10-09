@@ -9,7 +9,6 @@
 mod boot;
 mod children;
 mod codex;
-mod linkedin;
 mod onboard;
 mod paths;
 mod signin;
@@ -75,23 +74,6 @@ fn signin_open(
 #[tauri::command]
 fn signin_place(app: AppHandle, bounds: signin::Bounds) -> Result<(), String> {
     signin::place(&app, bounds)
-}
-
-/// Reads the LinkedIn connections list in the sign-in view; see linkedin.rs.
-#[tauri::command]
-async fn linkedin_read(
-    app: AppHandle,
-    boot: State<'_, Arc<Boot>>,
-) -> Result<linkedin::Progress, String> {
-    let root = boot::require_root(&boot)?;
-    let read = tauri::async_runtime::spawn_blocking(move || linkedin::read(&app, &root))
-        .await
-        .map_err(|error| error.to_string())?;
-    match &read {
-        Ok(progress) => eprintln!("linkedin: read {} of {}", progress.read, progress.total),
-        Err(error) => eprintln!("linkedin: read failed: {error}"),
-    }
-    read
 }
 
 /// Bring the window forward, after a sign-in that had to happen in the browser.
@@ -371,7 +353,6 @@ pub fn run() {
             signin_open,
             signin_place,
             signin_close,
-            linkedin_read,
             app_focus,
             open_external,
             update_check,

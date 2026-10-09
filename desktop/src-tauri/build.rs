@@ -13,7 +13,6 @@ const COMMANDS: &[&str] = &[
     "signin_open",
     "signin_place",
     "signin_close",
-    "linkedin_read",
     "app_focus",
     "open_external",
     "update_check",

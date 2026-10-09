@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useState, type FormEvent } from "react"
 
 import { useNavigate } from "react-router-dom"
 
@@ -7,12 +7,10 @@ import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import {
   continueSetup,
-  focusApp,
   importData,
   importSource,
   installAction,
   messagesReadable,
-  openExternal,
   skipSource,
   type SetupAnswer,
 } from "@/lib/api/install"
@@ -21,9 +19,6 @@ import { cn } from "@/lib/utils"
 import { openSignIn, POWERSET_CALLBACK } from "@/lib/signin"
 import type { InstallStatus } from "@/types/install"
 
-// Where LinkedIn lands once signed in: the feed, or the connections list it was asked for. The
-// app then reads the list, going there first (desktop/src-tauri/src/linkedin.rs).
-const LINKEDIN_SIGNED_IN = ["https://www.linkedin.com/feed", "https://www.linkedin.com/mynetwork"]
 // The waits setup stops at until the user resumes it; the others finish on their own.
 const STOPPED = new Set(["error", "resume", "details", "gmail"])
 // The WhatsApp steps: stopped at any of them, setup can go on without WhatsApp
@@ -31,6 +26,12 @@ const STOPPED = new Set(["error", "resume", "details", "gmail"])
 const WHATSAPP_STEPS = new Set(["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"])
 
 const MessagesIcon = CHANNEL_ICON.imessage
+
+/** Powerset signs in inside the app; LinkedIn and Google sign in through Chrome, and setup
+ *  brings the app forward after (workflow.py _back_to_app). */
+function signInToPowerset(url: string): void {
+  openSignIn({ title: "Powerset", url, finish: POWERSET_CALLBACK })
+}
 
 // While setup waits for Full Disk Access, ask macOS again this often and continue by itself.
 const PERMISSION_POLL_MS = 3_000
@@ -58,12 +59,10 @@ function Choice({
 }) {
   const navigate = useNavigate()
   // The clicked card spins until setup moves past the welcome (this unmounts) or the click fails.
-  const [chosen, setChosen] = useState<"start" | "import" | null>(null)
-  useEffect(() => {
-    if (failed) setChosen(null)
-  }, [failed])
+  const [clicked, setClicked] = useState<"start" | "import" | null>(null)
+  const chosen = failed ? null : clicked
   const choose = (which: "start" | "import", task: () => Promise<void>) => {
-    setChosen(which)
+    setClicked(which)
     onStart(task)
   }
   // undefined while the app looks; null when there is nothing to import.
@@ -249,24 +248,11 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   const [error, setError] = useState<string | null>(null)
   const action = data.action
   const signInUrl = action?.kind === "signin" ? (action.url ?? null) : null
-  const provider = action?.kind === "signin" ? (action.provider ?? "powerset") : null
   const resume = () => void continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
 
-  // Powerset and LinkedIn sign in inside the app; Google opens in the browser (its rule), and
-  // the app comes back forward once setup moves on.
-  const signIn = (url: string) => {
-    if (provider === "google") {
-      openExternal(url).catch((caught: unknown) => setError(errorText(caught)))
-    } else if (provider === "linkedin") {
-      openSignIn({ title: "LinkedIn", url, finish: LINKEDIN_SIGNED_IN, then: "linkedin", onDone: resume })
-    } else {
-      openSignIn({ title: "Powerset", url, finish: POWERSET_CALLBACK })
-    }
-  }
+  // The sign-in opens once per URL setup hands over.
   useEffect(() => {
-    if (signInUrl !== null) signIn(signInUrl)
-    // The sign-in opens once per URL setup hands over.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- W5
+    if (signInUrl !== null) signInToPowerset(signInUrl)
   }, [signInUrl])
   // Full Disk Access: setup resumes on its own the moment macOS reports the grant.
   const waitingForMessages = action?.kind === "permission"
@@ -285,14 +271,6 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
       clearInterval(timer)
     }
   }, [waitingForMessages])
-  const wasGoogle = useRef(false)
-  useEffect(() => {
-    if (provider === "google") wasGoogle.current = true
-    else if (wasGoogle.current) {
-      wasGoogle.current = false
-      void focusApp()
-    }
-  }, [provider])
 
   const run = useCallback((task: () => Promise<void>) => {
     setBusy(true)
@@ -323,8 +301,8 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   if (signInUrl !== null) {
     const url = signInUrl
     control = (
-      <Button variant={provider === "google" ? "default" : "primary"} onClick={() => signIn(url)}>
-        {provider === "google" ? "Open Google again" : "Sign in"}
+      <Button variant="primary" onClick={() => signInToPowerset(url)}>
+        Sign in
       </Button>
     )
   } else if (action?.kind === "qr") {

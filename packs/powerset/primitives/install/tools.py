@@ -34,11 +34,8 @@ HOMEBREW_INSTALL_COMMAND = '/bin/bash -c "$(curl -fsSL https://raw.githubusercon
 
 
 class ImportTools:
-    def __init__(self, *, sources: tuple[str, ...], desktop: bool = False) -> None:
+    def __init__(self, *, sources: tuple[str, ...]) -> None:
         self.sources = tuple(ImportSource(source) for source in sources)
-        # The desktop app signs in to LinkedIn and Google itself: no node, Chrome or gcloud, and
-        # no Homebrew for them. Only msgvault, wacli, and qrencode where brew already exists.
-        self.desktop = desktop
 
     def run(self) -> dict:
         # msgvault's installer and Homebrew put binaries here; a non-login
@@ -63,8 +60,6 @@ class ImportTools:
                 packages.append(("chrome", ["--cask", "google-chrome"]))
         if ImportSource.WHATSAPP in self.sources and not shutil.which("qrencode"):
             packages.append(("qrencode", ["qrencode"]))
-        if self.desktop:
-            packages = [package for package in packages if package[0] == "qrencode" and shutil.which("brew")]
         if packages:
             brew = shutil.which("brew")
             if not brew:
