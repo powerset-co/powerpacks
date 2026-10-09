@@ -36,7 +36,7 @@ Standard search (`depth: fast`) interprets one query, previews it, retrieves
 candidates, and ranks them. Deep mode generates one initial query from the JD,
 lets the user edit or approve the query and filters, then searches one broad
 candidate population at a time. A model proposes the next population until the
-user or model stops, normally after at most four ponds.
+user stops, five unique candidates rate overall 4 or 5, or no supported new pond remains.
 
 ```mermaid
 flowchart TD
@@ -88,7 +88,7 @@ not depend on the diagram alone.
 | --- | --- | --- |
 | Best for | Ordinary lookups and bounded people queries. | JDs, role briefs, shortlists, and requests for the strongest candidates for a stated role or domain. |
 | Human checkpoint | Confirm the prepared query once. | Review the initial query and filters once. |
-| Sourcing | One prepared hybrid retrieval pipeline. | One broad population (pond) at a time through the same pipeline, up to four ponds. |
+| Sourcing | One prepared hybrid retrieval pipeline. | One broad population (pond) at a time through the same pipeline until the search stops. |
 | Evaluation | LLM filter/rerank unless `--search-only` is selected. | The same filter/rerank, then one move-likelihood judgment for successful CE scores >= 3/5. |
 | Output | Ranked candidates and run artifacts. | `results.json`, `shortlist.csv`, and a local viewer with scores and notes. |
 
@@ -145,7 +145,7 @@ The agent then calls `review-payload` within the existing query approval.
 ## Deep mode: the pond harness
 
 **JD -> initial query -> query Review -> [compile -> payload review -> run ->
-decide] × ≤4 ponds -> summary**
+decide] until done -> summary**
 
 Each pond uses the ordinary `search_network_pipeline`: parallel extractors,
 hybrid retrieval capped at 1,000 by default, filter, and rerank. One move-likelihood

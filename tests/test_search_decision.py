@@ -104,8 +104,9 @@ class TestCasesIntegrity(unittest.TestCase):
 
     def test_deep_mode_cases_cover_default_and_auto(self):
         by_id = {case["id"]: case for case in CASES_DOC}
-        self.assertEqual(by_id["rec-job-url-greenhouse"]["mode"], "interactive")
+        self.assertEqual(by_id["rec-job-url-greenhouse"]["mode"], "auto")
         self.assertEqual(by_id["rec-auto-job-url"]["mode"], "auto")
+        self.assertEqual(by_id["rec-interactive-job-url"]["mode"], "interactive")
 
 
 class TestSkillContract(unittest.TestCase):
@@ -122,8 +123,7 @@ class TestSkillContract(unittest.TestCase):
 
     def test_contract_strings(self):
         self.assertIn("decision.json", SKILL_TEXT)
-        self.assertIn("Execute this search or modify it?", SKILL_TEXT)
-        self.assertIn("Decide + record the search decision", SKILL_TEXT)
+        self.assertNotIn("Execute this search or modify it?", SKILL_TEXT)
         self.assertIn("search_network_pipeline.py prepare", SKILL_TEXT)
         self.assertNotIn("primitives/route_query", SKILL_TEXT)
 

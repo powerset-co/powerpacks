@@ -1,353 +1,188 @@
 ---
 name: search
-description: "Find people in your network, look up a named person or their dossier, or search from a job description. Use for 'who is this person', 'tell me everything about someone', people searches, and shortlists. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
+description: "Find people from a natural-language request, a job description or posting URL, or a company's open roles. Use for \"find engineers\", \"who do I know for this job\", \"who in my network can help Cloaked\", person/dossier lookups, and search refinements. Search Powerset, Personal Network, or the local network. Load this skill before concluding that people search is unavailable: the packaged CLI searches people even when MCP only exposes account/network tools."
 ---
 
 # Search
 
-The single entry point for people search. `$search` routes every query to the right surface, then
-runs fast local/TurboPuffer retrieval itself for ordinary people searches.
+Turn the request into useful people and finish the search. Choose the tools yourself;
+users do not need to know skills, sets, or modes. Ask only for a missing choice that
+changes the result or an unavoidable human action. Do not ask routine spend or
+execution questions. For a named person or dossier, follow [person-lookup.md](person-lookup.md) first;
+this read-only lookup skips search preparation and `decision.json`. Requests for
+people like someone or who worked with them continue below. For searches, start
+with **Choose the network**, including its visible scope statement, before company intake. A request to preview or review step by
+step still means pause.
 
-Use this for any people search request:
+For ordinary and deep searches, follow [tmux-worker.md](tmux-worker.md) with session
+`powerpacks-search` and feedback category `search`. Track scope/intake,
+prepare/review, retrieve/rank and results; retrieve/rank stays open across deep
+ponds until the stopping rule is met. Quick person/dossier lookups run directly.
 
-- `$search software engineers in sf`
-- `$search local: product managers in nyc`
-- `$search https://jobs.lever.co/company/abc123`   ← deep JD → runs deep mode
-- `$search senior engineers at series a fintech companies`
-- `$search stanford engineers with 3-5 yoe in new york`
-- `$search people who work at OpenAI`
+## Locate the tools
 
-> `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
-> primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
+Run commands from the configured canonical checkout, not the conversation folder
+or installed skill bundle. Prefer `POWERPACKS_REPO_ROOT`, then a current Powerpacks
+checkout, `~/powerpacks`, or `~/workspace/powerpacks`; see [Powerset](../powerset/SKILL.md#canonical-repo-setup).
+Sibling skill links use the installed layout. When reading this repository copy,
+load that named skill from the harness catalog. Read only relevant instructions
+on the happy path, not source, old runs or transcripts.
 
-For a named person's profile, dossier, or "tell me everything about <person>",
-follow `packs/search/skills/search/person-lookup.md` and stop here. This read-only
-lookup skips search preparation, scoring, and `decision.json`. Requests for
-people *like* someone or who worked with them continue through search below.
+## Choose the network
 
-## How to run this skill
+Explicit scope and corrections persist through refinements. Never silently switch
+accounts or networks. Remove scope directives from the query text.
 
-Deep JD searches send every hydrated candidate to the Jev capability screen; there
-is no separate cheap filter (`--capability-judge terra` restores the Luna filter and
-Luna rating screen). Candidates that pass receive parallel Terra qualification and Luna
-opportunity judgments. Terra independently rechecks Luna opportunity cap 2;
-overall is the lower of qualifications and the authoritative opportunity cap.
-The viewer shows overall score and one explanation, sorted
-by overall then capability. Ratings 1–2 show "Did not pass screen". Saved human
-ratings remain separate. Ordinary non-JD searches keep their existing reranker.
-Deep-mode results also get a private hosted snapshot when signed in to Powerset;
-`deep-mode.md` owns upload and refresh. Explicit offline/local-only requests stay local.
+- “Local”, “offline”, or “my imported network” uses DuckDB without remote network
+  resolution. If only a local index is configured, use it without requiring login.
+- For hosted search, call Powerset MCP `list_sets`; use `person_count`, not member
+  or operator counts. No stated preference → largest accessible network by count.
+  Use its returned name; never hardcode Powerset or a population size.
+- “My network” / “people I know” → the signed-in account's Personal Network.
+  Get the actual email with [Powerset whoami](../powerset/SKILL.md#powerset-whoami).
+  The current API names this “Personal Connections” with `is_personal: true` and
+  `role: owner`; other people's personal networks can also be visible. Do not pick
+  the first personal row. If ownership remains ambiguous, ask one account question.
+- A named network wins. A company/location in “find people in XYZ” is a query
+  constraint unless context identifies XYZ as a network.
+- Pass the selected ID as `--set-id` to prepare or deep initialization. Keep IDs
+  internal; choosing a network for a search does not change the saved default.
 
-The pipeline generates pond queries, filters, and traits; review them for
-correctness, not extra specificity. Keep queries broad and positive and traits
-terse. Correct extraction or location errors against the user's request/JD,
-preserving intended breadth and OR alternatives. Do not add constraints, turn
-preferences into requirements, or pad queries with exclusions. Correct wording
-when needed; leave already-correct output alone. See `deep-mode.md` for review.
+State scope once: “Searching <name>: <count> people,” or “Searching the Personal
+Network for <actual email>: <count> people.” Local: “Searching your imported network.”
+For personal size 0, check [account/network health](../powerset/SKILL.md#network-health)
+and ask about another account/network if still empty. At 1–9, suggest another may
+have more people and continue. Never replace an explicit personal scope automatically.
+Unknown counts, a failed listing, and zero search matches are not empty networks.
 
-Before running, track these five steps in the harness's checklist:
+## Understand the request
 
-    1. Decide + record the search decision (decision.json)
-    2. Prepare the search (payload preview or deep query)
-    3. Review — confirm requirements with the user
-    4. Execute the search
-    5. Present results
+- Company-help/hiring request (including “who can help Cloaked”) → discover
+  openings and get the role choice below; only then prepare a people search.
+- Job posting URL or pasted JD → [deep mode](deep-mode.md).
+- Description of people to find → ordinary search.
 
-Work in order. A routed surface or deep mode owns steps 2–5 through its own skill.
+Preserve role, location, seniority, hard requirements and JD alternatives. Review
+extractor output for correctness, without making a broad query more specific.
+Defaults rank; they do not become extra hard requirements. Derive seniority from
+stated levels, never years of experience. With no stated level use junior/mid/senior/
+staff ICs; explicit leadership wins. “Product managers” does not imply management
+seniority. User corrections bind every subsequent pond and refinement. For “people like X,”
+anchor to X’s known current role/level; ask IC versus leadership only if ambiguous.
 
-## Step 1 — Decide the route (you are the router)
+## Company → openings → people
 
-You make this decision — there is no classifier to run. A one-liner, a pasted JD, and a
-job-posting URL all come through this same step and the same rules. Decide four things,
-record them, and only then act.
+For “who can help Cloaked”, a company name in hiring context, or “they're hiring,”
+find the company's official site and careers page, then its linked job board.
+Use web search/browser tools to find the official board. For Ashby, use the existing
+fetcher so a JS page or web-tool API failure does not turn into snippet-based jobs:
+
+```bash
+uv run --project . python packs/search/primitives/deep_search/fetch_jd.py \
+  --list-openings --url '<official Ashby board URL>' --out <run>/openings.json
+```
+
+It returns actual published titles, locations and posting URLs without full JDs.
+For other boards read the official current list or its public API. Failed access is
+not “no openings.” Never present snippets as verified current jobs. Preserve each
+posting URL; read its JD when the user selects the role.
+
+Show the returned count and a **Role | Location | Posting** table: one row per
+published opening, with its actual title, all locations and a direct posting link.
+Group rows Engineering → Product → Design → GTM → Finance → Other; user priorities
+override this order. Classify by the work (legal counsel belongs in Other).
+Ask which roles to search **after showing the table**, unless already selected.
+Then pass each chosen posting URL to [deep mode](deep-mode.md), preserving network
+and corrections and keeping results per role. No openings → say so and ask which
+role they need. Never search the literal phrase “help <company>” or invent a job.
 
 <!-- decision-rules:start -->
-Decide `surface`, `backend`, `depth`, and `mode` for the query:
+Record `surface`, `backend`, `depth`, `mode`, and a one-sentence `reason`:
 
-1. **surface** — where the query belongs:
-   - `people` — any search for people. The default when unsure.
-   - `company` — the subject is companies (lookup / IDs / investors / funding / sector) and
-     no people are asked for. "Engineers at companies backed by Sequoia" is `people`.
-   - `sql` — the predicate needs cross-row or cross-person logic: per-person aggregates
-     ("2+ startup stints"), role ordering ("engineers who became PMs"), or a join against
-     another person ("overlapped with Jane at Stripe"). A person's name alone is NOT sql:
-     "look up Jane Doe" and "who is Jane Doe" are `people` lookups. Common words like
-     "career" or "worked with <a technology>" do not make a query sql.
-   - `contacts` — "my contacts" / "set contacts" plus contact-field filtering.
-2. **backend** — which index runs the search. The user's explicit words always win:
-   - `powerset` — the user says "powerset", names a set, or says "team/shared network"
-     (even if they also say "my network": "search my Powerset network" is `powerset`).
-   - `local` — the user says "local", "offline", or "my imported network/contacts",
-     even if remote credentials exist.
-   - Unstated → environment default: if `POWERPACKS_LOCAL_SEARCH_DB` is set, or
-     `.powerpacks/search-index/local-search.duckdb` exists with no TurboPuffer credentials
-     configured, pick `local`; otherwise `powerset`. Both configured → `powerset`, and say
-     which you picked in one line so the user can flip it.
-   - Forced values: `sql` is always `local`; `company` and `contacts` are always `powerset`.
-3. **depth** — how hard to search (people surface only):
-   - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
-     deep/thorough/judged run or names the deliverable ("recruit ...", "build a shortlist",
-     "source candidates"). Quality-superlative hiring intent also means deep when the request
-     supplies a role/domain to judge: "best", "strongest",
-     "most exceptional", "top-tier", or "cracked" candidates. A bare "find me candidates" with
-     no role context remains fast/clarify; do not fabricate a hiring profile.
-     A raw profile URL is not yet a supported deep-search intake: ask for the role/domain rather
-     than claiming the internal shortlist-anchor expansion can start from that URL.
-   - `fast` — everything else: one expansion → retrieval → rerank pass.
-   - Deep uses the result-driven loop: one broad query, ordinary
-     retrieval/filter/rerank, all retrieved results in the viewer,
-     then one plain continue-or-done question; the model
-     diagnoses and crafts each next query
-     itself. Auto mode caps at four ponds; an explicit interactive request for another round
-     is binding and can reopen a model-stopped run. Scores are display-only.
-4. **mode** — how deep ponds are reviewed:
-   - `interactive` — default. After each pond, open the results in the viewer and ask one
-     plain question: another round, or done? Diagnosis and the next query are the model's job.
-   - `auto` — only when the user explicitly says `auto` or `autonomous` in the request. Run the
-     existing autonomous loop and review the completed search at the end.
-   - Fast searches and non-people surfaces use `interactive`.
-5. Uncertain on any axis → `people` / the environment default / `fast` / `interactive`, and state the
-   uncertainty in `reason`. Never block on routing.
+- **surface:** `people` by default; `company` when asking for companies/IDs/funding
+  rather than people; `sql` for cross-row aggregates, role ordering, or person joins;
+  `contacts` for contact-field browsing. A name alone is a people lookup. “Worked
+  with Python” is not SQL; “overlapped with Jane at Stripe” is.
+- **backend:** explicit `local`/offline/imported network → `local`; explicit Powerset,
+  named/shared network → `powerset`. Otherwise retain the current search's scope.
+  For a new search use `powerset` if remote credentials exist, else `local` when a
+  local index exists. `POWERPACKS_LOCAL_SEARCH_DB` explicitly selects local.
+  Both configured without that override → `powerset`. SQL is always `local`;
+  company and contacts are `powerset`. Never silently move an explicit local request
+  to a hosted specialist; explain a capability gap instead.
+- **depth:** `deep` for a JD/posting URL, detailed role brief, deep/thorough/judged
+  request, recruiting/shortlist/source-candidates deliverable, or best/top-tier/
+  strongest/cracked candidates with role context. `fast` for ordinary descriptions
+  and lookups. Bare “find candidates” needs role context; a profile URL alone is a
+  lookup, not a role brief. An explicit fast request overrides automatic deep intake.
+  Company hiring intake discovers/selects a posting first.
+- **mode:** `auto` for deep by default, continuing until five unique people
+  rate at least 4 overall or no supported new pond remains; `interactive` only for explicit step-by-step review.
+  Fast searches and other surfaces use `interactive` (no extra execution question).
+- Uncertain route → `people`, the applicable backend, `fast`, `interactive`; record
+  the uncertainty without blocking. Ask only when missing role/company identity
+  prevents a meaningful search.
 <!-- decision-rules:end -->
 
-Record the decision before anything runs (checklist item 1). Create the run dir with a short
-stable slug from the query (e.g. `swe-sf-stanford`) and write `decision.json`:
+Write the existing `decision.json` in `.powerpacks/search/<slug>` for fast or
+`.powerpacks/deep-search/<slug>` for deep before running. Use a fresh run for a new
+query/refinement, carrying forward scope and corrections; deep ponds share one run.
 
-```json
-{"surface": "people", "backend": "powerset", "depth": "fast", "mode": "interactive",
- "reason": "<one sentence on why>"}
-```
+## Run the search
 
-- fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
-  to `prepare` so the decision, payload, and outputs live together.
-- deep → `.powerpacks/deep-search/<jd-slug>/decision.json` (the engine's existing run dir).
 
-Then dispatch — this table is the whole routing contract:
+- JD/posting/shortlist → [deep-mode.md](deep-mode.md).
+- Named person, dossier, or identifier lookup → [person-lookup.md](person-lookup.md).
+- Relational/aggregate question → [search-sql](../search-sql/SKILL.md).
+- Company lookup/funding/IDs → [search-company](../search-company/SKILL.md).
+- Contact fields → [search-contacts](../search-contacts/SKILL.md).
+- Explicit offline → use the read-only local SQL tool in [search-sql](../search-sql/SKILL.md)
+  for the supported query. No remote fetch, extraction, embeddings, scoring or upload.
+  Say when the local data cannot answer; `--search-only` alone is not fully offline.
 
-| decision | action |
-|---|---|
-| surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
-| surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
-| surface `contacts` | load `packs/contacts/skills/search-contacts/SKILL.md` (decision.json still written first) |
-| `people` + `fast` + `local` | **Local Happy Path** below (`search_network_pipeline.py prepare --backend local --db <db>`) |
-| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare`) |
-| `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
-
-The deep engine owns orchestration and delegates each reviewed pond to the
-ordinary `search_network_pipeline.py prepare/run` path. Follow `deep-mode.md` so query,
-compiled traits/filters, result deltas, diagnosis, and the one next move stay in the fixed
-search-harness artifact. There is no other deep engine.
-
-Input shapes normalize before `prepare`, never before the decision:
-
-- **backend directives are directives, not query text** — strip words like `local:`, "offline",
-  "in powerset", "search powerset for", or a set name from the text you pass as `--query`; they
-  bound the decision, and leaving them in pollutes query expansion.
-
-- **job-posting URL** — deep mode fetches it itself (`--jd-url`). Only when the user
-  explicitly forces `fast` on a URL, fetch first with
-  `uv run --project . python packs/search/primitives/deep_search/fetch_jd.py --url <url> --out <run>/jd.txt`
-  (a thin fetch under ~400 chars → ask for a paste; Ashby URLs resolve via the public
-  posting API automatically) and use the fetched text as the query.
-- **pasted JD forced to `fast`** — use the JD text directly as `--query`; expansion condenses it.
-- **one-liner** — the query as-is.
-
-**The spend gate (checklist item 3):** fast mode confirms the prepare preview once
-(`Execute this search or modify it?`, or the local path's `Execute this local search or modify
-it?`). Deep mode confirms its initial query and filters once — the only approval in
-the flow. Interactive deep mode pauses after each pond only to ask continue-or-done at the
-viewer; auto deep mode runs all approved ponds without that pause.
-
-### Retrieval surface boundary
-
-`$search` people retrieval means the Powerpacks network surface: the `powerset` backend is
-set-scoped TurboPuffer/Postgres and the `local` backend is DuckDB. It is not Sales Navigator.
-
-- An explicit Powerset/network request stays on `$search` with `surface: people` and
-  `backend: powerset`, including retries, wider probes, adjacency, and sparse-result diagnosis.
-- Never treat Sales Nav or LinkedIn leads as an implicit fallback for a failed or weak `$search`
-  run. Ask before changing retrieval surfaces and keep artifacts/results separate unless the user
-  explicitly requests both.
-- If the user says only "extended search" and the conversation has not defined the surface, ask:
-  `Do you mean Sales Nav extended search, or regular Powerset network search?`
-
----
-
-## Hiring seniority & hireability defaults
-
-These apply to every hiring-intent search (a JD, a role brief, "find
-candidates", "people like X for this role") in both local and TurboPuffer
-modes, and they bind any fallback behavior too:
-
-The order is **explicit user preferences > JD-supported inference > defaults**.
-Apply these when reviewing the query and ordinary compiled payload. Defaults rank;
-they do not silently become JD hard requirements. The user can override them at review.
-
-- **Derive the seniority target from level language, else use the general IC
-  range.** Map stated levels ("senior", "staff+", "lead", "head of") to
-  seniority bands. A candidate role with no explicit level uses
-  junior/mid/senior/staff. Never derive bands from years of
-  experience, team size, scope, or impact language — YOE is unreliable
-  ("8+ years" does not mean senior). Preserve extractor-inferred bands
-  unless they contradict the query.
-- **Explicit leadership language overrides the IC default.** Lead, head,
-  manager, director, VP, and C-suite searches use the corresponding bands;
-  never append negative title clauses to approximate seniority.
-- **"People like <person>"** anchors seniority to that person's current
-  role and band (same rule as the deep-search engine). If the anchor is still
-  ambiguous, ask exactly one question before executing: "Hands-on IC
-  engineers only, or are technical leaders (VP/director/CTO) acceptable
-  if still hands-on?"
-- **Preserve the user's stated constraints exactly; never add exclusions.** When the
-  user corrects a seniority interpretation, that correction binds every
-  subsequent search in the session — repeating a corrected mistake is the
-  worst outcome.
-- **On pipeline failure, do not improvise retrieval.** Report the failure
-  (the "do not write new retrieval scripts" rule still holds). If the
-  user explicitly asks for a manual fallback over the local index, the
-  fallback must apply these same seniority defaults — in particular,
-  never put founder/CEO/CTO into a technical-title pattern by default.
-
----
-
-## Local Happy Path
-
-Uses the local DuckDB search index - no TurboPuffer, Postgres, or set
-resolution. Retrieval stays local, but LLM filtering/reranking runs by default
-and sends the required candidate evidence to the configured OpenAI boundary.
-Use `--search-only` to skip those model stages entirely.
-
-1. Determine the DuckDB path:
-   - `$POWERPACKS_LOCAL_SEARCH_DB` if set
-   - Otherwise `.powerpacks/search-index/local-search.duckdb`
-
-2. If the DB file does not exist, tell the user to run
-   `$build-local-search-index` first and stop.
-
-3. Run:
-
-   ```bash
-   uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
-     --backend local \
-     --query "<user query>" \
-     --db "<db-path>" \
-     --output-dir ".powerpacks/search/<slug>"
-   ```
-
-   Use the same `<slug>` run dir where `decision.json` was recorded.
-
-4. Show the query without an agent-written targeting or filter summary.
-   Review the compiled filters for correctness: a role noun like "product
-   managers" must not silently become a `manager` seniority band.
-   If `runtime_notes` flags a broad search
-   (hard filters match more than ~60% of the index), surface that note and
-   recommend narrowing before executing — running LLM stages over most of
-   the index is usually a query problem, not a retrieval problem. If it
-   flags 0 matches or a suspiciously narrow pool, recommend `modify`. Then ask exactly:
-
-   `Execute this local search or modify it?`
-
-5. If the user chooses `execute`, run the returned `execute_command` exactly.
-
-6. Keep execution quiet until the command finishes.
-
-### SQL assistance (local only)
-
-For cross-row evidence, explicit SQL assistance, or zero matches in the preview
-or results, load [search-sql](../search-sql/SKILL.md#integration-with-a-parent-search)
-and follow its parent-search integration instructions. Ordinary row-level filters
-do not need SQL assistance.
-
-### Local Constraints
-
-- LLM filter/rerank run by default and need `OPENAI_API_KEY`; if it is
-  missing, rerun with `--search-only` instead of failing the search
-- No set/operator resolution
-- No TurboPuffer or Postgres calls
-- Investor filters are not supported locally
-
----
-
-## TurboPuffer Happy Path
-
-Do not inspect repo docs, source, memory, prior transcripts, or prior result
-files on the happy path. Start a fresh run for every search request.
-
-1. Run:
-
-   ```bash
-   uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
-     --query "<user query>" \
-     --output-dir ".powerpacks/search/<slug>"
-   ```
-
-   Use the same `<slug>` run dir where `decision.json` was recorded. (Deep-engine delegated
-   profile searches pass their own output dir; follow the engine's instructions there.)
-
-2. If `prepare` returns `status: company_directory_fast_path`, follow the
-   returned tool request and skip semantic retrieval.
-3. If `prepare` returns a preview, show the query without an agent-written
-   targeting or filter summary. Then ask exactly:
-
-   `Execute this search or modify it?`
-
-4. If the user chooses `execute`, run the returned `execute_command` exactly.
-   It already includes `--execute-approved`; do not ask for another approval.
-   - If a **limit** was provided (e.g. by the deep-search engine for a
-     capped profile search), append `--limit <N>` to the execute_command (or
-     pass `--limit` to `prepare`, which threads it through). This caps
-     retrieval and the whole downstream pipeline. For standalone user
-     searches, do not add a limit unless the user asks for one.
-5. Keep execution quiet until the command finishes or emits a concrete
-   `blocked_approval` / `blocked_user_action`.
-
-## Final Summary
-
-- Say `<N> found`.
-- For local results, say `found (local)`.
-- Say `Run artifacts: <artifact-dir>`.
-- Read only the `csv` path from the final `artifacts` object and show the top
-  10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
-  compact: rank, name, current title/company, location, and LinkedIn URL when
-  present.
-- Other run files are internal handoff/debug artifacts. Inspect them only for a
-  failed or inconsistent run, or when the user asks to debug.
-
-## User edit & feedback capture
-
-Log each user query/filter/pond edit or result note immediately:
+For ordinary people search:
 
 ```bash
-uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py log \
-  --run-dir <run> --kind <filter_edit|query_edit|pond_edit|result_feedback> \
-  --note "<one line in the user's words>" [--before "<old value>"] [--after "<new value>"]
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
+  --query '<request without scope directives>' \
+  --set-id '<selected network ID>' --output-dir '.powerpacks/search/<slug>'
 ```
 
-Use identifiers only, never message content. At the end of a run with edits,
-send once:
+For local retrieval replace `--set-id` with `--backend local --db '<db>'`.
+The DB is `POWERPACKS_LOCAL_SEARCH_DB` or `.powerpacks/search-index/local-search.duckdb`.
+Omit `--env-file .env` when no env file exists. Missing index: follow the existing
+[build-local-search-index](../build-local-search-index/SKILL.md) workflow and resume
+when ready; surface only necessary user action.
 
-```bash
-uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py send \
-  --run-dir <run>
-```
+Review the returned query/filters yourself; correct extraction errors, preserve
+constraints and OR alternatives. A broad/zero-count preview merits diagnosis, not
+an automatic relaxation. For `company_directory_fast_path`, follow its returned
+tool request. Otherwise run the returned `execute_command`, including its existing
+`--execute-approved` flag; do not ask for another approval. Keep a user-specified
+limit; do not invent one. Preparation is not completion.
 
-`needs_auth` is normal; keep the local log and do not request login. Concrete
-person-data errors still use `$feedback`.
+Local retrieval stays on DuckDB; hosted model extraction/ranking can still run.
+Missing scoring credentials can use `--search-only` when preparation succeeded;
+explain unranked results. Never describe this as an offline guarantee.
 
-## Execution Rules
+## Results and recovery
 
-- Never spend before the checklist-item-3 confirmation. In interactive deep mode, also wait for
-  the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
-- Do not run doctor or setup checks before a normal search unless the primitive
-  fails with an unclear auth/env/setup error.
-- Do not use sub-agents for ordinary single-query searches except the local
-  SQL assistance described above.
-- Do not write new retrieval scripts during a search run.
-- Do not filter or reuse prior artifacts for refinements; create a new search
-  with the updated query or constraints.
-- Do not mention skip-rerank, alternate execution modes, internal ledgers, or
-  internal artifact paths in the user-facing preview.
+Present count, up to five useful candidates with concise evidence and profile links,
+and the viewer link when available. Ordinary results come from the returned CSV;
+deep mode documents its bounded preview. Do not fabricate fit or expose internal
+ledgers/paths as the answer. Zero matches means zero matches in the selected network.
 
-The packaged primitives own extraction, resolution, filtering, reranking, and
-persistence. Treat their output as authoritative and inspect internals only
-after a failed or inconsistent run, or when the user asks to debug.
+Use the actual error and documented recovery. Retry transient reads once. For thin
+job pages, try the official posting API or browser before asking for pasted text.
+Disconnected MCP: follow [Powerset recovery](../powerset/SKILL.md#connection-recovery);
+login only if authentication requires it. Retain the pending request and resume.
+Never bypass membership checks, write replacement retrieval code, or silently use
+Sales Navigator. If a requested “extended search” has no defined surface, clarify it.
+
+Keep the search unfinished until retrieval and the requested ranking complete,
+or a supported stopping reason is verified.
+
+For local zero-match diagnosis read [search-sql](../search-sql/SKILL.md#integration-with-a-parent-search).
+Apply user corrections to the next execution and log them via [feedback.md](feedback.md).
+Load references yourself; do not ask the user to invoke skills. Packaged primitives
+own extraction, retrieval, filtering, ranking and persistence.

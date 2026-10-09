@@ -96,6 +96,44 @@ checkout and follow it. Its coordinator signs in, pulls runtime keys, registers
 the MCP, and then imports and indexes the user's network, so there is no
 separate Powerset-only setup.
 
+## Network health
+
+After setup, or when an explicitly requested personal network is empty, run
+`auth.py whoami` for the actual signed-in email and MCP `list_sets` for accessible
+networks. Check a returned `error` before interpreting rows/counts. Missing or
+unknown counts are not zero. Count people (`person_count`), not members/operators.
+The current API labels the signed-in user's personal network “Personal Connections”
+with `is_personal: true`, `role: owner`; do not select another owner's personal row.
+If identity is ambiguous, ask which account/network rather than guessing.
+
+- Personal 0, shared populated: name the email and say the personal network reports
+  0 people; another login may contain the expected contacts. General search can
+  continue on the populated network. Ask about switching only when personal scope
+  is needed, and never switch automatically.
+- Personal 1–9: show count/email and suggest another account/network may have more;
+  continue without a blocking question.
+- All accessible networks report 0: verify account and connection/access once.
+  Counts may also be unavailable or an import unfinished; do not assert a wrong
+  login. If unresolved, offer another login or explain the concrete access/import
+  action. Do not merge accounts or bypass membership checks.
+- Search returned 0 matches in a populated network: diagnose query/filters; this
+  is not evidence of an empty account.
+
+Say “Your Personal Network for <actual email> has <count> people” or use the actual
+shared network name/count. Keep IDs and database details internal unless requested.
+A per-search network choice does not write the saved default.
+
+## Connection recovery
+
+Retain the user's pending request. A missing/disconnected MCP alone does not prove
+expired authentication: inspect `auth.py whoami` and MCP registration status first.
+Use the existing login workflow for expired/missing auth; refresh registration for
+a connection problem with valid auth. Expose necessary browser/code login actions.
+Retry the failed read once after repair, then resume the request. If a host restart
+is unavoidable, explain that action and the request to resume; do not claim success
+or repeatedly ask the user to log in. Never print credentials. A runtime-key error
+uses env pull/provisioning recovery, not a different account or unscoped retrieval.
+
 ## `$powerset login`
 
 User-facing output must be terse:

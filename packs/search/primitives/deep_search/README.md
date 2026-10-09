@@ -1,8 +1,8 @@
 # deep_search — the `$search` pond harness
 
 Deep mode generates one query directly from the JD, then runs one broad candidate
-population at a time through the ordinary search pipeline. The user reviews the
-initial query and filters once. Each pond compiles, retrieves, hydrates, and screens;
+population at a time through the ordinary search pipeline. The agent checks the
+initial query and filters against the request. Each pond compiles, retrieves, hydrates, and screens;
 the viewer shows candidates for human scoring. A model proposes the next pond.
 
 Jev screens every hydrated row; there is no Luna filter ahead of it. Candidates that
@@ -10,6 +10,11 @@ pass then receive independent Terra domain and opportunity judgments in parallel
 Overall is `min(domain, opportunity cap)`; human feedback is never changed.
 `--capability-judge terra` keeps the Luna filter followed by the Luna rating screen
 (pass = rated at least 3/5). Ordinary non-JD reranking is unchanged.
+
+For an official Ashby company board, `fetch_jd.py --list-openings --url <board>
+--out <roles.json>` returns published title/location/department/team/posting-link
+rows without full JDs. After role selection, pass the chosen posting URL to normal
+JD intake. Unsupported boards or failed access report an error, not an empty list.
 
 ## Flow
 
@@ -30,8 +35,9 @@ flowchart TD
     DECIDE -->|done| EXPORT[Summary + shortlist.csv]
 ```
 
-The normal loop completes after at most four ponds. Interactive mode asks
-continue-or-done after each pond; auto mode makes that decision without pausing.
+The default automatic loop stops at five unique candidates rated overall 4 or 5,
+or no supported next pond. Counts cover this run across its ponds,
+not other saved runs. Explicit interactive mode asks continue-or-done after each pond.
 An explicit request for another round can reopen a completed run.
 
 ## Stages
@@ -55,6 +61,10 @@ An explicit request for another round can reopen a completed run.
 `deep_search_loop.py --query-approved` initializes artifacts without retrieving
 candidates. The executable sequence is in [deep-mode.md](../../skills/search/deep-mode.md).
 
+CLI commands return actual status, current pond, unique candidate and overall rating
+counts, up to five projected candidates, pending query/payload, next action, terminal
+reason and artifact paths. Full candidate evidence stays in the saved artifacts.
+
 ## Geography and review
 
 Before presenting the initial query, compare all allowed posting locations in
@@ -66,7 +76,7 @@ Before retrieval, compare that query with the ordinary extractors' compiled
 geography. Check extractor errors and missing or narrowed filters. Repair them
 before calling `review-payload` and `run-pond`; an empty extraction is not evidence
 that the user requested worldwide search. This is agent verification within the
-existing approval, not another user confirmation.
+requested search; no extra user confirmation is needed.
 
 The harness preserves the selected retrieval corpus. It does not impose a
 separately generated geographic scope over the query's compiled filters.
