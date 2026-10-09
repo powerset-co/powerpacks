@@ -28,6 +28,8 @@ export interface CodexAccountState {
   connect: () => void
   cancel: () => void
   signOut: () => void
+  /** Ask Codex again after it failed to answer. */
+  retry: () => void
 }
 
 export function useCodexAccount(): CodexAccountState {
@@ -77,5 +79,9 @@ export function useCodexAccount(): CodexAccountState {
       setLoginId(null)
     },
     signOut: () => run(logoutCodex()),
+    retry: () => {
+      setActionError(null)
+      refresh()
+    },
   }
 }

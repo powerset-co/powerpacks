@@ -72,9 +72,11 @@ impl Connection {
         if let Some(cwd) = cwd {
             // The app's own Codex home: its sign-in and chats, apart from any `codex` on the
             // machine (whose keychain entry would prompt for every build of this app).
-            command
-                .current_dir(cwd)
-                .env("CODEX_HOME", cwd.join(CODEX_HOME));
+            // Codex refuses a home that does not exist.
+            let home = cwd.join(CODEX_HOME);
+            std::fs::create_dir_all(&home)
+                .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
+            command.current_dir(cwd).env("CODEX_HOME", home);
         }
         let mut child = command
             .spawn()

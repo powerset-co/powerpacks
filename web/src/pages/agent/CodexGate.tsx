@@ -17,13 +17,29 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 /** The chat before Codex can run: missing from the app, signed out, or signing in. */
 export function CodexGate({ codex }: { codex: CodexAccountState }) {
   if (codex.loading) return <EmptyState>Checking Codex…</EmptyState>
-  if (!codex.status?.installed) {
+  if (!codex.status) {
+    return (
+      <Panel title="Codex could not start">
+        <p className="m-0 text-muted-foreground">
+          Chat runs on the Codex bundled with the app, and it did not answer.
+        </p>
+        {codex.error && (
+          <p className="m-0 break-words text-xs text-bad" data-codex-error>
+            {codex.error}
+          </p>
+        )}
+        <Button variant="default" onClick={codex.retry}>
+          Try again
+        </Button>
+      </Panel>
+    )
+  }
+  if (!codex.status.installed) {
     return (
       <Panel title="Chat is unavailable">
         <p className="m-0 text-muted-foreground">
           This copy of Powerpacks is missing Codex. Reinstall the app.
         </p>
-        {codex.error && <p className="m-0 text-xs text-bad">{codex.error}</p>}
       </Panel>
     )
   }
