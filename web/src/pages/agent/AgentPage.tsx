@@ -163,7 +163,7 @@ function SignedInAgent() {
           type="button"
           aria-label="Close chats"
           onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 top-topbar z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden"
+          className="fixed inset-0 z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden"
         />
       )}
       <Conversation onToggle={() => setSidebarOpen((open) => !open)} />

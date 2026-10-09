@@ -1,4 +1,4 @@
-// The local UI's pages, in top-bar order. The review server serves each at its href.
+// The local UI's pages, in side-nav order. The review server serves each at its href.
 
 import { isDesktop } from "@/lib/desktop"
 

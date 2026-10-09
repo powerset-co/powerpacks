@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
-import { DebugMenu, SignInModal, TopBar } from "@/components/shared"
+import { DebugMenu, Sidebar, SignInModal } from "@/components/shared"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
@@ -12,15 +12,15 @@ import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
 import { TasksPage } from "@/pages/tasks/TasksPage"
 
-// The top bar row, then the page: the page owns its own scrolling inside the second row.
+// The side nav, then the page: the page owns its own scrolling and any panel of its own.
 function Shell() {
   const page = pageAt(useLocation().pathname)
   useEffect(() => {
     document.title = `${page.label} · Powerpacks`
   }, [page])
   return (
-    <div className="grid h-dvh grid-rows-[var(--topbar-height)_1fr] overflow-hidden">
-      <TopBar page={page} />
+    <div className="grid h-dvh grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
+      <Sidebar />
       <Outlet />
     </div>
   )

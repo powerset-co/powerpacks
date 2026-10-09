@@ -6,7 +6,7 @@
 .drawer {
   position: fixed;
   z-index: 70;
-  top: var(--topbar-height);
+  top: 0;
   right: 0;
   bottom: 0;
   width: min(var(--drawer-w), 100vw);
