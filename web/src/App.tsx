@@ -20,7 +20,7 @@ function Shell() {
     document.title = `${page.label} · Powerpacks`
   }, [page])
   return (
-    <div className="grid h-dvh grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
+    <div className="page-enter grid h-dvh grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
       <Sidebar />
       <Outlet />
     </div>

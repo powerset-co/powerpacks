@@ -228,3 +228,8 @@
   min-height: 0;
   padding: 0 0 8px;
 }
+
+/* The status line: each new sentence fades in where the last one stood. */
+.install-page .fade-swap {
+  animation: fade-in var(--t-slow) var(--ease-out) backwards;
+}

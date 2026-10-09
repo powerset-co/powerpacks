@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 
 import { useNavigate } from "react-router-dom"
 
-import { CHANNEL_ICON, ImportIcon, SparkIcon } from "@/components/shared"
+import { CHANNEL_ICON, ImportIcon, SparkIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import {
@@ -38,7 +38,7 @@ const INPUT =
   "min-h-9 w-full rounded-[var(--radius-s)] border border-line-strong bg-card px-3 text-[13px] text-foreground outline-none placeholder:text-faint focus-visible:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
 
 const CHOICE =
-  "group flex w-full cursor-pointer flex-col items-start gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left text-foreground transition-[border-color,background-color,transform] duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))] hover:bg-surface-2 active:translate-y-px disabled:cursor-default disabled:opacity-50 disabled:hover:border-line-strong disabled:hover:bg-card disabled:active:translate-y-0"
+  "group flex w-full cursor-pointer flex-col items-start gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left text-foreground transition-[border-color,background-color,transform,opacity] duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))] hover:bg-surface-2 active:translate-y-px disabled:cursor-default disabled:hover:border-line-strong disabled:hover:bg-card disabled:active:translate-y-0"
 
 /** A home folder path with the home part as a tilde, the way people write it. */
 function tilde(path: string): string {
@@ -47,15 +47,24 @@ function tilde(path: string): string {
 
 /** The first click: set up from scratch, or import the command-line install's data. */
 function Choice({
-  disabled,
+  failed,
   onStart,
   onError,
 }: {
-  disabled: boolean
+  failed: boolean
   onStart: (run: () => Promise<void>) => void
   onError: (message: string) => void
 }) {
   const navigate = useNavigate()
+  // The clicked card spins until setup moves past the welcome (this unmounts) or the click fails.
+  const [chosen, setChosen] = useState<"start" | "import" | null>(null)
+  useEffect(() => {
+    if (failed) setChosen(null)
+  }, [failed])
+  const choose = (which: "start" | "import", task: () => Promise<void>) => {
+    setChosen(which)
+    onStart(task)
+  }
   // undefined while the app looks; null when there is nothing to import.
   const [source, setSource] = useState<string | null | undefined>(undefined)
   useEffect(() => {
@@ -67,36 +76,46 @@ function Choice({
       })
   }, [onError])
   const importIt = () =>
-    onStart(async () => {
+    choose("import", async () => {
       if (await importData()) await navigate(HOME.href)
     })
   return (
     <div className="grid w-full max-w-[560px] grid-cols-2 gap-3 max-[720px]:grid-cols-1">
       <button
         type="button"
-        className={CHOICE}
-        disabled={disabled}
-        onClick={() => onStart(() => continueSetup({}))}
+        className={cn(CHOICE, chosen === "import" && "opacity-40")}
+        disabled={chosen !== null}
+        data-chosen={chosen === "start"}
+        onClick={() => choose("start", () => continueSetup({}))}
       >
         <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-primary-soft text-primary">
-          <SparkIcon className="size-[18px]" />
+          {chosen === "start" ? <Spinner className="size-4" /> : <SparkIcon className="size-[18px]" />}
         </span>
-        <span className="text-[13.5px] font-bold">Start setup</span>
+        <span className="text-[13.5px] font-bold">
+          {chosen === "start" ? "Starting setup…" : "Start setup"}
+        </span>
         <span className="text-xs leading-snug text-muted-foreground">
           Sign in, import your contacts and build your network from scratch.
         </span>
       </button>
       <button
         type="button"
-        className={cn(CHOICE, source && "border-[color-mix(in_srgb,var(--primary)_35%,var(--line-strong))]")}
-        disabled={disabled || !source}
+        className={cn(
+          CHOICE,
+          source && "border-[color-mix(in_srgb,var(--primary)_35%,var(--line-strong))]",
+          (chosen === "start" || !source) && "opacity-40",
+        )}
+        disabled={chosen !== null || !source}
+        data-chosen={chosen === "import"}
         onClick={importIt}
         data-import-source={source ?? ""}
       >
         <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground group-hover:text-primary">
-          <ImportIcon className="size-[18px]" />
+          {chosen === "import" ? <Spinner className="size-4" /> : <ImportIcon className="size-[18px]" />}
         </span>
-        <span className="text-[13.5px] font-bold">Import existing data</span>
+        <span className="text-[13.5px] font-bold">
+          {chosen === "import" ? "Importing…" : "Import existing data"}
+        </span>
         <span className="text-xs leading-snug text-muted-foreground">
           {source === undefined
             ? "Looking for a Powerpacks install on this computer…"
@@ -341,7 +360,7 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   } else if (data.event === "setup.ready" && !permissionsDone) {
     control = <Permissions onDone={finishPermissions} />
   } else if (data.event === "setup.ready") {
-    control = <Choice disabled={busy} onStart={run} onError={setError} />
+    control = <Choice failed={error !== null} onStart={run} onError={setError} />
   } else if (stopped) {
     control = (
       <div className="flex flex-wrap items-center justify-center gap-2">
@@ -356,7 +375,11 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   }
 
   return (
-    <section className="install-action flex flex-col items-center gap-2">
+    // Each new wait rises in rather than swapping in place.
+    <section
+      key={`${permissionsDone}-${data.event === "setup.ready"}-${data.step}-${action?.kind ?? ""}`}
+      className="install-action rise-in flex flex-col items-center gap-2"
+    >
       {control}
       {error && (
         <p role="alert" className="m-0 text-xs text-bad">

@@ -149,6 +149,11 @@ export function InstallPage() {
               : word("review.offer.many").replace("{count}", reviewLeft.toLocaleString()),
         }
       : (data?.action ?? undefined)
+  const message = error
+    ? OFFLINE.line
+    : data?.step === "index" && data.index_progress
+      ? data.index_progress.message
+      : (data?.message ?? OFFLINE.reading)
   const note = error ? "" : failed ? word("failed.note") : data?.note
   // The live line under a running step: how long it has run, beside the counts in its message.
   const elapsed = useElapsed(data?.step_started_at, !error && !failed && data?.status === "running")
@@ -173,7 +178,8 @@ export function InstallPage() {
       data-status={error ? "disconnected" : failed ? "failed" : data?.status}
       data-welcome={welcome || undefined}
     >
-      <main className="install-main">
+      {/* The welcome and the progress are two layouts: the new one rises in, never a jump. */}
+      <main key={welcome ? "welcome" : "progress"} className="install-main rise-in">
         <section aria-live="polite">
           <EmptyPanel
             title={title}
@@ -193,11 +199,10 @@ export function InstallPage() {
                 lines={MESSAGE_LINES.wide}
                 narrowLines={MESSAGE_LINES.narrow}
               >
-                {error
-                  ? OFFLINE.line
-                  : data?.step === "index" && data.index_progress
-                    ? data.index_progress.message
-                    : (data?.message ?? OFFLINE.reading)}
+                {/* A new line fades in over the old one's slot. */}
+                <span key={message} className="fade-swap">
+                  {message}
+                </span>
               </ReservedLines>
             )}
             {/* A clock ticks every second: kept out of the live region's announcements. */}

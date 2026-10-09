@@ -202,6 +202,11 @@
   }
 }
 
+/* A page fades in as it mounts: the first one after the splash, then each one the nav opens. */
+.page-enter > :last-child {
+  animation: fade-in var(--t-med) var(--ease-out) backwards;
+}
+
 /* Something added after its group appeared (an empty state, a new chip, a changed score)
    rises in on its own: 6px, --t-med. */
 .rise-in {
