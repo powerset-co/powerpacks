@@ -152,7 +152,7 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
         <Check
           icon={<MessagesIcon className="size-[18px]" />}
           title="Full Disk Access"
-          why="Powerpacks reads your iMessage history and Contacts on this Mac to find the people you talk to. Nothing leaves your computer."
+          why="Reads iMessage and Contacts to find who you talk to. Nothing leaves your computer."
           ready={readable ? "Allowed" : skipMessages ? "Skipped" : null}
           note={
             !readable && !skipMessages ? (
@@ -180,18 +180,9 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
         <Check
           icon={<BrowserIcon className="size-[18px]" />}
           title="A browser for sign-ins"
-          why="Powerpacks signs in to LinkedIn and Google in a browser window it controls, on this Mac. Nothing leaves your computer."
+          why="Signs in to LinkedIn and Google in a browser window. Nothing leaves your computer."
           ready={data?.browser.ok ? `Using ${data.browser.name}` : null}
-          note={
-            data && !data.browser.ok ? (
-              <>
-                <span className="text-[11.5px] text-faint">
-                  No Chrome, Brave, Edge or Arc found. Chromium is about 150 MB.
-                </span>
-                <InstallLine install={data.browser.install} />
-              </>
-            ) : null
-          }
+          note={data && !data.browser.ok ? <InstallLine install={data.browser.install} /> : null}
         >
           {data ? (
             <InstallButton
@@ -206,7 +197,7 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
         <Check
           icon={<CloudIcon className="size-[18px]" />}
           title="Google Cloud CLI"
-          why="Gmail connects through a private app Powerpacks makes in your own Google Cloud project. Your mail stays on this Mac."
+          why="Connects Gmail through a private app in your own Google Cloud. Nothing leaves your computer."
           ready={data?.gcloud.ok ? "Installed" : null}
           note={data && !data.gcloud.ok ? <InstallLine install={data.gcloud.install} /> : null}
         >
