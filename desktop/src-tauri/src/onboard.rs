@@ -115,6 +115,20 @@ pub struct Answer {
 
 /// Resume `bin/onboard` in the background with the user's answer; it outlives the app like the
 /// page server does.
+/// Whether setup is mid-step right now: the manifest says running, and its process is alive.
+pub fn is_running(root: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
+        return false;
+    };
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let running = manifest.get("status").and_then(serde_json::Value::as_str) == Some("running");
+    let pid = manifest
+        .get("installer_pid")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    running && pid != 0 && crate::children::is_alive(pid as u32)
+}
+
 /// Stop the setup process recorded in the manifest, if any: before a new run (its lock would
 /// refuse one, and a macOS permission granted meanwhile only reaches a new process), and when
 /// the app exits. Setup resumes from its saved step on the next launch.

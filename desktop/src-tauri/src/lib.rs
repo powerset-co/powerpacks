@@ -255,6 +255,17 @@ fn main_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// "Setup is still running": quit anyway, or keep it running.
+fn confirm_quit(app: &AppHandle) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    app.dialog()
+        .message("Setup is still importing your contacts. If you quit now it pauses, and picks up from the same step the next time you open Powerpacks.")
+        .title("Quit while setup is running?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Keep running".into()))
+        .blocking_show()
+}
+
 /// A termination signal (Terminal, `kill`, the system shutting down) quits the app the normal
 /// way, so the exit handler below still stops the server, Codex and setup.
 fn quit_on_signal(app: AppHandle) {
@@ -288,6 +299,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(Boot::default()))
         .manage(Codex::default())
         .manage(children::Children::default())
@@ -320,6 +332,18 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Powerpacks failed to start")
         .run(|app, event| {
+            // Quitting mid-setup pauses the import until the next launch; ask first.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+                let mid_setup = code.is_none()
+                    && app
+                        .state::<Arc<Boot>>()
+                        .root()
+                        .is_some_and(|root| onboard::is_running(&root));
+                if mid_setup && !confirm_quit(app) {
+                    api.prevent_exit();
+                }
+                return;
+            }
             // Nothing of Powerpacks outlives the window: the page server, Codex, and setup.
             if let tauri::RunEvent::Exit = event {
                 app.state::<Codex>().shutdown();
