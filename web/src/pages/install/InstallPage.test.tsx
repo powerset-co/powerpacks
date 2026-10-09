@@ -477,4 +477,60 @@ describe("installation progress", () => {
     expect(screen.getByText(status.message)).toBeTruthy()
     expect(container.querySelector(".enrich-orbit")).toBeNull()
   })
+
+  it("counts how long a running step has taken, and only while it runs", async () => {
+    const started = new Date(Date.now() - 125_000).toISOString().replace(/\.\d{3}Z$/, "Z")
+    let status: InstallStatus = {
+      ...INSTALL,
+      step: "deep_context",
+      message: "Learning about your contacts: 40 of 298",
+      step_started_at: started,
+      steps: { deep_context: { status: "running", message: "Learning about your contacts: 40 of 298" } },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    const { client, container } = mount()
+    await screen.findByText("Learning about your contacts: 40 of 298")
+    expect(container.querySelector(".install-elapsed")?.textContent).toMatch(/^2m 0[5-9]s so far$/)
+    status = { ...status, status: "waiting", action: { kind: "owner" } }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await waitFor(() => expect(container.querySelector(".install-elapsed")?.textContent).toBe(""))
+  })
+
+  it("in the desktop app, offers to skip WhatsApp at its QR and resumes setup without it", async () => {
+    const invoke = vi.fn(() => Promise.resolve(null))
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke },
+      event: { listen: () => Promise.resolve(() => undefined) },
+    })
+    const status: InstallStatus = {
+      ...INSTALL,
+      plan: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "deep_context"],
+      step: "whatsapp_login",
+      status: "waiting",
+      message: "Connect WhatsApp",
+      action: { kind: "qr", qr_url: "/api/install/qr?t=1" },
+      steps: {
+        whatsapp_tools: { status: "completed", message: "" },
+        whatsapp_login: { status: "waiting", message: "" },
+      },
+    }
+    const fetch = vi.fn((url: string) =>
+      Promise.resolve(
+        new Response(JSON.stringify(url.endsWith("/api/install/skip") ? { status: "skipped" } : status)),
+      ),
+    )
+    vi.stubGlobal("fetch", fetch)
+    mount()
+    fireEvent.click(await screen.findByRole("button", { name: "Skip WhatsApp for now" }))
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/install/skip",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ source: "whatsapp" }) }),
+      ),
+    )
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
+  })
 })

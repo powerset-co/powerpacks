@@ -8,11 +8,9 @@ export interface InstallAction {
     | "qr"
     | "processing"
     | "review"
-    | "approval"
     | "owner"
     | "error"
     | "resume"
-    | "recovery"
     | "details"
     | "signin"
   text?: string
@@ -21,9 +19,6 @@ export interface InstallAction {
   url?: string
   provider?: "powerset" | "linkedin" | "google"
   command?: string
-  // approval: the spend step and its estimate (packs/powerset/primitives/install/pipeline.py)
-  step?: string
-  estimate?: unknown
   qr_url?: string
   details?: unknown
 }
@@ -43,6 +38,8 @@ export interface InstallStatus {
   retry_command: string
   steps: Partial<Record<InstallStep, { status: InstallState; message: string }>>
   plan?: InstallStep[]
+  // When the run entered the current step, for the time a long step has taken.
+  step_started_at?: string
   prose: InstallProse
   action?: InstallAction | null
   index_progress?: { status: string; message: string; progress?: number; payload: unknown } | null

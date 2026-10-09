@@ -12,7 +12,8 @@ import unittest
 from pathlib import Path
 
 from packs.powerset.primitives.install.prose_cli import _RUN, _SAMPLE, _entry
-from packs.powerset.primitives.install.status_prose import PAGE, PROSE, ROWS, page_prose, render
+from packs.powerset.primitives.install.status_prose import (
+    DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE, PAGE, PROSE, ROWS, page_prose, render)
 from packs.powerset.primitives.install.steps import InstallStep
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,8 @@ NOT_EVENTS = {"log", "json", "csv", "py", "sh", "tmp", "lock", "sqlite", "md", "
 # The page holds 3 lines for the status line and 4 for the note on a wide screen
 # (InstallPage.tsx MESSAGE_LINES / NOTE_LINES); these keep every one inside them.
 LINE_BUDGET, NOTE_BUDGET = 150, 220
+# How the script speaks as the agent; under the desktop app no agent reads the page.
+AGENT_VOICE = re.compile(r"\b(I['’](ll|m)|I can|I will|I stopped|Tell me|Ask me|in chat|the agent)\b")
 
 
 def _looks_like_event(text: str) -> bool:
@@ -100,9 +103,24 @@ class StatusProseTests(unittest.TestCase):
         rows = [step for row in ROWS for step in row.steps]
         self.assertEqual(sorted(rows), sorted(step for step in InstallStep if step is not InstallStep.SOURCES))
 
+    def test_the_desktop_app_never_speaks_as_an_agent(self) -> None:
+        self.assertEqual(sorted((set(DESKTOP_LINES) | set(DESKTOP_NOTES)) - set(PROSE)), [])
+        self.assertEqual(sorted(set(DESKTOP_PAGE) - set(PAGE)), [])
+        for event in PROSE:
+            with self.subTest(event=event):
+                _, line, note = render(event, _SAMPLE, desktop=True)
+                self.assertIsNone(AGENT_VOICE.search(line + " " + note), (line, note))
+                self.assertNotIn("{", line + note)
+                self.assertLessEqual(len(line), LINE_BUDGET)
+                self.assertLessEqual(len(note), NOTE_BUDGET)
+        for word in page_prose(desktop=True)["page"].values():
+            self.assertIsNone(AGENT_VOICE.search(word), word)
+        # The agent's own words are unchanged outside the app.
+        self.assertEqual(render("setup.paused", {}, desktop=False)[1], "Setup paused. I can resume it from here.")
+
     def test_the_page_test_fixture_is_this_script(self) -> None:
         fixture = ROOT / "web/src/pages/install/prose.fixture.json"
-        self.assertEqual(json.loads(fixture.read_text()), page_prose(),
+        self.assertEqual(json.loads(fixture.read_text()), page_prose(desktop=False),
                          "regenerate web/src/pages/install/prose.fixture.json from status_prose.page_prose()")
 
     def test_the_page_words_are_complete(self) -> None:

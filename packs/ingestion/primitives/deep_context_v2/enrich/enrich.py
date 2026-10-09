@@ -87,7 +87,7 @@ class Enrich(Node):
                                                queries_enrich.connection_emails(self.conn))
         todo: list[ResearchSubject] = research.subjects(found.families, matches, found.research)
         if todo:
-            for key, value in research.submit(self.conn, todo).items():
+            for key, value in research.submit(self.conn, todo, on_progress=self.progress).items():
                 counts[key] = value
             found = proposals.derive(self.conn)
         # Step 3: a profile for every URL a judge or a confirmation will read.
@@ -111,7 +111,8 @@ class Enrich(Node):
         counts["judge_already_judged"] = planned.already_judged
         counts["judge_families"] = len(tasks)
         owner_block: str = owner_background_block(read_owner(self.conn))
-        for key, value in asyncio.run(judge.decide(self.conn, tasks, self.jev_cache, owner_block, now)).items():
+        for key, value in asyncio.run(judge.decide(self.conn, tasks, self.jev_cache, owner_block, now,
+                                                   on_progress=self.progress)).items():
             counts[key] = value
         # Step 5: settle, on the families as the judge left them.
         families: list[Family] = load_families(self.conn)

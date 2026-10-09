@@ -13,12 +13,12 @@ import {
   installAction,
   messagesReadable,
   openExternal,
+  skipSource,
   type SetupAnswer,
 } from "@/lib/api/install"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 import { openSignIn } from "@/lib/signin"
-import { isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
 
 // Where the Powerset login's own callback server listens (packs/powerset/primitives/auth/auth.py).
@@ -26,7 +26,10 @@ const POWERSET_CALLBACK = "http://localhost:9876/callback"
 // LinkedIn's sign-in lands here; the app then reads the list (desktop/src-tauri/src/linkedin.rs).
 const LINKEDIN_CONNECTIONS = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
 // The waits setup stops at until the user resumes it; the others finish on their own.
-const STOPPED = new Set(["error", "resume", "recovery", "details"])
+const STOPPED = new Set(["error", "resume", "details", "gmail"])
+// The WhatsApp steps: stopped at any of them, setup can go on without WhatsApp
+// (packs/powerset/primitives/install/controller.py SKIPPABLE).
+const WHATSAPP_STEPS = new Set(["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"])
 
 const MessagesIcon = CHANNEL_ICON.imessage
 
@@ -35,15 +38,6 @@ const PERMISSION_POLL_MS = 3_000
 
 const INPUT =
   "min-h-9 w-full rounded-[var(--radius-s)] border border-line-strong bg-card px-3 text-[13px] text-foreground outline-none placeholder:text-faint focus-visible:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
-
-/** The first dollar figure in a spend estimate, when it carries one. */
-function cost(estimate: unknown): string | null {
-  if (!isRecord(estimate)) return null
-  const dollars = Object.entries(estimate).find(
-    ([key, value]) => key.endsWith("usd") && typeof value === "number",
-  )?.[1]
-  return typeof dollars === "number" ? `About $${dollars.toFixed(2)}` : null
-}
 
 const CHOICE =
   "group flex w-full cursor-pointer flex-col items-start gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left text-foreground transition-[border-color,background-color,transform] duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))] hover:bg-surface-2 active:translate-y-px disabled:cursor-default disabled:opacity-50 disabled:hover:border-line-strong disabled:hover:bg-card disabled:active:translate-y-0"
@@ -292,6 +286,20 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   const answer = (value: SetupAnswer) => run(() => continueSetup(value))
   const [permissionsDone, setPermissionsDone] = useState(false)
   const finishPermissions = useCallback(() => setPermissionsDone(true), [])
+  // Stopped at a WhatsApp step (its QR, a failed link): go on without it. The server saves the
+  // skip and stops the waiting run; setup then resumes from the saved choices.
+  const skipWhatsapp = () =>
+    run(async () => {
+      await skipSource("whatsapp")
+      await continueSetup({})
+    })
+  const stopped = data.status === "failed" || (data.status === "waiting" && STOPPED.has(action?.kind ?? ""))
+  const skip =
+    WHATSAPP_STEPS.has(data.step) && (action?.kind === "qr" || stopped) ? (
+      <Button variant="default" disabled={busy} onClick={skipWhatsapp}>
+        {data.prose.page["qr.skip"]}
+      </Button>
+    ) : null
 
   let control
   if (signInUrl !== null) {
@@ -301,17 +309,8 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
         {provider === "google" ? "Open Google again" : "Sign in"}
       </Button>
     )
-  } else if (action?.kind === "approval" && action.step) {
-    const step = action.step
-    const price = cost(action.estimate)
-    control = (
-      <div className="flex flex-col items-center gap-2">
-        {price && <p className="m-0 text-sm tabular-nums text-foreground">{price}</p>}
-        <Button variant="primary" disabled={busy} onClick={() => answer({ approve: step })}>
-          Approve and continue
-        </Button>
-      </div>
-    )
+  } else if (action?.kind === "qr") {
+    control = skip
   } else if (
     action?.kind === "gmail" &&
     data.step === "gmail_login" &&
@@ -345,11 +344,14 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
     control = <Permissions onDone={finishPermissions} />
   } else if (data.event === "setup.ready") {
     control = <Choice disabled={busy} onStart={run} onError={setError} />
-  } else if (data.status === "failed" || (data.status === "waiting" && STOPPED.has(action?.kind ?? ""))) {
+  } else if (stopped) {
     control = (
-      <Button variant="primary" disabled={busy} onClick={() => answer({})}>
-        {data.status === "failed" ? "Try again" : "Continue setup"}
-      </Button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button variant="primary" disabled={busy} onClick={() => answer({})}>
+          {data.status === "failed" ? "Try again" : "Continue setup"}
+        </Button>
+        {skip}
+      </div>
     )
   } else {
     return null

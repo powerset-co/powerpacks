@@ -1,7 +1,7 @@
 //! The setup workflow (what `bin/onboard` wraps: account, imports, Deep Context, index), run by the app
 //! instead of an agent. The install page shows its progress from
 //! `.powerpacks/install/manifest.json`; re-running `bin/onboard` resumes from its saved choices,
-//! and `--approve-spend <step>` approves the spend it stopped for. Its own lock keeps one run.
+//! Its own lock keeps one run.
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
@@ -13,11 +13,12 @@ const MANIFEST: &str = ".powerpacks/install/manifest.json";
 /// Set from the debug menu: launch treats setup as done, so the other pages can be tried first.
 const SKIP_MARKER: &str = ".powerpacks/desktop/skip-setup";
 const LOG: &str = ".powerpacks/install/desktop-onboard.log";
+/// Read by the Python workflow and page server (`POWERPACKS_DESKTOP`): no browsers, app-voiced words.
+pub const DESKTOP_FLAG: &str = "POWERPACKS_DESKTOP";
 /// The setup workflow and the owner-profile step, run with the project's Python (what
 /// `bin/onboard` and `bin/deep-context-v2 owner` wrap) so no shell is needed.
 const ONBOARD_MODULE: &str = "packs.powerset.primitives.install.onboard";
 const OWNER_MODULE: &str = "packs.ingestion.primitives.deep_context_v2.owner";
-const SPEND_STEPS: [&str; 4] = ["synthesize", "cluster", "enrich", "index"];
 /// What bootstrap records after installing; the app did the same work before setup starts.
 const INSTALLED_EVENTS: [&str; 2] = ["install.dependencies_ready", "install.skills_ready"];
 /// The page shows a Start/Continue button for these (status_prose.py: action `resume`).
@@ -122,8 +123,6 @@ fn write_event(root: &Path, python: &Path, event: &str) -> Result<(), String> {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Answer {
-    /// A spend step the user approved.
-    pub approve: Option<String>,
     /// The Gmail account to add.
     pub gmail_email: Option<String>,
     /// The user's own LinkedIn profile, when the import could not tell whose network it is.
@@ -185,12 +184,6 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
     }
     let mut onboard = Command::new(paths::project_python(root));
     onboard.args(["-m", ONBOARD_MODULE, "--root"]).arg(root);
-    if let Some(step) = answer.approve {
-        if !SPEND_STEPS.contains(&step.as_str()) {
-            return Err(format!("{step} is not a step that needs approval."));
-        }
-        onboard.args(["--approve-spend", &step]);
-    }
     if let Some(email) = answer.gmail_email {
         if !email.contains('@') {
             return Err("Enter a Gmail address.".into());
@@ -204,6 +197,8 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let mut children = Vec::new();
     for mut step in steps {
+        // The workflow's desktop behaviour: no browsers, hand sign-ins and waits back to the page.
+        step.env(DESKTOP_FLAG, "1");
         let output = OpenOptions::new()
             .create(true)
             .append(true)

@@ -248,6 +248,7 @@ pub fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
             &PORT.to_string(),
         ])
         .current_dir(root)
+        .env(onboard::DESKTOP_FLAG, "1")
         .stdin(Stdio::null())
         .stdout(log)
         .stderr(errors)

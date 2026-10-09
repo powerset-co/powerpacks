@@ -29,6 +29,30 @@ const NOTE_LINES = { wide: 4, narrow: 6 }
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
 
+/** Seconds as the page counts them: 42s, 3m 05s, 1h 12m. */
+function elapsedText(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = seconds % 60
+  if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`
+  if (minutes) return `${minutes}m ${String(rest).padStart(2, "0")}s`
+  return `${rest}s`
+}
+
+/** How long the current step has run, ticking every second while setup works; "" otherwise. */
+function useElapsed(startedAt: string | undefined, running: boolean): string {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running || !startedAt) return
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [running, startedAt])
+  if (!running || !startedAt) return ""
+  const started = Date.parse(startedAt)
+  if (Number.isNaN(started)) return ""
+  return elapsedText(Math.max(0, Math.floor((now - started) / 1000)))
+}
+
 function installSteps(data?: InstallStatus) {
   if (!data) return []
   const plan = data.plan ?? []
@@ -124,6 +148,8 @@ export function InstallPage() {
         }
       : (data?.action ?? undefined)
   const note = error ? "" : failed ? word("failed.note") : data?.note
+  // The live line under a running step: how long it has run, beside the counts in its message.
+  const elapsed = useElapsed(data?.step_started_at, !error && !failed && data?.status === "running")
   useEffect(() => {
     document.title = `${title} · Powerpacks`
   }, [title])
@@ -167,6 +193,10 @@ export function InstallPage() {
                   ? data.index_progress.message
                   : (data?.message ?? OFFLINE.reading)}
             </ReservedLines>
+            {/* A clock ticks every second: kept out of the live region's announcements. */}
+            <p className="install-elapsed" aria-hidden="true">
+              {elapsed ? word("running.elapsed").replace("{elapsed}", elapsed) : ""}
+            </p>
             <ReservedLines className="install-note" lines={NOTE_LINES.wide} narrowLines={NOTE_LINES.narrow}>
               {note}
             </ReservedLines>

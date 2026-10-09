@@ -1,17 +1,50 @@
-"""Page actions launch the same detached coordinator and open permission guidance."""
+"""Page actions launch the same detached coordinator and open permission guidance.
+
+Changelog:
+  2026-10-09: `/api/install/skip` skips a stopped source (WhatsApp at its QR) for the rest of the
+      setup: the waiting run is stopped, the saved command gets `--skip-source`, and the page
+      resumes setup.
+"""
 from __future__ import annotations
 
+import json
 import os
+import shlex
+import signal
 import subprocess
+import time
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
 from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.steps import InstallStep
 
 
 PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+# The sources the page may skip at a stopped step, and the steps each one stops at.
+SKIPPABLE = {"whatsapp": {InstallStep.WHATSAPP_TOOLS.value, InstallStep.WHATSAPP_LOGIN.value,
+                          InstallStep.WHATSAPP_SYNC.value, InstallStep.WHATSAPP_IMPORT.value}}
+_STOP_SECONDS = 5.0
+
+
+def _stop(pid: int) -> None:
+    """Stop the setup process that owns the wait and let its lock go before a new run takes it."""
+    if pid <= 0 or pid == os.getpid():
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + _STOP_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    raise OSError("Setup did not stop; try again")
 
 
 def permission_app() -> str | None:
@@ -47,6 +80,32 @@ class InstallController:
         path = self.qr(InstallStatus(self.root).read())
         return path.read_bytes() if path else None
 
+    @staticmethod
+    def _body(handler) -> dict:
+        length = int(handler.headers.get("Content-Length") or 0)
+        payload = json.loads(handler.rfile.read(length) or b"{}") if length else {}
+        if not isinstance(payload, dict):
+            raise ValueError("Send a JSON object")
+        return payload
+
+    def skip(self, source: object) -> dict:
+        """Skip `source` for the rest of this setup, from the step it stopped at: the run that owns the
+        wait is stopped, the saved command remembers the skip, and setup waits to be resumed."""
+        steps = SKIPPABLE.get(source) if isinstance(source, str) else None
+        if steps is None:
+            raise ValueError("This source cannot be skipped")
+        status = InstallStatus(self.root)
+        record = status.read()
+        if record["step"] not in steps or record["status"] not in ("waiting", "failed"):
+            raise ValueError(f"Setup is not stopped at {source}")
+        _stop(int(record["installer_pid"]))
+        command = shlex.split(record["retry_command"])
+        skipped = {value for flag, value in zip(command, command[1:]) if flag == "--skip-source"}
+        if source not in skipped:
+            command.extend(("--skip-source", source))
+        status.write("setup.paused", pid=0, retry_command=shlex.join(command))
+        return {"status": "skipped", "source": source}
+
     def post(self, handler, path: str) -> bool:
         if not path.startswith("/api/install/"):
             return False
@@ -65,6 +124,8 @@ class InstallController:
                 response["app_path"] = app
             elif path == "/api/install/review":
                 subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
+            elif path == "/api/install/skip":
+                response = self.skip(self._body(handler).get("source"))
             else:
                 handler._json({"error": "Unknown setup action"}, HTTPStatus.NOT_FOUND)
                 return True
