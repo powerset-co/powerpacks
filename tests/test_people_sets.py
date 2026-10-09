@@ -98,6 +98,36 @@ class RelayInviteTests(unittest.TestCase):
             self.deliver(self.jordan, ("op-casey", "Casey Delta"))
             self.assertEqual(payload(self.jordan, 0)["sets"][1]["invited"][0]["status"], "declined")
 
+    def accepted(self) -> str:
+        """Jordan's set with Casey in it, both sides settled; returns the set id."""
+        self.jordan.create("Founders")
+        set_id = self.jordan.kept()[0].set_id
+        self.jordan.invite(set_id, "casey@example.com")
+        self.deliver(self.casey, ("op-jordan", "Jordan Bravo"))
+        self.casey.answer("m1", accepted=True)
+        self.deliver(self.jordan, ("op-casey", "Casey Delta"))
+        return set_id
+
+    def test_owner_delete_reaches_members(self) -> None:
+        with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):
+            set_id = self.accepted()
+            self.jordan.delete(set_id)
+            self.assertEqual((self.sent[-1]["to"], self.sent[-1]["kind"], self.sent[-1]["payload"]),
+                             ("op-casey", "set_deleted", {"set_id": set_id}))
+            self.assertEqual(self.jordan.kept(), [])
+            self.deliver(self.casey, ("op-jordan", "Jordan Bravo"))
+            self.assertEqual([s["name"] for s in payload(self.casey, 0)["sets"]], ["Personal network"])
+
+    def test_member_leave_reaches_the_owner(self) -> None:
+        with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):
+            set_id = self.accepted()
+            self.casey.delete(set_id)
+            self.assertEqual((self.sent[-1]["to"], self.sent[-1]["kind"]), ("op-jordan", "set_left"))
+            self.assertEqual(self.casey.kept(), [])
+            self.deliver(self.jordan, ("op-casey", "Casey Delta"))
+            founders = payload(self.jordan, 0)["sets"][1]
+        self.assertEqual(([m["email"] for m in founders["members"]], founders["invited"]), (["jordan@example.com"], []))
+
     def test_no_sign_in_is_said_so(self) -> None:
         with mock.patch("packs.ingestion.primitives.share.web.sets.bearer_token", side_effect=SystemExit("not signed in")):
             with self.assertRaises(NeedsSignIn):

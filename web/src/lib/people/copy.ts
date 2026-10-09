@@ -202,7 +202,7 @@ export const SETS = {
   loading: "Loading sets…",
   cancel: "Cancel",
   leave: "Leave set",
-  confirmLeave: (name: string) => `Leave “${name}” on this computer?`,
+  confirmLeave: (name: string) => `Leave “${name}”? Its owner is told.`,
   youOwn: "You own this set",
   youJoined: "You joined this set",
   memberHead: "Member",

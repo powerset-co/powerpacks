@@ -4,6 +4,7 @@ A set is a named group of people who see each other's shared networks. Sets live
 cloud keeps no set information. Creating a set stores it here with the owner as its one member. An invite
 is an agent message to an email (the relay delivers it when that email has an account); accepting stores
 the set on the invitee's machine and sends an agent message back, and the owner's set lists the new member.
+Deleting (owner) or leaving (member) sends set_deleted to the members or set_left to the owner the same way.
 The asks loop pulls both kinds into `.powerpacks/inbox/<id>.json`; the owner's sent invites are
 `.powerpacks/invites/<id>.json`, keyed by the invite message's id. Presence is `.powerpacks/presence.json`,
 the last relay heartbeat per operator, written by the asks loop.
@@ -13,6 +14,7 @@ whose allowed_operator_ids hold any member's operator id.
 
 Created: 2026-10-08
 Changelog:
+- 2026-10-08: deleting a set tells its members' agents, leaving tells the owner's; each side applies it on read.
 - 2026-10-08: local sets; no /v2/sets. Invites over the relay, joined sets stored on accept, each member's
   last heartbeat, and the set's people (and each member's) counted in the share_v1 namespace, cached an hour.
 """
@@ -41,6 +43,8 @@ ME_PATH = "/v2/team/me"
 MESSAGES_PATH = "/v2/agent-messages"
 INVITE = "set_invite"
 REPLY = "set_invite_reply"
+DELETED = "set_deleted"  # the owner deleted the set: each member's machine drops it
+LEFT = "set_left"        # a member left: the owner's machine drops them from the set
 ACCEPTED = "accepted"
 DECLINED = "declined"
 PENDING = "pending"
@@ -122,7 +126,41 @@ class Sets:
         queries_share.insert_set(self.conn, str(uuid.uuid4()), name, OWNER, json.dumps([asdict(me)]), now_iso())
 
     def delete(self, set_id: str) -> None:
+        """The owner deletes the set for everyone; a member leaves it. Either way the others' agents hear
+        it over the relay, then the set goes from this machine."""
+        view = next(view for view in self.kept() if view.set_id == set_id)
+        me = self.me()
+        if view.role == OWNER:
+            kind, told = DELETED, [member for member in self.members(view) if member.operator_id != me.operator_id]
+        else:
+            kind, told = LEFT, [member for member in view.members if member.role == OWNER]
+        for member in told:
+            self._call("POST", MESSAGES_PATH, {"to": member.operator_id, "kind": kind, "payload": {"set_id": set_id}})
         queries_share.delete_set(self.conn, set_id)
+
+    def members(self, view: SetView) -> list[Member]:
+        """The set's members: those stored with it, then those whose accept reached this owner."""
+        held = {member.operator_id for member in view.members}
+        joined = [Member(invite["name"] or invite["email"], invite["email"], MEMBER, invite["operator_id"])
+                  for invite in self.sent() if invite["set_id"] == view.set_id and invite["status"] == ACCEPTED]
+        return [*view.members, *(member for member in joined if member.operator_id not in held)]
+
+    def settle(self) -> None:
+        """Apply the deletes and leaves the relay delivered since the last read, once each."""
+        for message in self._inbox(DELETED) + self._inbox(LEFT):
+            if "applied_at" in message:
+                continue
+            set_id = message["payload"]["set_id"]
+            if message["kind"] == DELETED:
+                queries_share.delete_set(self.conn, set_id)
+            else:
+                replies = {reply["payload"]["invite_id"]: reply for reply in self._inbox(REPLY)}
+                for path in (self.data_root / "invites").glob("*.json"):
+                    invite: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+                    reply = replies.get(invite["id"])
+                    if invite["set_id"] == set_id and reply and reply["from"]["operator_id"] == message["from"]["operator_id"]:
+                        write_json(path, {**invite, "left_at": message["created_at"]})
+            write_json(self.data_root / "inbox" / f"{message['id']}.json", {**message, "applied_at": now_iso()})
 
     def kept(self) -> list[SetView]:
         return [SetView(row["set_id"], row["name"], row["role"],
@@ -169,6 +207,8 @@ class Sets:
         found: list[dict[str, Any]] = []
         for path in sorted((self.data_root / "invites").glob("*.json")):
             invite: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            if "left_at" in invite:
+                continue  # accepted, then left the set
             reply = replies.get(invite["id"])
             found.append({**invite, "status": reply["payload"]["answer"] if reply else PENDING,
                           "name": reply["from"]["name"] if reply else "",
@@ -210,6 +250,7 @@ def _member(member: Member, seen: dict[str, str], shared: dict[str, int]) -> dic
 def payload(sets: Sets, shared: int) -> dict[str, Any]:
     """The page's answer: the personal network, the sets here (each with its members, their presence, the
     invites still open and its people), the invites waiting for an answer, and how many people the owner shares."""
+    sets.settle()
     seen = sets.presence()
     sent = sets.sent()
     me = sets.me()
@@ -224,10 +265,7 @@ def payload(sets: Sets, shared: int) -> dict[str, Any]:
                                     "is_personal": True, "member_count": 1, "person_count": shared,
                                     "members": [_member(me, seen, {me.operator_id: shared})], "invited": []}]
     for view in sets.kept():
-        joined = [Member(invite["name"] or invite["email"], invite["email"], MEMBER, invite["operator_id"])
-                  for invite in sent if invite["set_id"] == view.set_id and invite["status"] == ACCEPTED]
-        members = [*view.members, *(member for member in joined
-                                    if member.operator_id not in {held.operator_id for held in view.members})]
+        members = sets.members(view)
         items.append({"set_id": view.set_id, "name": view.name, "role": view.role, "is_personal": False,
                       "member_count": len(members),
                       "person_count": sets.people([member.operator_id for member in members]),
