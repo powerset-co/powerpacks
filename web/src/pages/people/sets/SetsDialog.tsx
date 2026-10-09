@@ -160,7 +160,7 @@ function SetRow({ set, shared, open, onToggle, onDelete, onInvite, busy }: RowPr
 
 // The sets dialog: the personal (local) network, then the cloud sets the owner belongs to, each unfolding
 // to its members and their relay presence; New set creates one in the cloud; the owner of a set can delete
-// it and invite by email over the relay. Invites to this owner sit on top with Accept and Decline.
+// it and invite by email over the relay. Invites to this owner sit under the personal set with Accept and Decline.
 export function SetsDialog({ open, onOpenChange, sets }: SetsDialogProps) {
   const [unfolded, setUnfolded] = useState("")
   const [naming, setNaming] = useState(false)
@@ -234,6 +234,7 @@ export function SetsDialog({ open, onOpenChange, sets }: SetsDialogProps) {
             ) : null}
           </div>
         ) : null}
+        <ul className="set-list">{personal.map(row)}</ul>
         {sets.data?.invites.length ? (
           <>
             <p className="sets-divider">{SETS.invites}</p>
@@ -249,7 +250,6 @@ export function SetsDialog({ open, onOpenChange, sets }: SetsDialogProps) {
             </ul>
           </>
         ) : null}
-        <ul className="set-list">{personal.map(row)}</ul>
         {sets.data && !sets.failure ? (
           <p className="sets-divider">{cloud.length ? SETS.sharedWith : SETS.none}</p>
         ) : null}
