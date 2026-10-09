@@ -34,7 +34,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.account_email = "powerset@example.com"
         self.source_choices = []
         self.source_result = {"step": "deep_context", "status": "waiting", "action": {"kind": "processing"}}
-        self.page = patch("packs.shared.web.server.start_server",
+        self.page = patch("packs.powerset.primitives.install.onboard.start_server",
                           return_value={"url": "http://127.0.0.1:8899/install"})
         self.launch_page = self.page.start()
         self.account = patch("packs.powerset.primitives.install.onboard.Onboarding")
@@ -42,7 +42,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.account_class.side_effect = self.build_account
         self.sources = patch.object(SourceOnboarding, "run", autospec=True, side_effect=self.run_sources)
         self.run_source = self.sources.start()
-        self.processing = patch("packs.powerset.primitives.install.pipeline.ProcessingOnboarding")
+        self.processing = patch("packs.powerset.primitives.install.onboard.ProcessingOnboarding")
         self.processing_class = self.processing.start()
         self.processing_class.return_value.run.side_effect = self.run_processing
         self.addCleanup(patch.stopall)
@@ -90,11 +90,6 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertTrue(output.rstrip().endswith("DONE: Verified"))
         self.assertEqual(self.status.read()["retry_command"], self.retry)
         self.assertEqual(self.launch_page.call_args.kwargs["port"], 8899)
-
-    def test_approval_is_scoped_to_this_resume_not_saved_for_future_runs(self):
-        self.run_command("--approve-spend", "index")
-        self.assertEqual(self.processing_class.call_args.kwargs["approved_spend"], ("index",))
-        self.assertNotIn("approve", self.status.read()["retry_command"])
 
     def test_source_wait_does_not_start_processing(self):
         self.source_result = {"step": "gmail_login", "status": "waiting", "message": "Connect Gmail"}

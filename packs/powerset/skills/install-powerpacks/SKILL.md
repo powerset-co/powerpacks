@@ -6,7 +6,7 @@ allowed-tools: Bash(curl -fsSL https://raw.githubusercontent.com/powerset-co/pow
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.7.0
+  version: 1.7.1
   summary: Install and build your searchable network from one sentence
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -19,6 +19,9 @@ metadata:
 
 <!--
 Changelog:
+- 2026-10-07: nothing asks for spend: every paid step runs after its estimate (in the
+  install log); `--approve-spend` is gone. A rerun builds the index again unless
+  people.csv is unchanged.
 - 2026-10-07: processing runs deep-context v2; the review is the page at `/` and
   `bin/deep-context-v2 finish` rebuilds search after it.
 - 2026-10-05: Codex uses a persistent tmux worker; the advisor relays chat choices
@@ -55,10 +58,10 @@ Sync WhatsApp → Discover → Enrich → Build Index → Verify → Review (opt
 whenever the user has time).
 
 Own the result. Run commands yourself; involve the user only for browser logins,
-QR scans, OS permissions, and the one approval below. Reviewing LinkedIn matches is
+QR scans, OS permissions, and the one approval below (the data-sharing consent;
+paid steps never ask). Reviewing LinkedIn matches is
 offered after search is ready, never in the way of it.
-Never edit files in the Powerpacks checkout: a changed checkout cannot update.
-If something looks broken, tell the user what you saw and offer `$feedback`.
+Own repairs through a verified rerun; use the recovery and feedback instructions below.
 Open with: "I’ll set this up here. Feel free to ask questions or tell me what you
 want as it runs."
 
@@ -138,11 +141,40 @@ that checkout's bootstrap and verifies its commit, not the public launcher.
 
 ### Advisor and background worker
 
-The original chat is the advisor: carry the user's choices and existing approvals
-into one worker, open the status page, answer questions, and relay any changed
-choices immediately. The worker runs and repairs the existing coordinator through
-verified completion. Only it starts or resumes setup; the advisor never starts a
-second installer. A browser action does not require a "done" message.
+Read [tmux-worker.md](tmux-worker.md) before starting; include it in the worker's
+brief. If you downloaded only this SKILL.md, first save
+`https://raw.githubusercontent.com/powerset-co/powerpacks/stable/packs/shared/skills/tmux-worker.md`
+as `tmux-worker.md` beside it. A PR test uses that checkout's copy. It owns supervision, recovery, stopping and feedback (`category: install`).
+Only the worker starts/resumes the coordinator; the advisor relays chat choices.
+
+Before starting, the advisor creates this chat's visible checklist with the host's
+native task/plan tool (Codex's plan tool or Claude's task tools):
+
+1. Install Powerpacks
+2. Connect Powerset
+3. Sync LinkedIn
+4. Sync Gmail
+5. Sync iMessage
+6. Sync WhatsApp
+7. Discover contacts
+8. Enrich contacts
+9. Build search index
+10. Verify search
+
+Keep it current yourself from the worker's output and
+`.powerpacks/install/manifest.json`, even when the browser page is open. The
+worker reports stage results to the advisor; it never creates or updates a
+second task list. Group each source's preparation, login and import under its
+sync task. Follow the coordinator's actual order; logins can happen before sync.
+For install-only requests, show only the requested setup tasks.
+
+Mark verified cached/no-op work complete. Label user-skipped sources as skipped
+(use the host's skipped state when available, otherwise complete with “Skipped”
+in the task label). Leave failed or waiting tasks unfinished and name the wait,
+such as “Sync Gmail — waiting for sign-in”. Add a review task only when review is
+needed. Starting a background index build does not complete it; complete Verify
+search only when index validation succeeds. Reuse this checklist after a retry.
+If the host has no task tool, keep a compact checklist in chat instead.
 
 On Codex with a local CLI and tmux, use `bin/onboard-worker`. It is standalone and
 needs only Python 3, tmux and Codex, so a fresh install can download it before a
@@ -155,13 +187,20 @@ curl -fsSL https://raw.githubusercontent.com/powerset-co/powerpacks/stable/bin/o
 For a PR test, use that checkout's helper and bootstrap instead. Do not download
 stable over a PR test. If tmux or a suitable Codex CLI is unavailable, use the
 host's native background agent; do not install a second agent harness silently.
-Other hosts use their native background agent. Without either, supervise here.
+Other hosts use one native worker operating the bootstrap/coordinator in a tmux
+session named `powerpacks-onboarding`, as Deep Context does. Before sending any
+command, inspect its pane and the live coordinator; reuse active work instead of
+starting another copy. Without a background agent, supervise here.
 
 Write a private task file containing the saved skill's absolute path, the exact
 bootstrap command above (including requested options), account/history/source
 choices, existing consent and budget, and the requested outcome. The worker must
 read that skill, execute the command and supervise it, not repeat the advisor's
-up-front question or launch another worker. On an interrupted install, include
+up-front question or launch another worker. Keep the coordinator responsible for
+processing too: do not hand off to standalone Deep Context stages that leave the
+install page frozen. If a required restriction cannot be expressed by the
+coordinator, tell the advisor before changing the execution path; never present
+its old completed manifest as current progress. On an interrupted install, include
 the known checkout and tell it to inspect the live process and saved continuation.
 Never put tokens, passwords or message content in the task or steering messages.
 
@@ -189,19 +228,12 @@ first; process creation alone does not mean the Codex composer is ready.
 terminal output. This is the shared channel—no new queue or pipeline state file.
 Read the existing manifest as well as the worker output: it owns the exact action,
 progress and retry command. Open each printed `STATUS PAGE:` URL beside chat;
-keep login and review in the default browser. A `NEEDS USER:` or `BLOCKED:` reply
+let the login commands manage their Chrome windows; open review separately. A `NEEDS USER:` or `BLOCKED:` reply
 needs advisor attention; relay the user's answer through `send`. Verify changes
 from the manifest before claiming a source was skipped or search is ready.
 
-**Watching:** while setup is active, check in about every 30 seconds with bounded
-tool waits, and immediately after user input; don't wait 10–20 minutes. The worker
-uses short waits too so it can receive steering during a long import. Quietly
-handle routine progress; surface only a necessary human action, unresolved failure,
-or completion. Do not end supervision merely for a QR scan, login or permission:
-the worker keeps watching and resumes automatically. tmux cannot wake a finished
-chat turn. If the advisor must end its turn, use a supported host follow-up when
-available and authorized; otherwise say the worker continues and reattach on the
-next message. Never promise unsolicited notifications without an actual wakeup.
+Keep observing login, QR and permission completion; no "done" reply is needed.
+Keep the status/review server available when the worker finishes.
 
 ## Keep the status page beside chat
 
@@ -209,8 +241,9 @@ Open the exact printed `STATUS PAGE:` URL immediately. Use the host's browser-pa
 tool when available; reuse the tab on retries. On Codex, use `open_in_codex` when
 available. Other hosts may use their supported pane or system browser.
 
-Keep this tab on `/install`. Login and review open in the system's default browser,
-never by navigating the status tab. The page reads saved progress and the real
+Keep this tab on `/install`. Login commands reuse Powerpacks-managed Chrome
+sessions and close their windows when finished. Open review separately; never
+navigate the status tab to login or callback URLs. The page reads saved progress and the real
 Modal status files; it does not own the pipeline process. Closing or restarting
 its server must not stop the coordinator.
 
@@ -234,7 +267,7 @@ the Powerset login's address. Only without a Powerset account does the coordinat
 ask which Gmail accounts to add: ask the user in chat (a plain message, then wait
 for the reply), append one `--gmail-email` per address to the saved
 `retry_command`, first address first, and run it. Every address gets
-its own browser approval; the coordinator allows them all beforehand. LinkedIn and the Google Console run in
+its own browser approval; the coordinator allows them all beforehand. Powerset, LinkedIn and Google login flows reuse
 headless Chrome (or Brave); a window opens only when a login is needed, closes
 once the user is signed in, and the sessions are kept for later runs. LinkedIn
 reads up to ~3,000 connections per run, then processing starts; the rest sync on
@@ -267,14 +300,12 @@ imports, stores, and accounts survive; never log out or clear data for a retry.
 
 ## Approval and repair
 
-During onboarding, each paid step runs automatically when its estimated cost is
-below $500. At $500 or more, show the estimate and ask the user before running.
-This applies to synthesis, duplicate processing, enrichment, and indexing;
-do not ask at their former lower thresholds. Estimates and cache checks still
-run. Use the saved continuation for an authorized larger estimate, rather than
-running a separate paid command. Modal checks its shared cache before spending.
+Paid steps (synthesis, duplicate processing, enrichment, indexing) run without
+asking; each estimate is written to the install log first. Modal checks its
+shared cache before spending.
 
-Existing downloaded indexes are reused and verified locally without another upload.
+An existing index is reused and verified locally when people.csv is unchanged;
+otherwise the rerun builds it again.
 
 Read command output, saved progress, and `.powerpacks/install/install.log`:
 
@@ -285,41 +316,20 @@ Read command output, saved progress, and `.powerpacks/install/install.log`:
 | `FAILED:` | Inspect the exact failure, repair within scope, rerun the saved coordinator. |
 | `STOP:` | Explain the environment required; do not continue on another computer. |
 
-Use the manifest's canonical `retry_command` to resume. Native artifacts and
-SQLite, not UI labels, decide completed work. Never delete `.powerpacks`, replace
-configuration, reset reviews, or bypass spend gates to recover. If a targeted
-repair repeats the same failure, explain the remaining cause and needed action.
-For an unclear setup problem, load the installed `powerpacks-doctor` skill.
-If Modal disconnected after dispatch, inspect the existing run and recover its
-result; do not blindly dispatch another paid job.
+Use the manifest's canonical `retry_command` to resume, following the shared
+[repair and feedback instructions](tmux-worker.md#repair-and-finish). Never delete
+`.powerpacks`, replace configuration or reset reviews to recover. If the index
+build failed, rerun that continuation against Modal's cache.
 
 ## Finish
 
-The user does their part once, at the start; everything else runs on its own. When
-the ready step completes, say it in this order, in plain words:
+After index validation succeeds, say: **Indexed <N> people.** Use the
+verified index's people count, including on reruns that reuse an existing index.
+Then add: Try `$search software engineers in New York in my network`.
+Do not append cloud network counts, source recaps, or optional review prompts.
+Keep those details on the status page or explain them when asked.
 
-1. **Search is ready.** Then show only what this setup turned on:
-   - Local network (local search validated): `$search find people who … in my network`
-   - Powerset network (hosted search connected: the credentials step completed, not
-     the "Hosted search isn't enabled" warning): `$search find people who would be a
-     good fit for <job post URL> in my Powerset network`
-2. **What is left to fix**, if the ready step's note lists any: its
-   `action.details.left_to_fix` holds each one's reason (research skipped for a missing
-   key or no provider credit), and the LinkedIn step's line says when its read stalled.
-   One line each with what fixes it, and that the next setup run picks it up. When LinkedIn stopped
-   sending connections, say how many were read of how many, that it stopped to keep
-   their account safe, and that setup asked LinkedIn for their data export (it can
-   take a day); the next setup run imports it. Never ask the user to download or
-   upload the export.
-3. **Optional review.** Read the matches left to check from the review queue, the
-   count the review page shows: `pending` in `curl -fsS http://127.0.0.1:<port>/api/review/linkedin-card`
-   (the status page's port). When it is above 0, say: "If you have time, <pending>
-   LinkedIn matches need a quick look. Want me to open them?" Only on a yes, open
-   `http://127.0.0.1:<port>/` beside chat (the host's browser pane, else the default
-   browser). When they are done, say you are rebuilding search with their decisions and
-   run `bin/deep-context-v2 finish`. They can come back to it later by saying "review my
-   pending contacts" (`bin/deep-context-v2 review`).
-
-A network's people count does not prove search readiness; only index validation
-does. Keep internal IDs and provider details in troubleshooting. If the user also
-asked for a search, run the installed search skill once its backend is ready.
+If the requested workflow could not finish, briefly state what remains blocked
+and any action only the user can take. For install-only requests, say Powerpacks
+is installed; do not claim an index was built. If the user also asked for a
+search, run the installed search skill once its backend is ready.

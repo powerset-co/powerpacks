@@ -125,7 +125,7 @@ class SourceOnboarding:
         if all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
         else:
-            next_steps = tuple(step for step in PROCESSING_STEPS if step is not InstallStep.REVIEW)
+            next_steps = PROCESSING_STEPS
         steps = [InstallStep.SOURCES.value,
                  *(step.value for source in self.sources for step in _LOGIN_STEPS[source]),
                  *(step.value for source in self.sources for step in _SYNC_STEPS[source]),

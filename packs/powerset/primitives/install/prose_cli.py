@@ -53,11 +53,10 @@ _RUN = [
     "whatsapp.downloading", ("whatsapp.downloading.count", None, {"messages": 1200}),
     ("whatsapp.downloading.count", None, {"messages": 4800}), "whatsapp.syncing", "whatsapp.synced",
     "whatsapp.importing", "whatsapp.imported",
-    "discover.linkedin", "discover.merging", "discover.people", "discover.checking", "discover.owner",
-    "discover.reading", "discover.estimating", "discover.learning", "discover.composing", "discover.validating",
-    "discover.duplicates", "discover.combining", "discover.grouping", "discover.done",
+    "discover.linkedin", "discover.owner", "discover.people", "discover.reading", "discover.estimating",
+    "discover.learning", "discover.duplicates", "discover.combining", "discover.grouping", "discover.done",
     "enrich.running", "enrich.done",
-    "index.preparing", "index.estimating", "index.building", "index.done",
+    "index.preparing", "index.building", "index.done",
     "validate.checking", "validate.done", "search.ready",
 ]
 

@@ -33,6 +33,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.collect.collect import DEFAULT_LIMIT as COLLECT_LIMIT
@@ -115,6 +116,19 @@ def archive_v1(data_root: Path) -> Path | None:
             path.unlink()
     print(f"archived v1 state: {archive} ({len(present)} paths)", flush=True)
     return archive
+
+
+def stages(conn: sqlite3.Connection, data_root: Path, msgvault_db: Path = DEFAULT_MSGVAULT_DB,
+           chat_db: Path = DEFAULT_CHAT_DB) -> list[tuple[str, Callable[[], Node]]]:
+    """The stages before realize, in order, each built when it is about to run: a stage reads what the
+    one before it stored (synthesize reads the owner load writes). `run` and the install
+    (install/pipeline.py) both walk this list."""
+    return [("load", lambda: ImportLoad(conn, data_root, msgvault_db=msgvault_db)),
+            ("collect", lambda: Collect(conn, data_root, COLLECT_LIMIT, chat_db, msgvault_db=msgvault_db)),
+            ("synthesize", lambda: Synthesize(conn, data_root, limit=SYNTHESIZE_LIMIT)),
+            ("dedupe", lambda: Dedupe(conn, data_root, limit=DEDUPE_LIMIT)),
+            ("worth", lambda: Worth(conn, data_root, limit=WORTH_LIMIT)),
+            ("enrich", lambda: Enrich(conn, data_root, limit=None))]
 
 
 # ---- the review server
@@ -224,12 +238,8 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
     operator_id = resolve_operator_id(operator_id)
     archive_v1(data_root)
     conn: sqlite3.Connection = open_store(store_path(data_root))
-    _stage("load", ImportLoad(conn, data_root, msgvault_db=msgvault_db))
-    _stage("collect", Collect(conn, data_root, COLLECT_LIMIT, chat_db, msgvault_db=msgvault_db))
-    _stage("synthesize", Synthesize(conn, data_root, limit=SYNTHESIZE_LIMIT))
-    _stage("dedupe", Dedupe(conn, data_root, limit=DEDUPE_LIMIT))
-    _stage("worth", Worth(conn, data_root, limit=WORTH_LIMIT))
-    _stage("enrich", Enrich(conn, data_root, limit=None))
+    for name, build in stages(conn, data_root, msgvault_db, chat_db):
+        _stage(name, build())
     conn.close()
     people_csv: Path = realize(data_root)
     log: Path = index_in_background(data_root, people_csv, operator_id)

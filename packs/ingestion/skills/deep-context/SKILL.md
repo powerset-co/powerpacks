@@ -87,13 +87,11 @@ Messages numbers). If `.powerpacks/deep-context/owner.json` exists, skip this. O
 `owner` with the user's LinkedIn URL and emails from the account context; it reads the cached
 profile and fetches it once if it is not cached.
 
-**2. Run, in tmux, under a second agent.** Start a tmux session in the user's terminal and
-dispatch one worker (a sub-agent) into it to run `bin/deep-context-v2 run` and watch it to the
-end. This chat is the advisor: it stays free to answer the user, reads the worker's progress,
-keeps the visible tasks, and decides what to do when something fails. The worker's brief says
-so: run and watch the commands in the session, patch and rerun on failure, report issues through
-`send_feedback`; no task tool, no messages to the user. Without sub-agents, do the worker's job
-in this chat the same way.
+**2. Run, in tmux, under a second agent.** Read [tmux-worker.md](tmux-worker.md)
+and include it in the worker's brief. It owns advisor/worker roles, the 30-second
+watch cadence, recovery, stopping and technical feedback (`category: deep-context`).
+Use session `deep-context` for `run`, every retry, and `finish`; the advisor keeps
+the tasks above current from its pane and the stage manifests below.
 
 ```bash
 tmux has-session -t deep-context 2>/dev/null || tmux new-session -d -s deep-context -c "$POWERPACKS_REPO_ROOT"
@@ -101,12 +99,9 @@ tmux send-keys -t deep-context 'bin/deep-context-v2 run' Enter
 sleep 30; tmux capture-pane -p -t deep-context -S -200   # read progress: once every 30 s, not in a tight loop
 ```
 
-Read the pane every 30 seconds while a command runs; nothing in it changes faster than that, and a
-tight loop only burns the advisor's turns. One session, always named `deep-context`, for the whole job: the run, every rerun after a fix,
-and `finish` all go into it with `send-keys`. If it already exists, use it; never create a
-second. Kill it (`tmux kill-session -t deep-context`) once `finish` has ended, and nothing is
-left in it: the review server and the background index are detached and keep running on their
-own. A session left over from an interrupted job is reused, not a reason to open another.
+Reuse the owned session after interruption. Once `finish` and its index build
+are verified, close the idle session; keep the review server until the user is
+done with it. Detached indexing must be checked separately from the tmux pane.
 
 The run prints one line per stage. It ends with:
 
@@ -119,34 +114,10 @@ Tell the user, in one line: their network is being indexed from what was found, 
 it now, and the page at that URL has N people to check; once they finish, the index is updated.
 Open the URL in the browser pane when one is available.
 
-**3. The pipeline must reach the end.** A stage that fails prints its error and exits 1. The
-worker reports it; the advisor decides and the worker reruns. Use common sense:
-
-- **A few people failing is fine.** The paid steps skip a person they could not finish and try
-  them again next run. Carry on and say how many were left.
-- **Anything else: read the error, then fix it and run again.** Running `run` again continues
-  from what is stored. If it fails the same way, work out why and patch what you can in this
-  checkout, a bug or a bad row included, then run again. The patch is the smallest change that
-  lets the run continue: no new tests, no refactors, no files the fix does not need. The proof
-  is the rerun; the record is the feedback report.
-- **If only the user can fix it, tell them plainly.** No internet, a rejected key, no credit, a
-  full disk, a permission to grant: say what is broken and what to do, in a sentence. Never paste
-  a traceback or ask for logs.
-- **Do not loop.** Three attempts at one command, then stop and say where it stands. A step that
-  had people to work on and finished none of them is an error even when it exited 0.
-- **Send every issue up.** Whatever the advisor hits, a stage that failed, a patch it made to this
-  checkout, a row it had to work around, a wait that looked wrong, it posts one report per issue
-  straight to the feedback endpoint with the primitive, no dry run, no preview, no question:
-
-  ```bash
-  uv run --project . python packs/powerset/primitives/send_feedback/send_feedback.py \
-    --category deep-context --comment "<one paragraph: what failed, what was changed>" \
-    --metadata '<json: failing_command, error, code_pointers, diff, manifest path and counts, powerpacks version>'
-  ```
-
-  Code pointers are `path:line` of where it failed and of every line changed, with the diff when
-  there is one. Never a person's name, a dossier or a message. A patch that worked is still an
-  issue: the next install hits it too.
+**3. The pipeline must reach the end.** Use the shared repair/feedback rules.
+Rerun `run` using stored work. Individual failed people retry on the next run;
+report their count. A stage with pending people that finishes none is an error,
+even if it exits 0. Preserve caches and fix the cause before continuing.
 
 **4. Review.** The user answers each card on the Check LinkedIn page: Use this profile, Skip, or
 paste the right LinkedIn URL under "Wrong person?". Nothing comes back through chat: the server

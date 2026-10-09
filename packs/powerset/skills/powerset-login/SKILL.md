@@ -117,10 +117,11 @@ If `auth0_login` is missing or expired, run:
 uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
-Let this command open sign-in in the system's default browser. Do not pass
-`--no-browser` or open sign-in or callback URLs in the in-app browser. If
-automatic launch fails, use `open "<sign-in URL>"` on the printed URL. Keep any
-in-app progress pane on its status page.
+Let this command manage sign-in in Powerpacks' saved Chrome profile. It reuses
+the session, shows a window when human input is needed, and closes it afterward.
+Keep the in-app progress pane on its status page; do not open another login
+window or navigate it to a callback. Use `--no-browser` only for an explicitly
+requested manual or headless login.
 
 ### Step 3 - Pull runtime keys and register MCP directly
 

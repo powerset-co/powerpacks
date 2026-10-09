@@ -25,8 +25,8 @@ directly and retry the failing command. Do not give the user a command you can
 run or ask again for an already-authorized repair.
 
 - Python or dependency problems: run `bin/setup-python`.
-- Login or credential refresh: use `powerset`; sign-in opens in the system's
-  default browser while any in-app progress pane stays on its status page.
+- Login or credential refresh: use `powerset`; its managed Chrome login
+  window closes afterward while the in-app progress pane stays on its status page.
 - Other local fixes: run the relevant reported command from this shell. Do not
   run blanket `doctor fix` or hide browser/TTY interaction in a nested command.
 - Human action or account provisioning: explain the one action needed. An agent

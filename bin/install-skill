@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Install skill instructions with the checkout's absolute runtime context."""
+import shutil
 import sys
 from pathlib import Path
 
@@ -21,6 +22,9 @@ Use this checkout for execution, not the skill's copied `powerpacks/` bundle.
 """
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(metadata + "\n---\n" + context + body.lstrip("\n"))
+    for reference in source.parent.glob("*.md"):
+        if reference != source:
+            shutil.copyfile(reference, destination.parent / reference.name)
 
 
 if __name__ == "__main__":
