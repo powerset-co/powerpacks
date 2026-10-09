@@ -6,18 +6,12 @@ import { connectRelay, fetchRelay, type RelayStatus } from "@/lib/api/relay"
 const RELAY_KEY = ["relay"]
 const POLL_MS = 5_000
 
-/** "Staging" when the API base is a staging host; production has no qualifier. */
-function relayName(apiBase: string): string {
-  return apiBase.includes("staging") ? "Staging Powerset Relay" : "Powerset Relay"
-}
-
 function hoverText(status: RelayStatus | undefined, signingIn: boolean): string {
   if (signingIn) return "Signing in…"
-  if (!status) return "Checking the Powerset Relay…"
-  const name = relayName(status.api_base)
-  if (status.state === "connected") return `Connected to ${name}`
-  if (status.state === "signed_out") return `Not connected to ${name} · Click to sign in`
-  return `Not connected to ${name} · Click to retry`
+  if (!status) return "Checking Powerset Relay…"
+  if (status.state === "connected") return "Connected to Powerset Relay"
+  if (status.state === "signed_out") return "Not connected to Powerset Relay · Click to sign in"
+  return "Not connected to Powerset Relay · Click to retry"
 }
 
 // Green while the Ask the Set daemon holds its relay connection, grey otherwise. Grey is a
