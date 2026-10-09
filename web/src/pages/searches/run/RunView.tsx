@@ -7,6 +7,7 @@ import { filterRows, keptRows, labelsShown, NO_FILTERS, type ResultFilters } fro
 import { panelSections, rankResults } from "@/lib/searches/ranking"
 import type { FeedbackRecord, SearchRunPayload } from "@/types/searches"
 
+import { BroadcastDialog } from "../dialogs/BroadcastDialog"
 import { FeedbackStatus } from "../dialogs/FeedbackStatus"
 import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
 import type { Feedback } from "../hooks/useFeedback"
@@ -60,6 +61,11 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
     [sections, kept],
   )
   const shown = useMemo(() => filterRows(rows, filters, tags.tagged), [rows, filters, tags.tagged])
+  const pinnedCount = useMemo(
+    () =>
+      Object.values(tags.tagged.assignments).filter((labels) => labels.some((label) => label.toLowerCase() === "pinned")).length,
+    [tags.tagged],
+  )
   const people = new Set(rows.map((row) => row.row.person_id)).size
 
   const queued = useMemo(
@@ -120,6 +126,7 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
       headerActions={
         <>
           <FeedbackStatus runId={runId} feedback={feedback} onToast={onToast} />
+          <BroadcastDialog runId={runId} title={search.title} pinned={pinnedCount} onToast={onToast} />
           <SearchFeedbackDialog
             runId={runId}
             title={search.title}

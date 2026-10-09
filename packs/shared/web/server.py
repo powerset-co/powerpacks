@@ -110,7 +110,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches.post(self, parsed):
+            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches_json.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:
                 if not share.post(self, parsed):

@@ -23,7 +23,7 @@ from packs.search.primitives.deep_search.results_web import snapshot
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 from packs.search.primitives.upload_search_results import upload_search_results as upload
 
-from .server import SearchRoutes, _send_json
+from .server import LOCAL_HOSTS, SearchRoutes, _send_json
 
 
 class SearchApi:
@@ -55,6 +55,24 @@ class SearchApi:
             _send_json(handler, {"error": f"unknown search: {run_id}"}, status=HTTPStatus.NOT_FOUND)
             return True
         _send_json(handler, {"search": asdict(search), "ratings": {"rubric": RUBRIC, "legacy": LEGACY_SCORES}})
+        return True
+
+    def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
+        if self.routes._relative(parsed.path) != "/ask":
+            return False
+        origin = (handler.headers.get("Origin") or "").strip()
+        if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in LOCAL_HOSTS:
+            _send_json(handler, {"error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            return True
+        length = int(handler.headers.get("Content-Length", "0"))
+        request = json.loads(handler.rfile.read(length).decode("utf-8")) if length > 0 else {}
+        run_id = str(request.get("run_id") or "")
+        question = str(request.get("question") or "").strip()
+        run_dir = self.routes.results_root / run_id
+        if not run_id or not (run_dir / "results.json").is_file() or not question:
+            _send_json(handler, {"error": "run_id and question are required"}, status=HTTPStatus.BAD_REQUEST)
+            return True
+        _send_json(handler, self.ask_send(run_dir, question))
         return True
 
     @property

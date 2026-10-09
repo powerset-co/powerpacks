@@ -54,8 +54,14 @@ export interface AskAnswer {
   confidence: number
 }
 
+export interface SentAsk {
+  ask_id: string
+  question: string
+  candidates: { public_identifier: string; owners: string[] }[]
+}
+
 export interface AskStatus {
-  ask: { ask_id: string; question: string } | null
+  ask: SentAsk | null
   answers?: {
     pending: number
     candidates: {
@@ -78,7 +84,7 @@ export async function fetchAskStatus(runId: string): Promise<AskStatus> {
   return body<AskStatus>(response)
 }
 
-export async function sendAsk(runId: string, question: string): Promise<{ status: string; ask: AskStatus["ask"] }> {
+export async function sendAsk(runId: string, question: string): Promise<{ status: string; ask: SentAsk | null }> {
   const response = await fetch(`${API}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
