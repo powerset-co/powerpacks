@@ -24,8 +24,8 @@ export function SetsPage() {
   return (
     <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
       <div className="mx-auto flex max-w-[960px] flex-col gap-5">
-        {/* The title and the controls share one row, centred on each other; the description runs under
-            both. The controls stack under the title only at a phone's width. */}
+        {/* The title and the controls share one row, centred on each other; the description wraps under
+            the title in its own column, never under the controls. They stack only at a phone's width. */}
         <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 max-[680px]:grid-cols-1">
           <h1 className="m-0 text-xl font-semibold leading-8">{SETS.title}</h1>
           <div className="flex items-center gap-2 max-[680px]:order-last">
@@ -66,7 +66,9 @@ export function SetsPage() {
               + {SETS.newSet}
             </Button>
           </div>
-          <p className="col-span-full m-0 text-[13px] text-muted-foreground">{SETS.lead}</p>
+          <p className="col-start-1 m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">
+            {SETS.lead}
+          </p>
         </header>
 
         {naming ? (

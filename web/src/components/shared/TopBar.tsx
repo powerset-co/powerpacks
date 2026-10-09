@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom"
 
+import mark from "@/assets/powerset-mark.png"
 import type { Page } from "@/lib/nav"
 
 import { NavTabs } from "./NavTabs"
@@ -9,7 +10,7 @@ interface TopBarProps {
   page: Page
 }
 
-// results.css .topbar/.brand: the brand cell is the rail's width and its right
+// results.css .topbar/.brand: the Powerset mark and name; the brand cell is the rail's width and its right
 // border continues the rail line; the tabs start at the main pane. The brand links to the current page;
 // the dot beside it is the Ask the Set relay connection.
 export function TopBar({ page }: TopBarProps) {
@@ -18,8 +19,9 @@ export function TopBar({ page }: TopBarProps) {
       <div className="flex items-center gap-2 self-stretch justify-self-stretch border-r border-line max-[680px]:pr-3.5">
         <Link
           to={page.href}
-          className="inline-flex items-center gap-2.5 self-stretch text-[11px] font-extrabold tracking-[.16em] text-foreground no-underline before:size-2.5 before:rounded-[3px] before:bg-primary before:shadow-[0_0_0_3px_var(--primary-soft)] before:content-['']"
+          className="inline-flex items-center gap-2.5 self-stretch text-[11px] font-extrabold tracking-[.16em] text-foreground no-underline"
         >
+          <img src={mark} alt="" className="size-5 rounded-[5px]" />
           POWERPACKS
         </Link>
         <RelayDot />
