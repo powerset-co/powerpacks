@@ -3,10 +3,12 @@ import { useEffect } from "react"
 
 import { CLOSE_MARK } from "@/components/shared"
 import { groupThreads } from "@/lib/agent/groups"
-import { newChat, openChat, useAgent } from "@/lib/agent/store"
+import { newChat, openChat, openSearch, useAgent } from "@/lib/agent/store"
 import { THREADS_KEY, useThreads } from "@/lib/agent/useThreads"
 import { archiveThread } from "@/lib/api/codex"
+import { runDate } from "@/lib/searches/copy"
 import { cn } from "@/lib/utils"
+import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 
 import { ComposeIcon } from "./icons"
 
@@ -20,6 +22,7 @@ export function ChatSidebar({ open, onClose }: ChatSidebarProps) {
   const agent = useAgent()
   const client = useQueryClient()
   const threads = useThreads()
+  const searches = useCatalog()
 
   // A chat appears once its first turn starts, and moves up when a turn ends.
   useEffect(() => {
@@ -85,6 +88,31 @@ export function ChatSidebar({ open, onClose }: ChatSidebarProps) {
             </ul>
           </section>
         ))}
+        {searches.data?.length ? (
+          <section className="mb-2">
+            <h2 className="m-0 px-3 pb-1 pt-3 text-[11px] font-semibold text-faint">Searches</h2>
+            <ul className="m-0 flex list-none flex-col gap-px p-0">
+              {searches.data.map((card) => (
+                <li key={card.run_id}>
+                  <button
+                    type="button"
+                    aria-current={card.run_id === agent.searchRun ? "page" : undefined}
+                    onClick={() => pick(() => openSearch(card.run_id))}
+                    className={cn(
+                      "flex w-full cursor-pointer flex-col rounded-[var(--radius-s)] border-0 bg-transparent px-3 py-1.5 text-left transition-colors duration-fast ease-out hover:bg-secondary",
+                      "aria-[current=page]:bg-surface-2",
+                    )}
+                  >
+                    <span className="truncate text-[13px] text-foreground">{card.title}</span>
+                    <span className="truncate text-[11px] text-faint">
+                      {[card.company, runDate(card.created_at)].filter(Boolean).join(" · ")}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
       </nav>
     </aside>
   )

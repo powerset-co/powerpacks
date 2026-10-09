@@ -45,6 +45,7 @@ from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
+from packs.search.primitives.deep_search.results_web.model import record_quick_search  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -1111,10 +1112,25 @@ def _validate_capability_input(args) -> None:
         args.capability_judge = capability_contract.DEFAULT_JUDGE
 
 
+QUICK_SEARCH_ROOT = ROOT/".powerpacks/search"
+DEEP_SEARCH_ROOT = ROOT/".powerpacks/deep-search"
+
+def record_quick_run(result: dict[str, Any]) -> None:
+    """A quick search (its ledger under .powerpacks/search/<slug>) also lands in the results
+    viewer as a one-pond run; deep-search ponds keep their ledgers under deep-search/."""
+    lp=Path(result["ledger"]).resolve()
+    if lp.parent.parent!=QUICK_SEARCH_ROOT.resolve():
+        return
+    l=load_ledger(lp); artifacts=l["artifacts"]
+    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(ROOT/result["state"])["query"],
+                        created_at=l["created_at"], jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"])
+
 def cmd_run(args):
     try:
         _validate_capability_input(args)
-        emit(run_pipeline_local(args) if getattr(args,"backend","powerset")=="local" else run_pipeline(args)); return 0
+        result=run_pipeline_local(args) if getattr(args,"backend","powerset")=="local" else run_pipeline(args)
+        record_quick_run(result)
+        emit(result); return 0
     except Blocked as e: emit(e.payload); return e.code
     except Exception as e: emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
 

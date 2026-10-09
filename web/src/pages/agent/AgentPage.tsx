@@ -1,10 +1,15 @@
-import { useEffect, useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
 import { answer, newChat, send, setFullAccess, stop, useAgent } from "@/lib/agent/store"
+import { chatRun } from "@/lib/agent/searchRun"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
+import { cn } from "@/lib/utils"
+import { useCatalog } from "@/pages/searches/hooks/useCatalog"
+import { RunColumn } from "@/pages/searches/RunColumn"
 
 import { ApprovalCard } from "./ApprovalCard"
 import { ChatSidebar } from "./ChatSidebar"
@@ -54,10 +59,10 @@ function Welcome() {
   )
 }
 
-function ChatHeader({ onToggle }: { onToggle: () => void }) {
+function ChatHeader({ onToggle, runTitle }: { onToggle: () => void; runTitle: string | null }) {
   const agent = useAgent()
   const threads = useThreads()
-  const title = threads.data?.find(({ id }) => id === agent.threadId)?.title ?? "New chat"
+  const title = runTitle ?? threads.data?.find(({ id }) => id === agent.threadId)?.title ?? "New chat"
   return (
     <header className="flex h-12 items-center gap-2 px-4">
       <button
@@ -81,7 +86,7 @@ function ChatHeader({ onToggle }: { onToggle: () => void }) {
   )
 }
 
-function Conversation({ onToggle }: { onToggle: () => void }) {
+function Conversation({ onToggle, runTitle }: { onToggle: () => void; runTitle: string | null }) {
   const agent = useAgent()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -94,7 +99,7 @@ function Conversation({ onToggle }: { onToggle: () => void }) {
 
   return (
     <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
-      <ChatHeader onToggle={onToggle} />
+      <ChatHeader onToggle={onToggle} runTitle={runTitle} />
       <div
         ref={scroller}
         className="overflow-y-auto"
@@ -150,7 +155,6 @@ export function AgentPage() {
 
 function SignedInAgent() {
   const codex = useCodexAccount()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   if (!codex.status?.installed || !codex.status.account) {
     return (
       <main className="overflow-y-auto px-5">
@@ -158,8 +162,31 @@ function SignedInAgent() {
       </main>
     )
   }
+  return <Workspace />
+}
+
+/** The chats, the open chat, and the search it ran beside it (a quick search is one pond). */
+function Workspace() {
+  const agent = useAgent()
+  const catalog = useCatalog()
+  const client = useQueryClient()
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const listed = useMemo(() => new Set(catalog.data?.map(({ run_id }) => run_id)), [catalog.data])
+  const runId = chatRun(agent.entries, listed) ?? agent.searchRun
+  const runTitle = catalog.data?.find((card) => card.run_id === runId)?.title ?? null
+
+  // A search saves when its turn ends; look for it then.
+  useEffect(() => {
+    if (!agent.running) void client.invalidateQueries({ queryKey: ["searches", "catalog"] })
+  }, [agent.running, client])
+
   return (
-    <main className="grid min-h-0 grid-cols-[260px_minmax(0,1fr)] max-[860px]:grid-cols-1">
+    <main
+      className={cn(
+        "grid min-h-0 grid-cols-[260px_minmax(0,1fr)] max-[860px]:grid-cols-1",
+        runId && "grid-cols-[260px_minmax(340px,420px)_minmax(0,1fr)]",
+      )}
+    >
       <ChatSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       {sidebarOpen && (
         <button
@@ -169,7 +196,12 @@ function SignedInAgent() {
           className="fixed inset-0 z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden"
         />
       )}
-      <Conversation onToggle={() => setSidebarOpen((open) => !open)} />
+      <Conversation onToggle={() => setSidebarOpen((open) => !open)} runTitle={runTitle} />
+      {runId && (
+        <div className="searches-main border-l border-line" aria-label="Search results">
+          <RunColumn runId={runId} />
+        </div>
+      )}
     </main>
   )
 }

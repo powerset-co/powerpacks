@@ -324,7 +324,8 @@ def search_routes(root: Path, *, base: str = "", run_id: str | None = None) -> S
     load_one = _run_loader(root)
 
     def catalog() -> tuple[SearchCard, ...]:
-        cards = tuple(card for card in load_catalog(root) if card.ce_scored)
+        # A deep run counts the people its screen scored; a quick one, every person it found.
+        cards = tuple(card for card in load_catalog(root) if card.candidates)
         return tuple(card for card in cards if card.run_id == run_id) if run_id else cards
 
     def load() -> tuple[SearchResult, ...]:

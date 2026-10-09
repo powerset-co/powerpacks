@@ -26,6 +26,8 @@ export interface AgentState {
   approvals: Approval[]
   /** Commands run without asking; remembered on this Mac. */
   fullAccess: boolean
+  /** A saved search opened from the sidebar; the chat's first message is about it. */
+  searchRun: string | null
 }
 
 export const EMPTY_AGENT: AgentState = {
@@ -36,6 +38,7 @@ export const EMPTY_AGENT: AgentState = {
   entries: [],
   approvals: [],
   fullAccess: false,
+  searchRun: null,
 }
 
 let localIds = 0
@@ -153,8 +156,13 @@ export function useAgent(): AgentState {
   return useSyncExternalStore(subscribe, () => state)
 }
 
-export async function send(text: string): Promise<void> {
+export async function send(message: string): Promise<void> {
   wire()
+  // A chat opened from a saved search names its folder, so Codex reads it and the chat keeps it.
+  const text =
+    state.threadId === null && state.searchRun !== null
+      ? `About the search saved in .powerpacks/deep-search/${state.searchRun}: ${message}`
+      : message
   set({ ...state, running: true, entries: [...state.entries, { kind: "user", id: localId("user"), text }] })
   try {
     const threadId = state.threadId ?? (await startThread())
@@ -191,6 +199,12 @@ export async function setFullAccess(on: boolean): Promise<void> {
 /** Clears the screen; the next message starts a new thread. A running turn carries on in Codex. */
 export function newChat(): void {
   set({ ...EMPTY_AGENT, fullAccess: state.fullAccess })
+  remember(OPEN_CHAT_KEY, "")
+}
+
+/** Shows a saved search beside a new chat about it. */
+export function openSearch(runId: string): void {
+  set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, searchRun: runId })
   remember(OPEN_CHAT_KEY, "")
 }
 

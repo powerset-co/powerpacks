@@ -1,21 +1,17 @@
-import { useCallback, useState } from "react"
+import { useCallback } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 
-import { Toast, type ToastMessage } from "@/components/shared"
-
+import { RunColumn } from "./RunColumn"
 import { SearchesShell } from "./SearchesShell"
 import { useCatalog } from "./hooks/useCatalog"
-import { useFeedback } from "./hooks/useFeedback"
 import { useSearchRun } from "./hooks/useSearchRun"
-import { RunPane } from "./run/RunPane"
-import { RunView } from "./run/RunView"
 import { SearchSidebar } from "./sidebar/SearchSidebar"
 
 export const RUN_PATH = "/searches/run"
 
 /**
  * /searches (no run) and /searches/run?run_id=… (that run): one page, the URL picks the run.
- * The page owns the feedback queue (sent in order across runs) and the one toast every
+ * RunColumn owns the feedback queue (sent in order across runs) and the one toast every
  * control reports to.
  */
 export function SearchesPage() {
@@ -23,9 +19,6 @@ export function SearchesPage() {
   const runId = params.get("run_id")
   const navigate = useNavigate()
   const catalog = useCatalog()
-  const feedback = useFeedback(runId)
-  const [toast, setToast] = useState<ToastMessage | null>(null)
-  const dismiss = useCallback(() => setToast(null), [])
   // Starts the picked run's request while the old pane fades out.
   useSearchRun(runId)
 
@@ -37,26 +30,9 @@ export function SearchesPage() {
   )
 
   return (
-    <>
-      <SearchesShell
-        sidebar={
-          <SearchSidebar cards={catalog.data} error={catalog.error} selectedId={runId} onOpen={open} />
-        }
-        main={
-          <RunPane
-            runId={runId}
-            renderRun={(payload) => (
-              <RunView
-                payload={payload}
-                status={catalog.data?.find((card) => card.run_id === payload.search.run_id)?.status}
-                feedback={feedback}
-                onToast={setToast}
-              />
-            )}
-          />
-        }
-      />
-      <Toast toast={toast} onDismiss={dismiss} />
-    </>
+    <SearchesShell
+      sidebar={<SearchSidebar cards={catalog.data} error={catalog.error} selectedId={runId} onOpen={open} />}
+      main={<RunColumn runId={runId} />}
+    />
   )
 }
