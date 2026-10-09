@@ -4,20 +4,13 @@ import { useState, type SVGProps } from "react"
 import { EmptyState } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-  DialogClose,
-} from "@/components/ui/dialog"
 import { errorText } from "@/lib/api/http"
 import { fetchTask, setInstalled } from "@/lib/api/tasks"
 import { ago } from "@/lib/copy"
 import { cn } from "@/lib/utils"
 import type { Runner, ScheduleSettings, Task, TaskRun } from "@/types/tasks"
+
+import { ScheduleDialog } from "./ScheduleDialog"
 
 const RUNNER_TITLE: Readonly<Record<Runner, string>> = { codex: "Codex", claude: "Claude" }
 
@@ -91,18 +84,6 @@ interface TaskTileProps {
   onChange: (runner: Runner, installed: boolean, schedule?: ScheduleSettings) => void
 }
 
-const DAYS = [
-  ["MO", "Monday"],
-  ["TU", "Tuesday"],
-  ["WE", "Wednesday"],
-  ["TH", "Thursday"],
-  ["FR", "Friday"],
-  ["SA", "Saturday"],
-  ["SU", "Sunday"],
-]
-const FIELD =
-  "h-9 rounded-[var(--radius-s)] border border-line bg-background px-2 text-xs text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-
 function TaskTile({ task, pending, error, onChange }: TaskTileProps) {
   const [schedule, setSchedule] = useState<ScheduleSettings>(
     task.schedule_settings ?? {
@@ -170,92 +151,22 @@ function TaskTile({ task, pending, error, onChange }: TaskTileProps) {
           )
         })}
       </div>
-      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
-        <DialogContent className="w-[min(360px,calc(100%-32px))]">
-          <DialogHeader>
-            <DialogTitle>
-              {task.installs.includes(scheduleRunner)
-                ? "Edit schedule"
-                : `Install ${RUNNER_TITLE[scheduleRunner]}`}
-            </DialogTitle>
-            <DialogDescription>Choose when to refresh.</DialogDescription>
-          </DialogHeader>
-          <form
-            className="flex flex-col gap-3"
-            onSubmit={(event) => {
-              event.preventDefault()
-              onChange(scheduleRunner, true, schedule)
-              setScheduleOpen(false)
-            }}
-          >
-            {!task.schedule_settings && (
-              <p className="m-0 text-xs text-muted-foreground">
-                Custom schedule. Saving applies the times below.
-              </p>
-            )}
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                Repeat
-                <select
-                  className={FIELD}
-                  aria-label="Repeat"
-                  value={schedule.cadence}
-                  disabled={busy}
-                  onChange={(event) => {
-                    const cadence = event.target.value
-                    if (cadence === "daily" || cadence === "weekdays" || cadence === "weekly")
-                      setSchedule({ ...schedule, cadence })
-                  }}
-                >
-                  <option value="daily">Daily</option>
-                  <option value="weekdays">Weekdays</option>
-                  <option value="weekly">Weekly</option>
-                </select>
-              </label>
-              {schedule.cadence === "weekly" && (
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                  Day
-                  <select
-                    className={FIELD}
-                    aria-label="Day"
-                    value={schedule.day}
-                    disabled={busy}
-                    onChange={(event) => setSchedule({ ...schedule, day: event.target.value })}
-                  >
-                    {DAYS.map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                Time
-                <input
-                  className={FIELD}
-                  type="time"
-                  required
-                  value={schedule.time}
-                  disabled={busy}
-                  onChange={(event) => setSchedule({ ...schedule, time: event.target.value })}
-                />
-              </label>
-            </div>
-            <p className="m-0 text-xs text-muted-foreground">{schedule.timezone.replaceAll("_", " ")}</p>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button type="button" size="sm" variant="ghost">
-                  Cancel
-                </Button>
-              </DialogClose>
-              <Button type="submit" size="sm" disabled={busy}>
-                {task.installs.includes(scheduleRunner) ? "Save" : "Create"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <ScheduleDialog
+        open={scheduleOpen}
+        onOpenChange={setScheduleOpen}
+        title={
+          task.installs.includes(scheduleRunner) ? "Edit schedule" : `Install ${RUNNER_TITLE[scheduleRunner]}`
+        }
+        submitLabel={task.installs.includes(scheduleRunner) ? "Save" : "Create"}
+        replacesCustom={installed && !task.schedule_settings}
+        schedule={schedule}
+        onSchedule={setSchedule}
+        busy={busy}
+        onSubmit={() => {
+          onChange(scheduleRunner, true, schedule)
+          setScheduleOpen(false)
+        }}
+      />
       {task.codex_thread_url && (
         <div className="flex items-center gap-3 text-xs">
           <a className="font-semibold text-info no-underline hover:underline" href={task.codex_thread_url}>

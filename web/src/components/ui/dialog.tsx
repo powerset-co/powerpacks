@@ -30,37 +30,46 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
-// Centred by margin, not translate, so the animation owns transform.
+// Centred by a pointer-transparent flex frame, never by `inset-0` on the content box itself:
+// WebKit resolves an intrinsic height on an inset box as the full viewport. The box stops 16px
+// short of each edge, its DialogBody scrolls inside, and the animation owns transform.
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
   <DialogPrimitive.Portal>
     <DialogOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "fixed inset-0 z-50 m-auto grid h-fit max-h-[85vh] w-[min(480px,calc(100%-32px))] gap-4 overflow-y-auto rounded-lg border border-border bg-card p-5 text-foreground shadow-2 outline-none",
-        "data-[state=open]:animate-[dialog-in_var(--t-med)_var(--ease-out)]",
-        "data-[state=closed]:animate-[dialog-out_var(--t-exit)_var(--ease-in)_forwards]",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-      <DialogPrimitive.Close
-        aria-label="Close"
-        className="absolute right-3 top-3 grid size-7 cursor-pointer place-items-center rounded-sm border-0 bg-transparent text-base leading-none text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          "pointer-events-auto relative flex max-h-full w-[min(480px,100%)] flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-card p-5 text-foreground shadow-2 outline-none",
+          "data-[state=open]:animate-[dialog-in_var(--t-med)_var(--ease-out)]",
+          "data-[state=closed]:animate-[dialog-out_var(--t-exit)_var(--ease-in)_forwards]",
+          className,
+        )}
+        {...props}
       >
-        {CLOSE_MARK}
-      </DialogPrimitive.Close>
-    </DialogPrimitive.Content>
+        {children}
+        <DialogPrimitive.Close
+          aria-label="Close"
+          className="absolute right-3 top-3 grid size-7 cursor-pointer place-items-center rounded-sm border-0 bg-transparent text-base leading-none text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+        >
+          {CLOSE_MARK}
+        </DialogPrimitive.Close>
+      </DialogPrimitive.Content>
+    </div>
   </DialogPrimitive.Portal>
 ))
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("grid gap-1.5 pr-8", className)} {...props} />
+}
+
+/** What sits between header and footer: it scrolls when the dialog reaches its height limit. */
+function DialogBody({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("min-h-0 overflow-y-auto", className)} {...props} />
 }
 
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
@@ -93,6 +102,7 @@ DialogDescription.displayName = DialogPrimitive.Description.displayName
 
 export {
   Dialog,
+  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,
