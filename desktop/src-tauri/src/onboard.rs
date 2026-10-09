@@ -7,6 +7,7 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::children;
 use crate::paths;
 
 const MANIFEST: &str = ".powerpacks/install/manifest.json";
@@ -54,9 +55,16 @@ pub fn setup(root: &Path) -> Setup {
     if field("event") == READY_EVENT {
         return Setup::Paused;
     }
+    // A wait the installer sat in (it records its pid; 0 once it stops for a click) died with
+    // the last app run when that pid is gone.
+    let installer = manifest
+        .get("installer_pid")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
     match (field("status"), field("step")) {
         ("completed", "ready") => Setup::Done,
         ("running" | "completed", _) => Setup::Interrupted,
+        ("waiting", _) if installer != 0 && !children::is_alive(installer) => Setup::Interrupted,
         _ => Setup::Paused,
     }
 }
