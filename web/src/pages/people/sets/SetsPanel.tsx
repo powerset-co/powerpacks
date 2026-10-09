@@ -33,7 +33,10 @@ function Members({ set }: { set: SetView }) {
           <span className="set-avatar" aria-hidden="true">
             {initials(member.name || member.email)}
           </span>
-          <span className="set-member-name">{member.name || member.email}</span>
+          <span className="set-member">
+            <span className="set-member-name">{member.name || member.email}</span>
+            {member.name && member.email ? <span className="set-member-email">{member.email}</span> : null}
+          </span>
           {member.role !== "member" ? <span className="set-role">{member.role}</span> : null}
         </li>
       ))}
@@ -54,8 +57,10 @@ function SetRow({ set, open, onToggle, onDelete }: RowProps) {
       <button type="button" className="set-head" aria-expanded={open} onClick={onToggle}>
         <CloudIcon />
         <span className="set-name">{set.name}</span>
-        {set.is_personal ? <span className="set-tag">{SETS.personal}</span> : null}
-        <span className="set-count">{SETS.members(set.member_count)}</span>
+        <span className="set-meta">
+          {set.is_personal ? <span className="set-tag">{SETS.personal}</span> : null}
+          <span className="set-count">{SETS.members(set.member_count)}</span>
+        </span>
       </button>
       <Fold open={open}>
         <div className="set-body">

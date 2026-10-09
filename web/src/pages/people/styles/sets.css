@@ -82,9 +82,13 @@
 }
 .set-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "icon name"
+    ". meta";
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
+  row-gap: 3px;
   width: 100%;
   padding: 8px 4px;
   border: 0;
@@ -100,15 +104,22 @@
   background: var(--surface-2);
 }
 .set-cloud {
+  grid-area: icon;
   width: 15px;
   height: 15px;
   color: var(--muted);
-  flex: none;
+}
+.set-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .set-row[data-open="true"] .set-cloud {
   color: var(--primary);
 }
 .set-name {
+  grid-area: name;
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -148,6 +159,10 @@
   min-width: 0;
   font-size: 12px;
 }
+.set-members .set-role {
+  align-self: flex-start;
+  margin-top: 2px;
+}
 .set-avatar {
   display: grid;
   place-items: center;
@@ -161,10 +176,21 @@
   font-weight: 700;
   letter-spacing: 0.02em;
 }
-.set-member-name {
+.set-member {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.set-member-name,
+.set-member-email {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.set-member-email {
+  color: var(--faint);
+  font-size: 10.5px;
 }
 .set-role {
   margin-left: auto;
@@ -178,6 +204,9 @@
   margin-top: 10px;
   color: var(--faint);
   font-size: 11px;
+}
+.set-delete {
+  white-space: nowrap;
 }
 .set-delete,
 .sets-add {
