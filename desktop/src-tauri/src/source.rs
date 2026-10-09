@@ -2,9 +2,10 @@
 //! scripts/bundle-runtime.sh), installed as the checkout every Powerpacks tool expects: code,
 //! `.env` and `.powerpacks/` in one folder.
 //!
-//! A git checkout belongs to its owner and is used as it is. A folder this app installed is
-//! refreshed when the app's version changes: the archive's top-level entries are replaced and
-//! `.env`, `.powerpacks/` and `.venv/` (never in the archive) stay.
+//! A git checkout (only reached through POWERPACKS_REPO_ROOT) belongs to its owner and is used
+//! as it is. The app's own folder is refreshed when the app's version changes: the archive's
+//! top-level entries are replaced and `.env`, `.powerpacks/` and `.venv/` (never in the
+//! archive) stay.
 
 use std::fs;
 use std::path::{Path, PathBuf};

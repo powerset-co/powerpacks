@@ -8,8 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Where bootstrap installs Powerpacks; the app uses the same folder, and the same override.
-const DEFAULT_ROOT: &str = "powerpacks";
+/// The app's own Powerpacks folder, beside the credentials in `~/.powerpacks`. A checkout at
+/// `~/powerpacks` belongs to the command-line install and may be any version, so the app never
+/// touches it; `POWERPACKS_REPO_ROOT` points the app at a checkout on purpose (development).
+const DEFAULT_ROOT: &str = ".powerpacks/app";
 const ROOT_OVERRIDE: &str = "POWERPACKS_REPO_ROOT";
 const PATH_MARKER: &str = "__POWERPACKS_PATH__";
 
