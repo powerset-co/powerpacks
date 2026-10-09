@@ -46,6 +46,7 @@ export function useSets() {
   const failure = error ?? (sets.error instanceof SetsError ? sets.error : null)
   return {
     data: sets.data,
+    isPending: sets.isPending,
     failure,
     fail,
     busy: create.isPending || remove.isPending || invite.isPending || reply.isPending,

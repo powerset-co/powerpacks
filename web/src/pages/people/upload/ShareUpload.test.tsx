@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { UploadStatus } from "@/lib/api/upload"
@@ -48,9 +49,11 @@ let client: QueryClient
 function show(onToast = vi.fn()) {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
-    <QueryClientProvider client={client}>
-      <ShareUpload onToast={onToast} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <ShareUpload onToast={onToast} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
   return onToast
 }

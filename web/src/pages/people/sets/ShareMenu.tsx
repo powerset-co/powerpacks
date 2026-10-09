@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { DialogTrigger } from "@/components/ui/dialog"
 import type { UploadStatus } from "@/lib/api/upload"
 import { SETS, UPLOAD } from "@/lib/people/copy"
 import { cn } from "@/lib/utils"
 import { CloudIcon, HomeIcon } from "./icons"
-import { SetsDialog } from "./SetsDialog"
 import { readTarget, useSets, writeTarget } from "./useSets"
 import "../styles/sets.css"
 
@@ -24,11 +24,11 @@ function label(status: UploadStatus | undefined, busy: boolean): string {
 
 // The head's share control: the button opens the upload (the trigger of the dialog around it); the caret
 // opens the set menu: the personal (local) network and the cloud sets, the one shared to checked, and
-// "Manage sets…", which opens the sets dialog.
+// "Manage sets…", which opens the Sets page.
 export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
   const sets = useSets()
   const [open, setOpen] = useState(false)
-  const [managing, setManaging] = useState(false)
+  const navigate = useNavigate()
   const [target, setTarget] = useState(readTarget)
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -121,14 +121,13 @@ export function ShareMenu({ status, busy, onOpen }: ShareMenuProps) {
             className="share-option manage"
             onClick={() => {
               setOpen(false)
-              setManaging(true)
+              void navigate(chosen ? `/sets?set=${encodeURIComponent(chosen.set_id)}` : "/sets")
             }}
           >
             {SETS.manage}
           </button>
         </div>
       ) : null}
-      <SetsDialog open={managing} onOpenChange={setManaging} sets={sets} />
     </div>
   )
 }
