@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.22.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.1...powerpacks-v3.22.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **sets:** deleting a set withdraws its pending invites; long answer text is cut, not lost ([#784](https://github.com/powerset-co/powerpacks/issues/784)) ([8e52e39](https://github.com/powerset-co/powerpacks/commit/8e52e390bbda6a16cb42700e92612b24fb652026))
+
 ## [3.22.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.0...powerpacks-v3.22.1) (2026-10-09)
 
 
