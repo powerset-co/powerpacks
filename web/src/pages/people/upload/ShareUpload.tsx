@@ -9,7 +9,7 @@ export function ShareUpload({ onToast }: { onToast: (message: string) => void })
   const upload = useUpload(onToast)
   return (
     <Dialog open={upload.open} onOpenChange={upload.setOpen}>
-      <ShareMenu status={upload.status} busy={upload.busy} onOpen={upload.onOpen} />
+      <ShareMenu status={upload.status} busy={upload.busy} />
       <UploadDialog upload={upload} />
     </Dialog>
   )

@@ -77,15 +77,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+// A check that found nothing to upload.
+const NOTHING = { ...PLAN, new_to_cloud: 0, changed: 0, already_in_cloud: 0, losing_access: 0 }
+
 describe("ShareUpload trigger", () => {
   it.each([
-    [uploadStatus(), "never", "Never shared"],
+    [uploadStatus({ status: "ready", plan: PLAN }), "pending", "Never shared"],
+    [uploadStatus({ status: "ready", plan: NOTHING }), "never", "Never shared"],
+    [uploadStatus({ status: "ready", plan: NOTHING, last_upload: SHARED }), "current", "Shared 128 · Sep 27"],
+    [uploadStatus({ status: "ready", plan: PLAN, last_upload: SHARED }), "pending", "Shared 128 · Sep 27"],
     [uploadStatus({ status: "completed", last_upload: SHARED }), "current", "Shared 128 · Sep 27"],
-    [
-      uploadStatus({ status: "completed", last_upload: SHARED, share_changed: true }),
-      "pending",
-      "Shared 128 · Sep 27",
-    ],
     [
       uploadStatus({
         status: "interrupted",
@@ -97,13 +98,34 @@ describe("ShareUpload trigger", () => {
     ],
     [uploadStatus({ status: "uploading", last_upload: SHARED }), "running", "Shared 128 · Sep 27"],
     [uploadStatus({ status: "checking" }), "running", "Never shared"],
-  ])("always says Share network and marks where it stands (%#)", async (status, state, line) => {
+  ])("always says Share network and marks where the check stands (%#)", async (status, state, line) => {
     serve({ get: () => status })
     show()
     await waitFor(async () =>
       expect((await screen.findByRole("button", { name: "Share network" })).dataset.state).toBe(state),
     )
     expect(screen.queryByText(line)).toBeNull()
+  })
+
+  it.each([
+    ["never checked", uploadStatus()],
+    [
+      "edited since the upload",
+      uploadStatus({ status: "completed", last_upload: SHARED, share_changed: true }),
+    ],
+  ])("checks on its own when %s, with a spinner until the plan lands", async (_, first) => {
+    let state = first
+    const fetch = serve({
+      get: () => state,
+      check: () => (state = uploadStatus({ status: "checking", last_upload: first.last_upload })),
+    })
+    show()
+    const button = await screen.findByRole("button", { name: "Share network" })
+    expect(button.dataset.state).toBe("running")
+    await waitFor(() => expect(posts(fetch)).toEqual(["/api/people/upload/check"]), POLLED)
+    state = uploadStatus({ status: "ready", plan: PLAN, last_upload: first.last_upload })
+    await waitFor(() => expect(button.dataset.state).toBe("pending"), POLLED)
+    expect(posts(fetch)).toEqual(["/api/people/upload/check"])
   })
 })
 
@@ -117,19 +139,16 @@ describe("ShareUpload dialog", () => {
     expect(posts(fetch)).toEqual([])
   })
 
-  it("checks again when the button opens after a finished upload", async () => {
-    let state = uploadStatus({ status: "completed", plan: PLAN, last_upload: SHARED })
-    const fetch = serve({
-      get: () => state,
-      check: () => (state = uploadStatus({ status: "checking", plan: PLAN, last_upload: SHARED })),
-    })
+  it("opens a finished upload with nothing changed on its result, without a check", async () => {
+    const fetch = serve({ get: () => uploadStatus({ status: "completed", plan: PLAN, last_upload: SHARED }) })
     show()
     const dialog = await openDialog("Share network")
-    await within(dialog).findByRole("heading", { name: "Checking your network" })
-    expect(posts(fetch)).toEqual(["/api/people/upload/check"])
+    expect(within(dialog).getByRole("heading", { name: "Your network is shared" })).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    expect(posts(fetch)).toEqual([])
   })
 
-  it("checks a never-checked network on the first open, then lists the plan", async () => {
+  it("shows the check a never-checked network starts on its own, then lists the plan", async () => {
     let state = uploadStatus()
     const fetch = serve({
       get: () => state,
