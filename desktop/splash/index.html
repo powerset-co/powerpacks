@@ -23,9 +23,10 @@
   main { display: grid; place-items: center; padding: 24px; }
   .stack { width: min(520px, 100%); display: flex; flex-direction: column; align-items: center; gap: 20px;
            animation: enter 320ms var(--ease) both; }
-  .brand { display: inline-flex; align-items: center; gap: 12px; font-size: 12px; font-weight: 800; letter-spacing: .16em; }
-  .mark { width: 14px; height: 14px; border-radius: 4px; background: var(--primary);
-          box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 22%, transparent);
+  .brand { display: flex; flex-direction: column; align-items: center; gap: 16px; font-size: 12px; font-weight: 800; letter-spacing: .14em; }
+  .brand b { color: var(--primary); font-weight: inherit; }
+  .mark { width: 44px; height: 44px; border-radius: 11px; display: block;
+          box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 22%, transparent);
           animation: breathe 1600ms var(--ease) infinite alternate; }
   [data-phase="failed"] .mark, [data-phase="ready"] .mark { animation: none; }
   .status { display: flex; align-items: center; gap: 8px; color: var(--muted); min-height: 20px; }
@@ -48,8 +49,8 @@
   button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
   button[hidden] { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes breathe { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
-                       to { box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 28%, transparent); } }
+  @keyframes breathe { from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 14%, transparent); }
+                       to { box-shadow: 0 0 0 10px color-mix(in srgb, var(--primary) 26%, transparent); } }
   @keyframes enter { from { opacity: 0; transform: translateY(6px); } }
   @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
 </style>
@@ -58,7 +59,10 @@
   <div class="drag" data-tauri-drag-region></div>
   <main>
     <div class="stack">
-      <div class="brand"><span class="mark" aria-hidden="true"></span>POWERPACKS</div>
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 400 400" aria-hidden="true"><rect width="400" height="400" rx="88" fill="#111111"/><path d="M137.777 295.556V102.222H228.429C237.403 102.222 245.461 103.792 252.603 106.931C259.745 109.885 265.789 114.04 270.733 119.395C275.861 124.75 279.799 131.305 282.546 139.061C285.293 146.632 286.666 154.941 286.666 163.989C286.666 173.222 285.293 181.624 282.546 189.194C279.799 196.765 275.861 203.228 270.733 208.583C265.789 213.938 259.745 218.185 252.603 221.324C245.461 224.279 237.403 225.756 228.429 225.756H179.532V295.556H137.777ZM179.532 189.194H223.485C229.711 189.194 234.564 187.625 238.044 184.486C241.707 181.162 243.538 176.361 243.538 170.083V157.896C243.538 151.617 241.707 146.909 238.044 143.769C234.564 140.446 229.711 138.784 223.485 138.784H179.532V189.194Z" fill="#F2502A"/></svg>
+        <span>POWER<b>PACKS</b></span>
+      </div>
       <p class="status" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span id="message">Starting Powerpacks</span></p>
       <p class="detail" id="detail"></p>
       <ol class="log" id="log" aria-label="Setup output"></ol>

@@ -13,6 +13,7 @@ import {
 } from "@/lib/signin"
 
 import { CLOSE_MARK } from "./icons/actions"
+import { PowersetMark } from "./PowersetMark"
 import { Spinner } from "./Spinner"
 
 function LockIcon() {
@@ -89,10 +90,7 @@ function Card({ signIn }: { signIn: SignIn }) {
     >
       <div className="rise-in flex h-[min(700px,100%)] w-[min(480px,100%)] flex-col overflow-hidden rounded-[var(--radius-l)] border border-line-strong bg-card shadow-[var(--shadow-2)]">
         <header className="flex h-14 items-center gap-3 border-b border-line px-4">
-          <span
-            aria-hidden
-            className="size-2.5 rounded-[3px] bg-primary shadow-[0_0_0_3px_var(--primary-soft)]"
-          />
+          <PowersetMark className="size-7 rounded-[7px]" />
           <div className="min-w-0 flex-1">
             <h2 className="m-0 truncate text-[14px] font-semibold leading-tight">{title}</h2>
             <p className="m-0 truncate text-[11.5px] leading-tight text-muted-foreground">{subtitle}</p>

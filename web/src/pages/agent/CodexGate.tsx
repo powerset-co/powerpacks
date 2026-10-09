@@ -1,13 +1,13 @@
 import type { ReactNode } from "react"
 
-import { EmptyState, Spinner } from "@/components/shared"
+import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import type { CodexAccountState } from "@/lib/agent/useCodexAccount"
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rise-in mx-auto my-16 flex w-full max-w-[440px] flex-col items-center gap-4 rounded-[var(--radius-l)] border border-line bg-card px-6 py-8 text-center shadow-[var(--shadow-1)]">
-      <span aria-hidden className="size-3 rounded-[4px] bg-primary shadow-[0_0_0_4px_var(--primary-soft)]" />
+      <PowersetMark className="size-10 rounded-[10px] shadow-[var(--shadow-1)]" />
       <h1 className="m-0 text-lg font-semibold">{title}</h1>
       {children}
     </section>

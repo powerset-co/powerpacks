@@ -1,11 +1,12 @@
-//! Where things live: the Powerpacks folder, and the PATH every child process gets.
+//! Where things live: the Powerpacks folder, the bundled binaries, and the PATH every child
+//! process gets.
 //!
 //! A macOS app started from Finder gets a bare PATH, so the login shell's PATH is read once at
 //! launch. The app's own folder goes first: it holds the bundled `uv`, `codex` and `rg`, which
 //! Powerpacks calls by name (`uv run --project . ...`).
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// Where bootstrap installs Powerpacks; the app uses the same folder, and the same override.
 const DEFAULT_ROOT: &str = "powerpacks";
@@ -21,17 +22,59 @@ pub fn root() -> Result<PathBuf, String> {
         .ok_or_else(|| "No home folder.".into())
 }
 
-pub fn project_python(root: &std::path::Path) -> PathBuf {
-    root.join(".venv/bin/python")
+/// The project's interpreter, where `uv sync` puts it on each platform.
+pub fn project_python(root: &Path) -> PathBuf {
+    if cfg!(windows) {
+        root.join(".venv").join("Scripts").join("python.exe")
+    } else {
+        root.join(".venv").join("bin").join("python")
+    }
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// The folder the app's executable and its bundled binaries sit in.
+pub fn app_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+}
+
+/// A binary the app ships (uv, codex, rg): beside the executable, else the first on PATH. The
+/// error names where it was expected, for a bundle that came out wrong.
+pub fn bundled(name: &str) -> Result<PathBuf, String> {
+    let file = executable_name(name);
+    let beside = app_dir().map(|dir| dir.join(&file));
+    if let Some(path) = beside.as_ref().filter(|path| path.is_file()) {
+        return Ok(path.clone());
+    }
+    which(name).ok_or_else(|| {
+        let expected = beside
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| file.clone());
+        format!("The app is missing {name} (expected at {expected}).")
+    })
+}
+
+/// The first executable named `name` on PATH.
+pub fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let file = executable_name(name);
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(&file))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Bundled binaries first, then the login shell's PATH, then the usual install folders.
 pub fn adopt_path() {
     let mut entries: Vec<PathBuf> = Vec::new();
-    if let Some(app_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(PathBuf::from))
-    {
+    if let Some(app_dir) = app_dir() {
         entries.push(app_dir);
     }
     let inherited = login_shell_path()
@@ -41,7 +84,10 @@ pub fn adopt_path() {
     if let Some(home) = dirs::home_dir() {
         entries.push(home.join(".local/bin"));
     }
-    entries.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(PathBuf::from));
+    if !cfg!(windows) {
+        entries
+            .extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(PathBuf::from));
+    }
     let mut seen = std::collections::HashSet::new();
     entries.retain(|entry| seen.insert(entry.clone()));
     if let Ok(joined) = std::env::join_paths(entries) {
@@ -49,23 +95,19 @@ pub fn adopt_path() {
     }
 }
 
+/// The login shell's PATH; a POSIX notion, so none on Windows.
 fn login_shell_path() -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let script = format!("printf '{PATH_MARKER}%s{PATH_MARKER}' \"$PATH\"");
     let output = Command::new(shell)
         .args(["-ilc", &script])
-        .stdin(std::process::Stdio::null())
+        .stdin(Stdio::null())
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
     let path = text.split(PATH_MARKER).nth(1)?;
     (!path.is_empty()).then(|| path.to_string())
-}
-
-/// The first executable named `name` on PATH (the bundled one, after `adopt_path`).
-pub fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
 }

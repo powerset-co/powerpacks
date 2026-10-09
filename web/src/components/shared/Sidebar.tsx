@@ -6,6 +6,7 @@ import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 
 import { AccountsIcon, ChatIcon, CollapseIcon, PeopleIcon, SearchesIcon, TasksIcon } from "./icons/nav"
+import { PowersetMark } from "./PowersetMark"
 
 const COLLAPSED_KEY = "sidebar.collapsed"
 // Below this width the nav is always the icon rail; the pages' own panels need the room.
@@ -56,12 +57,11 @@ export function Sidebar() {
         data-sidebar-brand
         className={cn("flex h-topbar shrink-0 items-center gap-2.5 px-4", rail && "justify-center px-0")}
       >
-        <span
-          aria-hidden
-          className="size-2.5 shrink-0 rounded-[3px] bg-primary shadow-[0_0_0_3px_var(--primary-soft)]"
-        />
+        <PowersetMark className="size-7 rounded-[7px] shadow-[var(--shadow-1)]" />
         {!rail && (
-          <span className="text-[11px] font-extrabold tracking-[.16em] text-foreground">POWERPACKS</span>
+          <span className="text-[12px] font-extrabold tracking-[.14em] text-foreground">
+            POWER<span className="text-primary">PACKS</span>
+          </span>
         )}
       </div>
       <ul className="m-0 flex list-none flex-col gap-0.5 p-2">

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 
-import { EmptyState, Spinner } from "@/components/shared"
+import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
 import { answer, newChat, send, stop, useAgent } from "@/lib/agent/store"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { useThreads } from "@/lib/agent/useThreads"
@@ -26,10 +26,7 @@ const STARTERS = [
 function Welcome() {
   return (
     <div className="rise-in flex flex-col items-center gap-7 pt-[14vh] text-center max-[680px]:pt-[6vh]">
-      <span
-        aria-hidden
-        className="size-3.5 rounded-[4px] bg-primary shadow-[0_0_0_5px_var(--primary-soft)]"
-      />
+      <PowersetMark className="size-12 rounded-[12px] shadow-[var(--shadow-2)]" />
       <div className="flex flex-col gap-1.5">
         <h1 className="m-0 text-[22px] font-semibold tracking-[-.01em]">Who are you looking for?</h1>
         <p className="m-0 text-muted-foreground">

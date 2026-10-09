@@ -189,7 +189,7 @@ impl Codex {
         {
             return Ok(live.clone());
         }
-        let binary = paths::which("codex").ok_or(NOT_INSTALLED)?;
+        let binary = paths::bundled("codex")?;
         let connection = Arc::new(Connection::spawn(app, &binary, cwd)?);
         let client = json!({ "name": CLIENT_NAME, "title": CLIENT_TITLE, "version": app.package_info().version.to_string() });
         connection
@@ -227,7 +227,7 @@ impl Codex {
 
     /// The signed-in account, or `installed: false` when no Codex CLI is on this machine.
     pub async fn status(&self, app: &AppHandle, cwd: Option<&Path>) -> Reply {
-        let Some(binary) = paths::which("codex") else {
+        let Ok(binary) = paths::bundled("codex") else {
             return Ok(json!({ "installed": false }));
         };
         let account = self.call(app, cwd, "account/read", json!({})).await?;
@@ -278,5 +278,3 @@ impl Codex {
         self.call(app, Some(cwd), "thread/list", params).await
     }
 }
-
-pub const NOT_INSTALLED: &str = "The app is missing Codex. Reinstall Powerpacks.";

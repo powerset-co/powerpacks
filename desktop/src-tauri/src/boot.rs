@@ -134,7 +134,7 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         "Setting up Python",
         "The first launch downloads about 200 MB. Later launches skip this.",
     );
-    let uv = paths::which("uv").ok_or("The app is missing uv.")?;
+    let uv = paths::bundled("uv")?;
     let mut sync = Command::new(uv);
     sync.args(["sync", "--frozen", "--no-dev", "--project"])
         .arg(&root)
