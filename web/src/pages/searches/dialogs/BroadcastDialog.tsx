@@ -109,14 +109,18 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
                     <li key={candidate.public_identifier} className="flex justify-between gap-3">
                       <span>{candidate.name}</span>
                       <span className="text-muted-foreground">
-                        {candidate.owners.length === 0 ? "nobody in the set knows them" : candidate.owners.map((owner) => owner.name).join(", ")}
+                        {candidate.owners.length === 0
+                          ? "nobody in the set knows them"
+                          : candidate.owners.map((owner) => owner.name).join(", ")}
                       </span>
                     </li>
                   ))}
                 </ul>
               )}
               {preview.skipped > 0 ? (
-                <p className="mt-1 text-muted-foreground">{preview.skipped} pinned without a LinkedIn URL, not sent.</p>
+                <p className="mt-1 text-muted-foreground">
+                  {preview.skipped} pinned without a LinkedIn URL, not sent.
+                </p>
               ) : null}
             </section>
             <section>

@@ -67,7 +67,13 @@ export interface AskStatus {
     candidates: {
       public_identifier: string
       name: string
-      owners: { operator_id: string; name: string; status: string; awake: boolean; answer: AskAnswer | null }[]
+      owners: {
+        operator_id: string
+        name: string
+        status: string
+        awake: boolean
+        answer: AskAnswer | null
+      }[]
     }[]
   }
 }
@@ -84,7 +90,10 @@ export async function fetchAskStatus(runId: string): Promise<AskStatus> {
   return body<AskStatus>(response)
 }
 
-export async function sendAsk(runId: string, question: string): Promise<{ status: string; ask: SentAsk | null }> {
+export async function sendAsk(
+  runId: string,
+  question: string,
+): Promise<{ status: string; ask: SentAsk | null }> {
   const response = await fetch(`${API}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

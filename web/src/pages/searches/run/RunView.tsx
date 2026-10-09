@@ -63,7 +63,9 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
   const shown = useMemo(() => filterRows(rows, filters, tags.tagged), [rows, filters, tags.tagged])
   const pinnedCount = useMemo(
     () =>
-      Object.values(tags.tagged.assignments).filter((labels) => labels.some((label) => label.toLowerCase() === "pinned")).length,
+      Object.values(tags.tagged.assignments).filter((labels) =>
+        labels.some((label) => label.toLowerCase() === "pinned"),
+      ).length,
     [tags.tagged],
   )
   const people = new Set(rows.map((row) => row.row.person_id)).size
